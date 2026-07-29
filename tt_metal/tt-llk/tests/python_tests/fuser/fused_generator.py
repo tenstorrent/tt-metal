@@ -200,8 +200,6 @@ class FusedKernelGenerator:
             else '#include "operand.h"\n'
         )
 
-        dvalid_include = ""
-
         combined = (
             f"#define FUSED_TEST\n"
             f'#include "ckernel.h"\n'
@@ -210,7 +208,6 @@ class FusedKernelGenerator:
             f'#include "ckernel_sfpu.h"\n'
             f'#include "tensix_types.h"\n'
             f"{operand_include}"
-            f"{dvalid_include}"
             f"{profiler_include}"
             f"\n"
             f"std::uint32_t unp_cfg_context          = 0;\n"

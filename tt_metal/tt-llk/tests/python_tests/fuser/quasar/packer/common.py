@@ -67,15 +67,19 @@ def packer_dest_section_done(
 
 def packer_sync_with_unpacker(has_pack_consumer: bool) -> str:
     if has_pack_consumer:
-        return "t6_semaphore_post<>(semaphore::PACK_DONE);\n"
+        return "t6_semaphore_post<p_stall::PACK>(semaphore::PACK_UNPACK);\n"
     return ""
 
 
 def pack_reduce_mask_config(operation) -> str:
+    if operation.reduce_dim is None:
+        return ""
     reduce_dim = operation.reduce_dim.cpp_enum_value
     tensor_shape = operation.tile_shape.cpp_value
     return f"_llk_pack_reduce_mask_config_<{reduce_dim}>({tensor_shape});\n"
 
 
-def pack_reduce_mask_clear() -> str:
+def pack_reduce_mask_clear(operation) -> str:
+    if operation.reduce_dim is None:
+        return ""
     return "_llk_pack_reduce_mask_clear_();\n"

@@ -26,6 +26,7 @@ from helpers.unpack import unpack_res_tiles
 @dataclass
 class Operand:
     _next_buf_desc_id: ClassVar[int] = 0
+    MAX_OPERANDS_NUM: ClassVar[int] = 32
 
     name: str
     dimensions: Tuple[int, int]
@@ -54,9 +55,9 @@ class Operand:
 
     def __post_init__(self):
         self.buf_desc_id = Operand._next_buf_desc_id
-        if self.buf_desc_id >= 32:
+        if self.buf_desc_id >= Operand.MAX_OPERANDS_NUM:
             raise ValueError(
-                f"buf_desc_id {self.buf_desc_id} exceeds maximum of 31 for operand '{self.name}'"
+                f"buf_desc_id {self.buf_desc_id} exceeds maximum of {Operand.MAX_OPERANDS_NUM - 1} for operand '{self.name}'"
             )
         Operand._next_buf_desc_id += 1
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()

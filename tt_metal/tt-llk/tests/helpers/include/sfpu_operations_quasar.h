@@ -192,6 +192,8 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
  * @tparam APPROX Whether operations with approximate and accurate paths use the approximate path.
  * @tparam ITERATIONS Number of SFPU loop iterations.
+ * @tparam TYPECAST_IN_FORMAT Source format for the typecast op (default Float32).
+ * @tparam TYPECAST_OUT_FORMAT Destination format for the typecast op (default Float16_b).
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format; only the comp family reads it (see
  *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.

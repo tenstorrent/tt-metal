@@ -1,7 +1,7 @@
 # Simplified SDPA inner loop for Quasar.
 # Mirrors the WH/BH sdpa_inner_loop_step pipeline:
-# QKT matmul, reduce max, sub+exp (datacopy+SFPU), eltwise broadcast multiply,
-# attn_v matmul, reciprocal (datacopy+SFPU), normalize (eltwise broadcast multiply).
+# QKT matmul, reduce max, sub+exp (Elwsub+SFPU), attn_v matmul,
+# reciprocal (datacopy+SFPU), normalize (eltwise broadcast multiply).
 
 operands:
   # Q: query tile block
@@ -75,15 +75,16 @@ operations:
       - output: "row_max"
         packer: "Packer"
 
-  # Step 3: sub_exp = exp(datacopy(qkt))
+  # Step 3: sub_exp = exp(qkt - row_max)
   # Dual pack: sub_exp_out with ZERO_RELU, sub_exp_sum with L1 accumulation
   - math:
       - type: "Fpu"
-        operation: "Datacopy"
-        unpacker: "UnpackerA"
-        math_fidelity: "LoFi"
         src_a: "qkt"
-        src_b: "identity_scale"
+        src_b: "row_max"
+        operation: "Elwsub"
+        unpacker: "UnpackerAB"
+        broadcast_type: "COL"
+        math_fidelity: "LoFi"
       - type: "UnarySfpu"
         operation: "Exp"
         approximation_mode: true

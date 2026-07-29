@@ -101,7 +101,6 @@ class UnarySfpu(Sfpu):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
         dest_sync = operation.dest_sync.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        approx_mode = self.approx_mode.cpp_enum_value
         sfpu_format = config.sentinel._math_format.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
         quasar_iterations = self.iterations // 4

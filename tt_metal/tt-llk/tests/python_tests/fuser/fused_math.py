@@ -373,16 +373,6 @@ class ComputePipeline:
         stage = operation.stage_id
         return f"// Operation {stage}: Packer\n"
 
-    def _pack_reduce_mask_config(self, operation: "FusedOperation") -> str:
-        if operation.reduce_dim is not None:
-            return pack_common.pack_reduce_mask_config(operation)
-        return ""
-
-    def _pack_reduce_mask_clear(self, operation: "FusedOperation") -> str:
-        if operation.reduce_dim is not None:
-            return "_llk_pack_reduce_mask_clear_();\n"
-        return ""
-
     def packer_sync_with_unpacker(
         self,
         operation: "FusedOperation",
@@ -406,7 +396,7 @@ class ComputePipeline:
         init_code = config.sentinel.hw_configure_pack(config, operation, pack_only)
         if hoist_reconfig and pack_only:
             init_code += pack_only[0].reconfig(operation, config)
-        init_code += self._pack_reduce_mask_config(operation)
+        init_code += pack_common.pack_reduce_mask_config(operation)
         init_code += self._pack_dest_init(operation, config)
         if hoist:
             init_code += pack_only[0].configure(operation, config, None)
@@ -444,7 +434,7 @@ class ComputePipeline:
         uninit_code = self.packer_sync_with_unpacker(operation, config)
         if hoist:
             uninit_code += pack_only[0].uninit(operation, config)
-        uninit_code += self._pack_reduce_mask_clear(operation)
+        uninit_code += pack_common.pack_reduce_mask_clear(operation)
         code += self._zone(config, "INIT", uninit_code)
 
         return code

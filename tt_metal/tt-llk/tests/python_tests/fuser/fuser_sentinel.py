@@ -45,7 +45,6 @@ class FuserSentinel:
 
     _pack_src: Optional[DataFormat] = field(default=None, repr=False)
     _pack_dst: Optional[DataFormat] = field(default=None, repr=False)
-    _pack_buf_desc_id: Optional[int] = field(default=None, repr=False)
 
     golden_math_format: Optional[DataFormat] = field(default=None, repr=False)
     golden_pack_src: Optional[DataFormat] = field(default=None, repr=False)
@@ -66,7 +65,6 @@ class FuserSentinel:
     def reset_pack_formats(self):
         self._pack_src = None
         self._pack_dst = None
-        self._pack_buf_desc_id = None
 
     @staticmethod
     def _find_format_node(
@@ -436,7 +434,6 @@ class FuserSentinel:
 
         self._pack_src = pack_src
         self._pack_dst = pack_dst
-        self._pack_buf_desc_id = first.output.buf_desc_id
 
         return code
 
@@ -453,10 +450,7 @@ class FuserSentinel:
         """
         pack_src, pack_dst = self._resolve_pack_formats(config, operation, pack_node)
 
-        buf_desc_changed = self._pack_buf_desc_id != pack_node.output.buf_desc_id
-        format_changed = self._pack_src != pack_src or self._pack_dst != pack_dst
-
-        if not format_changed and not buf_desc_changed:
+        if self._pack_src == pack_src and self._pack_dst == pack_dst:
             return ""
 
         code = pack_common.configure_pack(
@@ -468,7 +462,6 @@ class FuserSentinel:
 
         self._pack_src = pack_src
         self._pack_dst = pack_dst
-        self._pack_buf_desc_id = pack_node.output.buf_desc_id
         return code
 
     def configure_golden(
