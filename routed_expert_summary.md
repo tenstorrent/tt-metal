@@ -510,3 +510,90 @@ per_core_N_gu = 6, and NUM_DRAM_BANKS = 8. Weights would need re-preparing per a
 the same layout or a flag. That is a deployment decision, so it needs the op owner's
 call: relayout upstream and version the cache name, or add a
 `weights_bank_grouped` op attribute so the old layout stays the default.
+
+## 11. ND-shard settings actually in use (measured, landed)
+
+### 11a. The settings
+
+Selected by `TtRoutedExpert(weights_dram_sharded=True)` (default `False`). The op detects
+the layout from the tensor itself — `memory_config().created_with_nd_shard_spec()` — so
+there is no extra op attribute to keep in sync.
+
+| | value |
+|---|---|
+| buffer type | `ttnn.BufferType.DRAM` |
+| memory config | `ttnn.MemoryConfig(buffer_type=DRAM, nd_shard_spec=...)` |
+| shard shape | `[TILE_SIZE, per_core_N * TILE_SIZE]` |
+| shard grid | full DRAM grid, `device.dram_grid_size()` → `CoreRange((0,0)-(7,0))` on P150 |
+| orientation | `ShardOrientation.ROW_MAJOR` |
+| distribution | `ShardDistributionStrategy.ROUND_ROBIN_1D` (the default) |
+| `per_core_N` | `ceil(n_tiles / FFN_GRID_X)`, `FFN_GRID_X = 11` |
+| applied by | `ttnn.to_memory_config()` after the interleaved build and the squeeze to 2D |
+
+Concrete shapes for the two swept models:
+
+| tensor | logical shape | n_tiles | per_core_N | **shard shape** | shard grid |
+|---|---|---|---|---|---|
+| kimi gate/up | [7168, 2048] | 64 | 6 | **[32, 192]** | 224 x 11 |
+| kimi down | [2048, 7168] | 224 | 21 | **[32, 672]** | 64 x 11 |
+| glm gate/up | [6144, 2048] | 64 | 6 | **[32, 192]** | 192 x 11 |
+| glm down | [2048, 6144] | 192 | 18 | **[32, 576]** | 64 x 11 |
+
+Why each choice, since none of them is free:
+
+* **Shard width = `per_core_N`** is what makes one FFN core's K-row slice exactly one
+  shard, hence ONE NoC request instead of `per_core_N`. Requests per K-block drop
+  gate 48 → 8, down 126 → 6, up 48 → 8. The op validates this width and fails host-side
+  if the spec and its own N split disagree.
+* **Shard height = exactly one tile-row.** With ROUND_ROBIN_1D, shard id =
+  `k * shard_grid_n + gx`, so consecutive K-rows land in DIFFERENT DRAM banks. That
+  rotation — not the request size — is what buys bandwidth (§7e, §10d). A K-block-tall
+  shard would be a single 27 KB request but would pin each core to one bank, measured at
+  246 GB/s, i.e. no better than interleaved. It would also couple the spec to the op's
+  `in0_block_w`, which the L1 guard can lower on large models.
+* **`n_tiles` need not divide `per_core_N`** (64 vs 6 → 11 shards covering 66). The last
+  shard is partially valid and those columns are dropped by the op's existing N-bounds
+  guards, so no tensor padding is needed.
+* **Device-side reshard, not an ND memory config on `as_tensor`**: the mesh-mapper path
+  rank-squeezes the 4D weight and ND-sharded tensors reject that view. This also keeps the
+  on-disk weight cache interleaved, so toggling the layout needs no cache rebuild.
+* **Kernels select the path with `-D WEIGHTS_ND_SHARDED`**, not `if constexpr`:
+  `TensorAccessor` exposes `get_shard_noc_addr` only on its sharded specialisation, and a
+  discarded `if constexpr` branch outside a template is still type-checked.
+
+### 11b. Measured result (P150 card 0, same build, one sample per case)
+
+| model | ISL | interleaved | ND-sharded | speedup |
+|---|---|---|---|---|
+| kimi | 128 | 174.0 us | **139.5** | **1.25x** |
+| kimi | 256 | 194.1 | **162.7** | **1.19x** |
+| kimi | 512 | 244.3 | **180.4** | **1.35x** |
+| kimi | 1024 | 309.7 | 308.2 | 1.00x |
+| kimi | 2048 | 592.2 | 590.9 | 1.00x |
+| kimi | 4096 | 1186.9 | 1167.6 | 1.02x |
+| kimi | 5120 | 1471.0 | 1478.0 | 1.00x |
+| glm | 128 | 146.5 | **122.2** | **1.20x** |
+| glm | 256 | 156.9 | **132.2** | **1.19x** |
+| glm | 512 | 232.3 | **157.1** | **1.48x** |
+| glm | 1024-5120 | | ~same | 1.00x |
+
+Sum over the sweep: kimi 4176 → 4031 us, glm 3644 → 3519 us, both **1.036x**.
+
+**1.19-1.48x at isl <= 512, exactly neutral from isl 1024 up.** That split is the
+prediction from §7c/§8a confirmed: below ~1024 tokens the fixed weight read is the
+critical path, above it the x read and the matmuls are, and this change touches neither.
+The isl-256 prediction was 1.21x against 1.19x measured.
+
+Cumulative from the session baseline at isl <= 512: **1.45-1.56x**, with the achieved DRAM
+traffic rate going 137 → ~200-220 GB/s.
+
+### 11c. Perf test now covers both layouts
+
+`test_single_routed_expert_perf.py` parametrizes `_WEIGHTS_IDS = ("w_interleaved",
+"w_ndshard")` with a separate baseline per (layout, model, ISL) — 32 cases — so a
+regression in either layout is caught and the gap between them stays visible. `_MARGIN` is
+**8%**: repeated runs of the same build show long ISL stable to <1% but short ISL spanning
+up to 11% (w_interleaved glm isl-256 measured 156.9 and 175.4 us), because those cases are
+dominated by fixed per-K-block sync latency rather than streaming work. Cases with more
+than one observation are centred on their min/max midpoint. Proper fix is multi-iteration
+averaging in the harness, not a narrower band.
