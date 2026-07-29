@@ -15,9 +15,10 @@ optimizer already does — so ask the advisor instead of exploring it yourself.
 Give it the model (or one block). It traces the ttnn function, runs the greedy
 optimizer, and hands back, per op, the layout to use and the matmul program
 config for it (`report.json`). Apply that as your sharding baseline, then spend
-your effort on the parts the advisor doesn't cover — dtype precision, the
-DRAM-sharded-weight strategy, kernel configs (see Scope) — rather than on the
-sharding the compiler can hand you for free.
+your effort on the parts the advisor doesn't cover — dtype precision and
+compute-kernel configs (see Scope) — rather than on the sharding the compiler can
+hand you for free. Its DRAM-sharded-weight picks come free too now, but they are a
+candidate set rather than a verdict: measure them.
 
 Intended loop:
 
@@ -97,11 +98,18 @@ the optimizer picks for that strategy (e.g. `matmul_multi_core_reuse_multi_cast_
 already chose (bfp4/bfp8 weights included), so layout reasoning uses the real
 footprint — but it does not *recommend* a dtype change.
 
-It does **not** pick the **DRAM-sharded-weight** matmul strategy (a distinct
-optimizer feature landing soon; once chosen its program config surfaces the same
-way) or tune **compute-kernel configs** (hifi2/hifi4). Comparing to a hand-tuned
-model, expect agreement on the layout skeleton + chosen-strategy program config,
-and gaps on precision and the DRAM-sharded-weight strategy.
+It **does** now pick the **DRAM-sharded-weight** matmul strategy — that optimizer
+feature has landed and is in the pinned advisor — and its program config surfaces
+the same way as any other pick. Two caveats that matter more than the capability:
+the optimizer has no cost model and its scoring *prefers* DS wherever DS is legal,
+so an advised DS is "legal and preferred here", **not** "fastest here"; and nothing
+in the advice is timed. Treat DS advice as a candidate set to sweep.
+
+It still does **not** tune **compute-kernel configs** (hifi2/hifi4) and does not
+recommend a dtype change. Comparing to a hand-tuned model, expect agreement on the
+layout skeleton and the chosen-strategy program config — including DS picks, which
+independently reproduced the shipped strategy on the models that use it — and gaps
+on precision and compute-kernel config.
 
 ## Gotchas
 
