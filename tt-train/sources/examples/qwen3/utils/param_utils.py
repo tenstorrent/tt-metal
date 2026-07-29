@@ -137,7 +137,7 @@ def _build_grad_mapping_single(config, root_prefix, tie_word_embeddings):
         )
         # Fused KV: both HF k_proj and v_proj map to the single ttml kv_proj grad
         # [2*kv_out, hidden] (K rows then V rows). split_kv selects the matching
-        # half; the K half is then re-permuted back to HF layout (V is not).
+        # half; the K half is then re-permuted back to HF layout as part of the split_kv transform (V is not).
         mapping[f"{hp}.self_attn.k_proj.weight"] = f"{tp}/self_attn/kv_proj/weight"
         inv_transforms[f"{hp}.self_attn.k_proj.weight"] = (
             "split_kv",

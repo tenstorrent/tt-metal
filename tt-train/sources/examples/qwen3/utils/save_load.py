@@ -124,7 +124,7 @@ def _build_inv_transforms(forward_transforms: dict) -> dict:
 
 
 def _split_fused_kv(weight: torch.Tensor, which: str, kv_out: int, tp_size: int, interleaved: bool) -> torch.Tensor:
-    """Select the K or V half of a fused kv_proj tensor and re-permute K back to HF.
+    """Select the K or V half of a fused kv_proj tensor. Does NOT re-permute.
 
     ``weight`` is the full fused param, squeezed to 2-D (weight) or 1-D (bias).
     ``kv_out`` is the true (config-derived) K/V output width = num_kv_heads *
@@ -139,9 +139,12 @@ def _split_fused_kv(weight: torch.Tensor, which: str, kv_out: int, tp_size: int,
                         padding to exactly 2*kv_out, then de-interleave via a
                         [tp, 2, per, ...] reshape and take the K (0) or V (1) plane.
 
-    The de-interleaved/split K half still carries the RoPE row-permute (K is
-    unpermuted on load like q_proj/k_proj), so re-permute it back to HF layout;
-    the V half is never permuted.
+    The returned K half is still in ttml layout: it carries the RoPE row-permute
+    (K is unpermuted on load like q_proj/k_proj), so the CALLER must pass it
+    through ``repermute_proj_rows(half, num_heads=num_kv_heads)`` to get HF layout
+    -- see ``_apply_inv_transform`` and the kv_proj branch of
+    ``_merge_lora_inplace``. The V half is never permuted and is returned
+    HF-ready.
     """
     plane = 0 if which == "k" else 1
 

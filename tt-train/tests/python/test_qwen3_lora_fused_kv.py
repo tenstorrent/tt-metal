@@ -7,9 +7,10 @@
 Qwen3 attention fuses K and V into a single ``kv_proj`` projection, so:
 
   - LoRA targets must name ``kv_proj`` (not the pre-fusion ``k_proj``/``v_proj``);
-    ``k_proj``/``v_proj`` are accepted as back-compat aliases that normalize to
-    ``kv_proj`` (``utils.lora.normalize_lora_targets``), so the advertised
-    "all projections" default still installs an adapter that trains K and V.
+    ``k_proj``/``v_proj`` are accepted as deprecated back-compat aliases that
+    normalize to ``kv_proj`` with a ``DeprecationWarning``
+    (``utils.lora.normalize_lora_targets``), so the advertised "all projections"
+    default still installs an adapter that trains K and V.
   - On HF export the single fused ``kv_proj`` LoRA delta (spanning
     ``[2*kv_out, hidden]``) must be split into the HF ``k_proj`` / ``v_proj``
     halves (K re-permuted for RoPE, V as-is) and each half added to its own HF
@@ -20,6 +21,7 @@ These tests are pure numpy/torch (no Tenstorrent device required).
 
 import os
 import sys
+import warnings
 
 import pytest
 
@@ -79,6 +81,24 @@ def test_aliases_accepted_and_normalized_to_kv_proj():
     assert normalize_lora_targets(["v_proj"]) == ["kv_proj"]
     # Both aliases collapse to a single kv_proj (de-duped), order preserved.
     assert normalize_lora_targets(["q_proj", "k_proj", "v_proj"]) == ["q_proj", "kv_proj"]
+
+
+def test_aliases_emit_deprecation_warning():
+    """The k_proj / v_proj aliases still resolve, but warn that they are deprecated."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert normalize_lora_targets(["q_proj", "k_proj", "v_proj"]) == ["q_proj", "kv_proj"]
+
+    messages = [str(w.message) for w in caught if issubclass(w.category, DeprecationWarning)]
+    assert len(messages) == 1, f"Expected exactly one DeprecationWarning, got {[str(w.message) for w in caught]}"
+    assert "k_proj" in messages[0] and "v_proj" in messages[0]
+    assert "kv_proj" in messages[0]
+
+    # Canonical-only targets must stay warning-free.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        normalize_lora_targets(list(LORA_TARGETS_ALL))
+    assert not [w for w in caught if issubclass(w.category, DeprecationWarning)]
 
 
 def test_normalize_is_idempotent_and_passes_through_unknowns():

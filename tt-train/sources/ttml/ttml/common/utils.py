@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import os, random
-from time import time
 import numpy as np
 import ttnn
 import ttml
@@ -228,36 +227,6 @@ def build_causal_mask(T: int, device: bool = False):
     if not device:
         return m
     return ttml.autograd.Tensor.from_numpy(m, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
-
-
-def get_available_device_memory_in_bytes() -> int:
-    """Get the total amount of device DRAM available on the system."""
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    dram_view = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
-    total_dram = dram_view.total_bytes_per_bank * dram_view.num_banks * ttnn.get_num_devices()
-    return total_dram
-
-
-class PerformanceMeter:
-    def __init__(self, cfg, window_size=10):
-        self.cfg = cfg
-        self.steps = []
-        self.window_size = window_size
-
-    def step(self):
-        self.steps.append(time())
-        if len(self.steps) > self.window_size:
-            self.steps.pop(0)
-
-    def get_metrics(self):
-        time_window = self.steps[-1] - self.steps[0]
-        if time_window == 0:
-            return 0, 0
-
-        samples = len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
-        samples_per_second = samples / time_window
-        tokens_per_second = samples * self.cfg.seq_len / time_window
-        return samples_per_second, tokens_per_second
 
 
 def summary(model) -> None:

@@ -77,11 +77,11 @@ import torch
 from tqdm import tqdm
 
 import ttml
-from ttnn.device import is_blackhole, is_wormhole_b0
 from ttml.models.qwen3.flops import calculate_flops_per_token
 
 from utils.lora import LORA_TARGETS_ACCEPTED, LORA_TARGETS_ALL, inject_adapter_in_model, normalize_lora_targets
 from utils.memory import MemoryUsageTracker, finalize_memory
+from ttml.common.performance import get_device_peak_tflops_bf16
 from ttml.common.utils import no_grad, build_causal_mask
 from utils.tensor_utils import (
     create_input_tensor,
@@ -117,25 +117,6 @@ def constant_lr_schedule(step, warmup_steps, max_lr):
     if step < warmup_steps:
         return max_lr * (step + 1) / warmup_steps
     return max_lr
-
-
-def get_device_peak_tflops_bf16() -> float:
-    """Per-device theoretical BF16 TFLOPS. Whole-mesh peak = this × num_devices.
-
-    Mirrors ``get_device_peak_tflops_bf16`` in examples/train/train.py so the
-    MFU reported here matches the main training example.
-    """
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    grid = device.compute_with_storage_grid_size()
-    num_cores = grid.x * grid.y
-    # Per-core BF16 TFLOPS for each supported TT architecture.
-    if is_wormhole_b0(device):
-        per_core = 1.0
-    elif is_blackhole(device):
-        per_core = 1.35
-    else:
-        raise ValueError(f"Unknown device: {device.arch()}")
-    return num_cores * per_core
 
 
 # =====================================================================
@@ -376,7 +357,7 @@ def main():
         default=None,
         help="LoRA target modules (default: all projections). "
         "Choices: q_proj, kv_proj, o_proj, gate_proj, up_proj, down_proj "
-        "(k_proj/v_proj are accepted aliases for the fused kv_proj).",
+        "(k_proj/v_proj are deprecated aliases for the fused kv_proj).",
     )
     # Checkpointing
     parser.add_argument(
