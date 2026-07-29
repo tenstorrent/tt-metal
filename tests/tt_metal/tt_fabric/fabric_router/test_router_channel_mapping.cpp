@@ -308,6 +308,62 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithIntermeshFullMeshPassThro
     // All modes that require VC1 create the same mappings
 }
 
+TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_ExpressRouting_Has4SenderChannels) {
+    // Express routing widens VC1 to four senders even with no intermesh Z router on the device: a
+    // carrier that crossed a mesh boundary stays on VC1 through every later mesh and can still
+    // decode a Z action, so the express output must be realizable on VC1 as well as VC0.
+    auto intermesh_config = IntermeshVCConfig::full_mesh();
+    FabricRouterChannelMapping mapping(
+        Topology::Torus,
+        false,
+        RouterVariant::MESH,
+        &intermesh_config,
+        false,  // has_z_on_device = false
+        true);  // express_routing_enabled = true
+
+    EXPECT_EQ(mapping.get_num_virtual_channels(), 2);
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), 5);  // worker + 3 cardinals + express
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(1), 4);  // 3 cardinals + express
+}
+
+TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_ExpressRouting_VC1BaseAfterWideVC0) {
+    // VC1 senders are laid out immediately after the five-wide express VC0, not the 2D mesh
+    // constant -- otherwise VC1 sender 0 would alias VC0's express channel at flat index 4.
+    auto intermesh_config = IntermeshVCConfig::full_mesh();
+    FabricRouterChannelMapping mapping(
+        Topology::Torus,
+        false,
+        RouterVariant::MESH,
+        &intermesh_config,
+        false,
+        true);  // express_routing_enabled = true
+
+    for (uint32_t i = 0; i < 4; ++i) {
+        auto vc1_ch = mapping.get_sender_mapping(1, i);
+        EXPECT_EQ(vc1_ch.builder_type, BuilderType::ERISC);
+        EXPECT_EQ(vc1_ch.internal_sender_channel_id, 5 + i);
+    }
+}
+
+TEST_F(RouterChannelMappingTest, VC2_ExpressMesh_SenderAtFlatIndex9) {
+    // Express (5 VC0) + VC1 (4) places the VC2 sender at flat index 9, reaching the
+    // num_max_sender_channels ceiling exactly (5 + 4 + 1 = 10).
+    auto config = IntermeshVCConfig::full_mesh();
+    config.requires_vc2 = true;
+    FabricRouterChannelMapping mapping(
+        Topology::Torus,
+        false,
+        RouterVariant::MESH,
+        &config,
+        false,  // has_z_on_device = false
+        true);  // express_routing_enabled = true
+
+    EXPECT_EQ(mapping.get_num_virtual_channels(), 3);
+    auto vc2_sender = mapping.get_sender_mapping(2, 0);
+    EXPECT_EQ(vc2_sender.builder_type, BuilderType::ERISC);
+    EXPECT_EQ(vc2_sender.internal_sender_channel_id, 9);
+}
+
 // ============ IntermeshVCConfig Tests ============
 
 TEST_F(RouterChannelMappingTest, IntermeshVCConfig_Disabled) {

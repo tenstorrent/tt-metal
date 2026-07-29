@@ -116,10 +116,13 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
         // Standard mesh router VC1: create if intermesh VC is required
         // Both inter-mesh and intra-mesh routers have VC1
         if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc1) {
-            // Determine sender count based on whether device has Z router
-            // Mesh with Z: 4 sender channels (3 mesh directions + 1 for Z router connection)
-            // Mesh without Z: 3 sender channels (3 mesh directions only)
-            uint32_t mesh_vc1_sender_count = has_z_on_device_ ? 4 : 3;
+            // Determine sender count:
+            // Mesh with an intermesh Z router: 4 sender channels (3 mesh directions + 1 for the Z
+            // router connection). Mesh with express routing: also 4 -- a carrier that crossed a mesh
+            // boundary stays on VC1 through every later mesh and can still decode a Z action, so the
+            // express output must be realizable on VC1 as well as VC0.
+            // Otherwise: 3 sender channels (3 mesh directions only)
+            uint32_t mesh_vc1_sender_count = (has_z_on_device_ || express_routing_enabled_) ? 4 : 3;
 
             // VC1 senders occupy the flat index space immediately after VC0's. Derive the base from the
             // actual VC0 count rather than the 2D mesh constant: the two agree today, but a wider VC0
@@ -253,8 +256,8 @@ uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc)
                     return no_channels;  // VC1 not enabled (no mappings created)
                 }
 
-                // Count actual sender channels (3 for XY intermesh, 4 for Z intermesh)
-                // 3 for MESH, 4 for MESH_AND_Z_ROUTER
+                // Count actual sender channels (3 for XY intermesh, 4 for Z intermesh or express)
+                // 3 for MESH, 4 for MESH_AND_Z_ROUTER / express
                 uint32_t count = 0;
                 for (uint32_t i = 0; i < builder_config::num_downstream_edms_2d_vc1_with_z; ++i) {
                     if (sender_channel_map_.contains(LogicalSenderChannelKey{vc1_index, i})) {

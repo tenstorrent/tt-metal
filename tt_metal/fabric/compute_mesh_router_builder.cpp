@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -308,7 +309,10 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         bool enable_mesh_pass_through = intermesh_config.requires_vc1_mesh_pass_through;
         // The MESH_TO_Z connection exists to reach an intermesh Z router, so it follows the intermesh
         // Z edge rather than the presence of any Z port. An express chord is instead wired as an
-        // ordinary same-VC cardinal/Z transition by the express path below.
+        // ordinary same-VC cardinal/Z transition by the express path below. The Z output is only
+        // emitted when this chip actually terminates the chord: on a chip whose only Z edge crosses
+        // a mesh boundary, a Z target would resolve to the intermesh Z router and leak same-mesh
+        // traffic onto the boundary link.
         connection_mapping = RouterConnectionMapping::for_mesh_router(
             topology,
             location.direction,
@@ -316,7 +320,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
             enable_vc1,
             enable_mesh_pass_through,
             control_plane.express_routing_enabled(local_node.mesh_id),
-            edge_capability);
+            edge_capability,
+            has_intramesh_express_edge(control_plane, local_node));
     }
 
     // Compute injection channel flags at router level BEFORE creating builders
@@ -566,6 +571,14 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
     // fed by one upstream producer, and the channel index identifies which ingress that is.
     const auto egress = control_plane.eth_direction_to_routing_direction(direction);
     const auto queries = make_protected_ring_queries(control_plane, local_node);
+    const bool has_express_chord = has_intramesh_express_edge(control_plane, local_node);
+
+    // VC2 stays out of the derivation: the optional existing VC2 behavior is separate from the
+    // express design, and its sender is not a fixed-direction producer slot that the table below
+    // can name. It keeps the ordinary non-injection guard until its express-mesh role is defined.
+    if (vc >= 2) {
+        return injection_flags;
+    }
 
     // Only VC0 carries a local worker; VC1 producers are all forwarding paths.
     if (vc == 0) {
@@ -591,6 +604,18 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
         const auto ingress_capability = capability_in_direction(control_plane, local_node, ingress);
         if (!ingress_capability.has_value()) {
             continue;  // no neighbour that way, so nothing is wired into this slot
+        }
+
+        // Classify only producers the connection map actually wired. The sender-channel direction
+        // table is static and names an ingress for every slot, but under express wiring some slots
+        // carry no producer: an intramesh X ingress is dimension-order-unwired from every intramesh
+        // Y egress, and nothing is wired into a Z egress on a chord-less chip. Skipping those slots
+        // here is what keeps the derivation's dimension-order failure meaningful -- a DOR-forbidden
+        // turn that still reaches classify_producer_effect genuinely signals a disagreement between
+        // the maps and this derivation, not a correctly unwired slot.
+        if (!RouterConnectionMapping::is_express_producer_wired(
+                ingress, *ingress_capability, egress, has_express_chord)) {
+            continue;
         }
 
         const auto effect =

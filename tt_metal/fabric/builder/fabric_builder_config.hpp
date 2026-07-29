@@ -75,11 +75,14 @@ static constexpr std::size_t num_receiver_channels_z_router = 2;  // 1 for VC0, 
 
 static constexpr std::size_t num_sender_channels_1d = 2;
 // VC0: Worker + 3 of [N/E/S/W], plus the express chord when express routing is on = 4 or 5 channels
-// VC1: Up to 3 of [N/E/S/W] for inter-mesh = 3 channels, 1 for Z→mesh
-// Total 2D without VC2: 5 + 3 + 1 = 9 channels (VC2 added dynamically)
+// VC1: Up to 4 channels (no worker): 3 of [N/E/S/W] for inter-mesh, plus a Z sender when the device
+// has an intermesh Z router or the mesh has express routing -- a carrier that crossed a mesh
+// boundary stays on VC1 and can still decode a Z action, so the express output must exist on VC1.
+// Total 2D without VC2: 5 + 4 = 9 channels (VC2 added dynamically)
 //
 // Sized for the widest 2D shape so the flat index space is the same whether or not express routing is
-// enabled. num_max_sender_channels is unchanged at 10, since the Z router already reached that.
+// enabled. num_max_sender_channels is unchanged at 10: express with VC2 reaches it exactly (5+4+1),
+// matching the capacity analysis in GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md section 3.6.
 static constexpr std::size_t num_sender_channels_2d = 9;
 // Max including VC2 — used only for array sizing
 static constexpr std::size_t num_sender_channels_2d_with_vc2 = num_sender_channels_2d + num_sender_channels_vc2;

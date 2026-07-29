@@ -4,6 +4,7 @@
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 
+#include <algorithm>
 #include <array>
 
 namespace tt::tt_fabric {
@@ -89,6 +90,32 @@ std::vector<RoutingDirection> RouterConnectionMapping::express_outbound_directio
     return outbound;
 }
 
+std::vector<RoutingDirection> RouterConnectionMapping::wired_express_outbound_directions(
+    RoutingDirection direction, EdgeCapability ingress_capability, bool has_intramesh_express) {
+    auto outbound = express_outbound_directions(direction, ingress_capability);
+
+    // A Z output is realizable only when this chip terminates an intramesh express chord. On a
+    // chip whose only Z edge crosses a mesh boundary, a Z target would resolve to the intermesh
+    // Z router and leak same-mesh traffic onto the boundary link; the MESH_TO_Z template is the
+    // only correct way to reach that router. On a chip with no Z edge the target would match
+    // nothing at connection resolution, but not emitting it keeps the transition set honest --
+    // and keeps the pass-through VC1 MESH_TO_Z channel (slot 3) free of aliases.
+    if (!has_intramesh_express) {
+        std::erase(outbound, RoutingDirection::Z);
+    }
+    return outbound;
+}
+
+bool RouterConnectionMapping::is_express_producer_wired(
+    RoutingDirection producer_direction,
+    EdgeCapability producer_capability,
+    RoutingDirection egress_direction,
+    bool has_intramesh_express) {
+    const auto outbound =
+        wired_express_outbound_directions(producer_direction, producer_capability, has_intramesh_express);
+    return std::find(outbound.begin(), outbound.end(), egress_direction) != outbound.end();
+}
+
 RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
     Topology topology,
     RoutingDirection direction,
@@ -96,7 +123,8 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
     bool enable_vc1,
     bool enable_mesh_pass_through,
     bool express_routing_enabled,
-    EdgeCapability ingress_capability) {
+    EdgeCapability ingress_capability,
+    bool has_intramesh_express) {
     RouterConnectionMapping mapping;
 
     // Express routing changes which local transitions are legal, so it gets its own construction.
@@ -104,7 +132,9 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
     // dimension-ordered, so its wired-but-unused X->Y arcs are harmless, and removing them would
     // change downstream counts, stream assignment, and L1 layout on every existing 2D configuration.
     if (express_routing_enabled && (topology == Topology::Mesh || topology == Topology::Torus)) {
-        const auto outbound = express_outbound_directions(direction, ingress_capability);
+        // Wired outputs, not merely legal ones: a Z target exists only where the chip terminates
+        // the chord, so an intermesh Z router can only be reached through the MESH_TO_Z template.
+        const auto outbound = wired_express_outbound_directions(direction, ingress_capability, has_intramesh_express);
 
         for (const auto egress : outbound) {
             TT_FATAL(

@@ -100,6 +100,10 @@ public:
      *        Y egress so dimension order holds. Non-express wiring is left byte-for-byte as it was.
      * @param ingress_capability Capability of this router's own edge. Only consulted under express
      *        routing, where an INTERMESH landing on an E/W port stays eligible to begin Y.
+     * @param has_intramesh_express Whether this chip terminates a same-mesh express chord. Only
+     *        consulted under express routing: a Z output is emitted only when the chord exists. On a
+     *        chip whose only Z edge crosses a mesh boundary, a Z target would resolve to the
+     *        intermesh Z router and leak same-mesh traffic onto the boundary link.
      * @return Configured RouterConnectionMapping for mesh router
      */
     static RouterConnectionMapping for_mesh_router(
@@ -109,7 +113,8 @@ public:
         bool enable_vc1 = false,
         bool enable_mesh_pass_through = false,
         bool express_routing_enabled = false,
-        EdgeCapability ingress_capability = EdgeCapability::INTRAMESH_CARDINAL);
+        EdgeCapability ingress_capability = EdgeCapability::INTRAMESH_CARDINAL,
+        bool has_intramesh_express = false);
 
     /**
      * @brief Legal outbound directions for one express-routing mesh router
@@ -119,6 +124,35 @@ public:
      */
     static std::vector<RoutingDirection> express_outbound_directions(
         RoutingDirection direction, EdgeCapability ingress_capability);
+
+    /**
+     * @brief The outbound directions this chip's router actually wires under express routing
+     *
+     * The legal transitions from express_outbound_directions minus any output whose edge does not
+     * exist here: a Z output requires the chip to terminate an intramesh express chord. On a chip
+     * whose only Z edge crosses a mesh boundary, a Z target would resolve to the intermesh Z router
+     * and leak same-mesh traffic onto the boundary link.
+     *
+     * for_mesh_router and the injection-flag derivation both consume this, so the wired producer
+     * set and the connection map cannot drift apart.
+     */
+    static std::vector<RoutingDirection> wired_express_outbound_directions(
+        RoutingDirection direction, EdgeCapability ingress_capability, bool has_intramesh_express);
+
+    /**
+     * @brief Would the router facing `producer_direction` (on the same chip) wire into the router
+     * facing `egress_direction` under express routing?
+     *
+     * True exactly when `egress_direction` is in the producer's wired outbound set. The
+     * injection-flag derivation uses this to classify only producers the connection map actually
+     * wired -- in particular, an intramesh X producer is never wired into an intramesh Y egress
+     * (dimension order), and no producer is wired into a Z egress on a chord-less chip.
+     */
+    static bool is_express_producer_wired(
+        RoutingDirection producer_direction,
+        EdgeCapability producer_capability,
+        RoutingDirection egress_direction,
+        bool has_intramesh_express);
 
     /**
      * @brief Factory method for Z router connection mapping

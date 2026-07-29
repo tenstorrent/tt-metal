@@ -41,9 +41,17 @@ std::set<RoutingDirection> target_directions(const RouterConnectionMapping& mapp
 RouterConnectionMapping express_mapping(
     RoutingDirection direction,
     EdgeCapability capability = EdgeCapability::INTRAMESH_CARDINAL,
-    bool enable_vc1 = k_vc1) {
+    bool enable_vc1 = k_vc1,
+    bool has_express_chord = true) {
     return RouterConnectionMapping::for_mesh_router(
-        Topology::Torus, direction, k_no_intermesh_z, enable_vc1, k_no_pass_through, k_express, capability);
+        Topology::Torus,
+        direction,
+        k_no_intermesh_z,
+        enable_vc1,
+        k_no_pass_through,
+        k_express,
+        capability,
+        has_express_chord);
 }
 
 // --- Legal transition set (builder contract section 4.4 wiring policy) ---
@@ -169,7 +177,8 @@ TEST(ExpressConnectionWiringTest, IntermeshZTemplateStillAppliesUnderExpress) {
         k_vc1,
         k_no_pass_through,
         k_express,
-        EdgeCapability::INTRAMESH_CARDINAL);
+        EdgeCapability::INTRAMESH_CARDINAL,
+        /*has_intramesh_express=*/false);
 
     bool has_mesh_to_z = false;
     for (const auto& target : mapping.get_downstream_targets(0, 0)) {
@@ -178,6 +187,161 @@ TEST(ExpressConnectionWiringTest, IntermeshZTemplateStillAppliesUnderExpress) {
         }
     }
     EXPECT_TRUE(has_mesh_to_z);
+}
+
+// --- Z output existence (F3): only a chip that terminates the chord may emit a Z target ---
+
+TEST(ExpressConnectionWiringTest, ChipWithoutExpressChordEmitsNoZTarget) {
+    // Express is mesh-level, but this chip has no intramesh chord (a leaf chip, or one whose only Z
+    // edge crosses a mesh boundary). A Z target would resolve to nothing -- or worse, to an
+    // intermesh Z router -- so it is not emitted at all.
+    for (const auto direction : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+        const auto mapping =
+            express_mapping(direction, EdgeCapability::INTRAMESH_CARDINAL, k_vc1, /*has_express_chord=*/false);
+        for (uint32_t vc : {0u, 1u}) {
+            const auto dirs = target_directions(mapping, vc);
+            EXPECT_FALSE(dirs.contains(RoutingDirection::Z))
+                << "direction " << static_cast<int>(direction) << " VC" << vc << " must not target Z";
+        }
+    }
+}
+
+TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipReachesZRouterOnlyThroughIntermeshTemplate) {
+    // The F3 case: express mesh, and this chip's only Z edge crosses a mesh boundary. Same-mesh
+    // traffic must not take an express-style Z target onto the boundary link; the intermesh
+    // template is the only correct way to reach that router.
+    const auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Torus,
+        RoutingDirection::N,
+        k_has_intermesh_z,
+        k_vc1,
+        k_no_pass_through,
+        k_express,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        /*has_intramesh_express=*/false);
+
+    for (const auto& target : mapping.get_downstream_targets(0, 0)) {
+        if (target.type == ConnectionType::INTRA_MESH) {
+            EXPECT_NE(target.target_direction, RoutingDirection::Z)
+                << "INTRA_MESH Z target would wire same-mesh VC0 traffic onto the intermesh link";
+        }
+    }
+
+    bool has_mesh_to_z = false;
+    for (const auto& target : mapping.get_downstream_targets(0, 0)) {
+        if (target.type == ConnectionType::MESH_TO_Z) {
+            has_mesh_to_z = true;
+            EXPECT_EQ(target.target_direction, RoutingDirection::Z);
+        }
+    }
+    EXPECT_TRUE(has_mesh_to_z);
+}
+
+TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipVc1MeshToZDoesNotAliasCardinalOutputs) {
+    // With the express Z target filtered, a Y-facing router's VC1 cardinal outputs occupy channels
+    // 0-2, so the pass-through VC1 MESH_TO_Z target (fixed at channel 3) no longer aliases one of
+    // them. This only holds because the chord-less chip drops the Z output.
+    const auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Torus,
+        RoutingDirection::N,
+        k_has_intermesh_z,
+        k_vc1,
+        /*enable_mesh_pass_through=*/true,
+        k_express,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        /*has_intramesh_express=*/false);
+
+    std::set<uint32_t> used_channels;
+    bool has_vc1_mesh_to_z = false;
+    for (const auto& target : mapping.get_downstream_targets(1, 0)) {
+        EXPECT_TRUE(used_channels.insert(target.target_sender_channel).second)
+            << "VC1 sender channel " << target.target_sender_channel << " is shared by two targets";
+        if (target.type == ConnectionType::MESH_TO_Z) {
+            has_vc1_mesh_to_z = true;
+            EXPECT_EQ(target.target_sender_channel, 3u);
+        }
+    }
+    EXPECT_TRUE(has_vc1_mesh_to_z);
+    EXPECT_EQ(used_channels.size(), 4u);  // S, E, W cardinals + MESH_TO_Z
+}
+
+// --- Wired producer sets (F1): the rule the injection-flag derivation consumes ---
+//
+// The derivation classifies a producer's protected-ring effect only when the connection map wires
+// that producer into the egress. The wired set is pinned here directly so the two cannot drift.
+
+TEST(ExpressConnectionWiringTest, WiredProducerSetsMatchExpectedTransitions) {
+    constexpr bool chord = true;
+
+    // Y-facing egress (N/S): the opposite-Y producer and the chord producer are wired; intramesh
+    // X producers are dimension-order-unwired.
+    for (const auto egress : {RoutingDirection::N, RoutingDirection::S}) {
+        const auto opposite = egress == RoutingDirection::N ? RoutingDirection::S : RoutingDirection::N;
+        EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
+            opposite, EdgeCapability::INTRAMESH_CARDINAL, egress, chord));
+        EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
+            RoutingDirection::Z, EdgeCapability::INTRAMESH_EXPRESS, egress, chord));
+        for (const auto x : {RoutingDirection::E, RoutingDirection::W}) {
+            EXPECT_FALSE(RouterConnectionMapping::is_express_producer_wired(
+                x, EdgeCapability::INTRAMESH_CARDINAL, egress, chord))
+                << "intramesh X must not wire into Y egress " << static_cast<int>(egress);
+        }
+    }
+
+    // Express-facing egress (Z): both Y cardinals are wired; intramesh X is unwired.
+    for (const auto y : {RoutingDirection::N, RoutingDirection::S}) {
+        EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
+            y, EdgeCapability::INTRAMESH_CARDINAL, RoutingDirection::Z, chord));
+    }
+    for (const auto x : {RoutingDirection::E, RoutingDirection::W}) {
+        EXPECT_FALSE(RouterConnectionMapping::is_express_producer_wired(
+            x, EdgeCapability::INTRAMESH_CARDINAL, RoutingDirection::Z, chord));
+    }
+
+    // X-facing egress (E/W): the opposite X plus every Y producer is wired, since the Y->X turn is
+    // the legal dimension change.
+    for (const auto egress : {RoutingDirection::E, RoutingDirection::W}) {
+        const auto opposite = egress == RoutingDirection::E ? RoutingDirection::W : RoutingDirection::E;
+        EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
+            opposite, EdgeCapability::INTRAMESH_CARDINAL, egress, chord));
+        for (const auto y : {RoutingDirection::N, RoutingDirection::S}) {
+            EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
+                y, EdgeCapability::INTRAMESH_CARDINAL, egress, chord));
+        }
+        EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
+            RoutingDirection::Z, EdgeCapability::INTRAMESH_EXPRESS, egress, chord));
+    }
+}
+
+TEST(ExpressConnectionWiringTest, IntermeshLandingProducerMayWireIntoY) {
+    // A boundary landing is a route root, not a packet mid-X-phase: an INTERMESH producer wires
+    // into N/S/Z even on an E or W port.
+    for (const auto x : {RoutingDirection::E, RoutingDirection::W}) {
+        for (const auto egress : {RoutingDirection::N, RoutingDirection::S, RoutingDirection::Z}) {
+            EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(x, EdgeCapability::INTERMESH, egress, true))
+                << "landing producer " << static_cast<int>(x) << " -> " << static_cast<int>(egress);
+        }
+    }
+}
+
+TEST(ExpressConnectionWiringTest, NoChordNothingWiresIntoZEgress) {
+    // The chord filter drops Z from every producer's outbound set, so on a chord-less chip no
+    // producer is wired into a Z egress.
+    for (const auto producer :
+         {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z}) {
+        const auto capability =
+            producer == RoutingDirection::Z ? EdgeCapability::INTRAMESH_EXPRESS : EdgeCapability::INTRAMESH_CARDINAL;
+        EXPECT_FALSE(
+            RouterConnectionMapping::is_express_producer_wired(producer, capability, RoutingDirection::Z, false))
+            << "producer " << static_cast<int>(producer);
+    }
+
+    // Y->Y without the chord still wires: leaf attachments and line continuation are real
+    // transitions with real flow-control classifications.
+    EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
+        RoutingDirection::S, EdgeCapability::INTRAMESH_CARDINAL, RoutingDirection::N, false));
+    EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
+        RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, RoutingDirection::S, false));
 }
 
 }  // namespace
