@@ -668,6 +668,8 @@ def test_rtdetr_model(device):
         tt_intermediate_hidden_states,
         tt_intermediate_logits,
         tt_intermediate_reference_points,
+        logits,
+        pred_boxes,
     ) = tt_module(tt_pixel_values)
 
     torch_scores = torch_outputs.enc_outputs_class.max(dim=-1).values

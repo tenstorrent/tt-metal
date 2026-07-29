@@ -312,7 +312,12 @@ class TtRTDetrModel:
             index=ttnn.repeat(ttnn.unsqueeze(topk_ind, dim=-1), (1, 1, output_memory.shape[-1])),
         )
 
-        decoder_outputs = self.decoder(
+        (
+            last_hidden_state,
+            intermediate_hidden_states,
+            intermediate_logits,
+            intermediate_reference_points,
+        ) = self.decoder(
             inputs_embeds=target,
             encoder_hidden_states=source_flatten,
             reference_points=reference_points_unact,
@@ -321,4 +326,14 @@ class TtRTDetrModel:
             level_start_index=self.level_start_index,
         )
 
-        return decoder_outputs
+        logits = intermediate_logits[:, -1]
+        pred_boxes = intermediate_reference_points[:, -1]
+
+        return (
+            last_hidden_state,
+            intermediate_hidden_states,
+            intermediate_logits,
+            intermediate_reference_points,
+            logits,
+            pred_boxes,
+        )

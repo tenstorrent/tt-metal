@@ -196,13 +196,11 @@ class TtRTDetrResNetConvLayer:
             tensor=parameters.convolution.weight * scale[:, None, None, None],
             dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
         )
         self.conv_bias = ttnn.from_torch(
             parameters.normalization.bias - parameters.normalization.running_mean * scale[None, None, None, :],
             dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
         )
 
         shard_layout = (
@@ -223,6 +221,45 @@ class TtRTDetrResNetConvLayer:
     def __call__(
         self, x: ttnn.Tensor, batch_size: int, input_height: int, input_width: int
     ) -> tuple[ttnn.Tensor, int, int]:
+        if not ttnn.is_tensor_storage_on_device(self.conv_weight):
+            conv_kwargs = {
+                "input_memory_config": x.memory_config(),
+                "input_layout": x.get_layout(),
+                "in_channels": self.in_channels,
+                "out_channels": self.out_channels,
+                "batch_size": batch_size,
+                "input_height": input_height,
+                "input_width": input_width,
+                "kernel_size": self.kernel_size,
+                "stride": self.stride,
+                "padding": self.padding,
+                "dilation": (1, 1),
+                "groups": 1,
+                "device": self.device,
+                "input_dtype": self.dtype,
+                "conv_config": self.conv_config,
+            }
+            self.conv_weight = ttnn.prepare_conv_weights(
+                weight_tensor=self.conv_weight,
+                weights_format="OIHW",
+                has_bias=True,
+                **conv_kwargs,
+            )
+            self.conv_bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.conv_bias,
+                **conv_kwargs,
+            )
+            self.conv_weight = ttnn.to_device(
+                self.conv_weight,
+                self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.conv_bias = ttnn.to_device(
+                self.conv_bias,
+                self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         x, (output_height, output_width) = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv_weight,
