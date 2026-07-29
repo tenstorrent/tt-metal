@@ -17,7 +17,9 @@ and `probes/probe_009.py` / `probe_010.py` for the sweeps):
   the planner for depth-2 only where it pays: below the DRAM
   bandwidth-saturation knee AND with ≥ 2 chunk-blocks per core. `True` / `False`
   still force depth-2 / depth-1, so the public kwarg keeps both values and their
-  documented meaning — only the *default* is gated.
+  documented meaning — only the *default* is gated. Gating the default does **not**
+  add an axis value: `SUPPORTED["double_buffer"]` stays `[False, True]`, guarded by
+  `test_double_buffer_axis_stays_two_valued`.
 
 Correctness is checked with `torch.equal` (tilize is value-preserving), so every
 gated path is proven bit-exact, not merely fast.
@@ -29,6 +31,7 @@ import pytest
 import torch
 
 import ttnn
+from ttnn.operations._op_contract import UnsupportedAxisValue
 from ttnn.operations.tilize import SUPPORTED, tilize, validate
 from ttnn.operations.tilize.tilize_program_descriptor import (
     A0_KNEE_CORES,
@@ -236,7 +239,7 @@ def test_gated_default_picks_depth1_for_one_block_per_core(device):
     assert gated["cb_bytes_per_core"] * 2 == forced2["cb_bytes_per_core"]
 
 
-@pytest.mark.parametrize("use_double_buffer", [None, True, False], ids=["auto", "forced_d2", "forced_d1"])
+@pytest.mark.parametrize("use_double_buffer", [None, True, False], ids=["planner", "forced_d2", "forced_d1"])
 @pytest.mark.parametrize("shape", [pytest.param(WIDE, id="wide"), pytest.param(NARROW, id="narrow")])
 def test_gated_default_is_bit_exact(device, shape, use_double_buffer):
     """Correctness at the gated default and at both forced depths."""
@@ -267,17 +270,40 @@ def test_gate_is_inert_on_the_zero_copy_path(device):
 
 
 # ---------------------------------------------------------------------------
-# Registry contract: the axis is now three-valued
+# Registry contract: gating the DEFAULT must not grow the axis
 # ---------------------------------------------------------------------------
 
 
-def test_double_buffer_axis_declares_auto():
-    assert "auto" in SUPPORTED["double_buffer"]
-    assert True in SUPPORTED["double_buffer"]
-    assert False in SUPPORTED["double_buffer"]
+def test_double_buffer_axis_stays_two_valued():
+    """The C16 gate changes the *default*, not the set of supported depths.
+
+    Refinement 1's first attempt declared a third value ``"auto"`` for
+    ``use_double_buffer=None``. That was a real registry defect, and this test is
+    its regression guard:
+
+    * ``None`` is a **request shape** — "let the planner choose" — and the planner
+      only ever chooses depth-1 or depth-2, both already in this axis. There is no
+      third CB depth, so there is no third capability to declare.
+    * No golden cell can take it: ``tag_double_buffer`` projects the scenario dict
+      onto a bool (the golden matrix is 192 ``True`` / 24 ``False``), so the value
+      bought exactly zero coverage.
+    * A grown SUPPORTED rectangle reclassifies a perf-only refinement as a
+      cartesian expansion, which raises the harness's golden-majority bar from
+      50 % to 75 % — unreachable for a refinement that unlocks no cell by
+      construction. It cost this refinement its completion gate.
+
+    Keep the axis equal to the golden TARGET ``[False, True]``.
+    """
+    assert sorted(SUPPORTED["double_buffer"], key=str) == [False, True], (
+        f'SUPPORTED["double_buffer"] must stay exactly [False, True], got '
+        f"{SUPPORTED['double_buffer']!r}. Gating the DEFAULT is not a new axis "
+        "value — see this test's docstring."
+    )
+    # Belt and braces: no sentinel of any spelling.
+    assert not any(isinstance(v, str) for v in SUPPORTED["double_buffer"])
 
 
-@pytest.mark.parametrize("use_double_buffer", [None, True, False], ids=["auto", "d2", "d1"])
+@pytest.mark.parametrize("use_double_buffer", [None, True, False], ids=["planner", "d2", "d1"])
 def test_validate_accepts_every_depth_request(device, use_double_buffer):
     torch.manual_seed(0)
     tt_input = ttnn.from_torch(
@@ -294,6 +320,43 @@ def test_validate_accepts_every_depth_request(device, use_double_buffer):
         use_multicore=True,
         use_double_buffer=use_double_buffer,
     )
+
+
+def test_validate_gates_every_depth_the_planner_may_pick(device, monkeypatch, expect_error):
+    """``None`` is *gated*, not waved through.
+
+    Dropping ``"auto"`` must not turn the delegated request into an unchecked one:
+    since the planner may pick either depth, ``validate(None)`` has to hold for
+    every depth in that set. Proven by shrinking the axis to ``[False]`` — the
+    delegated request must then be refused (the planner could still pick depth-2),
+    while the pinned ``False`` request stays legal.
+    """
+    import ttnn.operations.tilize as tilize_mod
+
+    torch.manual_seed(0)
+    tt_input = ttnn.from_torch(
+        torch.randn((1, 1, 32, 64)).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def _validate(request):
+        validate(
+            tt_input,
+            ttnn.DRAM_MEMORY_CONFIG,
+            output_dtype=ttnn.bfloat16,
+            use_multicore=True,
+            use_double_buffer=request,
+        )
+
+    monkeypatch.setitem(tilize_mod.SUPPORTED, "double_buffer", [False])
+    with expect_error(UnsupportedAxisValue, "double_buffer=True not in SUPPORTED"):
+        _validate(None)  # the planner could still pick depth-2 -> refuse
+    with expect_error(UnsupportedAxisValue, "double_buffer=True not in SUPPORTED"):
+        _validate(True)
+    _validate(False)  # the one depth still declared
 
 
 def test_per_core_cb_bytes_at_the_gated_default(device):

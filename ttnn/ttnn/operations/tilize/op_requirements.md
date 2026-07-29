@@ -72,7 +72,7 @@
 > it was dropped — the knee is a *bandwidth* phenomenon and this op is read-transaction-rate bound at
 > 64 B/page, unable to reach the knee's bandwidth at any core count. The `d_tall_narrow` ≥ 1.5 % gate
 > is therefore **not met** (measured 3 609 ns = 1.014×) and is shown unreachable from this
-> refinement's lever set; the residual is decomposed to the ns and handed to **Refinement 1b**. Full
+> refinement's lever set; the residual is decomposed to the ns and handed to **Refinement 1c**. Full
 > ledger, sweeps and the corrected C16 predicate: `changelog.md` § "Refinement 1".
 
 **Goal**: move the two named low-work-per-core bench regimes off their measured floor by gating
@@ -107,7 +107,45 @@ suite still 126/126.
 
 ---
 
-### [ ] Refinement 1b — `d_tall_narrow` sub-one-packet read path: B13 `set_state` on the 32 stick reads, then C7 split reader
+
+
+### [ ] Refinement 1b — Per-core-overhead gating for the low-work-per-core regimes (A0 knee + B0 + depth-2 default) (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: golden responsible cells 126/216 below majority threshold.
+```
+
+**Root cause (diagnosed 2026-07-29, this entry's own pass)**: not a kernel, hang, or correctness
+defect — a **registry-declaration** defect. Nothing regressed: `HANGS=0`, and all **240/240**
+prior-passing golden nodeids still passed (`golden_phase0` vs `golden_refinement_1` `test_results.json`
+set-diff = ∅). The 126/216 ratio is **byte-identical to Phase 0's** (the 90 INVALID-skipped cells sit
+in the harness's denominator), and a perf-only refinement cannot move it by construction.
+
+What moved was the *threshold*: Refinement 1 declared a third value `"auto"` in
+`SUPPORTED["double_buffer"]` for the new `use_double_buffer=None` default. The registry snapshot diff
+between the two phases is exactly `[+"auto"]`, which makes
+`eval/run_refinements.py::_supported_grew()` classify the phase as a **cartesian expansion** and raise
+the bullet-3 bar from `GOLDEN_MAJORITY_FIX = 0.50` to `GOLDEN_MAJORITY_EXPANSION = 0.75`. 126/216 =
+**0.583** clears 0.50 and fails 0.75. The value also bought **zero** coverage: `tag_double_buffer`
+projects the scenario dict onto a bool, so the golden axis only ever takes `True` (192 cells) /
+`False` (24) — never `"auto"`.
+
+**Fix**: `SUPPORTED["double_buffer"]` back to `[False, True]` (== the golden TARGET). `None` is a
+*request shape* — "let the planner choose" — not a capability, and the planner only ever picks
+depth-1 or depth-2, so `validate()` gates the delegated request against **both** depths instead of
+declaring a sentinel. The C16 lever itself (the shipped perf/L1 win) is untouched.
+**Generalisable rule**: only declare an axis value the op can be *asked for* and a golden cell can
+*take*; gating a *default* is never a new axis value. Guarded by
+`test_tilize_refinement1.py::test_double_buffer_axis_stays_two_valued` and
+`::test_validate_gates_every_depth_the_planner_may_pick`.
+
+---
+
+### [ ] Refinement 1c — `d_tall_narrow` sub-one-packet read path: B13 `set_state` on the 32 stick reads, then C7 split reader
 
 **Goal**: the remaining half of Refinement 1 — get `d_tall_narrow` `[1,1,2048,32]` below
 **2 439 ns** (the parent's 1.5× gate) from its measured **3 609 ns**. Refinement 1 proved the parent's

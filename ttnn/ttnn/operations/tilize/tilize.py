@@ -77,11 +77,11 @@ def tag_rank(inputs, axes):
 
 
 def tag_double_buffer(inputs, axes):
-    # A scenario that omits the key does not forward `use_double_buffer` at all,
-    # so the op runs its gated default ("auto"). Kept as bool(True) because that
-    # is the value the golden TARGET declares for those cells, and "auto" never
-    # exceeds depth-2 -- both are in SUPPORTED, so no xfail/xpass drift either
-    # way.
+    # A scenario that omits the key does not forward `use_double_buffer` at all, so
+    # the op runs its gated default (None => the planner picks depth-1 or depth-2).
+    # Projected as bool(True), which is the value the golden TARGET declares for
+    # those cells and the ceiling of what the planner can pick. The axis is
+    # two-valued on purpose -- there is no "auto" value; see SUPPORTED below.
     return bool(inputs[0].get("use_double_buffer", True))
 
 
@@ -121,12 +121,27 @@ SUPPORTED = {
         ttnn.int32,
     ],
     "use_multicore": [False, True],
-    # "auto" is the gated default added by Refinement 1 (lever C16): the caller
-    # leaves `use_double_buffer` unset and the planner picks depth-2 only where it
-    # was measured to pay (< the DRAM bandwidth-saturation knee AND >= 2 blocks
-    # per core). True/False keep their documented force-depth-2 / force-depth-1
-    # meaning, so the axis now has three values.
-    "double_buffer": [False, True, "auto"],
+    # The CB depth the op runs at. Exactly two values, matching the golden
+    # TARGET — Refinement 1's C16 gate did NOT add a third.
+    #
+    # `use_double_buffer=None` (the public default since Refinement 1) is a
+    # *request shape*, not a capability: it delegates the choice to the planner,
+    # which picks depth-1 or depth-2 — both already members of this axis. It is
+    # therefore deliberately NOT declared as an "auto" value here. Refinement 1's
+    # first attempt did declare it and that was a real defect, not a cosmetic one:
+    #
+    #   * no golden cell can ever take it — `tag_double_buffer` projects the
+    #     scenario dict onto a bool (the golden matrix is 192 True / 24 False), so
+    #     the value bought zero coverage; and
+    #   * a third value grows the SUPPORTED rectangle, which reclassifies a
+    #     perf-only refinement as a cartesian expansion and raises the harness's
+    #     golden-majority bar from 50 % to 75 % — unreachable for a refinement that
+    #     unlocks no cell by construction.
+    #
+    # Rule this pins: only declare an axis value the op can be *asked for* and a
+    # golden cell can *take*. A "let the planner decide" sentinel is neither.
+    # `validate()` handles None by checking every depth the planner may pick.
+    "double_buffer": [False, True],
     "shard_api": ["none", "legacy_2d", "nd"],
     "out_scheme": ["interleaved", _HEIGHT, _WIDTH, _BLOCK, "nd"],
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
@@ -195,6 +210,26 @@ def _shard_api_axis(in_memory_config, out_memory_config) -> str:
     return "legacy_2d"
 
 
+def _double_buffer_axis_values(use_double_buffer):
+    """The ``double_buffer`` axis value(s) this call may resolve to.
+
+    ``True`` / ``False`` pin the depth, so the axis takes exactly that value.
+    ``None`` — the public default — delegates to the planner's C16 gate
+    (``tilize_program_descriptor.depth2_pays``), which picks depth-1 or depth-2:
+    both members of this same two-valued axis. So ``None`` is not a third axis
+    value, it is a request that resolves to one of the two; the honest gate for it
+    is "every depth the planner may pick must be supported", which is what
+    returning both expresses.
+
+    Declaring an ``"auto"`` value instead (Refinement 1's first attempt) claimed a
+    capability that no caller can observe and no golden cell can take — see the
+    note on ``SUPPORTED["double_buffer"]``.
+    """
+    if use_double_buffer is None:
+        return (False, True)
+    return (bool(use_double_buffer),)
+
+
 def validate(
     input_tensor,
     out_memory_config,
@@ -210,9 +245,9 @@ def validate(
         "dtype": input_tensor.dtype,
         "output_dtype": output_dtype,
         "use_multicore": bool(use_multicore),
-        # None == "let the planner gate the depth" (the public default); True /
-        # False force depth-2 / depth-1. Three-valued, matching SUPPORTED.
-        "double_buffer": "auto" if use_double_buffer is None else bool(use_double_buffer),
+        # Filled in per candidate depth below (None => the planner decides, so
+        # every depth it may pick has to clear the gate).
+        "double_buffer": None,
         "shard_api": _shard_api_axis(in_memory_config, out_memory_config),
         "out_scheme": _out_scheme_axis(out_memory_config),
         "buffer": (
@@ -221,15 +256,18 @@ def validate(
         "rank": int(len(input_tensor.shape)),
     }
 
-    # 1. SUPPORTED — per-axis
-    for axis, allowed in SUPPORTED.items():
-        if axes[axis] not in allowed:
-            raise UnsupportedAxisValue(f"tilize: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+    for depth_value in _double_buffer_axis_values(use_double_buffer):
+        axes["double_buffer"] = depth_value
 
-    # 2. EXCLUSIONS — cell-level inside SUPPORTED
-    for exc in EXCLUSIONS:
-        if all(axes.get(k) == v for k, v in exc.items()):
-            raise ExcludedCell(f"tilize: unsupported combination (refinement candidate): {exc}")
+        # 1. SUPPORTED — per-axis
+        for axis, allowed in SUPPORTED.items():
+            if axes[axis] not in allowed:
+                raise UnsupportedAxisValue(f"tilize: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+
+        # 2. EXCLUSIONS — cell-level inside SUPPORTED
+        for exc in EXCLUSIONS:
+            if all(axes.get(k) == v for k, v in exc.items()):
+                raise ExcludedCell(f"tilize: unsupported combination (refinement candidate): {exc}")
 
 
 # ---------------------------------------------------------------------------
