@@ -398,6 +398,7 @@ def build_n_stage_pipeline(
     submeshes=None,
     block_cls=TTNNPi05AdaRMSGemmaBlock,
     use_concat_kv=False,
+    prefix_valid_tiles=None,
 ) -> Pipeline:
     assert attention_mask_torch is not None, "phantom-suffix mask is REQUIRED"
     n = len(splits)
@@ -430,6 +431,7 @@ def build_n_stage_pipeline(
         prefix_len=prefix_len,
         suffix_len=suffix_len,
         attention_mask_torch=attention_mask_torch,
+        prefix_valid_tiles=prefix_valid_tiles,
     )
     bridges = [
         D2DBridge(stages[i], stages[i + 1], transport=SplitSocketTransport(), tag=f"hop{i}") for i in range(n - 1)
@@ -912,6 +914,7 @@ def build_denoise_loop_pipeline(
     block_cls=TTNNPi05DenoiseExpertBlock,
     use_concat_kv=True,
     drain="all",
+    prefix_valid_tiles=None,
 ):
     assert len(adarms_cond_per_step) == num_steps, "per-step adarms_cond REQUIRED (len == num_steps)"
     pipe = build_n_stage_pipeline(
@@ -927,6 +930,7 @@ def build_denoise_loop_pipeline(
         prefix_len=prefix_len,
         suffix_len=suffix_len,
         attention_mask_torch=attention_mask_torch,
+        prefix_valid_tiles=prefix_valid_tiles,
         position_offset=position_offset,
         splits=splits,
         submeshes=submeshes,
