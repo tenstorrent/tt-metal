@@ -13,6 +13,9 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
+#endif
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -44,12 +47,20 @@ namespace {
 // `_mm_clflush` invalidates one host cache line; 64 B is the line size on typical x86-64.
 constexpr uint32_t k_x86_clflush_line_bytes = 64;
 
+// Drive the device forward one step from a host socket credit-wait loop. Simulator co-steps the umd
+// clock; emule pumps the parked fiber scheduler so a kernel blocked on this host-fed socket resumes.
 void advance_d2h_simulator_socket_device(MeshDevice* mesh_device, const MeshCoordinate& device_coord) {
     if (mesh_device == nullptr) {
         return;
     }
 
     const auto& cluster = MetalContext::instance().get_cluster();
+#ifdef TT_METAL_USE_EMULE
+    if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
+        tt::tt_metal::emule::pump_device();
+        return;
+    }
+#endif
     if (cluster.get_target_device_type() != tt::TargetDevice::Simulator) {
         return;
     }
@@ -231,10 +242,15 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-        sender_core_tlb_ = cluster.get_driver()
-                               ->get_chip(sender_device_id)
-                               ->get_tlb_manager()
-                               ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+        // Mock/emulated chips have no real TLB manager (SWEmuleChip::get_tlb_manager() always
+        // returns nullptr) — skip the static-TLB fetch below; the dynamic-TLB pcie_writer_ branch
+        // (cluster.write_core, which SWEmuleChip does support) is used for them instead.
+        if (!cluster.is_mock_or_emulated()) {
+            sender_core_tlb_ = cluster.get_driver()
+                                   ->get_chip(sender_device_id)
+                                   ->get_tlb_manager()
+                                   ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+        }
     } else {
         sender_device_id = device_id.value();
         sender_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
@@ -242,7 +258,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     }
 
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+    if (arch == tt::ARCH::BLACKHOLE && mesh_device && !cluster.is_mock_or_emulated()) {
         // This process owns a mesh_device and hence has statically initialized TLBs.
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
