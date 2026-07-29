@@ -12,6 +12,8 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/kernels/fd_copy_bench.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/context/context_types.hpp"
@@ -3128,8 +3130,327 @@ private:
 class SDPrefetchLinearPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherLinearPackedReadTestFixture> {};
 class SDPrefetchRingbufferReadTestFixture : public SDPrefetchTestBase<PrefetcherRingbufferReadTestFixture> {};
 
+class PrefetcherRelayLinearCycleBenchmarkFixture : public BasePrefetcherTestFixture {
+public:
+    void run_relay_linear_payload_sweep() {
+        const uint32_t payload_bytes = get_page_size() * get_num_pages();
+        ASSERT_EQ(payload_bytes % sizeof(uint32_t), 0u);
+
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/false);
+        const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+        const uint32_t payload_words = payload_bytes / sizeof(uint32_t);
+
+        std::vector<uint32_t> source_data(payload_words);
+        for (uint32_t i = 0; i < payload_words; i++) {
+            source_data[i] = i;
+        }
+
+        const CoreCoord phys_worker_core = device_->worker_core_from_logical_core(first_worker);
+        MetalContext::instance().get_cluster().write_core(device_->id(), phys_worker_core, source_data, l1_base);
+        MetalContext::instance().get_cluster().l1_barrier(device_->id());
+
+        Common::DeviceData device_data(
+            device_, worker_range, l1_base, dram_base_, nullptr, false, get_dram_data_size_words(), cfg_);
+
+        for (uint32_t datum : source_data) {
+            device_data.push_one(first_worker, datum);
+        }
+
+        const uint32_t dst_addr = device_data.get_result_data_addr(first_worker, 0);
+        DeviceDataUpdater::update_read(
+            first_worker,
+            device_data,
+            first_worker,
+            /*bank_id=*/0,
+            /*bank_offset=*/0,
+            payload_words,
+            tt::CoreType::WORKER);
+        device_data.pad(first_worker, /*bank_id=*/0, l1_alignment_);
+
+        const CoreCoord first_worker_virt = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_worker_virt);
+
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
+        commands_per_iteration.push_back(
+            CommandBuilder::build_prefetch_relay_linear_read<false, false>(noc_xy, dst_addr, l1_base, payload_bytes));
+
+        log_info(
+            tt::LogTest,
+            "RelayLinearCycleBenchmark payload_bytes={} iterations={}",
+            payload_bytes,
+            get_num_iterations());
+        execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), get_num_iterations());
+        report_copy_bench();
+    }
+
+private:
+    // Per-publish ring: the pipelining comparison. flush_cycles is the DEFERRED DRAIN the prefetcher paid
+    // before this publish -- BH's already-existing noc_async_writes_flushed() at the top of the loop, which
+    // is 0 on Quasar because that flush is compiled out there. publish_cycles is issue plus any inline wait.
+    //
+    // flush + publish is the comparable quantity: total prefetcher cycles burned getting one chunk out, with
+    // each arch timed exactly as it really runs -- no barrier added to BH, none removed from Quasar. If BH's
+    // flush is near-zero its pipelining is hiding the drain; if it is large, the overlap is failing.
+    //
+    // All rdcycle-based and producer-side, so unlike the end-to-end metric this works at any payload size.
+    void report_copy_bench_ring(const std::vector<uint32_t>& pf) {
+        const uint32_t n_written = pf[fd_copy_bench::kSlotRingCount];
+        const uint32_t n = std::min(n_written, fd_copy_bench::kRingEntries);
+        if (n_written > fd_copy_bench::kRingEntries) {
+            log_warning(
+                tt::LogTest,
+                "CopyBench ring: {} entries produced but only {} slots -- {} dropped; raise kRingEntries",
+                n_written,
+                fd_copy_bench::kRingEntries,
+                n_written - fd_copy_bench::kRingEntries);
+        }
+
+        uint64_t sum_flush = 0;
+        uint64_t sum_acq = 0;
+        uint64_t sum_issue = 0;
+        uint64_t sum_wait = 0;
+        uint64_t sum_pub = 0;
+        uint64_t sum_bytes = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            const uint32_t* e = pf.data() + fd_copy_bench::kRingBase + i * fd_copy_bench::kRingStride;
+            const uint32_t flush = e[fd_copy_bench::kRingOffFlushCycles];
+            const uint32_t acq = e[fd_copy_bench::kRingOffAcquireCycles];
+            const uint32_t issue = e[fd_copy_bench::kRingOffIssueCycles];
+            const uint32_t wait = e[fd_copy_bench::kRingOffWaitCycles];
+            const uint32_t pub = e[fd_copy_bench::kRingOffPublishCycles];
+            const uint32_t bytes = e[fd_copy_bench::kRingOffBytes];
+            sum_flush += flush;
+            sum_acq += acq;
+            sum_issue += issue;
+            sum_wait += wait;
+            sum_pub += pub;
+            sum_bytes += bytes;
+            log_info(
+                tt::LogTest,
+                "CopyBench ring[{:2}]: flush={:5} acquire={:6} issue={:6} wait={:6} publish={:6} total={:6} "
+                "bytes={:6}",
+                i,
+                flush,
+                acq,
+                issue,
+                wait,
+                pub,
+                flush + pub,
+                bytes);
+        }
+        if (n == 0) {
+            return;
+        }
+        const uint64_t total = sum_flush + sum_pub;
+        const int64_t unaccounted =
+            static_cast<int64_t>(sum_pub) - static_cast<int64_t>(sum_acq + sum_issue + sum_wait);
+        const auto pct = [total](uint64_t v) {
+            return total ? (100.0 * static_cast<double>(v) / static_cast<double>(total)) : 0.0;
+        };
+        // acquire = blocked by the DISPATCHER (circular back-pressure); issue = descriptor setup;
+        // wait = the iDMA barrier; flush = BH's deferred drain. Whichever dominates picks the fix.
+        log_info(
+            tt::LogTest,
+            "CopyBench ring SUMMARY: entries={} bytes={} total={} bytes_per_cycle={:.2f} | flush={} ({:.1f}%) "
+            "acquire={} ({:.1f}%) issue={} ({:.1f}%) wait={} ({:.1f}%) unaccounted={}",
+            n,
+            sum_bytes,
+            total,
+            total ? static_cast<double>(sum_bytes) / static_cast<double>(total) : 0.0,
+            sum_flush,
+            pct(sum_flush),
+            sum_acq,
+            pct(sum_acq),
+            sum_issue,
+            pct(sum_issue),
+            sum_wait,
+            pct(sum_wait),
+            unaccounted);
+    }
+
+    // Dispatcher-side stall/work accounting: the direct test of "is the consumer kept fed?".
+    //
+    // stall_pct low  => the prefetcher's higher per-byte cost is NOT reaching the dispatcher; its extra cost
+    //                   is absorbed by pipelining and does not yet limit anything.
+    // stall_pct high => the consumer really is waiting on the producer, and producer cost matters now.
+    //
+    // dispatcher_bytes_per_busy_cycle is the steady-state throughput number to compare across arches.
+    // Scope is process_write_linear only, so this is not general dispatcher utilization.
+    void report_copy_bench_dispatcher(const std::vector<uint32_t>& dp) {
+        const uint32_t total = dp[fd_copy_bench::kSlotDispTotalCycles];
+        const uint32_t stall = dp[fd_copy_bench::kSlotDispStallCycles];
+        const uint32_t nb_cycles = dp[fd_copy_bench::kSlotDispNonblockCycles];
+        const uint32_t nb_count = dp[fd_copy_bench::kSlotDispNonblockCount];
+        const uint32_t blocked_count = dp[fd_copy_bench::kSlotWaitedCount];
+        const uint32_t bytes = dp[fd_copy_bench::kSlotDispBytes];
+        const uint32_t cmds = dp[fd_copy_bench::kSlotDispCmdCount];
+        if (total == 0) {
+            log_warning(tt::LogTest, "CopyBench dispatcher: total_cycles=0 -- instrumentation did not run");
+            return;
+        }
+
+        // total INCLUDES stall -- it is elapsed time in process_write_linear, not "busy" time.
+        const uint32_t work = total - stall - nb_cycles;
+        log_info(
+            tt::LogTest,
+            "CopyBench dispatcher: cmds={} bytes={} total_cycles={} stall_cycles={} stall_pct={:.1f}% "
+            "work_cycles={} bytes_per_total_cycle={:.2f} bytes_per_work_cycle={:.2f}",
+            cmds,
+            bytes,
+            total,
+            stall,
+            100.0 * static_cast<double>(stall) / static_cast<double>(total),
+            work,
+            static_cast<double>(bytes) / static_cast<double>(total),
+            work ? static_cast<double>(bytes) / static_cast<double>(work) : 0.0);
+
+        // Non-blocking waits run the same code with no spin, so their per-call cost is the overhead the
+        // blocking waits also pay. Subtracting it separates REAL starvation from the cost of polling --
+        // which matters on Quasar, where the semaphore read goes through the uncached alias.
+        if (nb_count != 0 && blocked_count != 0) {
+            const double per_call_overhead = static_cast<double>(nb_cycles) / static_cast<double>(nb_count);
+            const double overhead_in_stall = per_call_overhead * static_cast<double>(blocked_count);
+            const double true_idle = static_cast<double>(stall) - overhead_in_stall;
+            log_info(
+                tt::LogTest,
+                "CopyBench dispatcher idle split: nonblocking_waits={} avg_overhead={:.1f} cyc | blocking_waits={} "
+                "stall={} of which overhead~{:.0f} => true_idle~{:.0f} ({:.1f}% of total)",
+                nb_count,
+                per_call_overhead,
+                blocked_count,
+                stall,
+                overhead_in_stall,
+                true_idle,
+                100.0 * true_idle / static_cast<double>(total));
+        } else {
+            log_info(
+                tt::LogTest,
+                "CopyBench dispatcher idle split: unavailable (nonblocking_waits={} blocking_waits={}) -- need both "
+                "to separate polling overhead from real starvation",
+                nb_count,
+                blocked_count);
+        }
+    }
+
+    // Reads the fd_copy_bench slots written by the prefetcher and dispatcher kernels and reports the
+    // end-to-end publish latency: prefetcher launches the copy -> dispatcher may legally read it.
+    //
+    // On Quasar both kernels are DMs on the same engine sharing one L1, so the two reads below return
+    // the same words. On tt-1xx they are separate cores. Identical code either way, which is why the
+    // core type comes from the dispatch core manager rather than being hardcoded (Quasar dispatch-engine
+    // cores are CoreType::DISPATCH; TT_METAL_TENSIX_DISPATCH_CORES=1 puts them back on workers).
+    void report_copy_bench() {
+        auto& ctx = MetalContext::instance();
+        auto& core_manager = ctx.get_dispatch_core_manager();
+        const auto device_id = device_->id();
+        const uint16_t channel = ctx.get_cluster().get_assigned_channel_for_device(device_id);
+        constexpr uint8_t cq_id = 0;
+        const CoreType dispatch_core_type = core_manager.get_dispatch_core_type();
+
+        const auto prefetch_logical = core_manager.prefetcher_core(device_id, channel, cq_id);
+        const auto dispatch_logical = core_manager.dispatcher_core(device_id, channel, cq_id);
+        const CoreCoord prefetch_virtual = device_->virtual_core_from_logical_core(
+            CoreCoord{prefetch_logical.x, prefetch_logical.y}, dispatch_core_type);
+        const CoreCoord dispatch_virtual = device_->virtual_core_from_logical_core(
+            CoreCoord{dispatch_logical.x, dispatch_logical.y}, dispatch_core_type);
+
+        const uint32_t base = Common::is_quasar_sim() ? fd_copy_bench::kBaseQuasar : fd_copy_bench::kBaseTt1xx;
+        const auto pf =
+            ctx.get_cluster().read_core<uint32_t>(device_id, prefetch_virtual, base, fd_copy_bench::kTotalBytes);
+        const auto dp =
+            ctx.get_cluster().read_core<uint32_t>(device_id, dispatch_virtual, base, fd_copy_bench::kTotalBytes);
+
+        // A magic mismatch means the scratch was never written, or something else scribbled on it. Say so
+        // instead of reporting a plausible-looking wrong latency.
+        if (pf[fd_copy_bench::kSlotPrefetchMagic] != fd_copy_bench::kPrefetchMagic ||
+            dp[fd_copy_bench::kSlotDispatchMagic] != fd_copy_bench::kDispatchMagic) {
+            log_warning(
+                tt::LogTest,
+                "CopyBench: magic mismatch at 0x{:x} (prefetch=0x{:08x} want 0x{:08x}, dispatch=0x{:08x} want "
+                "0x{:08x}) -- not reporting a latency",
+                base,
+                pf[fd_copy_bench::kSlotPrefetchMagic],
+                fd_copy_bench::kPrefetchMagic,
+                dp[fd_copy_bench::kSlotDispatchMagic],
+                fd_copy_bench::kDispatchMagic);
+            return;
+        }
+
+        report_copy_bench_ring(pf);
+        report_copy_bench_dispatcher(dp);
+
+        const uint32_t publishes = pf[fd_copy_bench::kSlotPublishCount];
+        const uint32_t observes = dp[fd_copy_bench::kSlotObserveCount];
+        const uint32_t waited = dp[fd_copy_bench::kSlotWaitedCount];
+        const uint32_t correction = pf[fd_copy_bench::kSlotCorrection];
+        const int64_t raw = static_cast<int64_t>(dp[fd_copy_bench::kSlotLastTObserved]) -
+                            static_cast<int64_t>(pf[fd_copy_bench::kSlotLastTIssue]);
+
+        const uint32_t issue_bytes = pf[fd_copy_bench::kSlotLastIssueBytes];
+        const uint32_t avail_bytes = dp[fd_copy_bench::kSlotLastAvailBytes];
+
+        // publishes / observes are per-COMMAND counts (first publish, first blocking wait). total_blocking_waits
+        // is a diagnostic across all chunks. Ticks == core cycles on both arches (1:1, confirmed by the
+        // ClockCalibration test's M2 on each); issue/avail bytes are needed because the latency is only
+        // comparable across arches if the two sides moved/waited on similar amounts of data per event.
+        log_info(
+            tt::LogTest,
+            "CopyBench: publishes={} observes={} total_blocking_waits={} issue_bytes={} avail_bytes={} "
+            "correction_ticks={} raw_ticks={} corrected_ticks={}",
+            publishes,
+            observes,
+            waited,
+            issue_bytes,
+            avail_bytes,
+            correction,
+            raw,
+            raw - static_cast<int64_t>(correction));
+
+        // Two distinct failure modes, deliberately reported differently -- one is a result, the other a bug.
+        if (observes < publishes && waited == observes) {
+            // Not a pairing bug: the dispatcher simply had credits in hand on most commands and never stalled.
+            // That is itself a finding (the producer kept the consumer fed), but it means the recorded pair
+            // straddles two different commands, so the latency is meaningless -- often visibly negative.
+            log_warning(
+                tt::LogTest,
+                "CopyBench: dispatcher blocked on only {}/{} commands -- it was never starved on the rest, so "
+                "there is no transport latency to measure at this payload. The value above pairs two different "
+                "commands; ignore it (a negative number is the giveaway).",
+                observes,
+                publishes);
+        } else if (publishes != observes) {
+            log_warning(
+                tt::LogTest,
+                "CopyBench: publishes({}) != observes({}) with {} total blocking waits -- counts should match one "
+                "per command, so the pairing logic is wrong, not just unlucky",
+                publishes,
+                observes,
+                waited);
+        } else {
+            // issue_bytes is the normalizer for cross-arch comparison: t_issue is sampled BEFORE the publish, so
+            // the interval covers the whole copy of issue_bytes plus the drain plus credit visibility. Compare
+            // arches only at equal issue_bytes.
+            //
+            // avail_bytes is NOT a normalizer and is expected to differ. Credits are released in one lump once
+            // the chunk lands, so avail_bytes is merely how much the consumer chose to claim on that first wait,
+            // bounded by its CB block limit. A mismatch here is normal, not a problem.
+            log_info(
+                tt::LogTest,
+                "CopyBench: {} bytes/cycle for the recorded publish (issue_bytes={} over {} cycles); avail_bytes={} "
+                "is the consumer's claim size, not the producer's work",
+                issue_bytes / static_cast<double>(raw - static_cast<int64_t>(correction)),
+                issue_bytes,
+                raw - static_cast<int64_t>(correction),
+                avail_bytes);
+        }
+    }
+};
+
 // Quasar FD fixtures
 class BasePrefetcherQuasarSimulatorTestFixture : public Common::QuasarSimulatorVariant<BasePrefetcherTestFixture> {};
+class PrefetcherRelayLinearCycleBenchmarkQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<PrefetcherRelayLinearCycleBenchmarkFixture> {};
 class PrefetcherPackedReadQuasarSimulatorTestFixture
     : public Common::QuasarSimulatorVariant<PrefetcherPackedReadTestFixture> {};
 class PrefetcherLinearPackedReadQuasarSimulatorTestFixture
@@ -3790,6 +4111,13 @@ TEST_P(BasePrefetcherTestFixture, PagedReadWriteTest) {
     run_paged_read_write_test();
 }
 
+TEST_P(PrefetcherRelayLinearCycleBenchmarkFixture, RelayLinearPayloadSweep) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherRelayLinearCycleBenchmarkFixture - RelayLinearPayloadSweep (Fast Dispatch) - Test Start");
+    run_relay_linear_payload_sweep();
+}
+
 // This tests random configurations of commands like CQ_PREFETCH_CMD_RELAY_LINEAR, CQ_PREFETCH_CMD_RELAY_PAGED,
 // CQ_PREFETCH_CMD_RELAY_INLINE etc
 TEST_P(RandomTestFixture, RandomTest) {
@@ -4106,6 +4434,14 @@ TEST_P(BasePrefetcherQuasarSimulatorTestFixture, PagedReadWriteTest) {
         tt::LogTest,
         "BasePrefetcherQuasarSimulatorTestFixture - PagedReadWriteTest (Quasar simulator FD) - Test Start");
     run_paged_read_write_test();
+}
+
+TEST_P(PrefetcherRelayLinearCycleBenchmarkQuasarSimulatorTestFixture, RelayLinearPayloadSweep) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherRelayLinearCycleBenchmarkQuasarSimulatorTestFixture - RelayLinearPayloadSweep (Quasar simulator FD) "
+        "- Test Start");
+    run_relay_linear_payload_sweep();
 }
 
 TEST_P(PrefetcherHostQuasarSimulatorTestFixture, HostTest) {
@@ -4489,6 +4825,20 @@ INSTANTIATE_TEST_SUITE_P(
                "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
     });
 
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherCycleBenchmarkTests,
+    PrefetcherRelayLinearCycleBenchmarkFixture,
+    ::testing::Values(
+        PagedReadParams{32 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{48 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{64 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{96 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{128 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_iterations) +
+               "iter_relay_linear";
+    });
+
 // PrefetcherThroughputTestFixture test - Runs only with exec buff disabled
 INSTANTIATE_TEST_SUITE_P(
     PrefetcherTests,
@@ -4517,6 +4867,20 @@ INSTANTIATE_TEST_SUITE_P(
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
                "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorPrefetcherTests,
+    PrefetcherRelayLinearCycleBenchmarkQuasarSimulatorTestFixture,
+    ::testing::Values(
+        PagedReadParams{32 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{48 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{64 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{96 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{128 * 1024, 1, 10, Common::DRAM_DATA_SIZE_WORDS, false}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_iterations) +
+               "iter_relay_linear";
     });
 
 INSTANTIATE_TEST_SUITE_P(
