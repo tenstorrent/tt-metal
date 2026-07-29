@@ -220,11 +220,62 @@ While checking S4 I measured two shapes whose programs are provably IDENTICAL be
 So the noise floor on those small shapes is about +-2.4%, not the +-1.5% seen on the big ones. Any claim under
 about 3% on a small 2048-K shape needs 3 or more relaunches.
 
+### Roofline redone with a measured COMPUTE floor (the number we were missing)
+
+Running compute alone (everything else deleted) gives the compute floor. Until now we only had the DRAM floor,
+which made two shapes look like they had more headroom than they do.
+
+| shape | wall | compute floor | DRAM floor | real floor | headroom left | limited by |
+|---|---|---|---|---|---|---|
+| 512x6144x4608 | 180.2 | **139.2** | 132.1 | 139.2 | 41.0 us | **compute** |
+| 512x6144x2304 | 110.3 | 70.0 | 72.2 | 72.2 | 38.1 us | both, nearly tied |
+| 256x15360x768 | 87.6 | 27.2 | 62.2 | 62.2 | 25.4 us | DRAM |
+| 256x2048x6144 | 81.1 | 32.7 | 57.3 | 57.3 | 23.8 us | DRAM |
+| 256x6144x4608 | 143.6 | 67.8 | 121.3 | 121.3 | 22.3 us | DRAM |
+| 256x2048x2048 | 39.6 | 20.0 | 20.5 | 20.5 | 19.2 us | both, nearly tied |
+
+512x6144x4608 is COMPUTE-limited - its compute alone takes longer than all its DRAM traffic. That changes what
+is worth trying on it. Also checked whether a wider sub-block lowers the compute floor: it barely does
+(139.2 -> 137.6 -> 135.6 for nsb 1, 2, 3) while the wall gets much worse (180 -> 200 -> 220), so all the
+nsb damage is on the data-movement side and compute is close to a hard limit.
+
+### F4. FAILED (noise): the S1 "regressions" were mostly measurement noise
+
+Suspected the API fix hurt three shapes by using the true per-NoC placement targets. Made the op use the
+NOC_0 target for both NoCs and A/B'd with 3 relaunches each: 32x6144x1536 +0.30%, 256x2048x2048 +0.25%,
+512x6144x2304 +0.11%, 256x6144x4608 -0.38%, 256x2048x6144 -0.76%. All under 1%. So the 1.5-3.7% "regressions"
+reported in S1 were within the noise of that 2-3 sample check. Kept the NOC_0-for-both choice anyway because
+it is principled - a NOC_1 read response from a DRAM column travels the wrong way and wraps, so the API's
+NOC_1 "optimal" worker is not actually a good target - and it decouples the op from that API subtlety.
+Diagnostic bit17 restores per-NoC targets.
+
+## Total progress this session
+
+| shape | at log start | now | change |
+|---|---|---|---|
+| 512x6144x2304 | 134.0 | 110.0 | **17.9% faster** |
+| 256x6144x768 | 42.0 | 35.6 | **15.2% faster** |
+| 256x2048x6144 | 92.2 | 79.9 | **13.3% faster** |
+| 512x6144x4608 | 207.5 | 180.3 | **13.1% faster** |
+| 256x2048x512 | 16.9 | 15.1 | **10.5% faster** |
+| 256x15360x768 | 95.1 | 87.6 | **7.9% faster** |
+| 32x6144x1536 | 40.5 | 40.4 | unchanged |
+| 256x6144x4608 | 141.4 | 143.6 | 1.6% slower (noise-level; gate declines the mesh here) |
+| 256x2048x2048 | 37.9 | 39.0 | 2.9% slower (inside the +-2.4% noise floor for this shape) |
+
+Across the whole 63-shape corpus the mesh alone is adopted on 26 shapes for a mean 5.4% gain.
+
 ## Work queue
 
 1. ~~Fit an adoption gate for the mesh and ship it.~~ DONE (S2, S3).
 2. ~~Re-run ring ORDER optimisation on the mesh.~~ CLOSED by analysis (see note above).
 3. ~~Mesh v2 (spread slices over rows).~~ FAILED, see F1.
-4. Re-measure where the time now goes on the shipped configuration, then attack the biggest remaining
-   exposure. [next]
-5. Revisit the three regressions from S1.
+4. ~~Re-measure where the time goes.~~ DONE (see the two tables above).
+5. ~~Revisit the S1 regressions.~~ CLOSED as noise (F4).
+6. Next candidates, in order of expected value:
+   a. Hide the in0 own-shard read behind compute on the two 512-row shapes (it is 7.5-12.2% exposed and it is
+      the serial head of the gather; the in1 reader goes idle during it because its buffer only holds 4
+      blocks). Earlier chunk-streaming of the ring was rejected as noise, but that was before the mesh, when
+      the ring was 17% and the read 10%; now the ring is 3.5% and the read 12.2%, so the balance has flipped.
+   b. Add 256x2048x6144 with nsb=2 to the picker's lookup table (+4.4%, measured).
+   c. 512x6144x4608 is compute-limited, so for it the only real lever is fewer or cheaper math passes.
