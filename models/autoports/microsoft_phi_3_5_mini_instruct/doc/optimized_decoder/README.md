@@ -20,7 +20,7 @@ Current-run warmed latency on one Blackhole p300c:
 | Workload | Functional | Optimized | Change |
 | --- | ---: | ---: | ---: |
 | Prefill, batch 1, seq 128 | 1.917 ms | 1.825 ms | -4.8% |
-| Traced decode, batch 1, context 128 | 1.051 ms | 0.522 ms | -50.3% |
+| Traced decode, batch 1, context 128 | 1.051 ms | 0.494 ms | -53.0% |
 | Traced decode, batch 32, context 128 | 1.217 ms | 0.723 ms | -40.6% |
 | Prefill, batch 32, seq 32 | 26.165 ms | 20.277 ms | -22.5% |
 
@@ -37,6 +37,7 @@ selected cumulative path preserves correctness and advertised capability.
 | Residual/norm | Functional DRAM interleaved, one-core norms | Width-sharded L1 chain | Kept: both norms are 16-core 7 us rows and residual adds stay sharded. |
 | Decode matmuls | BF16/interleaved baseline | DRAM-sharded BFP4/LoFi | Kept: profiler proves all five dominant rows are `BF16 x BFP4`, LoFi, on 12 DRAM cores. |
 | Attention | Paged BF16 cache and paged SDPA | BFP8 cache plus explicit SDPA config | Kept: SDPA is 19 us at batch 1; real-weight cache-consuming traced PCC is 0.999806. |
+| Decode cache update | Fused predecessor used paired K/V update at batch 1 | Disjoint-shard `paged_fused_update_cache` | Kept after review remediation: the first direct port reproduced the fused-kernel overlap assert; assigning disjoint K/V L1 grids passed real-weight PCC 0.999790 at 493.677 us over 200 replays, 28.002 us faster than the prior optimized 521.679 us default. Batch 32 and modulo-cache updates retain separate writes. |
 | Head/RoPE boundary | Phi head width 96 requires explicit rotate-half | Keep heads sharded throughout | Rejected with exact contract: 48-wide half slicing is not tile-shard legal. Narrow DRAM crossings remain around RoPE/head helpers. |
 | Large prefill | Static large-M config | Default bounded program above 4096 | Kept bounded path: static config requested 13,041,408 B CB vs 1,572,864 B L1 at seq 32769; adapted default passes 32769 and 131071. |
 | DRAM geometry | 32-core working shard, blocks 3/8 | 8/16-core phase shards and blocks through 16 | Selected 16 cores: three 200-replay runs were 0.5545-0.5549 ms vs 0.5565-0.5570 ms at 32 cores. An 8-core/block-16 candidate exceeded L1. |
@@ -90,12 +91,15 @@ rectangular 16-core residual grid is faster as part of the complete traced
 layer. Exact commands and the two first-attempt capture repairs are in
 `work_log.md`.
 
-The post-advisor final-default reports are
+The post-advisor reports are
 `tracy/final/decode_b1_shard_advise.txt`,
 `decode_b32_shard_advise.txt`, and `prefill_b1_shard_advise.txt`; all keep
-advice enabled. Batch-1 decode is 521.679 us end-to-end in the unprofiled
-same-environment default A/B; the paired final profiler run is 499 us device
-time and 566.429 us end-to-end. The BFP4 decode
+advice enabled. The first-review remediation then restored the fused
+predecessor's paired K/V update with disjoint K/V L1 grids. Its real-weight
+200-replay final-default run is 493.677 us, down from the prior optimized
+521.679 us. The paired pre-remediation profiler run is 499 us device time and
+566.429 us end-to-end; its matmul dtype/geometry rows remain authoritative
+because the remediation changes only the cache-update topology. The BFP4 decode
 weights move approximately 30 MiB per layer invocation; at the profiler's
 512 GB/s Blackhole peak this gives a coarse 61 us weight-only roofline.
 Cache reads are context-dependent and small at context 128. The 499 us device

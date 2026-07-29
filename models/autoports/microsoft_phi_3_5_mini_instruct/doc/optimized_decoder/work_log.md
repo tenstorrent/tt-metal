@@ -67,6 +67,17 @@ Result: prefill-128 1.917198 ms; traced decode context-128 batch 1
    packed-QKV final path. Separate gate/up won: three 200-replay runs were
    0.550049/0.550409/0.550487 ms versus packed
    0.555681/0.555158/0.554898 ms. Separate gate/up is the final default.
+8. First-review fused-predecessor preservation: the optimized draft had
+   unintentionally replaced the fused decoder's batch-1 paired K/V cache update
+   with two writes. The direct port failed the fused op's non-overlap assertion
+   because K and V occupied the same L1 core. The adapted candidate assigns
+   disjoint K/V height-sharded grids, passes real-weight PCC 0.999790, and
+   measures 493.677 us over 200 traced replays versus the prior optimized
+   521.679 us default. Retained for batch 1. Batch 32 retains two writes because
+   the predecessor already measured that family faster there; modulo-cache
+   updates also retain two writes because the fused API has no
+   `cache_position_modulo` contract. A structural test guards the selected
+   topology.
 
 The final runtime rows prove BFP4/LoFi reached packed QKV, output, separate
 gate and up, and down. All deciding precision/geometry PCC runs use official real layer-0
@@ -175,7 +186,7 @@ Post-advisor final-default validation:
 ## Commits
 
 - Repo: `tt-metal`
-- Branch: `skillexp-nofuse-advise`
+- Branch: `skillexp-fuse-advise`
 - Restored optimized baseline commits: `41544a0e7b1`, `0fa46fae7f7`
 - Post-advisor first review:
   `doc/optimized_decoder/stage_review_shard_advise_first.md`, verdict
@@ -186,3 +197,40 @@ Post-advisor final-default validation:
 - Closing review/documentation checkpoint: the commit immediately following
   `ed12648255e` on this branch.
 - Push: not performed
+
+## Current fused-checkout verification
+
+The completed stage-owned commits were restored onto the current fused-decoder
+branch as `e64f036b4fc`, `2e993fdc6eb`, `0850d51ceda`, and `67407bc0ff3`.
+This preserves the mandatory same-day advisor capture and its measured
+batch-1/batch-32 candidate evidence while rebasing the result on fused-decoder
+checkpoint `18371c7f4d3`.
+
+Fresh serialized hardware checks on this branch:
+
+```bash
+python -m pytest -q -s \
+  models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py
+
+TT_METAL_WATCHER=10 \
+TT_METAL_LOGS_PATH=$PWD/models/autoports/microsoft_phi_3_5_mini_instruct/doc/optimized_decoder/watcher_fused_branch \
+PHI35_RUN_LONG_CONTEXT=1 python -m pytest -q -s \
+  models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py \
+  -k 'synthetic_prefill_decode_pcc_and_traced_decode or non_aligned_prefill_and_decode_pcc or decode_batch32_traced_pcc or repeated_input_determinism or full_context_decode_current_position_and_page_table'
+```
+
+The full default suite passed 7 tests with 3 documented opt-in skips.
+The separate watcher run passed all 5 selected tests, including full-context
+decode, and its generated watcher log contains no kernel error, assert, or
+hang. Fresh batch-32 traced decode PCC was 0.9999852 and batch-32 prefill PCC
+was 0.9999967. Evidence:
+`watcher_fused_branch_console.log` and
+`watcher_fused_branch/generated/watcher/watcher.log`.
+
+The first independent rereview returned `more-work-needed` for the missing
+fused batch-1 K/V update. Remediation evidence is in
+`logs/fused_cache_update_b1.log` (first overlapping-grid failure),
+`logs/fused_cache_update_b1_adapted.log` (passing synthetic control), and
+`logs/fused_cache_update_b1_real.log` (real-weight PCC and 200-replay timing).
+After remediation the full default suite again passed 7 tests with the same 3
+opt-in skips; batch-32 traced PCC remained 0.9999852.

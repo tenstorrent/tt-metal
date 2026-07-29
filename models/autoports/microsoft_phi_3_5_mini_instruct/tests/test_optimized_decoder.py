@@ -545,6 +545,10 @@ def test_runtime_forward_fallback_audit_static():
         hits = [token for token in forbidden if token in source]
         assert not hits, f"{callable_obj.__name__} contains forbidden runtime fallback tokens: {hits}"
 
+    decode_source = inspect.getsource(OptimizedDecoder.decode_forward)
+    assert "paged_fused_update_cache" in decode_source
+    assert "batch_size == 1 and cache_position_modulo is None" in decode_source
+
 
 @pytest.mark.skipif(
     os.getenv("PHI35_RUN_LONG_CONTEXT") != "1", reason="set PHI35_RUN_LONG_CONTEXT=1 for full-context stress"

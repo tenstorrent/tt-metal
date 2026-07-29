@@ -218,6 +218,9 @@ class OptimizedDecoder(LightweightModule):
         self.decode_kv_mem_config = _height_sharded_decode_mem_config(
             mesh_device, config.num_kv_heads, config.head_dim, max_batch_size=batch
         )
+        self.decode_k_mem_config, self.decode_v_mem_config = _disjoint_height_sharded_decode_mem_configs(
+            mesh_device, config.num_kv_heads, config.head_dim, batch_size=batch
+        )
         self.decode_q_mem_config = _height_sharded_decode_mem_config(
             mesh_device, config.num_heads, config.head_dim, max_batch_size=batch
         )
@@ -737,19 +740,32 @@ class OptimizedDecoder(LightweightModule):
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
         q = ttnn.to_memory_config(q, self.decode_q_mem_config)
-        k = ttnn.to_memory_config(k, self.decode_kv_mem_config)
-        v = ttnn.to_memory_config(v, self.decode_kv_mem_config)
+        k = ttnn.to_memory_config(k, self.decode_k_mem_config if batch_size == 1 else self.decode_kv_mem_config)
+        v = ttnn.to_memory_config(v, self.decode_v_mem_config if batch_size == 1 else self.decode_kv_mem_config)
 
         update_kwargs = {}
         if cache_position_modulo is not None:
             update_kwargs["cache_position_modulo"] = cache_position_modulo
         k_cache, v_cache = kv_cache
-        ttnn.experimental.paged_update_cache(
-            k_cache, k, update_idxs_tensor=current_pos, page_table=page_table, **update_kwargs
-        )
-        ttnn.experimental.paged_update_cache(
-            v_cache, v, update_idxs_tensor=current_pos, page_table=page_table, **update_kwargs
-        )
+        if batch_size == 1 and cache_position_modulo is None:
+            # Preserve the fused decoder's measured batch-1 cache-write
+            # topology. The fused op has no cache_position_modulo contract, so
+            # sliding-window/modulo updates retain the two dedicated writes.
+            ttnn.experimental.paged_fused_update_cache(
+                k_cache,
+                k,
+                v_cache,
+                v,
+                update_idxs_tensor=current_pos,
+                page_table=page_table,
+            )
+        else:
+            ttnn.experimental.paged_update_cache(
+                k_cache, k, update_idxs_tensor=current_pos, page_table=page_table, **update_kwargs
+            )
+            ttnn.experimental.paged_update_cache(
+                v_cache, v, update_idxs_tensor=current_pos, page_table=page_table, **update_kwargs
+            )
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
@@ -1165,3 +1181,39 @@ def _height_sharded_decode_mem_config(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
+def _disjoint_height_sharded_decode_mem_configs(
+    mesh_device: ttnn.MeshDevice, num_heads: int, head_dim: int, *, batch_size: int
+) -> tuple[ttnn.MemoryConfig, ttnn.MemoryConfig]:
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    full_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(int(device_grid.x) - 1, int(device_grid.y) - 1),
+            )
+        }
+    )
+    key_grid = ttnn.num_cores_to_corerangeset(batch_size, device_grid, row_wise=True)
+    remaining_grid = full_grid.subtract(key_grid)
+    value_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        remaining_grid.ranges()[0].start,
+        batch_size,
+        remaining_grid,
+        True,
+    )
+    padded_heads = math.ceil(num_heads / 32) * 32
+    shard_shape = [padded_heads, head_dim]
+    return (
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(key_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(value_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
