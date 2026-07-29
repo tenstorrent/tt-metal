@@ -69,7 +69,7 @@ def test_multiply_l1(ttnn_mesh_device, reset_seeds, shape):
     dbox = U.to_tile_l1(dbox_torch, mesh)
     strides = U.to_tile_l1(strides_torch, mesh)
 
-    out = ttnn.multiply(dbox, strides)
+    out = ttnn.multiply(dbox, strides, dtype=ttnn.bfloat8_b)
 
     ref = dbox_torch.float() * strides_torch.float()
     U.assert_pcc(ref, out, pcc=0.99, mesh_device=mesh)
