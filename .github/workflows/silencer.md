@@ -154,9 +154,14 @@ Do all of the following with `bash`, keeping only small, aggregated results in c
    For a specific failed/large job, prefer `gh run view --job <job-id> --log`.
 2. **Grep for warning signatures, don't read.** Extract only the lines that matter:
    ```bash
-   grep -nE 'warning:|-W[a-z-]+|DeprecationWarning|deprecated|\[WARNING\]|WARN ' \
+   grep -nE 'warning:|-W[A-Za-z0-9=_-]+|[|][[:space:]]*[Ww]arning[[:space:]]*[|]|DeprecationWarning|FutureWarning|SyntaxWarning|deprecated|\[WARN(ING)?\]|WARN(ING)?[: ]' \
      /tmp/gh-aw/agent/silencer/logs/*.log > /tmp/gh-aw/agent/silencer/hits.txt
    ```
+   The `[|] *[Ww]arning *[|]` alternative is **essential**: tt-metal's **runtime logger** prints
+   `<timestamp> | warning  | <subsystem> | <message> (file.cpp:line)` — a pipe-delimited format
+   with **no** `warning:` token — so a naive `warning:`-only grep silently misses every runtime
+   and log-spam line (e.g. the matmul `allowed_worker_cores` spam in #48660). When in doubt,
+   broaden the signature set, never narrow it: a missed pattern is noise that never gets fixed.
 3. **Aggregate and rank by frequency.** The *count* is what tells you what to fix first and
    what is "spam". Normalize away line numbers/addresses/timestamps so identical messages
    collapse together:
@@ -220,6 +225,37 @@ own), a narrowly-scoped, well-commented suppression *around that specific includ
 acceptable — but you must say so explicitly in the PR, explain why the root cause is
 unreachable, and keep the suppression as tight as possible. Never reach for a blanket
 `-w`/`-Wno-*` at the build-system level.
+
+## Known warning complaints (seed targets)
+
+Maintainers have already filed issues about specific noise. Treat these as a **starting
+backlog** — confirm each is still present in current logs (grep, token-frugally), then fix at
+the source. Search for an existing issue/PR before opening a new one, and cross-link the
+issue your PR addresses. This list is a seed, **not** a limit: the ranked `top_noise.txt` from
+a fresh scan always governs priority, and new patterns you discover there are in scope too.
+
+- **#47891** (device-code compile spam): `-Wunused-but-set-variable` across
+  `normalization/layernorm`, `operations/matmul`, `operations/eltwise/binary_ng`, and the SFPU
+  `'sfpi::vUInt::operator sfpi::vInt() const' is deprecated` LLK warnings. The canonical case.
+- **#48660** (runtime log spam from matmul): repeated
+  `MatmulDeviceOperation::...: program_config.allowed_worker_cores not populated ...
+  (matmul_device_operation.cpp:465)` — hundreds of lines per pipeline. A category-5 log-spam +
+  category-3 runtime case: root-cause the missing `normalize_program_config()` call path, don't
+  mute it. Note it also says "will become a hard error" — fixing the emitter is the real ask.
+- **#22639**: enabling `-Wdouble-promotion` surfaces unintended `float`→`double` conversions
+  (also a perf issue). A category-1 target if/when it is in the build's warning set.
+- **#38338** (tt-train): a `-Wno-deprecated-declarations` workaround that should be removed
+  (root-cause the deprecation) rather than left suppressing. Exactly the "unsuppress + fix"
+  spirit — but respect `skip-tt-train=true` in the default CI verification.
+- **#31345 / #31591 / #43380 / #18933**: runtime `log_warning` messages (firmware-version
+  mismatch, conv2d weight-prep hint, non-fatal constraint warnings, ring-buffer dispatch note)
+  — evaluate each for category 3 (fix condition) vs category 6 (demote severity).
+
+> **Note on external corpora.** Wilder asked to also mine Glean for warning complaints. Glean's
+> MCP server is not authenticated in this environment (`needs_auth`), so this seed list was
+> built from the **tt-metal issue tracker** instead (`gh search issues`), which is the most
+> on-point corpus available here. When Glean is connected (BrAInClaw Dashboard → Glean →
+> Connect), a maintainer can extend this list with any Slack/Jira/doc complaints it surfaces.
 
 ## Scan procedure (scheduled mode)
 
