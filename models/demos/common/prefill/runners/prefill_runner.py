@@ -170,6 +170,13 @@ KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
 # fc slices; the last rank builds the drafter KV tail + cache. The tap reads each chip's own SP-sharded seq
 # slice (no gather). Requires DFLASH_HF_MODEL to be set when enabled.
 DFLASH_ENABLED = os.environ.get("PREFILL_DFLASH", "0") == "1"
+# D2D socket transport observability (opt-in, default OFF). When on, build_d2d_pipeline_endpoints logs the
+# derived activation spec/page geometry, and every _d2d_send/_d2d_recv logs the packed activation's
+# spec + a per-shard CRC32 of its contents. A SEND on rank r and the matching RECV on rank r+1 carry
+# identical per-shard CRCs iff the fabric transport was bit-exact, so a one-line diff of the two log
+# lines is a per-chunk transport-correctness check. The fingerprint reads the tensor to host
+# (non-mutating), so it is off by default and never on the production path.
+D2D_DEBUG = os.environ.get("PREFILL_D2D_DEBUG", "0") == "1"
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -316,6 +323,32 @@ def _socket_next(h2d_service) -> tuple:
     return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
 
 
+def _log_d2d_activation(tag: str, rank_label: str, t: ttnn.Tensor, meta: dict) -> None:
+    """PREFILL_D2D_DEBUG only. Log the D2D activation's spec + a per-shard CRC32 of its contents so a
+    SEND on rank r and the matching RECV on rank r+1 can be diffed for bit-exact fabric transport:
+    identical per-shard CRCs iff every byte survived the hop. Reads the tensor to host (a non-mutating
+    copy) and is computed OUTSIDE the send/recv timed window, so it never perturbs the production path
+    or the push/sync timings. Wrapped so instrumentation can never abort a run."""
+    import zlib
+
+    import torch
+
+    try:
+        shards = ttnn.get_device_tensors(t)
+        crcs = []
+        for s in shards:
+            host = ttnn.to_torch(s).to(torch.float32).flatten().contiguous()
+            crcs.append(hex(zlib.crc32(host.numpy().tobytes()) & 0xFFFFFFFF))
+        per_shard = list(shards[0].shape) if shards else None
+        logger.info(
+            f"[pp {rank_label}] [d2d-debug] {tag} [{meta['actual_start']},{meta['actual_end']}) "
+            f"slot={meta['slot_id']} global={list(t.shape)} dtype={t.dtype} layout={t.layout} "
+            f"nshards={len(shards)} per_shard={per_shard} crc32/shard={crcs}"
+        )
+    except Exception as e:  # debug-only: never let instrumentation break a run
+        logger.warning(f"[pp {rank_label}] [d2d-debug] {tag} fingerprint skipped: {e}")
+
+
 def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
     """Stand up this rank's persistent D2D endpoints for the pipeline: an inbound receiver from rank-1
     (every rank but the first) and an outbound sender to rank+1 (every rank but the last). Returns
@@ -327,6 +360,20 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     rank 1's receiver, which frees rank 1 to build its sender for rank 2's receiver, and so on — no
     deadlock. Both sides pass the identical worker-core grid and global spec."""
     global_spec = activation_global_spec(chunk_size, hidden_size)
+
+    if D2D_DEBUG:
+        try:
+            sp, tp = int(mesh_device.shape[0]), int(mesh_device.shape[1])
+            per_seq, per_feat = chunk_size // sp, hidden_size // tp
+            n_tiles = (per_seq // 32) * (per_feat // 32)
+            logger.info(
+                f"[pp rank {rank}] [d2d-debug] activation spec [1,1,{chunk_size},{hidden_size}] bf16 TILE DRAM "
+                f"(dflash={'on' if DFLASH_ENABLED else 'off'}, width={'2H' if DFLASH_ENABLED else 'H'}); "
+                f"per-chip shard [{per_seq},{per_feat}] = {n_tiles} tiles = {n_tiles * 2048}B, "
+                f"page=2048B x {n_tiles} pages/shard"
+            )
+        except Exception as e:
+            logger.warning(f"[pp rank {rank}] [d2d-debug] spec-log skipped: {e}")
 
     def _common():
         # Fresh mapper per call: create_sender/create_receiver take the mapper by std::unique_ptr and
@@ -379,6 +426,8 @@ def _d2d_recv(inbound) -> tuple:
         f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
         f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
     )
+    if D2D_DEBUG:
+        _log_d2d_activation("RECV", "recv", act, meta)
     return act, meta
 
 
@@ -386,6 +435,8 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
     """Push this rank's output hidden state + metadata to the downstream rank's receiver, then free it.
     The model already emits the activation in the sender backing's spec, and outbound_socket_service_sync
     TT_FATALs on any spec mismatch, so no host-side relayout is needed."""
+    if D2D_DEBUG:  # before t0: outside the timed push window, and before the send deallocates `activation`
+        _log_d2d_activation("SEND", f"rank {rank}", activation, meta)
     t0 = time.perf_counter()
     backing = outbound.get_backing_tensor()
     import torch
@@ -563,6 +614,13 @@ def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in
     cfg = runtime.config
     slot_id = 0  # first rank fills slot 0; downstream ranks adopt the slot from the received metadata
     n_chunks = NUM_CHUNKS
+    # DFlash drafter PCC (issue #49586): retain each owned target-layer hidden during the chunk loop so the
+    # last rank's dflash_pcc_check (and a non-last rank's dump) can rebuild the HF fc(concat) reference.
+    # Enabled AFTER compile() warmed up a throwaway chunk, so only the real chunks retain; each chunk clears
+    # the prior taps, leaving just the final chunk's. Inert unless the runtime implements the hook.
+    dflash_pcc = DFLASH_ENABLED and os.environ.get("PREFILL_STANDALONE_PCC", "0") == "1"
+    if dflash_pcc and hasattr(runtime, "enable_dflash_hidden_retention"):
+        runtime.enable_dflash_hidden_retention(True)
     token_ids = None
     if cfg.is_first_rank:
         token_ids = _load_token_ids()
@@ -622,6 +680,46 @@ def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in
             first_layer_idx=cfg.first_layer_idx,
         )
 
+    if dflash_pcc:
+        # DFlash drafter context-KV PCC vs the HF drafter (issue #49586): the drafter's OWN correctness
+        # proof, complementary to the MLA kv_cache_pcc_check above (which covers only the verifier KV). The
+        # last rank asserts K/V vs the HF reference; non-last ranks dump their retained target-layer hiddens
+        # to a shared gather dir so the last rank can rebuild the full fc(concat) input (rank 0's raw hiddens
+        # don't survive the reduce_scattered partial it forwards). Single-chunk only — the drafter is
+        # single-shot, so with n_chunks>1 only the final chunk's KV is validated.
+        if n_chunks != 1:
+            logger.warning(
+                f"[dflash-pcc] PREFILL_STANDALONE_NCHUNKS={n_chunks} != 1; the drafter is single-shot, so only "
+                f"the FINAL chunk's context-KV is validated (each chunk overwrites [0, chunk_size))."
+            )
+        gather_dir = os.environ.get("PREFILL_DFLASH_GATHER_DIR")
+        isl_total = cfg.chunk_size
+        # N>1: non-last ranks dump first, then a barrier guarantees all hiddens are on the shared FS before
+        # the last rank loads them. Single-rank owns all targets — no dump, no barrier, straight to check.
+        if num_ranks > 1 and gather_dir and not cfg.is_last_rank:
+            dump = getattr(runtime, "dump_tapped_hiddens", None)
+            if dump is not None:
+                dump(gather_dir, isl_total)
+        if num_ranks > 1:
+            ttnn.distributed_context_barrier()
+        if cfg.is_last_rank:
+            dflash_check = getattr(runtime, "dflash_pcc_check", None)
+            if dflash_check is None:
+                raise RuntimeError(
+                    f"PREFILL_DFLASH=1 + PREFILL_STANDALONE_PCC=1 but {type(runtime).__name__} implements no "
+                    "dflash_pcc_check."
+                )
+            if num_ranks > 1 and not gather_dir:
+                raise RuntimeError(
+                    "N>1 DFlash PCC needs PREFILL_DFLASH_GATHER_DIR (a shared-FS path) so the last rank can "
+                    "load the other ranks' tapped hiddens."
+                )
+            dflash_check(
+                isl_total=isl_total,
+                threshold=float(os.environ.get("PREFILL_DFLASH_PCC", "0.999")),
+                gather_dir=gather_dir,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -644,6 +742,8 @@ def _print_config() -> None:
         ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
         ("PREFILL_DFLASH", str(DFLASH_ENABLED)),
         ("DFLASH_HF_MODEL", os.environ.get("DFLASH_HF_MODEL", "<unset>")),
+        ("PREFILL_DFLASH_PCC", os.environ.get("PREFILL_DFLASH_PCC", "0.999")),
+        ("PREFILL_DFLASH_GATHER_DIR", os.environ.get("PREFILL_DFLASH_GATHER_DIR", "<unset (N=1 needs none)>")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_STANDALONE_NCHUNKS", str(NUM_CHUNKS)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),

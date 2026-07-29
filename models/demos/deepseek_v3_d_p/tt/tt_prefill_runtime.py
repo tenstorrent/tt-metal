@@ -107,6 +107,15 @@ class TtPrefillRuntime:
         self.drafter = None
         self._dflash_k_cache = None
         self._dflash_v_cache = None
+        # Stashed drafter config (set in _build_dflash_drafter) — dflash_pcc_check needs its
+        # target_layer_ids / num_hidden_layers / target_feature_size to rebuild the HF reference.
+        self._dflash_cfg = None
+        # Bring-up/validation only (dflash_pcc_check, issue #49586): when retention is enabled the
+        # on_layer_hidden tap ALSO keeps a private clone of each owned target-layer hidden here
+        # (global_idx -> device tensor [1,1,chunk/sp,H/tp]) so the last rank can rebuild the HF drafter's
+        # fc(concat) reference. OFF by default — the production tap never clones (see _build_dflash_drafter).
+        self._dflash_retain = False
+        self._dflash_tapped_hiddens = {}
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -203,6 +212,7 @@ class TtPrefillRuntime:
             "(a dir with config.json + model.safetensors)"
         )
         dcfg = DFlashDrafterConfig.from_pretrained(path)
+        self._dflash_cfg = dcfg  # dflash_pcc_check reads target_layer_ids / num_hidden_layers off this
 
         first = self.config.first_layer_idx
         last_excl = first + self.config.num_layers
@@ -224,13 +234,22 @@ class TtPrefillRuntime:
             f"checkpoint={path}"
         )
         state_dict = load_drafter_state_dict(path, build_kv_tail=self.config.is_last_rank)
+        # DFlash drafter footprint = ONE chunk, NOT the verifier's full-sequence KV ring buffer
+        # (config.max_seq_len). The drafter is single-shot (write_kv_cache positions_start=0): it processes
+        # the chunk's tokens, contiguously SP-sharded over chunk_size (chip r owns [r*chunk/sp,(r+1)*chunk/sp)),
+        # and BOTH its context cache and its rope table are SP-sharded over this same length. Sizing them to
+        # the verifier's max_seq_len (>> chunk) would (a) fill only chunk/sp of the cache_seq/sp slots per chip
+        # → the [:chunk] readback under-fills, PCC≈√(chunk/max_seq), and (b) misalign each chip's rope window
+        # from its token positions. Must equal chunk_size — matches the integration test (drafter built with
+        # max_seq_len=isl_total=chunk). Multi-chunk (positions_start>0) is issue #50725, out of scope.
+        dflash_seq = self.config.chunk_size
         self.drafter = TtDFlashDrafter(
             self.mesh_device,
             dcfg,
             state_dict=state_dict,
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
-            max_seq_len=self.config.max_seq_len,
+            max_seq_len=dflash_seq,
             num_links=self.config.num_links,
             topology=self.config.topology,
             owned_target_layer_ids=owned,
@@ -245,7 +264,16 @@ class TtPrefillRuntime:
         owned_set = set(owned)
 
         def on_layer_hidden(global_idx: int, h: ttnn.Tensor) -> None:
-            if global_idx in owned_set:
+            if global_idx not in owned_set:
+                return
+            if self._dflash_retain:
+                # Validation only (dflash_pcc_check): retain a private clone and tap THAT — exactly like
+                # test_dflash_prefill_integration.py — so the raw target-layer hidden survives the FC
+                # accumulate for the HF fc(concat) reference. Cleared each chunk in prefill_chunk's reset.
+                hc = ttnn.clone(h)
+                self._dflash_tapped_hiddens[global_idx] = hc
+                self.drafter.tap(hc, global_idx)
+            else:
                 self.drafter.tap(h, global_idx)
 
         self._on_layer_hidden = on_layer_hidden
@@ -255,7 +283,7 @@ class TtPrefillRuntime:
             self._dflash_k_cache, self._dflash_v_cache = allocate_dflash_kv_cache(
                 self.mesh_device,
                 dcfg,
-                self.config.max_seq_len,
+                dflash_seq,  # chunk_size — MUST match the drafter's cache_seq/rope (see note above)
                 sp_axis=self.config.sp_axis,
                 tp_axis=self.config.tp_axis,
             )
@@ -399,6 +427,13 @@ class TtPrefillRuntime:
         model_input = input_tensor
         if self.config.dflash_enabled:
             self.drafter.reset()
+            # Drop any retained taps from the previous chunk / compile warm-up (validation path only; the
+            # dict is empty when retention is off). Each chunk re-taps from scratch and write_kv_cache uses
+            # positions_start=0, so only the FINAL chunk's hiddens must survive for dflash_pcc_check.
+            if self._dflash_tapped_hiddens:
+                for t in self._dflash_tapped_hiddens.values():
+                    ttnn.deallocate(t)
+                self._dflash_tapped_hiddens = {}
             if not self.config.is_first_rank:
                 model_input, partial = self._unpack_activation(input_tensor)
                 ttnn.deallocate(input_tensor)
@@ -519,3 +554,106 @@ class TtPrefillRuntime:
             trace_dir=trace_dir,
             first_layer_idx=first_layer_idx,
         )
+
+    # ------------------------------------------------------------------ DFlash drafter validation
+    # Bring-up/validation-only hooks (issue #49586), the drafter analog of kv_cache_pcc_check: prove the
+    # finalized drafter context-KV cache matches the REAL HF DFlashDraftModel fed the same target-layer
+    # hiddens. Never called in production serving. All dflash-gated — inert when the drafter isn't built.
+
+    def enable_dflash_hidden_retention(self, enabled: bool = True) -> None:
+        """Opt-in retention for :meth:`dflash_pcc_check`: make the ``on_layer_hidden`` tap ALSO keep a
+        private clone of each owned target-layer hidden (see ``_build_dflash_drafter``). OFF by default so
+        the production tap never clones. Call BEFORE the validated chunk's ``prefill_chunk`` — retained
+        hiddens are cleared at the start of every chunk, so only the FINAL chunk's survive."""
+        self._dflash_retain = enabled
+
+    def _to_host_hidden(self, h: ttnn.Tensor, isl_total: int) -> torch.Tensor:
+        """Compose a retained target-layer hidden (SP-sharded on seq=dim2, TP-sharded on hidden=dim3) to a
+        full host ``[1, isl_total, H]`` fp32 — one fc-input block. Mirrors the integration test's ``_to_host``
+        (``ConcatMesh2dToTensor`` dims=(2,3))."""
+        host = ttnn.to_torch(
+            h,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 3), mesh_shape=self.config.mesh_shape),
+        )
+        return host.reshape(1, isl_total, self.hf_config.hidden_size).float()
+
+    def _read_dflash_cache(self, cache: ttnn.Tensor, isl_total: int) -> torch.Tensor:
+        """Compose a drafter K or V context cache to host ``[num_draft_layers, kv_heads, isl_total, head_dim]``
+        fp32. The cache is SP-sharded on seq (dim2), TP-sharded on kv-head (dim1) → ``ConcatMesh2dToTensor``
+        dims=(2,1); slice off the cache padding past ``isl_total``. Mirrors the integration test's ``_read``
+        — a plain DRAM tensor (unlike the ND-sharded kvpe cache, no ``ttnn.slice`` pre-step needed)."""
+        host = ttnn.to_torch(
+            cache,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=self.config.mesh_shape),
+        )
+        n = self._dflash_cfg.num_hidden_layers
+        return host[:n][:, :, :isl_total, :].float()
+
+    def dump_tapped_hiddens(self, gather_dir: str, isl_total: int) -> list:
+        """Non-last-rank helper for the N>1 PCC gather: write this rank's retained target-layer hiddens to
+        ``gather_dir`` (a shared FS path) as ``hidden_g{global_idx}.pt`` so the last rank's
+        :meth:`dflash_pcc_check` can rebuild the full fc(concat) context. Needed because rank 0's raw
+        hiddens are unrecoverable from the reduce_scattered partial it forwards. Returns the dumped ids."""
+        assert self._dflash_retain, "call enable_dflash_hidden_retention() before the chunk to dump hiddens"
+        os.makedirs(gather_dir, exist_ok=True)
+        dumped = []
+        for g, h in self._dflash_tapped_hiddens.items():
+            torch.save(self._to_host_hidden(h, isl_total), os.path.join(gather_dir, f"hidden_g{g}.pt"))
+            dumped.append(g)
+        logger.info(f"[dflash-pcc] rank dumped {len(dumped)} tapped hiddens {sorted(dumped)} -> {gather_dir}")
+        return sorted(dumped)
+
+    def dflash_pcc_check(self, *, isl_total: int, threshold: float = 0.999, gather_dir: Optional[str] = None) -> float:
+        """Last-rank drafter-correctness check (issue #49586): PCC the finalized drafter context-K/V cache
+        against the REAL HF ``DFlashDraftModel`` fed the SAME target-layer hiddens — the drafter's own proof
+        (the MLA ``kv_cache_pcc_check`` only covers the verifier KV). Rebuilds the fc input
+        ``ctx = concat(h_target_1..h_target_n)`` from the retained taps; on N>1 the last rank owns only its
+        slice's hiddens, so the rest are loaded from ``gather_dir`` (dumped by :meth:`dump_tapped_hiddens` on
+        the non-last ranks). Asserts min per-draft-layer PCC >= ``threshold``; returns that min.
+
+        Requires :meth:`enable_dflash_hidden_retention` before the validated chunk. SINGLE-CHUNK only: the
+        drafter is single-shot (write_kv_cache positions_start=0), so each chunk overwrites ``[0, chunk)`` —
+        the check validates whichever chunk ran last."""
+        assert self.config.is_last_rank, "dflash_pcc_check runs on the last rank only"
+        assert self.drafter is not None and self._dflash_cfg is not None, "dflash drafter not built"
+        assert self._dflash_k_cache is not None and self._dflash_v_cache is not None, "drafter caches not allocated"
+        from models.demos.deepseek_v3_d_p.reference.dflash_prefill.reference_kv import hf_context_kv, load_hf_drafter
+        from tests.ttnn.utils_for_testing import comp_pcc
+
+        dcfg = self._dflash_cfg
+        # fc-input context: this rank's retained target hiddens + any gathered from the other ranks (N>1).
+        ctx_parts = {g: self._to_host_hidden(h, isl_total) for g, h in self._dflash_tapped_hiddens.items()}
+        if gather_dir:
+            for g in dcfg.target_layer_ids:
+                if g not in ctx_parts:
+                    ctx_parts[g] = torch.load(os.path.join(gather_dir, f"hidden_g{g}.pt"))
+        missing = set(dcfg.target_layer_ids) - set(ctx_parts)
+        assert not missing, (
+            f"[dflash-pcc] missing target-layer hiddens {sorted(missing)} — enable retention on every rank "
+            f"that owns a target layer, and pass gather_dir for N>1 (owned here: {sorted(self._dflash_tapped_hiddens)})"
+        )
+        ctx = torch.cat([ctx_parts[t] for t in dcfg.target_layer_ids], dim=-1)  # [1, seq, n*H]
+        assert ctx.shape[-1] == dcfg.target_feature_size, f"ctx feature {ctx.shape[-1]} != {dcfg.target_feature_size}"
+
+        # HF reference (real drafter forward, fp32) on the SAME target hiddens: per-layer context (k, v).
+        real = hf_context_kv(load_hf_drafter(os.environ["DFLASH_HF_MODEL"]), dcfg, ctx)
+        dk = self._read_dflash_cache(self._dflash_k_cache, isl_total)
+        dv = self._read_dflash_cache(self._dflash_v_cache, isl_total)
+
+        fails, mn = [], 1.0
+        for i in range(dcfg.num_hidden_layers):
+            rk, rv = real[i]
+            ok_k, pcc_k = comp_pcc(rk, dk[i], threshold)
+            ok_v, pcc_v = comp_pcc(rv, dv[i], threshold)
+            mn = min(mn, pcc_k, pcc_v)
+            logger.info(f"[dflash-pcc] draft layer {i}: K pcc={pcc_k} (ok={ok_k})  V pcc={pcc_v} (ok={ok_v})")
+            if not ok_k:
+                fails.append(f"K[{i}]={pcc_k}")
+            if not ok_v:
+                fails.append(f"V[{i}]={pcc_v}")
+        assert not fails, f"[dflash-pcc] drafter context-KV PCC < {threshold}: {fails}"
+        logger.success(
+            f"[dflash-pcc] last-rank drafter context-KV PASSED: all {dcfg.num_hidden_layers} draft layers "
+            f"K & V PCC >= {threshold} (min {mn})"
+        )
+        return mn

@@ -24,7 +24,7 @@ SHARDING (sequence-parallel):
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import (
@@ -55,7 +55,7 @@ class TtDFlashDrafter:
         tp_axis: int = 1,
         max_seq_len: Optional[int] = None,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: Union[ttnn.Topology, Tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
         owned_target_layer_ids: Optional[tuple] = None,
         build_kv_tail: bool = True,
     ):
@@ -66,7 +66,11 @@ class TtDFlashDrafter:
         self.tp_factor = mesh_device.shape[tp_axis]
         self.sp_factor = mesh_device.shape[sp_axis]
         self.num_links = num_links
-        self.topology = topology
+        # `topology` arrives per-axis (a 2-tuple from the runner's per_axis_topology()) in production; all of
+        # this drafter's ccl ops (reduce_scatter/all_gather :306/:384 + the distributed hidden_norm) run along
+        # tp_axis, so collapse it to that axis's scalar Topology here. Standalone/integration tests pass a
+        # scalar directly (isinstance guard). Mirrors tt_prefill_transformer.py / tt_prefill_block.py.
+        self.topology = topology[tp_axis] if isinstance(topology, tuple) else topology
         # Pipeline distribution: each rank taps only the target layers it computes (owned_target_layer_ids,
         # default = ALL target layers for the single-rank / standalone case), and only the rank that
         # finalizes the drafter KV cache (build_kv_tail — the last pipeline rank) builds the hidden_norm +
