@@ -1,0 +1,22 @@
+{
+  "layer_type": "full_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "results": [
+    {
+      "pcc": 0.9987355434501431,
+      "position": 32767,
+      "threshold": 0.995
+    },
+    {
+      "pcc": 0.9989977257886039,
+      "position": 32768,
+      "threshold": 0.995
+    },
+    {
+      "pcc": 0.9995465485932274,
+      "position": 32799,
+      "threshold": 0.995
+    }
+  ],
+  "sequence_length": 32800
+}

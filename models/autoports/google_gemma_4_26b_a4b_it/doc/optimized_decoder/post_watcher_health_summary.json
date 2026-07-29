@@ -1,0 +1,37 @@
+{
+  "command": "/home/mvasiljevic/.ttsmi-venv/bin/tt-smi -s",
+  "device_count": 4,
+  "devices": [
+    {
+      "bus_id": "0000:01:00.0",
+      "board_type": "p300c",
+      "dram_status": true,
+      "gddr_corrected_errors": 0,
+      "gddr_uncorrected_errors": 0
+    },
+    {
+      "bus_id": "0000:02:00.0",
+      "board_type": "p300c",
+      "dram_status": true,
+      "gddr_corrected_errors": 0,
+      "gddr_uncorrected_errors": 0
+    },
+    {
+      "bus_id": "0000:03:00.0",
+      "board_type": "p300c",
+      "dram_status": true,
+      "gddr_corrected_errors": 0,
+      "gddr_uncorrected_errors": 0
+    },
+    {
+      "bus_id": "0000:04:00.0",
+      "board_type": "p300c",
+      "dram_status": true,
+      "gddr_corrected_errors": 0,
+      "gddr_uncorrected_errors": 0
+    }
+  ],
+  "host": "853faf68e2b0",
+  "kmd_version": "2.10.0",
+  "timestamp_utc": "2026-07-29T16:03:51.341377"
+}
