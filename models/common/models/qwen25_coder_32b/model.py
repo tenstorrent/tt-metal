@@ -354,6 +354,18 @@ class _Qwen25Coder32BWHTuning:
     # path (same as the mistral_7b / deepseek Qwen2 ports). Independent of the FF-hidden DRAM-shard pad
     # (a decode fix); minimal_matmul is prefill-only, so decode throughput is unchanged.
     prefill_minimal_matmul: bool = True
+    # Cast coder's per-layer prefill attention output reduce-scatter from bf16 to bfloat8_b, matching
+    # TTTv1's ccl_dtype (model_config.py:1070). coder's dim=5120 fails the fused all-gather auto-gate
+    # ((5120//32//8) % 8 = 4 != 0), so attention runs a SEPARATE per-layer reduce_scatter on the bf16 WO
+    # output (attention_1d._all_reduce_output_prefill), x64 layers; a bf16 reduce moves 2x the cross-device
+    # bytes of a bf8_b one and reduce_scatter on this shape is dtype-bound (PLAN_03: 2210us -> 1534us/layer
+    # at dim=5120). TTTv1 already reduces this at bf8_b, so the result matches the shipped reference numerics
+    # (not a degradation below it). PREFILL-ONLY: the decode reduce (_all_reduce_output_decode) never reads
+    # prefill_reduce_ccl_dtype -> decode byte-identical. A/B escape hatch: set DISABLE_PREFILL_REDUCE_BF8=1
+    # to keep the reduce at bf16 (byte-identical to the pre-change HEAD). Not bit-exact vs bf16 (mantissa
+    # drop) -> gated on token-accuracy + eval-32, not the 32-user byte-compare (INVALID on coder's tie-heavy
+    # on_device_topk).
+    prefill_reduce_ccl_bf8: bool = True
 
 
 def _resolve_qwen_coder_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen25Coder32BWHTuning:
@@ -369,11 +381,13 @@ def _resolve_qwen_coder_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen
         mlp_decode_spill_w1_to_dram=False,
     )
     t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
+    t.prefill_reduce_ccl_bf8 = not os.environ.get("DISABLE_PREFILL_REDUCE_BF8")
     logger.info(
         f"L1 tuning for Qwen2.5-Coder-32B on {num_dev} device(s): "
         f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
         f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}, "
-        f"prefill_minimal_matmul={t.prefill_minimal_matmul}"
+        f"prefill_minimal_matmul={t.prefill_minimal_matmul}, "
+        f"prefill_reduce_ccl_bf8={t.prefill_reduce_ccl_bf8}"
     )
     return t
 
@@ -456,6 +470,12 @@ def _build_decoder_layer(
             li_o_prefill_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             li_o_decode_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
+            # Cast the per-layer prefill attention output reduce-scatter (bf16 WO output) to bfloat8_b,
+            # matching TTTv1's ccl_dtype. coder is on the NON-fused path (dim=5120 fails the fused
+            # all-gather auto-gate), so this reduce runs every layer; a bf8_b reduce halves the
+            # cross-device payload. Prefill-only (the decode reduce ignores this field). Gated by the
+            # DISABLE_PREFILL_REDUCE_BF8 escape hatch (None => byte-identical to the pre-change HEAD).
+            prefill_reduce_ccl_dtype=(ttnn.bfloat8_b if wh.prefill_reduce_ccl_bf8 else None),
         )
     )
 
