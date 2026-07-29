@@ -84,38 +84,12 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ub
 }
 
 bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape) {
-    // Requesting MESH is always valid (can restrict any topology to MESH)
-    if (requested_type == FabricType::MESH) {
-        return false;
-    }
-
-    // Check if available topology can satisfy the requested topology
-    if (available_type == FabricType::MESH) {
-        // Special case: 2-element dimensions make torus wrap-around equivalent to mesh neighbor connections
-        // E.g., in a 2-row mesh, north/south wrap-around just connects to the adjacent row
-        bool has_two_rows = (mesh_shape[0] == 2);
-        bool has_two_cols = (mesh_shape[1] == 2);
-
-        if (has_flag(requested_type, FabricType::TORUS_Y) && !has_two_rows) {
+    for (uint32_t axis = 0; axis < 2; ++axis) {
+        if (has_genuine_torus_axis(requested_type, mesh_shape, axis) &&
+            !has_genuine_torus_axis(available_type, mesh_shape, axis)) {
             return true;
         }
-        if (has_flag(requested_type, FabricType::TORUS_X) && !has_two_cols) {
-            return true;
-        }
-        return false;
     }
-
-    // For non-MESH available types, check if requested features are present
-    if (requested_type == FabricType::TORUS_XY) {
-        return available_type != FabricType::TORUS_XY;
-    }
-    if (requested_type == FabricType::TORUS_X) {
-        return !has_flag(available_type, FabricType::TORUS_X);
-    }
-    if (requested_type == FabricType::TORUS_Y) {
-        return !has_flag(available_type, FabricType::TORUS_Y);
-    }
-
     return false;
 }
 
