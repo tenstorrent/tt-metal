@@ -1261,11 +1261,23 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const bool rs_feasible = (Pk > 1u) && (rs_T >= Pk) && !has_bias && !has_ternary && !has_activation &&
                              (n_chunks == 1u) && ((diag_mask & kDiagKernelBits) == 0u);
     // No N-WIDTH requirement. The original gate also demanded Nt>=32; measuring the declined shapes with bit23
-    // showed that was wrong - 128x2048x512 (Nt=16) is 8.9% FASTER with reduce-scatter. Across all 15 shapes
-    // measured, every shallow-K Pk>=4 shape with N_sub>=2 won (6/6, 5.5-16.4%) regardless of N width, while
-    // deep-K was genuinely mixed (-3.0% to +3.0%, mean ~0) and N_sub==1 was neutral (+0.4%). So the three
-    // surviving conditions are the ones the data supports.
-    const bool rs_gate = rs_feasible && (Pk >= 4u) && (Kt_r <= 64u) && (geo.N_sub >= 2u);
+    // showed that was wrong - 128x2048x512 (Nt=16) is 8.9% FASTER with reduce-scatter. Every shallow-K Pk>=4
+    // shape with N_sub>=2 won (6/6, 5.5-14.7%) regardless of N width, and N_sub==1 was neutral (+0.4%).
+    //
+    // DEEP K is admitted only under two extra conditions, because reduce-scatter trades data movement for
+    // per-round compute SETUP cost (each round pays an add_tiles_init + data-format reconfig no matter how few
+    // tiles it touches). It therefore needs FEW rounds and ENOUGH WORK per round:
+    //   Pk <= 6        -> at most 5 rounds per sub-block. At Pk=12 the 11 rounds cost far more than the
+    //                     shortened critical path saves: 512x6144x4608 +33.4%, 512x6144x2304 +19.5%,
+    //                     128x15360x1536 +3.0%.
+    //   max_chunk >= 2 -> a round that moves a single 2 KB tile is almost pure overhead: 64x15360x1536
+    //                     (Pk=6, 1-tile chunks) is +2.7% despite satisfying the round bound.
+    // Together these separate all 13 measured deep-K shapes exactly: the 6 satisfying both won (-1.3% to -3.8%)
+    // and all 5 losses are excluded. Shallow K still wins with single-tile chunks (compute has far more slack
+    // there - 30-40% of the wall vs 47-77%), so the chunk-size floor is deep-K only.
+    const uint32_t rs_max_chunk_gate = (rs_T + Pk - 1u) / Pk;
+    const bool rs_deep_ok = (Pk <= 6u) && (rs_max_chunk_gate >= 2u);
+    const bool rs_gate = rs_feasible && (Pk >= 4u) && (geo.N_sub >= 2u) && ((Kt_r <= 64u) || rs_deep_ok);
     const bool diag_force_chain = (diag_mask & 0x400000u) != 0u;     // bit22
     const bool diag_force_rscatter = (diag_mask & 0x800000u) != 0u;  // bit23
     TT_FATAL(
