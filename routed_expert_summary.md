@@ -426,7 +426,63 @@ against today's 99.7**, matching the predicted bank floor. The request becomes
 data-bound (3456/64 = 54 cy of link time) instead of issue-bound. Worth ~1.09x on a
 total run and ~1.21x at isl-256.
 
-**Why it is not landed.** The required permutation is fully derived and needs no
+### 10d. The right layout is DRAM ND/BLOCK sharding -- but NOT width sharding
+
+Measured the two candidate sharded access shapes (2 MiB per core, emulated on the
+existing tile-paged buffer; a read of S bytes at page p covers pages p, p+8, ... so
+it is confined to one bank, and the page STEP between requests decides whether the
+core rotates banks):
+
+| config | per-core GB/s | aggregate | weight read |
+|---|---|---|---|
+| today: 576 B, 11 cores | 20.5 | 226 | 100 us |
+| **plain WIDTH_SHARDED** (1 shard/bank), 27 KB req | 22.4 | **246** | **101 us** |
+| same, 13 KB req | 21.8 | 240 | 103 us |
+| same, 55 KB req | 22.3 | 245 | 101 us |
+| 8 cores, one bank each, 27 KB req | 31.6 | 253 | 98 us |
+| **bank-ROTATING**, 27 KB req | 34.0 | **374** | **66 us** |
+| bank-ROTATING, 3456 B req (section 10c) | 33.4 | 368 | 67 us |
+
+**The canonical dram-sharded-matmul layout -- WIDTH_SHARDED with one shard per bank
+-- buys nothing here (246 vs 226 GB/s).** A single bank saturates at ~22-31 GB/s
+REGARDLESS of request size (13/27/55 KB all land at ~245), so one-shard-per-bank caps
+the aggregate at ~8 x 30 = 246 GB/s, which is what the op already achieves. Request
+size is not the lever; BANK ROTATION is. Note this also re-explains section 7e:
+option B failed for exactly this reason.
+
+So the weights must be sharded along **K as well as N** (DRAM ND_SHARDED / block
+sharded, which ttnn supports -- the matmul validator accepts "DRAM ND_SHARDED", and
+`TensorAccessor::get_shard_noc_addr(shard_coord)` takes a coordinate array, i.e.
+(k, gx)) so that consecutive K-blocks of a core's slice land in different banks.
+
+Use **shard height = 1 tile-row**, not in0_block_w_gu tile-rows: shard id = k*GRID_X
++ gx then rotates the bank with k, a K-block becomes in0_block_w_gu consecutive-shard
+requests of 3456 B, and that measured 368 GB/s -- statistically the same as the 27 KB
+single-request 374. This matters because in0_block_w_gu can be LOWERED by the op's L1
+guard on large models, so binding the shard shape to it would be fragile;
+per_core_N_gu = ceil(hidden_tiles / GRID_X) is stable.
+
+| | shard shape | shard grid | padding | requests per K-block |
+|---|---|---|---|---|
+| gate, up | `[32, per_core_N_gu*32]` = [32, 192] | 224 x 11 | hidden 2048 -> 2112 (66 tiles) | 8 (was 48) |
+| down | `[32, per_core_N_d*32]` = [32, 672] | 64 x 11 | emb 7168 -> 7392 (231 tiles) | 6 (was 126) |
+
+The reader becomes one `noc_async_read(gate_acc.get_shard_noc_addr({k, my_nt_gu}),
+..., per_core_N_gu * 576)` per k, and the compute kernel is untouched -- tiles land in
+the k-major / n-minor order cb_in1_gate already expects. Expected: weight read
+99.7 -> 66 us, ~1.09x total and ~1.21x at isl-256.
+
+This supersedes the hand-rolled permutation below: sharding expresses the same bank
+rotation declaratively, the allocator does the shard -> bank assignment at runtime, so
+nothing arch-specific is baked into the DATA and weights need no per-arch preparation.
+The hand-rolled formula is kept only as the explanation of WHY the rotation works.
+
+**Why it is not landed.** It touches three tensors' memory configs plus padding in both
+the test and `TtRoutedExpert`, the op's weight validation, and the reader/writer read
+loops, and the non-sharded path has to stay for the other callers
+(`test_swigluoai_routed_expert`, `test_routed_expert_bias`, the MoE tests) -- so it
+wants a `weights_dram_sharded` op attribute with the current layout as default rather
+than a half-migrated tree. The superseded permutation below needs no
 change to the buffer's page size — only to tile ORDER, and it fits inside the
 existing 2D tile grid (padded 64 -> 66 tile-cols, +3% weight bytes), so the mesh
 mapper and 4D shape survive. For core gx, K-row k, slice element n (col = 6*gx + n):
