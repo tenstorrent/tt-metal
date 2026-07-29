@@ -19,9 +19,9 @@ Current-run warmed latency on one Blackhole p300c:
 
 | Workload | Functional | Optimized | Change |
 | --- | ---: | ---: | ---: |
-| Prefill, batch 1, seq 128 | 1.917 ms | 2.189 ms | +14.2% |
-| Traced decode, batch 1, context 128 | 1.051 ms | 0.550 ms | -47.7% |
-| Traced decode, batch 32, context 128 | 1.217 ms | 0.743 ms | -38.9% |
+| Prefill, batch 1, seq 128 | 1.917 ms | 1.825 ms | -4.8% |
+| Traced decode, batch 1, context 128 | 1.051 ms | 0.522 ms | -50.3% |
+| Traced decode, batch 32, context 128 | 1.217 ms | 0.723 ms | -40.6% |
 | Prefill, batch 32, seq 32 | 26.165 ms | 20.277 ms | -22.5% |
 
 The primary batch-1 decode target beats the best current functional baseline,
@@ -67,13 +67,39 @@ The acceptance floor is PCC >= 0.995.
 
 ## Profiler and accounting
 
-`tracy/final/decode_b1.txt`, `decode_b32.txt`, and `prefill_b1.txt` are
-advice-enabled reports. Batch-1 decode is about
-550 us end-to-end in the unprofiled repeated runs; the final profiler run is
-528 us device time and 590 us end-to-end. The BFP4 decode
+### Mandatory shard-advisor seed
+
+The required fresh advisor capture is saved under `shard_advise/`.
+`report.json` records 38 ops, 35 final choices, one spill, and
+`dram_sharding.dram_sharded_considered=5` with all five dense linears advised
+as DRAM-sharded. `final_ir.mlir` is authoritative: it recommends
+8-bank DRAM-sharded inputs/weights, block 12 for the four hidden-input
+projections, block 32 for down, and broad 96/86-core L1 outputs.
+
+The final path applies the advised DRAM-sharded matmul family and an L1
+residual/norm/MLP chain. It rejects the exact 8-core/block-32 geometry after
+real-weight whole-layer A/B at both required batches:
+
+| Candidate | Batch-1 traced decode | Batch-32 traced decode | PCC |
+| --- | ---: | ---: | ---: |
+| Advisor seed, 8 cores, blocks 12/32 | 555.650 us | 756.075 us | 0.999778 / 0.999530 |
+| Final default, 16 cores, blocks 6/16 | 521.679 us | 722.930 us | 0.999790 / 0.999541 |
+
+The advisor's large output grids are likewise not kept: the DRAM-sharded
+factory computes its legal round-robin output grid, and restoring the
+rectangular 16-core residual grid is faster as part of the complete traced
+layer. Exact commands and the two first-attempt capture repairs are in
+`work_log.md`.
+
+The post-advisor final-default reports are
+`tracy/final/decode_b1_shard_advise.txt`,
+`decode_b32_shard_advise.txt`, and `prefill_b1_shard_advise.txt`; all keep
+advice enabled. Batch-1 decode is 521.679 us end-to-end in the unprofiled
+same-environment default A/B; the paired final profiler run is 499 us device
+time and 566.429 us end-to-end. The BFP4 decode
 weights move approximately 30 MiB per layer invocation; at the profiler's
 512 GB/s Blackhole peak this gives a coarse 61 us weight-only roofline.
-Cache reads are context-dependent and small at context 128. The 528 us device
+Cache reads are context-dependent and small at context 128. The 499 us device
 time is dominated by many small Phi head/RoPE/cache operations plus the five
 matmuls, not weight traffic alone.
 
@@ -111,7 +137,10 @@ window; later dropped markers are not used as evidence.
 
 ## Validation
 
-Watcher and profiler were separate runs. `watcher/watcher_console.log` records
-five optimized-path tests passing under `TT_METAL_WATCHER=10`, including batch
+Watcher and profiler were separate runs. `watcher_shard_advise_console.log`
+records five optimized-path tests passing under `TT_METAL_WATCHER=10`, including batch
 1, batch 32, non-aligned, repeat, trace, and full-context decode checks.
+Nanobind reference-leak diagnostics occur during Python teardown after the
+tests pass, the watcher reports no kernel error, and device close succeeds;
+they are binding teardown noise rather than a decoder/watcher failure.
 Commands and additional evidence are in `work_log.md`.
