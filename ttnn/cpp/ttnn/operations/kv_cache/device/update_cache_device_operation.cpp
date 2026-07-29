@@ -4,8 +4,6 @@
 
 #include "update_cache_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -163,23 +161,6 @@ tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<UpdateKVCacheOperation>(
         args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
-}
-
-void UpdateKVCacheOperation::override_runtime_arguments(
-    tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Re-derive the descriptor from the single source of truth (create_descriptor) for the current
-    // tensors/attrs and re-apply its per-core args + tensor-backed CB/buffer addresses to the cached
-    // program. No rebuild; supersedes get_dynamic/resolve_bindings. Mirror select_program_factory.
-    auto desc = operation_attributes.op_type == UpdateCacheOpType::FILL
-                    ? FillCacheMultiCoreProgramFactory::create_descriptor(
-                          operation_attributes, tensor_args, tensor_return_value)
-                    : UpdateCacheMultiCoreProgramFactory::create_descriptor(
-                          operation_attributes, tensor_args, tensor_return_value);
-    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 Tensor update_cache(

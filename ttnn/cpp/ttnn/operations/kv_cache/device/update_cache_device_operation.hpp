@@ -35,14 +35,10 @@ struct UpdateKVCacheOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer
-    // addresses), since compute_program_hash excludes batch_idx/update_idx/batch_offset. See the .cpp.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+    // Cache-hit re-apply of all per-dispatch state (buffer addresses + the args derived from the
+    // batch_idx/update_idx/batch_offset that compute_program_hash excludes) lives on each program
+    // factory as override_runtime_arguments(); the framework calls it on the factory that built the
+    // cached program.
 };
 
 Tensor update_cache(
