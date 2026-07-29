@@ -149,6 +149,26 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             "Fp32Mode::Lossless to force the slow (bit-exact) tilize path.");
     }
 
+    // A resident INPUT on the FAST path additionally requires 32x32 input tiles, and this is
+    // NOT implied by can_use_fast_tilize (which checks `dfb_has_32x32_tiles<output_dfb>()` —
+    // the OUTPUT only). `fast_tilize_block` converts the caller's tile-unit index into the
+    // unpacker's 32-datum-unit index with the COMPILE-TIME constant `TILE_R_DIM` (= 32,
+    // `api/compute/tilize.h:407` on WH and `:367` on BH), where the slow path reads the
+    // operand's real row dim (`get_operand_tile_r_dim`, `llk_unpack_tilize_api.h:94-97`). So a
+    // 16-row (num_faces == 2) input feeding a 32x32 output would take the fast path and stride
+    // every block after the first 2x too far, while the pack side — which uses `fifo_page_size`
+    // — stays correct. The two sides would disagree with no assert and no hang.
+    // Only reachable with a NONZERO index, i.e. only in Resident mode, which is why the check
+    // lives here rather than in can_use_fast_tilize. (`ttnn-static-analyzer`, Refinement 4b F2.)
+    if constexpr (resident_in && use_fast) {
+        static_assert(dfb_has_32x32_tiles<input_dfb>(),
+            "InputBufferMode::Resident requires a 32x32-tile input DFB on the fast-tilize path: "
+            "fast_tilize_block scales the block index by the compile-time TILE_R_DIM (32), so a "
+            "16-row input tile would mis-stride every block after the first. Use "
+            "InputBufferMode::Circular, or Fp32Mode::Lossless to force the slow path (which "
+            "reads the operand's real row dim).");
+    }
+
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =
         (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure) ||
@@ -168,6 +188,20 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     if constexpr (resident_in) {
         ASSERT(!asymmetric_dfb_pages);
     }
+#ifdef ARCH_QUASAR
+    // On tt-2xx a logical DFB may round-robin several hardware tile counters, and
+    // push_back / pop_front are what advance `tc_idx` (`tt-2xx/dataflow_buffer.inl:193, :237`).
+    // Quasar's tilize addressing resolves the tile index against the CURRENT slot
+    // (`quasar/.../llk_unpack_tilize_api.h:52,58`, `llk_pack_tile_api.h:59`), so a resident DFB
+    // — which never advances the slot — is only well defined with a single counter. Everything
+    // else about Resident is arch-neutral. (`ttnn-static-analyzer`, Refinement 4b F3.)
+    if constexpr (resident_in) {
+        UNPACK(ASSERT(get_local_dfb_interface(input_dfb).num_tcs_to_rr == 1));
+    }
+    if constexpr (resident_out) {
+        PACK(ASSERT(get_local_dfb_interface(output_dfb).num_tcs_to_rr == 1));
+    }
+#endif
 
     // Tilize input must not be a block float format (Bfp8/4/2 and _b variants).
     // Block floats have shared exponents that break row-major-to-tile reinterpretation.

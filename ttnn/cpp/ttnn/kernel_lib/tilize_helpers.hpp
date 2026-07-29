@@ -106,6 +106,13 @@ enum class RemapMode : uint8_t {
 //        (Pair with `WaitMode::NoWait`; the helper static_asserts this.)
 //     2. The DFB holds the whole run: capacity >= block_width_tiles * num_blocks pages.
 //     3. Symmetric (tile-sized) pages — do not pass `total_input_pages`.
+//     4. On the FAST tilize path, 32x32 input tiles. `fast_tilize_block` scales the block
+//        index by the compile-time `TILE_R_DIM` (32) where the slow path reads the
+//        operand's real row dim, so a 16-row input tile would mis-stride every block
+//        after the first while the pack side stayed correct. static_asserted.
+//        NB `can_use_fast_tilize` checks 32x32 on the OUTPUT only, so this is a genuinely
+//        additional condition — and one that only bites once the index is nonzero, i.e.
+//        only here.
 //   OutputBufferMode::Resident
 //     1. NOTHING consumes from the output DFB (no writer kernel, no second compute
 //        phase reading it through the CB protocol).
@@ -113,12 +120,16 @@ enum class RemapMode : uint8_t {
 //
 //   Both: the helper leaves the DFB's fifo pointers where it found them, so the DFB
 //   must be at its base on entry (true at launch — the firmware re-initialises every
-//   DFB interface) and must not also be driven through the circular protocol
-//   elsewhere in the same kernel.
+//   DFB interface via `setup_local_cb_read_write_interfaces`) and must not also be
+//   driven through the circular protocol elsewhere in the same kernel. On tt-2xx the
+//   DFB must additionally use a SINGLE hardware tile counter (`num_tcs_to_rr == 1`):
+//   it is push_back / pop_front that round-robin `tc_idx`, and Quasar's tilize
+//   addressing resolves the tile index against the current slot. ASSERTed.
 //
 // Violating (1) is a correctness bug that no assert can catch (a consumer would read
 // pages that were never published, or a producer would overwrite pages that were never
-// freed); (2) and (3) are checked by debug ASSERTs.
+// freed) — it has to be guaranteed by the program's kernel list. (2), (3) and the
+// tt-2xx counter clause are debug ASSERTs; (4) is a static_assert.
 enum class InputBufferMode : uint8_t {
     Circular,  // Default — a real circular buffer: a producer publishes into it, the helper
                // waits (see WaitMode) and pops, and fifo_rd_ptr addresses block k.
