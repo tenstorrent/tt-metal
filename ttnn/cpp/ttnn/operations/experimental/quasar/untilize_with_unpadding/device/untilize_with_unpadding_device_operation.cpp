@@ -9,6 +9,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/constants.hpp>
+#include <ttnn/tensor/memory_config/memory_config.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 using namespace tt::tt_metal;
@@ -238,6 +239,15 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
             shard_shape = {fused_height, shard_spec.shape[1]};
         }
         shard_spec.shape = shard_shape;
+        // See the equivalent guard in the non-Quasar tilize_device_operation.cpp: rebuilding the
+        // output MemoryConfig here drops the per-core allocation bit (#51133), and this factory
+        // could not honour a per-core output anyway (#51354).
+        TT_FATAL(
+            !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
+                operation_attributes.output_mem_config),
+            "ttnn::experimental::quasar::untilize_with_unpadding: per-core allocated output is not supported by the "
+            "sharded program factory. Build the tensor without an on-device layout conversion, or request a lockstep "
+            "output.");
         auto mem_config = tt::tt_metal::MemoryConfig(
             input_tensor_a.memory_config().memory_layout(),
             operation_attributes.output_mem_config.buffer_type(),

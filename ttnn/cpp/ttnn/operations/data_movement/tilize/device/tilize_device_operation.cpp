@@ -14,6 +14,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
+#include <ttnn/tensor/memory_config/memory_config.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 using namespace tt::tt_metal;
@@ -241,6 +242,16 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
             tt::LogOp,
             "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
             "factory is being used");
+        // Rebuilding the output MemoryConfig from named fields drops everything the caller asked
+        // for that is not named here, including the experimental per-core allocation bit (#51133).
+        // Refuse rather than silently downgrade: this factory's output CB binds a single address
+        // for all cores, so it could not honour a per-core output even if the bit were carried
+        // through (#51354).
+        TT_FATAL(
+            !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
+                operation_attributes.output_mem_config),
+            "ttnn::tilize: per-core allocated output is not supported by the legacy sharded optimized program "
+            "factory. Build the tensor without an on-device layout conversion, or request a lockstep output.");
         auto mem_config = tt::tt_metal::MemoryConfig(
             input_tensor.memory_config().memory_layout(),
             operation_attributes.output_mem_config.buffer_type(),
