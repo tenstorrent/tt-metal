@@ -550,11 +550,12 @@ Tensor floor_div(
 Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor temp = ttnn::div(input_a, input_b, false, std::nullopt, std::nullopt, output_mem_config);
     Tensor result = ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
-    // floor(nan, inf, -inf) = nan, inf, -inf. isfinite tests all three in a
-    // single SFPU pass, replacing three eq's and two logical_or's. Note that
-    // eq(temp, nan) was always false under IEEE, so the NaN case previously
-    // fell through to the floored value.
-    return ttnn::where(ttnn::isfinite(temp, output_mem_config), result, temp);
+    // floor(inf, -inf) = inf, -inf. isinf tests both in a single SFPU pass,
+    // replacing two eq's and a logical_or. The dropped eq(temp, nan) term was
+    // always false under IEEE, so NaN selects the floored value here exactly as
+    // it did before; isinf (rather than !isfinite) keeps that branch identical
+    // without relying on floor propagating NaN.
+    return ttnn::where(ttnn::isinf(temp, output_mem_config), temp, result);
 }
 
 // outer(a, b) treats each input's last dim as a vector and broadcasts the
