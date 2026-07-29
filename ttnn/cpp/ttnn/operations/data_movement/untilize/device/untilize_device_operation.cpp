@@ -100,9 +100,12 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
-    // Input must be in valid tile layout
-    TT_FATAL(tensor_width % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
-    TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
+    // Input must be in valid tile layout. Align against the tensor's OWN tile: a tiny-tile input
+    // (e.g. 16x32) is perfectly tile-aligned at 16 rows, and comparing to the 32x32 globals rejected
+    // it outright (hit via ttnn.repeat's TILE->RM->TILE fallback).
+    const auto& in_tile = input_tensor_a.tensor_spec().tile();
+    TT_FATAL(tensor_width % in_tile.get_width() == 0, "Width must be evenly divisible into tiles");
+    TT_FATAL(tensor_height % in_tile.get_height() == 0, "Height must be evenly divisible into tiles");
 
     // Special conditions for sub_core_grids special case
     if (operation_attributes.sub_core_grids.has_value()) {

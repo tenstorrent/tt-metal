@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
+#include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operation.hpp"
@@ -123,11 +124,15 @@ ttnn::Tensor repeat_dim_tile(
     const auto& shape = tensor.logical_shape();
     const auto rank = shape.rank();
 
-    uint32_t h_tiles = shape[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t w_tiles = shape[-1] / tt::constants::TILE_WIDTH;
+    // Derive tile counts and the page size from the tensor's OWN tile, not the 32x32 globals: a
+    // tiny tile (e.g. 16x32) has a smaller page, and using tt::tile_size here would stride the copy
+    // by a full 32-row tile and silently corrupt / mis-shape the result.
+    const auto& tensor_tile = tensor.tensor_spec().tile();
+    uint32_t h_tiles = shape[-2] / tensor_tile.get_height();
+    uint32_t w_tiles = shape[-1] / tensor_tile.get_width();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    uint32_t tile_page_size = tt::tile_size(cb_data_format);
+    uint32_t tile_page_size = tensor_tile.get_tile_size(cb_data_format);
 
     uint32_t higher, rep_dim_pages, lower;
 
@@ -268,6 +273,16 @@ ttnn::Tensor repeat(
 
         if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
             working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, input_tensor.dtype());
+            // to_layout has no tile parameter -- it infers the tile from its (ROW_MAJOR) input, and the
+            // TILE->RM->repeat->TILE round-trip above does not carry a tiny tile all the way through,
+            // so the result comes back on the default 32x32 tile. That silently PROMOTES a tiny-tile
+            // input's output. Restore the requested geometry via the tilize retile path. No-op (and no
+            // extra dispatch) whenever the tiles already agree, i.e. for every 32x32 caller.
+            const auto& in_tile = input_tensor.tensor_spec().tile();
+            if (working_tensor.tensor_spec().tile() != in_tile) {
+                working_tensor = ttnn::tilize(
+                    working_tensor, working_tensor.memory_config(), working_tensor.dtype(), true, false, in_tile);
+            }
         }
     }
 

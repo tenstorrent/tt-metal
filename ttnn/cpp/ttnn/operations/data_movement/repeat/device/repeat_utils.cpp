@@ -98,8 +98,10 @@ bool is_native_repeat_sharding(
     // TILE input: reject non-tile-aligned H/W (native tile path requires alignment).
     if (input_spec.layout() == tt::tt_metal::Layout::TILE) {
         const auto& lshape = input_spec.logical_shape();
-        if (lshape.rank() < 2 || (lshape[-1] % tt::constants::TILE_WIDTH) != 0 ||
-            (lshape[-2] % tt::constants::TILE_HEIGHT) != 0) {
+        // Align against the tensor's own tile so a tiny tile is not rejected by the 32x32 globals.
+        const auto& in_tile = input_spec.tile();
+        if (lshape.rank() < 2 || (lshape[-1] % in_tile.get_width()) != 0 ||
+            (lshape[-2] % in_tile.get_height()) != 0) {
             return false;
         }
     }

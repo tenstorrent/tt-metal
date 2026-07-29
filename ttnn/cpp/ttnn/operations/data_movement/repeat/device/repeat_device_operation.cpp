@@ -87,7 +87,9 @@ RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config));
+            // Preserve the input's page config: a bare PageConfig(layout) defaults to a 32x32 tile,
+            // which silently PROMOTES a tiny-tile input's output (a (16,32) input yielded (32,32)).
+            input_tensor_a.dtype(), input_tensor_a.tensor_spec().page_config(), mem_config));
 }
 
 RepeatDeviceOperation::tensor_return_value_t RepeatDeviceOperation::create_output_tensors(

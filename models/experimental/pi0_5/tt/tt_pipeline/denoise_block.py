@@ -267,14 +267,6 @@ def _build_fused_gate_ws(device, gate, w, n_blocks=_MLP_N_BLOCKS):
     g2d = ttnn.reshape(gate, (1, w))
     g_rep = ttnn.repeat(g2d, ttnn.Shape([TILE_HEIGHT, 1]))  # [TILE_HEIGHT, W], replicated down rows
     ttnn.deallocate(g2d)
-    # ttnn.repeat does NOT preserve a tiny tile -- it promotes the output to 32x32 (verified: a
-    # (16,32) input yields a (32,32) output). Retile back so the shard spec below and the epilogue's
-    # mul against the matmul output (which carries inputA's tile) agree. Precompute-time only, so the
-    # extra retile costs nothing per replay.
-    if int(g_rep.get_tile().tile_shape[0]) != TILE_HEIGHT:
-        g_rt = ttnn.tilize(g_rep, tile=ttnn.Tile((TILE_HEIGHT, TILE_WIDTH)), dtype=g_rep.dtype, memory_config=_L1)
-        ttnn.deallocate(g_rep)
-        g_rep = g_rt
     mc = ttnn.create_sharded_memory_config(
         (TILE_HEIGHT, w // n_blocks),
         core_grid=_crs(device, n_blocks),

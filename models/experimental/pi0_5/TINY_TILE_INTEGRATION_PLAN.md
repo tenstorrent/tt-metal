@@ -269,10 +269,26 @@ A/B must hold the fusion state identical on both sides.**
 - **tile-16 reaches rough parity with pre-merge** (+1.9% / +0.9%), i.e. tiny tile offsets an
   as-yet-unexplained ~7% regression that the tile-32 build carries vs pre-merge.
 
-**OPEN: the ~7% tile-32 vs pre-merge regression.** Not the kv_sdpa chunk cap — `_KV_SDPA_MAX_CHUNK_TILES
-= 32` reproduces pre-merge's effective pick exactly (both land on a 4-tile prefix chunk for
-`prefix_Kt = 32`). Remaining suspects: the ~2 weeks of upstream main drift the merge pulled in, or the
-re-fused wiring not being byte-identical to the pre-merge block. Needs its own bisect.
+**RESOLVED (mostly): the ~7% tile-32 vs pre-merge regression was kv_sdpa math fidelity.** The re-fused
+block kept the tiny-tile branch's `get_sdpa_compute_kernel_config()` (BAKED **HiFi4**) where pre-merge
+used `_KV_SDPA_HIFI2` (**HiFi2**). kv_sdpa's fp32 dest accumulation is un-gated, so fidelity is the only
+effective knob. Restoring HiFi2 on both kv_sdpa call sites (the general-SDPA fallback stays HiFi4, as
+pre-merge) recovered 1.05 ms / 1.30 ms — the 3-cam figure matching pre-merge's "~1.3 ms" note exactly.
+PCC unchanged at 0.9999.
+
+| 16-chip e2e | pre-merge | tile-32 HiFi4 | tile-32 HiFi2 | **tile-16 HiFi2** |
+|---|---|---|---|---|
+| 2 cams | 25.31 ms | 27.21 | 26.16 | **25.10** |
+| 3 cams | 28.52 ms | 30.33 | 29.03 | **27.92** |
+
+**tile-16 now beats pre-merge by 0.8% / 2.1%**, and is 3.8–4.1% faster than tile-32 on the same build.
+
+Ruled out: the kv_sdpa chunk cap (`_KV_SDPA_MAX_CHUNK_TILES = 32` reproduces pre-merge's effective
+4-tile prefix chunk exactly) and `ttnn.repeat` (`_build_fused_gate_ws` is reached only from
+`precompute_mods`, which runs at BUILD time, so repeat and its retile cost zero per replay).
+
+**Still open: a residual +1.8%/+3.4% on tile-32 vs pre-merge.** Deprioritized because the shipping
+config (tile-16) is now ahead of pre-merge. Suspects remain main drift or a subtler wiring difference.
 
 Two more blockers had to be cleared beyond re-fusion:
 
