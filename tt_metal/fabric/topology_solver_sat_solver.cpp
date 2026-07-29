@@ -4,6 +4,7 @@
 
 #include "topology_solver_sat_solver.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -52,7 +53,14 @@ public:
         sols_target_ = target;
     }
 
+    void set_cancel(std::atomic<bool>* flag) { cancel_ = flag; }
+
     bool terminate() override {
+        // Portfolio cancellation: once another worker has won, stop this solve promptly (checked every call; a
+        // relaxed atomic load is ~1ns). Kept before the sample-mask early-out so cancellation is responsive.
+        if (cancel_ != nullptr && cancel_->load(std::memory_order_relaxed)) {
+            return true;
+        }
         if ((++calls_ & kSampleMask) != 0) {
             return false;
         }
@@ -143,6 +151,7 @@ private:
     std::string phase_;
     int64_t sols_found_ = 0;
     int64_t sols_target_ = 0;
+    std::atomic<bool>* cancel_ = nullptr;
 };
 
 }  // namespace
@@ -164,6 +173,8 @@ struct TopologySatSolver::Impl {
     }
 
     void add(int lit) { solver.add(lit); }
+
+    void set_cancel(std::atomic<bool>* flag) { heartbeat.set_cancel(flag); }
 
     void set_progress_phase(std::string_view phase) { heartbeat.set_phase(phase); }
 
@@ -211,6 +222,8 @@ void TopologySatSolver::configure_for_blocking_clause_enumeration() {
 }
 
 bool TopologySatSolver::set_option(const std::string& name, int value) { return impl_->solver.set(name.c_str(), value); }
+
+void TopologySatSolver::set_cancel_flag(std::atomic<bool>* flag) { impl_->set_cancel(flag); }
 
 TopologySatSolver::~TopologySatSolver() = default;
 

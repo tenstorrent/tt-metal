@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <atomic>
 #include <functional>
+#include <mutex>
+#include <thread>
 #include <cerrno>
 #include <chrono>
 #include <cctype>
@@ -2270,6 +2273,93 @@ int topology_sat_symmetry_assumption_lit(const TopologySatGraphView& graph_data,
     return enc.assign_lit[info.anchor][0];
 }
 
+// GOAL-1 / Design B: parallel seed portfolio (TT_TOPO_SAT_PORTFOLIO=N). Spawn N worker threads on rank 0, each
+// with its OWN CaDiCaL solver + independent encoding + a distinct seed (optionally fastsat). The first worker to
+// reach SAT sets `done`, which every worker's terminator polls and aborts on. The winning mapping is returned.
+// SAT solve time is highly seed-sensitive, so wall ~= fastest-of-N (bounded by free cores). Encode is serialized
+// (cheap, ~0.1s) to avoid any shared-state races; the parallel win is entirely in the solve.
+inline bool topology_sat_run_portfolio(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    ConnectionValidationMode validation_mode,
+    int n_workers,
+    long base_seed,
+    bool fastsat,
+    bool quiet_mode,
+    std::vector<int>& mapping_out) {
+    std::atomic<bool> done{false};
+    std::mutex mtx;  // guards encode serialization + the winner claim
+    std::vector<int> best;
+    int winner = -1;
+    double win_ms = 0.0;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<size_t>(n_workers));
+    for (int k = 0; k < n_workers; ++k) {
+        workers.emplace_back([&, k]() {
+            TopologySatSolver solver;
+            solver.set_cancel_flag(&done);
+            (void)solver.set_option("seed", static_cast<int>((base_seed >= 0 ? base_seed : 0) + k));
+            if (fastsat) {
+                (void)solver.set_option("target", 2);
+                (void)solver.set_option("phase", 1);
+            }
+            TopologySatHardEncoding enc;
+            {
+                std::lock_guard<std::mutex> lk(mtx);  // serialize encode (cheap; sidesteps any shared-state race)
+                if (done.load(std::memory_order_relaxed)) {
+                    return;
+                }
+                if (!topology_sat_encode_hard_constraints(
+                        solver, graph_data, constraint_data, enc, validation_mode, /*quiet_mode=*/true)) {
+                    return;
+                }
+            }
+            const int assumption = topology_sat_symmetry_assumption_lit(graph_data, enc);
+            int status;
+            if (assumption != 0) {
+                solver.assume(assumption);
+                status = solver.solve();
+                if (status != TopologySatSolver::kSat && !done.load(std::memory_order_relaxed)) {
+                    status = solver.solve();  // retry without the symmetry assumption (it is one-shot)
+                }
+            } else {
+                status = solver.solve();
+            }
+            if (status != TopologySatSolver::kSat) {
+                return;  // UNSAT/unknown or cancelled
+            }
+            std::vector<int> m;
+            if (!topology_sat_decode_hard_solution(solver, enc, m)) {
+                return;
+            }
+            std::lock_guard<std::mutex> lk(mtx);
+            if (!done.exchange(true)) {
+                best = std::move(m);
+                winner = k;
+                win_ms = topology_sat_elapsed_ms(t0);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        w.join();
+    }
+    if (winner < 0) {
+        return false;
+    }
+    mapping_out = std::move(best);
+    if (!quiet_mode) {
+        log_info(
+            tt::LogFabric,
+            "[topo-sat-profile] portfolio: {}-way, winner=seed_offset {} in {:.1f} ms (fastsat={})",
+            n_workers,
+            winner,
+            win_ms,
+            fastsat);
+    }
+    return true;
+}
+
 bool topology_sat_search(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
@@ -2349,6 +2439,36 @@ bool topology_sat_search(
     };
 
     auto solve_hard_only = [&](TopologySatSolver& solver, TopologySatHardEncoding& enc) -> bool {
+        // GOAL-1 / Design B: parallel seed portfolio (TT_TOPO_SAT_PORTFOLIO=N > 1). Race N seed workers (each its
+        // own solver), take the first to SAT. Returns that mapping directly (bypasses the single-solver path).
+        const long portfolio_n = topology_sat_env_long("TT_TOPO_SAT_PORTFOLIO", 0);
+        if (portfolio_n > 1) {
+            const long base_seed = topology_sat_env_long("TT_TOPO_SAT_SEED", 0);
+            const bool fastsat = topology_sat_env_long("TT_TOPO_SAT_FASTSAT", 0) != 0;
+            const auto t_pf = std::chrono::steady_clock::now();
+            std::vector<int> m;
+            if (topology_sat_run_portfolio(
+                    graph_data, constraint_data, validation_mode, static_cast<int>(portfolio_n), base_seed, fastsat,
+                    quiet_mode, m)) {
+                state.mapping = std::move(m);
+                std::fill(state.used.begin(), state.used.end(), false);
+                for (size_t t = 0; t < state.mapping.size(); ++t) {
+                    const int gi = state.mapping[t];
+                    if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                        state.used[static_cast<size_t>(gi)] = true;
+                    }
+                }
+                if (!quiet_mode) {
+                    log_debug(
+                        tt::LogFabric,
+                        "[topo-sat-profile] portfolio.total : {:.1f} ms ({}-way)",
+                        topology_sat_elapsed_ms(t_pf),
+                        portfolio_n);
+                }
+                return true;
+            }
+            // portfolio produced no model -> fall through to the normal single-solver path
+        }
         // GOAL-1 base-embedding speedups (each env-gated, default off; independently toggleable):
         //   TT_TOPO_SAT_SEED=N     -> CaDiCaL random seed (enables a seed portfolio; SAT time is seed-sensitive)
         //   TT_TOPO_SAT_FASTSAT=1  -> bias CaDiCaL toward finding a model fast

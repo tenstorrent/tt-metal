@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <atomic>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -68,6 +70,10 @@ struct TopologySatSolver {
     // Set a CaDiCaL option (e.g. "seed", "target"). Returns false if the option/value is rejected. Used by the
     // Goal-1 base-embedding speedup experiments (TT_TOPO_SAT_SEED / TT_TOPO_SAT_FASTSAT). No-op-safe.
     bool set_option(const std::string& name, int value);
+
+    // Point the solver's terminator at a shared cancel flag: once *flag is true, solve() aborts (returns non-SAT).
+    // Used by the parallel seed portfolio so the first thread to hit SAT cancels the rest. nullptr = no cancel.
+    void set_cancel_flag(std::atomic<bool>* flag);
 
     static constexpr int kSat = 10;
     static constexpr int kUnsat = 20;

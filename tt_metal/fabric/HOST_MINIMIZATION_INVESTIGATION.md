@@ -131,3 +131,13 @@ Ideas:
 - Modes: `TT_TOPO_SAT_MIN_MODE=0|1|2|3|4`; no minimization: `TT_TOPO_SAT_NO_MINHOST=1`.
 - Direct producer harness + gen_table.py in the session scratchpad; results in `warm_solve_experiment_results.md`.
 - Profiling: `-DTT_METAL_ENABLE_LOGGING=ON`, `TT_LOGGER_LEVEL=debug`, grep `[topo-sat-profile]` / `[intermesh-solve]`.
+
+---
+
+## GOAL-2 PARKED THOUGHT (revisit later)
+The all-or-nothing "every used host is completely full" tightening is what makes hardcap fast on PARTIAL
+fills (mode 4 without it times out), BUT it is pure overhead when the cap is NOT binding — at FULL fill
+(k_min == number of available host groups) there is nothing to minimize, yet it made 2x4-144 go from
+15.2 min (plain embedding) to TIMEOUT@30min. Proposed fix: guard to SKIP minimization / the all-or-nothing
+when k_min >= available host groups (or more generally when the cap can't reduce host count). Being confirmed
+via mode 4 on 144. Pick this up when we return to Goal 2.
