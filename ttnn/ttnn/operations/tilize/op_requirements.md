@@ -518,7 +518,48 @@ regime in the cumulative bench set (155 rows); golden suite still 126/126;
 
 ---
 
-### [ ] Refinement 4 — Path-B (same-spec sharded) compute + sync floor
+### [x] Refinement 4 — Path-B (same-spec sharded) compute + sync floor
+
+> **Outcome (2026-07-29): COMPLETE — all three levers landed or refuted with their own
+> measured verdict, and the entry's 1.3× numeric clause is shown UNREACHABLE.**
+> **Lever 1 (compute-only program) LANDED**: both dataflow kernels dropped on Path B,
+> `f_sharded_small` **1 365 → 1 273 ns (1.074×)**, `f_sharded_large` **2 070 → 1 985
+> (1.044×)**, and **1.171×** on the smallest Path-B shape — a fixed ~90-130 ns/launch,
+> i.e. ~2× R3b's per-kernel price, as its precedent predicted. **Lever 3
+> (`Fp32Mode::Fast` on a narrowing fp32 cast) LANDED**: **1.261×** into bf16 and
+> **1.436×** into bf8b on the compute-bound sharded cells, 1.003× (neutral) on the
+> DM-bound interleaved one, with output **byte-identical** to Lossless — so it ships
+> ungated rather than regime-gated. **Lever 2 (`InitUninitMode`) REFUTED with a priced
+> ceiling**: a config-burst pair costs **70 ns** (70 and 71 from two shapes), the kernel
+> already issues exactly one, and `uninit` cannot be dropped ⇒ ceiling 5.5 %,
+> unreachable.
+>
+> **The result worth carrying is the mechanism, not the number.** The lever deletes the
+> CB arm/drain; it does not move it. `examples/zero_copy_fold` measures the *folded*
+> form (arm/drain onto TRISC) at 0.74-0.95× on this very payload, and this pass
+> reproduces that as a permanent bench arm: **fold vs 3 kernels = 1.016 / 0.999 /
+> 1.002**, i.e. nothing. So "fewer kernels" is not what pays — the absent handshake is,
+> and it is only legal because the aliased CBs have exactly as many pages as compute
+> pushes.
+>
+> **Why ≤ 1 063 ns is unreachable**, each term measured: launch/dispatch floor **502 ns**
+> (`sync_only` on the minimum-work Path-B program) + tilize LLK **659 ns** = **1 161 ns
+> = 1.19×**; with *every* CB handshake at zero, **~1 121 = 1.23×**. The bar sits below
+> the sum of the launch floor and the LLK. And the LLK is a throughput term
+> (~67 ns/tile ≈ the unpacker's rate; bf16 already takes `fast_tilize`, and lever 3
+> measures the only other path at **+49 ns/tile**), so it cannot be optimised away.
+> The residual — 162 ns / 12.7 % of per-block CB bookkeeping at 40.5 ns/block — is
+> priced and handed to **Refinement 4b**.
+>
+> Everything else in the gate holds: `f_sharded_large` no slower ✓ (1 985 < 2 071);
+> re-binding probe passes; all same-spec sharded golden cells pass (126/126, 240/240);
+> `no_dm == full` ✓ (−0.4 %) and now structurally — the program has **no NoC-capable
+> kernel at all**; a Mode-C ledger row per lever. Zero regressions across all **177**
+> carried bench rows (max +1.9 %); `test_translated.py` 275; unit suite **421/421** in
+> both modes; no hangs. `ttnn-static-analyzer` found **two silent-corruption bugs in
+> lever 3's draft** (an fp32→integer-output cell that reaches fast tilize unguarded, and
+> a force flag that bypassed its own "structural" clause) — both fixed and pinned.
+> Full ledger: `changelog.md` § "Refinement 4".
 
 **Goal**: cut the fixed per-launch cost of the zero-copy path, which is the only thing left in it.
 Measured decomposition of `f_sharded_small` `[1,1,512,64]` H-sharded, 4 cores: **full 1 382 ns,
@@ -572,6 +613,60 @@ bit-exact, cache entries unchanged). Order after Refinement 3 so both sharded pa
 2 071 ns; the re-binding probe passes (cache hit + different addresses + bit-exact on both calls); all
 same-spec sharded golden cells (HEIGHT/WIDTH/BLOCK/nd, ROW and COL) still pass; `no_dm == full` still
 holds (the zero-DRAM claim must survive); Mode-C ledger row per lever.
+
+---
+
+### [ ] Refinement 4b — Path B's last 162 ns: the per-block CB bookkeeping, or close the regime
+
+**Goal**: Refinement 4 took `f_sharded_small` to **1 273 ns** and proved its parent's
+1 063 ns bar is below the op's arithmetic floor (launch 502 + LLK 659 = 1 161). Exactly one
+priced term is left, and this entry is deliberately scoped as *either take it or close the
+regime* — because it is a helper-API question as much as a perf one, and the honest answer may
+be "not worth it".
+
+| term | ns | share | status |
+|---|---|---|---|
+| launch / dispatch floor | 502 | 39 % | **platform** — not the op's (R3b: prologue + FW epilogue + core skew) |
+| tilize LLK, 8 tiles | 659 | 52 % | **irreducible** — ~67 ns/tile ≈ the unpacker's throughput; bf16 is already on `fast_tilize` and R4 measured the alternative at +49 ns/tile |
+| **per-block CB bookkeeping** | **162** | **13 %** | **this entry** — 40.5 ns/block, measured as `sync_only(4 blk) − sync_only(1 blk)` / 3 |
+
+**Concrete lever**: on the compute-only Path-B program nothing observes the per-block CB
+traffic — `cb_reserve_back(cb_out)` can never block (exactly `shard_tiles` pages against
+exactly `shard_tiles` pushes), `cb_push_back(cb_out)` has no consumer, and
+`cb_pop_front(cb_in)` exists only to walk `fifo_rd_ptr`. Each of the latter two carries a
+`TTI_STALLWAIT(STALL_THCON, ...)`, which is where the 40.5 ns/block plausibly lives. The
+lever is to walk the shard's tile addresses directly instead of through the CB pointers,
+across `num_blocks` `tilize_block` calls.
+
+**The reason this is not obviously worth doing, and must be settled first**:
+`compute_kernel_lib::tilize` owns those CB ops and has no mode to suppress them
+(`WaitMode::NoWait` suppresses only `wait_front` — `op_design.md` Risk #13). So the lever is
+a **helper substitution** — the implementer's standing rule requires a really good argument
+for raw LLK where a helper covers the step, and "it saves 13 % on one regime" competes
+against losing the helper's init/uninit, dst-sync and format-reconfig handling. **Ceiling if
+it works perfectly: 1 273 → ~1 121 ns = 1.23× against the parent's 1.30× bar — still short.**
+
+**Two acceptable outcomes, and the second is not a failure**:
+1. **A helper change**, if the right shape is a new `tilize_config` lifecycle mode (e.g. an
+   `OutputLifecycle`-style "no consumer, do not publish" / "resident, do not recycle" pair)
+   that expresses "this CB is aliased and nobody is on the other end" *once*, in
+   `kernel_lib`, for every zero-copy op — not a one-off raw-LLK block in this kernel. That is
+   a genuinely reusable primitive and the strongest version of this entry.
+2. **A recorded decline**: measure the ceiling by a throwaway raw-LLK spike (bench-only,
+   never shipped), confirm it against the 162 ns prediction, and close the regime with the
+   verdict "measured, not worth a helper substitution". Refinement 4 already prices the
+   prize; this would confirm the price and stop the queue returning to it.
+
+**Implementation skill**: /perf-measure
+
+**Verifier notes**: do **not** re-open the launch floor or the LLK — R4 attributes both to the
+ns and both are outside the op (see the table). Keep `TILIZE_LEVER_ND=0` and `=3` as the
+counterfactual arms: `=3` is the `zero_copy_fold` fold reproduction and the *only* evidence
+that lever 1's win is the absent handshake rather than the kernel count, so a future
+"simplify by folding it back" would otherwise look free. If option 1 is taken, the same
+lifecycle mode should be checked against the `alias_out` crossover, where R3b already dropped
+the writer and the output CB has the identical exact-page property — that is what would make
+it a helper change rather than a second one-off.
 
 ---
 
