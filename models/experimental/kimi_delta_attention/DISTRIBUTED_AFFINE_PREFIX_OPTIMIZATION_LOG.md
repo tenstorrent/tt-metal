@@ -191,4 +191,42 @@ The four recurrence matmuls fall from a 154.525 us median to 20.249 us; adds fal
 
 Decision 4: stop the target campaign at the first fully validated result above 60% rather than expand scope. Further work could fuse BF16 matmul/add with relay readiness or specialize P2P for persistent recurrence, but neither is required for the stated goal.
 
+## 2026-07-29: generalize the state relay
+
+Verdict: keep. Remove the `SP=4, TP=2` selection guard and use the same
+source-derived state relay for every distributed mesh (`SP > 1`). Loop bounds
+and mesh coordinates are derived from `sp_size`, `tp_size`, and
+`sequence_parallel_axis`; broadcast link count is auto-selected. There is no
+participant-count specialization.
+
+Hypothesis: SP2xTP4 was still running the generic affine-transform
+Hillis--Steele schedule, so applying the already validated state-relay
+algorithm should eliminate its redundant transform communication without
+regressing SP4xTP2.
+
+Validation:
+
+- `./build_metal.sh`: PASS.
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_distributed_affine_prefix.py -q -s`:
+  2 passed, `SAFE_PYTEST_RESULT: PASS`. SP4xTP2/axis 0 worst PCC is 0.999984
+  and max absolute error is 7.171780e-4; SP2xTP4/axis 1 worst PCC is 0.999991
+  and max absolute error is 4.910976e-4. Repeat and trace replay pass.
+- `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_sp_layer.py -q -s`:
+  6 passed, `SAFE_PYTEST_RESULT: PASS`; worst printed output PCC is 0.999974
+  and recurrent-state PCC is 0.999985.
+- Real Kimi-K3 layer, real weights, `T=5120`, ten trace replays:
+  SP2xTP4 passes at 13.472 ms/replay
+  (`generated/profiler/reports/2026_07_29_06_19_07`), down from 14.605 ms
+  (7.8%). The matched SP4xTP2 control passes at 12.462 ms/replay
+  (`generated/profiler/reports/2026_07_29_06_21_03`), versus the prior
+  12.423 ms (0.3%, noise).
+
+The source-semantic trace attribution confirms the hypothesis: SP2xTP4
+distributed-prefix time falls from 4.337 ms to 0.590 ms. It also rejects
+distributed prefix as the remaining explanation for the SP2/SP4 ordering:
+SP4's matched prefix is 2.378 ms. The largest remaining adverse SP2 deltas are
+output projection/reduce-scatter (4.055 vs 2.532 ms) and local affine
+composition (1.175 vs 0.508 ms). These are the next two targets, ranked by
+measured opportunity.
+
 ## Backlog

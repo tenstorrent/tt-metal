@@ -926,100 +926,50 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
     auto coordinate = [sequence_parallel_axis](uint32_t sp_rank, uint32_t tp_rank) {
         return sequence_parallel_axis == 0 ? MeshCoordinate(sp_rank, tp_rank) : MeshCoordinate(tp_rank, sp_rank);
     };
-    auto shift_predecessors = [&](const ttnn::Tensor& source, const ttnn::Tensor& default_value, uint32_t distance) {
-        auto shifted = ttnn::clone(default_value, std::nullopt, out_mem, compute_kernel_config);
-        for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
-            for (uint32_t destination = distance; destination < sp_size; ++destination) {
-                const auto sender_coord = coordinate(destination - distance, tp_rank);
-                const auto receiver_coord = coordinate(destination, tp_rank);
-                shifted = ttnn::point_to_point(
-                    source, receiver_coord, sender_coord, ttnn::ccl::Topology::Linear, shifted, std::nullopt);
-            }
-        }
-        return shifted;
-    };
-    auto matmul_fp32 = [&](const ttnn::Tensor& lhs, const ttnn::Tensor& rhs) {
+
+    // The API returns states rather than prefix transforms, so propagate the state directly for every SP mesh.
+    // Each TP line follows the same schedule.
+    const auto transform_a_compute = ttnn::typecast(transform_a, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
+    const auto transform_b_compute = ttnn::typecast(transform_b, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
+    auto entry_state = ttnn::clone(initial_state, std::nullopt, out_mem, compute_kernel_config);
+    auto entry_state_transport = ttnn::typecast(entry_state, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
+    auto matmul_bf16 = [&](const ttnn::Tensor& lhs, const ttnn::Tensor& rhs) {
         return ttnn::matmul(
-            lhs, rhs, false, false, out_mem, DataType::FLOAT32, std::nullopt, std::nullopt, compute_kernel_config);
-    };
-
-    // Kimi-K3 SP4xTP2 only needs the entry and final states. Relay the state
-    // directly instead of materializing the full affine-transform prefix.
-    if (sp_size == 4 && tp_size == 2) {
-        const auto transform_a_compute = ttnn::typecast(transform_a, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
-        const auto transform_b_compute = ttnn::typecast(transform_b, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
-        auto entry_state = ttnn::clone(initial_state, std::nullopt, out_mem, compute_kernel_config);
-        auto entry_state_transport = ttnn::typecast(entry_state, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
-        auto matmul_bf16 = [&](const ttnn::Tensor& lhs, const ttnn::Tensor& rhs) {
-            return ttnn::matmul(
-                lhs,
-                rhs,
-                false,
-                false,
-                ttnn::L1_MEMORY_CONFIG,
-                DataType::BFLOAT16,
-                std::nullopt,
-                std::nullopt,
-                compute_kernel_config);
-        };
-        auto carry = matmul_bf16(transform_a_compute, entry_state_transport);
-        carry = ttnn::add(carry, transform_b_compute, std::nullopt, ttnn::L1_MEMORY_CONFIG);
-        for (uint32_t destination = 1; destination < sp_size; ++destination) {
-            for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
-                entry_state_transport = ttnn::point_to_point(
-                    carry,
-                    coordinate(destination, tp_rank),
-                    coordinate(destination - 1, tp_rank),
-                    ttnn::ccl::Topology::Linear,
-                    entry_state_transport,
-                    std::nullopt);
-            }
-            entry_state = ttnn::typecast(entry_state_transport, DataType::FLOAT32, out_mem);
-            carry = matmul_bf16(transform_a_compute, entry_state_transport);
-            carry = ttnn::add(carry, transform_b_compute, std::nullopt, ttnn::L1_MEMORY_CONFIG);
-        }
-
-        auto final_state_transport = ttnn::broadcast(
-            carry,
-            coordinate(sp_size - 1, 0),
-            2,
+            lhs,
+            rhs,
+            false,
+            false,
             ttnn::L1_MEMORY_CONFIG,
-            ttnn::ccl::Topology::Linear,
-            sequence_parallel_axis);
-        auto final_state = ttnn::typecast(final_state_transport, DataType::FLOAT32, out_mem);
-        return {entry_state, final_state};
-    }
-
-    auto prefix_a = transform_a;
-    auto prefix_b = transform_b;
-    for (uint32_t distance = 1; distance < sp_size; distance *= 2) {
-        auto predecessor_a = shift_predecessors(prefix_a, identity_a, distance);
-        auto predecessor_b = shift_predecessors(prefix_b, zero_b, distance);
-        auto composed_b = matmul_fp32(prefix_a, predecessor_b);
-        prefix_a = matmul_fp32(prefix_a, predecessor_a);
-        prefix_b = ttnn::add(composed_b, prefix_b, std::nullopt, out_mem);
-    }
-
-    auto entry_a = shift_predecessors(prefix_a, identity_a, 1);
-    auto entry_b = shift_predecessors(prefix_b, zero_b, 1);
-    auto entry_state = matmul_fp32(entry_a, initial_state);
-    entry_state = ttnn::add(entry_state, entry_b, std::nullopt, out_mem);
-
-    auto inclusive_state = matmul_fp32(prefix_a, initial_state);
-    inclusive_state = ttnn::add(inclusive_state, prefix_b, std::nullopt, out_mem);
-    auto final_state = ttnn::clone(zero_b, std::nullopt, out_mem, compute_kernel_config);
-    for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
-        const auto sender_coord = coordinate(sp_size - 1, tp_rank);
-        for (uint32_t destination = 0; destination < sp_size; ++destination) {
-            final_state = ttnn::point_to_point(
-                inclusive_state,
+            DataType::BFLOAT16,
+            std::nullopt,
+            std::nullopt,
+            compute_kernel_config);
+    };
+    auto carry = matmul_bf16(transform_a_compute, entry_state_transport);
+    carry = ttnn::add(carry, transform_b_compute, std::nullopt, ttnn::L1_MEMORY_CONFIG);
+    for (uint32_t destination = 1; destination < sp_size; ++destination) {
+        for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
+            entry_state_transport = ttnn::point_to_point(
+                carry,
                 coordinate(destination, tp_rank),
-                sender_coord,
+                coordinate(destination - 1, tp_rank),
                 ttnn::ccl::Topology::Linear,
-                final_state,
+                entry_state_transport,
                 std::nullopt);
         }
+        entry_state = ttnn::typecast(entry_state_transport, DataType::FLOAT32, out_mem);
+        carry = matmul_bf16(transform_a_compute, entry_state_transport);
+        carry = ttnn::add(carry, transform_b_compute, std::nullopt, ttnn::L1_MEMORY_CONFIG);
     }
+
+    auto final_state_transport = ttnn::broadcast(
+        carry,
+        coordinate(sp_size - 1, 0),
+        std::nullopt,
+        ttnn::L1_MEMORY_CONFIG,
+        ttnn::ccl::Topology::Linear,
+        sequence_parallel_axis);
+    auto final_state = ttnn::typecast(final_state_transport, DataType::FLOAT32, out_mem);
     return {entry_state, final_state};
 }
 
