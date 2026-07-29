@@ -351,7 +351,7 @@
  	while (flexio_dev_cqe_get_owner(app_ctx.rq_cq_ctx.cqe) !=
 --- a/packet_processor/host/flexio_packet_processor_host.c
 +++ b/packet_processor/host/flexio_packet_processor_host.c
-@@ -36,6 +36,18 @@
+@@ -36,6 +36,22 @@
  /* Used for geteuid function. */
  #include <unistd.h>
  
@@ -367,10 +367,14 @@
 +#include <sys/stat.h>
 +#include <fcntl.h>
 +
++/* A3.3b-2: RDMA-CM RC responder on the SF — the standard connection method generic RoCEv2 apps speak. */
++#include <rdma/rdma_cma.h>
++#include <arpa/inet.h>
++
  /* Used for host (x86/DPU) memory allocations. */
  #include <malloc.h>
  
-@@ -59,6 +71,12 @@
+@@ -59,6 +75,12 @@
  
  /* Flex IO packet processor device (DPA) side function stub. */
  extern flexio_func_t flexio_pp_dev;
@@ -383,7 +387,7 @@
  
  /* Application context struct holding necessary host side variables. */
  struct app_context {
-@@ -122,6 +140,37 @@
+@@ -122,6 +144,37 @@
  	 * information struct.
  	 */
  	flexio_uintptr_t app_data_daddr;
@@ -421,7 +425,7 @@
  };
  
  /* Open ibv device
-@@ -178,8 +227,8 @@
+@@ -178,8 +231,8 @@
  /* Number of entries in each RQ/SQ/CQ is 2^LOG_Q_DEPTH. */
  #define LOG_Q_DEPTH 7
  #define Q_DEPTH L2V(LOG_Q_DEPTH)
@@ -432,7 +436,7 @@
  /* SQ/RQ data entry byte size log to value. */
  #define Q_DATA_ENTRY_BSIZE L2V(LOG_Q_DATA_ENTRY_BSIZE)
  /* SQ/RQ DATA byte size is queue depth times entry byte size. */
-@@ -217,6 +266,9 @@
+@@ -217,6 +270,9 @@
  
  /* Source MAC address to match for incoming packets. */
  #define SMAC 0x02427e7feb02
@@ -442,7 +446,7 @@
  /* Creates steering rules for application.
   * Returns 0 on success and -1 if the allocation was failed.
   * app_ctx - pointer to app_context structure.
-@@ -255,15 +307,17 @@
+@@ -255,15 +311,17 @@
  			return -1;
  		}
  
@@ -463,7 +467,7 @@
  		if (!app_ctx->tx_rule_vport) {
  			fprintf(stderr, "Failed to create TX vport steering rule\n");
  			return -1;
-@@ -686,6 +740,212 @@
+@@ -686,6 +744,212 @@
  	return 0;
  }
  
@@ -676,7 +680,7 @@
  /* Copy application information to DPA.
   * DPA side needs queue information in order to process the packets.
   * The DPA heap memory address will be passed as the event handler argument.
-@@ -716,6 +976,18 @@
+@@ -716,6 +980,18 @@
  	h2d_data->rq_cq_transf = app_ctx->rq_cq_transf;
  	/* Set RQ's information. */
  	h2d_data->rq_transf = app_ctx->rq_transf;
@@ -695,7 +699,7 @@
  	/* Set APP data info for first run. */
  	h2d_data->not_first_run = 0;
  
-@@ -887,6 +1159,492 @@
+@@ -887,6 +1163,682 @@
  /* dev msg stream buffer built from chunks of 2^FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE each */
  #define MSG_HOST_BUFF_BSIZE (512 * L2V(FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE))
  
@@ -797,6 +801,152 @@
 +	return NULL;
 +}
 +
++/* ---- A3.3b-2: RDMA-CM RC responder (replaces the sim producer with real RoCE) ---- */
++
++/* Advertised to the requester in rdma_accept private_data: where to RDMA-WRITE. */
++struct tt_roce_pdata {
++	uint32_t rkey;
++	uint64_t addr;
++	uint32_t len;
++} __attribute__((__packed__));
++
++struct roce_resp_arg {
++	void *land;                  /* landing buffer (== the DPA gather source, host mem) */
++	uint32_t land_len;
++	volatile uint64_t *produced; /* doorbell the DPA drains via the window */
++	uint64_t count;              /* stop after this many WRITE_IMM/SEND completions */
++	uint16_t port;
++	volatile int *ready;         /* set to 1 once ESTABLISHED (gate the drain start) */
++	volatile int *failed;
++};
++
++/* One RC-QP RoCEv2 responder via librdmacm: listen, accept ONE connection (advertising the landing MR's
++ * rkey/addr), then bump `produced` once per landed WRITE_IMM/SEND. The payload is HW-written straight into
++ * the landing buffer by the RDMA WRITE; this thread does NO data copy (just re-posts a recv + bumps). */
++static void *tt_roce_responder_thread(void *v)
++{
++	struct roce_resp_arg *a = v;
++	struct rdma_event_channel *ec = NULL;
++	struct rdma_cm_id *lid = NULL, *cid = NULL;
++	struct rdma_cm_event *ev = NULL;
++	struct ibv_qp_init_attr qia = {0};
++	struct rdma_conn_param cp = {0};
++	struct tt_roce_pdata pd_adv;
++	struct sockaddr_in sa = {0};
++	struct ibv_pd *pd = NULL;
++	struct ibv_cq *cq = NULL;
++	struct ibv_mr *mr = NULL;
++	const int NRECV = 1024;
++	uint64_t got = 0;
++	int i;
++
++	ec = rdma_create_event_channel();
++	if (!ec || rdma_create_id(ec, &lid, NULL, RDMA_PS_TCP)) {
++		fprintf(stderr, "roce: event channel / id failed\n");
++		*a->failed = 1;
++		return NULL;
++	}
++	sa.sin_family = AF_INET;
++	sa.sin_port = htons(a->port);
++	sa.sin_addr.s_addr = INADDR_ANY; /* bind all -> reachable via the SF's 10.99.0.1 */
++	if (rdma_bind_addr(lid, (struct sockaddr *)&sa) || rdma_listen(lid, 1)) {
++		fprintf(stderr, "roce: bind/listen on :%u failed\n", a->port);
++		*a->failed = 1;
++		return NULL;
++	}
++	printf("A3.3b-2 RoCE responder: RDMA CM listening on :%u (any RoCEv2 app can connect)\n", a->port);
++
++	if (rdma_get_cm_event(ec, &ev) || ev->event != RDMA_CM_EVENT_CONNECT_REQUEST) {
++		fprintf(stderr, "roce: expected CONNECT_REQUEST, got %s\n", ev ? rdma_event_str(ev->event) : "none");
++		*a->failed = 1;
++		return NULL;
++	}
++	cid = ev->id;
++	rdma_ack_cm_event(ev);
++
++	pd = ibv_alloc_pd(cid->verbs);
++	cq = ibv_create_cq(cid->verbs, NRECV + 16, NULL, NULL, 0);
++	mr = ibv_reg_mr(pd, a->land, a->land_len, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
++	if (!pd || !cq || !mr) {
++		fprintf(stderr, "roce: pd/cq/mr on the connected device failed\n");
++		*a->failed = 1;
++		return NULL;
++	}
++	qia.send_cq = cq;
++	qia.recv_cq = cq;
++	qia.qp_type = IBV_QPT_RC;
++	qia.cap.max_send_wr = 16;
++	qia.cap.max_recv_wr = NRECV;
++	qia.cap.max_send_sge = 1;
++	qia.cap.max_recv_sge = 1;
++	if (rdma_create_qp(cid, pd, &qia)) {
++		fprintf(stderr, "roce: rdma_create_qp failed\n");
++		*a->failed = 1;
++		return NULL;
++	}
++	/* A recv WR is consumed per RDMA_WRITE_WITH_IMM (and per SEND); no sge needed for WRITE_IMM. */
++	for (i = 0; i < NRECV; i++) {
++		struct ibv_recv_wr rwr = {0}, *bad;
++		rwr.wr_id = (uint64_t)i;
++		rwr.num_sge = 0;
++		if (ibv_post_recv(cid->qp, &rwr, &bad)) {
++			fprintf(stderr, "roce: post_recv %d failed\n", i);
++			*a->failed = 1;
++			return NULL;
++		}
++	}
++	/* Advertise the landing MR so the requester knows where to WRITE (CM private_data). */
++	pd_adv.rkey = mr->rkey;
++	pd_adv.addr = (uint64_t)(uintptr_t)a->land;
++	pd_adv.len = a->land_len;
++	cp.private_data = &pd_adv;
++	cp.private_data_len = sizeof(pd_adv);
++	cp.responder_resources = 4;
++	cp.initiator_depth = 4;
++	cp.rnr_retry_count = 7;
++	if (rdma_accept(cid, &cp)) {
++		fprintf(stderr, "roce: rdma_accept failed\n");
++		*a->failed = 1;
++		return NULL;
++	}
++	if (rdma_get_cm_event(ec, &ev) || ev->event != RDMA_CM_EVENT_ESTABLISHED) {
++		fprintf(stderr, "roce: expected ESTABLISHED, got %s\n", ev ? rdma_event_str(ev->event) : "none");
++		*a->failed = 1;
++		return NULL;
++	}
++	rdma_ack_cm_event(ev);
++	printf("A3.3b-2 RoCE responder: ESTABLISHED, advertised rkey=0x%x addr=%p len=%u\n", pd_adv.rkey, a->land,
++	       pd_adv.len);
++	*a->ready = 1; /* the drain may start now */
++
++	/* Each recv completion == one landed WRITE_IMM/SEND -> bump the doorbell + re-post. */
++	while (got < a->count) {
++		struct ibv_wc wc;
++		struct ibv_recv_wr rwr = {0}, *bad;
++		int n = ibv_poll_cq(cq, 1, &wc);
++
++		if (n < 0) {
++			fprintf(stderr, "roce: poll_cq error\n");
++			break;
++		}
++		if (n == 0)
++			continue;
++		if (wc.status != IBV_WC_SUCCESS) {
++			fprintf(stderr, "roce: wc status %s\n", ibv_wc_status_str(wc.status));
++			break;
++		}
++		got++;
++		*a->produced = got;
++		__sync_synchronize();
++		rwr.wr_id = wc.wr_id;
++		rwr.num_sge = 0;
++		ibv_post_recv(cid->qp, &rwr, &bad);
++	}
++	printf("A3.3b-2 RoCE responder: %lu WRITE_IMM/SEND landed -> produced=%lu\n", (unsigned long)got,
++	       (unsigned long)*a->produced);
++	return NULL;
++}
++
 +/* A3.2 arrival simulator: bump the host `produced` doorbell from 0 to target in chunks (models a RoCE
 + * responder posting WRITE_IMM completions), so the DPA drain is genuinely doorbell-paced. */
 +struct db_bump {
@@ -848,6 +998,12 @@
 +	struct ibv_mr *shmmr = NULL;
 +	void *shmbase = NULL;
 +	size_t shmsz = 0;
++	/* A3.3b-2: real RDMA-CM RoCE responder thread drives the doorbell (replaces the sim producer). */
++	int use_roce = getenv("TTDPA_ROCE") && strtoul(getenv("TTDPA_ROCE"), NULL, 0) > 0;
++	struct roce_resp_arg ra = {0};
++	volatile int roce_ready = 0, roce_failed = 0;
++	pthread_t rt;
++	int have_roce = 0;
 +
 +	total = tt_fill_hdr_params(&h);
 +	if (!total)
@@ -935,10 +1091,46 @@
 +
 +	preset = getenv("TTDPA_DB_PRESET") && strtoul(getenv("TTDPA_DB_PRESET"), NULL, 0) > 0;
 +	printf("A3.2 DOORBELL: total=%u plen=%u %s src=%s\n", total, plen,
-+	       shmfile ? "EXTERNAL(shm producer)" : (preset ? "PRESET(produced=total)" : "ARRIVAL-DRIVEN(bump thread)"),
++	       use_roce ? "REAL-ROCE(responder thread)"
++			: (shmfile ? "EXTERNAL(shm producer)"
++				   : (preset ? "PRESET(produced=total)" : "ARRIVAL-DRIVEN(bump thread)")),
 +	       shmfile ? "SHM-MEM" : (app_ctx->tt_src_ibv_mr ? "HOST-MEM" : (app_ctx->tt_src_mkey ? "DPA-heap-gather" : "none")));
 +
-+	if (shmfile) {
++	if (use_roce) {
++		/* A3.3b-2: the real RoCE responder thread bumps `produced` per WRITE_IMM. Needs the HOST landing
++		 * buffer (TTDPA_HOSTSRC) so it can be registered on the connected device's PD for REMOTE_WRITE. */
++		int waited = 0;
++
++		if (!app_ctx->tt_src_hostbuf) {
++			fprintf(stderr, "TTDPA_ROCE needs a HOST landing buffer -> set TTDPA_HOSTSRC=1\n");
++			rc = -1;
++			goto out;
++		}
++		ra.land = app_ctx->tt_src_hostbuf;
++		ra.land_len = plen;
++		ra.produced = db;
++		ra.count = total;
++		ra.port = getenv("TTDPA_ROCE_PORT") ? (uint16_t)strtoul(getenv("TTDPA_ROCE_PORT"), NULL, 0) : 18515;
++		ra.ready = &roce_ready;
++		ra.failed = &roce_failed;
++		if (pthread_create(&rt, NULL, tt_roce_responder_thread, &ra)) {
++			fprintf(stderr, "doorbell: RoCE responder thread failed\n");
++			rc = -1;
++			goto out;
++		}
++		have_roce = 1;
++		/* Wait (off the DPA watchdog clock) for a RoCE connection before starting the blocking drain. */
++		printf("A3.3b-2: waiting for a RoCE connection before starting the DPA drain...\n");
++		while (!roce_ready && !roce_failed && waited < 120000) {
++			usleep(1000);
++			waited++;
++		}
++		if (roce_failed || !roce_ready) {
++			fprintf(stderr, "doorbell: RoCE responder never established (failed=%d)\n", roce_failed);
++			rc = -1;
++			goto out;
++		}
++	} else if (shmfile) {
 +		/* External process (writer / RoCE responder) drives `produced`; the DPA drain waits on the doorbell.
 +		 * Don't touch *db here (the writer owns it). */
 +		printf("A3.3a: waiting on external producer via %s (produced now=%lu)\n", shmfile, (unsigned long)*db);
@@ -966,6 +1158,8 @@
 +	clock_gettime(CLOCK_MONOTONIC, &t1);
 +	if (have_thread)
 +		pthread_join(bt, NULL);
++	if (have_roce)
++		pthread_join(rt, NULL);
 +	{
 +		double dt = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
 +		double fl = 14.0 + 32.0 + (double)plen;
@@ -1188,7 +1382,7 @@
  /* Application name in string format for Flex IO app get. */
  #define DEV_APP_NAME_STR(_app_name) #_app_name
  #define DEV_APP_NAME_XSTR(_app_name) DEV_APP_NAME_STR(_app_name)
-@@ -1068,20 +1826,63 @@
+@@ -1068,20 +2020,63 @@
  
  	printf("Ready to receive messages\n");
  
@@ -1263,7 +1457,7 @@
  	}
  
  cleanup:
-@@ -1096,6 +1897,28 @@
+@@ -1096,6 +2091,28 @@
  		err = -1;
  	}
  
@@ -1294,12 +1488,14 @@
  		err = -1;
 --- a/packet_processor/host/meson.build
 +++ b/packet_processor/host/meson.build
-@@ -30,11 +30,14 @@
+@@ -30,11 +30,16 @@
  
  # The meson file for build packet processor host side sample
  
 +# TT-RDMA multi-thread fan-out needs pthreads (N host threads each blocking in flexio_process_call).
 +threads_dep = dependency('threads')
++# A3.3b-2: RDMA-CM RC responder on the SF (librdmacm).
++rdmacm_dep = dependency('librdmacm')
 +
  # Build sample as executable application
  executable('flexio_packet_processor',
@@ -1307,6 +1503,6 @@
  	c_args: '-DDEV_APP_NAME='+dev_app_name,
  	native: true,
 -	dependencies: [ibverbs_dep, mlx5_dep, flexio_dep, common_host_dep, sample_device_dep],
-+	dependencies: [ibverbs_dep, mlx5_dep, flexio_dep, common_host_dep, sample_device_dep, threads_dep],
++	dependencies: [ibverbs_dep, mlx5_dep, flexio_dep, common_host_dep, sample_device_dep, threads_dep, rdmacm_dep],
  	link_depends: sample_dev_target
  )
