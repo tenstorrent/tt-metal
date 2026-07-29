@@ -25,9 +25,10 @@ Usage::
     cat one_response.txt | llm_judge.py -
 
 Three Opus 5 properties shape the request: structured outputs constrain the reply to the verdict
-schema; thinking is on by default and ``max_tokens`` covers thinking plus text, so the budget is sized
-for both (``--effort low`` is the cost lever); and temperature does not exist -- Opus 5 rejects it --
-so ``--votes N`` gets its spread from ordinary sampling non-determinism, not a knob.
+schema; thinking is on by default and ``max_tokens`` covers thinking plus text, so the budget scales
+with ``--effort`` (default ``high``) rather than being a constant that a higher effort would truncate;
+and temperature does not exist -- Opus 5 rejects it -- so ``--votes N`` gets its spread from ordinary
+sampling non-determinism, not a knob.
 
 Concurrency is per ITEM (128 by default, and the httpx pool is sized to match, since httpx's own
 default of 100 would otherwise cap it silently). Votes within one item run in sequence, so the calls in
@@ -54,7 +55,10 @@ from pathlib import Path
 
 MODEL = os.environ.get("LLM_JUDGE_MODEL", "claude-opus-5")
 CONCURRENCY = int(os.environ.get("LLM_JUDGE_CONCURRENCY", "128"))
-MAX_TOKENS = 2048  # covers thinking + the verdict; thinking is on by default on Opus 5
+# `max_tokens` is a HARD cap on thinking PLUS the verdict text, and thinking is on by default on
+# Opus 5 -- so the budget has to scale with effort or a higher effort silently truncates the JSON
+# mid-object. The verdict itself is ~150 tokens; everything above that is thinking headroom.
+MAX_TOKENS = {"low": 2048, "medium": 4096, "high": 8192, "xhigh": 16000, "max": 32000}
 LETTERS = "ABCD"
 MODES = ("none", "empty", "repetition", "incoherent_noise", "wrong_language", "truncated_midthought", "off_task")
 
@@ -149,7 +153,7 @@ def judge_one(client, item: dict, cfg: dict, tally: Tally | None = None) -> dict
     not content[0] -- so neither is assumed here."""
     resp = client.beta.messages.create(
         model=cfg["model"],
-        max_tokens=MAX_TOKENS,
+        max_tokens=MAX_TOKENS[cfg["effort"]],
         system=SYSTEM,
         messages=[{"role": "user", "content": prompt_for(item, cfg["max_chars"])}],
         output_config={"effort": cfg["effort"], "format": SCHEMA},
@@ -162,6 +166,13 @@ def judge_one(client, item: dict, cfg: dict, tally: Tally | None = None) -> dict
         tally.add(getattr(resp, "usage", None))
     if resp.stop_reason == "refusal":
         raise RuntimeError(f"judge declined ({getattr(getattr(resp, 'stop_details', None), 'category', None)})")
+    if resp.stop_reason == "max_tokens":
+        # Thinking ate the budget, so the JSON is cut mid-object. Say that rather than letting
+        # json.loads report a syntax error, which sends you looking at the schema instead.
+        raise RuntimeError(
+            f"hit max_tokens ({MAX_TOKENS[cfg['effort']]}) before finishing the verdict -- "
+            "raise MAX_TOKENS for this effort level"
+        )
     text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
     got = json.loads(text)
     got["selected_letter"] = got.get("selected_letter") if got.get("selected_letter") in tuple(LETTERS) else None
@@ -232,9 +243,19 @@ def load(target: Path, stage: str) -> tuple[str, list[dict]]:
             sys.exit(f"no samples_*.jsonl under {target}")
         target = found[-1]
 
-    if str(target) != "-" and "samples_" in target.name:
+    raw = sys.stdin.read() if str(target) == "-" else target.read_text(errors="replace")
+    # split("\n"), NOT splitlines(): splitlines() also breaks on U+2028/U+2029/form-feed/NEL, which
+    # JSON does not escape -- so one of those inside a response cuts its JSON line in half. The real
+    # cot_rerun 198-question file has 4 U+2028s in it, which is exactly how this was found.
+    lines = [ln for ln in raw.split("\n") if ln.strip()]
+    first = json.loads(lines[0]) if lines and lines[0].lstrip().startswith("{") else None
+
+    # Detect lm_eval samples by CONTENT, not by filename. Keying off "samples_" in the name meant a
+    # renamed copy fell through to the blob branch and got judged as ONE 7 MB response -- no error, just
+    # a wrong answer and a wasted call.
+    if isinstance(first, dict) and ("doc" in first or "resps" in first):
         items = []
-        for line in target.open(errors="replace"):
+        for line in lines:
             row = json.loads(line)
             if row.get("filter") not in (None, "flexible-extract"):
                 continue  # one row per filter; flexible-extract is the scored one
@@ -252,8 +273,6 @@ def load(target: Path, stage: str) -> tuple[str, list[dict]]:
             )
         return f"{target} ({len(items)} questions)", items
 
-    raw = sys.stdin.read() if str(target) == "-" else target.read_text(errors="replace")
-    lines = [ln for ln in raw.splitlines() if ln.strip()]
     if lines and all(ln.lstrip().startswith("{") for ln in lines):
         items = []
         for i, ln in enumerate(lines):
@@ -328,7 +347,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("target", type=Path, help="a run dir, samples_*.jsonl, a jsonl of responses, or - for stdin")
     ap.add_argument("--model", default=MODEL)
-    ap.add_argument("--effort", default="low", choices=("low", "medium", "high", "xhigh", "max"))
+    ap.add_argument(
+        "--effort",
+        default="high",
+        choices=tuple(MAX_TOKENS),
+        help="thinking/output effort (default high). max_tokens scales with it, since thinking and the "
+        "verdict share that budget.",
+    )
     ap.add_argument("--votes", type=int, default=1, help="independent calls per item, majority-voted")
     ap.add_argument("--concurrency", type=int, default=CONCURRENCY, help=f"calls in flight (default {CONCURRENCY})")
     ap.add_argument("--stage", default="full", help="which lm_eval stage's samples to read")

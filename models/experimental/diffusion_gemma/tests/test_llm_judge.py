@@ -135,6 +135,27 @@ def test_judge_letter_refuses_an_ambiguous_text_match(judge):
     assert judge.judge_letter({"selected_letter": None, "selected_answer_text": "alpha"}, item) is None
 
 
+def test_load_detects_lm_eval_samples_by_content_not_filename(judge, tmp_path):
+    """A renamed copy used to fall through and get judged as ONE giant response."""
+    path = tmp_path / "renamed_run.jsonl"  # deliberately lacks "samples_"
+    doc = {"Record ID": "rec-1", "Question": "Q?", "choices": ["a", "b", "c", "d"], "answer": "(A)"}
+    path.write_text(json.dumps({"filter": "flexible-extract", "doc": doc, "resps": [["ans"]]}) + "\n")
+    src, items = judge.load(path, "full")
+    assert "1 questions" in src and items[0]["id"] == "rec-1"
+
+
+def test_load_survives_a_u2028_inside_a_response(judge, tmp_path):
+    """str.splitlines() breaks on U+2028 but JSON does not escape it, so it cuts the line in half.
+    The real 198-question file has four of them."""
+    path = tmp_path / "samples_x.jsonl"
+    doc = {"Record ID": "rec-1", "Question": "Q?", "choices": ["a", "b"], "answer": "(A)"}
+    text = "before\u2028after the separator"  # a real U+2028
+    row = {"filter": "flexible-extract", "doc": doc, "resps": [[text]]}
+    path.write_text(json.dumps(row, ensure_ascii=False) + "\n")
+    _src, items = judge.load(path, "full")
+    assert len(items) == 1 and items[0]["text"] == text
+
+
 def test_load_reads_one_row_per_question_not_per_filter(judge, tmp_path):
     path = tmp_path / "samples_gpqa.jsonl"
     doc = {"Record ID": "rec-9", "Question": "Q?", "choices": ["a", "b", "c", "d"], "answer": "(B)"}
