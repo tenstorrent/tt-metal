@@ -13,6 +13,11 @@ from helpers.chip_architecture import ChipArchitecture
 from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.logger import logger
 from helpers.perf import PerfReport
+from helpers.perf_schema import (
+    LOOP_FACTOR_COLUMN,
+    MARKER,
+    TEST_NAME_COLUMN,
+)
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
 from ttexalens.tt_exalens_lib import read_words_from_device
@@ -175,12 +180,12 @@ class FuserConfig(TestConfig):
         if self.BUILD_MODE != BuildMode.PRODUCE and all_results:
             results = reduce(
                 lambda left, right: pd.merge(
-                    left, right, on="marker", how="outer", validate="1:1"
+                    left, right, on=MARKER, how="outer", validate="1:1"
                 ),
                 all_results,
             )
-            results["test_name"] = self.global_config.test_name
-            results["loop_factor"] = self.global_config.loop_factor
+            results[TEST_NAME_COLUMN] = self.global_config.test_name
+            results[LOOP_FACTOR_COLUMN] = self.global_config.loop_factor
             perf_report.append(results)
             logger.info("Perf results:\n{}", results)
 
