@@ -262,6 +262,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
 
     const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
     const uint32_t num_output_chunks = num_input_pages * split_factor;
+    TT_FATAL(
+        num_output_chunks / split_factor == num_input_pages,
+        "all_gather output chunk count overflowed uint32: {} input pages x split factor {}",
+        num_input_pages,
+        split_factor);
 
     ::ttnn::ccl::validate_packet_size(input_tensor.device()->arch(), packet_size, output_chunk_size);
 
@@ -406,11 +411,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
 
-        // Map this worker's slice of input pages to its slice of output chunks.
-        // num_output_chunks already accounts for split_factor, so in matched/concat
-        // modes the ratio cancels back to num_input_pages.
-        uint32_t local_output_start = (input_tile_id_start * num_output_chunks) / num_input_pages;
-        uint32_t local_output_end = (input_tile_id_end * num_output_chunks) / num_input_pages;
+        // Map this worker's slice of input pages to its slice of output chunks. num_output_chunks is
+        // num_input_pages * split_factor, so the map is just a scale by split_factor (1 in
+        // matched/concat).
+        uint32_t local_output_start = input_tile_id_start * split_factor;
+        uint32_t local_output_end = input_tile_id_end * split_factor;
         uint32_t num_worker_output_chunks = local_output_end - local_output_start;
         // s_start = global chunk index of this worker's first write:
         //     stripe_index  = local / output_chunks_per_stripe
