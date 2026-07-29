@@ -145,8 +145,10 @@ void py_module(nb::module_& mod) {
     cnn::detail::bind_convert_to_hwc(mod);
 
     ttnn::operations::experimental::conv3d::detail::bind_conv3d(mod);
-    // NpConv3dConfig subclasses Conv3dConfig; bind it on the same module right after the base so
-    // the fused-op config registers with its base type already present.
+    // Fused neighbor_pad_conv3d op + NpConv3dConfig (a Conv3dConfig subclass). bind_np_conv3d_config
+    // must run after bind_conv3d so the Conv3dConfig base type is already registered. NpConv3dConfig
+    // is imported unconditionally in ttnn/ttnn/__init__.py, so it must always be bound.
+    ttnn::operations::experimental::ccl::bind_neighbor_pad_conv3d(mod);
     ttnn::operations::experimental::ccl::bind_np_conv3d_config(mod);
     adaptive_pool::bind_adaptive_avg_pool2d_operation(mod);
     adaptive_pool::bind_adaptive_max_pool2d_operation(mod);

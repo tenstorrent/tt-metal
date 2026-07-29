@@ -46,3 +46,9 @@ install(
 )
 
 install(TARGETS ttnn_op_experimental_yuv_conversion LIBRARY COMPONENT tar)
+
+# Register this op's Python bindings directly on the shared `ttnn` module target
+# (mirrors the conv3d pattern). `ttnn` only exists when WITH_PYTHON_BINDINGS is on.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/yuv_conversion_nanobind.cpp)
+endif()

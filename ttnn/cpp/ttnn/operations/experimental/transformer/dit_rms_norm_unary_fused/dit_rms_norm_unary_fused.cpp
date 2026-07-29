@@ -92,7 +92,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> dit_rms_norm_unary_fused_residual_sum(
 
     // The pre-add sum has the residual's spec (it is input + residual, elementwise).
     auto residual_output_tensor =
-        tt::tt_metal::create_device_tensor(residual_input_tensor.tensor_spec(), input_tensor.device());
+        ttnn::create_device_tensor(residual_input_tensor.tensor_spec(), input_tensor.device());
 
     auto normed = ttnn::prim::layer_norm(
         input_tensor,

@@ -17,7 +17,7 @@ namespace ttnn::experimental::prim {
 struct NpConv3dDeviceOperation {
     using operation_attributes_t = NpConv3dParams;
     using tensor_args_t = NpConv3dInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<NpConv3dMeshWorkloadFactory>;
 
