@@ -51,8 +51,15 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     }
 
     ContextId context_id = extract_context_id(mesh_device);
-    fast_dispatch_enabled_ = MetalContext::instance(context_id).rtoptions().get_fast_dispatch();
     const auto& cluster = MetalContext::instance(context_id).get_cluster();
+    // Manually toggling Fast Dispatch is a real-hardware throughput optimization (bulk writes via
+    // on-device dispatch firmware); Mock/Emulated devices have no such firmware and already run every
+    // write synchronously regardless of dispatch mode, so this is a no-op for them (mirrors
+    // RiscFirmwareInitializer/FabricFirmwareInitializer's is_mock_or_emulated() skips).
+    if (cluster.is_mock_or_emulated()) {
+        return;
+    }
+    fast_dispatch_enabled_ = MetalContext::instance(context_id).rtoptions().get_fast_dispatch();
     TT_FATAL(
         !fast_dispatch_enabled_,
         "Fast Dispatch can only be manually enabled when running the workload with Slow Dispatch mode.");
@@ -115,10 +122,15 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
         return;
     }
 
+    ContextId context_id = extract_context_id(mesh_device);
+    if (MetalContext::instance(context_id).get_cluster().is_mock_or_emulated()) {
+        // Mirrors the no-op in initialize_fast_dispatch — nothing was actually initialized.
+        return;
+    }
+
     TT_FATAL(fast_dispatch_enabled_, "Can only manually terminate fast dispatch after initializing it.");
     TT_FATAL(num_fd_inits_ == 1, "Fast Dispatch termination requires exactly one active manual Fast Dispatch session.");
 
-    ContextId context_id = extract_context_id(mesh_device);
     const auto& device_manager = MetalContext::instance(context_id).device_manager();
     const auto& active_devices = device_manager->get_all_active_devices();
 
