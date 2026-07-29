@@ -25,30 +25,33 @@ vibevoice/
 │   ├── config.py            # paths, HF repo id, transformers pin
 │   ├── model_utils.py       # resolve path + auto-download weights
 │   └── resource_utils.py    # download demo text/voices from upstream GitHub
+├── demo/
+│   ├── demo.py                  # TT-only inference entry point (writes wav + meta)
+│   └── perf_metrics.py          # generate() timing summary + ISL cropping
 ├── reference/               # vendored 1.5B-only torch model (from VibeVoice repo)
-│   ├── modular/             # config + modeling (imported as `modular.*`)
-│   ├── processor/           # tokenizer/audio processor (`processor.*`)
-│   ├── schedule/            # DPM solver (`schedule.*`)
+│   ├── modular/             # config + modeling
+│   ├── processor/           # tokenizer/audio processor
+│   ├── schedule/            # DPM solver
 │   └── lm_runner.py         # NOT vendored (ours): CPU fp32 LM swap-in for PCC tests
 ├── resources/               # auto-downloaded demo assets (gitignored content)
 │   ├── voices/              # from github .../demo/voices
 │   └── text/                # from github .../demo/text_examples
 ├── weights/                 # auto-downloaded HF checkpoint (gitignored content)
 ├── tests/
-│   ├── conftest.py              # pytest: reference/ on PYTHONPATH + shared fixtures
-│   ├── pcc/
-│   │   ├── pcc_helpers.py       # shared LM PCC helpers (HF ref, TT LM builder, PCC utils)
-│   │   ├── test_decoder_layer_pcc.py
-│   │   ├── test_prefill.py
-│   │   └── test_decode.py
+│   ├── conftest.py              # shared fixtures (weights/resources download, config, LM state)
+│   ├── pcc/                     # per-component + end-to-end correctness
 │   └── perf/                    # Tracy device-perf + single-step prefill/decode dumps
 └── tt/                          # TTNN port
 ```
 
+Everything is imported by its full path from the tt-metal root, e.g.
+`from models.experimental.vibevoice.reference.processor.vibevoice_processor import VibeVoiceProcessor`.
+
 ## Dependencies
 
-
-The processor also pulls **Qwen/Qwen2.5-1.5B** tokenizer assets from the Hugging Face cache (`QWEN_TOKENIZER` in `common/config.py`).
+The reference processor also pulls **Qwen/Qwen2.5-1.5B** tokenizer assets from the Hugging Face
+cache; they are not bundled in the VibeVoice-1.5B checkpoint. Reference parity requires
+**transformers 4.51.3** — 4.57 changed the `generate()` KV-cache API.
 
 ## Quick start (from tt-metal root)
 
@@ -242,7 +245,7 @@ python models/experimental/vibevoice/tests/perf/test_device_perf_single_step_pre
 
 CSV=$(ls -td generated/profiler/vibevoice_lm_single_step_prefill/reports/*/ops_perf_results_*.csv | head -1)
 tt-perf-report "$CSV" --start-signpost start --end-signpost stop
-# optional: > prefill_expN.txt
+# optional: redirect to a file to keep the report
 ```
 
 ### 3. Single-step decode dump
@@ -255,7 +258,7 @@ python models/experimental/vibevoice/tests/perf/test_device_perf_single_step_dec
 
 CSV=$(ls -td generated/profiler/vibevoice_lm_single_step_decode/reports/*/ops_perf_results_*.csv | head -1)
 tt-perf-report "$CSV" --start-signpost start --end-signpost stop
-# optional: > decode_expN.txt
+# optional: redirect to a file to keep the report
 ```
 
 | Test | Inner workload | Profiler subdir |

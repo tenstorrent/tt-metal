@@ -23,7 +23,7 @@ import ttnn
 
 # Optional env-gated diagnostics for generate():
 #   VV_PROFILE=1 — device-synced timing breakdown per phase
-#   VV_DEBUG=1   — per-AR-step token + phase logs (also set by demo_ttnn.py --debug)
+#   VV_DEBUG=1   — per-AR-step token + phase logs (also set by demo/demo.py --debug)
 #   VV_PROFILE_PREFILL=1 — Tracy signposts ``start``/``stop`` around LM prefill
 #     (``_lm_prefill`` only). Use with ``python -m tracy …`` then
 #     ``tt-perf-report <csv> --start-signpost start --end-signpost stop``.
@@ -191,12 +191,11 @@ class _LoopBreaker:
     ``_ON=0.40`` the detector never fires on clean audio, so on a clean render it is a
     no-op and output stays byte-identical.
 
-    Intervention: on the frames of a detected loop, re-draw that frame's diffusion init
-    noise from a frame-local RNG.  (Perturbing the loop-carried *hidden* directly was tried
-    and was worse — the kick compounds through the on-device hidden-carry and drove the
-    trajectory into worse loops + energy collapse; the noise re-draw is the gentler,
-    better-behaved lever.)  It does not fully prevent the loop but shortens it and recovers
-    ~4 min earlier.  The forced escape can briefly over-drive the diffusion into clipping,
+    Intervention: on the frames of a detected loop, re-draw that frame's diffusion init noise
+    from a frame-local RNG.  Perturbing the loop-carried *hidden* instead is not viable — the
+    kick compounds through the on-device hidden-carry into worse loops and energy collapse.
+    The re-draw does not fully prevent a loop but shortens it, recovering ~4 min earlier on the
+    calibration render.  The forced escape can briefly over-drive the diffusion into clipping,
     so the emitted audio is clamped to [-1, 1] during the loop episode + a recovery tail
     (never on clean audio, whose legitimate peaks can exceed 1.0).  Frame-local RNG →
     deterministic; the global draw order is untouched, so non-loop frames are unchanged.
@@ -353,10 +352,9 @@ class TTVibeVoiceGenerator:
         # Lifecycle per segment: warmup -> throwaway capture -> reset (rewind positions, re-seed
         # hidden, zero the conv streaming caches IN PLACE) -> pure replay.  The trace is released
         # at each speech_start (so the boundary's eager LM decodes cannot corrupt a live capture)
-        # and recaptured per segment; a single-segment generation captures once.  Validated:
-        # tests/perf/{dev_rope_plusone,trace_fused_frame_llama,trace_segment_run}.py (PCC 1.0 vs
-        # the eager dev-rope path).  bf16 RoPE makes it ~0.9999 vs the fp32 reference — the same
-        # accepted precision as the bf16 SDPA-decode.
+        # and recaptured per segment; a single-segment generation captures once.  Replay is PCC 1.0
+        # against the eager device-RoPE path; its bf16 RoPE puts it at ~0.9999 vs the fp32
+        # reference, the same accepted precision as the bf16 SDPA-decode.
         self._trace_segment = os.environ.get("VV_TRACE_SEGMENT", "0") == "1"
         self._sf_tid = None
         self._sf_warm = 0
@@ -392,8 +390,9 @@ class TTVibeVoiceGenerator:
         # Co-capturing the LM together with diffusion+post in a single trace causes a buffer-scheduling
         # aliasing whose replay diverges from eager at ~frame 177 (a tiny bf16 delta) and amplifies
         # chaotically into an unintelligible (but RMS-flat) long-form render; separate traces are
-        # bit-identical to eager.  Set VV_CAP_SPLIT=0 to fall back to the monolithic capture (repro the
-        # bug).  Address-stable hand-off buffers between the three traces: _sf_neg_hidden, _sf_fused_out.
+        # bit-identical to eager.  VV_CAP_SPLIT=0 falls back to the monolithic capture and reproduces
+        # that divergence.  _sf_neg_hidden and _sf_fused_out are the address-stable hand-off buffers
+        # between the three traces.
         self._sf_cap_split = os.environ.get("VV_CAP_SPLIT", "1") == "1"
         self._sf_negtrace_tid = None
         self._sf_dptrace_tid = None
@@ -404,14 +403,15 @@ class TTVibeVoiceGenerator:
         # forward that reads each layer's weights ONCE for both CFG rows (weight-DRAM-bound at M=1).
         # Software-pipelined: each frame's batched forward computes pos-LM(k) [row0, → cond_pos(k+1)]
         # and neg-LM(k+1) [row1, → cond_neg(k+1)]; the diffusion runs FIRST from cond buffers the
-        # PREVIOUS frame's forward wrote.  A once-per-segment eager boot seeds neg-LM(0).  Proven
-        # byte-identical per row to the two B=1 forwards => Tier-0.
-        # Requires cap-split token semantics (in-trace constrained argmax).
+        # PREVIOUS frame's forward wrote.  A once-per-segment eager boot seeds neg-LM(0).  Each row
+        # is byte-identical to its B=1 forward.  Requires cap-split token semantics (in-trace
+        # constrained argmax).
         self._sf_cfg_b2 = self._sf_cap_split and os.environ.get("VV_CFG_BATCH2", "1") == "1"
         self._sf_dp2trace_tid = None
         self._sf_lm2trace_tid = None
-        # Diagnostic (VV_TRACE_NOCAPTURE=1): run the frame graph EAGERLY (no ttnn capture/replay) — also
-        # clean (it exonerates the graph ops), but slower (no replay).  Used to isolate the bug above.
+        # Diagnostic (VV_TRACE_NOCAPTURE=1): run the frame graph eagerly, with no ttnn
+        # capture/replay.  Also bit-clean but slower, which isolates capture aliasing from the
+        # graph ops themselves.
         self._sf_nocapture = os.environ.get("VV_TRACE_NOCAPTURE", "0") == "1"
         self._sf_nocap_started = False
         # Diagnostic (VV_LOG_TRAJ=<csv path>, default off): per-frame loop-state trace — the
@@ -464,7 +464,9 @@ class TTVibeVoiceGenerator:
         return self._token_mask_tt
 
     def _reset_ref_tokenizer_caches(self):
-        from modular.modular_vibevoice_tokenizer import VibeVoiceTokenizerStreamingCache
+        from models.experimental.vibevoice.reference.modular.modular_vibevoice_tokenizer import (
+            VibeVoiceTokenizerStreamingCache,
+        )
 
         self._ref_acoustic_cache = VibeVoiceTokenizerStreamingCache()
         self._ref_semantic_cache = VibeVoiceTokenizerStreamingCache()
@@ -870,7 +872,7 @@ class TTVibeVoiceGenerator:
                         layer's weights once; writes hidden_buf (cond_pos(k+1)) + neg_hidden
                         (cond_neg(k+1)); constrained argmax on row0 → token(k)
         plus a once-per-segment eager _boot (neg-LM(0), the negative prefill) seeding neg_hidden for
-        frame 0.  Byte-identical per row to the split neg/pos B=1 forwards (Tier-0)."""
+        frame 0.  Byte-identical per row to the split neg/pos B=1 forwards."""
         dev = self.device
         lm = self.lm
 
