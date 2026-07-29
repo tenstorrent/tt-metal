@@ -141,6 +141,85 @@ Why: with few slices there are few cores, so each core reads a LOT of in1 (1.18 
 already at 83-95% of their DRAM floor, so there is nothing to win and everything to lose. Conclusion: the mesh
 belongs only to the many-core, ring-heavy regime, which is what the gate already says. Not pursuing further.
 
+### Where the time goes now (measured after the mesh shipped)
+
+Percentages are how much faster the kernel gets if that stage is deleted. The mesh did its job: ring exposure
+collapsed from 17.4% to 3.5% on 512x6144x2304 and from 21.7% to 0.8% on 256x15360x768.
+
+| shape | wall | % of DRAM floor | in0 read | ring | compute | output | in1 read |
+|---|---|---|---|---|---|---|---|
+| 512x6144x4608 | 185.2 | 71% | +7.5 | +2.0 | **+9.8** | +0.8 | +4.0 |
+| 512x6144x2304 | 112.2 | 64% | +12.2 | +3.5 | **+13.5** | +1.3 | +5.3 |
+| 256x15360x768 | 87.7 | 71% | +18.1 | +0.8 | +1.3 | +0.9 | **+35.4** |
+| 256x2048x6144 | 79.8 | 72% | +8.2 | +0.2 | -0.5 | +14.8 | **+33.0** |
+| 256x6144x4608 | 143.3 | 85% | +5.5 | +6.3 | +1.0 | +3.0 | **+35.4** |
+| 256x2048x2048 | 39.9 | 51% | +3.4 | +7.4 | +3.4 | +12.8 | **+17.6** |
+
+So the ring is done. What is left is the in1 read (3 shapes), compute (the two 512-row shapes), the in0 read,
+and the output write on the two 2048-K shapes.
+
+### F2. FAILED: nsb (N sub-block width) re-tuning, mostly
+
+Compute and output-write exposure both pointed at the picker choosing nsb=1, which forces a 1-tile-wide
+subblock and single-page output writes. Swept nsb at the deployed config with the mesh active:
+
+| shape | nsb=1 | nsb=2 | nsb=3 | nsb=4 | nsb=8 | best |
+|---|---|---|---|---|---|---|
+| 512x6144x2304 | **112.7** | 135.8 | 147.4 | - | - | picker right (nsb=1) |
+| 512x6144x4608 | **185.3** | 200.0 | 223.6 | - | - | picker right (nsb=1) |
+| 256x2048x6144 | 79.8 | **76.3** | - | 78.0 | 100.6 | nsb=2 is **4.4% faster** |
+| 256x6144x4608 | - | **143.6** | 145.4 | - | 169.5(9) | picker right (nsb=2) |
+| 256x2048x2048 | - | 40.9 | - | 39.1 | **38.7** | nsb=8 1.2% faster (noise-level) |
+| 256x15360x768 | 108.4 | - | **87.6** | - | - | picker right (nsb=3) |
+
+So the picker is right on 4 of 6; one real win (256x2048x6144, 4.4% at nsb=2) is parked as a candidate table
+entry rather than a rule change.
+
+### F3. FAILED: cb1 depth no longer helps after the mesh
+
+Before the mesh, deepening the in1 buffer bought 7.7% on 256x2048x6144. Re-measured after the mesh:
+
+| shape | depth 8 | depth 16 | depth 32 |
+|---|---|---|---|
+| 256x2048x6144 | +0.9% | +1.3% | +1.6% (was +7.7%) |
+| 256x6144x4608 | +2.5% | +2.9% | +2.0% |
+| 256x15360x768 | +0.7% | -0.1% | +0.3% |
+| 512x6144x2304 | -0.9% | -2.9% | -4.0% |
+| 512x6144x4608 | -0.5% | -1.6% | -2.5% |
+
+The mesh and cb1 depth were attacking the same cost (in1 read latency), and the mesh did it better. Closing
+this lever.
+
+### S4. SHIPPED: bigger compute subblock when the old sizer wasted half the registers
+
+With fp32 accumulation the compute unit can hold 4 result tiles at once. The old sizer capped the subblock
+height at 2, so whenever the N sub-block is 1 tile wide it used a 2x1 subblock - only 2 of the 4 register
+slots. Now such a subblock is enlarged to the biggest area that still fits (4x1 when M_block divides by 4),
+which halves the number of matmul calls for exactly the same arithmetic. **Verified bit-exact** (identical
+output bytes), so this cannot change numerics.
+
+Important detail: it only ever ENLARGES. An earlier version also re-shaped subblocks that were already at 4
+tiles (2x2 -> 1x4), which cost 2.22% on 256x2048x1024 for no reason. Shapes already at 4 tiles are now
+untouched by construction.
+
+Corpus result (63 shapes, 2 relaunches): mean +0.05%, and the gain is concentrated exactly where predicted:
+
+| shape | legacy sizer | shipped | gain |
+|---|---|---|---|
+| 512x6144x4608 | 184.99 | 180.46 | **2.45%** |
+| 512x6144x2304 | 112.56 | 109.97 | **2.31%** |
+| 256x6144x768 | 35.99 | 35.63 | 0.99% |
+| everything else | - | - | within noise |
+
+111/111 correctness tests pass. Diagnostic bit16 restores the legacy sizer for A/B.
+
+### Measurement note: the small 2048-K shapes are noisy
+
+While checking S4 I measured two shapes whose programs are provably IDENTICAL between the two arms
+(256x2048x1024 and 256x2048x2048, because their old subblock was already 4 tiles) and got +2.39% and -1.86%.
+So the noise floor on those small shapes is about +-2.4%, not the +-1.5% seen on the big ones. Any claim under
+about 3% on a small 2048-K shape needs 3 or more relaunches.
+
 ## Work queue
 
 1. ~~Fit an adoption gate for the mesh and ship it.~~ DONE (S2, S3).

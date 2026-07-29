@@ -63,6 +63,9 @@ struct RegimeAMatmulParams {
     //                                       shipped default can be A/B'd
     //   bit15 (32768) MESH_SPREAD          - mesh variant: when there are fewer slices than grid rows, space
     //                                       them evenly over all rows instead of packing rows 0..preaders-1
+    //   bit16 (65536) SUBBLOCK_LEGACY      - restore the old subblock sizer (subblock_h capped at 2). The
+    //                                       default now enlarges an under-4-tile subblock to the largest area
+    //                                       that fits the fp32 DST limit; bit-exact, so this bit is for A/B.
     //   bit12 (4096) PLACE_IN1_OPT         - CROSS placement: put each (bank, noc) reader group in the region
     //                                       downstream of THAT endpoint on THAT NoC instead of one spiral
     //                                       around the NOC_0-optimal core (also supersedes IN1_NEAR pass 1)
