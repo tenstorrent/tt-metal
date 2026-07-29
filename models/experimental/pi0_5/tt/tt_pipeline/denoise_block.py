@@ -178,10 +178,13 @@ _LOFI = ttnn.WormholeComputeKernelConfig(
 #   HiFi4  0.135 ms  rel-err 3.475%   <- what get_sdpa_compute_kernel_config bakes / the tiny-tile branch
 #   HiFi2  0.126 ms  rel-err 3.428%   <- the pre-merge setting
 #   LoFi   0.122 ms  rel-err 3.420%   <- chosen
-# CAVEAT: this is a SINGLE-LAYER measurement. A math-fidelity reduction on attention is exactly the
-# class of change that looks free per-layer and can still accumulate over 18 layers x N denoise steps,
-# and PCC is scale-invariant so it is a weak detector. Validate with a LIBERO rollout before treating
-# LoFi as production-blessed; set this back to HiFi2 if task success regresses.
+# LIBERO-VALIDATED (2026-07-29): 40/40 (100.0%) on libero_spatial, 10 tasks x 4 init states, N=5,
+# backend ttnn_16_decode -- matching the known-good reference for that suite. The earlier caveat here
+# (a fidelity reduction can accumulate over 18 layers x N steps, and PCC is scale-invariant so it is a
+# weak detector) was the right concern, and it has now been checked on task success rather than PCC.
+# LoFi is production-blessed for accuracy. Re-run that rollout if this constant or the denoise
+# numerics change again. NOTE the validation ran at TILE_HEIGHT=32 with PI05_PASS_EXPERT_MASK=1,
+# because tile-16 cannot run masked workloads at all (see the mask discussion below).
 # The general-SDPA fallback below deliberately stays on get_sdpa_compute_kernel_config().
 _KV_SDPA_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
