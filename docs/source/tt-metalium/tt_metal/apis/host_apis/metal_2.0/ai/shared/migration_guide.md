@@ -858,7 +858,7 @@ TTNN ops integrate with the Metal 2.0 host API through the `ttnn::device_operati
 
 - **`ProgramFactoryConcept`** — the oldest concept; legacy `host_api.hpp` builder-style factories. Returns a `CachedProgram<shared_variables_t>` from `create()`; updates per-execution state via `override_runtime_arguments()`.
 - **`ProgramDescriptorFactoryConcept`** — the intermediate concept; legacy `ProgramDescriptor`-based factories. Returns a `tt::tt_metal::ProgramDescriptor` from `create_descriptor()`.
-- **`MetalV2FactoryConcept`** — the Metal 2.0 concept. Returns a `ttnn::device_operation::ProgramArtifacts` (the `ProgramSpec`, its `ProgramRunArgs`, and any op-owned tensors) from `create_program_artifacts()`. **This is the concept ops port to.**
+- **`ProgramSpecFactoryConcept`** — the Metal 2.0 concept. Returns a `ttnn::device_operation::ProgramArtifacts` (the `ProgramSpec`, its `ProgramRunArgs`, and any op-owned tensors) from `create_program_artifacts()`. **This is the concept ops port to.**
 
 > The porter-facing detail for this concept — the feasibility gate, the device-op-class edits a port forces, and the cache lifecycle in operational terms — lives in [`ttnn_factory.md`](ttnn_factory.md). This section is the conceptual overview.
 
@@ -933,7 +933,7 @@ The framework manages two distinct execution paths:
 - **Cache miss** (first execution, or a new op-args key): the framework calls `create_program_artifacts`, then internally calls `MakeProgramFromSpec(*device, spec)` to build the `Program`, then `SetProgramRunArgs(program, run_params)` to apply the per-execution values, resolving each `TensorArgument` against the op's io tensors and any `op_owned_tensors`. The full spec is realized once; op-owned tensors are parked in the cache entry at a stable address.
 - **Cache hit** (subsequent executions with a still-valid cached `Program`): the framework **does not re-run the factory**. It refreshes the tensor bindings — the io tensors plus the parked op-owned ones — via `UpdateTensorArgs`, and skips the build. Only the tensor bindings are refreshed; other run-arg values keep the values they were given at cache-miss.
 
-The cache key is the op itself — its type, attributes, and tensor args (the framework's automatic hash), combined with the target mesh coordinates; a custom `compute_program_hash`, if present, replaces that default. A factory satisfying `MetalV2FactoryConcept` is routed through `MetalV2MeshWorkloadFactoryAdapter`, which handles both paths.
+The cache key is the op itself — its type, attributes, and tensor args (the framework's automatic hash), combined with the target mesh coordinates; a custom `compute_program_hash`, if present, replaces that default. A factory satisfying `ProgramSpecFactoryConcept` is routed through `ProgramSpecMeshWorkloadFactoryAdapter`, which handles both paths.
 
 ### TTNN's immutability convention
 
