@@ -446,8 +446,10 @@ First measurements (tile-16, single-layer, machinery present at every S):
 | 1 | 8 | 0.129 ms |
 | 2 | 16 | 0.121 ms |
 
-The split itself works (-6% from S=1 to S=2); the CB overhead was masking it. See the R9 table below
-for numbers after the CB guard + NOC barrier batching.
+**SUPERSEDED -- do not read this table as a result.** It looked like "the split works, -6% from S=1 to
+S=2, and CB overhead was masking it". Both readings were wrong: the CB guard changed nothing, and the
+apparent gain was an artifact of a ~12% runtime-arg penalty that BOTH arms were paying. See "VERDICT"
+and "THE KEY FINDING" below for what actually happened.
 
 ## Harness note: the standalone kv_sdpa microbenchmark is NOT a valid oracle
 
@@ -576,6 +578,11 @@ time against 117 us of measured traced wall-clock** -- so **~29 us (25%) per ite
 non-kernel overhead**, roughly 2.6 us across the ~11 ops in the block. At S=2 that overhead grows to
 ~54 us/iteration. Adding 8 cores to ONE op cost ~25 us of launch/sync, swamping the 7.7 us of kernel
 time it saved.
+
+**The ~3.7 us/op is not a mesh-fanout artifact.** `test_walltime_l1_single_layer` is parametrized
+`@pytest.mark.parametrize("mesh_device", [1])`, i.e. a SINGLE-device mesh, so per-op launch cost is not
+being multiplied across chips. That is also exactly the per-chip situation in the 16-chip pipeline
+(each chip runs this same denoise block on its own submesh), so the figure transfers.
 
 **Do not over-model the overhead as "proportional to core count"** -- S=4 (32 cores, 0.125 ms) beats
 S=2 (16 cores, 0.133 ms). At S=4 each core gets exactly ONE prefix chunk, so `processed == 0` on its
