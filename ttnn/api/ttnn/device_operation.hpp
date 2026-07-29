@@ -22,7 +22,6 @@
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
-#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -44,60 +43,10 @@ using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCa
 template <typename T>
 using CachedMeshWorkload = tt::tt_metal::program_cache::detail::CachedMeshWorkload<T>;
 
-// Opt-in marker for per-core L1 allocation.
-//
-// A per-core allocated buffer has an independent L1 address on every core, but ops address a
-// buffer by a single value -- Buffer::address() is the first core's address, and CB binding,
-// runtime-arg patching and the host write/read all resolve through it (#51354). An op that has
-// not been taught to resolve `get_per_core_address()` per core would therefore address every
-// core as though it shared the first core's allocation, which is silently wrong whenever those
-// addresses differ.
-//
-// Ops are refused per-core *inputs* unless they declare support (the output side is #51482):
-//
-//     struct MyDeviceOperation {
-//         static constexpr bool supports_per_core_allocation = true;
-//         ...
-//     };
-//
-// Declaring it is a promise that the op resolves per-core addresses at every point it binds the
-// buffer -- circular buffers, runtime args, and any borrowed-memory attachment.
-template <typename T>
-concept PerCoreAllocationAware = requires {
-    { T::supports_per_core_allocation } -> std::convertible_to<bool>;
-} && T::supports_per_core_allocation;
-
 namespace detail {
 
 using ::tt::tt_metal::program_cache::detail::CachedProgramFactory;
 using ::tt::tt_metal::program_cache::detail::ProgramCacheKey;
-
-// Refuse a per-core allocated input on an op that has not opted in. See PerCoreAllocationAware.
-//
-// Only inputs are checked here. Checking the requested *output* memory config would mean walking
-// operation_attributes, and ttsl::reflection's visitor throws on any leaf that is neither the
-// target type nor reflectable (reflection.hpp:696) -- fine for tensor_args, which holds nothing
-// but tensors, but not for attributes structs full of scalars. An op that rebuilds its output
-// MemoryConfig from named fields can therefore still drop the per-core bit unnoticed; that is
-// tracked in #51482, and needs an input that is itself lockstep, which no current path produces.
-inline void reject_per_core_allocation(const Tensor& tensor, std::string_view operation_name) {
-    // Ask via device_local_config().sharding_args, not the MeshBuffer overload of
-    // is_per_core_allocation. That overload resolves MeshBuffer::get_reference_buffer(), which
-    // TT_THROWs "no local buffer found" when no shard is local -- and this runs before launch()'s
-    // inactive-MeshDevice short-circuit, which exists precisely because most MeshDevice calls fail
-    // there. A guard meant to be inert must not be able to throw.
-    // This is also the expression behind Tensor.is_per_core_allocated(), so the check and the
-    // accessor the caller branches on cannot disagree.
-    TT_FATAL(
-        !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
-            tensor.mesh_buffer().device_local_config().sharding_args),
-        "{}: input tensor is per-core allocated, but this operation has not opted in to per-core allocation. "
-        "Ops address a buffer by a single L1 address, so a per-core buffer would be read as though every core "
-        "shared the first core's allocation (#51354). If the operation resolves per-core addresses, declare "
-        "`static constexpr bool supports_per_core_allocation = true` on it; otherwise build the tensor with a "
-        "lockstep memory config.",
-        operation_name);
-}
 
 template <typename... Ts>
 [[nodiscard]] std::variant<Ts...> map_index_to_variant(std::size_t i, std::variant<Ts...>) {
@@ -505,8 +454,13 @@ typename device_operation_t::tensor_return_value_t launch(
         const auto& input_tensor = input_tensor_ref.get();
         TT_FATAL(is_device_tensor(input_tensor), "Device Operations expect device tensors as inputs");
         TT_FATAL(input_tensor.is_allocated(), "Input Tensor is not allocated");
-        if constexpr (!PerCoreAllocationAware<device_operation_t>) {
-            reject_per_core_allocation(input_tensor, operation_name);
+    }
+
+    // Whether the op accepts per-core allocation is a property of the op, not of any one tensor,
+    // so ask it once rather than inside the loop above.
+    if constexpr (!SupportsPerCoreAllocation<device_operation_t>) {
+        for (size_t i = 0; i < input_tensors.size(); ++i) {
+            detail::validate_no_per_core_allocation(input_tensors[i].get(), operation_name, i);
         }
     }
 
