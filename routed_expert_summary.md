@@ -123,9 +123,26 @@ Result: core (0,0) 92% → **75%** busy, isl-256 276K → 246K cycles, **1.12× 
 - **Compute is near HW peak**: 14.8 cycles per 32³ tile-MAC. matmul busy ≈ 1.35M cycles
   ≈ 1020 µs at isl-5120 with 88 cores ⇒ a hard ~217 GB/s ceiling at long ISL. Long-ISL
   work is compute-bound; the DRAM headroom is at **short/mid ISL**.
-- **x row-major → bfp8 tilize costs 27% of runtime at isl-5120** and is done redundantly
-  on all 11 cores of each M-row. Cheapest fix is upstream: have dispatch emit bfp8 TILE x
-  (removes the tilize *and* halves x bytes, 73.4 → 39 MB).
+- **x row-major → bfp8 tilize costs 27% of runtime at isl-5120**, and it is executed 11x on
+  identical input. The tilize itself is NOT avoidable — in the real model x arrives
+  ROW_MAJOR, which is why the `x_rm` path exists. What is duplicated is the work: on the
+  RM path the sender multicasts `cb_x_rm` (the row-major bf16 bytes), then every core runs
+  `tilize(n_strips)` with `n_strips = per_core_M`, i.e. the whole block, producing byte-identical
+  bfp8 tiles. Core (5,4) — a pure receiver that issues no DRAM read and sends no multicast —
+  still spends 27% of the op in the tilize.
+  **RETRACTED:** an earlier draft suggested having dispatch emit bfp8 TILE x. Our own data
+  contradicts it: in the `x_tile` variant the conversion appears as standalone Tilize 786 us
+  + Typecast 491 us = 1277 us at isl-5120, against ~450 us for the in-op tilize. Moving it
+  upstream is ~3x worse; the fused in-op tilize is the right design.
+  Of the three ways to tilize once per M-row, two are ruled out: (a) sender tilizes and
+  multicasts bfp8 but keeps its matmul -> ZERO gain, the sender's tilize+matmul equals what
+  every core pays today and everyone waits on it; (b) distributing the tilize by tile-row ->
+  measured 2x SLOWER (see section 5). The workable form is a **dedicated producer column**:
+  gx=0 does x read + tilize + bfp8 multicast and no matmul, the other 10 columns only
+  matmul, so the producer is never the straggler; it also halves x multicast bytes
+  (2048 -> 1088 B/tile). Costs: 10% more N work per matmul core, per_core_N_gu 6->7 and
+  per_core_N_d 21->23 (~10% more L1 against an already tight budget), phase-4 activated
+  rotation over 10 cores not 11, and a changed writer output column mapping.
 - The down matmul runs the full compile-time M ring and skips only the MACs, not the packs
   — 137K vs 214K cycles at per_core_M 1 vs 8. Wasteful at short ISL.
 - Overlapping mcast with reads / relaxing `async_read_barrier` is worth only ~11% on the
@@ -220,6 +237,36 @@ Ranked by measured value. Target: 198 → ~70 µs (≈350–410 GB/s of total tr
 Hard arithmetic: 24.8 MB of weights at the 576 B ceiling (310 GB/s) is **80 µs**, so
 without item 1 the best possible isl-256 is ~2.5×. At the ≥1024 B ceiling (400 GB/s) it is
 62 µs, so **3× is right at the hardware limit and requires item 1.**
+
+### 8a. Estimated device time on a total run
+
+Model `T = sum_chunks (FIXED + TOKEN * per_core_M)` with FIXED = 137 us (weight read 99.7 +
+mcast 37.6, ISL-independent per chunk) and TOKEN = 56.8 us per per_core_M unit, validated
+against measured times to 2% on the total (worst point 11% at isl-1024). TOKEN decomposes as
+tilize 18.8 + rest 38.0.
+
+| scenario | 128 | 256 | 512 | 1024 | 2048 | 4096 | 5120 | TOTAL | vs now |
+|---|---|---|---|---|---|---|---|---|---|
+| measured now | 180 | 198 | 256 | 329 | 591 | 1175 | 1489 | 4218 | 1.00x |
+| A: multi-tile pages | 110 | 139 | 196 | 310 | 538 | 1076 | 1386 | 3756 | 1.15x |
+| A + 2 senders/column | 93 | 122 | 178 | 292 | 519 | 1038 | 1330 | 3573 | 1.20x |
+| B: strided cols, 64 cores + 2 senders | 109 | 148 | 227 | 384 | 767 | 1464 | 1848 | 4948 | **0.87x** |
+| A + 2 senders + producer column | 86 | 107 | 149 | 232 | 399 | 799 | 1031 | **2803** | **1.53x** |
+
+Three things this settles:
+
+1. **Any weight-side work is capped at 1.48x on a total run.** The sweep contains 10 chunks,
+   so the entire weight cost is 10 x 137 = 1370 us of 4218 (32%); even a free weight read
+   leaves 2848 us. A + 2 senders captures 632 us = 46% of that headroom.
+2. **Option A is a short-ISL optimization**: 1.9x at isl-128, 1.12x at isl-5120.
+3. **Option B is a net regression (0.87x)** and should be dropped unless the production
+   distribution is entirely short-ISL. It wins only at ISL <= 512; above that, 64 cores raise
+   token work by 88/64 = 1.375x and the L1 growth forces per_core_M 8->6, pushing isl-5120
+   from 3 chunks to 4.
+
+Open input needed: which ISLs dominate production DeepSeek prefill? The table above is the
+artificial sweep. If experts typically see <=512 tokens, item 1 alone is a 1.4-1.9x win; if
+they see thousands, the token side (producer column) is where the time is.
 
 Superseded from the pre-reference plan: "stateful NoC reads (`set_state`/`read_with_state`)
 to cut per-request issue cost" — still real for the per-core rate, but §7a shows aggregate
