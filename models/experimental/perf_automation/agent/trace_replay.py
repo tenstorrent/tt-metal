@@ -146,13 +146,26 @@ def measure_adapter(adapter, device) -> float:
 
     pipeline_ms = sum(ms for _, ms, _ in results)
     decode = next((r for r in results if "decode" in r[0].lower()), None)
-    headline_ms = decode[1] if decode else pipeline_ms
-    headline_path = decode[2] if decode else "trace+pipeline"
+    # WHICH UNIT OF WORK THE HEADLINE MEASURES. This selection already knew -- a decode stage means
+    # the number is per TOKEN, no decode stage means it is one whole pipeline pass -- but it never
+    # said so, and the roofline band on the other end assumed "token" unconditionally. A step-unit
+    # (diffusion) or inference-unit (classifier) model therefore had its per-unit ceiling scored
+    # against whatever this printed, silently: the same per-token-vs-per-profile unit mix that once
+    # made every module read ABOVE_BAND, on a different axis. Name it here, at the only place that
+    # can know, so the band can refuse a mismatch instead of guessing.
+    step = next((r for r in results if any(k in r[0].lower() for k in ("step", "denoise", "diffus"))), None)
+    if decode:
+        headline_ms, headline_path, headline_unit = decode[1], decode[2], "token"
+    elif step:
+        headline_ms, headline_path, headline_unit = step[1], step[2], "step"
+    else:
+        headline_ms, headline_path, headline_unit = pipeline_ms, "trace+pipeline", "inference"
     batch = int(getattr(adapter, "batch", 1) or 1)
     per_s = headline_ms / 1000.0
     tokens_per_sec = (batch / per_s) if per_s > 0 else 0.0
     # THE line the harness parses (tracy_tool.py:_PER_TOKEN_RE / perf_mcp.py). Keep the name verbatim.
     print("TRACE_PER_TOKEN_MS=%.4f" % headline_ms, flush=True)
+    print("TRACE_HEADLINE_UNIT=%s" % headline_unit, flush=True)
     print(
         "TRACE_PIPELINE_MS=%.4f TRACE_STAGES=%d%s"
         % (pipeline_ms, len(results), "" if decode else " (no decode stage: per-token=pipeline sum)"),

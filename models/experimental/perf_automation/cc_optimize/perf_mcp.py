@@ -1908,6 +1908,7 @@ def _run_full_pipeline_ms():
     if case:
         cmd += ["-k", case]
     per_tokens = []
+    headline_units = []
     walls = []
     prefills = []
     tp = dp = 1
@@ -1965,6 +1966,13 @@ def _run_full_pipeline_ms():
                     per_tokens.append(float(line.split("TRACE_PER_TOKEN_MS=", 1)[1].split()[0]))
                 except Exception:  # noqa: BLE001
                     pass
+            elif "TRACE_HEADLINE_UNIT=" in line:
+                # WHICH unit that reading measures. trace_replay picks the decode stage when there is
+                # one (per token), a step/denoise stage next (per step), else the whole pipeline sum
+                # (one inference). The marker name TRACE_PER_TOKEN_MS is historical and says "token"
+                # for all three, so without this the roofline band scored a diffusion model's per-step
+                # ceiling against a whole-pipeline number and called it a verdict.
+                headline_units.append(line.split("TRACE_HEADLINE_UNIT=", 1)[1].split()[0].strip())
             elif "TRACE_PREFILL_MS=" in line:
                 try:
                     prefills.append(float(line.split("TRACE_PREFILL_MS=", 1)[1].split()[0]))
@@ -2022,6 +2030,8 @@ def _run_full_pipeline_ms():
         )
         sys.stderr.flush()
     if per_tokens:
+        if headline_units:
+            os.environ["PERF_MCP_LAST_HEADLINE_UNIT"] = headline_units[-1]
         return statistics.median(per_tokens), "trace", None, decode_path
     if walls:
         return statistics.median(walls), "eager", None, None
@@ -2188,7 +2198,15 @@ def _record_fullpipe_candidate(ms: float, method: str, mode: str) -> None:
     """Stash a reading as PENDING, stamped with the HEAD it was measured at."""
     try:
         _fullpipe_pending_path().write_text(
-            json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode, "sha": _head_sha_quiet()})
+            json.dumps(
+                {
+                    "full_pipeline_ms": ms,
+                    "method": method,
+                    "mode": mode,
+                    "sha": _head_sha_quiet(),
+                    "unit": os.environ.get("PERF_MCP_LAST_HEADLINE_UNIT", ""),
+                }
+            )
         )
     except Exception:  # noqa: BLE001
         pass
@@ -2269,7 +2287,16 @@ def _establish_fullpipe_baseline(ms: float, method: str, mode: str) -> None:
     is no commit to wait for, and keeping the old number would make every later delta meaningless.
     """
     try:
-        _FULLPIPE_BASELINE_1CQ_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
+        _FULLPIPE_BASELINE_1CQ_PATH.write_text(
+            json.dumps(
+                {
+                    "full_pipeline_ms": ms,
+                    "method": method,
+                    "mode": mode,
+                    "unit": os.environ.get("PERF_MCP_LAST_HEADLINE_UNIT", ""),
+                }
+            )
+        )
     except Exception:  # noqa: BLE001
         pass
     _discard_fullpipe_pending()
@@ -3010,7 +3037,9 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
             status = (
                 "trusted"
                 if fname.startswith("GRADUATED_")
-                else "provisional" if fname.startswith("LEARNED_") else "baseline-guideline"
+                else "provisional"
+                if fname.startswith("LEARNED_")
+                else "baseline-guideline"
             )
             try:
                 text = router.read_section(h["id"], gdir)
@@ -3215,6 +3244,14 @@ def _reliable_forward_ms(dev: float) -> float | None:
     return None
 
 
+def _reliable_forward_unit() -> str:
+    """The unit of work the gate's stored reading counts, or "" when it predates the marker."""
+    try:
+        return str(json.loads(_FULLPIPE_BASELINE_1CQ_PATH.read_text()).get("unit") or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _load_perf_target_inputs() -> dict | None:
     try:
         return json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
@@ -3238,6 +3275,28 @@ def _perf_target_status(rep: dict, dev: float) -> dict | None:
     try:
         target, scope, is_llm = _select_perf_target(rep)
         measured_ms = _reliable_forward_ms(dev) if is_llm else dev
+        # UNIT MATCH, OR NO VERDICT. `is_llm` is really "a config ceiling exists", which is true for a
+        # diffusion (step) or classifier (inference) model too -- and _reliable_forward_ms returns
+        # whatever the gate last measured. If the ceiling counts bytes per STEP and the reading counts
+        # a whole pipeline pass, the ratio is arithmetic, not a comparison, and IN_BAND from it could
+        # end a run at a target that was never tested. The gate now records the unit it measured
+        # (TRACE_HEADLINE_UNIT, chosen where trace_replay picks its headline stage), so require the two
+        # to agree. A reading with no recorded unit is accepted only for the token ceiling, which is
+        # the pairing every existing run and test was built on.
+        if is_llm and measured_ms is not None:
+            want = str(getattr(target, "unit", "token") or "token").lower()
+            got = str(_reliable_forward_unit() or "").lower()
+            if got != want and not (got == "" and want == "token"):
+                return {
+                    "status": "UNIT_MISMATCH",
+                    "scope": scope,
+                    "target_unit": want,
+                    "measured_unit": got or "unrecorded",
+                    "note": (
+                        "no verdict: the ceiling is per %s and the measurement counts per %s"
+                        % (want, got or "unknown unit")
+                    ),
+                }
         if measured_ms is None:
             # No trace+1cq per-token number exists, so nothing here is comparable to a full-model
             # tok/s target. Return no score rather than scoring the capped-window device_ms, which
@@ -3256,7 +3315,7 @@ def _perf_target_status(rep: dict, dev: float) -> dict | None:
 
 def _select_perf_target(rep: dict):
     """Pick the roofline target for this pipeline, STATIC (no measurement mixed in). Returns
-    ``(target, scope, is_llm_decode)``. Model-level config ceiling (compute_target, per-token tok/s)
+    ``(target, scope, has_unit_ceiling)``. Model-level config ceiling (compute_target, per-token tok/s)
     when perf_target_inputs.json exists and this is not a per-module run; otherwise the per-profile
     roofline floor (target_from_floor_ms). Shared by the stop gate and the report snapshot so both
     agree on the target."""
@@ -3284,12 +3343,18 @@ def _persist_throughput(rep: dict) -> None:
         target, scope, is_llm = _select_perf_target(rep)
         snap = {
             "scope": scope,
-            "is_llm_decode": bool(is_llm),
-            "theoretical_tok_s": target.theoretical_tok_s,
+            "has_unit_ceiling": bool(is_llm),
+            "theoretical_rate": target.theoretical_rate,
             "band": [target.band[0], target.band[1]],
             "active_bytes": target.active_bytes,
             "peak_bw_gbps": float((_ENV or {}).get("dram_bw_gbps", 0.0)),
             "tp_degree": target.tp_degree,
+            # THE UNIT MUST TRAVEL WITH THE CEILING. Without this key the report's
+            # `throughput.get("unit") or "token"` fell back to token for EVERY model, so a diffusion
+            # model printed its steps/s ceiling labelled "tok/s/u" and the byte anchor was looked up
+            # under the wrong depth -- the unit plumbing existed end to end except for the one line
+            # that put the unit in the snapshot, which is where a test passing `unit` by hand hid it.
+            "unit": getattr(target, "unit", "token"),
             "modeled_floor_ms": rep.get("modeled_floor_ms"),
             # The floor is a SUM OVER THE PROFILED OPS, so it scales with the window it was computed
             # at. This snapshot is keyed by (model, task) and persists across runs, so without the

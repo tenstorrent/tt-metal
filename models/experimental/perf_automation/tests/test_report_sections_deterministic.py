@@ -35,8 +35,8 @@ def _tp(floor_ms):
     theo = 1000.0 / floor_ms
     return {
         "scope": "model",
-        "is_llm_decode": False,
-        "theoretical_tok_s": theo,
+        "has_unit_ceiling": False,
+        "theoretical_rate": theo,
         "band": [0.6 * theo, 0.8 * theo],
         "active_bytes": 0,
         "peak_bw_gbps": 0.0,
@@ -111,8 +111,8 @@ def test_a_bandwidth_ceiling_does_publish_the_band(tmp_path):
     sm = _summary()
     llm = {
         "scope": "model",
-        "is_llm_decode": True,
-        "theoretical_tok_s": 64.0,
+        "has_unit_ceiling": True,
+        "theoretical_rate": 64.0,
         "band": [38.4, 51.2],
         "active_bytes": int(8e9),
         "peak_bw_gbps": 512.0,
@@ -181,3 +181,32 @@ def test_block_level_timing_is_rendered_exactly_once():
     out = sm.render_summary(kl, model="m", task="main", finalized=True)
     assert out.count("Block-level timing (per-stage trace)") == 1, out.count("Block-level timing (per-stage trace)")
     assert out.count("prefill ff1/ff3") == 1
+
+
+def test_the_snapshot_carries_every_key_the_report_reads():
+    """PRODUCER/CONSUMER KEY PARITY. The roofline section reads its inputs out of the throughput
+    snapshot by name, so a key the writer omits silently becomes the reader's default -- and defaults
+    are where the model-specific bugs live. `unit` was missing exactly this way: the report fell back
+    to "token" for every model, printing a diffusion model's steps/s ceiling as "tok/s/u" and reading
+    the byte anchor under the wrong depth, while unit-passing tests kept passing.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    writer = re.search(
+        r"def _persist_throughput.*?\n(?=def )", (root / "cc_optimize" / "perf_mcp.py").read_text(), re.S
+    ).group(0)
+    written = set(re.findall(r'"([a-z_]+)":', writer))
+
+    rl = re.search(r"def _roofline_lines.*?\n(?=def )", (root / "cc_optimize" / "summary.py").read_text(), re.S).group(
+        0
+    )
+    read = set(re.findall(r'throughput(?:\s*or\s*\{\})?\.get\("([a-z_]+)"', rl)) | set(
+        re.findall(r'\(throughput or \{\}\)\.get\("([a-z_]+)"', rl)
+    )
+
+    # keys the reader accepts only for backward compatibility are allowed to be absent
+    legacy = {"theoretical_tok_s", "is_llm_decode"}
+    missing = sorted((read - written) - legacy)
+    assert not missing, "the report reads keys the snapshot never writes (they silently default): %s" % missing

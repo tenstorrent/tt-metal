@@ -37,7 +37,7 @@ def _pm(tmp_path, monkeypatch):
 
 
 class _T:
-    theoretical_tok_s = 0.0
+    theoretical_rate = 0.0
     band = (0.0, 0.0)
     active_bytes = 0
     tp_degree = 1

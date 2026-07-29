@@ -114,11 +114,23 @@ def _scalar(v, default=0):
 class PerfTarget:
     active_bytes: int
     peak_bw_bytes_s: float
-    theoretical_tok_s: float
+    # NOT "tok_s". This is the ceiling per UNIT OF WORK -- tokens/s for an autoregressive model,
+    # steps/s for a diffusion model, inferences/s for a single-pass one -- and the unit is in `unit`
+    # below. The field was called theoretical_tok_s, which read as a promise that the number was
+    # per-token; that is what led a reader to hardcode depth="token" when looking up the byte anchor,
+    # so every non-LLM model silently fell back to a stale snapshot. A name that cannot be misread is
+    # cheaper than the bug it prevents.
+    theoretical_rate: float
     band: tuple[float, float]
     regime: str = "decode"
     tp_degree: int = 1
     seq_len: int = 0
+    # THE UNIT THE CEILING IS PER. peak_BW / active_bytes is a rate only if `active_bytes` is what ONE
+    # unit of work reads, and that unit differs by model: a token (autoregressive), a denoise step
+    # (diffusion), one forward pass (classifier/encoder). Carried here so the band can check that the
+    # measurement it is handed counts the SAME unit -- a per-step ceiling scored against a per-token
+    # reading is not a comparison, and nothing downstream could previously tell.
+    unit: str = "token"
 
 
 def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0) -> int:
@@ -179,10 +191,11 @@ def compute_target(model_facts: dict, hw_facts: dict, *, tp_degree: int = 1, seq
     return PerfTarget(
         active_bytes=ab,
         peak_bw_bytes_s=peak_bw,
-        theoretical_tok_s=theo,
+        theoretical_rate=theo,
         band=band,
         tp_degree=tp,
         seq_len=seq_len,
+        unit=str((model_facts or {}).get("unit") or "token").strip().lower(),
     )
 
 
@@ -201,7 +214,7 @@ def target_from_floor_ms(modeled_floor_ms: float) -> PerfTarget:
     and the band stop cannot fire until a real ceiling exists (compute_target, from active_bytes).
     """
     theo = (1000.0 / modeled_floor_ms) if modeled_floor_ms and modeled_floor_ms > 0 else 0.0
-    return PerfTarget(active_bytes=0, peak_bw_bytes_s=0.0, theoretical_tok_s=theo, band=(0.0, 0.0))
+    return PerfTarget(active_bytes=0, peak_bw_bytes_s=0.0, theoretical_rate=theo, band=(0.0, 0.0))
 
 
 def score(target: PerfTarget, forward_ms: float) -> dict:
@@ -211,9 +224,9 @@ def score(target: PerfTarget, forward_ms: float) -> dict:
     the achievable ceiling reached. status: BELOW_BAND (keep optimizing) | IN_BAND (>= 60% of
     ceiling, done) | ABOVE_BAND (beat the ceiling -> active_bytes/floor suspect, assert never win)
     | UNKNOWN (no valid target or measurement)."""
-    theo = target.theoretical_tok_s if target else 0.0
+    theo = target.theoretical_rate if target else 0.0
     if not theo or theo <= 0 or not forward_ms or forward_ms <= 0:
-        return {"status": "UNKNOWN", "measured_tok_s": None, "bw_util": None, "theoretical_tok_s": theo or None}
+        return {"status": "UNKNOWN", "measured_tok_s": None, "bw_util": None, "theoretical_rate": theo or None}
     measured = 1000.0 / forward_ms
     bw_util = measured / theo
     lo, _hi = target.band
@@ -240,7 +253,7 @@ def score(target: PerfTarget, forward_ms: float) -> dict:
     return {
         "status": status,
         "measured_tok_s": round(measured, 3),
-        "theoretical_tok_s": round(theo, 3),
+        "theoretical_rate": round(theo, 3),
         "bw_util": round(bw_util, 4),
         "band": (round(target.band[0], 3), round(target.band[1], 3)),
         "effective_bw_bytes_s": eff_bw,

@@ -43,7 +43,7 @@ def test_the_ceiling_is_peak_bandwidth_over_model_bytes():
     pt = _pt()
     tgt = pt.compute_target({"weight_bytes": int(8 * _GB)}, {"dram_bw_gbps": _BH_DRAM_GBPS})
     assert tgt.active_bytes == int(8 * _GB)
-    assert round(tgt.theoretical_tok_s, 1) == 64.0
+    assert round(tgt.theoretical_rate, 1) == 64.0
 
 
 def test_the_achievable_band_is_60_to_80_percent_of_peak():
@@ -208,7 +208,7 @@ def test_end_to_end_the_produced_facts_give_the_published_ceiling(tmp_path, monk
 
     pt = _pt()
     tgt = pt.compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS})
-    assert round(tgt.theoretical_tok_s, 1) == 64.0
+    assert round(tgt.theoretical_rate, 1) == 64.0
     assert [round(b, 1) for b in tgt.band] == [38.4, 51.2]
     assert round(pt.score(tgt, 19.4)["measured_tok_s"], 1) == 51.5
 
@@ -225,7 +225,7 @@ def test_on_device_weight_bytes_can_be_stated_when_they_differ_from_the_checkpoi
     monkeypatch.delenv("TT_PERF_WEIGHT_BYTES", raising=False)
     from_disk = run._perf_target_inputs(tmp_path, None, {})
     pt = _pt()
-    assert round(pt.compute_target(from_disk, {"dram_bw_gbps": _BH_DRAM_GBPS}).theoretical_tok_s, 1) == 31.9
+    assert round(pt.compute_target(from_disk, {"dram_bw_gbps": _BH_DRAM_GBPS}).theoretical_rate, 1) == 31.9
     assert "checkpoint" in from_disk["source"]
 
     monkeypatch.setenv("TT_PERF_WEIGHT_BYTES", str(int(8 * _GB)))
@@ -233,7 +233,7 @@ def test_on_device_weight_bytes_can_be_stated_when_they_differ_from_the_checkpoi
     assert on_device["weight_bytes"] == int(8 * _GB)
     assert "on-device" in on_device["source"]
     tgt = pt.compute_target(on_device, {"dram_bw_gbps": _BH_DRAM_GBPS})
-    assert round(tgt.theoretical_tok_s, 1) == 64.0
+    assert round(tgt.theoretical_rate, 1) == 64.0
     assert [round(b, 1) for b in tgt.band] == [38.4, 51.2]
 
 
@@ -258,12 +258,20 @@ def _sm():
     return mod
 
 
+def _led_mod():
+    spec = importlib.util.spec_from_file_location("led_phys_ut", _ROOT / "cc_optimize" / "measurements.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["led_phys_ut"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _snap():
     pt = _pt()
     tgt = pt.compute_target({"weight_bytes": int(8 * _GB)}, {"dram_bw_gbps": _BH_DRAM_GBPS})
     return {
-        "is_llm_decode": True,
-        "theoretical_tok_s": tgt.theoretical_tok_s,
+        "has_unit_ceiling": True,
+        "theoretical_rate": tgt.theoretical_rate,
         "band": [tgt.band[0], tgt.band[1]],
         "active_bytes": tgt.active_bytes,
         "peak_bw_gbps": _BH_DRAM_GBPS,
@@ -364,3 +372,50 @@ def test_an_unknown_depth_on_either_side_does_not_block_the_report(tmp_path, mon
     sm = _sm()
     out = "\n".join(sm._roofline_lines(_snap(), None, None, "m", "main", per_token_ms=19.4, measured_depth=""))
     assert "51.5 tok/s/u" in out
+
+
+# --- the anchored ceiling must work for EVERY unit, not just token ----------------------------------
+
+
+def _unit_snap(unit, byts, theo):
+    return {
+        "scope": "model",
+        "has_unit_ceiling": True,
+        "theoretical_rate": theo,
+        "band": [0.6 * theo, 0.8 * theo],
+        "active_bytes": byts,
+        "peak_bw_gbps": 512.0,
+        "tp_degree": 1,
+        "perf_layers": "all",
+        "unit": unit,
+    }
+
+
+def test_the_anchor_is_read_under_the_models_own_unit(tmp_path, monkeypatch):
+    """THE BUG: the producer anchors bytes under the model's unit (run.py: depth=facts["unit"]), and the
+    reader hardcoded depth="token". For a diffusion or classifier model the lookup missed, the renderer
+    silently fell back to the snapshot, and the anchor's whole purpose -- surviving the model directory
+    being reverted mid-run -- applied to LLMs only. It passed unnoticed because the only model that has
+    ever had an anchor is per-token."""
+    sm, led = _sm(), _led_mod()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+
+    # a diffusion model: 2.76 GB per STEP anchored, snapshot deliberately holding a WRONG 9 GB
+    led.anchor(led.KIND_ACTIVE_BYTES, 2760.0, depth="step", mode="bytes_mb", source="test", model="m")
+    txt = "\n".join(
+        sm._roofline_lines(_unit_snap("step", 9_000_000_000, 56.9), None, {"per_token_ms": 30.0}, "m", "main")
+    )
+    # 512 / 2.76 = 185.5 steps/s -- from the ANCHOR, not the snapshot's 9 GB
+    assert "185.5 steps/s" in txt, txt
+    assert "56.9" not in txt, txt
+
+
+def test_a_token_model_still_reads_its_anchor(tmp_path, monkeypatch):
+    sm, led = _sm(), _led_mod()
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
+    led.anchor(led.KIND_ACTIVE_BYTES, 6094.651392, depth="token", mode="bytes_mb", source="test", model="m")
+    txt = "\n".join(
+        sm._roofline_lines(_unit_snap("token", 3_330_000_000, 153.8), None, {"per_token_ms": 17.0}, "m", "main")
+    )
+    assert "84.0 tok/s/u" in txt, txt
+    assert "153.8" not in txt, txt

@@ -71,13 +71,13 @@ def test_tp_divides_per_device_bytes():
     t1 = pt.compute_target(mf, _BH, tp_degree=1)
     t4 = pt.compute_target(mf, _BH, tp_degree=4)
     # per-device bytes /4 -> theoretical tok/s x4
-    assert abs(t4.theoretical_tok_s - 4 * t1.theoretical_tok_s) < 1e-6
+    assert abs(t4.theoretical_rate - 4 * t1.theoretical_rate) < 1e-6
 
 
 def test_compute_target_ceiling_and_band():
     mf = {"total_params": 1_000_000_000, "dominant_dtype": "bfloat16"}  # 2 GB
     t = pt.compute_target(mf, _BH)  # 512e9 / 2e9 = 256 tok/s
-    assert abs(t.theoretical_tok_s - 256.0) < 1e-3
+    assert abs(t.theoretical_rate - 256.0) < 1e-3
     assert abs(t.band[0] - 0.60 * 256.0) < 1e-3 and abs(t.band[1] - 0.80 * 256.0) < 1e-3
 
 
@@ -107,7 +107,7 @@ def test_a_floor_target_carries_no_band():
     never derived from the hardware.
     """
     t = pt.target_from_floor_ms(2.0)
-    assert abs(t.theoretical_tok_s - 500.0) < 1e-6
+    assert abs(t.theoretical_rate - 500.0) < 1e-6
     assert t.band == (0.0, 0.0)
     # no band to be in, at any measurement -- and never a silent IN_BAND from `measured >= 0`
     for ms in (3.5, 2.2, 2.05):

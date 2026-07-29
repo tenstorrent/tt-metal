@@ -286,8 +286,8 @@ def _throughput_from_profile(baseline_profile: dict | None) -> dict | None:
         tgt = _pt.target_from_floor_ms(floor)
         return {
             "scope": "model",
-            "is_llm_decode": False,
-            "theoretical_tok_s": tgt.theoretical_tok_s,
+            "has_unit_ceiling": False,
+            "theoretical_rate": tgt.theoretical_rate,
             "band": [tgt.band[0], tgt.band[1]],
             "active_bytes": tgt.active_bytes,
             "peak_bw_gbps": 0.0,
@@ -496,9 +496,16 @@ def _roofline_lines(
     if not isinstance(throughput, dict):
         return []
     fm = forward_ms if (isinstance(forward_ms, (int, float)) and forward_ms > 0) else None
-    theo = throughput.get("theoretical_tok_s")
+    # BACKWARD-COMPATIBLE READ. The snapshot on disk may predate the rename (it lives in /tmp and is
+    # rewritten every profile, but a run in flight can be holding the old spelling).
+    theo = throughput.get("theoretical_rate")
+    if theo is None:
+        theo = throughput.get("theoretical_tok_s")
     out = ["Roofline & utilization"]
-    if throughput.get("is_llm_decode") and isinstance(theo, (int, float)) and theo > 0:
+    _has_ceiling = throughput.get("has_unit_ceiling")
+    if _has_ceiling is None:
+        _has_ceiling = throughput.get("is_llm_decode")
+    if _has_ceiling and isinstance(theo, (int, float)) and theo > 0:
         band = throughput.get("band") or [None, None]
         # THE LEDGER WINS. The throughput snapshot is rewritten from perf_target_inputs.json, which
         # lives in the model directory the optimize loop restores -- so a 16-layer 3.33 GB vintage kept
@@ -508,7 +515,14 @@ def _roofline_lines(
         active_bytes = throughput.get("active_bytes") or 0
         try:
             _led = _ledger()
-            _mb = _led.anchor_value(_led.KIND_ACTIVE_BYTES, depth="token", model=model, task=task)
+            # DEPTH IS THE UNIT, NOT THE STRING "token". The producer anchors the bytes under the
+            # model's own unit of work (run.py: depth=facts["unit"]), so hardcoding "token" here read
+            # the wrong key for every step-unit (diffusion) and inference-unit (classifier) model:
+            # the lookup missed, the code fell back to the snapshot, and the whole point of the anchor
+            # -- surviving the model directory being reverted mid-run -- was lost for everything but an
+            # LLM. It worked only because the one model that has ever had an anchor is per-token.
+            _anchor_depth = str(throughput.get("unit") or "token").strip().lower() or "token"
+            _mb = _led.anchor_value(_led.KIND_ACTIVE_BYTES, depth=_anchor_depth, model=model, task=task)
             if _mb and float(_mb) > 0:
                 active_bytes = int(round(float(_mb) * 1e6))
                 _pk = float((throughput or {}).get("peak_bw_gbps") or 0.0) * 1e9
@@ -827,7 +841,7 @@ def render_summary(
         _tok_ms, _tok_depth = None, ""
     # For a per-token ceiling the per-profile sum is not a fallback, it is a WRONG ANSWER, so it is
     # never offered: with no per-token reading the line reads n/a instead of "3% utilisation".
-    _is_decode = bool(throughput.get("is_llm_decode")) if isinstance(throughput, dict) else False
+    _is_decode = bool(throughput.get("has_unit_ceiling")) if isinstance(throughput, dict) else False
     # An EXPLICIT final_override_ms is the caller stating the measured value, and in a decode run that
     # is already the per-token figure (_reliable_forward_ms), so it is honoured. What is withheld is
     # the DERIVED final_ms -- a per-profile sum -- which is not a fallback for a per-token ceiling.

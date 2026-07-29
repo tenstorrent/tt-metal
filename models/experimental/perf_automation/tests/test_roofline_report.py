@@ -14,8 +14,8 @@ S = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(S)
 
 _LLM = {
-    "is_llm_decode": True,
-    "theoretical_tok_s": 64.0,
+    "has_unit_ceiling": True,
+    "theoretical_rate": 64.0,
     "band": [38.4, 51.2],
     "active_bytes": 8_000_000_000,
     "tp_degree": 1,
@@ -33,7 +33,7 @@ def test_llm_decode_form_matches_bandwidth_math():
 
 
 def test_module_floor_form_when_not_llm():
-    out = "\n".join(S._roofline_lines({"is_llm_decode": False, "scope": "module", "modeled_floor_ms": 8.90}, 11.82))
+    out = "\n".join(S._roofline_lines({"has_unit_ceiling": False, "scope": "module", "modeled_floor_ms": 8.90}, 11.82))
     assert "modeled floor       : 8.90 ms" in out
     assert "measured            : 11.82 ms" in out
     assert "at-floor            : 75%" in out  # 8.90 / 11.82
@@ -49,14 +49,14 @@ def test_floor_form_shows_the_achievable_band_not_just_the_floor():
     is NOT a bandwidth ceiling -- so it publishes no 60-80% band. Deriving one from 1000/floor made a
     range the hardware has no peak behind, which the report showed as "achievable" and the stop gate
     treated as done. What the operator gets instead is at-floor% with no fabricated goal."""
-    out = "\n".join(S._roofline_lines({"is_llm_decode": False, "modeled_floor_ms": 8.90}, 11.82))
+    out = "\n".join(S._roofline_lines({"has_unit_ceiling": False, "modeled_floor_ms": 8.90}, 11.82))
     assert "achievable (60-80%)" not in out
     assert "status              : NO_BAND" in out
     assert "at-floor            : 75%" in out  # 8.90 / 11.82
 
 
 def test_floor_form_below_band_keeps_optimizing():
-    out = "\n".join(S._roofline_lines({"is_llm_decode": False, "modeled_floor_ms": 8.90}, 40.0))
+    out = "\n".join(S._roofline_lines({"has_unit_ceiling": False, "modeled_floor_ms": 8.90}, 40.0))
     assert "status              : NO_BAND" in out and "keep optimizing" in out
     assert "at-floor            : 22%" in out  # 8.90 / 40.0
 
@@ -76,7 +76,7 @@ def test_floor_form_flags_stale_when_measured_below_floor():
     # measured faster than the modeled floor => floor is from a different (stale) profile; the table
     # must say so, NOT print a bogus >100% at-floor. (Caught live on ace_step_audio_tokenizer: a
     # baseline-profile floor of 14.81 ms paired with the optimized 11.82 ms.)
-    out = "\n".join(S._roofline_lines({"is_llm_decode": False, "modeled_floor_ms": 14.81}, 11.82))
+    out = "\n".join(S._roofline_lines({"has_unit_ceiling": False, "modeled_floor_ms": 14.81}, 11.82))
     assert "stale/suspect" in out
     assert "125%" not in out and "at-floor            : 1" not in out  # no >100% number
     # It must NOT assert WHICH side is stale. On llama3_1_8b_p150 the FLOOR was the fresh number
@@ -91,8 +91,8 @@ def test_llm_form_flags_stale_when_measured_exceeds_ceiling():
     out = "\n".join(
         S._roofline_lines(
             {
-                "is_llm_decode": True,
-                "theoretical_tok_s": 40.0,
+                "has_unit_ceiling": True,
+                "theoretical_rate": 40.0,
                 "band": [24.0, 32.0],
                 "active_bytes": 8_000_000_000,
                 "tp_degree": 1,

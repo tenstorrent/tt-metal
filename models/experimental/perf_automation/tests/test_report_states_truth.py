@@ -53,7 +53,7 @@ def test_it_does_not_claim_a_decode_model_is_not_a_decode_model():
 def test_it_still_says_not_decode_when_that_is_actually_why():
     m = _sm()
     out = m._roofline_lines(
-        {"modeled_floor_ms": 341.47, "active_bytes": 12345, "peak_bw_gbps": 512.0, "is_llm_decode": False}, 615.69
+        {"modeled_floor_ms": 341.47, "active_bytes": 12345, "peak_bw_gbps": 512.0, "has_unit_ceiling": False}, 615.69
     )
     assert "no single unit of work for this pipeline" in "\n".join(out)
 
@@ -272,8 +272,8 @@ def test_utilisation_names_the_ceiling_it_is_measured_against(tmp_path, monkeypa
     sm, _ = _sm_and_led()
     monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
     snap = {
-        "is_llm_decode": True,
-        "theoretical_tok_s": 84.0,
+        "has_unit_ceiling": True,
+        "theoretical_rate": 84.0,
         "band": [50.4, 67.2],
         "active_bytes": 6094651392,
         "peak_bw_gbps": 512.0,
