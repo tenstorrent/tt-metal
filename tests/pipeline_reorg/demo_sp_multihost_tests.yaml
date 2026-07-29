@@ -99,20 +99,24 @@
 # =============================================================================
 # Count + SC16 topologyKey, then tt-run automapper (same pattern as tt-blaze
 # kimi-decode-ladder): --mesh-graph-descriptor + --hosts from /etc/ttop/hostfile.
-# Phase-1 generate_rank_bindings places meshes; do NOT assume hostfile order.
-# --bind-to none (required for Phase 1; hwt fights map-by hwthread).
+# Launch cwd MUST be $PIPELINE_DIR/tt-metal-src (NFS source only): Phase 1 writes
+# generated/ttrun/ under ORIGINAL_CWD so the runner can see rank-0's outputs.
+# TT_METAL_HOME=/home/user/tt-metal supplies the local build (no NFS build unpack).
+# Phase 2 uses --wdir ${TT_METAL_HOME}. --bind-to none for Phase 1.
 
 - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging)}"
+    NFS_TT_METAL="${PIPELINE_DIR}/tt-metal-src"
     MGD="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
-    PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
     mkdir -p "${PIPELINE_DIR}/ranklogs"
     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -d "${NFS_TT_METAL}" || { echo "ERROR: missing ${NFS_TT_METAL} (unpack step must stage it)"; exit 1; }
+    test -f "${NFS_TT_METAL}/${MGD}" || { echo "ERROR: MGD not found under ${NFS_TT_METAL}"; exit 1; }
 
-    cd "${TT_METAL_HOME}"
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    cd "${NFS_TT_METAL}"
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 ttnn/ttnn/distributed/ttrun.py \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "${MGD}" \
@@ -137,14 +141,16 @@
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging)}"
+    NFS_TT_METAL="${PIPELINE_DIR}/tt-metal-src"
     MGD="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
-    PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
     mkdir -p "${PIPELINE_DIR}/ranklogs"
     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -d "${NFS_TT_METAL}" || { echo "ERROR: missing ${NFS_TT_METAL} (unpack step must stage it)"; exit 1; }
+    test -f "${NFS_TT_METAL}/${MGD}" || { echo "ERROR: MGD not found under ${NFS_TT_METAL}"; exit 1; }
 
-    cd "${TT_METAL_HOME}"
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    cd "${NFS_TT_METAL}"
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 ttnn/ttnn/distributed/ttrun.py \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "${MGD}" \
@@ -168,14 +174,16 @@
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging)}"
+    NFS_TT_METAL="${PIPELINE_DIR}/tt-metal-src"
     MGD="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
-    PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
     mkdir -p "${PIPELINE_DIR}/ranklogs"
     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -d "${NFS_TT_METAL}" || { echo "ERROR: missing ${NFS_TT_METAL} (unpack step must stage it)"; exit 1; }
+    test -f "${NFS_TT_METAL}/${MGD}" || { echo "ERROR: MGD not found under ${NFS_TT_METAL}"; exit 1; }
 
-    cd "${TT_METAL_HOME}"
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    cd "${NFS_TT_METAL}"
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 ttnn/ttnn/distributed/ttrun.py \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "${MGD}" \
