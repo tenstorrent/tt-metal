@@ -45,25 +45,18 @@ without a device). Artifacts (wav + metrics JSON) land under ``output/e2e_sim/``
 
 import json
 import os
-import sys
 from pathlib import Path
 
 import pytest
 import torch
 
-from models.experimental.vibevoice.common.config import MODEL_PATH, TEXT_EXAMPLES_DIR, VOICES_DIR
+from models.experimental.vibevoice.common.config import MODEL_PATH, TEXT_EXAMPLES_DIR, VIBEVOICE_ROOT, VOICES_DIR
 from models.experimental.vibevoice.common.resource_utils import (
     CLIMATE_4P_SPEAKER_NAMES,
     CLIMATE_4P_VOICE_FILES,
     load_script,
 )
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
-
-_VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent.parent
-_REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
-for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
 CFG_SCALE = 1.3
 NUM_DIFFUSION_STEPS = 10
@@ -93,7 +86,7 @@ MAX_NEW_TOKENS = int(os.environ.get("VV_SIM_MAX_NEW_TOKENS", "200"))
 SIM_TARGET_FLOOR = float(os.environ.get("VV_SIM_TARGET_FLOOR", "0.5"))
 SIM_MARGIN = float(os.environ.get("VV_SIM_MARGIN", "0.05"))
 
-_OUT_DIR = _VIBEVOICE_ROOT / "output" / "e2e_sim"
+_OUT_DIR = VIBEVOICE_ROOT / "output" / "e2e_sim"
 _OUT_TAG = os.environ.get("VV_SIM_OUT_TAG", "")
 
 
@@ -132,7 +125,7 @@ class _BasePlusVerifier:
 
 
 def _make_processor():
-    from processor.vibevoice_processor import VibeVoiceProcessor
+    from models.experimental.vibevoice.reference.processor.vibevoice_processor import VibeVoiceProcessor
 
     return VibeVoiceProcessor.from_pretrained(MODEL_PATH)
 

@@ -6,9 +6,6 @@
 Asserts logit PCC >= 0.99 for the last token's logits.
 """
 
-import sys
-from pathlib import Path
-
 import pytest
 import torch
 import ttnn
@@ -26,12 +23,6 @@ from models.experimental.vibevoice.tt.ttnn_vibevoice_lm import (
     create_kv_cache,
 )
 from models.experimental.vibevoice.tt.vibevoice_config import load_vibevoice_model_config
-
-_VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent.parent
-_REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
-for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
 SEQ_LEN = 32
 
@@ -92,6 +83,7 @@ def _reference_lm_head_logits(lm_state: dict, input_ids: torch.Tensor, vv_config
     return out.logits[:, -1, :]  # [B, vocab]
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_lm_head_logits_pcc(mesh_device, vv_config, lm_state):
     torch.manual_seed(0)

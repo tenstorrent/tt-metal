@@ -29,13 +29,14 @@ _COMPUTE_KERNEL_FP32 = ttnn.WormholeComputeKernelConfig(
 )
 
 
-# Byte-identical B=2 program configs for the CFG diffusion head.  The head ALWAYS runs at B=2
-# (sample_speech_latents concats [neg,pos] on dim0), on auto, so each head weight is read TWICE per
-# step x 10 steps/frame — the same weight-read-twice waste the LM FFN had.  per_core_M=2 folds both
-# CFG rows into M so the weights are read once.  in0_block_w=2 is auto's K-reduction block for these
-# shapes (proven maxabsdiff==0 vs auto for both fp32 and bf16 inputs)
-# => same reduction order => long-form-safe (Tier-0),
-# ~1.6-1.9x per matmul.  Applied only when B==2; a B=1 PCC-test call falls back to auto.
+# Byte-identical B=2 program configs for the CFG diffusion head.  The head always runs at B=2
+# (sample_speech_latents concats [neg, pos] on dim 0); on the auto config each head weight is
+# therefore read twice per step, 10 steps per frame.  per_core_M=2 folds both CFG rows into M so
+# each weight is read once, worth ~1.6-1.9x per matmul.  in0_block_w=2 is the K-reduction block
+# auto picks for these shapes, so the reduction order — and hence the rounding — is unchanged
+# (maxabsdiff==0 vs auto for both fp32 and bf16 inputs).
+#
+# Applied only when B==2; a B=1 PCC-test call falls back to auto.
 def _diff_b2_cfg(cx, cy, pn):
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
@@ -53,9 +54,9 @@ def _diff_b2_cfg(cx, cy, pn):
 _DIFF_N4608_B2 = _diff_b2_cfg(8, 9, 2)  # gate / up / head-layer modulation  (K=1536, N=4608)
 _DIFF_N1536_B2 = _diff_b2_cfg(8, 3, 2)  # swiglu down                        (K=4608, N=1536)
 _DIFF_N3072_B2 = _diff_b2_cfg(8, 6, 2)  # final-layer modulation             (K=1536, N=3072)
-# final_linear 1536→64: auto runs on 2 cores (~36 µs, SLOW).  in0_block_w=2 matches auto's
-# K-reduction (maxabsdiff==0 vs auto).
-# Device: 36→21 µs (diffusion_exp3).  ibw≠2 is math-CHANGING (long-form-unsafe).
+# final_linear 1536→64: auto runs this on only 2 cores (~36 µs).  in0_block_w=2 matches auto's
+# K-reduction (maxabsdiff==0 vs auto) and brings it to ~21 µs.  Any other in0_block_w changes the
+# reduction order, so it is not byte-identical and must not be used on the long-form path.
 _DIFF_N64_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(1, 2),
     in0_block_w=2,
@@ -270,11 +271,11 @@ class TTDiffusionHead:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # Place the SwiGLU product (down_proj's in0) in L1: the down_proj is the SLOW head matmul
-        # (K=4608, 24c, ~37% DRAM BW) and reads in0 ~9 us faster from L1 than DRAM.  Memory placement
-        # only changes WHERE the tensor lives, not its bits (same in0_block_w reduction) => byte-identical
-        # (proven maxabsdiff==0; 79.4->70.7 us).  Only down
-        # benefits; L1 in0 REGRESSES final_adaLN (41->108 us) so it stays DRAM.
+        # Place the SwiGLU product (down_proj's in0) in L1: down_proj is the slowest head matmul
+        # (K=4608, 24 cores, ~37% DRAM BW) and reads in0 ~9 µs faster from L1 (79.4 -> 70.7 µs).
+        # Placement changes where the tensor lives, not its bits, so this stays byte-identical
+        # (maxabsdiff==0).  Only down_proj benefits — L1 in0 regresses final_adaLN (41 -> 108 µs),
+        # which therefore stays in DRAM.
         hidden = ttnn.mul(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.linear(
             hidden,

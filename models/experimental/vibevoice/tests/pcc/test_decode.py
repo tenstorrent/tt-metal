@@ -26,8 +26,6 @@ Gating:
 """
 
 import math
-import sys
-from pathlib import Path
 
 import pytest
 import torch
@@ -42,12 +40,6 @@ from models.experimental.vibevoice.tt.ttnn_dpm_scheduler import (
     sample_speech_latents,
 )
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
-
-_VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent.parent
-_REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
-for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
 _TEXT_PATH = TEXT_EXAMPLES_DIR / "1p_vibevoice.txt"
 _VOICE_PATH = VOICES_DIR / "en-Alice_woman.wav"
@@ -71,7 +63,7 @@ def _voice_path() -> str:
 
 
 def _build_processor_batch():
-    from processor.vibevoice_processor import VibeVoiceProcessor
+    from models.experimental.vibevoice.reference.processor.vibevoice_processor import VibeVoiceProcessor
 
     assert _TEXT_PATH.is_file(), f"Missing demo text: {_TEXT_PATH}"
     script = load_script(_TEXT_PATH)
@@ -367,7 +359,9 @@ def test_decode_ref_cond_frame_pcc(mesh_device):
     distribution-gated (floor + bounded outlier fraction) to tolerate the rare, inherent
     separatrix frame while catching a real sampler regression. See the module docstring.
     """
-    from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+    from models.experimental.vibevoice.reference.modular.modeling_vibevoice_inference import (
+        VibeVoiceForConditionalGenerationInference,
+    )
 
     processor, inputs = _build_processor_batch()
     prefill_len = inputs["input_ids"].shape[1]

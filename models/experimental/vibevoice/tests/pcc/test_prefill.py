@@ -19,8 +19,6 @@ states is large and highly input-dependent. All are gated at >= 0.99.
 """
 
 import contextlib
-import sys
-from pathlib import Path
 
 import pytest
 import torch
@@ -40,12 +38,6 @@ from models.experimental.vibevoice.tests.pcc.pcc_helpers import (
 )
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
-_VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent.parent
-_REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
-for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
 FULL_PREFILL_ISL_SWEEP_LENGTHS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 24000]
 SPEECH_TOK_COMPRESS_RATIO = 3200
 FIXED_SPEECH_SLOTS = 64
@@ -60,7 +52,7 @@ RANDOM_SEED = 2
 
 
 def _load_processor():
-    from processor.vibevoice_processor import VibeVoiceProcessor
+    from models.experimental.vibevoice.reference.processor.vibevoice_processor import VibeVoiceProcessor
 
     return VibeVoiceProcessor.from_pretrained(MODEL_PATH)
 
@@ -299,7 +291,9 @@ def tt_full_prefill_chain(tt_model: TTVibeVoiceModel, processor, inputs: dict):
 
 
 def _load_ref_model():
-    from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+    from models.experimental.vibevoice.reference.modular.modeling_vibevoice_inference import (
+        VibeVoiceForConditionalGenerationInference,
+    )
 
     ref_model = VibeVoiceForConditionalGenerationInference.from_pretrained(
         MODEL_PATH,
