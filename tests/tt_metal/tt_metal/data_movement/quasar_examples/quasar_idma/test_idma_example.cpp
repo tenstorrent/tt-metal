@@ -28,6 +28,8 @@ constexpr auto kIdmaBasic =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_idma/kernels/idma_basic_example.cpp";
 constexpr auto kIdma1DStrided =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_idma/kernels/idma_1d_strided_example.cpp";
+constexpr auto kClockCalibration =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_idma/kernels/clock_calibration_example.cpp";
 
 void run_kernel(
     distributed::MeshDevice& mesh_device,
@@ -36,12 +38,21 @@ void run_kernel(
     const experimental::KernelSpecName DM_KERNEL{"idma"};
     const experimental::NodeCoord node{0, 0};
 
+    // DataMovementGen2Config is Quasar-only -- ValidateProgramSpec hard-fails on Gen1 (WH/BH) with
+    // "targets Gen1 but its DataMovementHardwareConfig holds a DataMovementGen2Config". Select per arch so
+    // arch-generic kernels (e.g. clock_calibration_example.cpp) can run on both.
+    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    experimental::DataMovementHardwareConfig dm_hw_config = experimental::DataMovementGen2Config{};
+    if (arch != tt::ARCH::QUASAR) {
+        dm_hw_config = experimental::CreateReaderGen1DataMovementConfig();
+    }
+
     experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source = kernel_path,
         .num_threads = 1,
         .compile_time_args = std::move(compile_time_args),
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = dm_hw_config,
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -178,6 +189,15 @@ bool run_idma_1d_strided_test(distributed::MeshDevice& mesh_device) {
     return pass;
 }
 
+// Clock calibration: moves no data and allocates no buffers, so there is nothing for the host to
+// verify -- the result IS the kernel's DEVICE_PRINT table. Run with DPRINT enabled and read the
+// CLOCK_CAL lines. Establishes probe cost, cycles-per-tick, and effective granularity for every
+// timestamp source a DM can reach, which is a prerequisite for interpreting any copy benchmark that
+// mixes core cycles with a shared wall clock.
+void run_clock_calibration_test(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    run_kernel(mesh_device, kClockCalibration, {});
+}
+
 }  // namespace unit_tests::dm::quasar_idma
 
 // =============================================================================
@@ -200,6 +220,36 @@ TEST_F(QuasarIdmaOps, IDMA_1D_Strided) {
     }
     // Host writes pattern to src, kernel copies 10 elements with src_stride=16 B to dst linearly
     EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_1d_strided_test(this->device()));
+}
+
+TEST_F(QuasarIdmaOps, ClockCalibration) {
+    if (unit_tests::dm::quasar_idma::should_skip_test()) {
+        GTEST_SKIP() << "Test requires Quasar simulator";
+    }
+    // Probe-only: read the CLOCK_CAL DEVICE_PRINT output, there is no host-side assertion to make
+    unit_tests::dm::quasar_idma::run_clock_calibration_test(devices_[0]);
+}
+
+// =============================================================================
+// Test Suite: Blackhole clock calibration
+//
+// The calibration kernel is arch-generic (no rdtime, get_timestamp() has the same signature on tt-1xx
+// and tt-2xx, cycle/instret deltas held in uint32_t so RV32 works). It lives in the quasar_idma
+// directory only because that is where it was first needed.
+//
+// Running it on Blackhole is REQUIRED before any Quasar-vs-Blackhole latency comparison: the
+// prefetcher->dispatcher benchmark reports wall-clock TICKS, and a tick is only a known quantity once
+// M2 establishes the tick-to-core-cycle ratio on that arch. Quasar measured 1 tick per cycle with a
+// 41.8 cycle probe; Blackhole's probe self-measures as ~1 tick, which is consistent either with a cheap
+// register read at a 1:1 ratio or with a coarser clock. M2 distinguishes them.
+// =============================================================================
+
+class BlackholeClockCalibration : public BlackholeSingleCardFixture {};
+
+TEST_F(BlackholeClockCalibration, ClockCalibration) {
+    // Probe-only: read the CLOCK_CAL DEVICE_PRINT output. BlackholeSingleCardFixture already skips on
+    // non-Blackhole, so no extra arch guard is needed here.
+    unit_tests::dm::quasar_idma::run_clock_calibration_test(devices_[0]);
 }
 
 }  // namespace tt::tt_metal
