@@ -5,6 +5,7 @@
 # standard
 import argparse
 import builtins
+import collections
 import datetime as dt
 import importlib
 import os
@@ -1297,6 +1298,78 @@ def _filter_vectors_by_mesh_dims(vectors, mesh_dims):
     return kept
 
 
+def _vector_dispatch_group(vector, env_axis):
+    """Device-key group for a vector: the dispatch axis its module will open.
+
+    'row'/'col' when the vector's grids force an axis, else the pass's
+    TTNN_DISPATCH_AXIS (the axis a module passing None inherits), else 'auto'.
+    """
+    try:
+        from split_vectors_by_axis import vector_dispatch_axis_hint
+
+        hint = vector_dispatch_axis_hint(vector)
+    except Exception:
+        hint = None
+    if hint is None:
+        return env_axis if env_axis in ("col", "row") else "auto"
+    return hint
+
+
+def _order_vectors_by_device_key(vectors, module_name, suite_name):
+    """Stable-sort vectors so same-device vectors run back to back.
+
+    The 8 model_traced modules that open their own device per vector derive the
+    dispatch axis from each vector's shard/compute grid, so in file order the job
+    device key flips ROW<->COL repeatedly and each flip is a close+reopen. On Galaxy a
+    reopen is the event that wedges a dispatch core (run_mailbox=0x40), so grouping
+    vectors by the device they need cuts reopens from O(transitions) to O(distinct
+    keys): measured 44 -> 9 over the 293 Galaxy vectors in those modules.
+
+    Vectors matching the current pass's axis go first so the device the worker already
+    opened is reused for the longest initial stretch.
+
+    This only ever REORDERS: the result is verified to be a permutation of the input by
+    object identity, so no vector can be duplicated (run twice) or dropped. If that
+    check or anything else fails, the original order is returned unchanged -- a few
+    extra reopens are always preferable to running a vector twice or losing one.
+    Set TTNN_SWEEP_NO_VECTOR_REORDER=1 to disable.
+    """
+    if os.environ.get("TTNN_SWEEP_NO_VECTOR_REORDER") == "1" or len(vectors) < 2:
+        return vectors
+    try:
+        env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
+        groups = [_vector_dispatch_group(v, env_axis) for v in vectors]
+        distinct = sorted(set(groups))
+        if len(distinct) < 2:
+            return vectors  # nothing to gain -- leave the order byte-identical
+        first = env_axis if env_axis in distinct else distinct[0]
+
+        # (rank, group, original index) -> stable within a group, env axis first.
+        order = sorted(range(len(vectors)), key=lambda i: (groups[i] != first, groups[i], i))
+        reordered = [vectors[i] for i in order]
+
+        # Permutation check by identity: same objects, same multiplicity, none lost.
+        if len(reordered) != len(vectors) or collections.Counter(map(id, reordered)) != collections.Counter(
+            map(id, vectors)
+        ):
+            logger.warning(
+                f"vector reorder for {module_name}/{suite_name} did not produce a permutation "
+                f"({len(vectors)} in, {len(reordered)} out) -- keeping the original order."
+            )
+            return vectors
+        moved = builtins.sum(1 for i, j in enumerate(order) if i != j)
+        counts = ", ".join(f"{g}={groups.count(g)}" for g in distinct)
+        logger.info(
+            f"vector order for {module_name}/{suite_name}: grouped {len(vectors)} vector(s) by dispatch "
+            f"axis ({counts}), '{first}' first; {moved} moved, {len(distinct) - 1} device reopen(s) "
+            f"instead of {builtins.sum(1 for a, b in zip(groups, groups[1:]) if a != b)}."
+        )
+        return reordered
+    except Exception as e:
+        logger.warning(f"vector reorder for {module_name}/{suite_name} failed ({e}) -- keeping the original order.")
+        return vectors
+
+
 def run_sweeps(
     module_names,
     config: SweepsConfig,
@@ -1406,6 +1479,10 @@ def run_sweeps(
 
                 vectors = vector_source.load_vectors(module_name, suite, config.vector_id)
                 vectors = _filter_vectors_by_mesh_dims(vectors, config.mesh_dims)
+                # Group same-device vectors together BEFORE sanitize_inputs, which builds
+                # header_info as a list positionally parallel to test_vectors -- reordering
+                # after it would misattribute every result to the wrong vector.
+                vectors = _order_vectors_by_device_key(vectors, module_name, suite)
                 # Update summary counters
                 total_vectors_run += len(vectors)
                 total_tests_run += 1

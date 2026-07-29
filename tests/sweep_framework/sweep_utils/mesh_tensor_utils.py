@@ -231,6 +231,20 @@ def _job_device_enabled() -> bool:
         return False
 
 
+def _axis_token(dispatch_core_axis):
+    """Canonical lowercase token ('row'/'col') for a dispatch axis.
+
+    str(ttnn.DispatchCoreAxis.COL) is 'DispatchCoreAxis.COL' while the
+    TTNN_DISPATCH_AXIS env override is 'col'. Keying on the raw str() made those two
+    DIFFERENT keys for the SAME physical device, so a module that derived COL from its
+    vector grid missed the cache against the worker's env-derived 'col' device and did a
+    full close+reopen -- on Galaxy every needless reopen risks wedging a dispatch core
+    (run_mailbox=0x40). Measured on the Galaxy vector set: 18 of the 44 reopens in the
+    modules that open per vector were this mismatch alone (linear: 19 of its 68 vectors).
+    """
+    return str(dispatch_core_axis).split(".")[-1].strip().lower()
+
+
 def _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth):
     """Canonical key for the device config create_mesh_device WOULD open. Must be
     identical for the same intended device regardless of whether the caller passes
@@ -254,7 +268,7 @@ def _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth):
         if single_host and prefer_eth:
             disp = ("ETH",)  # ETH intent (may fall back to WORKER, but the key stays consistent)
         elif dispatch_core_axis is not None:
-            disp = ("WORKER", str(dispatch_core_axis))
+            disp = ("WORKER", _axis_token(dispatch_core_axis))
         else:
             env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
             if env_axis in ("col", "row"):
