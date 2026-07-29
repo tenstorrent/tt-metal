@@ -11,12 +11,8 @@ from transformers import AutoConfig, DynamicCache
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DecoderLayer
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import (
-    MODEL_ID,
-    MODEL_REVISION,
-    FunctionalDecoder,
-    _to_device,
-)
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, MODEL_REVISION, _to_device
+from models.autoports.qwen_qwen3_6_27b.tt.fused_decoder import FusedDecoder
 from models.common.utility_functions import comp_pcc
 
 LAYER = 0
@@ -52,6 +48,8 @@ def _hf_layer(config, state):
 
 @torch.no_grad()
 def run():
+    ttnn.CONFIG.throw_exception_on_fallback = True
+    print("FALLBACK_AUDIT", f"throw_exception_on_fallback={ttnn.CONFIG.throw_exception_on_fallback}")
     torch.manual_seed(20260729)
     config = AutoConfig.from_pretrained(MODEL_ID, revision=MODEL_REVISION).text_config
     state = _real_state()
@@ -66,7 +64,7 @@ def run():
 
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     try:
-        decoder = FunctionalDecoder.from_state_dict(
+        decoder = FusedDecoder.from_state_dict(
             state,
             hf_config=config,
             layer_idx=LAYER,
