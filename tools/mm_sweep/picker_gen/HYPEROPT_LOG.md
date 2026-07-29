@@ -631,3 +631,67 @@ small wins in the table above.
 **Remaining headroom on the top two shapes is therefore NOT the reduction.** 512x6144x4608 has 41.2 us of slack
 and is compute-floor-bound; the lever there is cheaper math, not cheaper movement. 512x6144x2304 has 38.1 us
 with its compute floor (70.0) and DRAM floor (72.2) essentially equal, so it needs BOTH to improve.
+
+### F10. FAILED: deeper kb cuts the compute floor but every config that reaches it costs more elsewhere
+
+512x6144x4608 is the one corpus shape whose COMPUTE floor binds (139.2 us of a 180.4 us wall). Earlier work
+found compute efficiency rises a lot with a deeper K block (kb), and this shape runs kb=2 - the maximum its
+config allows, because the in0 ring shard must hold a whole number of kb-blocks and at Pk=12 the K slice is only
+16 tiles. So I swept every 96-core config that reaches a deeper kb without wasting K.
+
+| config | wall (us) | compute floor | vs deployed |
+|---|---|---|---|
+| **deployed (12,1,1,kb2,nsb1)** | **179.9** | 139.2 | - |
+| 6,2,1,kb4,nsb1 | 185.2 | **128.6** | 2.9% slower |
+| 6,1,2,kb4,nsb2 | 190.2 | 130.0 | 5.7% slower |
+| 6,1,2,kb4,nsb1 | 206.8 | 132.0 | 15.0% slower |
+| 4,1,3,kb6,nsb2 | 222.0 | 149.4 | 23.4% slower |
+| 3,1,4,kb8,nsb2 | 305.5 | 204.0 | 69.8% slower |
+| 2,1,6,kb12,nsb2 | 401.9 | 295.4 | 123.4% slower |
+
+Same story on 512x6144x2304 (deployed 109.9 us; best alternative 123.6, 12.4% slower). Two configs
+(3,4,1,kb8,nsb1 and 4,3,1,kb6,nsb1) do not fit in L1 at all - their in0 CB alone is 2.0 and 1.5 MB against a
+1.44 MB budget.
+
+**The deeper kb DOES work as predicted - it cuts the compute floor 7.6% (139.2 -> 128.6).** But the wall gets
+worse anyway, and the reason is structural: the in0 ring shard is (Kt / (8*Pk)) * M_block, which does not depend
+on kb at all. Raising kb while keeping 96 cores forces Pk down, and halving Pk DOUBLES the ring shard. So you
+buy ~8% of compute with ~2x of in0 ring traffic. The picker's choice is correct.
+
+**Conclusion: config tuning is closed for both 512-row shapes.** Their remaining slack is exposed data
+movement at the deployed config, not a bad config and (per F9) not the reduction either.
+
+### S9. SHIPPED: reduce-scatter for deep K too, under two mechanistic conditions (6 more shapes, -0.9 to -4.4%)
+
+F9 said deep-K reduce-scatter was "genuinely mixed" and I left it on the chain. That was right as a default but
+wrong as a stopping point: the mix is not random. F9 already identified the mechanism - reduce-scatter buys
+less data movement by paying a fixed per-round compute setup cost - so it needs FEW rounds and ENOUGH WORK per
+round. Turning that into two compile-time conditions:
+
+- **Pk <= 6** - at most 5 rounds per sub-block.
+- **max_chunk >= 2 tiles** - a round that ships a single 2 KB tile is nearly all overhead.
+
+These two separate **all 13 measured deep-K shapes exactly**: the 6 that satisfy both were faster (-1.3% to
+-3.8%), and all 5 slower ones are excluded (+2.7%, +3.0%, +19.5%, +33.4%, and one +2.3% at Pk=3). No threshold
+was tuned to fit - both conditions came from the F9 mechanism before I checked them against the data.
+
+Confirmed after shipping (mask 0 now selects reduce-scatter, bit22 forces the chain; 2 relaunches, order
+reversed):
+
+| shape | chain (us) | reduce-scatter (us) | change |
+|---|---|---|---|
+| 256x15360x1536 | 142.27 | 136.06 | **4.4% faster** |
+| 256x6144x6144 | 193.08 | 186.75 | **3.3% faster** |
+| 256x6144x1536 | 61.12 | 60.59 | 0.9% faster |
+
+plus 256x6144x4608 (-1.8%), 256x15360x768 (-1.4%) and 128x15360x768 (-1.3%) from the bit23 sweep.
+
+Adoption 8 -> 14 corpus shapes. Honest caveat: only the two leaders clear the +-1.5% noise floor for large
+shapes; the other four are 0.9-1.8%, i.e. small but consistently signed across both relaunches. In ABSOLUTE
+terms the six together take about 17 us off the corpus wall - comparable to the shallow-K win - because they are
+the biggest shapes in the corpus.
+
+Shallow K deliberately keeps NO chunk-size floor: it still wins with single-tile chunks (64x2048x1024 -5.5%,
+128x2048x512 -8.2%) because compute there is only 30-40% of the wall rather than 47-77%.
+
+PCC 0.99999-1.000000 on all 6 new shapes plus 2 excluded controls; 111/111 correctness tests pass.
