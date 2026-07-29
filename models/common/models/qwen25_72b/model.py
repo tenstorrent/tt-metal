@@ -251,8 +251,23 @@ def _post_attn_norm_decode_configs(
     return program_config, mlp.config.decode_input_memcfg
 
 
+# Cast the three per-layer prefill all-gathers (the two DistributedNorm activation reconstructions here
+# + the pre-WO gather via Attention1DConfig.prefill_ag_ccl_dtype) from bf16 to bfloat8_b. These are the
+# largest CCL cost in the batched b32-ci prefill and a bf16 all-gather moves 2× the bytes of a bf8_b one,
+# while every matmul they feed (QKV/WO bf8_b, W1/W3 bf4_b) quantizes the activation further regardless —
+# so the bf16 gather precision is largely wasted. PREFILL-ONLY: the decode call sites of
+# _all_gather_rmsnorm_tensor pass no dtype (byte-identical decode). None disables (byte-identical).
+# Qwen2.5-72B is precision-tolerant (the ">70B" recipe ships bf4 MLP + bf8 attention even in accuracy
+# mode); gated by token-accuracy + eval-32, not bit-exactness (see PLAN_03's prefill_reduce_ccl_dtype).
+_PREFILL_AG_CCL_DTYPE: ttnn.DataType | None = ttnn.bfloat8_b
+
+
 def _all_gather_rmsnorm_tensor(
-    norm: RMSNorm1D, x: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None
+    norm: RMSNorm1D,
+    x: ttnn.Tensor,
+    *,
+    memory_config: ttnn.MemoryConfig | None = None,
+    dtype: ttnn.DataType | None = None,
 ) -> ttnn.Tensor:
     cfg = norm.config
     if cfg.mesh_device.get_num_devices() == 1 or x.shape[-1] == cfg.weight.source.numel():
@@ -260,6 +275,15 @@ def _all_gather_rmsnorm_tensor(
 
     if memory_config is None:
         memory_config = x.memory_config()
+
+    # Prefill-only opt-in (``dtype`` set only at the prefill call sites): cast the gather input (bf16) to
+    # a smaller CCL dtype (bfloat8_b) to halve this collective's cross-device payload. Decode call sites
+    # leave ``dtype=None`` → byte-identical. An explicit typecast is required (to_memory_config does not
+    # cast an already-DRAM tensor).
+    if dtype is not None and x.dtype != dtype:
+        x_cast = ttnn.typecast(x, dtype)
+        ttnn.deallocate(x)
+        x = x_cast
 
     tt_ccl = cfg.tt_ccl or get_tt_ccl(cfg.mesh_device)
     return ttnn.experimental.all_gather_async(
@@ -418,6 +442,11 @@ def _build_decoder_layer(
             # 2 chunks of 2048 (per_core_M=8) instead of 4 chunks of 1024, halving the WO weight
             # re-stream passes on the folded prefill. Bit-identical M-reblocking (see field doc).
             wo_prefill_len_cutoff=2048,
+            # Cast the pre-WO fused prefill all-gather from bf16 to bfloat8_b (halves this per-layer
+            # collective's cross-device payload). Paired with the two norm-reconstruction gathers cast
+            # via _PREFILL_AG_CCL_DTYPE in prefill_forward. Prefill-only (the fused gather is a
+            # prefill-path method); decode is unaffected. See _PREFILL_AG_CCL_DTYPE for rationale.
+            prefill_ag_ccl_dtype=_PREFILL_AG_CCL_DTYPE,
         )
     )
 
@@ -580,7 +609,7 @@ class Qwen25_72BDecoderLayer(LightweightModule):
         # Match Llama ``TransformerBlock1D``: fractured embed / norm activations must be
         # all-gathered to full ``dim`` before Attention1D / MLP1D (QKV matmul expects width ``dim``).
         r = self.input_layernorm.prefill_forward(x)
-        r = _all_gather_rmsnorm_tensor(self.input_layernorm, r)
+        r = _all_gather_rmsnorm_tensor(self.input_layernorm, r, dtype=_PREFILL_AG_CCL_DTYPE)
         r = self.self_attn.forward(
             r,
             None,
@@ -594,7 +623,7 @@ class Qwen25_72BDecoderLayer(LightweightModule):
         )
         h = ttnn.add(x, r, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         r2 = self.post_attention_layernorm.prefill_forward(h)
-        r2 = _all_gather_rmsnorm_tensor(self.post_attention_layernorm, r2)
+        r2 = _all_gather_rmsnorm_tensor(self.post_attention_layernorm, r2, dtype=_PREFILL_AG_CCL_DTYPE)
         r2 = self.mlp.prefill_forward(r2)
         return ttnn.add(h, r2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

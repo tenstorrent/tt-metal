@@ -125,6 +125,14 @@ class Attention1DConfig:
     # default — byte-identical to leaving the reduce untouched).
     prefill_reduce_ccl_dtype: ttnn.DataType | None = None
 
+    # Optional CCL dtype for the prefill all-gather. When the fused all-gather+WO path IS selected,
+    # attention all-gathers the bf16 concat-heads output before the WO matmul; casting that input to a
+    # smaller dtype (e.g. bfloat8_b) halves the collective's cross-device payload. Model files that also
+    # own norm-reconstruction all-gathers may thread this same dtype through them. None keeps the input
+    # dtype (no cast, default — byte-identical). to_memory_config does not cast an already-DRAM tensor,
+    # so an explicit typecast is required (mirrors prefill_reduce_ccl_dtype).
+    prefill_ag_ccl_dtype: ttnn.DataType | None = None
+
     # Model dimensions (derived from weights if None)
     dim: int | None = None
     n_heads: int | None = None
@@ -968,6 +976,13 @@ class Attention1D(LightweightModule):
     def _all_gather_before_wo_prefill_fused(self, attn_output_concat: ttnn.Tensor) -> ttnn.Tensor:
         """Fused path: all-gather before WO matmul (Ring topology)."""
         cfg = self.config
+        # Optionally cast the gather input (bf16) to a smaller CCL dtype (e.g. bfloat8_b) to halve this
+        # per-layer collective's cross-device payload. None (default) leaves the dtype unchanged. an
+        # explicit typecast is required (to_memory_config does not cast an already-DRAM tensor).
+        if cfg.prefill_ag_ccl_dtype is not None and attn_output_concat.dtype != cfg.prefill_ag_ccl_dtype:
+            attn_output_cast = ttnn.typecast(attn_output_concat, cfg.prefill_ag_ccl_dtype)
+            ttnn.deallocate(attn_output_concat)
+            attn_output_concat = attn_output_cast
         return ttnn.experimental.all_gather_async(
             attn_output_concat,
             persistent_output_buffer=None,
