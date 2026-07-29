@@ -345,6 +345,64 @@ and deepening the buffer deepens both, so the reason it fails is not yet explain
 promising open question**: why the in1 read refuses to run ahead during the in0 gather even with buffer space.
 Answering it needs per-RISC timeline zones (which stage is actually waiting), not another blind knob.
 
+### S6. FIXED A REGRESSION I SHIPPED: the mesh gate needed Mt >= 8
+
+**Process error worth recording.** I fitted the mesh gate (S2/S3) by measuring every corpus shape with the
+mesh on versus off - but at that moment the "off" baseline was itself degraded, because the API cache fix (S1)
+had changed the placement targets for half the cores. I later restored those targets (F4), which made the
+no-mesh placement much better, and that silently invalidated the gate I had fitted against the worse baseline.
+
+Caught it by re-running the whole 60-shape corpus against the pre-session baseline, which showed the op
+**2.58% slower on average** with individual shapes 8-13% slower. Re-running the mesh A/B against the CURRENT
+baseline confirmed the mesh was actively hurting a family of shapes:
+
+| shape | mesh | no mesh | mesh gain |
+|---|---|---|---|
+| 128x6144x4608 | 141.62 | 125.19 | **13.1% slower** |
+| 32x6080x4640 | 138.52 | 122.74 | **12.9% slower** |
+| 128x15360x1536 | 125.75 | 111.71 | **12.6% slower** |
+| 64x15360x768 | 63.61 | 57.58 | 10.5% slower |
+| 64x6144x768 | 28.15 | 25.64 | 9.8% slower |
+| 128x6144x2304 | 74.31 | 67.81 | 9.6% slower |
+| 512x6144x2304 | 109.85 | 131.32 | 16.4% faster |
+| 256x6144x768 | 35.69 | 46.89 | 23.9% faster |
+
+Every one of those shapes is Pk=12/Ns=1/Sm=1, i.e. inside the old gate - so slice count was not the
+discriminator at all. **Mt (the number of row tiles) is.** The mesh trades in1 read locality for a ~70% cut in
+ring traffic, and ring traffic per shard scales with M_block = Mt/Sm. At Mt <= 4 the shards are so small there
+is almost no ring traffic to save, while the read penalty is paid in full. Added `Mt >= 8` to the gate:
+
+| shape | shipped | no mesh | change |
+|---|---|---|---|
+| 32x6080x4640 | 122.58 | 122.95 | +0.30% (no longer meshed) |
+| 128x6144x4608 | 125.30 | 125.04 | -0.21% (no longer meshed) |
+| 64x6144x768 | 25.53 | 25.54 | +0.03% (no longer meshed) |
+| 128x15360x1536 | 111.72 | 111.70 | -0.01% (no longer meshed) |
+| 256x6144x768 | 35.53 | 46.45 | **23.5% faster** |
+| 256x2048x6144 | 76.51 | 90.41 | **15.4% faster** |
+| 512x6144x2304 | 110.09 | 132.27 | **16.8% faster** |
+| 256x6080x4640 | 148.73 | 152.26 | 2.3% faster |
+
+**Lesson: when a change alters the baseline, every gate fitted against the old baseline has to be re-fitted.
+And always close the loop against a fixed external reference, not just against the current binary.**
+
+### Corpus-wide result against the pre-session baseline (60 shapes)
+
+After the gate fix: **mean 0.99% faster, median 0.40% faster, 50 of 60 shapes within 2%.** The only shapes
+more than 3% off:
+
+| shape | before | after | change |
+|---|---|---|---|
+| 256x6144x768 | 46.62 | 35.88 | **23.0% faster** |
+| 256x2048x512 | 16.54 | 15.08 | **8.8% faster** |
+| 256x6144x2304 | 86.32 | 79.01 | **8.5% faster** |
+| 256x15360x768 | 95.54 | 88.43 | **7.4% faster** |
+| 256x2048x1024 | 22.43 | 23.15 | 3.2% slower - baseline predates the reduce-scatter removal (not from this work) |
+| 256x2048x2048 | 37.88 | 39.12 | 3.3% slower - same reason |
+
+Note this corpus is Mt<=8 only, so the two largest wins of the session (512x6144x2304 and 512x6144x4608) are
+not in it.
+
 ## Total progress this session
 
 | shape | at log start | now | change |

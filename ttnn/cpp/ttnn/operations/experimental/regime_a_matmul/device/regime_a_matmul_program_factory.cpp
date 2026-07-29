@@ -1256,8 +1256,15 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint64_t ring_bytes =
         static_cast<uint64_t>(geo.num_cores) * 7u * geo.W * geo.M_block_capacity * kb * kTileBytesBf16;
     const uint64_t in1_bytes = static_cast<uint64_t>(geo.Kt) * geo.Nt * kTileBytesBf16;
-    const bool mesh_gate = ((Pk * Ns_gate >= 10u) && (Sm == 1u) && (Ns_gate == 1u || Pk >= 4u)) ||
-                           (ring_bytes >= 2u * in1_bytes);
+    // Mt >= 8 is REQUIRED. The mesh trades in1 read locality (cores leave their own DRAM bank) for a ~70% cut
+    // in in0 ring traffic, and ring traffic per shard scales with M_block = Mt/Sm. At Mt <= 4 the shards are
+    // so small that there is almost no ring traffic to save while the read penalty is paid in full: measured
+    // 9.6-13.1% SLOWER on 32x6080x4640, 128x6144x4608, 64x6144x768, 128x6144x2304, 64x15360x768 and
+    // 128x15360x1536 (all Pk=12, i.e. inside the old gate). At Mt >= 8 it is 16-24% FASTER on the same
+    // topology (512x6144x2304 +16.4%, 256x6144x768 +23.9%).
+    const bool mesh_gate = geo.Mt >= 8u &&
+                           (((Pk * Ns_gate >= 10u) && (Sm == 1u) && (Ns_gate == 1u || Pk >= 4u)) ||
+                            (ring_bytes >= 2u * in1_bytes));
     const bool diag_mesh_spread = (diag_mask & 0x8000u) != 0u;  // bit15: even row spacing for few slices
     if ((diag_place_mesh || mesh_gate) && !diag_mesh_off) {
         place_mesh(P, geo, device->compute_with_storage_grid_size(), diag_mesh_spread);
