@@ -1,24 +1,40 @@
 {
+  "hf_advertised_context": 262144,
+  "current_supported_context": 262144,
   "schema_version": 1,
   "model_id": "Qwen/Qwen3.6-27B",
   "model_revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
-  "hf_advertised_context": 262144,
   "functional_decoder": {
     "decode_supported_context": 262144,
     "single_pass_prefill_supported_context": 192511,
     "supported_context": 262144,
     "largest_prefill_context_tested": 192511,
     "largest_decode_position_tested": 262143,
-    "decode_batches_tested": [1, 32],
-    "decode_token_mixer_trace_smoke_batches": [1, 32],
-    "full_layer_nonzero_input_trace_batches": [1, 32],
+    "decode_batches_tested": [
+      1,
+      32
+    ],
+    "decode_token_mixer_trace_smoke_batches": [
+      1,
+      32
+    ],
+    "full_layer_nonzero_input_trace_batches": [
+      1,
+      32
+    ],
     "numerical_tests": {
       "linear_attention": {
         "largest_target_shape_prefill_sequence": 192511,
         "largest_reduced_state_sequence": 262145,
         "largest_decode_position": 262143,
-        "decode_batches": [1, 32],
-        "numerical_traced_decode_batches": [1, 32],
+        "decode_batches": [
+          1,
+          32
+        ],
+        "numerical_traced_decode_batches": [
+          1,
+          32
+        ],
         "trace_updates_inputs_and_positions": true,
         "real_weight_decode": true,
         "advertised_prefill_failure": {
@@ -33,8 +49,14 @@
       "full_attention": {
         "largest_prefill_sequence": 192511,
         "largest_decode_position": 262143,
-        "decode_batches": [1, 32],
-        "numerical_traced_decode_batches": [1, 32],
+        "decode_batches": [
+          1,
+          32
+        ],
+        "numerical_traced_decode_batches": [
+          1,
+          32
+        ],
         "cache_dependent_prefill_decode_sequence": 65,
         "cache_dependent_decode_position": 65,
         "permuted_page_table_validated": true,
@@ -59,7 +81,9 @@
     "serving_batch_32_advertised_context_cache_bytes": 34359738368,
     "serving_batch_32_note": "KV alone is 32 GiB before layer weights, RoPE tables, activations, and workspace; batch-32 traced execution is validated at context 64.",
     "watcher_interval_seconds": 10,
-    "watcher_numerical_batches": [32],
+    "watcher_numerical_batches": [
+      32
+    ],
     "status": "functional_decoder_complete_clean_pass"
   },
   "layer_kinds": {
@@ -73,5 +97,9 @@
       "layer_count": 16,
       "cache": "paged key/value cache"
     }
-  }
+  },
+  "notes": [
+    "current_supported_context (262144) relocated post-stage from functional_decoder.supported_context (the stage's explicit claim) so check_context_contract.py can read it. No capability claim changed.",
+    "SCOPED CAPABILITY REDUCTION -- single-pass full-layer prefill on one Blackhole device: hard device DRAM contiguous-allocation limit; largest feasible tested 192511. The top-level current_supported_context reflects the contract's overall supported context; see functional_decoder.capability_reduction for the path that does not reach it and its byte evidence."
+  ]
 }
