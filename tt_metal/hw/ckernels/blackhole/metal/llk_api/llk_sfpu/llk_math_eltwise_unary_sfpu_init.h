@@ -59,6 +59,9 @@ void sign_init();
 void softplus_init();
 void softshrink_init();
 void square_init();
+// Both SiTU halves share one init: it loads tanh's constants, and the gate half's
+// sigmoid needs none of the same registers.
+void situ_init();
 void tiled_prod_init();
 void unary_eq_init();
 void unary_ge_init();
@@ -231,6 +234,8 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         sfpu::unary_lt_init();
     } else if constexpr (sfpu_op == SfpuType::unary_ne) {
         sfpu::unary_ne_init();
+    } else if constexpr (sfpu_op == SfpuType::soft_clamp || sfpu_op == SfpuType::situ_gate) {
+        sfpu::situ_init();
     } else if constexpr (sfpu_op == SfpuType::unused) {
         sfpu::unused_init();
     } else if constexpr (sfpu_op == SfpuType::typecast) {

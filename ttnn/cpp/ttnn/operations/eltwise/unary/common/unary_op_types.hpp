@@ -135,6 +135,8 @@ enum class UnaryOpType {
     LGAMMA,
     DIGAMMA,
     POLYGAMMA,
+    SOFT_CLAMP,
+    SITU_GATE,
 };
 
 enum class VecMode {

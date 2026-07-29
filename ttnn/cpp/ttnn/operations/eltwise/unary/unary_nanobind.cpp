@@ -2015,6 +2015,24 @@ void py_module(nb::module_& mod) {
         mod, "exponent", "exponent value. Non-positive values are not supported.", "");
     bind_unary_operation_with_float_parameter_default<"celu", &ttnn::celu>(
         mod, "alpha", "The alpha parameter for the CELU function", 1.0f, "", R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    // The two halves of Moonshot's SiTU activation. No default beta: it is a model
+    // hyperparameter (Kimi K3 uses 4 for the gate half, 25 for the up half).
+    bind_unary_operation_with_float_parameter<"soft_clamp", &ttnn::soft_clamp>(
+        mod,
+        "beta",
+        "The beta parameter. Bounds the output to +/-beta. Must be non-zero.",
+        "Soft clamp, the up half of the SiTU activation. Near-linear for |input| << beta, saturating at +/-beta.",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc",
+        "",
+        R"doc(\mathrm{output\_tensor}_i = \verb|beta| \cdot \tanh(\mathrm{input\_tensor}_i / \verb|beta|))doc");
+    bind_unary_operation_with_float_parameter<"situ_gate", &ttnn::situ_gate>(
+        mod,
+        "beta",
+        "The beta parameter. Bounds the output to +/-beta. Must be non-zero.",
+        "The gate half of the SiTU activation. sigmoid takes the raw input, not the soft-clamped value.",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc",
+        "",
+        R"doc(\mathrm{output\_tensor}_i = \verb|beta| \cdot \tanh(\mathrm{input\_tensor}_i / \verb|beta|) \cdot \sigma(\mathrm{input\_tensor}_i))doc");
 
     bind_unary_operation_with_scalar_parameter<"fill", &ttnn::fill>(
         mod,
