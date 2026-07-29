@@ -779,11 +779,13 @@ inline bool topology_sat_encode_at_most_k_groups(
 //   0 baseline    : warm solve + soft descent + hard-cap lock (original).
 //   1 skipdescent : warm solve + hard-cap lock only (skip the one-at-a-time descent).
 //   2 greedy      : construct a host-packing greedily (no SAT search), verify by unit propagation.
-enum class TopoMinMode { Baseline = 0, SkipDescent = 1, Greedy = 2 };
+enum class TopoMinMode { Baseline = 0, SkipDescent = 1, Greedy = 2, HardCapOnly = 3, AtMostK = 4 };
 inline TopoMinMode topology_sat_min_mode() {
     switch (topology_sat_env_long("TT_TOPO_SAT_MIN_MODE", 0)) {
         case 1: return TopoMinMode::SkipDescent;
         case 2: return TopoMinMode::Greedy;
+        case 3: return TopoMinMode::HardCapOnly;
+        case 4: return TopoMinMode::AtMostK;
         default: return TopoMinMode::Baseline;
     }
 }
@@ -819,7 +821,8 @@ inline bool topology_sat_greedy_minhost_fill(
         return (g < constraint_data.global_to_same_rank_group.size()) ? constraint_data.global_to_same_rank_group[g]
                                                                       : -1;
     };
-    // BFS order over targets so we extend along adjacency (ring/line stays connected).
+    // DFS (linear walk) order over targets: on a ring/line this yields a contiguous path 0,1,2,... (NOT the
+    // both-ends BFS order 0,1,N-1,2,...), so consecutive stages fill one host before the walk moves on.
     std::vector<size_t> order;
     order.reserve(nt);
     {
@@ -828,15 +831,18 @@ inline bool topology_sat_greedy_minhost_fill(
             if (seen[s]) {
                 continue;
             }
-            std::vector<size_t> q{s};
-            seen[s] = 1;
-            for (size_t h = 0; h < q.size(); ++h) {
-                const size_t u = q[h];
+            std::vector<size_t> stack{s};
+            while (!stack.empty()) {
+                const size_t u = stack.back();
+                stack.pop_back();
+                if (seen[u]) {
+                    continue;
+                }
+                seen[u] = 1;
                 order.push_back(u);
                 for (size_t v : graph_data.target_adj_idx[u]) {
                     if (!seen[v]) {
-                        seen[v] = 1;
-                        q.push_back(v);
+                        stack.push_back(v);
                     }
                 }
             }
@@ -1056,6 +1062,72 @@ inline bool topology_sat_solve_minimize_groups(
     };
 
     const bool profile = !quiet_mode;
+
+    // EXPERIMENT mode 3 (HardCapOnly): skip the warm feasible solve AND the descent -- go straight to a single
+    // cold all-or-nothing hard-cap solve at hard_cap_k. Tests whether the warm-start (mode 1) actually matters.
+    if (min_mode == TopoMinMode::HardCapOnly && hard_cap_k > 0 && hard_cap_k < num_present) {
+        topology_sat_add_all_or_nothing_tightening(solver, occ, used_per_group);
+        const int bound = atmost_lit(hard_cap_k);
+        const auto t_hc = std::chrono::steady_clock::now();
+        if (bound != 0) {
+            solver.assume(bound);
+        }
+        const int st = solver.solve();
+        bool ok = false;
+        if (st == TopologySatSolver::kSat) {
+            best_k_out = count_occupied();
+            topology_sat_decode_hard_solution(solver, enc, best_mapping_out);
+            if (hard_cap_met_out != nullptr) {
+                *hard_cap_met_out = (best_k_out <= hard_cap_k);
+            }
+            ok = !best_mapping_out.empty();
+        }
+        if (profile) {
+            log_debug(
+                tt::LogFabric,
+                "[topo-sat-profile]   hardcap_only target<={} : {:.1f} ms (status={}, occupied={}, ok={})",
+                hard_cap_k,
+                topology_sat_elapsed_ms(t_hc),
+                st,
+                best_k_out,
+                ok);
+        }
+        return ok;
+    }
+
+    // EXPERIMENT mode 4 (AtMostK): assert "<= k_min occupied" as a HARD counter unit (no all-or-nothing
+    // tightening, works for non-exact fills), then do ONE plain solve. No warm, no descent.
+    if (min_mode == TopoMinMode::AtMostK) {
+        const size_t target = (hard_cap_k > 0) ? hard_cap_k : std::max<size_t>(k_floor, 1);
+        const int bound = atmost_lit(target);
+        if (bound != 0) {
+            solver.add(bound);
+            solver.add(0);
+        }
+        const auto t_am = std::chrono::steady_clock::now();
+        const int st = solver.solve();
+        bool ok = false;
+        if (st == TopologySatSolver::kSat) {
+            best_k_out = count_occupied();
+            topology_sat_decode_hard_solution(solver, enc, best_mapping_out);
+            if (hard_cap_met_out != nullptr) {
+                *hard_cap_met_out = (best_k_out <= target);
+            }
+            ok = !best_mapping_out.empty();
+        }
+        if (profile) {
+            log_debug(
+                tt::LogFabric,
+                "[topo-sat-profile]   atmostk target<={} : {:.1f} ms (status={}, occupied={}, ok={})",
+                target,
+                topology_sat_elapsed_ms(t_am),
+                st,
+                best_k_out,
+                ok);
+        }
+        return ok;
+    }
+
     auto t_warm = std::chrono::steady_clock::now();
     if (solver.solve() != TopologySatSolver::kSat) {  // step 1: warm feasible model
         if (profile) {
