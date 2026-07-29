@@ -43,7 +43,8 @@ from helpers.utils import TILE_BG_RESULT, format_tile_row
 from ttexalens.tt_exalens_lib import parse_elf
 
 # hostdev/device_print_structures.h: DevicePrintStringInfo is four uint32_t
-# on 4-byte ELFs, and four uint64_t on 64-bit ELFs (Rocket cores on Quasar).
+# where pointers are 4 bytes wide, and four uint64_t where they are 8 (Rocket
+# cores on Quasar). Keyed on pointer size in bytes, as ElfFile reports it.
 _STRING_INFO_LAYOUT: dict[int, tuple[int, str]] = {
     4: (16, "<IIII"),
     8: (32, "<QQQQ"),
