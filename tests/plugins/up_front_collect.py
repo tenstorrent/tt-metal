@@ -76,9 +76,26 @@ class CollectStats:
     skipped_capture: int = 0
     shallow: int = 0
     fallback: int = 0
+    xpass_strict: int = 0
+    other_failures: int = 0
 
 
 _STATS = CollectStats()
+
+
+def _emit_result(status, reason, *, unique, programs, errors, pytest_exit):
+    """Emit the machine-readable warm-pass verdict consumed by run_safe_pytest.sh.
+
+    Best-effort ATTRIBUTION only. The warm/cold decision is carried by the process exit
+    status, which this plugin owns (see pytest_sessionfinish) -- so a missing or malformed
+    line here degrades the reported reason, never the decision.
+    """
+    print(
+        f"UP_FRONT_COLLECT_RESULT: status={status} reason={reason} "
+        f"unique={unique} programs={programs} errors={errors} pytest_exit={int(pytest_exit)} "
+        f"xpass_strict={_STATS.xpass_strict} other_failures={_STATS.other_failures}",
+        flush=True,
+    )
 
 
 def _torch_to_ttnn_dtype(torch_dtype):
@@ -448,6 +465,24 @@ def pytest_sessionstart(session):
     ttnn.graph.up_front_clear()  # clean slate before the session
 
 
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_logreport(report):
+    """Classify failures for telemetry only -- they never gate the warm/cold decision.
+
+    The collector deliberately swallows call-time exceptions because values computed under
+    NO_DISPATCH are meaningless. A strict-xfail test whose expected exception was swallowed
+    therefore reaches pytest as XPASS(strict), which pytest counts as a failure. Under this
+    plugin EVERY test verdict is meaningless, so we only record the split to explain a
+    non-zero pytest status in the log.
+    """
+    if not report.failed:
+        return
+    if report.when == "call" and "[XPASS(strict)]" in str(report.longrepr):
+        _STATS.xpass_strict += 1
+    else:
+        _STATS.other_failures += 1
+
+
 def pytest_sessionfinish(session, exitstatus):
     import ttnn
 
@@ -465,13 +500,22 @@ def pytest_sessionfinish(session, exitstatus):
             flush=True,
         )
     if n_unique == 0:
+        # NOT normalized: zero unique programs is indistinguishable from a collection error,
+        # and claiming success here would report a warm cache that does not exist. Let pytest's
+        # status (e.g. 5 = no tests collected, 2 = collection error) stand.
         print("UP_FRONT_COLLECT: nothing to compile", flush=True)
+        _emit_result("ok", "nothing_to_compile", unique=0, programs=0, errors=0, pytest_exit=exitstatus)
         return
     if _NO_COMPILE:
         print(f"UP_FRONT_COLLECT: NO_COMPILE set — collected {n_unique}, skipping compile", flush=True)
+        _emit_result("skipped", "no_compile", unique=n_unique, programs=0, errors=0, pytest_exit=exitstatus)
         return
 
     device = None
+    n_prog = 0
+    n_err = 0
+    result_status = "failed"
+    result_reason = "exception"
     try:
         device = ttnn.CreateDevice(device_id=_DEVICE_ID)
         try:
@@ -484,6 +528,13 @@ def pytest_sessionfinish(session, exitstatus):
             f"(workers={used}, errors={n_err}) -> on-disk JIT cache warm",
             flush=True,
         )
+        if n_err == 0 and n_prog == n_unique:
+            result_status = "ok"
+            result_reason = "ok"
+        elif n_err:
+            result_reason = "compile_errors"
+        else:
+            result_reason = "incomplete"
     except Exception as e:  # best-effort: never break the session
         print(f"UP_FRONT_COLLECT: compile skipped (best-effort) — {e!r}", flush=True)
     finally:
@@ -492,3 +543,40 @@ def pytest_sessionfinish(session, exitstatus):
                 ttnn.close_device(device)
             except Exception:
                 pass
+
+    _emit_result(
+        result_status,
+        result_reason,
+        unique=n_unique,
+        programs=n_prog,
+        errors=n_err,
+        pytest_exit=exitstatus,
+    )
+
+    # THE COLLECTOR OWNS THE EXIT CODE.
+    #
+    # This is a compile-only pass: bodies run solely so address-baked kernels see real buffer
+    # addresses, and every value they compute under NO_DISPATCH is meaningless. So pytest's
+    # status describes test verdicts that carry no information about whether the cache warmed --
+    # e.g. a swallowed strict-xfail surfaces as XPASS(strict) and pytest exits 1 even though
+    # every program compiled. Whitelisting individual benign exit codes downstream only defers
+    # the problem to the next one, so instead: when the compile genuinely succeeded (every
+    # collected program built, zero errors), report success and let a non-zero status downstream
+    # mean the warm pass ACTUALLY broke.
+    #
+    # Deliberately narrow: only result_status == "ok" from a real compile normalizes. The
+    # nothing_to_compile / NO_COMPILE paths return earlier without touching the status, so a
+    # collection error still propagates instead of masquerading as a warm cache.
+    if result_status == "ok" and exitstatus != 0:
+        detail = []
+        if _STATS.xpass_strict:
+            detail.append(f"{_STATS.xpass_strict} XPASS(strict)")
+        if _STATS.other_failures:
+            detail.append(f"{_STATS.other_failures} other failing report(s)")
+        print(
+            f"UP_FRONT_COLLECT: compile succeeded ({n_prog}/{n_unique} programs, 0 errors); "
+            f"overriding pytest exit {exitstatus} -> 0"
+            + (f" [meaningless under NO_DISPATCH: {', '.join(detail)}]" if detail else ""),
+            flush=True,
+        )
+        session.exitstatus = 0
