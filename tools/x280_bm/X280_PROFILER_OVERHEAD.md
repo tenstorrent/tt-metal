@@ -145,10 +145,88 @@ readback of all 15 outputs*. A one-time profiler-induced cost at that flush of o
 account for the gap, since ResNet divides it by 15 while UFLD divides it by 1000. The arithmetic fits, but
 a plausible arithmetic fit is not evidence.
 
-**To confirm**: raise `num_measurement_iterations` in `perf_e2e_resnet50.py` (hardcoded to 15) and check
-whether ResNet's per-iteration overhead decays toward ~1.7 %. If it does, quote **+1.7 % as the steady-state
-overhead** and treat +4.6 % as a short-window artifact. If it does not, the difference is real and belongs
-to the models (grid occupancy, 1 CQ vs 2 CQ pipelining) and both numbers stand as measured.
+> **This hypothesis was REFUTED by Result 3 below** — no editing of the model file was needed, because the
+> four extra models happen to span windows of 1, 10 and 15 iterations. Overhead does not track window
+> length. Left in place because the reasoning is the sort that looks convincing and is wrong.
 
-Until that is settled, the defensible claim is: **profiling costs between 1.7 % and 4.6 % of e2e time
-depending on the shape of the workload, and none of it is the drain or the host sink.**
+---
+
+## Result 3 — four more models: overhead is 0.3 % to 10 %, and dispatch mode is what predicts it
+
+Configs **A** and **C** only, 3 reps interleaved, same rules. Blackhole-native model coverage is thin;
+the four below are what actually runs (see "models that do not run" at the end).
+
+Collected with everything measured so far, sorted by overhead:
+
+| model | dispatch | window | A ms/iter | C ms/iter | overhead | markers |
+|---|---|---|---|---|---|---|
+| ResNet-50 b32 | trace + 2 CQ | 15 | 2.4448 | 2.4533 | **+0.3 %** | 1.61 M |
+| SD 1.4 UNet | trace | **1** | 45.2950 | 45.7416 | **+1.0 %** | 2.50 M |
+| UFLD-v2 | trace + 2 CQ | **1000** | 1.8360 | 1.8680 | **+1.7 %** | 99.2 M |
+| ResNet-50 b16 | trace | 15 | 1.6417 | 1.7160 | **+4.5 %** | 1.58 M |
+| ResNet-50 b16 | **non-trace** | 15 | 12.3480 | 13.5970 | **+10.1 %** | 1.58 M |
+| VGG-UNet | trace + 2 CQ | 10 | 3.2430 | 2.9290 | **−9.7 %** ⚠️ | 0.56 M |
+
+All profiled runs: **0 producer stalls, 0 ring drops.**
+
+### Two hypotheses die here
+
+**Window length does not predict overhead.** 1 iteration → +1.0 %; 15 iterations → anywhere from +0.3 % to
++10.1 %; 1000 iterations → +1.7 %. There is no trend. The Result-2 fixed-cost story is dead.
+
+**Marker count does not predict overhead either.** UFLD emits **99.2 M** markers for +1.7 %. ResNet-50 b16
+non-trace emits **1.58 M** — 63× fewer — for **+10.1 %**. And the cleanest pair available: ResNet-50 b16
+trace vs non-trace are the *same model at the same batch* with essentially the same marker count
+(1,581,952 vs 1,578,688), yet absolute overhead is **+79 µs vs +1249 µs — 16× apart.**
+
+### What does predict it: **program dispatch count**
+
+The trace/non-trace pair isolates exactly one variable. Trace replay issues **one** program launch per
+iteration; non-trace dispatches every op individually from the host. Per-launch profiler work (init,
+finish, control-buffer handling) is therefore paid hundreds of times per iteration instead of once.
+
+That ranks the whole table correctly: every trace-based configuration lands at **≤ +4.5 %**, and the single
+non-trace configuration is the outlier at **+10.1 %**.
+
+Practical consequence: **quote overhead per dispatch mode, never as one number.** For trace-replay
+workloads — which is what perf work usually targets — the honest figure is **≤ 5 %**, and typically 1–2 %.
+
+### ⚠️ VGG-UNet runs 9.7 % FASTER with the profiler on, and I cannot explain it
+
+This is not noise and not a sign error. Four configurations, 3 interleaved reps each (medians):
+
+| A — off | D — tracy wrapper only | B — X280, sink off | C — X280 full |
+|---|---|---|---|
+| 3.243 ms | 3.196 ms | **2.834 ms** | **2.929 ms** |
+
+What that rules out:
+- **Not the tracy wrapper** — `D ≈ A` (−1.4 %).
+- **Not the Tracy sink** — `B ≈ C`, consistent with every other result here.
+- **Not chip warm-up from the profiler's device activity.** Tested directly: four consecutive config-A runs
+  with `tt-smi -r 0` *only* before the first gave 3.236 / 3.229 / 3.463 / 3.447 ms — warm A is not faster,
+  so the per-run reset is not penalising the baseline.
+- **Not one-time setup captured inside the timed region** — `initialize_vgg_unet_trace_2cqs_inference()`
+  (which does `begin/end_trace_capture`) runs *before* `t0`; the window is 10 `run()` calls and a sync.
+
+So enabling instrumentation genuinely makes this model faster, reproducibly. Remaining candidates, none
+tested: instrumented kernels shifting L1 allocation (profiler buffers) and with it sharding/NoC behaviour;
+or the added per-zone code perturbing a dispatch/NoC overlap that was pathological in the uninstrumented
+build. Both are guesses.
+
+**Why this matters more than the sign:** a profiler that can move a workload ±10 % is not merely adding
+time, it is *changing the thing being measured*. The 0-stall result proves the X280 never back-pressures
+the producers — it does not prove the instrumented workload behaves like the uninstrumented one. Worth
+resolving before anyone treats X280 numbers as ground truth for a model this size.
+
+### Models that do not run on Blackhole (probed, 2026-07-28)
+
+| model | blocker |
+|---|---|
+| ViT b10 | `ImportError: cannot import name 'HfFolder' from 'huggingface_hub'` — removed in hub ≥ 1.0. Fixing it means downgrading below 1.0, which transformers 5.x likely needs; not worth the venv. |
+| SentenceBERT b8 | `TT_FATAL … shards along height 8 must not exceed number of cores 7` — model/device grid mismatch, unchanged from the earlier survey. |
+| MobileNetV2, SegFormer | `@run_for_wormhole_b0()` — skipped on Blackhole by decorator. |
+
+**Stable Diffusion needed an env fix and now works**: `diffusers` 0.35.1 could not import against the
+pinned `transformers == 5.10.2` (`FLAX_WEIGHTS_NAME` was removed). Installed `diffusers 0.39.0` with
+**`--no-deps`** specifically so transformers stays pinned — qwen36 depends on that pin, and upgrading
+normally would trade one working model for another.
