@@ -25,7 +25,7 @@ Neck channel-concats, dim=-1   ttnn_yolov8l.py:494/499 (C2f) and sharded_concat*
 (ttnn_yolov8l.py:1034/1074/1087/1102, SPPF :542): channel widths model-specific.
 
 A = total detect anchors: 8400 @ 640 (80/40/20), 33600 @ 1280 (160/80/40).
-Reference: torch.cat.  PCC 0.999 (value-preserving).
+Reference: torch.cat; concat is value-preserving so we require exact equality (assert_lossless).
 """
 
 import pytest
@@ -58,7 +58,7 @@ def test_concat_detect_cv2cv3(ttnn_mesh_device, reset_seeds, hw):
     out = ttnn.concat([a, b], dim=3)
 
     ref = torch.cat([a_torch.float(), b_torch.float()], dim=3)
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(ref, out, mesh_device=mesh)
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +96,7 @@ def test_concat_channel(ttnn_mesh_device, reset_seeds, name, dim, in_shapes, out
 
     ref = torch.cat([p.float() for p in parts_torch], dim=dim)
     assert tuple(ref.shape) == tuple(out_shape), f"{name}: torch.cat -> {tuple(ref.shape)} != {out_shape}"
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(ref, out, mesh_device=mesh)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +138,7 @@ def test_concat_detect_l1(ttnn_mesh_device, reset_seeds, name, dim, in_shapes, o
 
     ref = torch.cat([p.float() for p in parts_torch], dim=dim)
     assert tuple(ref.shape) == tuple(out_shape), f"{name}: torch.cat -> {tuple(ref.shape)} != {out_shape}"
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(ref, out, mesh_device=mesh)
 
 
 # ---------------------------------------------------------------------------
@@ -158,22 +158,33 @@ def test_concat_detect_l1(ttnn_mesh_device, reset_seeds, name, dim, in_shapes, o
 def test_concat_neck_sharded(ttnn_mesh_device, reset_seeds):
     """neck channel-concat on HEIGHT_SHARDED L1 operands (sharded_concat, ttnn_yolov8l.py:1034; def :47-64)."""
     mesh = ttnn_mesh_device
-    hw = 80
-    C = 320  # per-operand channel width stand-in (model-config specific, see note)
-    shape = (1, 1, hw * hw, C)
+    hw = 80  # neck concat feeding model.15 runs at the 80x80 (P3) level
+    # The real neck concat is UNEQUAL width: upsample(512) + backbone skip(256) -> 768
+    # (model.15.cv1 in_ch = 768; branch configs.json c2f model.15 cv1 = [1,1,0,256,768]).
+    Ca, Cb = 512, 256
+    rows = hw * hw
     num_cores = 64  # _SPPF_CORE_GRID best-estimate (64 WH / 80 BH); 6400 % 64 == 0
 
-    memcfg = U.height_sharded_memcfg(mesh, num_cores, shape)
-
-    a_torch = U.torch_rand(shape)
-    b_torch = U.torch_rand(shape)
-    # ROW_MAJOR: the neck's sharded feature maps are row-major, so the shard height need
-    # not be tile-aligned (a TILE shard here would trip "shard shape must be tile sized").
-    a = U.to_tt(a_torch, mesh, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=memcfg)
-    b = U.to_tt(b_torch, mesh, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=memcfg)
+    a_torch = U.torch_rand((1, 1, rows, Ca))
+    b_torch = U.torch_rand((1, 1, rows, Cb))
+    # ROW_MAJOR HEIGHT-sharded (neck feature maps are row-major, so the shard height need
+    # not be tile-aligned); each operand keeps its own channel width and the concat is on
+    # the non-sharded channel dim -> 512 + 256 = 768.
+    a = U.to_tt(
+        a_torch,
+        mesh,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=U.height_sharded_memcfg(mesh, num_cores, (1, 1, rows, Ca)),
+    )
+    b = U.to_tt(
+        b_torch,
+        mesh,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=U.height_sharded_memcfg(mesh, num_cores, (1, 1, rows, Cb)),
+    )
 
     out = ttnn.concat([a, b], dim=-1)
 
     ref = torch.cat([a_torch.float(), b_torch.float()], dim=-1)
-    assert tuple(ref.shape) == (1, 1, hw * hw, 2 * C), f"neck concat -> {tuple(ref.shape)}"
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    assert tuple(ref.shape) == (1, 1, rows, Ca + Cb), f"neck concat -> {tuple(ref.shape)}"
+    U.assert_lossless(ref, out, mesh_device=mesh)

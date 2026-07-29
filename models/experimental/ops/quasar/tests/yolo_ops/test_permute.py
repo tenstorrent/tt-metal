@@ -43,7 +43,7 @@ def test_permute_nchw_to_nhwc(ttnn_mesh_device, reset_seeds, hw):
     out = ttnn.permute(x, dims)
 
     ref = torch.permute(x_torch.float(), dims).contiguous()
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(ref, out, mesh_device=mesh)
 
 
 # =============================================================================
@@ -97,7 +97,7 @@ def test_permute_tile(ttnn_mesh_device, reset_seeds, name, shape, dims, model_li
     out = ttnn.permute(x, dims)
 
     ref = torch.permute(x_torch.float(), dims).contiguous()
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(ref, out, mesh_device=mesh)
 
 
 # --- DFL / detect-head permutes: non-spatial (H != W) -> shape-tuple params. --
@@ -125,4 +125,4 @@ def test_permute_detect(ttnn_mesh_device, reset_seeds, name, shape, dims):
     out = ttnn.permute(x, dims)
 
     ref = torch.permute(x_torch.float(), dims).contiguous()
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(ref, out, mesh_device=mesh)

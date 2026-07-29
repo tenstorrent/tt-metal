@@ -75,7 +75,7 @@ def test_reshape(ttnn_mesh_device, reset_seeds, name, in_shape, out_shape):
     out = ttnn.reshape(x, list(out_shape))
 
     ref = torch.reshape(x_torch.float(), out_shape)
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(ref, out, mesh_device=mesh)
 
 
 # =============================================================================
@@ -132,4 +132,4 @@ def test_reshape_tile_dfl(ttnn_mesh_device, reset_seeds, name, in_shape, out_sha
     out = ttnn.reshape(x, list(out_shape))
 
     ref = torch.reshape(x_torch.float(), out_shape)
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(ref, out, mesh_device=mesh)

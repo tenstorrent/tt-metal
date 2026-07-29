@@ -6,7 +6,7 @@ Per-op test: ``ttnn.to_memory_config`` (YOLOv8, 640x640, batch 1).
 
 YOLOv8 uses ``to_memory_config`` all over the neck to relocate activations
 (DRAM<->L1) and to move interleaved tensors into sharded configs before conv /
-concat. It only relocates data, so a round-trip must preserve values (PCC 0.999).
+concat. It only relocates data, so a round-trip must preserve values exactly (assert_lossless).
 
 Model call sites (branch ``origin/sdawle/yolov8_bh``):
   * DRAM <-> L1 placement:
@@ -64,7 +64,7 @@ def test_to_memory_config_placement(ttnn_mesh_device, reset_seeds, target_memcfg
     source_memcfg = ttnn.DRAM_MEMORY_CONFIG if target_memcfg == ttnn.L1_MEMORY_CONFIG else ttnn.L1_MEMORY_CONFIG
     x = U.to_tt(x_torch, mesh, memory_config=source_memcfg)
     out = ttnn.to_memory_config(x, target_memcfg)
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)
 
 
 # --- interleaved -> WIDTH-sharded move (per-core conv input config). ---------
@@ -84,7 +84,7 @@ def test_to_memory_config_interleaved_to_sharded(ttnn_mesh_device, reset_seeds, 
     x = U.to_tt(x_torch, mesh)  # interleaved DRAM
     out = ttnn.to_memory_config(x, _width_sharded(U.TILE, width))
     assert out.is_sharded(), "expected a sharded output"
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)
 
 
 # --- model-faithful: interleaved L1 RM -> HEIGHT_SHARDED on the SPPF core grid. -----------
@@ -115,4 +115,30 @@ def test_to_memory_config_to_height_sharded(ttnn_mesh_device, reset_seeds, varia
     sharded = U.height_sharded_memcfg(mesh, num_cores, shape)  # skips if device < num_cores
     out = ttnn.to_memory_config(x, sharded)
     assert out.is_sharded(), "expected a HEIGHT_SHARDED output"
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)
+
+
+# Fused relocation + dtype cast: to_memory_config(..., dtype=bfloat8_b). The model casts
+# the detect-head anchors/strides to bfloat8_b *during* the L1 relocation
+# (ttnn_yolov8l.py:751,754 / ttnn_yolov8s.py:572,575) — a distinct overload from the
+# plain relocation and from the separate ttnn.to_dtype path.
+@U.with_default_mesh()
+@pytest.mark.parametrize(
+    "shape",
+    [
+        pytest.param((1, 2, 8400), id="anchors-640"),
+        pytest.param((1, 1, 8400), id="strides-640"),
+    ],
+)
+def test_to_memory_config_dtype_cast(ttnn_mesh_device, reset_seeds, shape):
+    """relocation fused with bf16->bfloat8_b cast (ttnn_yolov8l.py:751,754)."""
+    mesh = ttnn_mesh_device
+    x_torch = U.torch_rand(shape)
+    # Source in DRAM (tilize into DRAM works for these odd shapes). The cast must ride a
+    # REAL relocation: an L1->L1 no-op short-circuits and ignores dtype, leaving bf16.
+    x = U.to_tt(x_torch, mesh, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    out = ttnn.to_memory_config(x, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+
+    assert out.dtype == ttnn.bfloat8_b, f"expected bfloat8_b, got {out.dtype}"
+    U.assert_pcc(x_torch, out, pcc=0.99, mesh_device=mesh)  # 0.99: bfloat8_b precision

@@ -49,7 +49,7 @@ def test_split(ttnn_mesh_device, reset_seeds, shape):
 
     refs = torch.split(x_torch.float(), split_size, dim=dim)
     for ref, part in zip(refs, parts):
-        U.assert_pcc(ref, part, pcc=0.999, mesh_device=mesh)
+        U.assert_lossless(ref, part, mesh_device=mesh)
 
 
 # =============================================================================
@@ -96,4 +96,4 @@ def test_split_tile(ttnn_mesh_device, reset_seeds, shape):
 
     refs = torch.split(x_torch.float(), split_size, dim=dim)
     for ref, part in zip(refs, parts):
-        U.assert_pcc(ref, part, pcc=0.999, mesh_device=mesh)
+        U.assert_lossless(ref, part, mesh_device=mesh)

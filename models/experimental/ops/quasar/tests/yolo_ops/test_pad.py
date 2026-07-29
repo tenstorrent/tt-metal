@@ -43,4 +43,4 @@ def test_pad_stem_channels(ttnn_mesh_device, reset_seeds, hw):
 
     # F.pad pads from the last dim outward: (W_l,W_r, H_l,H_r, C_l,C_r).
     ref = F.pad(x_torch.float(), (0, 0, 0, 0, 0, pad_c), value=0.0)
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(ref, out, mesh_device=mesh)

@@ -59,7 +59,7 @@ def test_interleaved_to_sharded(ttnn_mesh_device, reset_seeds, shape, strategy):
     out = ttnn.interleaved_to_sharded(x, memcfg)
 
     assert out.is_sharded(), "expected a sharded output"
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)
 
 
 # --- model-faithful: interleaved L1 RM -> HEIGHT sharded on the real multi-core grid. -----
@@ -95,4 +95,4 @@ def test_interleaved_to_sharded_multicore(ttnn_mesh_device, reset_seeds, site, n
     out = ttnn.interleaved_to_sharded(x, memcfg)
 
     assert out.is_sharded(), "expected a sharded output"
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)

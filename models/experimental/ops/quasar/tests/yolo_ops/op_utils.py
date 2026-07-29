@@ -183,6 +183,27 @@ def block_sharded_memcfg(mesh_device, grid_y, grid_x, shape):
     )
 
 
+def assert_lossless(torch_ref, tt_out, *, mesh_device=None):
+    """Exact-equality check for **value-preserving** ops (clone, reshape, permute, slice,
+    split, pad, concat, transpose, untilize, layout/sharding moves, reallocate...).
+
+    Those ops must not alter data, so a PCC check is too weak — on the large tensors here
+    it can pass even when values are corrupted. We require the logical data to be bit-exact
+    (bf16 in == bf16 out). Compare in float32; align on the reference's element count when
+    the device output is tile-padded (logical data comes first, row-major).
+    """
+    got = from_tt(tt_out, mesh_device)
+    ref = torch_ref.float()
+    if got.shape != ref.shape and got.numel() >= ref.numel():
+        got = got.reshape(-1)[: ref.numel()].reshape(ref.shape)
+    if not torch.equal(got, ref):
+        diff = (got - ref).abs()
+        raise AssertionError(
+            f"value-preserving op changed data: {(got != ref).sum().item()}/{ref.numel()} "
+            f"elements differ, max|diff|={diff.max().item():.6g}"
+        )
+
+
 def nhwc_to_tt(torch_nchw: torch.Tensor, mesh_device, *, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     """torch NCHW -> ttnn NHWC row-major (the layout ttnn.conv2d / max_pool2d consume).
 

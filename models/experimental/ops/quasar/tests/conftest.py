@@ -260,6 +260,12 @@ def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int,
         for mesh_shape in _CANDIDATE_REQ_SHAPES[sys_shape]:
             allowed.add(mesh_shape)
 
+    # A single-device (1, 1) submesh is valid on ANY system, so always allow it —
+    # otherwise the suite's universal (1, 1) request silently skips on a topology
+    # whose system shape isn't in the table above (e.g. a new/differently-oriented
+    # Blackhole). (Ideal fix per repo guidance: fingerprint via ttnn.cluster.get_cluster_type.)
+    allowed.add((1, 1))
+
     return allowed
 
 

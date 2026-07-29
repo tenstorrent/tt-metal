@@ -69,7 +69,7 @@ def test_reshard(ttnn_mesh_device, reset_seeds, shape):
     assert x_reshard.is_sharded(), "expected a sharded output"
 
     out = ttnn.sharded_to_interleaved(x_reshard, ttnn.L1_MEMORY_CONFIG)
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)
 
 
 # --- model-faithful: HEIGHT-shard -> reshard to the real neck HEIGHT grid. ----------------
@@ -114,4 +114,4 @@ def test_reshard_multicore(ttnn_mesh_device, reset_seeds, site, src_cores, dst_c
     assert x_reshard.is_sharded(), "expected a sharded output"
 
     out = ttnn.sharded_to_interleaved(x_reshard, ttnn.L1_MEMORY_CONFIG)
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)

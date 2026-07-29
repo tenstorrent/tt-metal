@@ -50,7 +50,7 @@ def test_to_layout_tile_rowmajor_roundtrip(ttnn_mesh_device, reset_seeds, hw, c)
     assert rm.layout == ttnn.ROW_MAJOR_LAYOUT
     back = ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
 
-    U.assert_pcc(x_torch, back, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, back, mesh_device=mesh)
 
 
 # ROW_MAJOR -> TILE (+ bf8 cast) into L1. ttnn_yolov8l.py:327 / ttnn_yolov8s.py:288

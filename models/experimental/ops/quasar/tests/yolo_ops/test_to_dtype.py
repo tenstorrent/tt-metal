@@ -8,12 +8,17 @@ The detect head casts decoded boxes to bfloat8_b before the stride multiply:
 
     # dbox = ttnn.to_dtype(dbox, dtype=ttnn.bfloat8_b)
 
-Note: in the shipped source this exact ``ttnn.to_dtype`` line is commented out
-(the cast is folded into the following ``ttnn.multiply(..., dtype=bfloat8_b)`` /
-``ttnn.to_memory_config(..., dtype=bfloat8_b)`` calls). It is still the model's
-declared dtype-conversion of ``dbox``, so it is exercised here directly. The cast
-is value-preserving up to precision, so the reference is ``x`` compared at PCC
-0.99 (bfloat8_b block-float target).
+Note: in the shipped source this exact ``ttnn.to_dtype`` line is commented out — the
+model's LIVE bf16->bfloat8_b cast is done via ``ttnn.to_memory_config(..., dtype=bfloat8_b)``
+(anchors/strides, ttnn_yolov8l.py:751,754) and ``ttnn.multiply(..., dtype=bfloat8_b)``,
+which are covered by ``test_to_memory_config_dtype_cast`` (test_to_memory_config.py) and
+``test_multiply``. This file keeps a direct check of the ``ttnn.to_dtype`` op itself for
+the model's declared dtype-conversion of ``dbox``.
+
+``ttnn.to_dtype`` is a **host-side** op — it operates on a host tensor (a device tensor
+trips ``host_storage != nullptr``), so this test does NOT exercise the device; it just
+verifies the host dtype conversion. The cast is value-preserving up to precision, so the
+reference is ``x`` compared at PCC 0.99 (bfloat8_b block-float target).
 
 Model call sites (branch ``origin/sdawle/yolov8_bh``):
   * models/demos/yolov8l/tt/ttnn_yolov8l.py:753  (# dbox = ttnn.to_dtype(dbox, dtype=ttnn.bfloat8_b))

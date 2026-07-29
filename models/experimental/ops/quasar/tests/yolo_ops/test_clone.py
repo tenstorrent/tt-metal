@@ -48,7 +48,7 @@ def test_clone(ttnn_mesh_device, reset_seeds, hw, c):
 
     out = ttnn.clone(x, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)
 
 
 # =============================================================================
@@ -86,4 +86,4 @@ def test_clone_rm_l1(ttnn_mesh_device, reset_seeds, hw, c):
 
     out = ttnn.clone(x, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)

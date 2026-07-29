@@ -60,7 +60,7 @@ def test_sharded_to_interleaved(ttnn_mesh_device, reset_seeds, shape, strategy):
     out = ttnn.sharded_to_interleaved(x_sharded, ttnn.L1_MEMORY_CONFIG)
 
     assert not out.is_sharded(), "expected an interleaved output"
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)
 
 
 # --- model-faithful: un-shard a HEIGHT-sharded concat output on the SPPF grid. ------------
@@ -92,7 +92,7 @@ def test_sharded_to_interleaved_height(ttnn_mesh_device, reset_seeds, variant, n
 
     out = ttnn.sharded_to_interleaved(x_sharded, ttnn.L1_MEMORY_CONFIG)
     assert not out.is_sharded(), "expected an interleaved output"
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)
 
 
 # --- model-faithful: un-shard a BLOCK-sharded conv output. -------------------------------
@@ -126,4 +126,4 @@ def test_sharded_to_interleaved_block(ttnn_mesh_device, reset_seeds, site, grid_
 
     out = ttnn.sharded_to_interleaved(x_sharded, ttnn.L1_MEMORY_CONFIG)
     assert not out.is_sharded(), "expected an interleaved output"
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)

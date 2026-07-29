@@ -40,4 +40,4 @@ def test_reallocate(ttnn_mesh_device, reset_seeds, hw):
 
     out = ttnn.reallocate(x)
 
-    U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(x_torch, out, mesh_device=mesh)

@@ -51,7 +51,7 @@ def test_slice(ttnn_mesh_device, reset_seeds, name, start_c, end_c):
     out = ttnn.slice(x, [0, start_c, 0], [1, end_c, _N])
 
     ref = x_torch.float()[0:1, start_c:end_c, 0:_N]
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(ref, out, mesh_device=mesh)
 
 
 # =============================================================================
@@ -91,4 +91,4 @@ def test_slice_tile(ttnn_mesh_device, reset_seeds, name, start_c, end_c):
     out = ttnn.slice(x, [0, start_c, 0], [1, end_c, _N])
 
     ref = x_torch.float()[0:1, start_c:end_c, 0:_N]
-    U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+    U.assert_lossless(ref, out, mesh_device=mesh)

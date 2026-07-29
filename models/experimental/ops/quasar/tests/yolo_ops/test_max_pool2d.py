@@ -90,12 +90,11 @@ def test_max_pool2d(ttnn_mesh_device, reset_seeds, variant, channels, hw):
     U.assert_pcc(ref, out, pcc=0.99, mesh_device=mesh)
 
 
-def _torch_max_pool2d_twice(x_nchw: torch.Tensor) -> torch.Tensor:
-    """Golden for two stacked SPPF pools (5x5/s1/p2 is size-preserving), NHWC flat."""
-    y = torch.nn.functional.max_pool2d(
-        x_nchw.float(), kernel_size=_KERNEL, stride=_STRIDE, padding=_PADDING, dilation=_DILATION
-    )
-    y = torch.nn.functional.max_pool2d(y, kernel_size=_KERNEL, stride=_STRIDE, padding=_PADDING, dilation=_DILATION)
+def _torch_max_pool2d_thrice(x_nchw: torch.Tensor) -> torch.Tensor:
+    """Golden for the SPPF's three stacked pools (5x5/s1/p2 is size-preserving), NHWC flat."""
+    y = x_nchw.float()
+    for _ in range(3):
+        y = torch.nn.functional.max_pool2d(y, kernel_size=_KERNEL, stride=_STRIDE, padding=_PADDING, dilation=_DILATION)
     n, c, h, w = y.shape
     return y.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c)
 
@@ -125,9 +124,7 @@ def test_max_pool2d_sharded(ttnn_mesh_device, reset_seeds, variant, channels, hw
 
     x_nchw = U.torch_rand((n, c, h, w))
     x_nhwc_flat = x_nchw.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c).contiguous()
-    x = U.to_tt(
-        x_nhwc_flat, mesh, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
+    x = U.to_tt(x_nhwc_flat, mesh, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     pool_kwargs = dict(
         batch_size=n,
@@ -146,6 +143,11 @@ def test_max_pool2d_sharded(ttnn_mesh_device, reset_seeds, variant, channels, hw
 
     # Pool #2: consumes the HEIGHT_SHARDED L1 tensor directly, exactly as the model loop does.
     out2 = ttnn.max_pool2d(input_tensor=out1, **pool_kwargs)
+    assert out2.is_sharded(), "pool #2 output should be HEIGHT_SHARDED (the pool #3 input state)"
 
-    ref = _torch_max_pool2d_twice(x_nchw)
-    U.assert_pcc(ref, out2, pcc=0.99, mesh_device=mesh)
+    # Pool #3: the SPPF applies max_pool2d three times; verify the 2nd sharded output can
+    # feed the 3rd invocation (catches a state/layout issue that only shows on the last pool).
+    out3 = ttnn.max_pool2d(input_tensor=out2, **pool_kwargs)
+
+    ref = _torch_max_pool2d_thrice(x_nchw)
+    U.assert_pcc(ref, out3, pcc=0.99, mesh_device=mesh)
