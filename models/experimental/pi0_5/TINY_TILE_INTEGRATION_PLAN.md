@@ -840,3 +840,57 @@ not the K balance.**
 **Validate every one of these at 16-chip e2e, not at single-layer only.** Kernel-time reductions have
 now twice failed to translate (kv_splits -27% kernel -> +5.7% e2e; the norm fusion removed 2 ops/iter ->
 +5% wall). Treat a kernel-time win as a hypothesis until e2e agrees.
+
+---
+
+# CORRECTION: there is no large core imbalance. `PER CORE MIN` counts NON-PARTICIPATING cores.
+
+The section above recommended spreading the K-reduction across each N-slice's `K_blocks` cores, on the
+strength of `PER CORE MAX - PER CORE MIN` = 8.58 us on a 12.03 us `gate_up` ("72% idle"). That was a
+**misreading of the metric**, and the implementation proved it.
+
+The change was built and is correct (`test_l1_single_layer_pcc` passes, PCC(active) 0.999872): every core
+of a slice reduces one `Nc` sub-range, senders scatter `K_blocks` sub-range pieces instead of one whole
+block, and the base core pulls the finished pieces into its output shard. Result:
+
+| | kernel | max-min |
+|---|---|---|
+| base | 12.03 us | 8.58 |
+| spread across K_blocks cores | 11.91 us | 8.39 |
+
+**No effect.** Because the gap was never load imbalance. Adding the `PER CORE AVG` column settles it:
+
+| op | CORE COUNT | min | **avg** | max | real spread (max-avg) |
+|---|---|---|---|---|---|
+| `GateUpMatmulDecode` | 70 | 3.44 | **10.26** | 11.83 | **~1.6 us** (not 8.4) |
+| `MatmulDecode` | 70 | 5.04 | 6.99 | 8.06 | ~1.1 us (not 3.1) |
+| `NlpCreateQkvHeadsRope` | 10 | 3.04 | 5.21 | 5.50 | ~0.3 us (not 2.5) |
+
+`gate_up` has `K_blocks * N_blocks` = 4*16 = **64** working B-cores but `CORE COUNT` reports **70**: the
+core range is `all_compute_cores.bounding_box()`, so ~6 cores are bounding-box PADDING that run the
+reader/writer and do no matmul. `PER CORE MIN` reports those. **`max - min` over a bounding box is not a
+load-imbalance measure.** Use `max - avg`, and check `CORE COUNT` against the op's real participant count
+first.
+
+Conclusion: the denoise block is already well balanced (~13% spread, not 72%), so there is no imbalance
+left to reclaim. The spread-reduce implementation was reverted -- correct, but pure added complexity for
+zero measurable gain.
+
+## Scoreboard: four structural hypotheses, four negatives
+
+| hypothesis | outcome |
+|---|---|
+| `kv_sdpa` is core-starved (8 of 120) -> split the KV | kernel -27%, wall +14%, e2e +5.7% |
+| block is dispatch-bound -> remove ops (norm fusion) | 2 ops/iter removed, wall +5% |
+| MLP wants its own K-split | 4% slower at the block level |
+| base cores are 72% idle -> spread the reduction | no change; the metric was an artifact |
+
+Everything measurable has been tuned; every structural change tried has been neutral or negative. The
+~30 us/iteration between summed kernel time (83 us) and traced wall-clock (116.5 us) remains
+**unexplained**, and four different guesses at it have now been wrong.
+
+**Stop guessing from aggregate profiler columns.** The next step needs a different instrument: the tracy
+timeline (`tracy_profile_log_host.tracy`) or raw per-op device timestamps in `profile_log_device.csv`,
+which show when each op actually starts and ends on device rather than summing durations. Until something
+in that view explains the 30 us, further optimization is unguided -- as the four attempts above
+demonstrate empirically.
