@@ -14,13 +14,6 @@
 #include <tt_stl/span.hpp>
 #include <vector>
 
-/**
- * Private tensor_impl utilities for Runtime Tensors.
- *
- * Not part of the installed public API. Prefer HostTensor / MeshTensor /
- * tensor_apis surfaces at call sites outside this directory.
- */
-
 namespace tt::tt_metal::tensor_impl {
 
 // ======================================================================================
