@@ -132,20 +132,47 @@ def load_tokenizer(checkpoint: str):
     return AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True)
 
 
-def render_prompts(task_name: str, tok, thinking: bool):
-    """(padded_len, index) for every question, rendered through lm_eval's task object.
+def render_prompts(task_name: str, tok, thinking: bool, seed: int = 42, limit: int | None = None):
+    """(padded_len, index) per question, plus this run's OWN gold letters, keyed by index.
 
-    Only needed to map a served request back to a question index, which in turn is only needed to
-    score against gold letters -- so it is called only under --unsafe-gold. Keeping it out of the
-    default path also keeps lm_eval out of it, which is why this runs from any venv mid-run.
+    Returns ``(pairs, gold_by_index, records_by_index)``.
+
+    Seeding first is what makes the gold trustworthy. lm_eval seeds the global ``random`` (and numpy /
+    torch) from its ``--seed`` before building the task dict, and ``process_docs`` shuffles each
+    question's four choices out of that RNG -- so seeding identically reproduces the exact same
+    shuffle, and therefore the same gold LETTER, as the run being watched. Verified against a finished
+    run: 198/198 letters and 198/198 choice orders identical at seed 42. ``--validate-against`` re-runs
+    that check rather than trusting this comment.
+
+    ``limit`` mirrors lm_eval's ``--limit``, which takes the FIRST n docs -- without it a limited run's
+    requests get matched against questions it never served.
     """
+    import random
+
+    random.seed(seed)
+    try:
+        import numpy as np
+
+        np.random.seed(seed)
+    except Exception:
+        pass
+    try:
+        import torch
+
+        torch.manual_seed(seed)
+    except Exception:
+        pass
+
     from lm_eval.tasks import TaskManager, get_task_dict
 
     task = get_task_dict([task_name], TaskManager())[task_name]
     while isinstance(task, dict):
         task = next(iter(task.values()))
-    out = []
-    for idx, doc in enumerate(task.eval_docs):
+    out, gold_by_idx, rec_by_idx = [], {}, {}
+    docs = list(task.eval_docs)
+    if limit is not None:
+        docs = docs[:limit]
+    for idx, doc in enumerate(docs):
         enc = tok.apply_chat_template(
             [{"role": "user", "content": task.doc_to_text(doc)}],
             tokenize=True,
@@ -156,7 +183,34 @@ def render_prompts(task_name: str, tok, thinking: bool):
         while isinstance(ids, (list, tuple)) and ids and isinstance(ids[0], (list, tuple)):
             ids = ids[0]
         out.append((max(TILE, -(-len(ids) // TILE) * TILE), idx))
-    return out
+        letter = str(doc.get("answer", "")).strip().upper().strip("()")
+        if letter[:1] in ("A", "B", "C", "D"):
+            gold_by_idx[idx] = letter[:1]
+        rec_by_idx[idx] = doc.get("Record ID")
+    return out, gold_by_idx, rec_by_idx
+
+
+def validate_shuffle(task_name: str, tok, thinking: bool, seed: int, samples: Path) -> str:
+    """Prove the reproduced shuffle equals a finished run's, joined on the stable Record ID."""
+    import json as _json
+
+    _, gold_by_idx, rec_by_idx = render_prompts(task_name, tok, thinking, seed=seed)
+    repro = {rec_by_idx[i]: g for i, g in gold_by_idx.items() if rec_by_idx.get(i)}
+    actual = {}
+    for line in samples.open(errors="replace"):
+        row = _json.loads(line)
+        if row.get("filter") not in (None, "flexible-extract"):
+            continue
+        d = row.get("doc") or {}
+        rec = d.get("Record ID")
+        if rec:
+            actual[rec] = str(d.get("answer", "")).strip().upper().strip("()")[:1]
+    common = [k for k in actual if k in repro]
+    if not common:
+        return f"validate: no Record ID overlap with {samples.name} -- cannot prove the shuffle"
+    same = sum(1 for k in common if repro[k] == actual[k])
+    verdict = "EXACT" if same == len(common) else "MISMATCH"
+    return f"validate: reproduced gold matches {samples.name} on {same}/{len(common)} " f"Record IDs -> {verdict}"
 
 
 def read_completions(server_log: Path):
@@ -187,7 +241,50 @@ def read_completions(server_log: Path):
     return requests, guard_trips
 
 
-def score(run_dir: Path, task: str, checkpoint: str, thinking: bool, gate_dir: Path, unsafe_gold: bool = False):
+def smoke_stage_requests(run_dir: Path) -> int:
+    """How many leading requests belong to the runner's SMOKE stage, per that stage's own samples.
+
+    The runner smoke-tests a couple of questions and then runs the full eval against the SAME server,
+    and both stages start at doc 0. Walking requests in arrival order without dropping the smoke ones
+    shifts every question index after them, which silently pairs each answer with another question's
+    gold letter -- 60.0% instead of 72.9% on the run this was found on. The count is read off the smoke
+    stage's finished samples file rather than assumed to be 2.
+    """
+    files = sorted((run_dir / "smoke").rglob("samples_*.jsonl"))
+    if not files:
+        return 0
+    docs = set()
+    for line in files[-1].open(errors="replace"):
+        try:
+            docs.add(json.loads(line).get("doc_id"))
+        except ValueError:
+            continue
+    return len(docs)
+
+
+def completed_count(run_dir: Path):
+    """How many requests lm_eval has FINISHED, from its progress bar; None if it cannot be read.
+
+    Anything past that count is still generating, and a partial completion's extracted letter changes
+    as blocks land -- so scoring it makes the reported rate drift with no new question answered.
+    """
+    log = run_dir / "full.log"
+    if not log.exists():
+        return None
+    hits = re.findall(r"(\d+)/\d+ \[", log.read_text(errors="replace")[-6000:])
+    return int(hits[-1]) if hits else None
+
+
+def score(
+    run_dir: Path,
+    task: str,
+    checkpoint: str,
+    thinking: bool,
+    gate_dir: Path,
+    unsafe_gold: bool = False,
+    seed: int | None = 42,
+    limit: int | None = None,
+):
     server_log = run_dir / "server.log"
     if not server_log.exists():
         return f"no server.log under {run_dir}"
@@ -199,15 +296,39 @@ def score(run_dir: Path, task: str, checkpoint: str, thinking: bool, gate_dir: P
             "emitted a block. A run started before that landed can only be scored at the end."
         )
 
+    # Score the full stage's SETTLED requests only: the smoke stage restarts at doc 0 (so keeping it
+    # misaligns every later question index), and a request still generating has a partial completion
+    # whose extracted letter is not final yet.
+    n_smoke = smoke_stage_requests(run_dir)
+    requests = requests[n_smoke:]
+    done = completed_count(run_dir)
+    n_live = 0 if done is None else max(0, len(requests) - done)
+    if n_live:
+        requests = requests[: len(requests) - n_live]
+    if not requests:
+        return (
+            f"nothing settled yet: {n_smoke} smoke-stage request(s) dropped and "
+            f"{n_live} still generating, leaving no finished request from the full stage."
+        )
+
     tok = load_tokenizer(checkpoint)
-    gold = load_gold(gate_dir) if unsafe_gold else {}
+    # Gold from THIS run's own shuffle, reproduced from the seed (see render_prompts). --unsafe-gold
+    # remains the old cross-run behaviour and is strictly worse; it is kept only so existing callers
+    # do not break.
+    gold, gold_src = {}, ""
+    if unsafe_gold:
+        gold, gold_src = load_gold(gate_dir), "ANOTHER run's letters (--unsafe-gold)"
+    elif seed is not None:
+        gold_src = f"reproduced from --seed {seed}"
 
     served_order, unmatched, ambiguous = [None] * len(requests), 0, 0
-    if gold:
+    if gold or (seed is not None and not unsafe_gold):
         # Match on padded prompt length + arrival order. Ambiguity is reported, never guessed.
-        # Only needed to reach gold; skipped entirely otherwise.
+        pairs, gold_by_idx, _rec = render_prompts(task, tok, thinking, seed=seed or 42, limit=limit)
+        if not unsafe_gold:
+            gold = gold_by_idx
         by_len = {}
-        for plen, idx in render_prompts(task, tok, thinking):
+        for plen, idx in pairs:
             by_len.setdefault(plen, []).append(idx)
         served_order = []
         cursor = {k: 0 for k in by_len}
@@ -240,7 +361,13 @@ def score(run_dir: Path, task: str, checkpoint: str, thinking: bool, gate_dir: P
             if idx is not None and gold.get(idx) and pick == gold[idx]:
                 correct += 1
 
-    L = [f"run: {run_dir}", f"requests seen: {n}   (guard-truncated: {truncated})"]
+    L = [
+        f"run: {run_dir}",
+        f"requests scored: {n} settled   (guard-truncated: {truncated})",
+        f"  excluded: {n_smoke} smoke-stage request(s)"
+        + (f", {n_live} still generating" if n_live else "")
+        + (f"; lm_eval reports {done} finished" if done is not None else ""),
+    ]
     if FILTER is None:
         L.append("  (approximate extractor: lm_eval is not importable here, so the built-in mirror is")
         L.append("   in use -- it agreed with lm_eval on 54/61 non-empty responses, undercounting.")
@@ -255,12 +382,22 @@ def score(run_dir: Path, task: str, checkpoint: str, thinking: bool, gate_dir: P
             if extractable
             else f"correct: {correct}/{n}"
         )
-        L.append("  !! --unsafe-gold: these letters come from ANOTHER run's choice shuffle, so this")
-        L.append("     number is only valid if both runs shuffled identically. It is not a score.")
+        if unsafe_gold:
+            L.append("  !! --unsafe-gold: these letters come from ANOTHER run's choice shuffle, so this")
+            L.append("     number is only valid if both runs shuffled identically. It is not a score.")
+        else:
+            L.append(f"  gold: {gold_src}. lm_eval seeds the global RNG from --seed before building the")
+            L.append("     task, and process_docs shuffles the choices out of it, so the same seed gives")
+            L.append("     the same letters. Verified 198/198 against a finished run; re-check any time")
+            L.append("     with --validate-against <finished samples_*.jsonl>.")
+        if unmatched or ambiguous:
+            L.append(f"  !! {unmatched} request(s) matched no question and {ambiguous} were ambiguous on")
+            L.append("     padded prompt length -- those are EXCLUDED, so the denominator is short. If a")
+            L.append("     limited run, pass --limit so the candidate set matches what was served.")
+        L.append("  final number still comes from the samples file: compare_same_questions.py <run_dir>")
     else:
-        L.append("correct: not reported here on purpose — gold LETTERS are per-run (lm_eval reshuffles")
-        L.append("  the choices), so scoring this run against another run's letters is meaningless.")
-        L.append("  For the real number: compare_same_questions.py <run_dir>  (joins on Record ID).")
+        L.append("correct: not reported (--seed -1). Pass the run's --seed to score, or use")
+        L.append("  compare_same_questions.py <run_dir> once samples are written (joins on Record ID).")
     if letters:
         L.append(
             f"answer distribution: {dict(sorted(letters.items()))}"
@@ -283,9 +420,39 @@ def main() -> int:
         "came from a run with the same choice shuffle as this one -- lm_eval reshuffles per run. "
         "Use compare_same_questions.py for a real score.",
     )
+    ap.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="the run's lm_eval --seed. Gold letters are reproduced from it, which is what makes a "
+        "mid-run accuracy trustworthy (verified 198/198 against a finished run). Pass -1 to skip "
+        "scoring and report only extractability / distribution / guard trips.",
+    )
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="the run's lm_eval --limit, if it used one. --limit takes the FIRST n docs, so without "
+        "this a limited run's requests are matched against questions it never served.",
+    )
+    ap.add_argument(
+        "--validate-against",
+        type=Path,
+        default=None,
+        help="a FINISHED samples_*.jsonl. Proves the reproduced shuffle equals that run's, joined on "
+        "doc['Record ID'], and prints the verdict instead of scoring.",
+    )
     ap.add_argument("-f", "--follow", action="store_true")
     ap.add_argument("-i", "--interval", type=float, default=60.0)
     args = ap.parse_args()
+
+    if args.validate_against is not None:
+        print(
+            validate_shuffle(
+                args.task, load_tokenizer(args.checkpoint), bool(args.thinking), args.seed, args.validate_against
+            )
+        )
+        return 0
 
     run_dir = args.run_dir
     if not (run_dir / "server.log").exists():
@@ -303,6 +470,8 @@ def main() -> int:
                 bool(args.thinking),
                 args.gate_dir,
                 unsafe_gold=args.unsafe_gold,
+                seed=(None if args.seed is not None and args.seed < 0 else args.seed),
+                limit=args.limit,
             ),
             flush=True,
         )
