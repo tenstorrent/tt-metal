@@ -1731,14 +1731,15 @@ void py_module(nb::module_& mod) {
     bind_unary_operation_subcoregrids<"i0">(
         mod,
         &ttnn::i0,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|i0|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        R"doc(\mathrm{{output\_tensor}}_i = I_0(\mathrm{{input\_tensor}}_i))doc",
+        "[Validated range: -88.5 to 88.5; inputs outside this range are clamped]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
+        R"doc(Computes the modified Bessel function of the first kind of order 0.)doc");
     bind_unary_operation_subcoregrids<"i1">(
         mod,
         &ttnn::i1,
         R"doc(\mathrm{{output\_tensor}}_i = I_1(\mathrm{{input\_tensor}}_i))doc",
-        "[Validated range: -10 to 10]",
+        "[Validated range: -88.5 to 88.5; inputs outside this range are clamped]",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Computes the modified Bessel function of the first kind of order 1.)doc");
     bind_unary_operation_subcoregrids<"isfinite">(
