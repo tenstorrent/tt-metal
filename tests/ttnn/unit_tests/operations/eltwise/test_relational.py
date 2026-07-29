@@ -421,6 +421,7 @@ _ISCLOSE_SPECIAL_VALUES = [
     float("inf"),
     float("-inf"),
     float("nan"),
+    float("-nan"),  # sign-bit-set NaN survives in float32; bfloat16 canonicalizes it
     2.0e9,  # below _INF_BIT_PATTERN_AS_FLOAT
     _INF_BIT_PATTERN_AS_FLOAT,
     3.0e9,  # above it
@@ -502,6 +503,24 @@ def test_isclose_large_finite_magnitudes(device, magnitude, sign):
     """
     x = torch.full((1, 1, 32, 32), sign * magnitude, dtype=torch.float32)
     _assert_isclose_matches_torch(device, x, x.clone(), ttnn.float32, rtol=1e-5, atol=1e-8)
+
+
+@pytest.mark.parametrize("equal_nan", [True, False])
+def test_isclose_negative_nan(device, equal_nan):
+    """Sign-bit-set NaN must classify as NaN.
+
+    SFPABS in float mode deliberately leaves -NaN as -NaN instead of clearing the
+    sign bit (see the SFPABS functional model in tt-isa-documentation), so the
+    kernel cannot derive the abs bit pattern from sfpi::abs() -- it has to mask.
+    Built from raw bits because bfloat16 canonicalizes -NaN to +NaN.
+    """
+    neg_nan = torch.tensor([-4194304], dtype=torch.int32).view(torch.float32)  # 0xFFC00000
+    pos_nan = torch.tensor([0x7FC00000], dtype=torch.int64).to(torch.int32).view(torch.float32)
+    assert neg_nan.view(torch.int32).item() & 0xFFFFFFFF == 0xFFC00000, "expected sign-bit-set NaN"
+
+    lhs = torch.tensor([neg_nan, neg_nan, neg_nan, pos_nan], dtype=torch.float32).reshape(1, 1, 1, 4)
+    rhs = torch.tensor([neg_nan, pos_nan, 1.0, pos_nan], dtype=torch.float32).reshape(1, 1, 1, 4)
+    _assert_isclose_matches_torch(device, lhs, rhs, ttnn.float32, rtol=1e-5, atol=1e-8, equal_nan=equal_nan)
 
 
 def test_isclose_inf_bit_pattern_boundary(device):
