@@ -192,7 +192,9 @@ MassagedConcat build_non_aligned_last_dim_concat(
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
             auto storage_type = tensor.storage_type();
             if (storage_type == ttnn::StorageType::DEVICE) {
-                return tensor.padded_shape()[dim] * tensor.element_size() % tensor.buffer()->alignment() == 0;
+                // Logical, not padded: the reader copies the logical width, so that is what has to
+                // be aligned for the next input to land on an aligned address.
+                return tensor.logical_shape()[dim] * tensor.element_size() % tensor.buffer()->alignment() == 0;
             }
             TT_THROW(
                 "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type"

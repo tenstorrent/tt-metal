@@ -173,7 +173,8 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto* buffer = input_tensors[i].buffer();
             src_buffers[i] = buffer;
-            page_size_per_tensor[i] = buffer->page_size();
+            // Copy the row's contents (logical_shape), not its whole page (page_size)
+            page_size_per_tensor[i] = input_tensors[i].logical_shape()[-1] * input_tensors[i].element_size();
             if (dim == num_dims - 1) {
                 num_pages_per_block[i] = num_accum_pages;
             } else {

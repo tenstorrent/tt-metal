@@ -89,6 +89,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         1u,
         std::multiplies<uint32_t>());
 
+    // The writer moves whole input pages into the output, so the two page sizes must match.
+    TT_FATAL(
+        input_tensor.buffer()->aligned_page_size() == output_tensors[ring_index].buffer()->aligned_page_size(),
+        "all_broadcast needs the output page size ({} B) to match the input's ({} B), but the output memory config "
+        "gives it a different physical layout",
+        output_tensors[ring_index].buffer()->aligned_page_size(),
+        input_tensor.buffer()->aligned_page_size());
+
     // L1 Scratch CB Creation
     DataType dtype = input_tensor.dtype();
     const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -194,7 +202,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
     } else {
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensors[ring_index].buffer()).append_to(writer_compile_args);
     }
 
     // Build kernel descriptors.  Push them onto desc.kernels NOW (before the

@@ -531,3 +531,42 @@ def test_concat_int32_2d_dim1_regression(device):
 
     tt_output_torch = ttnn.to_torch(tt_output)
     assert torch.equal(torch_output, tt_output_torch)
+
+
+@pytest.mark.parametrize(
+    "logical_width, shard_width",
+    [
+        (48, 64),
+        (40, 64),
+    ],
+    ids=["stick_32b_aligned", "stick_32b_unaligned"],
+)
+def test_concat_rm_padded_last_dim(device, logical_width, shard_width):
+    shape = [1, 1, 32, logical_width]
+    torch_input = torch.rand(shape).bfloat16()
+
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.num_cores_to_corerangeset(1, ttnn.CoreCoord(8, 8), row_wise=True),
+            (shape[-2], shard_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    sharded = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded_mem_config
+    )
+
+    # sharded_to_interleaved keeps the shard width as the padded width, so this is
+    # interleaved row-major with padded_width > logical_width.
+    tt_input = ttnn.to_memory_config(sharded, ttnn.DRAM_MEMORY_CONFIG)
+
+    # Without these the test is vacuous if the padding ever stops being propagated.
+    assert tt_input.padded_shape[-1] == shard_width
+    assert torch.equal(ttnn.to_torch(tt_input), torch_input)
+
+    tt_output = ttnn.concat([tt_input, tt_input], dim=-1)
+
+    assert list(tt_output.shape) == shape[:-1] + [2 * logical_width]
+    assert torch.equal(ttnn.to_torch(tt_output), torch.cat([torch_input, torch_input], dim=-1))
