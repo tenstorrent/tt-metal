@@ -721,15 +721,25 @@ def drop_writer_pays() -> bool:
 #     `shard_tiles - k*chunk_wt >= chunk_wt` for every k < num_blocks:
 #     `cb_reserve_back` never blocks and the CB never needs recycling.
 #
-# Across launches the firmware re-runs `setup_local_cb_read_write_interfaces`, which
-# sets `tiles_acked_received_init = 0` (`circular_buffer_init.h`), so neither the
-# un-popped output pages nor the un-pushed input credits can leak into the next
-# launch of a cached program.
+# Across launches neither the un-popped output pages nor the un-pushed input credits
+# can leak into the next launch of a cached program. NB the mechanism is NOT the
+# `setup_local_cb_read_write_interfaces` reset Refinement 3b cited: that zeroes only
+# the per-RISC LOCAL shadow (`tiles_acked_received_init`, `circular_buffer_init.h`),
+# whereas the counters that actually carry producer/consumer state are STREAM SCRATCH
+# REGISTERS (`get_cb_tiles_received_ptr` -> `STREAM_REG_ADDR(...)`, `stream_io_map.h`)
+# which CB-interface setup does not touch. The real guarantee is
+# `init_sync_registers()` (`firmware/src/tt-1xx/trisc.cc`), triggered unconditionally
+# by `trigger_sync_register_init()` in `brisc.cc` on every launch -- including this
+# compute-only case, where BRISC runs no kernel but its firmware still does this.
+# (`ttnn-static-analyzer`, this refinement: the local-shadow reset alone would NOT be
+# sufficient, and it is what the three-kernel counterfactual arm depends on.)
 #
-# Both base-address runtime args move onto the compute kernel (read by nobody; their
-# job is to exist), because with both CBs aliased there is no `Buffer*` runtime arg
-# forcing a re-patch -- `test_tilize_refinement4.py::test_path_b_program_cache_rebinding`
-# is the probe.
+# Both base-address runtime args move onto the compute kernel. They are NOT
+# load-bearing -- `apply_descriptor_runtime_args` re-patches every CB descriptor that
+# carries a `tensor` unconditionally (`program_descriptors.cpp:198-210`), independently
+# of any runtime arg -- but they are a cheap explicit witness that a cached program
+# was re-bound, which `test_tilize_refinement4.py::test_path_b_program_cache_rebinding`
+# reads directly off the compute kernel.
 DROP_DATAFLOW_MAX_BLOCKS_PER_CORE = 1 << 30  # no structural cap; see the gate
 
 
@@ -774,21 +784,58 @@ def drop_dataflow_pays(blocks_per_core: int) -> bool:
 # silently corrupt the output. So `_compute_config` must also drop
 # `unpack_to_dest_mode[CB_RM_INPUT]` back to `Default` on exactly the cells this
 # gate turns on.
-def fp32_fast_pays(in_dtype, out_dtype) -> bool:
-    """Lever-3 gate: may an fp32 input take the fast tilize path?
+# The ONLY output formats an fp32 input may be fast-tilized into. This is a
+# WHITELIST, not `out_dtype != float32`, and the difference is a silent-corruption
+# bug that `ttnn-static-analyzer` caught in this refinement's first draft (F1):
+# `can_use_fast_tilize` guards the output with `!is_fp32_output_format`, which
+# refuses Float32 but happily accepts UInt32 / Int32 / UInt16 -- all of which are
+# declared in `SUPPORTED["output_dtype"]`. Fast tilize's pack stage steps DEST at
+# bf16 stride (`Read_32b=0`), so a 32-bit INTEGER output would be read 16 bits at a
+# time and silently corrupted, with no static_assert to catch it (the Lossless
+# asserts are gated on `lossless_fp32_override`, the fast one on
+# `is_fp32_input_format`, and this cell satisfies neither guard's trigger).
+# Before Refinement 4 those cells were forced onto the slow path and never reached
+# fast tilize; they must stay there.
+_FP32_FAST_OUT = (ttnn.bfloat16, ttnn.bfloat8_b)
 
-    Structural clause (not a payoff question): the output must NOT be fp32.
-    `fp32 -> fp32` is a bit-exactness contract (`test_tilize_precision_baseline`
-    asserts `exact_frac == 1.0`) and `can_use_fast_tilize` refuses an fp32 output
-    anyway, so Lossless + UnpackToDestFp32 is the only correct configuration there.
 
-    Payoff clause: see `changelog.md` Refinement 4 -- measured on the compute-bound
-    sharded regime the refinement targets AND on the DM-bound interleaved one, and
-    gated to where it was measured to pay.
+def fp32_fast_legal(in_dtype, out_dtype) -> bool:
+    """STRUCTURAL: may an fp32 input legally take the fast tilize path at all?
+
+    Not a payoff question, so the ``TILIZE_LEVER_F32=2`` force flag must NOT be able
+    to bypass it (analyzer finding F2). Two cells this refuses:
+
+    * ``fp32 -> fp32`` — a bit-exactness contract
+      (``test_tilize_precision_baseline`` asserts ``exact_frac == 1.0``), and
+      ``can_use_fast_tilize`` refuses an fp32 output anyway, so forcing it here
+      would land on the slow path with ``Default`` unpack, i.e. the slow path *plus*
+      the fp32 -> tf32 unpack downgrade — the one combination that is silently
+      neither fast nor lossless, and no helper ``static_assert`` fires on it.
+    * ``fp32 -> uint32 / int32 / uint16`` — see ``_FP32_FAST_OUT`` above.
     """
-    if in_dtype != ttnn.float32:
-        return False  # not an fp32 input -> `Lossless` was never selected
-    return out_dtype != ttnn.float32
+    return in_dtype == ttnn.float32 and out_dtype in _FP32_FAST_OUT
+
+
+def fp32_fast_pays(in_dtype, out_dtype) -> bool:
+    """Lever-3 gate: SHOULD a legal fp32 -> narrow cast take the fast tilize path?
+
+    **MEASURED: YES, wherever it is legal — there is no payoff clause.** In-run A/B,
+    15 rounds x 10 launches (`changelog.md` Refinement 4, Perf gate):
+
+      regime                                | Fast | Lossless | ratio
+      --------------------------------------|------|----------|-------
+      n_sharded_fp32_to_bf16  (compute-bd)  | 1495 |    1878  | 1.256
+      n_sharded_fp32_to_bf8b  (compute-bd)  | 1305 |    1865  | 1.429
+      e_square_fp32_to_bf16   (DM-bound)    | 120729 | 121072 | 1.003
+
+    i.e. 1.26-1.43x where the tilize LLK is the bound and neutral (inside the +-2 %
+    noise floor) where DRAM is — which is what the refinement predicted. It is
+    therefore NOT gated on the regime: neutral-and-legal beats a shape-dependent
+    numerics surface, and the output is measurably indistinguishable from Lossless
+    (PCC 1.0000000 and byte-identical mismatch counts on fp32 -> bf16 and
+    fp32 -> bf8b, `test_tilize_refinement4.py::test_fast_fp32_matches_lossless_*`).
+    """
+    return fp32_fast_legal(in_dtype, out_dtype)
 
 
 def stateful_read_pays(chunk_row_bytes: int) -> bool:
@@ -1384,6 +1431,10 @@ def _fp32_lossless(plan) -> int:
     f32 = _lever_flags()["f32"]
     if f32 == 0:
         return 1  # counterfactual: the Phase-0 behaviour
+    if not fp32_fast_legal(plan["in_dtype"], plan["out_dtype"]):
+        # STRUCTURAL — checked before the force flag, so `TILIZE_LEVER_F32=2` cannot
+        # bypass it (analyzer finding F2).
+        return 1
     if f32 == 2 or fp32_fast_pays(plan["in_dtype"], plan["out_dtype"]):
         return 0
     return 1

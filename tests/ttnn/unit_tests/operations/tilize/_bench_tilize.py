@@ -633,6 +633,123 @@ REGIMES = {
         out_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(1, 3), (128, 64)),
         levers=dict(nw=0),
     ),
+    # --- Refinement 4: the Path-B compute + sync floor ------------------------
+    # Lever 1 (compute-only program). Every Path-B regime gets three arms:
+    #   ND=1  the shipped compute-only program (the `f_*` / `n_*` rows themselves)
+    #   nd=0  the Phase-0 three-kernel program            -> `*_nd_off`
+    #   nd=3  ONE kernel but with the arm/drain FOLDED onto TRISC, i.e. the
+    #         `examples/zero_copy_fold` variant            -> `*_nd_fold`
+    # The third arm is what separates "fewer kernels" from "no handshake": the
+    # example measures the fold at 0.74-0.95x, so if this lever pays it must be
+    # because the handshake is GONE, not because the kernel count fell.
+    "p_sharded_small_nd_off": dict(
+        shape=(1, 1, 512, 64),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (128, 64)),
+        same_cfg=True,
+        levers=dict(nd=0),
+    ),
+    "p_sharded_small_nd_fold": dict(
+        shape=(1, 1, 512, 64),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (128, 64)),
+        same_cfg=True,
+        levers=dict(nd=3),
+    ),
+    "p_sharded_large_nd_off": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        same_cfg=True,
+        levers=dict(nd=0),
+    ),
+    "p_sharded_large_nd_fold": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        same_cfg=True,
+        levers=dict(nd=3),
+    ),
+    # The SMALLEST Path-B shape the op can express: 1 chunk-block per core, 2 tiles.
+    # A fixed per-launch term is the largest share of the runtime here, which is
+    # where master.md B0 says to counterfactual it.
+    "n_sharded_tiny": dict(
+        shape=(1, 1, 128, 64),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (32, 64)),
+        same_cfg=True,
+    ),
+    "p_sharded_tiny_nd_off": dict(
+        shape=(1, 1, 128, 64),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (32, 64)),
+        same_cfg=True,
+        levers=dict(nd=0),
+    ),
+    "p_sharded_tiny_nd_fold": dict(
+        shape=(1, 1, 128, 64),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (32, 64)),
+        same_cfg=True,
+        levers=dict(nd=3),
+    ),
+    # Lever 2's ceiling probe (IU): num_blocks fully-inited tilize calls instead of
+    # one. Bit-exact, so the delta against `f_sharded_small` prices num_blocks-1
+    # extra tilize_init/uninit pairs -- the ceiling of ANY amortisation scheme.
+    "p_sharded_small_iu": dict(
+        shape=(1, 1, 512, 64),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (128, 64)),
+        same_cfg=True,
+        levers=dict(iu=1),
+    ),
+    "p_sharded_large_iu": dict(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(7, 7), (256, 64)),
+        same_cfg=True,
+        levers=dict(iu=1),
+    ),
+    # Lever 3 (Fp32Mode::Fast on a narrowing fp32 cast). The compute-bound sharded
+    # cell the refinement targets, plus its counterfactual; the DM-bound
+    # interleaved pair is `e_square_fp32_to_bf16` / `p_square_fp32_to_bf16_f32_off`.
+    "n_sharded_fp32_to_bf16": dict(
+        shape=(1, 1, 512, 64),
+        dtype=ttnn.float32,
+        out_dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (128, 64)),
+        same_cfg=True,
+    ),
+    "p_sharded_fp32_to_bf16_f32_off": dict(
+        shape=(1, 1, 512, 64),
+        dtype=ttnn.float32,
+        out_dtype=ttnn.bfloat16,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (128, 64)),
+        same_cfg=True,
+        levers=dict(f32=0),
+    ),
+    "p_square_fp32_to_bf16_f32_off": dict(
+        shape=(1, 1, 2048, 2048),
+        dtype=ttnn.float32,
+        out_dtype=ttnn.bfloat16,
+        levers=dict(f32=0),
+    ),
+    # ... and the bf8b narrowing sibling, which is the other cell the gate opens.
+    "n_sharded_fp32_to_bf8b": dict(
+        shape=(1, 1, 512, 64),
+        dtype=ttnn.float32,
+        out_dtype=ttnn.bfloat8_b,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (128, 64)),
+        same_cfg=True,
+    ),
+    "p_sharded_fp32_to_bf8b_f32_off": dict(
+        shape=(1, 1, 512, 64),
+        dtype=ttnn.float32,
+        out_dtype=ttnn.bfloat8_b,
+        in_cfg=_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(3, 0), (128, 64)),
+        same_cfg=True,
+        levers=dict(f32=0),
+    ),
     # C16 on the smallest sharded regime (lever B0: per-core-overhead levers must
     # be counterfactualed on the SMALLEST shape they run in).
     "x_sharded_small_depth1": dict(
@@ -765,6 +882,20 @@ def _assert_structural_gates(name, spec, plan, grid_cores):
     """
     if plan["path"] == "alias":
         expected = plan["ncores"]  # the shard's own cores, by construction
+        # Refinement 4 lever 1: Path B ships a COMPUTE-ONLY program, and the two
+        # dataflow kernels go together (dropping only one would leave the surviving
+        # one waiting on a CB nobody drives). Asserted rather than printed, so a
+        # future edit that re-introduces either kernel has to say so here.
+        levers = spec.get("levers") or {}
+        want_drop = 1 if levers.get("nd", 1) else 0
+        assert plan["drop_reader"] == plan["drop_writer"] == want_drop, (
+            f"lever-1 gate violation on {name}: drop_reader={plan['drop_reader']} "
+            f"drop_writer={plan['drop_writer']}, wanted both {want_drop}"
+        )
+        # The `zero_copy_fold` arm is the ONLY thing that may fold the arm/drain.
+        assert plan["self_arm"] == (
+            1 if levers.get("nd", 1) == 3 else 0
+        ), f"self_arm violation on {name}: {plan['self_arm']} (nd={levers.get('nd', 1)})"
     elif plan["path"] in ("alias_out", "alias_in"):
         # Refinement 3: the work split IS the sharded side's shard map, so the core
         # count is the shard grid's. Asserted non-tautologically -- the shards must
@@ -783,6 +914,17 @@ def _assert_structural_gates(name, spec, plan, grid_cores):
     assert plan["ncores"] == expected, (
         f"A0 violation on {name}: launched {plan['ncores']} cores, "
         f"expected {expected} (total_tiles={plan['total_tiles']}, path={plan['path']})"
+    )
+
+    # Refinement 4 lever 3: an fp32 input may only be fast-tilized into a NARROWER
+    # FLOAT format. Asserted on every row so widening the whitelist to a 32-bit
+    # integer output -- which `can_use_fast_tilize` accepts and then silently
+    # corrupts, because its pack stage steps DEST at bf16 stride -- fails here.
+    want_lossless = 0 if tpd.fp32_fast_legal(spec["dtype"], spec.get("out_dtype") or spec["dtype"]) else 1
+    if (spec.get("levers") or {}).get("f32", 1) == 0:
+        want_lossless = 1
+    assert plan["fp32_lossless"] == want_lossless, (
+        f"lever-3 gate violation on {name}: fp32_lossless={plan['fp32_lossless']}, " f"wanted {want_lossless}"
     )
 
     if plan["path"] != "alias":
@@ -857,10 +999,11 @@ def test_bench_tilize(device):
         # reader). Set before the plan is built AND before the runs, since the
         # planner reads them per call.
         levers = spec.get("levers") or {}
-        for key in ("b13", "c7", "b8", "b10", "a3", "r2b", "stg", "r3", "coal", "bt", "nw"):
+        for key in ("b13", "c7", "b8", "b10", "a3", "r2b", "stg", "r3", "coal", "bt", "nw", "nd", "f32"):
             os.environ[f"TILIZE_LEVER_{key.upper()}"] = str(levers.get(key, 1))
-        # Default 0: this one is a measurement probe, not a lever.
+        # Default 0: these two are measurement probes, not levers.
         os.environ["TILIZE_LEVER_ADDR"] = str(levers.get("addr", 0))
+        os.environ["TILIZE_LEVER_IU"] = str(levers.get("iu", 0))
         tt_input, out_cfg = _build(device, spec)
         plan = _plan_for(device, tt_input, spec, out_cfg)
         _assert_structural_gates(name, spec, plan, grid_cores)
@@ -895,6 +1038,13 @@ def test_bench_tilize(device):
                     b13=plan["stateful_read"],
                     bt=plan["bank_table"],
                     nw=plan["drop_writer"],
+                    # Refinement 4: ND = kernels in the program (1 = compute-only),
+                    # SA = the zero_copy_fold arm/drain fold, F32 = 0 when an fp32
+                    # input takes the fast tilize path, IU = per-block init arm.
+                    nd=len([k for k in (plan["drop_reader"], plan["drop_writer"]) if k]),
+                    sa=plan["self_arm"],
+                    f32=plan["fp32_lossless"],
+                    iu=int(os.environ.get("TILIZE_LEVER_IU", "0")),
                     c7=plan["split_read"],
                     b8=plan["prefetch_blocks"],
                     b10=plan["vc_spread"],
@@ -911,9 +1061,10 @@ def test_bench_tilize(device):
 
         os.environ["TILIZE_SKIP_DM"] = "0"
         os.environ["TILIZE_SKIP_COMPUTE"] = "0"
-        for key in ("B13", "C7", "B8", "B10", "A3", "R2B", "STG", "R3", "COAL", "BT", "NW"):
+        for key in ("B13", "C7", "B8", "B10", "A3", "R2B", "STG", "R3", "COAL", "BT", "NW", "ND", "F32"):
             os.environ[f"TILIZE_LEVER_{key}"] = "1"
         os.environ["TILIZE_LEVER_ADDR"] = "0"
+        os.environ["TILIZE_LEVER_IU"] = "0"
         tpd.CORE_CAP_OVERRIDE = None
         tpd.CHUNK_CAP_OVERRIDE = None
         tpd.STAGGER_MOD_OVERRIDE = None
@@ -929,14 +1080,16 @@ def test_bench_tilize(device):
         f"    C16 gate: depth 2 iff ncores < {tpd.BANDWIDTH_KNEE_CORES} and "
         f"blk/core >= {tpd.MIN_BLOCKS_FOR_DEPTH2}",
         f"    {'regime':<34} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
-        f"{'blk':>4} {'B13':>4} {'BT':>3} {'NW':>3} {'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'R2B':>4} {'STG':>4} {'GRP':>4} {'cbB/core':>9} "
+        f"{'blk':>4} {'B13':>4} {'BT':>3} {'NW':>3} {'ND':>3} {'SA':>3} {'F32':>4} {'IU':>3} "
+        f"{'C7':>3} {'B8':>3} {'VC':>3} {'A3':>3} {'R2B':>4} {'STG':>4} {'GRP':>4} {'cbB/core':>9} "
         f"{'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
     ]
     for r in rows:
         gbps = (r["traffic"] / r["ns"]) if (r["traffic"] and r["ns"]) else 0.0
         lines.append(
             f"    {r['regime']:<34} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
-            f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['b13']:>4} {r['bt']:>3} {r['nw']:>3} {r['c7']:>3} "
+            f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['b13']:>4} {r['bt']:>3} {r['nw']:>3} "
+            f"{r['nd']:>3} {r['sa']:>3} {r['f32']:>4} {r['iu']:>3} {r['c7']:>3} "
             f"{r['b8']:>3} {r['b10']:>3} {r['a3']:>3} {r['r2b']:>4} {r['stg']:>4} {r['grp']:>4} "
             f"{r['cb_bytes']:>9} {r['ns']:>10.1f} {r['cv']:>5.1f} {r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
         )

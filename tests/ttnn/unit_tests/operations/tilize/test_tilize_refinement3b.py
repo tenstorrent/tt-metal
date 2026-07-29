@@ -253,19 +253,19 @@ def test_the_dropped_writer_still_emits_a_base_address_runtime_arg(device):
 
 
 def test_the_writer_survives_everywhere_it_is_still_needed(device):
-    """Lever 2 is `alias_out`-only. Path B (both sides aliased), `alias_in`, and the
-    generic path all still need the writer -- Path B and `alias_in` because their
-    OUTPUT CB is a plain CB the writer drains, the generic path because it writes.
+    """Lever 2 is `alias_out`-only. `alias_in` and the generic path still need the
+    writer -- `alias_in` because its OUTPUT CB is a plain CB the writer drains, the
+    generic path because it writes.
+
+    Path B was in this list until Refinement 4, which drops BOTH dataflow kernels
+    there (its output CB is aliased too, so the writer was as idle as `alias_out`'s).
+    That case now lives in `test_tilize_refinement4.py`, asserting the opposite --
+    which is the honest bookkeeping: this test's claim about Path B was true of the
+    program Refinement 3b shipped, and Refinement 4 changed the program, not the test.
     """
     cases = [
         ("generic", (1, 1, 128, 128), DRAM, DRAM),
         ("alias_in", (1, 1, 256, 128), _shard(_BLOCK, _crs(1, 1), (128, 64), _ROW), DRAM),
-        (
-            "alias",
-            (1, 1, 256, 128),
-            _shard(_BLOCK, _crs(1, 1), (128, 64), _ROW),
-            _shard(_BLOCK, _crs(1, 1), (128, 64), _ROW),
-        ),
     ]
     for name, shape, in_cfg, out_cfg in cases:
         plan = _plan(device, shape, in_cfg, out_cfg)

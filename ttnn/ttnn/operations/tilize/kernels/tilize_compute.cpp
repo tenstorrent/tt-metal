@@ -95,10 +95,15 @@ void kernel_main() {
     constexpr bool fp32_in = compute_kernel_lib::is_fp32_input_format<cb_rm_input>();
     constexpr Fp32Mode fp32_mode = (fp32_in && fp32_lossless) ? Fp32Mode::Lossless : Fp32Mode::Fast;
 
-    // The three Refinement-4 branches are mutually exclusive by construction; these
-    // are the tripwires if a future host gate loosens. `no_wait` without the reader
-    // gone is a guaranteed hang (nothing would ever publish the input CB), and
-    // `self_arm` with the reader still there is a single-producer violation.
+    // The three Refinement-4 branches are mutually exclusive by construction.
+    // NB these assert what THIS kernel can see; it has no CT arg for the reader's
+    // existence, so "no_wait implies the reader is gone" and "self_arm implies it is
+    // gone" rest entirely on the host derivation in `_plan_alias` /
+    // `create_program_descriptor` (`no_wait = drop_reader and not self_arm`). Getting
+    // that wrong is a hang (nothing publishes the input CB) or a single-producer
+    // violation (two pushers), neither of which is catchable here — flagged by
+    // `ttnn-static-analyzer` and guarded on the host side by
+    // `test_tilize_refinement4.py::test_no_wait_is_set_exactly_when_the_reader_is_gone`.
     static_assert(!(no_wait && self_arm), "self_arm publishes the input CB itself, so it must WAIT for it");
     static_assert(!zones || !(no_wait || self_arm), "the zone variant instruments the three-kernel program");
 
