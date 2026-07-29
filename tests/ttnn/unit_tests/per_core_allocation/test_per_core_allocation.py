@@ -13,6 +13,7 @@ The local conftest.py sets TT_METAL_ALLOCATOR_MODE_HYBRID=1 and creates the devi
 
 import torch
 import ttnn
+from conftest import requires_hybrid_allocator
 
 
 class PerCoreMemMap:
@@ -89,6 +90,7 @@ def _create_single_core_tensor(device, core, shard_bytes):
     )
 
 
+@requires_hybrid_allocator
 def test_per_core_tensors_get_same_address(device):
     """Two single-core tensors on different cores can share the same L1 address,
     proving they use independent per-bank allocators (not lockstep)."""
@@ -106,6 +108,7 @@ def test_per_core_tensors_get_same_address(device):
     assert addr0 == addr1, f"Expected same address on different cores (per-bank allocators), got {addr0} vs {addr1}"
 
 
+@requires_hybrid_allocator
 def test_per_core_round_trip(device):
     """Data written to a per-core allocated tensor reads back correctly."""
     shard_bytes = 2048
@@ -130,6 +133,7 @@ def test_per_core_round_trip(device):
     assert torch.equal(data, result), "Round-trip data mismatch"
 
 
+@requires_hybrid_allocator
 def test_per_core_sharded_dealloc_realloc(device):
     """Deallocate a per-core sharded tensor and reallocate — verifies deallocation frees per-core space.
 
@@ -172,6 +176,7 @@ def test_per_core_sharded_dealloc_realloc(device):
     ), f"Expected same addresses after dealloc/realloc:\n  first:  {[f'{a:#x}' for a in addrs1]}\n  second: {[f'{a:#x}' for a in addrs2]}"
 
 
+@requires_hybrid_allocator
 def test_per_core_tetris_allocation(device):
     """Tetris-style allocation across 4 cores with alloc/free/realloc patterns.
 
@@ -252,6 +257,7 @@ def _addr_ranges_overlap(addr_a, size_a, addr_b, size_b):
     return addr_a < addr_b + size_b and addr_b < addr_a + size_a
 
 
+@requires_hybrid_allocator
 def test_per_core_and_lockstep_coexist(device):
     """Interleave per-core and lockstep allocations across multiple cores.
 
@@ -329,6 +335,7 @@ def test_per_core_and_lockstep_coexist(device):
         assert t.is_allocated(), f"{label} should still be allocated"
 
 
+@requires_hybrid_allocator
 def test_all_cores_lockstep_then_per_core_then_reverse(device):
     """Allocate on ALL L1 cores: lockstep first then per-core, then deallocate and reverse order.
 
@@ -396,6 +403,7 @@ def test_all_cores_lockstep_then_per_core_then_reverse(device):
         assert per_core_tensors[i].is_allocated()
 
 
+@requires_hybrid_allocator
 def test_triangle_allocation_then_uniform_sharded(device):
     """Triangle per-core allocation on ALL compute cores, then a per-core sharded tensor.
 

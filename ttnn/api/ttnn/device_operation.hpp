@@ -456,6 +456,14 @@ typename device_operation_t::tensor_return_value_t launch(
         TT_FATAL(input_tensor.is_allocated(), "Input Tensor is not allocated");
     }
 
+    // Whether the op accepts per-core allocation is a property of the op, not of any one tensor,
+    // so ask it once rather than inside the loop above.
+    if constexpr (!SupportsPerCoreAllocation<device_operation_t>) {
+        for (size_t i = 0; i < input_tensors.size(); ++i) {
+            detail::validate_no_per_core_allocation(input_tensors[i].get(), operation_name, i);
+        }
+    }
+
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
 
     ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
