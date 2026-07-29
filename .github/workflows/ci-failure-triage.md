@@ -30,15 +30,34 @@ engine: copilot
 
 network: defaults
 
+# One concurrency group per triggering run so no failure is ever dropped: a
+# single shared group would keep only one pending run and evict the rest during
+# a burst. The cost is that runs execute in parallel and cannot use the shared
+# cache-memory store to prevent duplicate issues — so duplicate prevention is
+# done authoritatively by searching tt-auto-triage at issue-creation time (see
+# Phase 5) plus the deduplicate-by-title safety net below, not via cache-memory.
+concurrency:
+  group: "gh-aw-${{ github.workflow }}-${{ github.event.workflow_run.id }}"
+
 safe-outputs:
+  mentions: false
   create-issue:
     target-repo: "tenstorrent/tt-auto-triage"
     title-prefix: "[gh-aw-pilot] "
     labels: [gh-aw-pilot]
     github-token: ${{ secrets.TT_METAL_TICKETING_TOKEN }}
+    # Server-side safety net against the concurrent-run race: if an open issue
+    # with a near-identical title already exists, comment instead of duplicating.
+    deduplicate-by-title: true
   add-comment:
     target-repo: "tenstorrent/tt-auto-triage"
     github-token: ${{ secrets.TT_METAL_TICKETING_TOKEN }}
+  # Shadow pilot must not write to tt-metal: disable the auto-enabled
+  # framework outputs that would otherwise file issues in the source repo.
+  missing-tool: false
+  noop:
+    report-as-issue: false
+  report-incomplete: false
 
 tools:
   github:
@@ -71,9 +90,20 @@ system during this pilot, so be rigorous and honest about uncertainty.
 ## Phase 1 — Guard and dedup
 
 1. Only proceed if the run conclusion is `failure`. Exit immediately otherwise.
-2. Read `analyzed-runs.json` from the cache-memory directory. If run ID
-   ${{ github.event.workflow_run.id }} is already listed, **stop immediately**.
-   After completing an investigation, append the run ID to this file.
+2. Determine whether this exact run was already handled. Runs execute in
+   parallel, so the cache-memory ledger may be stale — the tt-auto-triage issue
+   search is the source of truth, not the cache.
+   - Search `tenstorrent/tt-auto-triage` (label `gh-aw-pilot`) for the token
+     `gh-aw-run-${{ github.event.workflow_run.id }}` — every issue and recurrence
+     comment this workflow writes embeds that exact token (see Phase 5), and a
+     bare `run-<digits>` token is indexed reliably by GitHub search, unlike a
+     full run URL. If a match is found, **stop immediately** — already handled.
+   - Otherwise proceed, even if `analyzed-runs.json` already lists this run ID:
+     a listed-but-not-found run means a prior attempt died after analysis but
+     before delivery, so it must be re-delivered.
+3. After a successful investigation, append this run ID to `analyzed-runs.json`
+   in cache-memory as a best-effort fast-path (its loss under concurrency is
+   harmless — the issue search above still prevents duplicates).
 
 ## Phase 2 — Evidence gathering
 
@@ -109,69 +139,84 @@ system during this pilot, so be rigorous and honest about uncertainty.
   retrieve all commits in the window; rank the available ones and state explicitly
   that the true culprit may be among the missing commits.
 
-For Cases 1/4/5, assign every commit in the window a confidence score 0–100 and
-present a ranked table (hash, one-line description, score). Case 1 requires exactly
+For Cases 1 and 4, assign every commit in the window a confidence score 0–100; for
+Case 5, score every commit you were able to retrieve (and say which are missing).
+Present a ranked table (hash, one-line description, score). Case 1 requires exactly
 one candidate above 95 with all others below 90 and explicitly ruled out.
 
-## Phase 4 — Cross-run pattern memory
+## Phase 4 — Cross-run pattern memory (best-effort)
 
 Maintain `patterns/error-signatures.json` in the cache-memory directory: a list of
-entries `{signature, workflow, job, first_seen_run, last_seen_run, count, issue_url}`.
+entries `{signature, workflow, job, first_seen_run, last_seen_run, count}`. This is
+best-effort recurrence *statistics* only — because parallel runs share this store,
+an occasional lost update is acceptable. It never decides whether to file an issue;
+that decision belongs to the tt-auto-triage search in Phase 5.
 
 1. Compare this failure's error signature against stored signatures. Two errors
    match if they describe the same underlying failure even when run-specific noise
    (timestamps, seeds, addresses, exact numeric deltas) differs — judge semantically.
-2. If a matching signature exists, increment its count and update `last_seen_run`;
-   this failure is a **recurrence**, not a new issue.
-3. If new, append an entry after filing the issue (record the issue URL).
+2. If a matching signature exists, increment its `count` and update `last_seen_run`.
+3. If new, append an entry with `count` = 1 and `first_seen_run` = this run ID.
+
+The authoritative link between a signature and its filed issue lives in the issue
+itself (Phase 5 embeds the run token), not here, so no issue URL is stored.
 
 ## Phase 5 — File or update the triage issue
+
+This phase is authoritative for duplicate prevention.
 
 1. Search open issues in `tenstorrent/tt-auto-triage` labeled `gh-aw-pilot` whose
    title or body matches this error signature (search by test name and key error
    text; judge relevance yourself).
-2. **If a matching open issue exists**: add a comment with this occurrence
-   (run URL, date, commit window summary, whether the signature is identical) and
-   do NOT create a new issue.
-3. **If no match**: create one issue using exactly this structure:
+2. **If a matching open issue exists**: add a comment with this occurrence and do
+   NOT create a new issue. The comment must include the run link, the date, a
+   commit-window summary, whether the signature is identical, and — on its own
+   line — the run token `gh-aw-run-${{ github.event.workflow_run.id }}` so this
+   run is discoverable by the Phase 1 search.
+3. **If no match**: create one issue using exactly the structure below. Note the
+   outer block is fenced with four backticks so the inner three-backtick blocks
+   nest correctly; reproduce the inner three-backtick fences, not the outer four.
 
    Title: `<workflow name>: <failing job name>: <short error summary>`
 
-   ```markdown
-   ## Summary
-   [2–3 sentences: what failed and the chosen case]
+````markdown
+## Summary
+[2–3 sentences: what failed and the chosen case]
 
-   ## Failing Test
-   [test name(s), or "n/a" for infra failures]
+## Failing Test
+[test name(s), or "n/a" for infra failures]
 
-   ## Case N — [case name]
-   [Justification for the case selection]
+## Case N — [case name]
+[Justification for the case selection]
 
-   ## Failure details
-   - **Run**: [run URL]
-   - **Head commit**: [sha]
-   - **Failed jobs**: [names with links]
-   - **Error signature**:
-   ```text
-   [the canonical error snippet, trimmed to the essential lines]
-   ```
+## Failure details
+- **Run**: [run URL]
+- **Head commit**: [sha]
+- **Failed jobs**: [names with links]
+- **Error signature**:
+```text
+[the canonical error snippet, trimmed to the essential lines]
+```
 
-   ## Commit window analysis
-   [Last successful run link, compare URL, ranked commit table with confidence
-   scores for Cases 1/4/5; "n/a" for Cases 2/3]
+## Commit window analysis
+[Last successful run link, compare URL, ranked commit table with confidence
+scores for Cases 1/4/5; "n/a" for Cases 2/3]
 
-   ## Who to contact
-   [Names + GitHub handles + profile links. Prioritize code owners of the files
-   that need fixing (.github/CODEOWNERS, git blame); include commit authors for
-   attribution. Never include Slack IDs.]
+## Who to contact
+[Names + GitHub profile links. Prioritize code owners of the files that need
+fixing (.github/CODEOWNERS, git blame); include commit authors for attribution.
+Never include Slack IDs. Shadow pilot must not notify anyone: render handles
+as plain text (e.g. `handle` in backticks) or profile URLs — never `@handle`.]
 
-   ## Recommended actions
-   - [ ] [Specific next steps: revert candidate, targeted fix, re-run to confirm
-     flakiness, infra escalation, etc.]
+## Recommended actions
+- [ ] [Specific next steps: revert candidate, targeted fix, re-run to confirm
+  flakiness, infra escalation, etc.]
 
-   ## Recurrence
-   [Count and links to earlier occurrences from pattern memory, if any]
-   ```
+## Recurrence
+[Count and links to earlier occurrences from pattern memory, if any]
+
+<!-- gh-aw-run-${{ github.event.workflow_run.id }} -->
+````
 
 ## Guardrails
 
