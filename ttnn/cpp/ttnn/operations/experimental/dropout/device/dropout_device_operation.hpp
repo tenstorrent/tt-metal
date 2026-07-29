@@ -33,8 +33,8 @@ struct DropoutDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // Re-derives ALL per-dispatch state (seed, buffer addresses) on every cache hit by re-running the
-    // selected factory's create_descriptor. seed is hash-excluded (per-device offset applied when
+    // Patches ALL per-dispatch state (seed, src/dst addresses) into the cached program on every cache
+    // hit -- in place, no descriptor rebuild. seed is hash-excluded (per-device offset applied when
     // use_per_device_seed); supersedes get_dynamic_runtime_args and resolve_bindings.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
