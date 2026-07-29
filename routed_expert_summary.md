@@ -132,23 +132,101 @@ Result: core (0,0) 92% → **75%** busy, isl-256 276K → 246K cycles, **1.12× 
   critical core (barrier 20.9K of 185.4K), because read-issue and mcast-issue are both on
   the same RISC and therefore additive.
 
-## 7. Open path to 3× on isl-256
+## 7. Post-remap: DRAM read bandwidth reference (the number that reframed everything)
 
-Critical core (weight sender) work at isl-256 = 185.4K cycles: read issue 113.7K (61%),
-read barrier 20.9K (11%), mcast 50.8K (27%). To get 198 → ~66 µs:
+Everything in §1–6 was measured *before* the sender remap. After it landed, the open
+question was how much headroom is actually left, so we measured the machine directly
+rather than inferring it. A timed reference pass was injected at the top of the reader
+kernel: each participating core issues N independent reads of the real gate tensor into a
+small rotating L1 window, then barriers. Participation is gated on `(my_mt, my_nt_gu)`, so
+the core count sweeps with a kernel-only edit (JIT — no host rebuild per point).
+`TT_METAL_BUILD_TESTS=OFF` in this build, so metal's `6_dram_offchip` microbenchmark was
+not available without a full reconfigure; this was cheaper and runs on the exact buffers
+and page sizes the op uses.
 
-1. **Cheaper per-request issue** — stateful NoC reads (`set_state` / `read_with_state`):
-   program size/dest once, per request write only the source address. Target 43 → ~15–20
-   cy/req ⇒ read issue 113.7K → ~45K.
-2. **More issuing RISCs** — 2 weight readers per column (now non-conflicting with the
-   x senders after the remap), and/or split each stream between the reader (NoC 0) and
-   the idle writer (NoC 1).
-3. **Hide the barrier** — per-subset barriers (transaction IDs) so the mcast of K-row *n*
-   starts while *n+1* is still in flight.
-4. **Reference measurement pending**: aggregate DRAM read bandwidth with ~64 cores all
-   issuing, to fix the real ceiling and the required number of issuing cores.
+### 7a. Scaling with the number of ISSUING cores (576 B = one bfp4 tile page)
 
-## 8. How to reproduce
+| issuing cores | cy/req | per-core GB/s | **aggregate GB/s** |
+|---|---|---|---|
+| 1 | 36.6 | 21.2 | 21 |
+| 8 | 37.4 | 20.8 | 166 |
+| 16 | 42.7 | 18.2 | **292** |
+| 32 | 79.5 | 9.8 | **313** |
+| 64 | 163.8 | 4.7 | 304 |
+| 88 | 218.8 | 3.6 | 313 |
+
+**Ceiling for 576 B reads is ~310 GB/s and it saturates at 16–32 cores.** Beyond that the
+aggregate is flat while per-core issue cost inflates 6× (36.6 → 218.8 cy/req) — the RISC
+is absorbing NoC backpressure, not doing useful work. `bar` stays ~430 cycles at every
+point, confirming the responses are never the constraint.
+
+This retro-explains the rejected experiment in §5: the 88-core weight all-gather pushed
+~3× past saturation, so it bought no aggregate bandwidth and paid full price in per-core
+stall and gather-barrier width. **"More issuing cores" is exhausted as a lever.**
+
+### 7b. Scaling with REQUEST SIZE (64 cores, 2 MiB per core)
+
+Read from the x buffer, whose pages are whole emb-wide bf16 sticks (14,336 B), so any size
+up to a full stick is a single-page read.
+
+| request size | elapsed cy | **aggregate GB/s** |
+|---|---|---|
+| 512 B | 673,643 | 269 |
+| 1024 B | 486,259 | 373 |
+| 2048 B | 477,727 | **380** |
+| 4096 B | 477,129 | **380** |
+| 14336 B | 487,894 | 371 |
+
+**Request size does move the ceiling: ~310 GB/s at 576 B → ~380–420 GB/s at ≥1024 B.**
+Caveat: the 8-core/2048 B point measures 461 GB/s, but that is optimistic — 8 cores reading
+2 MiB each out of a 3.67 MB buffer get DRAM row-buffer hits from page reuse. Treat the
+64/88-core numbers as the honest ceiling.
+
+### 7c. What the op is actually achieving
+
+Critical core (weight sender) at isl-256, post-remap: 185.4K cycles of work in a 198 µs op.
+
+| | cycles | µs | rate |
+|---|---|---|---|
+| DRAM read, gate + down (up runs concurrently on NoC 1) | 134.6K | 99.7 | 24.8 MB ⇒ **249 GB/s** |
+| multicast | 50.8K | 37.6 | 45.4 B/cy = **70% of port** |
+| sync waits | ~61K | | |
+
+**The weight read is already at 249 of a 310 GB/s ceiling — only 1.25× remains at this
+request size.** That is the single most important correction to §3's framing: the reads are
+issue-bound per core, but in aggregate the op is already close to what 576 B pages can
+deliver. Scheduling is no longer the problem; the page size is.
+
+## 8. Revised path to 3× on isl-256
+
+Ranked by measured value. Target: 198 → ~70 µs (≈350–410 GB/s of total traffic).
+
+1. **Multi-tile weight pages — the only change that can reach 3×.** Make each core's
+   (K-row × `per_core_N`) slice a *single* DRAM page (6 tiles = 3456 B) instead of 6
+   separate 576 B pages. Two compounding effects: request count ÷6 (issue 113.7K → ~18K cy)
+   **and** the ceiling moves 310 → ~400 GB/s per §7b. Needs host-side weight relayout
+   (DRAM-sharded or custom page size) in `TtRoutedExpert` plus the matching
+   `TensorAccessor` in the reader — i.e. it changes the layout the model hands the op.
+   Open question for the op owner: relayout upstream, or accept both layouts behind a flag?
+2. **2 weight senders per column.** Now safe: the remap made the weight-sender and
+   x-sender sets disjoint, and 22 issuing cores sits inside the 16–32 sweet spot. Its real
+   value is halving the **multicast** on the critical RISC (50.8K → 25.4K) — multicast
+   volume itself is irreducible (it is already a true multicast), it can only be split
+   across senders. Expect ~1.7× on its own; read time improves only 249 → ~310 GB/s.
+3. **Residual sync (~61K cy)** — deeper weight CBs (3–4 slots) plus per-subset
+   (transaction-ID) barriers so the mcast of K-row *n* starts while *n+1* is still in
+   flight, instead of one `async_read_barrier` over everything.
+
+Hard arithmetic: 24.8 MB of weights at the 576 B ceiling (310 GB/s) is **80 µs**, so
+without item 1 the best possible isl-256 is ~2.5×. At the ≥1024 B ceiling (400 GB/s) it is
+62 µs, so **3× is right at the hardware limit and requires item 1.**
+
+Superseded from the pre-reference plan: "stateful NoC reads (`set_state`/`read_with_state`)
+to cut per-request issue cost" — still real for the per-core rate, but §7a shows aggregate
+bandwidth is capped by the 576 B page size well before per-core issue cost matters, so it
+is a second-order fix behind item 1.
+
+## 9. How to reproduce
 
 ```bash
 # correctness (74 cases, all models × both x layouts)
@@ -161,6 +239,18 @@ pytest tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/te
 python3 -m tracy -p -r -o <outdir> -a device_kernel_duration -t 5000 \
   -m "pytest <worker> -k 'kimi_k26 and x_rm' -q"
 ```
+
+Kernel-side instrumentation used for §3 and §7 (reverted, not in the tree): wall-clock
+accumulators via `get_timestamp_32b()` around each region, dumped with the new-style
+`DPRINT(fmt, ...)` at kernel exit, read back with
+
+```bash
+TT_METAL_DPRINT_CORES="(0,0),(1,0),(0,3),(5,3)" TT_METAL_DPRINT_RISCVS="NC,BR" \
+TT_METAL_DPRINT_FILE=dump.txt pytest <worker> -k "kimi_k26-isl-256 and x_rm" -q
+```
+
+Kernel `.cpp` edits are JIT-compiled, so instrumentation and the §7 core/size sweeps need
+no host rebuild — one data point per ~15 s test run.
 
 Gotchas hit along the way:
 - After any C++ change, `cmake --build build --target install` is required — plain
