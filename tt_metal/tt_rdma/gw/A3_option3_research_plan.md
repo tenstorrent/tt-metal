@@ -122,6 +122,31 @@ finding (keep the landing in DPA-private DDR) — that stands, but it's a busy-p
 form. P2 (the risky co-location for a GID+DPA function) is only needed if P1's RC-RQ-CQ can't be armed on the
 DPA without co-location — the same G1 gate.
 
+## P1 build recipe (execution-ready, from the reference sample)
+**Base sample: `/opt/mellanox/doca/samples/doca_dpa/dpa_verbs_initiator_target/`** — a DOCA DPA RC-verbs
+initiator+target. Its `device/..._kernels_dev.c: target_thread_kernel` is a DPA-side RC responder:
+`doca_dpa_dev_verbs_qp_post_recv_wr` + `_commit_recv`, and it waits on completions via
+**`doca_dpa_dev_get_completion(dpa_comp_handle, &comp)`** (a DPA completion context — the event-driven
+mechanism; interrupt-backed, closer to native than our `flexio_window` spin). Host side uses `doca_verbs` +
+`doca_rdma_bridge.h`, OOB-TCP exchange of GID + `remote_qp_number` → manual `doca_verbs_ah_attr` transition
+(NOT RDMA CM — matches the interop note; a matched/OOB requester, or a CM bridge for generic apps).
+**Adapt steps:**
+1. Build the stock sample first (DPACC via `build_dpacc_samples.sh`) and run its loopback/2-host RC ping-pong —
+   confirms the DPA RC target + `doca_dpa_dev_get_completion` path works on this BF3.
+2. Replace the target kernel body: instead of "increment + WRITE back", on each recv completion do the
+   **RE-HEAD** — build the 46B TT-RDMA header, gather-egress `[hdr]+[landed payload]` on an **ETH SQ** to the
+   BH (reuse the A4 2-seg gather + the ds=4 patch), re-post the recv, ack the completion. The landing MR is the
+   RC QP's recv buffer in **DPA-private DDR** (per the memory-model finding -> scales).
+3. Add the ETH SQ + the TX-to-vport steering rule to the sample (from the packet_processor / our patch).
+4. **G1 test inside P1:** create the RC QP bound to the **SF's** GID/device while the DPA context is on the PF
+   (doca_verbs QP on the SF ctx; cf. `flexio_qp_create(process, ibv_ctx=SF, ...)` where ibv_ctx "might be
+   different than process'"). If that binds + the PF DPA can `get_completion` on its CQ -> G1 solved WITHOUT
+   co-location. If not -> co-locate (mlxconfig) or fall back to option-1.
+5. Drive: external RoCEv2 WRITE_IMM (matched OOB requester) -> DPA target re-heads -> BH pool byte-exact;
+   then N target threads on N EUs (`FLEXIO_AFFINITY_STRICT` / doca_dpa thread affinity) -> ~146G, and measure
+   latency vs the doorbell path (expect lower — no Arm hop, no window toggle).
+This is a fresh multi-hour build with its own DPACC build/iterate cycle — schedule as its own unit.
+
 ## Status of the scaffold vs the native path
 - **DONE (scaffold, RPC+busy-poll):** RoCE→DPA→BH byte-exact E2E; option-1 DPA-heap doorbell scales to 134G.
   Proves the datapath, byte-exactness, and the memory model. NOT the native execution model.
