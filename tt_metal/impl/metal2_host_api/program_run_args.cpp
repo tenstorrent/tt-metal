@@ -118,10 +118,7 @@ void ValidateTensorArgs(
         const TensorSpec* expected_spec = program_impl.get_tensor_parameter_layout(param_name.get());
         TT_FATAL(expected_spec != nullptr, "TensorArgument references unknown TensorParameter '{}'.", param_name);
         const TensorSpec& runtime_spec = mesh_tensor_of(tensor_arg).tensor_spec();
-        const bool dyn_shape = program_impl.get_tensor_parameter_dynamic_tensor_shape(param_name.get());
-        const bool padded_only = program_impl.get_tensor_parameter_match_padded_shape_only(param_name.get());
-        const TensorSpecRelaxation relaxation{
-            .match_padded_shape_only = padded_only, .dynamic_tensor_shape = dyn_shape};
+        const TensorSpecRelaxation relaxation = program_impl.get_tensor_parameter_relaxations(param_name.get());
         // Authoritative accept/reject via the same predicate the program-cache hash keys on, so
         // run-time validation and cache-equivalence cannot disagree. On rejection,
         // report_tensor_arg_mismatch emits a specific diagnostic (and always throws).

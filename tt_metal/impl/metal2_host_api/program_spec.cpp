@@ -2925,10 +2925,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
     // Register TensorParameters with the program for ValidateProgramRunArgs to consult at enqueue.
     for (const auto& tensor_parameter : spec.tensor_parameters) {
-        const bool dyn_shape = tensor_parameter.relaxations.dynamic_tensor_shape;
-        const bool match_padded_only = tensor_parameter.relaxations.match_padded_shape_only;
         program_impl->register_tensor_parameter(
-            tensor_parameter.unique_id.get(), tensor_parameter.spec, dyn_shape, match_padded_only);
+            tensor_parameter.unique_id.get(), tensor_parameter.spec, tensor_parameter.relaxations);
     }
 
     // Create DataflowBuffers and build name -> ID map.
