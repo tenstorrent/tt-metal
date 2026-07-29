@@ -176,7 +176,38 @@
  /* SQ/RQ data entry byte size log to value. */
  #define Q_DATA_ENTRY_BSIZE L2V(LOG_Q_DATA_ENTRY_BSIZE)
  /* SQ/RQ DATA byte size is queue depth times entry byte size. */
-@@ -716,6 +721,31 @@
+@@ -217,6 +222,9 @@
+ 
+ /* Source MAC address to match for incoming packets. */
+ #define SMAC 0x02427e7feb02
++/* TT-RDMA Phase C: the DPA TX->wire steering matches on DST MAC. Match the BH RXQ2 dest MAC so the DPA can
++ * send frames with the real dst=BH (02:00:00:00:00:02) instead of having to spoof dst=SMAC (A1 workaround). */
++#define TT_BH_DMAC 0x020000000002ULL
+ /* Creates steering rules for application.
+  * Returns 0 on success and -1 if the allocation was failed.
+  * app_ctx - pointer to app_context structure.
+@@ -255,15 +263,17 @@
+ 			return -1;
+ 		}
+ 
+-		/* Create a TX flow rule to forward outgoing packets to SW steering table. */
+-		app_ctx->tx_rule_table = create_rule_tx_fwd_to_sws_table(app_ctx->tx_matcher, SMAC);
++		/* Create a TX flow rule to forward outgoing packets to SW steering table.
++		 * TT-RDMA Phase C: match the BH dst MAC (these rules match on DST MAC) so DPA-sent TT-RDMA frames
++		 * keep dst=BH (02:..:02) and still egress to the wire. */
++		app_ctx->tx_rule_table = create_rule_tx_fwd_to_sws_table(app_ctx->tx_matcher, TT_BH_DMAC);
+ 		if (!app_ctx->tx_rule_table) {
+ 			fprintf(stderr, "Failed to create TX table steering rule\n");
+ 			return -1;
+ 		}
+ 
+ 		/* Create a TX flow rule to forward outgoing packets to vport (wire). */
+-		app_ctx->tx_rule_vport = create_rule_tx_fwd_to_vport(app_ctx->tx_matcher, SMAC);
++		app_ctx->tx_rule_vport = create_rule_tx_fwd_to_vport(app_ctx->tx_matcher, TT_BH_DMAC);
+ 		if (!app_ctx->tx_rule_vport) {
+ 			fprintf(stderr, "Failed to create TX vport steering rule\n");
+ 			return -1;
+@@ -716,6 +726,31 @@
  	h2d_data->rq_cq_transf = app_ctx->rq_cq_transf;
  	/* Set RQ's information. */
  	h2d_data->rq_transf = app_ctx->rq_transf;
@@ -208,7 +239,7 @@
  	/* Set APP data info for first run. */
  	h2d_data->not_first_run = 0;
  
-@@ -1068,20 +1098,37 @@
+@@ -1068,20 +1103,37 @@
  
  	printf("Ready to receive messages\n");
  

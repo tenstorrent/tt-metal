@@ -110,10 +110,11 @@ bash tt_metal/tt_rdma/gw/deploy_dpa_ttblast.sh            # build -> ~/flexio_sa
 bash tt_metal/tt_rdma/gw/deploy_dpa_ttblast.sh --run      # blast 500k x 4080B jumbo on mlx5_0
 ```
 **Measured ~178 Gbps jumbo (5.38 Mpps), Arm-free** (vs B3.1a copy ~56G, raw ~13G) → full offload is line-rate.
-BH lands it exactly-once, drop=0. **Gotchas:** (1) it's `flexio_process_call`, NOT an event handler (which
-only fires on an RX CQE). (2) the stock TX→vport rule matches **dst MAC == SMAC**, so A1 sends with dst=SMAC
-(02:42:7e:7f:eb:02); the BH still routes unicast-"other" → RXQ2. Phase C changes the rule to keep dst=BH.
-(3) DPA runs on the PF (mlx5_0), not the SF. **Next (DPA):** A2 (per-frame read landed payload) → A3 (trigger
+BH lands it exactly-once, drop=0 (dst=02:00:00:00:00:02, the real BH RXQ2 MAC). **Gotchas:** (1) it's
+`flexio_process_call`, NOT an event handler (which only fires on an RX CQE). (2) the TX→vport steering matches
+on **dst MAC** — Phase C (done) points both TX rules at the BH dst MAC (`TT_BH_DMAC 0x020000000002`) so frames
+keep the real dst=BH (A1 had spoofed dst=SMAC to satisfy the stock rule). (3) DPA runs on the PF (mlx5_0),
+not the SF. **Next (DPA):** A2 (per-frame read landed payload) → A3 (trigger
 off the RoCE RQ completion; SF-RoCE vs PF-DPA cross-device) → A4 full re-head → A5 perf.
 **Next (egress overall):** B2 (MR federation via RISC1 doorbell 3.1e).
 

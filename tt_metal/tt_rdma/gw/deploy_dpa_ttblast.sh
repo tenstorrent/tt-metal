@@ -16,8 +16,8 @@
 # Env overrides: DPU=ubuntu@192.168.100.2  DPU_PASS=ubuntu  DEV=mlx5_0
 #   TTDPA_COUNT/TTDPA_PLEN/TTDPA_DMAC/TTDPA_RKEY tune the blast (see the patch).
 #
-# NOTE (steering): the stock packet_processor forwards SQ output to the wire by matching dst MAC == SMAC, so
-# the A1 blast sets the frame dst MAC = SMAC (02:42:7e:7f:eb:02). Phase C changes the TX rule to keep dst=BH.
+# NOTE (steering): the TX->wire rule matches on dst MAC. Phase C points it at the BH dst MAC (TT_BH_DMAC
+# 0x020000000002), so frames use the real dst=02:00:00:00:00:02 (BH RXQ2) and still egress.
 set -euo pipefail
 
 DPU="${DPU:-ubuntu@192.168.100.2}"
@@ -73,7 +73,7 @@ sshdpu '
 '
 
 if [ "$RUN" = 1 ]; then
-  echo "== run: DPA blast 500k x 4080B jumbo on $DEV (dst=SMAC per stock steering) =="
-  sshdpu "echo $DPU_PASS | sudo -S env TTDPA_COUNT=500000 TTDPA_PLEN=4080 TTDPA_DMAC=02:42:7e:7f:eb:02 \
+  echo "== run: DPA blast 500k x 4080B jumbo on $DEV (dst=BH RXQ2) =="
+  sshdpu "echo $DPU_PASS | sudo -S env TTDPA_COUNT=500000 TTDPA_PLEN=4080 TTDPA_DMAC=02:00:00:00:00:02 \
             ~/flexio_samples/build/packet_processor/host/flexio_packet_processor $DEV 2>&1 | grep -iE 'returned|blast done'"
 fi
