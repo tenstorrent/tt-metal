@@ -24,6 +24,7 @@ from models.autoports.coherelabs_north_mini_code_1_0.tests.test_functional_decod
 )
 from models.autoports.coherelabs_north_mini_code_1_0.tt.functional_decoder import MODEL_ID, FunctionalDecoder
 from models.autoports.coherelabs_north_mini_code_1_0.tt.fused_decoder import FusedDecoder
+from models.autoports.coherelabs_north_mini_code_1_0.tt.optimized_decoder import OptimizedDecoder
 
 
 def _decode_probe(decoder, mesh_device, config, context):
@@ -105,7 +106,7 @@ def _prefill_probe(decoder, mesh_device, config, sequence, *, warmed):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("prefill", "decode"), required=True)
-    parser.add_argument("--implementation", choices=("functional", "fused"), default="functional")
+    parser.add_argument("--implementation", choices=("functional", "fused", "optimized"), default="functional")
     parser.add_argument("--context", type=int, required=True)
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--layer", type=int, default=0, choices=(0, 1, 4))
@@ -116,7 +117,11 @@ def main():
     config = AutoConfig.from_pretrained(MODEL_ID, revision=REAL_REVISION)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     try:
-        decoder_type = FunctionalDecoder if args.implementation == "functional" else FusedDecoder
+        decoder_type = {
+            "functional": FunctionalDecoder,
+            "fused": FusedDecoder,
+            "optimized": OptimizedDecoder,
+        }[args.implementation]
         decoder = decoder_type.from_state_dict(
             _synthetic_state(config, args.layer),
             hf_config=config,
