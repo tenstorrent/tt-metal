@@ -326,6 +326,7 @@ static inline void emule_asan_check_oob_dram(uint32_t noc_x, uint32_t noc_y, uin
     }
     auto off_it = __emule_self->dram_view_offsets->find(key);
     if (off_it == __emule_self->dram_view_offsets->end()) {
+        __emule_self->san.chk_skip[static_cast<uint32_t>(EmuleAsanCheck::OobDram)]++;
         return;
     }
     const uint64_t view_base = off_it->second;
@@ -334,8 +335,10 @@ static inline void emule_asan_check_oob_dram(uint32_t noc_x, uint32_t noc_y, uin
     }
     const uint32_t addr = static_cast<uint32_t>(in_bank_off - view_base);
     if (addr < san.dram_unreserved_base) {
+        __emule_self->san.chk_skip[static_cast<uint32_t>(EmuleAsanCheck::OobDram)]++;
         return;
     }
+    __emule_self->san.chk_eval[static_cast<uint32_t>(EmuleAsanCheck::OobDram)]++;
     for (uint32_t i = 0; i < san.dram_tensor_ranges_count; ++i) {
         const uint64_t packed = san.dram_tensor_ranges[i];
         if (addr >= static_cast<uint32_t>(packed >> 32) && addr < static_cast<uint32_t>(packed)) {

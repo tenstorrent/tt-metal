@@ -89,6 +89,8 @@ if(TT_METAL_USE_EMULE)
         # Reachability controls: violations via the PUBLIC kernel API only, to
         # distinguish "check logic works" from "a real kernel can reach it".
         asan_controls/test_asan_reachability.cpp
+        asan_controls/test_asan_cb_overrun.cpp
+        asan_controls/test_asan_cb_guard_band.cpp
         test_cb_leak.cpp
         test_cb_pages.cpp
         # Per-fiber ASAN sanitizer-state isolation (pure unit test, no device/death):

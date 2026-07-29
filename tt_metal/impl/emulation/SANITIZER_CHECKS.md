@@ -12,6 +12,9 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 **Common mechanics**
 - All checks are gated by one env var, **`TT_METAL_EMULE_ASAN=1`**, off by
   default (one exception: *CB Reservation Overflow* is always on — see §8).
+- Which checks run, per-check overrides, the coverage tally and the Blaze guard band are
+  all env-driven too. **Every variable is listed in `[emule] docs/ASAN.md` "Running the
+  checks"** — start there rather than grepping for `getenv`.
 - Each fires a single `[ASAN ERROR] <Category>: …` line, then a unified
   diagnostic trace (see *Diagnostic trace* below), then `abort()`s — every site
   calls `__emule_asan_panic()` instead of a bare `abort()`.
@@ -104,6 +107,7 @@ happens to the core the `abort()` would otherwise produce:
 | NOC Transfer Alignment | kernel | both | `[emule] api/dataflow/asan/asan_dataflow.h` | a NoC endpoint isn't aligned to its own memory-type alignment |
 | Dirty CB Detected | runner | **metal only** | `[metal] emule_sanitizers.cpp` (counters in `[emule] asan/asan_cb.h`) | a kernel left a `cb_reserve_back` un-pushed or a `cb_wait_front` un-popped |
 | Object Intent Violation | runner | **metal only** | `[metal] emule_sanitizers.cpp` | a kernel changed a buffer it never resolved a pointer into |
+| CB Guard Band | kernel | both | `[emule] asan/asan_l1_checks.h` | write into the arena guard band between two CBs — a near overrun (§15) |
 | Launch-Mailbox Clobber | kernel + runner | both | `[emule] asan/emule_asan.h`; hooked at the local chokepoint and at `__emule_resolve_noc_addr` / `__emule_multicast_write` in `[metal] emulated_program_runner.cpp` | kernel-initiated data movement lands in the reserved firmware launch-mailbox window |
 
 ---
@@ -639,6 +643,59 @@ base 0x…)`.
 abort) and `Reach_OobDram_InBounds_NoViolation` (a legal write must stay silent —
 this is what catches a wrong sign/key/view, which the death test alone cannot, since
 a check that fires on everything also passes it).
+
+---
+
+## 15. CB Guard Band
+
+**Lives in:** `__emule_asan_check_cb_guard_band` in
+`[emule] include/jit_hw/asan/asan_l1_checks.h`, called from the local chokepoint.
+**Profile:** both (on metal, CBs abut with no guard band, so it never fires).
+**What it catches:** a write into the guard band Blaze's arena leaves between scratch CB
+slots — i.e. a modest overrun off the end of a CB.
+
+**Why §4 cannot do this.** On Blaze the arena packs CBs densely, so an overrun lands in
+the *next CB's data*, which is live memory. §4 asks "is this inside a live extent"; the
+answer is yes, so it accepts. The guard band exists to give the overrun somewhere unowned
+to land — but the band is inside the arena tensor, which is itself an allocated L1 buffer,
+so §4 accepts a write there too. Hence a separate check.
+
+**The rule.** Fires when all three hold:
+1. the address is in **no** CB (the chokepoint's `cb_resolve` has already established this);
+2. there is a CB ending at or below it **and** a CB starting above it — the address is
+   strictly *between* two CBs, not before the first or past the last;
+3. the distance between those two CBs is **≤ redzone + 64 B**.
+
+Clause 2 is load-bearing. An earlier version required only "just past some CB end" and
+false-positived on loudbox `test_gather`, on a legitimate tensor access 128 B past a CB.
+Clause 3 keeps two unrelated CBs from being read as bracketing a gap that actually holds
+other live buffers; the bound is read from `BLAZE_ASAN_CB_REDZONE`, the same variable
+Blaze sizes the band with, so there is no magic constant and it tightens automatically
+when the band shrinks or is off.
+
+**Ordering.** Runs *before* §4. It must fire even where §4 would accept, and where §4
+would also reject, its message names the CB and the byte distance. Its clauses are tight
+enough that firing first cannot mask a different diagnosis.
+
+**Enabling it.** Two variables: `TT_METAL_EMULE_ASAN=1` as always, plus
+`BLAZE_ASAN_CB_REDZONE=<bytes>` (64 is a good start) which makes Blaze's
+`_compute_arena_offsets` leave that many bytes after every scratch slot. The band is
+**off by default** because it grows the arena and L1 is scarce on Blaze. With no band only
+natural alignment slack qualifies, so the check still works with a smaller catch window.
+Full variable reference: `[emule] docs/ASAN.md` "Running the checks".
+
+**Limitation.** An overrun that clears the whole band and lands inside the next CB is
+still invisible — that address is genuinely live CB memory and no address-based rule can
+distinguish it. This converts *near* overruns, the common case, into detections; it does
+not make CB bounds checking complete.
+
+*Diagnostic:* `Out-of-Bounds Write: offset 0x… is in the guard band between CB N (ends
+0x…) and the next CB at 0x… — M byte(s) past the end of CB N`.
+*Opt-out:* `TT_METAL_EMULE_ASAN_CHECK_CB_GUARD_BAND=0`.
+*Exercised by:* `asan_controls/test_asan_cb_guard_band.cpp` — in-bounds silent, last word
+of the lower CB silent (off-by-one guard), a write in the band aborts naming the lower CB,
+and a hole wider than the bound falls through to §4 (which pins clause 3: a §15 fire would
+print the guard-band text instead).
 
 ---
 

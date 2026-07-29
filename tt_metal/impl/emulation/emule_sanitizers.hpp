@@ -96,6 +96,9 @@ private:
 void set_sanitizer_thread_locals(const EmuleOobTensorState& oob, uint32_t sem_base, uint32_t sem_size);
 void clear_sanitizer_thread_locals();
 
+// Fold this fiber's per-check tally into the process totals (called at kernel exit).
+void fold_sanitizer_tally();
+
 // Dirty CB (§11): at kernel exit, abort if any CB is left with a trailing
 // dangling reserve (no following push) or wait (no following pop).
 void sweep_per_kernel_dirty_cbs(

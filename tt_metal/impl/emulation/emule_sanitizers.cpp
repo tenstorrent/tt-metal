@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <atomic>
+#include <mutex>
 #include <unordered_set>
 
 #include <tt-metalium/allocator.hpp>
@@ -151,7 +153,71 @@ void set_sanitizer_thread_locals(const EmuleOobTensorState& oob, uint32_t sem_ba
     san.pending_noc_reads = 0;
 }
 
+// Process-wide coverage tally, folded from the per-fiber counters at kernel exit and
+// printed when TT_METAL_EMULE_ASAN_TALLY is set. See docs/ASAN.md "Running the checks".
+namespace {
+std::atomic<uint64_t> g_tally_eval[kEmuleAsanCheckCount];
+std::atomic<uint64_t> g_tally_skip[kEmuleAsanCheckCount];
+
+void tally_install_dump_once() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::atexit([] {
+            if (std::getenv("TT_METAL_EMULE_ASAN_TALLY") == nullptr) {
+                return;
+            }
+            std::fprintf(stderr, "\n[emule ASAN] per-check coverage (EVALUATED / SKIPPED):\n");
+            for (uint32_t i = 1; i < kEmuleAsanCheckCount; ++i) {
+                const uint64_t e = g_tally_eval[i].load();
+                const uint64_t k = g_tally_skip[i].load();
+                // Every check prints, all-zero rows included: "never reached" is the
+                // state most worth seeing. Host-side checks are not tallied yet and
+                // always read 0/0 — see docs/ASAN.md.
+                // Host-side checks have no per-fiber counter, so 0/0 for them means
+                // "not instrumented", NOT "never ran". Labelling them apart keeps the
+                // tally honest — a row that reads "never reached" must actually mean it.
+                const auto chk = static_cast<EmuleAsanCheck>(i);
+                const bool host_side = chk == EmuleAsanCheck::UseAfterFree || chk == EmuleAsanCheck::HostAlign ||
+                                       chk == EmuleAsanCheck::MetadataOverflow || chk == EmuleAsanCheck::DirtyCb ||
+                                       chk == EmuleAsanCheck::ObjectIntent;
+                const char* note = "";
+                if (host_side) {
+                    note = "   (host-side: not tallied)";
+                } else if (e == 0 && k == 0) {
+                    note = "   <- never reached";
+                } else if (e == 0) {
+                    note = "   <- reached but never evaluated";
+                }
+                std::fprintf(
+                    stderr,
+                    "  %-26s %14llu %14llu%s\n",
+                    __emule_asan_check_name(static_cast<EmuleAsanCheck>(i)),
+                    static_cast<unsigned long long>(e),
+                    static_cast<unsigned long long>(k),
+                    note);
+            }
+        });
+    });
+}
+}  // namespace
+
+void fold_sanitizer_tally() {
+    tally_install_dump_once();
+    auto& san = __emule_self->san;
+    for (uint32_t i = 0; i < kEmuleAsanCheckCount; ++i) {
+        if (san.chk_eval[i] != 0) {
+            g_tally_eval[i].fetch_add(san.chk_eval[i], std::memory_order_relaxed);
+            san.chk_eval[i] = 0;
+        }
+        if (san.chk_skip[i] != 0) {
+            g_tally_skip[i].fetch_add(san.chk_skip[i], std::memory_order_relaxed);
+            san.chk_skip[i] = 0;
+        }
+    }
+}
+
 void clear_sanitizer_thread_locals() {
+    fold_sanitizer_tally();
     auto& san = __emule_self->san;
     san.sem_l1_range_start = 0;
     san.sem_l1_range_end = 0;
