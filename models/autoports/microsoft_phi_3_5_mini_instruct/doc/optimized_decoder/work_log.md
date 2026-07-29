@@ -239,4 +239,20 @@ fresh rereview correctly flagged as an evidence gap. The suite was therefore
 rerun from commit `106503402d3`; all 7 default tests passed and the 3
 documented opt-in tests skipped in 28.66 seconds. The complete console is
 `logs/final_tests_fused_cache_remediation.log`. The second review and its
-resolution are recorded in `stage_review_fused_second.md`.
+resolution are recorded in `stage_review_fused_second.md`. A third, genuinely
+fresh read-only review of checkpoint `f5fe927a205` returned **clean-pass** with
+no required work; its conclusion is preserved in
+`stage_review_fused_final.md`.
+
+Final fused-checkout checkpoint chain:
+
+- `e64f036b4fc` — optimized decoder implementation and evidence restored onto
+  the fused-decoder checkout.
+- `2e993fdc6eb` — optimized decoder checkpoint.
+- `0850d51ceda` — mandatory shard-advisor gate and decision evidence.
+- `67407bc0ff3` — prior clean advisor-stage review record.
+- `106503402d3` — preserve and accelerate the fused predecessor's batch-1
+  paired cache update with disjoint K/V shards.
+- `f5fe927a205` — persist the complete post-remediation suite and second review.
+- The local commit containing this paragraph preserves the final clean-pass
+  review. No commit was pushed.
