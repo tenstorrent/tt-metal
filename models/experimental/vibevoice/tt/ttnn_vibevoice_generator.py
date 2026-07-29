@@ -772,7 +772,7 @@ class TTVibeVoiceGenerator:
         else:
             self._sf_pos_pos_host += 1  # mirror the on-device plus_one from the prior frame
             self._sf_neg_pos_host += 1
-        if self._sf_fp32_rope:
+        if self._sf_fp32_rope and not self.lm._fused_rope:
             # fp32 rope rows for the current positions (device positions self-advance for KV/sdpa).
             self._sf_write_rope(self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos_host)
             self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
@@ -850,12 +850,14 @@ class TTVibeVoiceGenerator:
             self._sf_pos_pos_host = start_pos
             self._sf_neg_pos_host = 0  # boot advances the device tensor + this mirror to 1
             ttnn.copy(input_a=self._sf_hidden_seed, input_b=self._sf_hidden_buf)  # cond_pos(0) seed
-            self._sf_write_rope(self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos_host)
+            if not self.lm._fused_rope:
+                self._sf_write_rope(self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos_host)
         else:
             self._sf_pos_pos_host += 1  # mirror the on-device plus_one from the prior frame's lm2
             self._sf_neg_pos_host += 1
-            self._sf_write_rope(self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos_host)
-            self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
+            if not self.lm._fused_rope:
+                self._sf_write_rope(self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos_host)
+                self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(noise_2x[:1].to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
             self._sf_noise,
@@ -876,7 +878,8 @@ class TTVibeVoiceGenerator:
             # Eager B=1 negative-prefill: neg-LM on speech_start @ neg_pos 0 → _sf_neg_hidden.  Runs
             # once per segment while no trace is live (the frame-0 boundary), then switches the neg
             # row's embed/RoPE to the steady speech_diffusion @ neg_pos 1 for lm2.
-            self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, 0)
+            if not self.lm._fused_rope:
+                self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, 0)
             ttnn.copy(input_a=self._sf_neg_start, input_b=self._sf_neg_embed)
             _, nh = lm.forward_decode_traced_embeds(
                 self._sf_neg_embed,
@@ -893,7 +896,8 @@ class TTVibeVoiceGenerator:
                 ttnn.copy(input_a=nh, input_b=self._sf_neg_hidden)
             ttnn.plus_one(self._sf_neg_pos)  # device neg_pos → 1
             self._sf_neg_pos_host = 1
-            self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
+            if not self.lm._fused_rope:
+                self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
 
         def _dp2trace():
             cond_pos = _condition_from_hidden(self._sf_hidden_buf)
