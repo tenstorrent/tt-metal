@@ -3062,23 +3062,26 @@ static std::vector<tt::tt_metal::emule::OobStateOwner> g_mesh_oob_keep;
 struct ResolvedProgram {
     std::map<CoreCoord, std::vector<KernelInfo>> core_kernels;
     uint32_t emule_sem_base = 0;
-    // Fabric connection routing captured at first resolve. __emule_fabric_record_conn populates the global
-    // g_conn_route/g_mux_dir during host program construction — but ttnn's program cache SKIPS construction
-    // on a cache hit, so an intervening different op leaves the globals holding ITS routes. Routing is a
-    // property of the program (like the compiled kernels), so snapshot it here and restore it into the
-    // globals at every dispatch, so a cache-hit reinstates its own directions. g_ring_adj (the static
-    // physical ring) is accumulated globally and not snapshotted; g_worker_dir is a run-time cache, not a
-    // program property, so it is cleared (not snapshotted/restored) and re-derived per op. See tt-emule
-    // docs/fabric-ccl-emulation.md.
-    // NOTE (known limitation): an LRU-forced re-resolve of a ttnn program-cache hit re-runs the snapshot
-    // below with construction skipped, so it would capture whatever routes the globals then hold. Bounded
-    // today by kMaxResolvedPrograms >> live CCL programs; tracked for a per-program construction guard.
-    std::unordered_map<uint32_t, std::vector<ConnRoute>> conn_route;
-    std::unordered_map<uint64_t, uint32_t> mux_dir;
 };
 static std::unordered_map<ProgramId, ResolvedProgram> g_resolved_programs;
 static std::deque<ProgramId> g_resolved_lru;
 static constexpr size_t kMaxResolvedPrograms = 256;
+
+// Per-program fabric routing, keyed by ProgramId. __emule_fabric_record_conn populates the globals
+// g_conn_route/g_mux_dir during host program construction, but ttnn's program cache SKIPS construction on a
+// cache hit, so an intervening op leaves the globals holding ITS routes. Routing is a property of the
+// program (like the compiled kernels), so it is captured ONCE (on the program's first resolve, right after
+// its construction recorded it) and restored into the globals at every dispatch, so a cache-hit reinstates
+// its own directions. This map is intentionally NOT LRU-bounded (unlike g_resolved_programs): the routing
+// data is tiny, and it must outlive kernel-cache eviction so an evicted-then-redispatched program restores
+// its own routes rather than re-capturing a foreign op's. g_ring_adj (static physical ring) is accumulated
+// globally and not captured; g_worker_dir is a run-time cache, cleared and re-derived per op. See tt-emule
+// docs/fabric-ccl-emulation.md.
+struct ProgramRoutes {
+    std::unordered_map<uint32_t, std::vector<ConnRoute>> conn_route;
+    std::unordered_map<uint64_t, uint32_t> mux_dir;
+};
+static std::unordered_map<ProgramId, ProgramRoutes> g_program_routes;
 
 static void launch_cores(
     std::vector<CoreSetup>& core_setups,
@@ -3366,14 +3369,15 @@ static ResolvedProgram& prepare_program(IDevice* device, Program& program) {
         pid,
         resolved.core_kernels.size());
 
-    // Snapshot this program's fabric routing (recorded into the globals by __emule_fabric_record_conn during
-    // this program's host construction, just before this first resolve) so a later program-cache HIT — which
-    // skips construction — can restore its own directions instead of inheriting an intervening op's. See the
-    // ResolvedProgram fields and the restore in execute_program_emulated.
+    // Capture this program's fabric routing ONCE, keyed by pid: on its first resolve the globals still hold
+    // what __emule_fabric_record_conn recorded during this program's host construction (just before this
+    // resolve). On an LRU-forced re-resolve of a ttnn cache-hit (construction skipped, globals hold a foreign
+    // op's routes) the entry already exists, so we keep the ORIGINAL. Restored in execute_program_emulated.
     {
         std::lock_guard<std::mutex> lk(g_conn_route_mu);
-        resolved.conn_route = g_conn_route;
-        resolved.mux_dir = g_mux_dir;
+        if (g_program_routes.find(pid) == g_program_routes.end()) {
+            g_program_routes[pid] = ProgramRoutes{g_conn_route, g_mux_dir};
+        }
     }
 
     // LRU-bound the cache (safety net; entries are otherwise valid for the program's life).
@@ -3433,14 +3437,18 @@ void execute_program_emulated(IDevice* device, Program& program) {
     // Restore this program's fabric routing into the globals before the run resolves any 1D send direction.
     // On a fresh resolve this equals what record_conn just recorded (no-op); on a program-cache HIT (which
     // skipped construction + record_conn) it reinstates this program's directions over whatever an
-    // intervening op left behind. g_ring_adj (static physical ring) is intentionally left accumulated;
-    // g_worker_dir is a run-time cache, cleared here so it is re-derived for this op. See
-    // ResolvedProgram / tt-emule docs/fabric-ccl-emulation.md.
+    // intervening op left behind. Keyed by pid in g_program_routes (never LRU-evicted), so it is correct even
+    // after the resolved-program cache evicts and re-resolves this program. g_ring_adj (static physical ring)
+    // is intentionally left accumulated; g_worker_dir is a run-time cache, cleared here so it is re-derived
+    // for this op. See ProgramRoutes / tt-emule docs/fabric-ccl-emulation.md.
     {
+        const ProgramId pid = program.impl().get_id();
         std::lock_guard<std::mutex> lk(g_conn_route_mu);
-        g_conn_route = resolved.conn_route;
+        if (auto rit = g_program_routes.find(pid); rit != g_program_routes.end()) {
+            g_conn_route = rit->second.conn_route;
+            g_mux_dir = rit->second.mux_dir;
+        }
         g_worker_dir.clear();
-        g_mux_dir = resolved.mux_dir;
     }
 
     const bool defer = g_emule_mesh_defer;  // mesh register phase (the run is deferred)
