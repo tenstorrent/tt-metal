@@ -122,7 +122,9 @@ def decode_forward(
         program_config=program_config.get_decode_down_config(
             down_input.shape[2], weights.down_proj.shape[-1], k=down_input.shape[-1]
         ),
-        dtype=activation_dtype,
+        # bf16 output (not bf8): feeds the bf16 permute+add(bias)+mul(routing)+sum tail;
+        # emitting bf16 avoids the per-op bf8->bf16 recast (same win as gate/up above).
+        dtype=ttnn.bfloat16,
     )
 
     down_input.deallocate(True)
