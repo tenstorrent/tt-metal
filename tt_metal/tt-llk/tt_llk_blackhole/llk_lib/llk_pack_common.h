@@ -23,7 +23,8 @@ using namespace ckernel::packer;
 // wait until math is done and has produced something to pack
 inline void _llk_packer_wait_for_math_done_()
 {
-    TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
+    // STALL_SYNC prevents wait while holding when ADC instructions are mutexed
+    TTI_SEMWAIT(p_stall::STALL_TDMA | p_stall::STALL_SYNC, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
 }
 
 /**
@@ -127,9 +128,19 @@ inline void _llk_pack_dest_init_()
  *
  * @param tile_index: Index of the source tile in the destination register.
  */
+template <bool mutex_ADC = false>
 inline void set_dst_write_addr(const std::uint32_t tile_index)
 {
-    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
+    if constexpr (mutex_ADC)
+    {
+        t6_mutex_acquire(mutex::THREAD2_ADC);
+        TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
+        t6_mutex_release(mutex::THREAD2_ADC);
+    }
+    else
+    {
+        TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
+    }
 }
 
 /**

@@ -177,26 +177,29 @@ inline void _llk_unpack_AB_face_compressed_mm_init_(const std::uint32_t unpB_fac
 
     _llk_unpack_AB_face_compressed_mm_mop_config_();
 
+    constexpr std::uint32_t unpA_x_end = FACE_R_DIM * FACE_C_DIM - 1;
+    const std::uint32_t unpB_x_end = 4 * unpB_face_r_dim * FACE_C_DIM - 1;
+
+    t6_mutex_acquire(mutex::THREAD2_ADC);
     // counter override overrides CH0 XY and CH1 X counters, CH0 ZW counters are still shared
     TTI_SETADCXY(0b011, 0b10'000, 0, 0, 0, 0b1111);  // reset overridden counters for bfp2
     TTI_SETADCXY(0b011, 0b11'000, 0, 0, 0, 0b1111);  // reset overridden counters for bfp4
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1111);         // reset CH0 XY counters for unp1 (and unp0 while at it)
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);         // reset shared counters for both unpackers
-
-    constexpr std::uint32_t unpA_x_end = FACE_R_DIM * FACE_C_DIM - 1;
-    const std::uint32_t unpB_x_end = 4 * unpB_face_r_dim * FACE_C_DIM - 1;
-
     // set CH1 X counters for both unpackers, bfp4 and bfp2 use different counter overrides so we need to set both
     TTI_SETADC(p_setadc::UNP0, p_setadc::CH_1, p_setadc::SET_X, (0b10 << 16) | unpA_x_end);
     TTI_SETADC(p_setadc::UNP0, p_setadc::CH_1, p_setadc::SET_X, (0b11 << 16) | unpA_x_end);
     TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
+    t6_mutex_release(mutex::THREAD2_ADC);
 }
 
 inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_num_faces) {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Ovrd_data_format_RMW>(0);
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xFF0000>(unpA_num_faces);
 
+    t6_mutex_acquire(mutex::THREAD2_ADC);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1111);  // reset CH0 XY counters for both unpackers to leave them in a clean state
+    t6_mutex_release(mutex::THREAD2_ADC);
 }
 
 template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true>
@@ -222,8 +225,10 @@ inline void _llk_unpack_AB_face_compressed_mm_(
     }
     cfg[THCON_SEC0_REG3_Base_address_ADDR32] = pre_meta_ptr[1] & 0x00FFFFFF;
     cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & 0x00FFFFFF;
+    t6_mutex_acquire(mutex::THREAD2_ADC);
     TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b10 << 16) | (pre_meta_ptr[1] >> 24));
     TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b11 << 16) | (pre_meta_ptr[2] >> 24));
+    t6_mutex_release(mutex::THREAD2_ADC);
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = base_address_b;
 
     semaphore_post(semaphore::UNPACK_SYNC);
@@ -277,8 +282,10 @@ inline void _llk_unpack_AB_face_compressed_mm_(
             emit_word(meta_ptr[c]);
         }
         TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0002);
+        t6_mutex_acquire(mutex::THREAD2_ADC);
         TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b10 << 16) | (pre_meta_ptr[3 + 4 * b] >> 24));
         TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b11 << 16) | (pre_meta_ptr[4 + 4 * b] >> 24));
+        t6_mutex_release(mutex::THREAD2_ADC);
         for (std::uint32_t i = 0; i < 4; ++i, ++c) {
             emit_word(meta_ptr[c]);
         }
@@ -288,8 +295,10 @@ inline void _llk_unpack_AB_face_compressed_mm_(
             emit_word(meta_ptr[c]);
         }
         TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
+        t6_mutex_acquire(mutex::THREAD2_ADC);
         TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b10 << 16) | (pre_meta_ptr[5 + 4 * b] >> 24));
         TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b11 << 16) | (pre_meta_ptr[6 + 4 * b] >> 24));
+        t6_mutex_release(mutex::THREAD2_ADC);
     }
 
     if (odd_block) {
@@ -302,10 +311,12 @@ inline void _llk_unpack_AB_face_compressed_mm_(
             emit_word(meta_ptr[c]);
         }
         TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0002);
+        t6_mutex_acquire(mutex::THREAD2_ADC);
         TT_SETADC(
             p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b10 << 16) | (pre_meta_ptr[3 + 4 * full_blocks] >> 24));
         TT_SETADC(
             p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b11 << 16) | (pre_meta_ptr[4 + 4 * full_blocks] >> 24));
+        t6_mutex_release(mutex::THREAD2_ADC);
     }
 
     for (; c < full_iters; ++c) {
@@ -332,7 +343,9 @@ inline void _llk_unpack_AB_face_compressed_mm_(
     wait_for_next_context(1);
     reset_config_context();
 
+    t6_mutex_acquire(mutex::THREAD2_ADC);
     TTI_SETADCXY(0b011, 0b10'000, 0, 0, 0, 0b1010);
     TTI_SETADCXY(0b011, 0b11'000, 0, 0, 0, 0b1010);
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    t6_mutex_release(mutex::THREAD2_ADC);
 }

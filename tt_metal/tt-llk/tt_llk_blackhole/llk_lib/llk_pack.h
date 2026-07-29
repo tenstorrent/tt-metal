@@ -387,7 +387,7 @@ namespace llk_pack_internal_bh
  * @note Init owns the packer X (datum) counter (SETADCXX): every init programs its own value, mirroring
  *       the Wormhole contract. On Blackhole the value is always a single row (FACE_C_DIM - 1).
  */
-template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides>
+template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool mutex_ADC>
 inline void pack_init_apply(
     const std::uint32_t pack_src_format,
     const std::uint32_t face_r_dim,
@@ -407,7 +407,17 @@ inline void pack_init_apply(
 
     // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
     // own value; on Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+
+    if constexpr (mutex_ADC)
+    {
+        t6_mutex_acquire(mutex::THREAD2_ADC);
+        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+        t6_mutex_release(mutex::THREAD2_ADC);
+    }
+    else
+    {
+        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    }
 }
 } // namespace llk_pack_internal_bh
 
@@ -513,7 +523,12 @@ inline void _llk_pack_hw_configure_(
  * @param skip_bh_tilize_workaround: When true (8-bit src datums), skip the Blackhole tilize row-unswizzle workaround.
  * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
  */
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+template <
+    PackMode pack_mode       = PackMode::Default,
+    bool zero_output         = false,
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false,
+    bool mutex_ADC           = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
     const std::uint32_t face_r_dim,
@@ -540,12 +555,12 @@ inline void _llk_pack_init_(
     // so we can skip the workaround which involves unswizzling rows in the tile.
     if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
     {
-        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides>(
+        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides, mutex_ADC>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
     else
     {
-        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, mutex_ADC>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
 }
@@ -580,18 +595,27 @@ inline void _llk_pack_uninit_()
  * @note Call @ref _llk_pack_init_ with matching template/runtime args before this function, and
  *       @ref _llk_pack_uninit_ once all pack calls are complete.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
     llk::san::operation_check<llk::san::Operation::Pack>();
 
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Blackhole: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
-    set_dst_write_addr(tile_index);
+    set_dst_write_addr<mutex_ADC>(tile_index);
 
     program_packer_destination(address);
 
     ckernel::ckernel_template::run();
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+    if constexpr (mutex_ADC)
+    {
+        t6_mutex_acquire(mutex::THREAD2_ADC);
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+        t6_mutex_release(mutex::THREAD2_ADC);
+    }
+    else
+    {
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+    }
 }
