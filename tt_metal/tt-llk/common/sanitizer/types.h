@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <bitset>
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -15,53 +17,12 @@
 namespace llk::san
 {
 
-struct Ignore
-{
-    constexpr Ignore() = default;
-};
-
-struct Unknown
-{
-    constexpr Unknown() = default;
-};
-
-static constexpr Ignore IGNORE   = Ignore();
-static constexpr Unknown UNKNOWN = Unknown();
-
-enum class StateType : std::uint8_t
-{
-    Known,
-    Unknown,
-    Ignore
-};
-
-template <typename T>
-class State;
-
-template <typename T>
-struct is_state : std::false_type
-{
-};
-
-template <typename T>
-struct is_state<State<T>> : std::true_type
-{
-};
-
-template <typename T>
-inline constexpr bool is_state_v = is_state<T>::value;
-
-// True for value types that construct a KNOWN State, i.e. anything that is not a State<>,
-// nor one of the IGNORE / UNKNOWN markers.
-template <typename T>
-inline constexpr bool is_known_value_v = !is_state_v<std::decay_t<T>> && !std::is_same_v<std::decay_t<T>, Ignore> && !std::is_same_v<std::decay_t<T>, Unknown>;
-
 template <typename T>
 class State
 {
 private:
     T underlying;
-    StateType state_type;
+    ValueState state_type;
 
 public:
     template <typename U>
@@ -69,7 +30,7 @@ public:
 
     // CONSTRUCTION
     // Default to UNKNOWN state because hardware is not initialized
-    State() noexcept(std::is_nothrow_default_constructible_v<T>) : underlying {}, state_type(StateType::Unknown)
+    State() noexcept(std::is_nothrow_default_constructible_v<T>) : underlying {}, state_type(ValueState::Unknown)
     {
     }
 
@@ -82,29 +43,29 @@ public:
     // - other                -> State with state_type == Known (storing the value)
 
     // Constructor for IGNORE
-    constexpr State(const Ignore&) noexcept : underlying {}, state_type(StateType::Ignore)
+    constexpr State(const Ignore&) noexcept : underlying {}, state_type(ValueState::Ignore)
     {
     }
 
     // Constructor for UNKNOWN
-    constexpr State(const Unknown&) noexcept : underlying {}, state_type(StateType::Unknown)
+    constexpr State(const Unknown&) noexcept : underlying {}, state_type(ValueState::Unknown)
     {
     }
 
     // Constructor for KNOWN value
     template <typename U, typename = std::enable_if_t<is_known_value_v<U>>>
-    constexpr State(U&& value) noexcept(std::is_nothrow_constructible_v<T, U&&>) : underlying(std::forward<U>(value)), state_type(StateType::Known)
+    constexpr State(U&& value) noexcept(std::is_nothrow_constructible_v<T, U&&>) : underlying(std::forward<U>(value)), state_type(ValueState::Known)
     {
     }
 
     // ASSIGNMENT
-    // if RHS of assignment is StateType::Ignore, noop (stays old value)
+    // if RHS of assignment is ValueState::Ignore, noop (stays old value)
     // otherwise take the state_type and underlying of RHS
 
     template <typename U>
     State& operator=(const State<U>& rhs) noexcept(std::is_nothrow_copy_assignable_v<T>)
     {
-        if (rhs.state_type == StateType::Ignore)
+        if (rhs.state_type == ValueState::Ignore)
         {
             return *this;
         }
@@ -118,7 +79,7 @@ public:
     template <typename U>
     State& operator=(State<U>&& rhs) noexcept(std::is_nothrow_move_assignable_v<T>)
     {
-        if (rhs.state_type == StateType::Ignore)
+        if (rhs.state_type == ValueState::Ignore)
         {
             return *this; // No-op
         }
@@ -152,17 +113,17 @@ public:
 
     constexpr bool is_known() const noexcept
     {
-        return state_type == StateType::Known;
+        return state_type == ValueState::Known;
     }
 
     constexpr bool is_unknown() const noexcept
     {
-        return state_type == StateType::Unknown;
+        return state_type == ValueState::Unknown;
     }
 
     constexpr bool is_ignore() const noexcept
     {
-        return state_type == StateType::Ignore;
+        return state_type == ValueState::Ignore;
     }
 
     const T& get_underlying() const
@@ -206,78 +167,113 @@ public:
     }
 };
 
-// TODO: refactor below
-
-enum class llk_san_cfg_t
-{
-    Addrmod,
-    Mop,
-    DvalidDisable,
-    CH0Strides,
-    CH1Strides,
-    TileDesc,
-    AdcXX,
-    Transpose,
-    L1Offset
+enum class StateType {
+    None,
+    OperandUnpack,
+    OperandFpu,
+    OperandSfpu,
+    OperandPack,
+    Operation
 };
 
-enum class llk_san_operand_t
-{
-    SrcA,
-    SrcB,
-    Dst
+template <StateType Category, typename Group, typename T>
+class StateField {
+public:
+    using GroupTag = Group;   // enables the reverse field -> owning-struct lookup
+    using ValueType = T;
+
+    static constexpr StateType state_type() { return Category; }
+
+    static constexpr std::size_t size() { return sizeof(T); }
+    static constexpr std::size_t align() { return alignof(T); }
+
 };
 
-// UNPACK operand state
-struct UnpackSrcState
-{
-    State<std::uint32_t> input_format;
-    State<std::uint32_t> output_format;
-    State<std::uint32_t> face_height;
-    State<std::uint32_t> num_faces;
+
+template <typename Id>
+class StateVal {
+public:
+    using StateIdType = Id;
+    using ValueType = typename StateIdType::ValueType;
+    using GroupTag = typename StateIdType::GroupTag;
+    using State = typename GroupTag::State;
+
+    ValueType value;
+
+    constexpr StateVal(ValueType v) : value(v) {}
 };
 
-struct UnpackOperandState
-{
-    UnpackSrcState src_a;
-    UnpackSrcState src_b;
-    State<bool> dest_width_32;
-    bool is_configured = false;
+template <typename... Fields>
+class StateStruct {
+
+    template <typename Field>
+    using ValueType = typename Field::ValueType;
+
+private:
+    std::tuple<ValueType<Fields>...> values;
+    std::bitset<sizeof...(Fields)> known;
+
+    template <typename F>
+    static constexpr std::size_t index()
+    {
+        constexpr bool matches[] = {std::is_same_v<Fields, F>...};
+        for (std::size_t i = 0; i < sizeof...(Fields); ++i)
+        {
+            if (matches[i])
+            {
+                return i;
+            }
+        }
+        return sizeof...(Fields);
+    }
+
+public:
+    template <typename Field>
+    bool update()
+    {
+        constexpr std::size_t idx = index<Field>();
+        static_assert(idx < sizeof...(Fields), "field does not belong to this StateStruct");
+        known.set(idx);
+        return true;
+    }
+
+    // Access a field's value by the field itself, e.g. get<OperandUnpack::InputFormatA>().
+    // Marks the field known/touched -- use the const overload for a read that shouldn't.
+    template <typename F>
+    auto& get()
+    {
+        constexpr std::size_t idx = index<F>();
+        static_assert(idx < sizeof...(Fields), "field does not belong to this StateStruct");
+        known.set(idx);
+        return std::get<idx>(values);
+    }
+
+    template <typename F>
+    const auto& get() const
+    {
+        constexpr std::size_t idx = index<F>();
+        static_assert(idx < sizeof...(Fields), "field does not belong to this StateStruct");
+        return std::get<idx>(values);
+    }
+
+    // Has this field been touched via get<F>() at least once?
+    template <typename F>
+    bool is_set() const
+    {
+        constexpr std::size_t idx = index<F>();
+        static_assert(idx < sizeof...(Fields), "field does not belong to this StateStruct");
+        return known.test(idx);
+    }
 };
 
-// MATH operand state
-struct MathSrcState
-{
-    State<std::uint32_t> input_format;
-};
 
-struct MathOperandState
-{
-    MathSrcState src_a;
-    MathSrcState src_b;
-    bool is_configured = false;
-};
+// Reverse lookup: given a field, recover its owning group tag and StateStruct.
+template <typename F>
+using group_of_t = typename F::GroupTag;
 
-// PACK operand state
-struct PackOperandState
-{
-    State<std::uint32_t> input_format;
-    State<std::uint32_t> output_format;
-    State<std::uint32_t> face_height;
-    State<std::uint32_t> tile_width;
-    State<std::uint32_t> num_faces;
-    State<bool> partial_face;
-    State<bool> narrow_tile;
-    State<bool> dest_width_32;
-    bool is_configured = false;
-};
+template <typename F>
+using state_of_t = typename group_of_t<F>::State;
 
-struct OperandState
-{
-    UnpackOperandState unpack;
-    MathOperandState math;
-    PackOperandState pack;
-};
 
 enum class Operation : std::uint32_t;
 
