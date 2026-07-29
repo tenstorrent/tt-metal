@@ -39,13 +39,14 @@ enum register_space_e
     ADDR_COUNTERS = 0x2
 };
 
-// TODO: AM; rename enum values, issue #1275
+// Mailbox slot index per Quasar Neo-cluster TRISC role (matches the COMPILE_FOR_TRISC processor_id
+// assigned in hal_2xx_common.cpp: 0=unpack, 1=math, 2=pack, 3=isolate-sfpu).
 enum ThreadId
 {
-    BriscThreadId  = 0,
-    UnpackThreadId = 1,
-    MathThreadId   = 2,
-    PackThreadId   = 3
+    UnpackThreadId      = 0,
+    MathThreadId        = 1,
+    PackThreadId        = 2,
+    IsolateSfpuThreadId = 3
 };
 
 enum class BinaryOp : std::uint8_t

@@ -281,14 +281,18 @@ void kernel_main() {
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
-            // Check whether this batch is valid
-            bool is_batch_valid = false;
-            UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-            MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-            PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-            if (!is_batch_valid) {
-                continue;
-            }
+            // This reader-to-compute is_batch_valid handoff is unresolved. It previously read
+            // ThreadId::BriscThreadId, a slot that does not exist on Quasar (the enum only covers
+            // the 4 Tensix compute roles) and that no writer ever wrote to. Routing it correctly
+            // requires the DM-side reader kernel to reach a TRISC mailbox, which ckernel::
+            // mailbox_write cannot do from a DM core -- it needs a raw NOC write to the queue's
+            // NEO-cluster address, picking a writer slot by convention with the reader. That is an
+            // ops-owned fix, not something to guess at here, so this path is kept unreachable
+            // rather than silently compiling unverified synchronization.
+            static_assert(
+                !get_batch_from_reader,
+                "get_batch_from_reader mailbox synchronization (reader/writer -> compute is_batch_valid "
+                "handoff) is unresolved -- fix the mailbox sync before enabling this path");
         }
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
