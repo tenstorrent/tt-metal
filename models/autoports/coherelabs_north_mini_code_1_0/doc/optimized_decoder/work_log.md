@@ -572,3 +572,44 @@ external pinned tt-mlir environment lacks both `ttnn-advise` and `ttnn_jit`.
 Per the shard-advisor skill, building that environment inside this model
 experiment is prohibited operator setup. Exact failure and recovery commands
 are retained under `shard_advise/` and `AUTOFIX.md`.
+
+## Current no-advisor arm continuation
+
+The preceding OPT-015 text is retained as historical evidence from the source
+branch. The current branch descends from the same functional checkpoint but
+uses the explicit `nofuse-noadvise` experiment arm. Its current
+`.agents/skills/optimize/SKILL.md` removes OPT-015 and instead requires the
+dense block's L1 layouts and matmul programs to be derived and swept from
+shapes, dtype, grid, and measured profiler evidence. The existing 8/12/16/32
+residual-grid sweep, batch-specific DRAM-sharded matmul sweeps, and retained
+advice-enabled reports satisfy that current contract; no unavailable external
+advisor result is claimed.
+
+The model-isolated commits were transplanted onto this arm without changing
+their contents:
+
+- `a4f01f9df0c` — Add optimized North Mini decoder.
+- `896cdb1a9f4` — Close North Mini optimized decoder review gaps.
+- `e85ebbb8108` — Log North Mini optimization checkpoint.
+- `adfdd00a802` — Optimize North Mini decoder active expert paths.
+- `2e27475fbc7` — Close North Mini optimized decoder review 4.
+- `8440ab8e801` — Record isolated North Mini stage history.
+- `838af0978af` — Point North Mini docs at final review suite.
+- `4c9ad9aa51a` — Fix North Mini final prefill geometry.
+
+Current-arm revalidation on four visible Blackhole p300c boards:
+
+```text
+pytest -q -s --timeout=900 \
+  --junitxml=.../doc/optimized_decoder/artifacts/current_full.xml \
+  .../tests/test_optimized_decoder.py \
+  .../tests/test_optimized_decoder_prefill_geometry.py
+```
+
+Result: `38 passed, 16 skipped in 381.19s`. The skips are the default-off
+real-weight DRAM expert candidate matrix; selected-path coverage passed. The
+run reproduced the authentic batch-32 packed-prefill PCCs
+0.99923857/0.99993403, batch-32 MoE decode PCCs
+0.99799467/0.99723433, non-aligned active-expert prefill, paged-cache slot
+updates, all representative layer kinds, and repeated traced determinism.
+`artifacts/current_full.xml` records the gate. No commit was pushed.

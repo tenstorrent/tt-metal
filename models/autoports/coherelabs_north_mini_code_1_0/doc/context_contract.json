@@ -16,14 +16,14 @@
   "page_size": 32,
   "cache_dtype": "bfloat16",
   "capability_reduction": null,
-  "completion_status": "in-progress",
+  "completion_status": "review-pending",
   "pending_gates": [
-    "Install the pinned external tt-mlir shard-advisor environment, complete OPT-015, and rerun independent stage review"
+    "Obtain a fresh clean-pass from stage-review under the current no-advisor optimize contract"
   ],
   "independent_stage_review": {
-    "verdict": "more-work-needed",
+    "verdict": "pending-current-arm-rereview",
     "required_work": [
-      "Complete mandatory OPT-015 shard-advisor capture and candidate comparison after external operator setup installs ttnn-advise and ttnn_jit."
+      "Review the current isolated optimized-decoder commits and current-arm revalidation evidence."
     ]
   },
   "context_probe_evidence": {

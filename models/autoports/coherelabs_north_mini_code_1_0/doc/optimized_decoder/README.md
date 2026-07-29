@@ -58,6 +58,14 @@ pytest -q -s --timeout=900 \
 Result: `38 passed, 16 skipped in 383.78s`. The skips are opt-in
 DRAM-sharded candidate cases, not selected-path coverage.
 
+The same final source was revalidated after transplanting the isolated
+model-only commit chain onto the current no-advisor experiment arm:
+`38 passed, 16 skipped in 381.19s`. The JUnit artifact is
+`artifacts/current_full.xml`. The current arm's `optimize` skill intentionally
+requires a manually derived and measured layout seed; it does not contain the
+historical OPT-015 shard-advisor gate discussed in the retained review-5
+history.
+
 | Check | Final evidence |
 |---|---:|
 | authentic layer-1 prefill b1 / b32 | PCC 0.999428 / 0.999428 |
