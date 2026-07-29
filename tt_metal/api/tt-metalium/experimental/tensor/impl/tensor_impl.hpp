@@ -5,7 +5,6 @@
 #pragma once
 
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/tilize_utils.hpp>
 
 #include <tt_stl/span.hpp>
 #include <vector>
@@ -32,27 +31,5 @@ namespace tt::tt_metal::tensor_impl {
 //   * Resulting data is safe to be converted to python tensors or general consumption with just a ND logical shape
 template <typename T>
 std::vector<T> decode_tensor_data(ttsl::Span<const T> physical_data, const TensorSpec& tensor_spec);
-
-// ======================================================================================
-//                                  Layout converters
-// ======================================================================================
-
-template <typename T>
-std::vector<T> to_row_major_layout(const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data_to_convert) {
-    auto tile_shape = tile.get_tile_shape();
-    auto face_shape = tile.get_face_shape();
-    auto transpose_within_face = tile.get_transpose_within_face();
-    auto transpose_of_faces = tile.get_transpose_of_faces();
-
-    return convert_layout(
-        data_to_convert,
-        shape,
-        TensorLayoutType::TILED_NFACES,
-        TensorLayoutType::LIN_ROW_MAJOR,
-        tile_shape,
-        face_shape,
-        transpose_within_face,
-        transpose_of_faces);
-}
 
 }  // namespace tt::tt_metal::tensor_impl

@@ -47,6 +47,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/graph/graph_serialization.hpp"
 #include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include <ttnn/tensor/to_string.hpp>
@@ -207,8 +208,16 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
     auto dispatch_to_concrete = [&tensor_spec, padded_output]<typename T>(HostBuffer host_buffer) {
         if (padded_output) {
             if (tensor_spec.layout() == Layout::TILE) {
-                auto row_major_data = tt::tt_metal::tensor_impl::to_row_major_layout(
-                    tensor_spec.physical_shape(), tensor_spec.tile(), host_buffer.view_as<const T>());
+                const auto& tile = tensor_spec.tile();
+                auto row_major_data = convert_layout(
+                    host_buffer.view_as<const T>(),
+                    tensor_spec.physical_shape(),
+                    TensorLayoutType::TILED_NFACES,
+                    TensorLayoutType::LIN_ROW_MAJOR,
+                    tile.get_tile_shape(),
+                    tile.get_face_shape(),
+                    tile.get_transpose_within_face(),
+                    tile.get_transpose_of_faces());
                 return RowMajorHostBuffer::create_padded(HostBuffer(std::move(row_major_data)), tensor_spec);
             }
             return RowMajorHostBuffer::create_padded(std::move(host_buffer), tensor_spec);

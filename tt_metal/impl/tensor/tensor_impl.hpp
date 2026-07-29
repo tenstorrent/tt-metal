@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/tile.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 
@@ -27,6 +28,24 @@ std::vector<T> encode_tensor_data(ttsl::Span<const T> logical_data, const Tensor
 
 template <typename T>
 std::vector<T> to_tile_major_layout(const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data_to_convert);
+
+template <typename T>
+std::vector<T> to_row_major_layout(const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data_to_convert) {
+    auto tile_shape = tile.get_tile_shape();
+    auto face_shape = tile.get_face_shape();
+    auto transpose_within_face = tile.get_transpose_within_face();
+    auto transpose_of_faces = tile.get_transpose_of_faces();
+
+    return convert_layout(
+        data_to_convert,
+        shape,
+        TensorLayoutType::TILED_NFACES,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        tile_shape,
+        face_shape,
+        transpose_within_face,
+        transpose_of_faces);
+}
 
 // Empty structs to facilitate Tensor template logic.
 struct bfloat4_b {};
