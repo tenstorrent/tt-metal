@@ -9,6 +9,7 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include <tt-metalium/allocator.hpp>
+#include <ttnn/tensor/memory_config/memory_config.hpp>
 #include <tt_stl/unreachable.hpp>
 
 #include <tracy/Tracy.hpp>
@@ -66,7 +67,18 @@ bool can_construct_on_device(
     DataType dst_dtype,
     const std::optional<Tile>& optional_tile,
     bool enable_device_typecast,
-    bool preserve_nan_values) {
+    bool preserve_nan_values,
+    const MemoryConfig& memory_config) {
+    // Constructing on device builds the tensor in the *source* layout and converts it with ttnn
+    // ops (tilize / typecast). Those ops rebuild the output MemoryConfig from a handful of named
+    // fields and drop the experimental per-core allocation bit, so the caller would silently get
+    // a lockstep-allocated buffer (#51133). No op understands per-core allocation today (#51354),
+    // so there is nothing to preserve the bit through. Build on host instead: the subsequent
+    // to_device() applies the caller's memory_config directly, with no op in between.
+    if (experimental::per_core_allocation::is_per_core_allocation(memory_config)) {
+        return false;
+    }
+
     bool res = device != nullptr && !device->is_remote_only() &&
                (device->get_active_sub_device_manager_id() == device->get_default_sub_device_manager_id()) &&
                tensor_shape.volume() > 0 && can_exec_ops_on_device(src_dtype) && can_exec_ops_on_device(dst_dtype) &&
@@ -238,7 +250,14 @@ Tensor create_tt_tensor_from_host_data(
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
 
         const bool construct_on_device = can_construct_on_device(
-            device, tensor_shape, src_dtype, dst_dtype, optional_tile, enable_device_typecast, preserve_nan_values);
+            device,
+            tensor_shape,
+            src_dtype,
+            dst_dtype,
+            optional_tile,
+            enable_device_typecast,
+            preserve_nan_values,
+            memory_config);
 
         if (mesh_mapper != nullptr) {
             const auto device_shard_shape =
