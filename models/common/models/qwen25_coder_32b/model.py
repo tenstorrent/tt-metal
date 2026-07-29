@@ -470,6 +470,13 @@ def _build_decoder_layer(
             li_o_prefill_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             li_o_decode_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
+            # Route the folded-batch prefill WO projection through minimal_matmul (completes PLAN_01's
+            # QKV+FF2 minimal plumbing on coder). WO is the least-efficient prefill matmul on ttnn.linear;
+            # the minimal op (already used for QKV/FF2) recovers most of that gap and makes TTTv2 beat
+            # TTTv1's ttnn.linear WO (a shared op on both stacks). coder's WO is the non-fused shape
+            # (dim=5120 fails the fused all-gather auto-gate), so this runs every layer. Gated by the
+            # same DISABLE_MINIMAL_MATMUL escape hatch (OFF => byte-identical to the pre-change HEAD).
+            prefill_wo_minimal_matmul=wh.prefill_minimal_matmul,
             # Cast the per-layer prefill attention output reduce-scatter (bf16 WO output) to bfloat8_b,
             # matching TTTv1's ccl_dtype. coder is on the NON-fused path (dim=5120 fails the fused
             # all-gather auto-gate), so this reduce runs every layer; a bf8_b reduce halves the
