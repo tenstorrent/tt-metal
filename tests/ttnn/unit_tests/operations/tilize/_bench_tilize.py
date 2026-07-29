@@ -63,6 +63,13 @@ ABLATE = os.environ.get("TILIZE_BENCH_ABLATE", "0") == "1"
 # TILIZE_SKIP_DM=2 drops the read payload only, =3 the write payload only, so
 # `full - no_read` prices the read leg and `full - no_write` the write leg.
 SPLIT_DM = os.environ.get("TILIZE_BENCH_SPLIT_DM", "0") == "1"
+# Refinement 4b: the resident-CB default for every regime that does not pin `rcb`
+# itself. `TILIZE_BENCH_FORCE_RCB=0` reproduces the Refinement-4 CB protocol across the
+# WHOLE cumulative set in ONE session, which is a strictly better non-regression check
+# than diffing against a prior session's table (it cannot be confounded by the 0.85 %
+# cross-session scatter). Regimes with an explicit `levers=dict(rcb=...)` are unaffected,
+# so the counterfactual arms stay counterfactual either way.
+RCB_DEFAULT = int(os.environ.get("TILIZE_BENCH_FORCE_RCB", "1"))
 
 _L1 = ttnn.BufferType.L1
 _ROW = ttnn.ShardOrientation.ROW_MAJOR
@@ -1018,10 +1025,16 @@ def _assert_structural_gates(name, spec, plan, grid_cores):
     # the compute kernel never freed. This is the one precondition the kernel's own
     # static_asserts cannot see.
     rcb = plan["resident_cb"]
-    rcb_lever = (spec.get("levers") or {}).get("rcb", 1)
+    levers_spec = spec.get("levers") or {}
+    rcb_lever = levers_spec.get("rcb", RCB_DEFAULT)
     structural = (1 if (plan["alias_in"] and plan["drop_reader"]) else 0) | (
         2 if (plan["alias_out"] and plan["drop_writer"]) else 0
     )
+    # The `zero_copy_fold` arm and lever 2's per-block-init arm both drive the CBs
+    # through the full protocol from the compute kernel, so neither side may be
+    # resident there (the kernel static_asserts it; this mirrors the host clause).
+    if plan["self_arm"] or levers_spec.get("iu", 0):
+        structural = 0
     if rcb_lever == 0:
         want_rcb = 0
     elif rcb_lever == 2:
@@ -1109,7 +1122,8 @@ def test_bench_tilize(device):
         # planner reads them per call.
         levers = spec.get("levers") or {}
         for key in ("b13", "c7", "b8", "b10", "a3", "r2b", "stg", "r3", "coal", "bt", "nw", "nd", "f32", "rcb"):
-            os.environ[f"TILIZE_LEVER_{key.upper()}"] = str(levers.get(key, 1))
+            default = RCB_DEFAULT if key == "rcb" else 1
+            os.environ[f"TILIZE_LEVER_{key.upper()}"] = str(levers.get(key, default))
         # Default 0: these two are measurement probes, not levers.
         os.environ["TILIZE_LEVER_ADDR"] = str(levers.get("addr", 0))
         os.environ["TILIZE_LEVER_IU"] = str(levers.get("iu", 0))

@@ -616,7 +616,49 @@ holds (the zero-DRAM claim must survive); Mode-C ledger row per lever.
 
 ---
 
-### [ ] Refinement 4b — Path B's last 162 ns: the per-block CB bookkeeping, or close the regime
+### [x] Refinement 4b — Path B's last 162 ns: the per-block CB bookkeeping, or close the regime
+
+> **Outcome (2026-07-29): COMPLETE via outcome 1 — the helper change — which also carries
+> outcome 2's deliverable.** `compute_kernel_lib::tilize` gained a **per-CB** residency
+> lifecycle (`InputBufferMode` / `OutputBufferMode` = `Circular` | `Resident`), defaulted so
+> all ~30 other call sites in the tree are byte-identical, with the "nothing is on the other
+> end of this CB" contract written out in the header. It is **not** a raw-LLK substitution:
+> the mode keeps the addressing and drops only the credits, using the `input_tile_index` /
+> `output_tile_index` parameters `tilize_block` / `fast_tilize_block` already expose, so
+> block k is tile index `k*chunk_wt` off a CB whose pointers never move. `f_sharded_small`
+> **1 273 → 1 254-1 267 ns**, `f_sharded_large` **1 985 → 1 949**, `n_sharded_deep` (32 blk)
+> **5 711 → 5 557**.
+>
+> **The entry's own 162 ns price is REFUTED, and the reason is worth more than the
+> nanoseconds.** The real prize is **~4.8 ns/block**, 12 % of the estimate. R4 derived
+> "40.5 ns/block, exposed" from `full − LLK` with `LLK := full − no_compute` — an identity
+> that is **tautological** (`Δfull ≡ ΔLLK + Δno_compute` by construction) and therefore
+> cannot detect that the CB calls **overlap** the LLK on the other TRISCs. They do, ~85 % of
+> them. The lever nonetheless **removes 100 % of the per-block CB traffic**, proved
+> structurally rather than by ratio: `sync_only` is now **flat in block count** (438.0 ns at
+> 1 block, 438.0 at 32) where the counterfactual gives 1 486.5 at 32 blk = 33.8 ns/block. It
+> ships because the 32-block row is **1.028× at CV 0.2 %** and the win is proportional to
+> shard depth. By-product: **the launch floor is 438 ns, not R4's 502** (502 included the
+> 1-block CB triple).
+>
+> **The entry's `alias_out` check was run and came back negative**: mask 2 is implemented and
+> **bit-exact** there, but measures **1.001 / 0.995** (neutral, sign-unstable) because R3b's
+> timeline has TRISC0 blocked in `cb_wait_front` for **90 %** of that kernel — so it is
+> gated off (`resident_cb_pays`: mask must be 3, i.e. a program with no dataflow kernel at
+> all, hence no DM, hence compute *is* the bound) with permanent forced counterfactual rows.
+>
+> Non-regression was done as an **in-run A/B over the whole 164-row cumulative set** (both
+> arms measured in one session), which yields an empirical null from the 152 structurally
+> untouched rows — mean **0.9994**, sd **0.0079** — instead of a remembered threshold. **All
+> 10 rows the lever touches are faster** (0.940-0.996), every one at or below the null's p5;
+> the only two rows above +2 % are `rcb=0` on both sides and are the two noisiest in the set
+> (CV 4.1 % / 6.8 %), re-measured twice to confirm. **0 B of L1** on all 164 rows.
+> `SUPPORTED` unchanged (the R1b rule: gating a default is never a new axis value). Golden
+> 126/126 (240 passed / 0 failed); `test_translated.py` 275; unit suite **450/450** in both
+> modes; no hangs. `ttnn-static-analyzer` cleared the shipped path on all six questions and
+> found **three gaps**, one of which (`resident_cb` had no test, and the code cited a test
+> file that did not exist) would have shipped an unguarded silent-hang clause. Full ledger,
+> the null distribution and all three findings: `changelog.md` § "Refinement 4b".
 
 **Goal**: Refinement 4 took `f_sharded_small` to **1 273 ns** and proved its parent's
 1 063 ns bar is below the op's arithmetic floor (launch 502 + LLK 659 = 1 161). Exactly one

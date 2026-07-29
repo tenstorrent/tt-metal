@@ -3020,3 +3020,376 @@ Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **421 passed** (359 p
    Four of this queue's five numeric gates (1c, 2, 2b, 3b, 4) were unreachable, each
    for a reason a single `sync_only`-style ablation would have exposed up front. R5's
    audit should record that as a process finding, not five independent surprises.
+
+---
+
+## Refinement 4b — Path B's last 162 ns: the per-block CB bookkeeping, or close the regime
+
+- **Date**: 2026-07-29
+- **Outcome**: **full (`[x]`) via the entry's FIRST acceptable outcome — a helper change —
+  and it carries the second one's deliverable too (the priced ceiling with its
+  counterfactual).** `compute_kernel_lib::tilize` gained a per-CB residency lifecycle
+  (`InputBufferMode` / `OutputBufferMode` = `Circular` | `Resident`), defaulted so every
+  other call site in the tree is byte-identical, shipped on Path B and **implemented,
+  bit-exact, but measured neutral and therefore gated off** on the `alias_out` crossover.
+  **`f_sharded_small` 1 273 → 1 254-1 267 ns**, `f_sharded_large` 1 985 → **1 949**,
+  `n_sharded_deep` (32 blk) **5 711 → 5 557**. Zero regressions across all **164** carried
+  bench rows; golden **126/126** (240 passed / 0 failed); `test_translated.py` 275; unit
+  suite **450/450** in both modes; no hangs. `SUPPORTED` is **unchanged** — this is a perf
+  refinement, it declares no axis value (the Refinement-1b rule).
+  **The entry's own 162 ns price is refuted**: the real prize is **~4.8 ns/block**, and the
+  reason is a methodological error worth more than the nanoseconds — see §2.
+
+### What was done
+
+**The lever, stated precisely.** Refinement 4 left Path B as a compute-only program with
+`WaitMode::NoWait`, which removed the per-block `cb_wait_front`. **Three** per-block CB
+calls survived, and with nothing on the other end of either CB all three are dead weight:
+`cb_reserve_back(cb_out)` polls a free-space credit no consumer will ever decrement;
+`cb_push_back(cb_out)` publishes a tiles-received credit nobody reads and pays a
+`TTI_STALLWAIT(STALL_THCON, PACK)` to order that publish behind the packer
+(`llk_io_pack.h:66`); `cb_pop_front(cb_in)` returns a credit nobody reads and pays
+`TTI_STALLWAIT(STALL_THCON, UNPACK)` (`llk_io_unpack.h:96`).
+
+**What is load-bearing in those calls is not the credit but the POINTER WALK** — it is
+`fifo_rd_ptr` / `fifo_wr_ptr` that address block k. So the lever is not "delete the CB
+ops", it is **"keep the addressing, drop the credits"**, and the tilize LLK already
+supports exactly that: `tilize_block` / `fast_tilize_block` take an `input_tile_index` /
+`output_tile_index` resolved off the CB base (`get_output_tile_address<out_of_order=true>`
+→ `fifo_wr_ptr + page_size*idx`, `llk_pack_common_api.h:69-77`;
+`_llk_unpack_fast_tilize_block_` → `fifo_rd_ptr + SCALE_DATUM_SIZE(fmt, idx*TILE_C_DIM)`,
+`llk_unpack_tilize.h:773`). Block k becomes tile index `k*chunk_wt` on a CB whose pointers
+never move. **No raw LLK, no pointer poking, no `get_local_cb_interface` surgery** — the
+mode is expressed entirely in parameters the LLK already exposes.
+
+**It ships as the helper change the entry asked for, not a one-off in this kernel.** That
+was the entry's stated condition for taking it at all, and the two enums are **per-CB**,
+which is what makes it a primitive rather than a Path-B special case:
+
+| mask | shape | status |
+|---|---|---|
+| **3** | Path B: both CBs aliased, compute-only program | **SHIPPED** |
+| **2** | the `alias_out` crossover (R3b dropped the writer, the reader stays) | implemented, bit-exact, **measured neutral ⇒ gated off**, forced arms retained |
+| 1 | input-resident only | structurally unreachable today (`_plan_generic` hard-sets `drop_reader = 0`); pinned by `test_the_resident_mask_is_reachable_only_as_0_2_or_3` so the day it becomes reachable the gate is revisited rather than silently refusing it |
+
+The contract the helper cannot check ("nothing is on the other end of this CB") is written
+out in the header and derived once on the host from `drop_reader` / `drop_writer` — the same
+derivation `no_wait` already rested on.
+
+### Accuracy achieved
+
+**Bit-exact everywhere, and that is the only acceptable oracle here**: the lever replaces
+pointer arithmetic with index arithmetic, so its failure mode is a block landing at the
+wrong tile — a **permutation** of the correct bytes, which a PCC bar or a symmetric input
+would hide. Every numeric test uses `arange` (all values distinct) and `torch.equal`:
+
+| cell | oracle | result |
+|---|---|---|
+| Path B × 10 geometries (H/W/BLOCK, ROW+COL, 1/2/4/8/32 blocks, chunk 2/8/64) | `torch.equal`, **4 repeat launches each** | exact |
+| Path B × 5 dtypes (bf16 fast, fp32 slow/Lossless, uint32/int32/uint16 slow) | `torch.equal`, 2 launches | exact |
+| `alias_out` crossover × 3 geometries, mode FORCED on | `torch.equal`, 2 launches | exact |
+| `rcb=0` counterfactual arm | `torch.equal` | exact |
+| program-cache re-binding (2 shard addresses, 1 cache entry) | `torch.equal` on both, first undisturbed | exact |
+
+The repeat launches are the point of that column: with the pointers never walked, a stale
+`fifo_rd_ptr`/`fifo_wr_ptr` from a previous launch of a *cached* program would show up on
+launch 2+, not launch 1.
+
+### Golden test progress
+
+**126 / 126** registry cells (90 INVALID-skipped), 0 xfail / xpass / drift — unchanged.
+Whole golden dir minus `test_translated.py`, run to completion with **no `-k` filter**:
+**240 passed, 118 skipped, 0 failed**, byte-identical to the Phase-0 → R4 baselines. The 2
+collection ERRORs are the pre-existing `use_module_device` × `device_params` conflict inside
+the reference file (`test_deepseek_v3_mla_tilize_trace_mode`), diagnosed at Phase 0.
+`test_translated.py`: 275 passed / 1 failed — the same reference-file device-portability
+bug. **No hangs** in either mode.
+
+### Perf gate
+
+#### 1. Bound classification (re-ablated on the shipped plan)
+
+| regime | blk | full | no_compute | **no_dm** | sync_only | verdict |
+|---|---|---|---|---|---|---|
+| n_sharded_tiny | 1 | 747.8 | 440.0 | **749.1** | 438.0 | dispatch-dominated, **0 % DM** |
+| f_sharded_small | 4 | 1 254.0 | 442.0 | **1 254.7** | 443.7 | compute + dispatch, **0 % DM** |
+| f_sharded_large | 8 | 1 950.0 | 547.1 | **1 956.2** | 548.9 | compute + dispatch, **0 % DM** |
+| n_sharded_deep | 32 | 5 554.8 | 438.0 | **5 562.4** | 438.0 | compute-dominated, **0 % DM** |
+
+`no_dm == full` to within 0.4 % everywhere — the zero-DRAM claim survives, structurally
+(the program still contains no NoC-capable kernel).
+
+**And this table contains the structural proof that the lever removed ALL of the per-block
+CB traffic: `sync_only` is now FLAT in block count — 438.0 ns at 1 block and 438.0 ns at
+32.** `sync_only` keeps every CB call and loop trip count and drops both payloads, so its
+slope in `num_blocks` *is* the per-block CB cost. The counterfactual proves the instrument
+still works: `p_sharded_deep_rcb_off` gives **1 486.5 ns at 32 blocks** vs 438 at 1, i.e.
+**33.8 ns/block**, reproducing R4's 40.5 and this pass's opening 38.9. Slope 33.8 → **0.0**.
+
+**By-product worth carrying into R5: the launch/dispatch floor is 438 ns, not 502.** R4
+attributed 502 ns to "platform, not the op's", but 502 was `sync_only` on a 1-block program
+*with* its CB triple; the floor with no per-block CB work at all is 438.
+
+#### 2. Why the entry's 162 ns was wrong — the reusable finding
+
+R4 priced the survivors at 40.5 ns/block from `sync_only(4 blk) − sync_only(1 blk)`, and
+concluded they were **exposed** from `full − LLK` where `LLK := full − no_compute`.
+
+**That identity is tautological.** `Δfull = ΔLLK + Δno_compute` holds *by construction* once
+`LLK` is defined as `full − no_compute`, so the decomposition attributes every nanosecond to
+either the LLK or the CB dance and **cannot detect that the two overlap**. They do, almost
+entirely: the CB calls sit on the same TRISCs as the LLK stages they pipeline against
+(`reserve`/`push` on PACK, `pop` on UNPACK), so while TRISC0 pops block k the packer is
+still on block k−1. `sync_only` has no LLK to overlap with, which is exactly why the
+isolation instrument over-reports by ~7×.
+
+The only instrument that answers "is it exposed?" is removing the calls from the *real*
+kernel and measuring — i.e. this lever. **Generalisable rule: an ablation that defines one
+term as the residual of another can price both terms but can never prove either is on the
+critical path.** Four of this queue's five numeric gates were set from decompositions of
+this shape; R5 should record it as one process finding rather than five surprises.
+
+#### 3. Lever sweep — in-run A/B, 15 rounds × 10 launches, CV ≤ 1.4 %
+
+| regime | blk | chk | **shipped** | `rcb=0` | ratio | Δns | Δns/blk |
+|---|---|---|---|---|---|---|---|
+| n_sharded_tiny | 1 | 2 | **748.7** | 755.4 | **1.009** | −6.7 | −6.7 |
+| f_sharded_small | 4 | 2 | **1 256.4** | 1 272.5 | **1.013** | −16.1 | −4.0 |
+| f_sharded_large | 8 | 2 | **1 952.2** | 1 981.5 | **1.015** | −29.3 | −3.7 |
+| **n_sharded_deep** | **32** | 2 | **5 563.0** | 5 717.4 | **1.028** | **−154.4** | **−4.8** |
+| n_sharded_wide | 1 | 64 | **4 702.4** | 4 715.4 | 1.003 | −13.0 | −13.0 |
+
+⇒ **~4.8 ns/block**, 12 % of the 38.9 ns/block the isolation instrument reported. The
+32-block row is the decisive one — 1.028× at CV 0.2-0.3 %, far outside any noise argument,
+and it is why the lever ships despite being 1.3 % on `f_sharded_small`: **the win is
+proportional to shard depth**, so it grows exactly where a deep H-shard needs it.
+
+Both new regimes exist because the lever's cost model keys on `blocks_per_core` and
+`chunk_wt`, and the non-regression rule requires the **range** of a shape axis a change
+depends on, not one point: `n_sharded_deep` (32 blk) and `n_sharded_wide` (chunk 64, 1 blk)
+bracket 1-8 blk × chunk 2 from the other side.
+
+#### 4. Whole-set non-regression as an in-run A/B with a measured null distribution
+
+Rather than diff against a prior session's table (confounded by the 0.85 % cross-session
+scatter), the whole cumulative set was measured **twice in this session** — once with
+`TILIZE_BENCH_FORCE_RCB=0` (the exact Refinement-4 protocol on every row) and once at the
+shipped default. 164 rows, 5 rounds × 10 launches.
+
+**152 of the 164 rows build a byte-identical program in both runs** (mask 0 on both sides),
+so their ratio distribution *is* the empirical null:
+
+| | ratio |
+|---|---|
+| mean / sd | **0.9994 / 0.0079** |
+| p5 / p95 | 0.9877 / 1.0078 |
+| the only two rows > +2 % | `x_square_b10_write_only` (+5.98 %, **CV 4.1 / 2.8 %**), `x_wide_short_b10_write_only` (+2.22 %, **CV 6.8 / 6.5 %**) |
+
+Both outliers are the two noisiest rows in the whole set (the refuted-B10 write-only arms)
+and are `rcb=0` on **both** sides — the lever cannot reach them. Re-measured at 15 rounds in
+two fresh sessions: `x_square_b10_write_only` 169 236 / 168 044 (CV 3.0/3.1 %) and
+`x_wide_short_b10_write_only` 22 318 / 22 351 (CV 3.0/3.5 %), i.e. the *low* readings in the
+`rcb=0` run were the outliers. **Not regressions.**
+
+**The 10 rows the lever actually changes are unanimously faster:**
+
+| regime | blk | mask | `rcb=0` | shipped | ratio |
+|---|---|---|---|---|---|
+| n_sharded_fp32_to_bf8b | 4 | 3 | 1 308.4 | **1 229.6** | 0.940 |
+| n_sharded_fp32_to_bf16 | 4 | 3 | 1 493.1 | **1 437.2** | 0.963 |
+| n_sharded_tiny | 1 | 3 | 764.5 | **743.3** | 0.972 |
+| n_sharded_deep | 32 | 3 | 5 710.9 | **5 557.3** | 0.973 |
+| p_sharded_fp32_to_bf8b_f32_off | 4 | 3 | 1 869.0 | **1 820.9** | 0.974 |
+| p_sharded_fp32_to_bf16_f32_off | 4 | 3 | 1 881.5 | **1 845.7** | 0.981 |
+| x_sharded_small_depth1 | 4 | 3 | 1 273.3 | **1 253.2** | 0.984 |
+| f_sharded_large | 8 | 3 | 1 976.3 | **1 948.7** | 0.986 |
+| f_sharded_small | 4 | 3 | 1 271.0 | **1 259.8** | 0.991 |
+| n_sharded_wide | 1 | 3 | 4 722.3 | **4 703.5** | 0.996 |
+
+Ten independent rows, all one sign, every one at or below the null's p5 — a stronger
+statement than "inside ±2 %" (binomial p ≈ 0.001 under a null of no effect).
+
+**Unexplained but consistently signed observation for R5:** the win is markedly larger on
+**fp32-input** Path-B cells (−1.9 % to −6.0 %, i.e. 9-20 ns/block) than on bf16 (−0.4 % to
+−2.8 %, 3-5 ns/block), on *both* LLK paths, so it is the input format rather than
+fast-vs-slow tilize. Most likely candidate: `fp32_dest_acc_en` halves DEST capacity, so
+`fast_tilize_block` runs more dest-chunk iterations per block and the pack thread has less
+slack to hide the CB calls in. Not chased — it argues for *more* of this lever, not less.
+
+**Per-core CB L1 is byte-identical on all 164 rows** (asserted, not eyeballed:
+`test_residency_costs_no_l1`). The lever removes instructions; it buys no buffer.
+
+#### 5. Headline rows vs Refinement 4 (cumulative set carried forward)
+
+| regime | R4 ns | **now ns** | Δ |
+|---|---|---|---|
+| a_square | 85 719 | 85 811 | +0.1 % |
+| b_wide_short | 12 485 | 12 483 | −0.0 % |
+| c_single_core | 27 348 | 27 338 | −0.0 % |
+| d_tall_narrow | 3 455 | 3 453 | −0.1 % |
+| e_square_fp32 | 182 498 | 182 072 | −0.2 % |
+| e_square_bf8b_out | 64 652 | 64 616 | −0.1 % |
+| e_square_fp32_to_bf16 | 120 589 | 120 723 | +0.1 % |
+| **f_sharded_small** | 1 273 | **1 267** | −0.4 % |
+| **f_sharded_large** | 1 985 | **1 953** | **−1.6 %** |
+| g_dram_to_sharded | 16 176 | 16 311 | +0.8 % |
+| g_sharded_to_dram | 15 081 | 15 163 | +0.5 % |
+| m_wide_short_8k | 7 205 | 7 257 | +0.7 % |
+| n_tall_narrow_4blk | 11 252 | 11 216 | −0.3 % |
+| x_wide_short_1core | 50 838 | 50 764 | −0.1 % |
+| **x_sharded_small_depth1** | 1 273 | **1 259** | −1.1 % |
+| **n_sharded_fp32_to_bf16** | 1 487 | **1 450** | −2.5 % |
+| **n_sharded_fp32_to_bf8b** | 1 298 | **1 220** | −6.0 % |
+| n_sharded_deep / n_sharded_wide | — | 5 554 / 4 700 | *new* |
+
+#### 6. Ceiling vs measured, after this pass
+
+| term | ns | how measured | status |
+|---|---|---|---|
+| launch / dispatch floor | **438** | `sync_only`, now **flat in blocks** so it is purely the floor | platform (R3b: prologue + FW epilogue + core skew), and **64 ns lower than R4 thought** |
+| tilize LLK, marginal | **155.1 / block** (2 tiles) = **77.6 ns/tile** | `(full(32 blk) − full(1 blk)) / 31` | irreducible — R4 measured the only alternative path at +49 ns/tile |
+| per-block CB bookkeeping | **0** | slope of `sync_only` in blocks | **taken by this refinement** |
+
+`f_sharded_small` = 438 + 4×155 = **1 058 ns** predicted vs **1 254-1 267** measured; the
+~200 ns gap is the non-marginal LLK entry cost (the config-burst pair R4 priced at 70 ns,
+plus `compute_kernel_hw_startup`). Against the parent's 1 063 ns bar the op is now at
+**1.02×**, and R4 already proved that bar sits below the launch floor + LLK sum — nothing
+here changes that verdict, it just removes the last term that was not either of those two.
+
+#### 7. Mode-C used-optimization ledger
+
+| lever | id | predicted Δ | **measured Δ** | verdict |
+|---|---|---|---|---|
+| resident CBs on the compute-only program (mask 3) | 4b / B0 | entry: **162 ns / 12.7 %** on `f_sharded_small` (40.5 ns/block) | **4.8 ns/block**: 1.009 (1 blk) / 1.013 (4) / 1.015 (8) / **1.028 (32)**; `sync_only` slope 33.8 → **0.0 ns/block**; 10/10 touched rows faster; **0 B** of L1 | **KEEP** — real, proportional to shard depth, free. The entry's price is refuted at 12 % of its estimate. |
+| — the same mode on the one-sided `alias_out` alias (mask 2) | 4b | "should be checked against the `alias_out` crossover" | **1.001 / 0.995** (neutral, sign-unstable) across `n_g_to_sharded_small` and `g_dram_to_sharded` | **DROP (gated off, kept forced-reachable)** — R3b's timeline has TRISC0 blocked in `cb_wait_front` **90 %** of that kernel, so there are microseconds of slack to hide 3 CB calls in. Correct there (bit-exact), just not worth firing. |
+| — the `sync_only` block-slope instrument as an *exposure* estimator | — | 40.5 ns/block exposed | over-reports by **7×** | **REFUTED as an estimator** — see §2; it prices a term, it cannot prove exposure |
+
+#### 8. DM lever checklist review (`master.md` Part 2)
+
+Nothing DM-side moved and nothing could: Path B has **no data movement at all**, which is
+why this entry (like its parent) is compute- and dispatch-side. Applied this pass: **B0
+per-core-overhead reduction** taken past the kernel count to the *per-block* CB protocol —
+the checklist's "one barrier per block, not per transaction" argument applied to CB credits
+rather than NoC barriers, and gated (as B0 requires) on the smallest regime it runs in
+*and* the deepest. Re-confirmed still applied and **unmoved**: A0 2D split, A1 `row_wise`,
+B7 one barrier per block, B8 (gated), B9 reads NoC0 / writes NoC1, B13 (gated), C14
+one-sided alias, C16 gated depth, B5/B6 coalesced sharded read, the R2b issue-order
+rotation (gated), D18/D19 program-cache args, R3b's writer drop, R4's compute-only program
+and `Fp32Mode::Fast`. **Measured-no-payoff, cumulative**: B10, A3, whole-page + L1
+redistribution, re-blocking, C7 and B8 on the alias path, read grouping (B7'), the hoisted
+bank table, the arm/drain fold, `InitUninitMode` amortisation, and now **resident CBs on the
+one-sided alias**. Left to its owner: the run-closing Mode-D audit (R5).
+
+### Issues encountered
+
+1. **`ttnn-static-analyzer` cleared the shipped path on all six questions I asked it and
+   returned three gaps, one of which I would not have shipped without.** It verified the
+   index resolution end-to-end on WH slow / WH fast / BH fast / BH `block==1` delegation /
+   Quasar / all pack paths, cleared the two removed `TTI_STALLWAIT`s three independent ways
+   (the LLK's own comment at `cpack_common.h:870-876` says no packer-drain fence is needed
+   in front of an `L1_Dest_addr` reprogram; the *intra*-block boundary already reprograms it
+   per tile with no such stall, so the inter-block boundary now merely looks like the
+   interior; and the unpack side's THCON↔UNPACK ordering comes from its own
+   `STALLWAIT(STALL_TDMA, UNPACK)` plus the double-buffered config-context handshake),
+   cleared cross-launch state (and noted Resident leaves *less* residue than R4 did — R4
+   left `tiles_received == shard_tiles` in the stream register, Resident writes nothing),
+   cleared the capacity bound as exact-not-conservative, and confirmed byte-identical
+   codegen at the other call sites. Findings:
+   - **F1 (would not ship without)**: `resident_cb` had **no test at all**, and the
+     descriptor comment cited a test file that **did not exist**. Worse, the analyzer
+     pointed out `drop_writer` is decided by an entirely separate lever chain (`nw`,
+     `split_read`, `_zone_flag`, `drop_writer_pays`) from the one `no_wait` rests on, so bit
+     1 had no indirect coverage either. Fixed with `test_tilize_refinement4b.py`, whose
+     central test asserts the mask against the **kernel list** rather than the plan flags —
+     that is the statement that actually rules out the failure (output resident + writer
+     launched ⇒ the writer blocks forever in `cb_wait_front` on a credit compute never
+     posts). **Generalisable rule: a comment that names its own guard is not a guard.**
+   - **F2 (silent numerical, latent in the new public API)**: `fast_tilize_block` scales the
+     block index by the **compile-time** `TILE_R_DIM` (32) where the slow path reads the
+     operand's real row dim (`get_operand_tile_r_dim`), so a 16-row (`num_faces == 2`) input
+     tile would stride every block after the first 2× too far while the pack side — which
+     uses `fifo_page_size` — stayed correct: wrong tiles, no assert, no hang. **Only
+     reachable once the index is nonzero, i.e. only under `Resident`**, and **not** implied
+     by `can_use_fast_tilize`, which checks 32×32 on the **output** only. Fixed with
+     `static_assert(dfb_has_32x32_tiles<input_dfb>())` under `resident_in && use_fast` plus
+     contract clause 4. Unreachable from `tilize` (both CBs are 32×32) but the helper is
+     shared.
+   - **F3 (UB, Quasar, latent)**: on tt-2xx it is `push_back`/`pop_front` that round-robin
+     the hardware tile counter (`tc_idx`), and Quasar's tilize addressing resolves against
+     the *current* slot — so `Resident`, which never advances it, is only defined for
+     `num_tcs_to_rr == 1`. Fixed with an `ARCH_QUASAR` ASSERT and a contract line.
+2. **The entry's premise was measurably wrong, and finding that out was the work.** The
+   162 ns came from an instrument that cannot measure what it was used for (§2). Both of the
+   entry's acceptable outcomes are therefore delivered at once: the helper change *and* the
+   confirmed-then-refuted ceiling with a permanent counterfactual arm. The queue should not
+   return to this term: `sync_only`'s slope in blocks is now **zero**, so there is no
+   per-block CB cost left to find, however it is measured.
+3. **A bench structural gate I added was wrong in the direction that would have hidden a
+   bug.** My first `resident_cb` gate assertion computed the expected mask from the alias +
+   drop flags alone, omitting the `self_arm` / `iu` short-circuits — so it fired on
+   `p_sharded_small_nd_fold` (`self_arm=1`, mask correctly 0) and *demanded* mask 3 there.
+   Had I "fixed" it by relaxing the assert instead of by mirroring the short-circuit, the
+   `zero_copy_fold` arm could later have been given a resident CB (two producers on one CB).
+   Fixed by mirroring, and the kernel `static_assert`s the same pairing as a backstop.
+4. **Two bench rows crossed the ±2 % threshold and neither is a regression** — both are
+   `rcb=0` on *both* sides of the A/B (structurally identical programs) and are the two
+   noisiest rows in the set (CV 4.1 % and 6.8 %). Rather than argue that, this pass built
+   the empirical null from the 152 untouched rows (mean 0.9994, sd 0.0079) and re-measured
+   the two outliers in two fresh sessions. **Method note for future phases: measuring the
+   whole cumulative set twice in one session with the lever forced off is strictly better
+   than diffing a prior session's table** — it yields a null distribution instead of a
+   remembered threshold. Added as `TILIZE_BENCH_FORCE_RCB`.
+
+### Tests added
+
+- `tests/ttnn/unit_tests/operations/tilize/test_tilize_refinement4b.py` — **29 cells.**
+  The host clause (F1): the mask asserted against the **kernel list** over 10 lever
+  combinations (Path B gated / `nd=0` / `nd=3` fold / `rcb=0`, `alias_out` gated / forced /
+  writer-kept-and-forced, `alias_in` ×2, interleaved-forced), both directions, plus the
+  CT-arg round-trip and the reachable-mask-set property (`{0,2,3}`, with bit 1 flagged as
+  structurally unreachable *today* so a future refinement that makes it reachable trips
+  here rather than being silently refused). The capacity bound with **equality** on every
+  geometry, host-side (the helper's ASSERTs are watcher-only). F2's reachable half (both
+  tilize CBs are whole 32×32 tiles). The four forbidden pairings (`zones`,
+  `per_block_init`, `self_arm`, resident-input-implies-`no_wait`) asserted on the host
+  derivation so the JIT never has to be the backstop. The shipped gate pinned both as a
+  unit property of `resident_cb_pays` and on real `alias_out` plans, so re-widening it must
+  change the test and re-measure. Numerics: 10 Path-B geometries × 4 repeat launches, 5
+  dtypes across both LLK paths, `alias_out` forced-on, the `rcb=0` counterfactual, and
+  program-cache re-binding on two shard addresses. Plus the two structural perf claims:
+  zero per-block CB calls survive under mask 3 while the counterfactual keeps its three
+  (the `sync_only`-is-flat property, asserted as a **count** rather than a duration), and
+  the plans differ in **exactly** that one way (same cores / chunk / depth / blocks /
+  shard_tiles / CB bytes / fp32 mode).
+- `_bench_tilize.py` — an `RCB` report column; **6 new regimes**: `n_sharded_deep` (32
+  blk) and `n_sharded_wide` (chunk 64) with their `rcb=0` partners, bracketing the two axes
+  the lever's cost model keys on, plus `x_g_to_sharded_small_rcb_forced` /
+  `x_g_to_sharded_rcb_forced` keeping the `alias_out` refutation re-measurable; a structural
+  gate asserting a CB may declare residency **only** when its counterpart kernel is absent
+  (checked on **every** row, not just the sharded ones); and `TILIZE_BENCH_FORCE_RCB` so the
+  whole cumulative set can be A/B'd in one session.
+- `probes/probe_037-039.py` — the first-light sweep (13 geometries × Path B / both
+  crossovers / interleaved, bit-exact) that caught the plumbing before any measurement.
+
+Suite status: `tests/ttnn/unit_tests/operations/tilize/` = **450 passed** (421 prior + 29
+new) in **both** default and `--dev` mode.
+
+### Ranked follow-ups
+
+1. **Path B is finished, and this entry is the proof.** Launch floor 438 + marginal LLK
+   155 ns/block, `sync_only` slope **0**, `no_dm == full`, and no NoC-capable kernel in the
+   program. Every remaining nanosecond is dispatch (platform) or the unpacker's throughput.
+   **Do not open a third entry on this regime.**
+2. **The fp32-input Path-B cells gain 2-4× more from this lever than bf16 does** (§4), on
+   both LLK paths, which points at DEST capacity (`fp32_dest_acc_en` halving it ⇒ more
+   dest-chunk iterations per block ⇒ less pack-side slack). R4's follow-up #3 already asks
+   whether `_compute_config` should stop forcing `fp32_dest_acc_en=True` for every bf8b
+   output and every fp32 input; this is a second, independent reason to ask.
+3. **The `Resident` lifecycle is a `kernel_lib` primitive now — the untilize partner is
+   the obvious next user.** `untilize_helpers` has the identical per-block CB structure and
+   the identical zero-copy use case (a sharded TILE → RM op), and this pass's helper carries
+   the contract, the static_asserts and the arch caveats already.
+4. **`/perf-ceiling-dm` Mode D (R5) should record §2 as a process finding**: four of this
+   queue's five numeric gates were set from residual-defined decompositions that cannot
+   prove exposure. The cheap up-front check is to remove the suspected term from the real
+   kernel once, before writing the gate.
