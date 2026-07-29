@@ -249,13 +249,23 @@ it is principled - a NOC_1 read response from a DRAM column travels the wrong wa
 NOC_1 "optimal" worker is not actually a good target - and it decouples the op from that API subtlety.
 Diagnostic bit17 restores per-NoC targets.
 
+### S5. SHIPPED: picker table entry for 256x2048x6144 (nsb 1 -> 2)
+
+The picker had no table entry for this shape so it used the cost-model fallback, which chose a 1-tile-wide N
+sub-block. That makes every output write a lone 2 KB page. nsb=2 measured 5.7% faster (80.8 -> 76.16 us, three
+relaunches: 76.03, 76.16, 76.18). nsb=4 is 2% worse than 2 and nsb=8 is 25% worse, so 2 is a real optimum, not
+"bigger is better". Added `{{8, 64, 192}, {4, 3, 1, 2, 2}}` to the lookup table and mirrored it into the
+offline model so future analysis matches. 111/111 correctness tests pass.
+
+This shape is now **17.4% faster than at the start of the log** (92.2 -> 76.16 us).
+
 ## Total progress this session
 
 | shape | at log start | now | change |
 |---|---|---|---|
 | 512x6144x2304 | 134.0 | 110.0 | **17.9% faster** |
 | 256x6144x768 | 42.0 | 35.6 | **15.2% faster** |
-| 256x2048x6144 | 92.2 | 79.9 | **13.3% faster** |
+| 256x2048x6144 | 92.2 | 76.2 | **17.4% faster** |
 | 512x6144x4608 | 207.5 | 180.3 | **13.1% faster** |
 | 256x2048x512 | 16.9 | 15.1 | **10.5% faster** |
 | 256x15360x768 | 95.1 | 87.6 | **7.9% faster** |
@@ -277,5 +287,5 @@ Across the whole 63-shape corpus the mesh alone is adopted on 26 shapes for a me
       the serial head of the gather; the in1 reader goes idle during it because its buffer only holds 4
       blocks). Earlier chunk-streaming of the ring was rejected as noise, but that was before the mesh, when
       the ring was 17% and the read 10%; now the ring is 3.5% and the read 12.2%, so the balance has flipped.
-   b. Add 256x2048x6144 with nsb=2 to the picker's lookup table (+4.4%, measured).
+   b. ~~Add 256x2048x6144 nsb=2 to the picker table.~~ DONE (S5, +5.7%).
    c. 512x6144x4608 is compute-limited, so for it the only real lever is fewer or cheaper math passes.
