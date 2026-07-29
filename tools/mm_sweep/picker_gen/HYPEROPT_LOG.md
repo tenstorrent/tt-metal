@@ -1050,3 +1050,44 @@ The negative results themselves (F12, F13, F14) are kept above: they contain the
 load-imbalance model of the reduction, the four flow-control bugs, and the zone breakdown showing that at Pk=12
 the reduction cost is load imbalance rather than messaging. That model is the reason not to revisit these
 topologies, so it is worth more than the code was.
+
+### Re-applied: don't allocate the chain's cb7 under reduce-scatter (L1 saving, perf-neutral)
+
+The revert above restored cb7 allocation for reduce-scatter shapes. cb7 is the CHAIN's running-sum buffer;
+reduce-scatter routes its partials through the c_4/c_5 chunk CBs and never touches cb7, so allocating it is dead
+L1. Re-applied as a standalone change.
+
+L1 freed on the 14 reduce-scatter shapes (cb7 = 2 * M_block * N_sub bf16 tiles):
+
+| shape | Pk | cb7 KB | op L1 KB | freed |
+|---|---|---|---|---|
+| 256x15360x1536 | 6 | 96 | 1024 | 9.4% |
+| 256x15360x768 / 128x15360x768 | 6 | 48 | 832 | 5.8% |
+| 256x6144x6144 / 4608 / 1536 | 6 | 32 | 416 | 7.7% |
+| 256x2048x1024 | 4 | 64 | 384 | **16.7%** |
+| 256x2048x2048 | 4 | 48 | 304 | 15.8% |
+| 128x2048x2048 | 4 | 48 | 320 | 15.0% |
+| 256x2048x1536 | 4 | 36 | 252 | 14.3% |
+| 128x2048x1024 | 4 | 32 | 224 | 14.3% |
+| 256x2048x512 | 4 | 24 | 200 | 12.0% |
+| 64x2048x1024 / 128x2048x512 | 4 | 16 | 144 | 11.1% |
+
+5.8-16.7% of the op's L1 per core, 41 KB on average.
+
+The kernels are BYTE-IDENTICAL: `use_reduce` (the cb7 depth compile arg) is still computed from the planner's
+`cb.cb7_tiles`, which is unchanged - only the `mkcb` call is skipped. So the only possible perf effect is L1
+addresses shifting for the other CBs, which has to be measured rather than assumed.
+
+Measured, mask 0: 512x6144x4608 (CHAIN, unaffected control) 180.12 vs 179.96 = +0.1%; 256x6144x6144 186.89 vs
+186.62 = +0.1%; 256x6144x1536 60.85 vs 61.00 = -0.2%. The two small 2048-K shapes first read +2.6% and +1.9%,
+which is at their +-2.4% noise floor, so I resampled with 4 relaunches and compared against EVERY
+ring-configuration measurement of those shapes from earlier in the session:
+
+| shape | now (4 runs) | median | history (cb7 allocated) | median | delta |
+|---|---|---|---|---|---|
+| 256x2048x1024 | 19.37 / 19.52 / 19.62 / 19.84 | 19.57 | 19.32-19.85 | 19.63 | **-0.3%** |
+| 256x2048x512 | 13.79 / 13.80 / 13.82 / 13.89 | 13.81 | 13.63-13.82 | 13.76 | **+0.4%** |
+
+Both inside the historical spread: the initial +2.6% was a low-outlier single-run reference, not a regression.
+**LESSON: never accept a 1-2% delta against a single-run baseline on these small shapes - the noise floor is
+wider than the effect.** 111/111 correctness tests pass.

@@ -1477,7 +1477,9 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     mkcb(program, all_cores, 1, cb.cb1_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in1 (depth 4)
     mkcb(program, all_cores, 2, cb.cb2_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // out
     mkcb(program, all_cores, 3, cb.cb3_tiles, tt::DataFormat::Float32, kTileBytesFp32);    // fp32 intermediate
-    if (cb.cb7_tiles > 0u) {
+    // cb7 is the CHAIN's running-sum buffer. Reduce-scatter never touches it (its partials travel through the
+    // c_4/c_5 chunk CBs instead), so don't spend the L1 on it there.
+    if (cb.cb7_tiles > 0u && !rscatter) {
         mkcb(program, all_cores, 7, cb.cb7_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // reduce (Pk>1)
     }
     // Fused-epilogue operand CBs (only when the matching fusion is active). c_4 bias [1,N_sub], c_5 residual
