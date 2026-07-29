@@ -802,26 +802,42 @@ class ModelArgs:
             self.mlp_core_grid = (
                 self.dram_shard_core_grid_for_k(self.dim)
                 if self.is_galaxy
-                # SWEEP-TUNED (single P150, gemma2 K=3584): the default k_and_n heuristic
-                # maxes out at 56c (8x7) for FF1/FF3, which over-parallelizes the DRAM-sharded
-                # matmul -> bank contention (~106us). The op sweep (sweep_gemma2_mm.py) shows
-                # fewer cores are faster (~95us at 16c). 16c broke accuracy-mode L1 (per-core
-                # buffers too big for fp32 CBs), so use 28c (7x4): still faster than 56c
-                # (~100us) while keeping per-core work small enough to fit accuracy-mode L1.
-                # NOTE: 16c is faster for the FF1/FF3 matmul *in isolation* (308 vs 296 GB/s),
-                # but mlp_core_grid also drives the FF norm, SwiGLU-mul and input sharding;
-                # running those elementwise ops on 16c instead of 28c regresses end-to-end
-                # decode by ~17% (measured: 31.2 vs 37.4 t/s/u). Keep 28c.
-                # Gated to single device so multi-device/other-model paths are unchanged.
-                # 3584/28 = 128 = 4 tiles: tile-aligned width-sharding OK.
+                # SWEEP-TUNED (gemma2 K=3584): the default k_and_n heuristic maxes out at
+                # 56c (8x7) for FF1/FF3, which over-parallelizes the DRAM-sharded matmul ->
+                # bank contention (1xP150 ~106us; 2xP150 per-chip N=7168 ~83us). The op sweep
+                # (sweep_gemma2_mm.py --variant {1x,2x}) shows fewer cores are much faster.
+                # 16c broke accuracy-mode L1 on 1x (per-core fp32 CBs too big), and mlp_core_grid
+                # also drives the FF norm, SwiGLU-mul and input sharding, so 28c (7x4) is the
+                # balanced pick: near-best matmul (1x ~100us; 2x ~54us vs 83us default) while
+                # keeping elementwise ops well-parallelized. At 28c dram_matmul_config auto-
+                # derives the swept-best in0_block_w/per_core_N for both 1x and 2x.
+                # dim=3584/(32*28)=4 tiles and (hidden/num_devices)/(32*28) are tile-aligned.
                 else ttnn.CoreGrid(x=7, y=4)
-                if (self.num_devices == 1 and self.dim == 3584 and self.dim % (32 * 28) == 0)
+                if (
+                    self.num_devices in (1, 2)
+                    and self.dim == 3584
+                    and self.dim % (32 * 28) == 0
+                    and (self.hidden_dim // self.num_devices) % (32 * 28) == 0
+                )
                 else self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
             )
 
             self.mlp2_core_grid = (
                 ttnn.CoreGrid(y=1, x=8)
                 if self.is_galaxy
+                # SWEEP-TUNED (gemma2, 2xP150 TP=2): FF2 per chip is K=7168 N=3584 (bf8). The
+                # default k_and_n heuristic picks 56c -> 68.5us; the sweep shows ~58us is
+                # achievable across 4-32c. 28c (7x4) keeps FF2 near-optimal (58.9us, matching
+                # the swept-best in0_block_w=8/per_core_N=4) while parallelizing the downstream
+                # reduce path. Gated to num_devices==2 so the tuned 1x path is untouched.
+                # 7168/(32*28)=8 tiles, 3584/(32*28)=4 tiles: both tile-aligned.
+                else ttnn.CoreGrid(x=7, y=4)
+                if (
+                    self.num_devices == 2
+                    and self.dim == 3584
+                    and (self.hidden_dim // self.num_devices) % (32 * 28) == 0
+                    and self.dim % (32 * 28) == 0
+                )
                 else self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
             )
 

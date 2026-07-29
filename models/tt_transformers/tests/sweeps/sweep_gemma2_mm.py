@@ -58,6 +58,17 @@ SHAPES = {
     "LMHEAD": dict(M=32, K=3584, N=256000, dtype=ttnn.bfloat8_b, fid=ttnn.MathFidelity.LoFi),
 }
 
+# Gemma-2-9B on 2xP150 / P300, TP=2 (num_devices=2). Column-parallel matmuls
+# (QKV, FF1/FF3, LMHEAD) shard N in half; row-parallel matmuls (WO, FF2) shard K
+# in half. These are the per-chip shapes each device actually runs.
+SHAPES_2X = {
+    "QKV": dict(M=32, K=3584, N=4096, dtype=ttnn.bfloat8_b, fid=ttnn.MathFidelity.LoFi),
+    "WO": dict(M=32, K=2048, N=3584, dtype=ttnn.bfloat8_b, fid=ttnn.MathFidelity.LoFi),
+    "FF1_FF3": dict(M=32, K=3584, N=7168, dtype=ttnn.bfloat4_b, fid=ttnn.MathFidelity.LoFi),
+    "FF2": dict(M=32, K=7168, N=3584, dtype=ttnn.bfloat8_b, fid=ttnn.MathFidelity.LoFi),
+    "LMHEAD": dict(M=32, K=3584, N=128000, dtype=ttnn.bfloat8_b, fid=ttnn.MathFidelity.LoFi),
+}
+
 
 def align_up(x, a):
     return x if x % a == 0 else x + (a - x % a)
@@ -167,8 +178,9 @@ def build_in0_dram(device, M, K):
     return ttnn.from_torch(in0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram_il)
 
 
-def make_pc(factory, in0_block_w, M, per_core_N, grid_xy, K_tiles, num_cores):
+def make_pc(factory, in0_block_w, M, per_core_N, grid_xy, K_tiles, num_cores, out_subblock_w=None):
     if factory == "dram_sharded":
+        # DRAM-sharded config has no subblock knobs (kernel-internal); out_subblock_w ignored.
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=in0_block_w,
             per_core_M=M // 32,
@@ -176,11 +188,14 @@ def make_pc(factory, in0_block_w, M, per_core_N, grid_xy, K_tiles, num_cores):
             fused_activation=None,
         )
     elif factory == "mcast_1d":
+        # Decode: per_core_M = M/32 = 1 tile, so out_subblock_h is forced to 1. The only
+        # free subblock knob is out_subblock_w. Default to the previous heuristic.
+        osw = out_subblock_w if out_subblock_w else find_largest_divisor(per_core_N, 4)
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_xy,
             in0_block_w=in0_block_w,
             out_subblock_h=1,
-            out_subblock_w=find_largest_divisor(per_core_N, 4),
+            out_subblock_w=osw,
             per_core_M=M // 32,
             per_core_N=per_core_N,
             fuse_batch=True,
@@ -232,8 +247,9 @@ def measure(
     fp32,
     out_dtype,
     iterations,
+    out_subblock_w=None,
 ):
-    pc = make_pc(factory, in0_block_w, M, per_core_N, grid_xy, K_tiles, num_cores)
+    pc = make_pc(factory, in0_block_w, M, per_core_N, grid_xy, K_tiles, num_cores, out_subblock_w)
     ckc = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=fidelity,
@@ -287,7 +303,10 @@ def measure(
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--shapes", nargs="*", default=list(SHAPES.keys()))
+    ap.add_argument(
+        "--variant", choices=["1x", "2x"], default="1x", help="1x=single P150 shapes, 2x=per-chip TP=2 (P300)"
+    )
+    ap.add_argument("--shapes", nargs="*", default=None)
     ap.add_argument("--iters", type=int, default=20)
     ap.add_argument("--factory", choices=["dram_sharded", "mcast_1d", "both"], default="dram_sharded")
     ap.add_argument("--sweep-dtype", action="store_true")
@@ -295,6 +314,12 @@ def main():
     ap.add_argument("--sweep-packer", action="store_true")
     ap.add_argument("--sweep-fp32", action="store_true")
     ap.add_argument("--sweep-percoreN", action="store_true", help="also try per_core_N multiples (pad N distribution)")
+    ap.add_argument(
+        "--sweep-subblock",
+        action="store_true",
+        help="mcast_1d only: sweep out_subblock_w over divisors of per_core_N (<=4 if fp32 else <=8). "
+        "out_subblock_h is always 1 in decode (per_core_M=1 tile).",
+    )
     ap.add_argument("--sweep-outdtype", action="store_true", help="also sweep bf16 vs bf8 output")
     ap.add_argument(
         "--out-mems",
@@ -309,6 +334,9 @@ def main():
     ap.add_argument("--no-l1-filter", action="store_true", help="skip analytic L1 prefilter; rely on try/except")
     ap.add_argument("--csv", type=str, default="sweep_v2.csv")
     args = ap.parse_args()
+
+    shape_table = SHAPES_2X if args.variant == "2x" else SHAPES
+    shape_names = args.shapes if args.shapes else list(shape_table.keys())
 
     factories = ["dram_sharded", "mcast_1d"] if args.factory == "both" else [args.factory]
 
@@ -356,8 +384,8 @@ def main():
     )
 
     try:
-        for sname in args.shapes:
-            base = SHAPES[sname]
+        for sname in shape_names:
+            base = shape_table[sname]
             M, K, N = base["M"], base["K"], base["N"]
             K_tiles, N_tiles = K // 32, N // 32
             baseline_nc = model_baseline_cores(K_tiles, N_tiles)
@@ -426,89 +454,101 @@ def main():
                             n_l1 += 1
                             row_out(rb + ["", "", "", "", "", "", "SKIP_L1", ""])
                             continue
-                        in0_t = in1_t = None
-                        try:
-                            if factory == "dram_sharded":
-                                in1_t = build_in1(device, K, N, in1_dtype, num_banks)
-                                in0_t, _ = build_in0_sharded(device, M, K, nc, grid_xy)
-                            else:  # mcast_1d
-                                in1_t = build_in1_interleaved(device, K, N, in1_dtype)
-                                in0_t, _ = build_in0_sharded(device, M, K, nc, grid_xy)
-                            r = measure(
-                                device,
-                                factory,
-                                in0_t,
-                                in1_t,
-                                out_mem,
-                                M,
-                                K,
-                                N,
-                                in1_dtype,
-                                fid,
-                                in0_block_w,
-                                per_core_N,
-                                grid_xy,
-                                K_tiles,
-                                nc,
-                                packer,
-                                fp32,
-                                odt,
-                                args.iters,
+                        # out_subblock_w candidates: mcast_1d + --sweep-subblock only.
+                        # DST limit is 4 with fp32_dest_acc, else 8. h is always 1 in decode.
+                        if args.sweep_subblock and factory == "mcast_1d":
+                            _lim = 4 if fp32 else 8
+                            osw_cands = [d for d in all_divisors(per_core_N) if d <= _lim] or [None]
+                        else:
+                            osw_cands = [None]
+                        for osw in osw_cands:
+                            in0_t = in1_t = None
+                            try:
+                                if factory == "dram_sharded":
+                                    in1_t = build_in1(device, K, N, in1_dtype, num_banks)
+                                    in0_t, _ = build_in0_sharded(device, M, K, nc, grid_xy)
+                                else:  # mcast_1d
+                                    in1_t = build_in1_interleaved(device, K, N, in1_dtype)
+                                    in0_t, _ = build_in0_sharded(device, M, K, nc, grid_xy)
+                                r = measure(
+                                    device,
+                                    factory,
+                                    in0_t,
+                                    in1_t,
+                                    out_mem,
+                                    M,
+                                    K,
+                                    N,
+                                    in1_dtype,
+                                    fid,
+                                    in0_block_w,
+                                    per_core_N,
+                                    grid_xy,
+                                    K_tiles,
+                                    nc,
+                                    packer,
+                                    fp32,
+                                    odt,
+                                    args.iters,
+                                    out_subblock_w=osw,
+                                )
+                            except Exception as e:
+                                n_err += 1
+                                msg = str(e).strip().split("\n")[0][:80] or type(e).__name__
+                                row_out(rb + ["", "", "", "", "", "", "ERR", f"osw={osw} {msg}"])
+                                continue
+                            finally:
+                                for t in (in0_t, in1_t):
+                                    try:
+                                        if t is not None:
+                                            t.deallocate(True)
+                                    except Exception:
+                                        pass
+                            n_ok += 1
+                            row_out(
+                                rb
+                                + [
+                                    r["src"],
+                                    f"{r['dur_ns']/1000:.1f}",
+                                    f"{r['bw_gbps']:.1f}",
+                                    f"{r['dram_pct']:.1f}",
+                                    f"{r['ach_pct']:.1f}",
+                                    f"{r['util']:.1f}",
+                                    "OK",
+                                    f"osw={osw}" if osw else "",
+                                ]
                             )
-                        except Exception as e:
-                            n_err += 1
-                            msg = str(e).strip().split("\n")[0][:80] or type(e).__name__
-                            row_out(rb + ["", "", "", "", "", "", "ERR", msg])
-                            continue
-                        finally:
-                            for t in (in0_t, in1_t):
-                                try:
-                                    if t is not None:
-                                        t.deallocate(True)
-                                except Exception:
-                                    pass
-                        n_ok += 1
-                        row_out(
-                            rb
-                            + [
-                                r["src"],
-                                f"{r['dur_ns']/1000:.1f}",
-                                f"{r['bw_gbps']:.1f}",
-                                f"{r['dram_pct']:.1f}",
-                                f"{r['ach_pct']:.1f}",
-                                f"{r['util']:.1f}",
-                                "OK",
-                                "",
-                            ]
-                        )
-                        print(
-                            f"{factory:>12s} {nc:4d} {str(grid_xy):>7s} {in0_block_w:5d} {per_core_N:4d} "
-                            f"{'Y' if packer else 'N':>2s} {'Y' if fp32 else 'N':>3s} "
-                            f"{str(odt).split('.')[-1][:4]:>4s} {l1_kb:6.0f} {r['src']:>4s} "
-                            f"{r['dur_ns']/1000:8.1f} {r['bw_gbps']:7.1f} {r['ach_pct']:5.1f}%"
-                        )
-                        if best is None or r["dur_ns"] < best[0]:
-                            best = (
-                                r["dur_ns"],
-                                factory,
-                                nc,
-                                in0_block_w,
-                                per_core_N,
-                                fid,
-                                packer,
-                                fp32,
-                                in1_dtype,
-                                odt,
-                                r["bw_gbps"],
-                                r["ach_pct"],
-                                r["src"],
+                            print(
+                                f"{factory:>12s} {nc:4d} {str(grid_xy):>7s} {in0_block_w:5d} {per_core_N:4d} "
+                                f"osw={str(osw) if osw else '-':>3s} "
+                                f"{'Y' if packer else 'N':>2s} {'Y' if fp32 else 'N':>3s} "
+                                f"{str(odt).split('.')[-1][:4]:>4s} {l1_kb:6.0f} {r['src']:>4s} "
+                                f"{r['dur_ns']/1000:8.1f} {r['bw_gbps']:7.1f} {r['ach_pct']:5.1f}%"
                             )
+                            if best is None or r["dur_ns"] < best[0]:
+                                best = (
+                                    r["dur_ns"],
+                                    factory,
+                                    nc,
+                                    in0_block_w,
+                                    per_core_N,
+                                    fid,
+                                    packer,
+                                    fp32,
+                                    in1_dtype,
+                                    odt,
+                                    r["bw_gbps"],
+                                    r["ach_pct"],
+                                    r["src"],
+                                    osw,
+                                )
 
             print(f"  [{sname}] OK={n_ok} SKIP_L1={n_l1} ERR={n_err}")
             if best:
-                (d, fac, nc, bw, pcN, fid, pk, f32, idt, odt, gbps, ach, src) = best
+                (d, fac, nc, bw, pcN, fid, pk, f32, idt, odt, gbps, ach, src, osw) = best
                 print(
-                    f"  BEST {sname}: {fac} {nc}c in0bw={bw} pcN={pcN} fid={str(fid).split('.')[-1]} "
+                    f"  BEST {sname}: {fac} {nc}c in0bw={bw} pcN={pcN} osw={osw if osw else '-'} "
+                    f"fid={str(fid).split('.')[-1]} "
                     f"pk={pk} f32={f32} in1={str(idt).split('.')[-1]} out={str(odt).split('.')[-1]} "
                     f"-> {d/1000:.1f}us {gbps:.0f}GB/s ({ach:.0f}% ach) [{src}]"
                 )

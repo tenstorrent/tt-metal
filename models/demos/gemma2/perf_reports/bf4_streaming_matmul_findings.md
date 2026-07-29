@@ -238,3 +238,100 @@ python models/demos/deepseek_v3_b1/tests/unit_tests/bench_stream_mm.py          
 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_stream_mm_bridge.py -s       # tilize blocker
 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_stream_mm_bridge2.py -s      # copy-path blockers
 ```
+
+---
+
+## 2026-07-28: matmul_decode (tiny-tile) integrated + measured
+
+The `smanoj/pi0_tiny_tile` branch's first-class decode matmul,
+`ttnn.experimental.matmul_decode`, was surgically ported into this branch
+(C++ op + nanobind + CMake), namespace-fixed for the `tt::tt_metal::TensorSpec`
+migration, and validated after a clean `./build_metal` rebuild.
+
+### Op is live and correct
+- `tests/ttnn/unit_tests/operations/experimental/test_matmul_decode.py`
+  - `test_matmul_decode` (full width-sharded): 5/5 PASS (m=1,4,8,16,32)
+  - `test_matmul_decode_partial_width_sharded`: 6/6 PASS (m=1..64)
+
+### Measured at gemma2-9B MLP shapes (bf4 weights, batch-1)
+Bench: `tests/ttnn/unit_tests/operations/experimental/bench_matmul_decode_gemma2.py`
+(P150, 11x10=110 core grid, trace-replay median over 50 reps)
+
+| matmul | shape (k x n) | path | cores | PCC | time | vs prod ~98us |
+|--------|---------------|------|-------|-----|------|---------------|
+| FF1/FF3 | 3584 x 14336 | partial (k_blk=2, n_blk=32) | 64 | 0.993 | **68.0 us** | -30% |
+| FF2     | 14336 x 3584 | partial | 56 | - | L1 clash (kc=7168 too big; needs k_blk=4 tune) |
+
+### The catch that decides everything
+`matmul_decode` requires **L1-resident, width-sharded weights**. Production
+gemma2 MLP weights are **DRAM-sharded** (`create_dram_sharded_mem_config`,
+mlp.py:54-55) and streamed fused with the matmul. So the 68 us is *compute-only,
+weights already in L1* -- it does NOT include the DRAM->L1 load.
+
+- A 9B layer's FF weights are ~87 MB bf4; total L1 is ~165 MB. Cannot keep all
+  42 layers resident -> weights must come from DRAM every decode step.
+- Naive use: DRAM->L1 load (~28.9 MB/matmul) + 68 us compute would be *slower*
+  than the 98 us fused production path.
+- The only way this wins in-model is an **overlapped DRAM->L1 prefetch**
+  (double-buffer layer N+1's weights during layer N compute), i.e. combine
+  matmul_decode with the DRAM prefetcher. Then steady-state = max(load, compute).
+  Whether that beats 98 us depends on P150 DRAM peak BW -- must be measured.
+- Note full-width tiny-tile (m=1, real compute reduction) needs n/64 cores:
+  FF1/FF3 n=14336 -> 224 cores > 110, impossible on 1xP150. Only the partial
+  path fits, and it pads m to a full 32-row tile (no tiny-tile compute saving).
+
+### Verdict
+matmul_decode is now a real, tested tool in the tree. But on a single P150 it
+is **not a drop-in win** for FF1/FF3: the shapes force the partial path (m padded
+to 32) and the weights must be prefetched DRAM->L1. Next experiment to settle it:
+wire FF1 with an overlapped weight prefetch + matmul_decode and measure t/s/u.
+
+### Reproduce
+```bash
+export TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole
+export TT_VISIBLE_DEVICES=0 MESH_DEVICE=P150
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
+pytest tests/ttnn/unit_tests/operations/experimental/test_matmul_decode.py -s -q
+pytest tests/ttnn/unit_tests/operations/experimental/bench_matmul_decode_gemma2.py -s -q
+```
+
+### 2026-07-28 (cont): weights CANNOT be DRAM-resident (confirmed at op level)
+Tried width-sharding the matmul_decode weight in DRAM (`BENCH_W_DRAM=1`):
+`TT_FATAL Logical DRAM core 0-3 outside valid range (num_views=8)`. DRAM has only
+8 banks; matmul_decode weights are width-sharded one-shard-per-compute-core and read
+from each core's local L1. So the weight is fundamentally **L1-resident** -- there is
+no DRAM-weight mode. matmul_decode is therefore NOT a drop-in for the DRAM-streaming
+`ttnn.linear`; in-model use REQUIRES staging weights DRAM->L1 every decode step (and
+overlapping that stage to have any chance of beating the 98 us fused path).
+
+### 2026-07-28 (final): VERDICT from the 2xP150 profiler — matmul_decode is not a win for gemma2 MLP
+
+Compared matmul_decode against the ACTUAL production decode matmuls (from
+`gemma2-9B_2xp150_decode_ops.csv`), not the stale 1xP150 98us figure.
+
+Production decode matmuls (DRAM-sharded, per chip, TP=2):
+- Run on **12 cores**, at **~40% DRAM BW (~210 GB/s)** and **~40% FLOPs**,
+  op-to-op gap ~0.6us (NOT latency-bound).
+- Per-op device times cluster at ~35us (BF16xBFP4, = FF1/FF3 3584x7168 per chip),
+  ~60-62us (larger), ~17us (attn).
+- Matmuls are 61% of decode time (8498us/180 ops); CCL only ~16%.
+
+matmul_decode at the same per-chip shapes (weights already in L1, 64 cores):
+- FF1/FF3 3584x7168: **46.7us**  (vs production ~35us -> SLOWER)
+- FF2 7168x3584: 52.3us
+
+Why it loses: the production DRAM-sharded matmul is well tuned - it streams bf4
+weights from DRAM fused with compute. matmul_decode (a) can't hold weights in
+DRAM at all, so any in-model use adds a per-step DRAM->L1 stage, and (b) even
+with weights pre-staged in L1 its gather_in0 + partial-K-reduce across 64 cores
+is *slower per op* than the 12-core DRAM-sharded matmul. There is no config on a
+110-core P150/P300 that lets the fast full-width tiny-tile path fit (needs
+n/64 = 112-224 cores).
+
+**Bottom line:** matmul_decode is now integrated + fully tested (reusable for
+models whose weights fit L1, or future HW), but it does NOT speed up gemma2-9B/27B
+dense MLP on P150 or P300. Stop pursuing it for this model.
+
+**The real lever the profiler shows:** decode matmuls sit at ~40%/40% on 12 cores.
+The upside is in the DRAM-sharded matmul program-config / core-count tuning
+(sweeps), not in swapping the op. That is the direction worth the next effort.
