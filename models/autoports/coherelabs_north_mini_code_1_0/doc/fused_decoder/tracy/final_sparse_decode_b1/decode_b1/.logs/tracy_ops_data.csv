@@ -1,0 +1,4917 @@
+MessageName;total_ns
+perf_event_paranoid: 4;207499696
+Failed to get tracefs path, cannot setup system tracing.;207557626
+SYNC_CHECK;3563067095
+`TT_DNN_DEVICE_OP: "TilizeDeviceOperation", 7906080297439492770, 3, false, 1027 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "enough_space_width": "true",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "sub_core_grids": "std::nullopt",
+        "use_low_perf": "false",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 1027,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "5120[5120]",
+                "Y": "2048[2048]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "tilize_wh/3462646505101473433/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id_wh/13185733169617654874/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp"
+            },
+            {
+                "name": "reader_unary_pad_multicore_both_dims/16987907450872916548/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1384,
+            "TENSIX_COMPUTE_1_max_kernel_size": 828,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2184,
+            "TENSIX_DM_0_max_kernel_size": 744,
+            "TENSIX_DM_1_max_kernel_size": 3032
+        }
+    },
+    "op_code": "TilizeDeviceOperation",
+    "op_hash": 7906080297439492770,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "5120[5120]",
+                "Y": "2048[2048]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;3589983569
+`TT_DNN_DEVICE_OP: "TilizeDeviceOperation", 12048250130100943949, 3, false, 2051 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "enough_space_width": "true",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "sub_core_grids": "std::nullopt",
+        "use_low_perf": "false",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 2051,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "4096[4096]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "tilize_wh/8015709473972964319/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id_wh/4949688895654721602/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp"
+            },
+            {
+                "name": "reader_unary_pad_multicore_both_dims/16983970179483948642/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1380,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1044,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2156,
+            "TENSIX_DM_0_max_kernel_size": 744,
+            "TENSIX_DM_1_max_kernel_size": 3024
+        }
+    },
+    "op_code": "TilizeDeviceOperation",
+    "op_hash": 12048250130100943949,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "4096[4096]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;3610760177
+`TT_DNN_DEVICE_OP: "TilizeWithValPaddingDeviceOperation", 16411171134496090032, 3, false, 3075 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "enough_space_width": "true",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_padded_shape": "Shape([1, 1, 32, 2048])",
+        "pad_value": "0",
+        "sub_core_grids": "std::nullopt",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 3075,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "tilize_wh/14307883186269081375/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id_wh/4992277251710934477/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp"
+            },
+            {
+                "name": "reader_unary_pad_multicore_both_dims/16704570900907146508/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1220,
+            "TENSIX_COMPUTE_1_max_kernel_size": 728,
+            "TENSIX_COMPUTE_2_max_kernel_size": 1548,
+            "TENSIX_DM_0_max_kernel_size": 744,
+            "TENSIX_DM_1_max_kernel_size": 3028
+        }
+    },
+    "op_code": "TilizeWithValPaddingDeviceOperation",
+    "op_hash": 16411171134496090032,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;3616072074
+`TT_DNN_DEVICE_OP: "TilizeDeviceOperation", 14665545546871093180, 3, false, 4099 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "enough_space_width": "true",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "sub_core_grids": "std::nullopt",
+        "use_low_perf": "false",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 4099,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "2048[2048]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "tilize/9207119747511123796/",
+                "source": "ttnn/cpp/ttnn/kernel/compute/tilize.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/12823350331057913928/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_stick_layout_split_rows_multicore/5137991844069086675/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1168,
+            "TENSIX_COMPUTE_1_max_kernel_size": 768,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2012,
+            "TENSIX_DM_0_max_kernel_size": 1000,
+            "TENSIX_DM_1_max_kernel_size": 860
+        }
+    },
+    "op_code": "TilizeDeviceOperation",
+    "op_hash": 14665545546871093180,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "2048[2048]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;3621309017
+`TT_DNN_DEVICE_OP: "TilizeDeviceOperation", 3546313562684507322, 3, false, 5123 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "enough_space_width": "true",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "sub_core_grids": "std::nullopt",
+        "use_low_perf": "false",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 5123,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "768[768]",
+                "Y": "2048[2048]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "tilize/12146125137977213421/",
+                "source": "ttnn/cpp/ttnn/kernel/compute/tilize.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/12823350331057913928/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_stick_layout_split_rows_multicore/9165835070369018247/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1308,
+            "TENSIX_COMPUTE_1_max_kernel_size": 928,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2324,
+            "TENSIX_DM_0_max_kernel_size": 1000,
+            "TENSIX_DM_1_max_kernel_size": 860
+        }
+    },
+    "op_code": "TilizeDeviceOperation",
+    "op_hash": 3546313562684507322,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "768[768]",
+                "Y": "2048[2048]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;3735150985
+`TT_DNN_DEVICE_OP: "TilizeDeviceOperation", 3546313562684507322, 3, false, 6147`;3849642692
+`TT_DNN_DEVICE_OP: "TilizeDeviceOperation", 11023446373212214921, 3, false, 7171 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "enough_space_width": "true",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "sub_core_grids": "std::nullopt",
+        "use_low_perf": "false",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 7171,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "768[768]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "tilize/8499559687976835721/",
+                "source": "ttnn/cpp/ttnn/kernel/compute/tilize.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/12823350331057913928/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_stick_layout_split_rows_multicore/16118258048622377923/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1312,
+            "TENSIX_COMPUTE_1_max_kernel_size": 792,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2144,
+            "TENSIX_DM_0_max_kernel_size": 1000,
+            "TENSIX_DM_1_max_kernel_size": 856
+        }
+    },
+    "op_code": "TilizeDeviceOperation",
+    "op_hash": 11023446373212214921,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "768[768]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;3962562932
+`TT_DNN_DEVICE_OP: "TilizeDeviceOperation", 6788435388273234147, 3, false, 8195 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "enough_space_width": "true",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "sub_core_grids": "std::nullopt",
+        "use_low_perf": "false",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 8195,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "1536[1536]",
+                "Y": "2048[2048]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "tilize/10599219831938540429/",
+                "source": "ttnn/cpp/ttnn/kernel/compute/tilize.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/12823350331057913928/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_stick_layout_split_rows_multicore/12978468088621504965/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1324,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1120,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2148,
+            "TENSIX_DM_0_max_kernel_size": 1000,
+            "TENSIX_DM_1_max_kernel_size": 864
+        }
+    },
+    "op_code": "TilizeDeviceOperation",
+    "op_hash": 6788435388273234147,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "1536[1536]",
+                "Y": "2048[2048]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4465126748
+`TT_DNN_DEVICE_OP: "TilizeWithValPaddingDeviceOperation", 16411171134496090032, 3, false, 9219`;4499359288
+`TT_DNN_DEVICE_OP: "TilizeWithValPaddingDeviceOperation", 3659389130450307870, 3, false, 10243 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "enough_space_width": "true",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_padded_shape": "Shape([1, 1, 32, 128])",
+        "pad_value": "0",
+        "sub_core_grids": "std::nullopt",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 10243,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "tilize/9207119747511123796/",
+                "source": "ttnn/cpp/ttnn/kernel/compute/tilize.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/12823350331057913928/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_pad_dims_split_rows_multicore/15913063110563993903/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1168,
+            "TENSIX_COMPUTE_1_max_kernel_size": 768,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2012,
+            "TENSIX_DM_0_max_kernel_size": 1000,
+            "TENSIX_DM_1_max_kernel_size": 1852
+        }
+    },
+    "op_code": "TilizeWithValPaddingDeviceOperation",
+    "op_hash": 3659389130450307870,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4501872940
+`TT_DNN_DEVICE_OP: "TilizeWithValPaddingDeviceOperation", 3659389130450307870, 3, false, 11267`;4501953554
+`TT_DNN_DEVICE_OP: "LayerNormDeviceOperation", 18229885342882361417, 3, false, 12291 ->
+{
+    "attributes": {
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi4,math_approx_mode=1,fp32_dest_acc_en=0,packer_l1_acc=0,dst_full_sync_en=0,throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "distributed_norm_stage": "DistributedLayerNormStage::NOT_DISTRIBUTED",
+        "dtype": "std::nullopt",
+        "eps": "1e-06",
+        "fused_activation": "std::nullopt",
+        "norm_type": "LayerNormType::RMSNORM",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "program_config": "LayerNormDefaultProgramConfig(legacy_reduction=0,legacy_rsqrt=0,use_welford=0)"
+    },
+    "device_id": 3,
+    "global_call_count": 12291,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "layernorm/2715421386497350779/",
+                "source": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id_blocked/7143009526625848983/",
+                "source": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp"
+            },
+            {
+                "name": "reader_unary_interleaved_ln/11410384521337529621/",
+                "source": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 3388,
+            "TENSIX_COMPUTE_1_max_kernel_size": 2536,
+            "TENSIX_COMPUTE_2_max_kernel_size": 3388,
+            "TENSIX_DM_0_max_kernel_size": 812,
+            "TENSIX_DM_1_max_kernel_size": 1684
+        }
+    },
+    "op_code": "LayerNormDeviceOperation",
+    "op_hash": 18229885342882361417,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4506620271
+`TT_DNN_DEVICE_OP: "MatmulDeviceOperation", 10098045366060013753, 3, false, 13315 ->
+{
+    "attributes": {
+        "bcast_batch": "true",
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi2,math_approx_mode=0,fp32_dest_acc_en=0,packer_l1_acc=1,dst_full_sync_en=0,throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "global_cb": "std::nullopt",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_tile": "Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4)",
+        "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=2,per_core_M=1,per_core_N=2,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=0,untilize_out=0,allowed_worker_cores={[0-0 - 10-9]})",
+        "sub_device_id": "std::nullopt",
+        "transpose_a": "false",
+        "transpose_b": "false",
+        "untilize_out": "false",
+        "user_core_coord": "std::nullopt",
+        "user_fused_activation": "std::nullopt",
+        "user_run_batched": "false"
+    },
+    "device_id": 3,
+    "global_call_count": 13315,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "5120[5120]",
+                "Y": "2048[2048]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi2",
+                "name": "bmm_large_block_zm_fused_bias_activation/9250639293354640982/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "reader_bmm_tile_layout_in1_sender_writer_padding/17563367210953479204/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp"
+            },
+            {
+                "name": "reader_bmm_tile_layout_in0_receiver/11847109078087111066/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+            },
+            {
+                "name": "reader_bmm_tile_layout_in0_sender_padding/6763223310763198877/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 2020,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1848,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2516,
+            "TENSIX_DM_0_max_kernel_size": 1680,
+            "TENSIX_DM_1_max_kernel_size": 1084
+        }
+    },
+    "op_code": "MatmulDeviceOperation",
+    "op_hash": 10098045366060013753,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "5120[5120]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 38146,
+        "compute_ns": 70,
+        "ideal_ns": 38146,
+        "input_bws": [
+            3.436061382293701,
+            549.7698364257813
+        ],
+        "output_bws": [
+            8.590153694152832
+        ]
+    },
+    "program_cache_hit": false
+}`;4511680197
+`TT_DNN_DEVICE_OP: "NLPCreateQKVHeadsDecodeDeviceOperation", 7716817570127292276, 3, false, 14339 ->
+{
+    "attributes": {
+        "head_dim": "128",
+        "input_on_subcoregrids": "false",
+        "num_kv_heads": "4",
+        "num_q_heads": "32",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":9}], shape=[0, 0], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "overlap_qk_coregrid": "true",
+        "slice_size": "std::nullopt"
+    },
+    "device_id": 3,
+    "global_call_count": 14339,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "5120[5120]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "reader_interleaved_tm_tile_layout_nlp_create_qkv_heads_decode/5824328713435979520/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/reader_interleaved_tm_tile_layout_nlp_create_qkv_heads_decode.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 1624,
+            "TENSIX_DM_1_max_kernel_size": 1592
+        }
+    },
+    "op_code": "NLPCreateQKVHeadsDecodeDeviceOperation",
+    "op_hash": 7716817570127292276,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[4]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[4]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4513608453
+`TT_DNN_DEVICE_OP: "InterleavedToShardedDeviceOperation", 6590647175480785292, 3, false, 15363 ->
+{
+    "attributes": {
+        "keep_l1_aligned": "false",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":0,\"y\":0}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
+    },
+    "device_id": 3,
+    "global_call_count": 15363,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_sharded/8354490188168529288/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp"
+            },
+            {
+                "name": "reader_unary_sharded_blocks_interleaved_start_id/10361044479765069990/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 384,
+            "TENSIX_DM_1_max_kernel_size": 876
+        }
+    },
+    "op_code": "InterleavedToShardedDeviceOperation",
+    "op_hash": 6590647175480785292,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4515450435
+`TT_DNN_DEVICE_OP: "InterleavedToShardedDeviceOperation", 6590647175480785292, 3, false, 16387`;4515481684
+`TT_DNN_DEVICE_OP: "RotaryEmbeddingHfDeviceOperation", 13733694147300090891, 3, false, 17411 ->
+{
+    "attributes": {
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi4,math_approx_mode=1,fp32_dest_acc_en=0,packer_l1_acc=0,dst_full_sync_en=0,throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "is_decode_mode": "true",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
+    },
+    "device_id": 3,
+    "global_call_count": 17411,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "rotary_embedding_hf_sharded/10932837163080803245/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/compute/rotary_embedding_hf_sharded.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "reader_rotary_embedding_hf_sharded/14021862279706250830/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/reader_rotary_embedding_hf_sharded.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 2904,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1700,
+            "TENSIX_COMPUTE_2_max_kernel_size": 3376,
+            "TENSIX_DM_0_max_kernel_size": 0,
+            "TENSIX_DM_1_max_kernel_size": 440
+        }
+    },
+    "op_code": "RotaryEmbeddingHfDeviceOperation",
+    "op_hash": 13733694147300090891,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4518771366
+`TT_DNN_DEVICE_OP: "RotaryEmbeddingHfDeviceOperation", 550127476333402405, 3, false, 18435 ->
+{
+    "attributes": {
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi4,math_approx_mode=1,fp32_dest_acc_en=0,packer_l1_acc=0,dst_full_sync_en=0,throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "is_decode_mode": "true",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
+    },
+    "device_id": 3,
+    "global_call_count": 18435,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[4]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "rotary_embedding_hf_sharded/10932837163080803245/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/compute/rotary_embedding_hf_sharded.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "reader_rotary_embedding_hf_sharded/14021862279706250830/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/reader_rotary_embedding_hf_sharded.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 2904,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1700,
+            "TENSIX_COMPUTE_2_max_kernel_size": 3376,
+            "TENSIX_DM_0_max_kernel_size": 0,
+            "TENSIX_DM_1_max_kernel_size": 440
+        }
+    },
+    "op_code": "RotaryEmbeddingHfDeviceOperation",
+    "op_hash": 550127476333402405,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[4]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4518983851
+`TT_DNN_DEVICE_OP: "PagedUpdateCacheDeviceOperation", 13307843605886090045, 3, false, 19459 ->
+{
+    "attributes": {
+        "batch_offset": "0",
+        "block_size_override": "std::nullopt",
+        "cache_position_modulo": "std::nullopt",
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=LoFi,math_approx_mode=1,fp32_dest_acc_en=0,packer_l1_acc=0,dst_full_sync_en=0,throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "mesh_coords": "std::nullopt",
+        "num_kv_heads_override": "std::nullopt",
+        "share_cache": "false",
+        "update_idxs": "{}"
+    },
+    "device_id": 3,
+    "global_call_count": 19459,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[32]",
+                "Z": "4[4]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[4]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        },
+        {
+            "dtype": "INT32",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "1[1]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "INT32",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "1[1]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "update_cache/7719482939042225285/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/update_cache.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_update_cache_interleaved_start_id/16832400637625167007/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_update_cache_interleaved_start_id/15232364426487745121/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 2196,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1748,
+            "TENSIX_COMPUTE_2_max_kernel_size": 4752,
+            "TENSIX_DM_0_max_kernel_size": 1548,
+            "TENSIX_DM_1_max_kernel_size": 1324
+        }
+    },
+    "op_code": "PagedUpdateCacheDeviceOperation",
+    "op_hash": 13307843605886090045,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[32]",
+                "Z": "4[4]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4523090129
+`TT_DNN_DEVICE_OP: "PagedUpdateCacheDeviceOperation", 13307843605886090045, 3, false, 20483`;4523118232
+`TT_DNN_DEVICE_OP: "SdpaDecodeDeviceOperation", 10710892236647265592, 3, false, 21507 ->
+{
+    "attributes": {
+        "block_size_override": "std::nullopt",
+        "cache_position_modulo": "std::nullopt",
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi2,math_approx_mode=1,fp32_dest_acc_en=0,packer_l1_acc=0,dst_full_sync_en=0,throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "cur_pos": "{}",
+        "head_dim_v": "std::nullopt",
+        "is_causal": "true",
+        "k_chunk_size": "32",
+        "num_kv_heads_override": "std::nullopt",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "paged_attention": "true",
+        "program_config": "SDPAProgramConfig(compute_with_storage_grid_size=11-10,sub_core_grids=std::nullopt,q_chunk_size=32,k_chunk_size=32,exp_approx_mode=std::nullopt,max_cores_per_head_batch=1)",
+        "scale": "0.088388346",
+        "share_cache": "std::nullopt",
+        "sliding_window_size": "4096",
+        "use_mla": "std::nullopt"
+    },
+    "device_id": 3,
+    "global_call_count": 21507,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[32]",
+                "Z": "4[4]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[32]",
+                "Z": "4[4]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "INT32",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "1[1]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "INT32",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "1[1]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi2",
+                "name": "sdpa_flash_decode/9150744692088939571/",
+                "source": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_decode_all/16721015998500054588/",
+                "source": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp"
+            },
+            {
+                "name": "reader_decode_all/6598986524153066131/",
+                "source": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 13940,
+            "TENSIX_COMPUTE_1_max_kernel_size": 12604,
+            "TENSIX_COMPUTE_2_max_kernel_size": 10668,
+            "TENSIX_DM_0_max_kernel_size": 4988,
+            "TENSIX_DM_1_max_kernel_size": 2360
+        }
+    },
+    "op_code": "SdpaDecodeDeviceOperation",
+    "op_hash": 10710892236647265592,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4528575646
+`TT_DNN_DEVICE_OP: "InterleavedToShardedDeviceOperation", 6590647175480785292, 3, false, 22531`;4528621384
+`TT_DNN_DEVICE_OP: "NLPConcatHeadsDecodeDeviceOperation", 2898211738510500164, 3, false, 23555 ->
+{
+    "attributes": {
+        "num_heads": "32",
+        "on_subcoregrids": "false",
+        "sub_core_grids": "std::nullopt"
+    },
+    "device_id": 3,
+    "global_call_count": 23555,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "HEIGHT_SHARDED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "reader_tm_tile_layout_nlp_concat_heads_decode/9920008636224395622/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_decode.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 628,
+            "TENSIX_DM_1_max_kernel_size": 600
+        }
+    },
+    "op_code": "NLPConcatHeadsDecodeDeviceOperation",
+    "op_hash": 2898211738510500164,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "4096[4096]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "WIDTH_SHARDED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4530480468
+`TT_DNN_DEVICE_OP: "MatmulDeviceOperation", 17653542816436256477, 3, false, 24579 ->
+{
+    "attributes": {
+        "bcast_batch": "true",
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi2,math_approx_mode=0,fp32_dest_acc_en=0,packer_l1_acc=1,dst_full_sync_en=0,throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "global_cb": "std::nullopt",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_tile": "Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4)",
+        "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-3,in0_block_w=4,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=2,per_core_M=1,per_core_N=2,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=0,untilize_out=0,allowed_worker_cores={[0-0 - 10-2]})",
+        "sub_device_id": "std::nullopt",
+        "transpose_a": "false",
+        "transpose_b": "false",
+        "untilize_out": "false",
+        "user_core_coord": "std::nullopt",
+        "user_fused_activation": "std::nullopt",
+        "user_run_batched": "false"
+    },
+    "device_id": 3,
+    "global_call_count": 24579,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "4096[4096]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "L1",
+                    "memory_layout": "WIDTH_SHARDED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "4096[4096]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi2",
+                "name": "bmm_large_block_zm_fused_bias_activation/13834447141767987884/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "reader_bmm_tile_layout_in1_sender_writer_padding/3609679124057874636/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp"
+            },
+            {
+                "name": "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded/947210846011268679/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 2020,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1852,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2516,
+            "TENSIX_DM_0_max_kernel_size": 1660,
+            "TENSIX_DM_1_max_kernel_size": 1164
+        }
+    },
+    "op_code": "MatmulDeviceOperation",
+    "op_hash": 17653542816436256477,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 30517,
+        "compute_ns": 1766,
+        "ideal_ns": 30517,
+        "input_bws": [
+            8.590097427368164,
+            549.7662353515625
+        ],
+        "output_bws": [
+            4.295048713684082
+        ]
+    },
+    "program_cache_hit": false
+}`;4534665656
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 11278533856207897225, 3, false, 25603 ->
+{
+    "attributes": {
+        "num_devices": "std::nullopt",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "slice_dim": "std::nullopt",
+        "slice_end": "Shape([1, 1, 32, 2048])",
+        "slice_start": "Shape([0, 0, 0, 0])",
+        "step": "Shape([1, 1, 1, 1])",
+        "sub_core_grids": "std::nullopt",
+        "use_tensor_args": "false"
+    },
+    "device_id": 3,
+    "global_call_count": 25603,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/11396476643056635318/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_unpad_dims_interleaved_start_id/15985850001773238796/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 680,
+            "TENSIX_DM_1_max_kernel_size": 716
+        }
+    },
+    "op_code": "SliceDeviceOperation",
+    "op_hash": 11278533856207897225,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 238,
+        "compute_ns": 800,
+        "ideal_ns": 800,
+        "input_bws": [
+            163.83999633789063
+        ],
+        "output_bws": [
+            163.83999633789063
+        ]
+    },
+    "program_cache_hit": false
+}`;4536623980
+`TT_DNN_DEVICE_OP: "MatmulDeviceOperation", 13899688942104566726, 3, false, 26627 ->
+{
+    "attributes": {
+        "bcast_batch": "true",
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi2,math_approx_mode=0,fp32_dest_acc_en=0,packer_l1_acc=1,dst_full_sync_en=0,throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "global_cb": "std::nullopt",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_tile": "Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4)",
+        "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=0,untilize_out=0,allowed_worker_cores={[0-0 - 10-9]})",
+        "sub_device_id": "std::nullopt",
+        "transpose_a": "false",
+        "transpose_b": "false",
+        "untilize_out": "false",
+        "user_core_coord": "std::nullopt",
+        "user_fused_activation": "std::nullopt",
+        "user_run_batched": "false"
+    },
+    "device_id": 3,
+    "global_call_count": 26627,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "2048[2048]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi2",
+                "name": "bmm_large_block_zm_fused_bias_activation/942525137029099931/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "reader_bmm_tile_layout_in1_sender_writer_padding/7747605843580814394/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp"
+            },
+            {
+                "name": "reader_bmm_tile_layout_in0_receiver/11847109078087111066/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+            },
+            {
+                "name": "reader_bmm_tile_layout_in0_sender_padding/5402803145243945533/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1992,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1796,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2344,
+            "TENSIX_DM_0_max_kernel_size": 1556,
+            "TENSIX_DM_1_max_kernel_size": 1084
+        }
+    },
+    "op_code": "MatmulDeviceOperation",
+    "op_hash": 13899688942104566726,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 953,
+        "compute_ns": 3,
+        "ideal_ns": 953,
+        "input_bws": [
+            137.53619384765625,
+            550.144775390625
+        ],
+        "output_bws": [
+            8.596012115478516
+        ]
+    },
+    "program_cache_hit": false
+}`;4855281747
+`TT_DNN_DEVICE_OP: "FillPadDeviceOperation", 13832910413183836699, 3, false, 27651 ->
+{
+    "attributes": {
+        "fill_value": "-inf",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
+    },
+    "device_id": 3,
+    "global_call_count": 27651,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "fill_pad_compute/13029899571357189771/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "fill_pad_writer/11976613069468260788/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp"
+            },
+            {
+                "name": "fill_pad_reader/11280157221938756688/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_reader.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1528,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1428,
+            "TENSIX_COMPUTE_2_max_kernel_size": 1328,
+            "TENSIX_DM_0_max_kernel_size": 956,
+            "TENSIX_DM_1_max_kernel_size": 692
+        }
+    },
+    "op_code": "FillPadDeviceOperation",
+    "op_hash": 13832910413183836699,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4859652780
+`TT_DNN_DEVICE_OP: "TopKDeviceOperation", 4970718084269396396, 3, false, 28675 ->
+{
+    "attributes": {
+        "dim": "-1",
+        "k": "32",
+        "largest": "true",
+        "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "sorted": "true",
+        "sub_core_grids": "{[0-0 - 10-9]}"
+    },
+    "device_id": 3,
+    "global_call_count": 28675,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "topk/8679865028900713769/",
+                "source": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_binary_interleaved/2668655102038004167/",
+                "source": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_binary_interleaved.cpp"
+            },
+            {
+                "name": "reader_create_index_tensor/4964966769969383863/",
+                "source": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 6532,
+            "TENSIX_COMPUTE_1_max_kernel_size": 5432,
+            "TENSIX_COMPUTE_2_max_kernel_size": 4580,
+            "TENSIX_DM_0_max_kernel_size": 908,
+            "TENSIX_DM_1_max_kernel_size": 948
+        }
+    },
+    "op_code": "TopKDeviceOperation",
+    "op_hash": 4970718084269396396,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[32]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "UINT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[32]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4864010137
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 6229401578558839682, 3, false, 29699 ->
+{
+    "attributes": {
+        "num_devices": "std::nullopt",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "slice_dim": "std::nullopt",
+        "slice_end": "Shape([1, 1, 32, 32])",
+        "slice_start": "Shape([0, 0, 0, 0])",
+        "step": "Shape([1, 1, 1, 1])",
+        "sub_core_grids": "std::nullopt",
+        "use_tensor_args": "false"
+    },
+    "device_id": 3,
+    "global_call_count": 29699,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[32]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/11396476643056635318/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_unpad_dims_interleaved_start_id/15985850001773238796/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 680,
+            "TENSIX_DM_1_max_kernel_size": 716
+        }
+    },
+    "op_code": "SliceDeviceOperation",
+    "op_hash": 6229401578558839682,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[32]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 3,
+        "compute_ns": 429,
+        "ideal_ns": 429,
+        "input_bws": [
+            4.773892879486084
+        ],
+        "output_bws": [
+            4.773892879486084
+        ]
+    },
+    "program_cache_hit": false
+}`;4864274211
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 4769391882251065572, 3, false, 30723 ->
+{
+    "attributes": {
+        "num_devices": "std::nullopt",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "slice_dim": "std::nullopt",
+        "slice_end": "Shape([1, 1, 32, 32])",
+        "slice_start": "Shape([0, 0, 0, 0])",
+        "step": "Shape([1, 1, 1, 1])",
+        "sub_core_grids": "std::nullopt",
+        "use_tensor_args": "false"
+    },
+    "device_id": 3,
+    "global_call_count": 30723,
+    "input_tensors": [
+        {
+            "dtype": "UINT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[32]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/13355930290814581581/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_unpad_dims_interleaved_start_id/1108021301349754100/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 680,
+            "TENSIX_DM_1_max_kernel_size": 716
+        }
+    },
+    "op_code": "SliceDeviceOperation",
+    "op_hash": 4769391882251065572,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "UINT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[32]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 3,
+        "compute_ns": 429,
+        "ideal_ns": 429,
+        "input_bws": [
+            4.773892879486084
+        ],
+        "output_bws": [
+            4.773892879486084
+        ]
+    },
+    "program_cache_hit": false
+}`;4866151359
+`TT_DNN_DEVICE_OP: "UnaryDeviceOperation", 1433205122739524802, 3, false, 31747 ->
+{
+    "attributes": {
+        "bfp8_pack_precise": "false",
+        "fp32_dest_acc_en": "false",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "op_chain": "{BasicUnaryWithParam<float, int, unsigned int>(base=BasicUnaryWithParam<float>(op_type=UnaryOpType::SIGMOID,param={4, 0}))}",
+        "output_dtype": "DataType::BFLOAT16",
+        "preserve_fp32_precision": "false",
+        "sub_core_grids": "std::nullopt",
+        "worker_grid": "{[0-0 - 10-9]}"
+    },
+    "device_id": 3,
+    "global_call_count": 31747,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[8]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "eltwise_sfpu/17254425182357590235/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary/17308908021593325674/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary.cpp"
+            },
+            {
+                "name": "reader_unary/7914283486036039746/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1060,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1132,
+            "TENSIX_COMPUTE_2_max_kernel_size": 1260,
+            "TENSIX_DM_0_max_kernel_size": 1000,
+            "TENSIX_DM_1_max_kernel_size": 924
+        }
+    },
+    "op_code": "UnaryDeviceOperation",
+    "op_hash": 1433205122739524802,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[8]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4870478679
+`TT_DNN_DEVICE_OP: "UnaryDeviceOperation", 17376454958624202605, 3, false, 32771 ->
+{
+    "attributes": {
+        "bfp8_pack_precise": "false",
+        "fp32_dest_acc_en": "false",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "op_chain": "{BasicUnaryWithParam<float, int, unsigned int>(base=BasicUnaryWithParam<float>(op_type=UnaryOpType::FILL,param={0}))}",
+        "output_dtype": "DataType::BFLOAT16",
+        "preserve_fp32_precision": "false",
+        "sub_core_grids": "std::nullopt",
+        "worker_grid": "{[0-0 - 10-9]}"
+    },
+    "device_id": 3,
+    "global_call_count": 32771,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "eltwise_sfpu/14928341353554394541/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary/17308908021593325674/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary.cpp"
+            },
+            {
+                "name": "reader_unary/7914283486036039746/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1060,
+            "TENSIX_COMPUTE_1_max_kernel_size": 856,
+            "TENSIX_COMPUTE_2_max_kernel_size": 1260,
+            "TENSIX_DM_0_max_kernel_size": 1000,
+            "TENSIX_DM_1_max_kernel_size": 924
+        }
+    },
+    "op_code": "UnaryDeviceOperation",
+    "op_hash": 17376454958624202605,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4873542620
+`TT_DNN_DEVICE_OP: "UntilizeWithUnpaddingDeviceOperation", 14902904521591196528, 3, false, 33795 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "fp32_dest_acc_en": "false",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_tensor_end": "Shape([0, 127])",
+        "sub_core_grids": "std::nullopt",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 33795,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "untilize/9522839940934009808/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_stick_layout_split_rows_multicore/3489260697385388776/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp"
+            },
+            {
+                "name": "reader_unary_interleaved_start_id/14429317243173019626/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1124,
+            "TENSIX_COMPUTE_1_max_kernel_size": 940,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2572,
+            "TENSIX_DM_0_max_kernel_size": 1564,
+            "TENSIX_DM_1_max_kernel_size": 924
+        }
+    },
+    "op_code": "UntilizeWithUnpaddingDeviceOperation",
+    "op_hash": 14902904521591196528,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 14,
+        "compute_ns": 466,
+        "ideal_ns": 466,
+        "input_bws": [
+            17.57939910888672
+        ],
+        "output_bws": [
+            0.54935622215271
+        ]
+    },
+    "program_cache_hit": false
+}`;4877377711
+`TT_DNN_DEVICE_OP: "UntilizeWithUnpaddingDeviceOperation", 11922607627742944294, 3, false, 34819 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "fp32_dest_acc_en": "false",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_tensor_end": "Shape([0, 7])",
+        "sub_core_grids": "std::nullopt",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 34819,
+    "input_tensors": [
+        {
+            "dtype": "UINT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[8]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "untilize/14659225964938679449/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_stick_layout_split_rows_multicore/4720355238896889287/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp"
+            },
+            {
+                "name": "reader_unary_interleaved_start_id/9735162635154385579/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1040,
+            "TENSIX_COMPUTE_1_max_kernel_size": 788,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2356,
+            "TENSIX_DM_0_max_kernel_size": 1564,
+            "TENSIX_DM_1_max_kernel_size": 924
+        }
+    },
+    "op_code": "UntilizeWithUnpaddingDeviceOperation",
+    "op_hash": 11922607627742944294,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "UINT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "8[8]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 3,
+        "compute_ns": 466,
+        "ideal_ns": 466,
+        "input_bws": [
+            4.39484977722168
+        ],
+        "output_bws": [
+            0.03433476388454437
+        ]
+    },
+    "program_cache_hit": false
+}`;4881049932
+`TT_DNN_DEVICE_OP: "UntilizeWithUnpaddingDeviceOperation", 1909789345117384535, 3, false, 35843 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "fp32_dest_acc_en": "false",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_tensor_end": "Shape([0, 7])",
+        "sub_core_grids": "std::nullopt",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 35843,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[8]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "untilize/4715010967245292982/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_stick_layout_split_rows_multicore/3692805883673047670/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp"
+            },
+            {
+                "name": "reader_unary_interleaved_start_id/14429317243173019626/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1040,
+            "TENSIX_COMPUTE_1_max_kernel_size": 788,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2352,
+            "TENSIX_DM_0_max_kernel_size": 1564,
+            "TENSIX_DM_1_max_kernel_size": 924
+        }
+    },
+    "op_code": "UntilizeWithUnpaddingDeviceOperation",
+    "op_hash": 1909789345117384535,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "8[8]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 3,
+        "compute_ns": 466,
+        "ideal_ns": 466,
+        "input_bws": [
+            4.39484977722168
+        ],
+        "output_bws": [
+            0.03433476388454437
+        ]
+    },
+    "program_cache_hit": false
+}`;4884466555
+`TT_DNN_DEVICE_OP: "ScatterDeviceOperation", 2212679851877615096, 3, false, 36867 ->
+{
+    "attributes": {
+        "dim": "1",
+        "opt_reduction": "ScatterReductionType::INVALID",
+        "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "sub_core_grid": "std::nullopt"
+    },
+    "device_id": 3,
+    "global_call_count": 36867,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "UINT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "8[8]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "8[8]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "writer_scatter/4916711344444631664/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/writer_scatter.cpp"
+            },
+            {
+                "name": "reader_scatter/273156988392805560/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/reader_scatter.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 792,
+            "TENSIX_DM_1_max_kernel_size": 2272
+        }
+    },
+    "op_code": "ScatterDeviceOperation",
+    "op_hash": 2212679851877615096,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 466,
+        "ideal_ns": 466,
+        "input_bws": [
+            0.54935622215271
+        ],
+        "output_bws": [
+            0.54935622215271
+        ]
+    },
+    "program_cache_hit": false
+}`;5169703069
+`TT_DNN_DEVICE_OP: "TilizeWithValPaddingDeviceOperation", 9109233834135679062, 3, false, 37891 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "enough_space_width": "true",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_padded_shape": "Shape([32, 128])",
+        "pad_value": "0",
+        "sub_core_grids": "std::nullopt",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 37891,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "tilize/9207119747511123796/",
+                "source": "ttnn/cpp/ttnn/kernel/compute/tilize.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/12823350331057913928/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_pad_dims_split_rows_multicore/15913063110563993903/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1168,
+            "TENSIX_COMPUTE_1_max_kernel_size": 768,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2012,
+            "TENSIX_DM_0_max_kernel_size": 1000,
+            "TENSIX_DM_1_max_kernel_size": 1852
+        }
+    },
+    "op_code": "TilizeWithValPaddingDeviceOperation",
+    "op_hash": 9109233834135679062,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;5170056703
+`TT_DNN_DEVICE_OP: "UntilizeWithUnpaddingDeviceOperation", 15139353585856017297, 3, false, 38915 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "fp32_dest_acc_en": "false",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_tensor_end": "Shape([0, 0, 2047])",
+        "sub_core_grids": "std::nullopt",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 38915,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "untilize_wh/1101123440850024073/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_stick_layout_wh_multicore/14947561892630781098/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp"
+            },
+            {
+                "name": "reader_unary_interleaved_wh_multicore/20479790458110726/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1040,
+            "TENSIX_COMPUTE_1_max_kernel_size": 788,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2352,
+            "TENSIX_DM_0_max_kernel_size": 1596,
+            "TENSIX_DM_1_max_kernel_size": 688
+        }
+    },
+    "op_code": "UntilizeWithUnpaddingDeviceOperation",
+    "op_hash": 15139353585856017297,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 238,
+        "compute_ns": 872,
+        "ideal_ns": 872,
+        "input_bws": [
+            150.31192016601563
+        ],
+        "output_bws": [
+            4.697247505187988
+        ]
+    },
+    "program_cache_hit": false
+}`;5436327691
+`TT_DNN_DEVICE_OP: "RepeatDeviceOperation", 681222707590581328, 3, false, 39939 ->
+{
+    "attributes": {
+        "m_is_last_dim": "false",
+        "m_num_repeats": "128",
+        "m_output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "m_repeat_dim": "-1",
+        "m_tile_higher_pages": "0",
+        "m_tile_lower_pages": "0",
+        "m_tile_page_size_bytes": "0",
+        "m_tile_rep_dim_pages": "0"
+    },
+    "device_id": 3,
+    "global_call_count": 39939,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "1[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "repeat_higher_dim_rm_interleaved/12161771946417035220/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_higher_dim_rm_interleaved.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 0,
+            "TENSIX_DM_1_max_kernel_size": 1836
+        }
+    },
+    "op_code": "RepeatDeviceOperation",
+    "op_hash": 681222707590581328,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "1[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 953,
+        "compute_ns": 2060,
+        "ideal_ns": 2060,
+        "input_bws": [
+            1.9883495569229126
+        ],
+        "output_bws": [
+            254.5087432861328
+        ]
+    },
+    "program_cache_hit": false
+}`;5680284058
+`TT_DNN_DEVICE_OP: "TilizeWithValPaddingDeviceOperation", 5081976570427011011, 3, false, 40963 ->
+{
+    "attributes": {
+        "enough_space_height": "true",
+        "enough_space_width": "true",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_padded_shape": "Shape([128, 32, 2048])",
+        "pad_value": "0",
+        "sub_core_grids": "std::nullopt",
+        "use_multicore": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 40963,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "ROW_MAJOR",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "1[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "tilize/15953909738789604675/",
+                "source": "ttnn/cpp/ttnn/kernel/compute/tilize.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/12823350331057913928/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_pad_dims_split_rows_multicore/18065323348172680216/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1312,
+            "TENSIX_COMPUTE_1_max_kernel_size": 796,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2140,
+            "TENSIX_DM_0_max_kernel_size": 1000,
+            "TENSIX_DM_1_max_kernel_size": 1868
+        }
+    },
+    "op_code": "TilizeWithValPaddingDeviceOperation",
+    "op_hash": 5081976570427011011,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;5944802325
+`TT_DNN_DEVICE_OP: "MatmulDeviceOperation", 15357249994526973941, 3, false, 41987 ->
+{
+    "attributes": {
+        "bcast_batch": "false",
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi2,math_approx_mode=0,fp32_dest_acc_en=0,packer_l1_acc=1,dst_full_sync_en=0,throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "global_cb": "std::nullopt",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_tile": "Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4)",
+        "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=0,untilize_out=0,allowed_worker_cores={[0-0 - 10-9]})",
+        "sub_device_id": "std::nullopt",
+        "transpose_a": "false",
+        "transpose_b": "false",
+        "untilize_out": "false",
+        "user_core_coord": "std::nullopt",
+        "user_fused_activation": "std::nullopt",
+        "user_run_batched": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 41987,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "1536[1536]",
+                "Y": "2048[2048]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi2",
+                "name": "bmm_large_block_zm_fused_bias_activation/9942774903908902718/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "reader_bmm_tile_layout_in1_sender_writer_padding/3211332167927653699/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp"
+            },
+            {
+                "name": "reader_bmm_tile_layout_in0_receiver/9454651291751331030/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+            },
+            {
+                "name": "reader_bmm_tile_layout_in0_sender_padding/3825915319514073519/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 2172,
+            "TENSIX_COMPUTE_1_max_kernel_size": 2016,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2360,
+            "TENSIX_DM_0_max_kernel_size": 1576,
+            "TENSIX_DM_1_max_kernel_size": 1124
+        }
+    },
+    "op_code": "MatmulDeviceOperation",
+    "op_hash": 15357249994526973941,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "1536[1536]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1464843,
+        "compute_ns": 2649,
+        "ideal_ns": 1464843,
+        "input_bws": [
+            11.453251838684082,
+            549.756103515625
+        ],
+        "output_bws": [
+            8.58993911743164
+        ]
+    },
+    "program_cache_hit": false
+}`;6276471517
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 1182799935115409531, 3, false, 43011 ->
+{
+    "attributes": {
+        "num_devices": "std::nullopt",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "slice_dim": "std::nullopt",
+        "slice_end": "Shape([128, 32, 768])",
+        "slice_start": "Shape([0, 0, 0])",
+        "step": "Shape([1, 1, 1])",
+        "sub_core_grids": "std::nullopt",
+        "use_tensor_args": "false"
+    },
+    "device_id": 3,
+    "global_call_count": 43011,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "1536[1536]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/11396476643056635318/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_unpad_dims_interleaved_start_id/10579228541280834701/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 680,
+            "TENSIX_DM_1_max_kernel_size": 716
+        }
+    },
+    "op_code": "SliceDeviceOperation",
+    "op_hash": 1182799935115409531,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "768[768]",
+                "Y": "32[32]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 22888,
+        "compute_ns": 19351,
+        "ideal_ns": 22888,
+        "input_bws": [
+            549.76025390625
+        ],
+        "output_bws": [
+            274.880126953125
+        ]
+    },
+    "program_cache_hit": false
+}`;6500573374
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 2132989046904997778, 3, false, 44035 ->
+{
+    "attributes": {
+        "num_devices": "std::nullopt",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "slice_dim": "std::nullopt",
+        "slice_end": "Shape([128, 32, 1536])",
+        "slice_start": "Shape([0, 0, 768])",
+        "step": "Shape([1, 1, 1])",
+        "sub_core_grids": "std::nullopt",
+        "use_tensor_args": "false"
+    },
+    "device_id": 3,
+    "global_call_count": 44035,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "1536[1536]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/11396476643056635318/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_unpad_dims_interleaved_start_id/10579228541280834701/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 680,
+            "TENSIX_DM_1_max_kernel_size": 716
+        }
+    },
+    "op_code": "SliceDeviceOperation",
+    "op_hash": 2132989046904997778,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "768[768]",
+                "Y": "32[32]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 22888,
+        "compute_ns": 19351,
+        "ideal_ns": 22888,
+        "input_bws": [
+            549.76025390625
+        ],
+        "output_bws": [
+            274.880126953125
+        ]
+    },
+    "program_cache_hit": false
+}`;6501038481
+`TT_DNN_DEVICE_OP: "BinaryNgDeviceOperation", 10172879989616481542, 3, false, 45059 ->
+{
+    "attributes": {
+        "atol": "0",
+        "binary_op_type": "BinaryOpType::MUL",
+        "compute_kernel_config": "std::nullopt",
+        "dtype": "DataType::BFLOAT16",
+        "equal_nan": "false",
+        "input_dtype": "DataType::BFLOAT16",
+        "input_layout_a": "Layout::TILE",
+        "input_layout_b": "Layout::TILE",
+        "is_quant_op": "false",
+        "is_sfpu": "true",
+        "is_where_op": "false",
+        "lhs_activations": "{BasicUnaryWithParam<float, int, unsigned int>(base=BasicUnaryWithParam<float>(op_type=UnaryOpType::SILU,param={}))}",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_layout": "Layout::TILE",
+        "post_activations": "{}",
+        "rhs_activations": "{}",
+        "rtol": "0",
+        "scalar": "std::nullopt",
+        "sub_core_grids": "std::nullopt",
+        "sub_device_id": "std::nullopt",
+        "subtile_broadcast_type": "SubtileBroadcastType::NONE",
+        "worker_grid": "{[0-0 - 10-9]}"
+    },
+    "device_id": 3,
+    "global_call_count": 45059,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "768[768]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "768[768]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "eltwise_binary_sfpu_no_bcast/3780526887682866779/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_interleaved_no_bcast/18136391367178959522/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp"
+            },
+            {
+                "name": "reader_interleaved_no_bcast/7308495782470126971/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1732,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1872,
+            "TENSIX_COMPUTE_2_max_kernel_size": 1548,
+            "TENSIX_DM_0_max_kernel_size": 1120,
+            "TENSIX_DM_1_max_kernel_size": 1644
+        }
+    },
+    "op_code": "BinaryNgDeviceOperation",
+    "op_hash": 10172879989616481542,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "768[768]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;6505736106
+`TT_DNN_DEVICE_OP: "MatmulDeviceOperation", 2865546788280469803, 3, false, 46083 ->
+{
+    "attributes": {
+        "bcast_batch": "false",
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi2,math_approx_mode=0,fp32_dest_acc_en=0,packer_l1_acc=1,dst_full_sync_en=0,throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "global_cb": "std::nullopt",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_tile": "Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4)",
+        "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=0,untilize_out=0,allowed_worker_cores={[0-0 - 10-9]})",
+        "sub_device_id": "std::nullopt",
+        "transpose_a": "false",
+        "transpose_b": "false",
+        "untilize_out": "false",
+        "user_core_coord": "std::nullopt",
+        "user_fused_activation": "std::nullopt",
+        "user_run_batched": "true"
+    },
+    "device_id": 3,
+    "global_call_count": 46083,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "768[768]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "768[768]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi2",
+                "name": "bmm_large_block_zm_fused_bias_activation/6413801273150219852/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "reader_bmm_tile_layout_in1_sender_writer_padding/4083721815547354720/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp"
+            },
+            {
+                "name": "reader_bmm_tile_layout_in0_receiver/1122096504142533827/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+            },
+            {
+                "name": "reader_bmm_tile_layout_in0_sender_padding/17672480630196952306/",
+                "source": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 2156,
+            "TENSIX_COMPUTE_1_max_kernel_size": 2020,
+            "TENSIX_COMPUTE_2_max_kernel_size": 2360,
+            "TENSIX_DM_0_max_kernel_size": 1580,
+            "TENSIX_DM_1_max_kernel_size": 1104
+        }
+    },
+    "op_code": "MatmulDeviceOperation",
+    "op_hash": 2865546788280469803,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 732421,
+        "compute_ns": 1325,
+        "ideal_ns": 732421,
+        "input_bws": [
+            8.589944839477539,
+            549.7564697265625
+        ],
+        "output_bws": [
+            22.906518936157227
+        ]
+    },
+    "program_cache_hit": false
+}`;6833999146
+`TT_DNN_DEVICE_OP: "TransposeDeviceOperation", 3556068238743279635, 3, false, 47107 ->
+{
+    "attributes": {
+        "dim": "TransposeOpDim::WH",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "pad_value": "0"
+    },
+    "device_id": 3,
+    "global_call_count": 47107,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "transpose_wh/6148515967295005335/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/12823350331057913928/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_transpose_wh_interleaved_start_id/12549895365772018052/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/reader_unary_transpose_wh_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1104,
+            "TENSIX_COMPUTE_1_max_kernel_size": 736,
+            "TENSIX_COMPUTE_2_max_kernel_size": 1292,
+            "TENSIX_DM_0_max_kernel_size": 1000,
+            "TENSIX_DM_1_max_kernel_size": 732
+        }
+    },
+    "op_code": "TransposeDeviceOperation",
+    "op_hash": 3556068238743279635,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[1]",
+                "Y": "128[128]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 14,
+        "compute_ns": 466,
+        "ideal_ns": 466,
+        "input_bws": [
+            17.57939910888672
+        ],
+        "output_bws": [
+            17.57939910888672
+        ]
+    },
+    "program_cache_hit": false
+}`;6837950789
+`TT_DNN_DEVICE_OP: "ReshapeViewDeviceOperation", 5485882098674198627, 3, false, 48131 ->
+{
+    "attributes": {
+        "logical_output_shape": "Shape([128, 1, 1])",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "padded_output_shape": "Shape([128, 32, 32])",
+        "recreate_mapping_tensor": "false",
+        "sub_core_grid": "std::nullopt"
+    },
+    "device_id": 3,
+    "global_call_count": 48131,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[1]",
+                "Y": "128[128]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "writer_reshape_tiled/153652395497883413/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp"
+            },
+            {
+                "name": "reader_reshape_tiled/15738258887596407837/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 1668,
+            "TENSIX_DM_1_max_kernel_size": 984
+        }
+    },
+    "op_code": "ReshapeViewDeviceOperation",
+    "op_hash": 5485882098674198627,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[1]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;6840301661
+`TT_DNN_DEVICE_OP: "BinaryNgDeviceOperation", 9109786479759121483, 3, false, 49155 ->
+{
+    "attributes": {
+        "atol": "0",
+        "binary_op_type": "BinaryOpType::MUL",
+        "compute_kernel_config": "std::nullopt",
+        "dtype": "DataType::BFLOAT16",
+        "equal_nan": "false",
+        "input_dtype": "DataType::BFLOAT16",
+        "input_layout_a": "Layout::TILE",
+        "input_layout_b": "Layout::TILE",
+        "is_quant_op": "false",
+        "is_sfpu": "true",
+        "is_where_op": "false",
+        "lhs_activations": "{}",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_layout": "Layout::TILE",
+        "post_activations": "{}",
+        "rhs_activations": "{}",
+        "rtol": "0",
+        "scalar": "std::nullopt",
+        "sub_core_grids": "std::nullopt",
+        "sub_device_id": "std::nullopt",
+        "subtile_broadcast_type": "SubtileBroadcastType::SCALAR_B",
+        "worker_grid": "{[0-0 - 10-9]}"
+    },
+    "device_id": 3,
+    "global_call_count": 49155,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "32[1]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "eltwise_binary_sfpu_scalar_bcast/5417108191563464514/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_scalar_bcast.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_interleaved_no_bcast/16082081782850918657/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp"
+            },
+            {
+                "name": "reader_interleaved_scalar_bcast/4528687550032723316/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_scalar_bcast.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 3484,
+            "TENSIX_COMPUTE_1_max_kernel_size": 2524,
+            "TENSIX_COMPUTE_2_max_kernel_size": 4560,
+            "TENSIX_DM_0_max_kernel_size": 1120,
+            "TENSIX_DM_1_max_kernel_size": 1636
+        }
+    },
+    "op_code": "BinaryNgDeviceOperation",
+    "op_hash": 9109786479759121483,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;6845053780
+`TT_DNN_DEVICE_OP: "FillPadDeviceOperation", 8309062378769451476, 3, false, 50179 ->
+{
+    "attributes": {
+        "fill_value": "0",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
+    },
+    "device_id": 3,
+    "global_call_count": 50179,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "fill_pad_compute/5940683706860411184/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "fill_pad_writer/9180862167353242513/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp"
+            },
+            {
+                "name": "fill_pad_reader/9803540601234854410/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_reader.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1528,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1424,
+            "TENSIX_COMPUTE_2_max_kernel_size": 1328,
+            "TENSIX_DM_0_max_kernel_size": 956,
+            "TENSIX_DM_1_max_kernel_size": 692
+        }
+    },
+    "op_code": "FillPadDeviceOperation",
+    "op_hash": 8309062378769451476,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;7108063461
+`TT_DNN_DEVICE_OP: "FastReduceNCDeviceOperation", 5140372399995887469, 3, false, 51203 ->
+{
+    "attributes": {
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi4,math_approx_mode=0,fp32_dest_acc_en=1,packer_l1_acc=0,dst_full_sync_en=0,throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "dim": "0",
+        "output_dtype": "std::nullopt",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "sub_core_grids": "std::nullopt"
+    },
+    "device_id": 3,
+    "global_call_count": 51203,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "128[128]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "reduce_nc/15517094258136700099/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_reduce_nc/5261097171432542084/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp"
+            },
+            {
+                "name": "reader_reduce_nc/11179432673682079788/",
+                "source": "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1388,
+            "TENSIX_COMPUTE_1_max_kernel_size": 916,
+            "TENSIX_COMPUTE_2_max_kernel_size": 1800,
+            "TENSIX_DM_0_max_kernel_size": 644,
+            "TENSIX_DM_1_max_kernel_size": 1148
+        }
+    },
+    "op_code": "FastReduceNCDeviceOperation",
+    "op_hash": 5140372399995887469,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;7366932517
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 11285150007123563239, 3, false, 52227 ->
+{
+    "attributes": {
+        "num_devices": "std::nullopt",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "slice_dim": "std::nullopt",
+        "slice_end": "Shape([1, 32, 2048])",
+        "slice_start": "Shape([0, 0, 0])",
+        "step": "Shape([1, 1, 1])",
+        "sub_core_grids": "std::nullopt",
+        "use_tensor_args": "false"
+    },
+    "device_id": 3,
+    "global_call_count": 52227,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [],
+        "datamovement_kernels": [
+            {
+                "name": "writer_unary_interleaved_start_id/11396476643056635318/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+            },
+            {
+                "name": "reader_unary_unpad_dims_interleaved_start_id/10579228541280834701/",
+                "source": "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 0,
+            "TENSIX_COMPUTE_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_2_max_kernel_size": 0,
+            "TENSIX_DM_0_max_kernel_size": 680,
+            "TENSIX_DM_1_max_kernel_size": 716
+        }
+    },
+    "op_code": "SliceDeviceOperation",
+    "op_hash": 11285150007123563239,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[32]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 238,
+        "compute_ns": 800,
+        "ideal_ns": 800,
+        "input_bws": [
+            163.83999633789063
+        ],
+        "output_bws": [
+            163.83999633789063
+        ]
+    },
+    "program_cache_hit": false
+}`;7367370252
+`TT_DNN_DEVICE_OP: "BinaryNgDeviceOperation", 1295168523863076379, 3, false, 53251 ->
+{
+    "attributes": {
+        "atol": "0",
+        "binary_op_type": "BinaryOpType::ADD",
+        "compute_kernel_config": "std::nullopt",
+        "dtype": "DataType::BFLOAT16",
+        "equal_nan": "false",
+        "input_dtype": "DataType::BFLOAT16",
+        "input_layout_a": "Layout::TILE",
+        "input_layout_b": "Layout::TILE",
+        "is_quant_op": "false",
+        "is_sfpu": "false",
+        "is_where_op": "false",
+        "lhs_activations": "{}",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_layout": "Layout::TILE",
+        "post_activations": "{}",
+        "rhs_activations": "{}",
+        "rtol": "0",
+        "scalar": "std::nullopt",
+        "sub_core_grids": "std::nullopt",
+        "sub_device_id": "std::nullopt",
+        "subtile_broadcast_type": "SubtileBroadcastType::NONE",
+        "worker_grid": "{[0-0 - 10-9]}"
+    },
+    "device_id": 3,
+    "global_call_count": 53251,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "HiFi4",
+                "name": "eltwise_binary_no_bcast/7702167649156508193/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_no_bcast.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer_interleaved_no_bcast/13786176872452774081/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp"
+            },
+            {
+                "name": "reader_interleaved_no_bcast/13696495097517312790/",
+                "source": "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1308,
+            "TENSIX_COMPUTE_1_max_kernel_size": 768,
+            "TENSIX_COMPUTE_2_max_kernel_size": 1292,
+            "TENSIX_DM_0_max_kernel_size": 1120,
+            "TENSIX_DM_1_max_kernel_size": 1644
+        }
+    },
+    "op_code": "BinaryNgDeviceOperation",
+    "op_hash": 1295168523863076379,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "2048[2048]",
+                "Y": "32[1]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 0,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;7372006310
+`TT_DNN_DEVICE_OP: "BinaryNgDeviceOperation", 1295168523863076379, 3, false, 54275`;7372104638
+FINISH_SYNC;7380546361
+`TT_METAL_TRACE_BEGIN: 3, 0`;7380715724
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 54`;7380840592
+`TT_DNN_DEVICE_OP: "LayerNormDeviceOperation", 18229885342882361417, 3, false, 55299`;7380867253
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 55`;7380917689
+`TT_DNN_DEVICE_OP: "MatmulDeviceOperation", 10098045366060013753, 3, false, 56323`;7380974667
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 56`;7381030173
+`TT_DNN_DEVICE_OP: "NLPCreateQKVHeadsDecodeDeviceOperation", 7716817570127292276, 3, false, 57347`;7381042457
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 57`;7381062294
+`TT_DNN_DEVICE_OP: "InterleavedToShardedDeviceOperation", 6590647175480785292, 3, false, 58371`;7381070480
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 58`;7381077413
+`TT_DNN_DEVICE_OP: "InterleavedToShardedDeviceOperation", 6590647175480785292, 3, false, 59395`;7381078726
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 59`;7381101038
+`TT_DNN_DEVICE_OP: "RotaryEmbeddingHfDeviceOperation", 13733694147300090891, 3, false, 60419`;7381110025
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 60`;7381126557
+`TT_DNN_DEVICE_OP: "RotaryEmbeddingHfDeviceOperation", 550127476333402405, 3, false, 61443`;7381140003
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 61`;7381165211
+`TT_DNN_DEVICE_OP: "PagedUpdateCacheDeviceOperation", 13307843605886090045, 3, false, 62467`;7381175761
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 62`;7381183365
+`TT_DNN_DEVICE_OP: "PagedUpdateCacheDeviceOperation", 13307843605886090045, 3, false, 63491`;7381184698
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 63`;7381262226
+`TT_DNN_DEVICE_OP: "SdpaDecodeDeviceOperation", 10710892236647265592, 3, false, 64515`;7381318914
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 64`;7381332429
+`TT_DNN_DEVICE_OP: "InterleavedToShardedDeviceOperation", 6590647175480785292, 3, false, 65539`;7381334063
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 65`;7381367727
+`TT_DNN_DEVICE_OP: "NLPConcatHeadsDecodeDeviceOperation", 2898211738510500164, 3, false, 66563`;7381395800
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 66`;7381424154
+`TT_DNN_DEVICE_OP: "MatmulDeviceOperation", 17653542816436256477, 3, false, 67587`;7381450044
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 67`;7381488667
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 11278533856207897225, 3, false, 68611`;7381519937
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 68`;7381559352
+`TT_DNN_DEVICE_OP: "MatmulDeviceOperation", 13899688942104566726, 3, false, 69635`;7381572497
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 69`;7381594429
+`TT_DNN_DEVICE_OP: "FillPadDeviceOperation", 13832910413183836699, 3, false, 70659`;7381604077
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 70`;7381624306
+`TT_DNN_DEVICE_OP: "TopKDeviceOperation", 4970718084269396396, 3, false, 71683`;7381635958
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 71`;7381650416
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 6229401578558839682, 3, false, 72707`;7381658381
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 72`;7381670584
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 4769391882251065572, 3, false, 73731`;7381676235
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 73`;7381741810
+`TT_DNN_DEVICE_OP: "UnaryDeviceOperation", 1433205122739524802, 3, false, 74755`;7381786535
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 74`;7381832292
+`TT_DNN_DEVICE_OP: "UnaryDeviceOperation", 17376454958624202605, 3, false, 75779`;7381871878
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 75`;7381896595
+`TT_DNN_DEVICE_OP: "UntilizeWithUnpaddingDeviceOperation", 14902904521591196528, 3, false, 76803`;7381905282
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 76`;7381921042
+`TT_DNN_DEVICE_OP: "UntilizeWithUnpaddingDeviceOperation", 11922607627742944294, 3, false, 77827`;7381928416
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 77`;7381940118
+`TT_DNN_DEVICE_OP: "UntilizeWithUnpaddingDeviceOperation", 1909789345117384535, 3, false, 78851`;7381947392
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 78`;7381961859
+`TT_DNN_DEVICE_OP: "ScatterDeviceOperation", 2212679851877615096, 3, false, 79875`;7381969454
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 79`;7381987959
+`TT_DNN_DEVICE_OP: "TilizeWithValPaddingDeviceOperation", 9109233834135679062, 3, false, 80899`;7381995163
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 80`;7382059686
+`TT_DNN_DEVICE_OP: "UntilizeWithUnpaddingDeviceOperation", 15139353585856017297, 3, false, 81923`;7382134408
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 81`;7382150319
+`TT_DNN_DEVICE_OP: "RepeatDeviceOperation", 681222707590581328, 3, false, 82947`;7382181588
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 82`;7382198511
+`TT_DNN_DEVICE_OP: "TilizeWithValPaddingDeviceOperation", 5081976570427011011, 3, false, 83971`;7382268173
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 83`;7382295525
+`TT_DNN_DEVICE_OP: "MatmulDeviceOperation", 15357249994526973941, 3, false, 84995`;7382324851
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 84`;7382358055
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 1182799935115409531, 3, false, 86019`;7382400987
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 85`;7382427227
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 2132989046904997778, 3, false, 87043`;7382459528
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 86`;7382540272
+`TT_DNN_DEVICE_OP: "BinaryNgDeviceOperation", 10172879989616481542, 3, false, 88067`;7382582142
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 87`;7382600647
+`TT_DNN_DEVICE_OP: "MatmulDeviceOperation", 2865546788280469803, 3, false, 89091`;7382632277
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 88`;7382659770
+`TT_DNN_DEVICE_OP: "TransposeDeviceOperation", 3556068238743279635, 3, false, 90115`;7382700487
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 89`;7382724313
+`TT_DNN_DEVICE_OP: "ReshapeViewDeviceOperation", 5485882098674198627, 3, false, 91139`;7382757386
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 90`;7382807211
+`TT_DNN_DEVICE_OP: "BinaryNgDeviceOperation", 9109786479759121483, 3, false, 92163`;7382852367
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 91`;7382871674
+`TT_DNN_DEVICE_OP: "FillPadDeviceOperation", 8309062378769451476, 3, false, 93187`;7382909466
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 92`;7382925036
+`TT_DNN_DEVICE_OP: "FastReduceNCDeviceOperation", 5140372399995887469, 3, false, 94211`;7382948971
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 93`;7382964621
+`TT_DNN_DEVICE_OP: "SliceDeviceOperation", 11285150007123563239, 3, false, 95235`;7382986573
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 94`;7383044533
+`TT_DNN_DEVICE_OP: "BinaryNgDeviceOperation", 1295168523863076379, 3, false, 96259`;7383082436
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 3, 0, 95`;7383110569
+`TT_DNN_DEVICE_OP: "BinaryNgDeviceOperation", 1295168523863076379, 3, false, 97283`;7383119426
+`TT_METAL_TRACE_END: 3, 0`;7383127331
+`TT_METAL_TRACE_REPLAY: 3, 0`;7383441109
+`TT_METAL_TRACE_REPLAY: 3, 0`;7383445688
+`TT_METAL_TRACE_REPLAY: 3, 0`;7383446710
+`TT_SIGNPOST: PERF_DECODE`;7403578790
+`TT_METAL_TRACE_REPLAY: 3, 0`;7403744856
+`TT_SIGNPOST: PERF_DECODE_END`;7410462593
+`TT_METAL_TRACE_REPLAY: 3, 0`;7410508681
+`TT_METAL_TRACE_RELEASE: 3, 0`;7417223923

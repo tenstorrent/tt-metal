@@ -1,0 +1,14 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+93.23,MatmulDeviceOperation (in0:dram_interleaved),5601.54,3,Compute,4.25,5.51,4.78,0.66,4.77
+1.88,BinaryNgDeviceOperation (in0:dram_interleaved),113.17,3,Compute,,,,,
+1.22,SliceDeviceOperation (in0:dram_interleaved),73.04,2,TM,,,,,
+0.84,ReshapeViewDeviceOperation (in0:dram_interleaved),50.33,1,Other,,,,,
+0.73,MatmulDeviceOperation (in0:width_sharded),43.95,1,Compute,13.81,13.81,13.81,,13.81
+0.60,LayerNormDeviceOperation (in0:dram_interleaved),35.92,1,Compute,,,,,
+0.44,NLPCreateQKVHeadsDecodeDeviceOperation (in0:dram_interleaved),26.43,1,Other,,,,,
+0.28,TransposeDeviceOperation (in0:dram_interleaved),16.66,1,TM,,,,,
+0.28,SdpaDecodeDeviceOperation (in0:height_sharded),16.57,1,Other,,,,,
+0.24,PagedUpdateCacheDeviceOperation (in0:dram_interleaved),14.55,2,DM,,,,,
+0.10,RotaryEmbeddingHfDeviceOperation (in0:height_sharded),5.81,2,Other,,,,,
+0.09,NLPConcatHeadsDecodeDeviceOperation (in0:height_sharded),5.51,1,TM,,,,,
+0.08,InterleavedToShardedDeviceOperation (in0:dram_interleaved),4.75,3,DM,,,,,
