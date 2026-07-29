@@ -221,6 +221,24 @@ class Model:
 
         # Initialize on-device sampling (supported when padded per-device vocab fits in 64K)
         self._supports_on_device_sampling = per_device_padded <= 64 * 1024
+
+        # When on-device sampling is DISABLED (TP=1: pow2 per-device vocab > 64K),
+        # decode uses host-greedy ttnn.argmax (no topk), so the pow2 vocab padding
+        # (262144 vs ~201088 real) is dead weight -- the lm_head matmul computes ~23%
+        # zero columns/token. Trim the loaded weight ON-DEVICE to tile-aligned real
+        # vocab (the pow2 tail is all zeros; real vocab is a prefix, so argmax over the
+        # trimmed logits returns the identical greedy token). The lm_head program
+        # config derives Nt from shape[-1] so it adapts automatically.
+        if not self._supports_on_device_sampling and self.lm_head_weight is not None:
+            tile_vocab = ((self.vocab_size + 31) // 32) * 32
+            if self.lm_head_weight.shape[-1] > tile_vocab:
+                _shp = list(self.lm_head_weight.shape)
+                _starts = [0] * len(_shp)
+                _ends = list(_shp)
+                _ends[-1] = tile_vocab
+                _trimmed = ttnn.slice(self.lm_head_weight, _starts, _ends)
+                ttnn.deallocate(self.lm_head_weight)
+                self.lm_head_weight = _trimmed
         self._prefill_sampling_active = False
         # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
         self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
