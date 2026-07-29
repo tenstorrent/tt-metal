@@ -35,7 +35,10 @@ mpirun --bind-to none --pernode --tag-output bash -c 'source $TT_METAL_HOME/pyth
 
 Everything from `test_local_compute_determinism` down replicates identical inputs to all 32
 chips and uses no fabric, so a chip that disagrees with the other 31 **is** the fault.
-A failure there is hardware; only the first two tests can implicate tt-metal.
+A failure there is below tt-metal — one chip, not the code; only the first two tests can
+implicate tt-metal. Below tt-metal is not automatically the silicon: firmware owns the
+operating point (AICLK, VDD, DVFS, harvesting), so a marginal core can pass under one
+firmware and drift under another. Rule out the firmware/KMD pair before calling it a bad die.
 
 Read the results in this order — the first failing row is the answer:
 
@@ -45,7 +48,9 @@ CCL pass, local_compute fails       -> one chip. Continue.
 readback fails                      -> DRAM / storage on that chip.
 eltwise fails, readback passes      -> unpack/SFPU/pack path.
 matmul* fail, readback+eltwise pass -> the matmul (FPU) path.
-core_locality block index invariant -> one Tensix core. Hardware. RMA or harvest.
+core_locality block index invariant -> one Tensix core on that chip. Not a code bug.
+                                       Next: same box on a newer fw/KMD pair. Still fails
+                                       -> the die (harvest or RMA). Passes -> firmware.
 ```
 
 ## Reference: b07u08 (a good box), 2026-07-29

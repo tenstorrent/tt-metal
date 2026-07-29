@@ -90,8 +90,12 @@ needs redoing on b06u02; the open item there is not a software question:
 
 - Re-confirm with the 8-test subset that device 14 (PCI `0000:47:00.0`) still fails, and that
   the block index is still `(M 8 of 10, N 6 of 12)`.
-- Then it is a hardware call — harvest that core, or RMA the board. b07u02 is reported to
-  have the same symptom and is worth running the subset on.
+- Done 2026-07-29, same failure set — see `DETERMINISM_RESULT_b06u02.md`.
+- Then the next variable is the firmware/KMD pair, not an RMA: this box is on fw `19.12.0` /
+  KMD `2.10.0`, b06u02 on `19.8.1.0` / `2.8.0`, and both reported-failing boxes are on the
+  older pair. Bring b06u02 to the newer pair, rerun the subset, and only then call it a die.
+  b07u02 is reported to have the same symptom and is worth running the subset on, recording
+  *which* shard fails there.
 - The two side issues found while bisecting are independent of the box and still open:
   `conftest.py` `weight_cache_path` has no `use_pretrained` gate, so a random-weight test on
   an unstaged box starts a 181 GB HF download; and several CI `-k` selectors over-select by

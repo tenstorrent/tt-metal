@@ -2,9 +2,13 @@
 
 **One Tensix core on physical device 14 (PCI `0000:47:00.0`, mesh shard 21) has an
 intermittently wrong matmul FPU path. DRAM and SFPU on the same die are bit-exact. Not a
-tt-metal bug.**
+tt-metal bug — but not proven to be a bad die either: this box runs fw `19.8.1.0` / KMD
+`2.8.0`, and both known-passing boxes run the newer pair. Firmware owns the operating point,
+so it can be the trigger and the weakest core the place it shows. See "Caveat and open
+items".**
 
-Host `bh-glx-b06u02`, HEAD `da6f15e849a`, driver `tenstorrent 2.8.0`, 32 Blackhole boards.
+Host `bh-glx-b06u02`, HEAD `da6f15e849a`, driver `tenstorrent 2.8.0`, fw bundle `19.8.1.0`,
+32 Blackhole boards.
 Second independent confirmation run: **6 failed, 21 passed, 14:12.** Log:
 `/data/nmilicevic/b06u02_det_confirm.log`.
 
@@ -61,11 +65,22 @@ Full suite: drop the `-k`. The 18 CCL tests are the slow half and pass on the ba
 
 ## Caveat and open items
 
-- **Driver versions differ between the two boxes**: b06u02 is on `tenstorrent 2.8.0`, b07u08 on
-  `2.10.0`. A host driver has no path to one core's FPU accumulation, and cannot explain a
-  footprint that tracks the core grid across three shapes while DRAM and SFPU on the same die
-  stay clean — but the variable is uncontrolled. Close it by running the subset on b07u02
-  (reported to show the same symptom) or by bringing b06u02 to 2.10.0 and re-running.
+- **Firmware/KMD is the leading candidate for the *cause*, and it is uncontrolled.** b06u02 is
+  on fw `19.8.1.0` / KMD `2.8.0`, b07u08 on `19.12.0` / `2.10.0`, and the two reported-failing
+  boxes are both on the older pair. Firmware owns AICLK, VDD, DVFS and harvesting, so a core
+  that is marginal at 19.8.1's operating point and fine at 19.12.0's produces exactly this
+  signature. These tests establish *where* the fault manifests, not why. Three constraints:
+  a uniform firmware cannot select 1 chip of 32 by itself (all 32 report `fw_bundle 19.8.1.0`,
+  `asic_fmax 1350`, `vdd 0.70-0.90`, `THERM_TRIP_COUNT 0x0`, `GDDR_UNCORR_ERRS 0x0`), so the
+  mechanism has to be firmware interacting with something per-chip; the KMD code itself is
+  unlikely, since readback and eltwise are bit-exact on the same die so host DMA/MMIO is clean;
+  and **harvesting** is the one firmware-only mechanism that would fully exonerate the silicon
+  — `ENABLED_TENSIX_COL` is per-chip (dev 14 = `0x3ffd`, 13 of 14 columns enabled), so a
+  different harvest under 19.12.0 could simply stop mapping the marginal core.
+  Close it in this order: (1) flash 19.12.0 + KMD 2.10 here and rerun the 8-test subset — one
+  variable, same silicon (`fw_pack-19.8.1.fwbundle` is kept for rollback); (2) run the subset
+  on b07u02 and record *which* shard fails; (3) diff `tt-smi -s --snapshot_no_tty` against a
+  passing box on `ENABLED_TENSIX_COL`, `asic_fmax`, and the VDD limits.
 - Resolve block (8,6) to a logical core x/y via `transpose_mcast` so the core can be named in a
   harvest request.
 - **A wedged board is a no-result, not a failure.** If every test errors in ~20 s with

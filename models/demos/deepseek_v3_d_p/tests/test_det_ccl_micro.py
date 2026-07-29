@@ -15,7 +15,10 @@ apart without weights, a model, or a trace, in the order worth running:
 
 Everything from test_local_compute_determinism down replicates identical inputs to all 32
 chips, so a chip that disagrees with the other 31 is the fault, and no fabric is involved.
-A failure there is hardware; only the first two tests can implicate tt-metal.
+A failure there is below tt-metal -- one chip, not the code -- but below tt-metal is not
+automatically the silicon: firmware owns the operating point (AICLK, VDD, DVFS, harvesting),
+so a marginal core can pass under one firmware and drift under another. Rule out the
+firmware/KMD pair before calling it a bad die. Only the first two tests implicate tt-metal.
 """
 
 import pytest
