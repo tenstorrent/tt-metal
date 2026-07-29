@@ -189,12 +189,7 @@ skus:
   # exabox.tenstorrent.com/power=14kw.
   bh_sc1_high_power:
     runs_on:
-      - exabox-multihost-with-nfs
-    allocation:
-      type: Count
-      count: 1
-      match_labels:
-        exabox.tenstorrent.com/power: "14kw"
+      - exabox-multihost-ci-sc1
 
   bh_sc4:
     runs_on:
