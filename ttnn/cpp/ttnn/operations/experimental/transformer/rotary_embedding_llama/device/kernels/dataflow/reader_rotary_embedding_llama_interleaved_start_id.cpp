@@ -37,25 +37,25 @@ void kernel_main() {
     const auto s2 = TensorAccessor(tensor::sin);
     const auto s3 = TensorAccessor(tensor::trans_mat);
 
-    DataflowBuffer cb_input(dfb::input);
-    DataflowBuffer cb_cos(dfb::cos);
-    DataflowBuffer cb_sin(dfb::sin);
-    DataflowBuffer cb_trans_mat(dfb::trans_mat);
+    DataflowBuffer dfb_input(dfb::input);
+    DataflowBuffer dfb_cos(dfb::cos);
+    DataflowBuffer dfb_sin(dfb::sin);
+    DataflowBuffer dfb_trans_mat(dfb::trans_mat);
 
-    const uint32_t input_tile_bytes = cb_input.get_entry_size();
-    const uint32_t cos_tile_bytes = cb_cos.get_entry_size();
-    const uint32_t sin_tile_bytes = cb_sin.get_entry_size();
-    const uint32_t trans_mat_tile_bytes = cb_trans_mat.get_entry_size();
+    const uint32_t input_tile_bytes = dfb_input.get_entry_size();
+    const uint32_t cos_tile_bytes = dfb_cos.get_entry_size();
+    const uint32_t sin_tile_bytes = dfb_sin.get_entry_size();
+    const uint32_t trans_mat_tile_bytes = dfb_trans_mat.get_entry_size();
 
     uint32_t trans_mat_curr_idx = 0;
 
     // Read transformation matrix in CB (only once, because it will be reused)
-    cb_trans_mat.reserve_back(onetile);
-    uint32_t trans_mat_l1_write_addr = cb_trans_mat.get_write_ptr();
+    dfb_trans_mat.reserve_back(onetile);
+    uint32_t trans_mat_l1_write_addr = dfb_trans_mat.get_write_ptr();
     noc.async_read(
         s3, CoreLocalMem<uint32_t>(trans_mat_l1_write_addr), trans_mat_tile_bytes, {.page_id = trans_mat_curr_idx}, {});
     noc.async_read_barrier();
-    cb_trans_mat.push_back(onetile);
+    dfb_trans_mat.push_back(onetile);
 
     /*
         Read a ublock of tiles from src to CB, and then push the ublock to unpacker
@@ -71,10 +71,10 @@ void kernel_main() {
         uint32_t cos_l1_write_addr = 0;
 #if RELOAD_IMPL == 0
         if (my_cos_sin_tiles > 0) {
-            cb_sin.reserve_back(my_cos_sin_tiles);
-            cb_cos.reserve_back(my_cos_sin_tiles);
-            sin_l1_write_addr = cb_sin.get_write_ptr();
-            cos_l1_write_addr = cb_cos.get_write_ptr();
+            dfb_sin.reserve_back(my_cos_sin_tiles);
+            dfb_cos.reserve_back(my_cos_sin_tiles);
+            sin_l1_write_addr = dfb_sin.get_write_ptr();
+            cos_l1_write_addr = dfb_cos.get_write_ptr();
         }
 #endif
 
@@ -85,14 +85,14 @@ void kernel_main() {
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
             for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
 #if RELOAD_IMPL == 1
-                cb_sin.reserve_back(Wt);
-                cb_cos.reserve_back(Wt);
-                uint32_t sin_l1_write_addr = cb_sin.get_write_ptr();
-                uint32_t cos_l1_write_addr = cb_cos.get_write_ptr();
+                dfb_sin.reserve_back(Wt);
+                dfb_cos.reserve_back(Wt);
+                uint32_t sin_l1_write_addr = dfb_sin.get_write_ptr();
+                uint32_t cos_l1_write_addr = dfb_cos.get_write_ptr();
 #endif
 
-                cb_input.reserve_back(Wt);
-                uint32_t input_l1_write_addr = cb_input.get_write_ptr();
+                dfb_input.reserve_back(Wt);
+                uint32_t input_l1_write_addr = dfb_input.get_write_ptr();
                 uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                 uint32_t cos_curr_idx;
                 uint32_t sin_curr_idx;
@@ -135,15 +135,15 @@ void kernel_main() {
                 }
 
                 noc.async_read_barrier();
-                cb_input.push_back(Wt);
+                dfb_input.push_back(Wt);
 #if RELOAD_IMPL == 1
-                cb_sin.push_back(Wt);
-                cb_cos.push_back(Wt);
+                dfb_sin.push_back(Wt);
+                dfb_cos.push_back(Wt);
 #else
 
                 if (!done_sin_cos) {
-                    cb_sin.push_back(Wt);
-                    cb_cos.push_back(Wt);
+                    dfb_sin.push_back(Wt);
+                    dfb_cos.push_back(Wt);
 
                     // Update sin_cos_row_cnt
                     sin_cos_row_cnt++;

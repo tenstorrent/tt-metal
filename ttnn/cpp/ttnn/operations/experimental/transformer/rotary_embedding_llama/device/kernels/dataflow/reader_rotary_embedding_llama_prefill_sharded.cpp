@@ -34,12 +34,12 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(tensor::input);
 
-    DataflowBuffer cb_input(dfb::input);
-    DataflowBuffer cb_cos(dfb::cos);
-    DataflowBuffer cb_sin(dfb::sin);
-    DataflowBuffer cb_trans_mat(dfb::trans_mat);
+    DataflowBuffer dfb_input(dfb::input);
+    DataflowBuffer dfb_cos(dfb::cos);
+    DataflowBuffer dfb_sin(dfb::sin);
+    DataflowBuffer dfb_trans_mat(dfb::trans_mat);
 
-    const uint32_t input_tile_bytes = cb_input.get_entry_size();
+    const uint32_t input_tile_bytes = dfb_input.get_entry_size();
 
     // ------------------------------------------------------------------
     // Transformation matrix
@@ -50,18 +50,18 @@ void kernel_main() {
     // removing this `if` block negatively affects performance. In most cases, we should land
     // in this block unless users are improperly sharding `trans_mat`, e.g., replicating it on
     // fewer cores than available in the chosen core grid.
-    cb_trans_mat.reserve_back(onetile);
-    cb_trans_mat.push_back(onetile);
+    dfb_trans_mat.reserve_back(onetile);
+    dfb_trans_mat.push_back(onetile);
 #else
     // Non-height-sharded/fewer-#shards-than-cores-height-sharded cases
     const auto s3 = TensorAccessor(tensor::trans_mat);
 
-    cb_trans_mat.reserve_back(onetile);
-    uint32_t trans_mat_l1_write_addr = cb_trans_mat.get_write_ptr();
+    dfb_trans_mat.reserve_back(onetile);
+    uint32_t trans_mat_l1_write_addr = dfb_trans_mat.get_write_ptr();
     noc.async_read(
-        s3, CoreLocalMem<uint32_t>(trans_mat_l1_write_addr), cb_trans_mat.get_entry_size(), {.page_id = 0}, {});
+        s3, CoreLocalMem<uint32_t>(trans_mat_l1_write_addr), dfb_trans_mat.get_entry_size(), {.page_id = 0}, {});
     noc.async_read_barrier();
-    cb_trans_mat.push_back(onetile);
+    dfb_trans_mat.push_back(onetile);
 #endif
 
     // ------------------------------------------------------------------
@@ -70,8 +70,8 @@ void kernel_main() {
 #ifdef COS_SIN_SHARDED
     // Sharded cos/sin: fast (1 seq tile/core, L1 view) vs reload (multi seq, read via TensorAccessor)
 #if COS_SIN_SHARDED_RELOAD == 1
-    const uint32_t cos_tile_bytes = cb_cos.get_entry_size();
-    const uint32_t sin_tile_bytes = cb_sin.get_entry_size();
+    const uint32_t cos_tile_bytes = dfb_cos.get_entry_size();
+    const uint32_t sin_tile_bytes = dfb_sin.get_entry_size();
     const auto s1 = TensorAccessor(tensor::cos);
     const auto s2 = TensorAccessor(tensor::sin);
 #endif
@@ -79,12 +79,12 @@ void kernel_main() {
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
             for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
-                cb_cos.reserve_back(Wt);
-                cb_sin.reserve_back(Wt);
-                cb_input.reserve_back(Wt);
+                dfb_cos.reserve_back(Wt);
+                dfb_sin.reserve_back(Wt);
+                dfb_input.reserve_back(Wt);
 #if COS_SIN_SHARDED_RELOAD == 1
-                uint32_t cos_l1_write_addr = cb_cos.get_write_ptr();
-                uint32_t sin_l1_write_addr = cb_sin.get_write_ptr();
+                uint32_t cos_l1_write_addr = dfb_cos.get_write_ptr();
+                uint32_t sin_l1_write_addr = dfb_sin.get_write_ptr();
                 uint32_t cos_curr_idx = freq_per_head ? (head_num * cos_Ht * Wt + seq_tile * Wt) : (seq_tile * Wt);
                 uint32_t sin_curr_idx = freq_per_head ? (head_num * sin_Ht * Wt + seq_tile * Wt) : (seq_tile * Wt);
                 for (uint32_t j = 0; j < Wt; ++j) {
@@ -98,7 +98,7 @@ void kernel_main() {
                     sin_l1_write_addr += sin_tile_bytes;
                 }
 #endif
-                uint32_t input_l1_write_addr = cb_input.get_write_ptr();
+                uint32_t input_l1_write_addr = dfb_input.get_write_ptr();
                 uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                 for (uint32_t j = 0; j < Wt; ++j) {
                     noc.async_read(
@@ -111,18 +111,18 @@ void kernel_main() {
                     input_l1_write_addr += input_tile_bytes;
                 }
                 noc.async_read_barrier();
-                cb_cos.push_back(Wt);
-                cb_sin.push_back(Wt);
-                cb_input.push_back(Wt);
+                dfb_cos.push_back(Wt);
+                dfb_sin.push_back(Wt);
+                dfb_input.push_back(Wt);
             }
         }
     }
 #else
     // Interleaved cos/sin (trans_mat may still be sharded).
-    const uint32_t cos_tile_bytes = cb_cos.get_entry_size();
+    const uint32_t cos_tile_bytes = dfb_cos.get_entry_size();
     const auto s1 = TensorAccessor(tensor::cos);
 
-    const uint32_t sin_tile_bytes = cb_sin.get_entry_size();
+    const uint32_t sin_tile_bytes = dfb_sin.get_entry_size();
     const auto s2 = TensorAccessor(tensor::sin);
 
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
@@ -130,10 +130,10 @@ void kernel_main() {
         uint32_t cos_l1_write_addr = 0;
 #if RELOAD_IMPL == 0
         if (my_cos_sin_tiles > 0) {
-            cb_sin.reserve_back(my_cos_sin_tiles);
-            cb_cos.reserve_back(my_cos_sin_tiles);
-            sin_l1_write_addr = cb_sin.get_write_ptr();
-            cos_l1_write_addr = cb_cos.get_write_ptr();
+            dfb_sin.reserve_back(my_cos_sin_tiles);
+            dfb_cos.reserve_back(my_cos_sin_tiles);
+            sin_l1_write_addr = dfb_sin.get_write_ptr();
+            cos_l1_write_addr = dfb_cos.get_write_ptr();
         }
 #endif
 
@@ -144,14 +144,14 @@ void kernel_main() {
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
             for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
 #if RELOAD_IMPL == 1
-                cb_sin.reserve_back(Wt);
-                cb_cos.reserve_back(Wt);
-                uint32_t sin_l1_write_addr = cb_sin.get_write_ptr();
-                uint32_t cos_l1_write_addr = cb_cos.get_write_ptr();
+                dfb_sin.reserve_back(Wt);
+                dfb_cos.reserve_back(Wt);
+                uint32_t sin_l1_write_addr = dfb_sin.get_write_ptr();
+                uint32_t cos_l1_write_addr = dfb_cos.get_write_ptr();
 #endif
 
-                cb_input.reserve_back(Wt);
-                uint32_t input_l1_write_addr = cb_input.get_write_ptr();
+                dfb_input.reserve_back(Wt);
+                uint32_t input_l1_write_addr = dfb_input.get_write_ptr();
                 uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                 uint32_t cos_curr_idx;
                 uint32_t sin_curr_idx;
@@ -194,15 +194,15 @@ void kernel_main() {
                 }
 
                 noc.async_read_barrier();
-                cb_input.push_back(Wt);
+                dfb_input.push_back(Wt);
 #if RELOAD_IMPL == 1
-                cb_sin.push_back(Wt);
-                cb_cos.push_back(Wt);
+                dfb_sin.push_back(Wt);
+                dfb_cos.push_back(Wt);
 #else
 
                 if (!done_sin_cos) {
-                    cb_sin.push_back(Wt);
-                    cb_cos.push_back(Wt);
+                    dfb_sin.push_back(Wt);
+                    dfb_cos.push_back(Wt);
 
                     // Update sin_cos_row_cnt
                     sin_cos_row_cnt++;

@@ -31,20 +31,20 @@ void kernel_main() {
 
     const auto s = TensorAccessor(tensor::output);
 
-    DataflowBuffer cb_out(dfb::out);
-    DataflowBuffer cb_zero(dfb::zero);
+    DataflowBuffer dfb_out(dfb::out);
+    DataflowBuffer dfb_zero(dfb::zero);
 
-    const uint32_t tile_bytes = cb_out.get_entry_size();
-    const uint32_t zero_tile_bytes = cb_zero.get_entry_size();
+    const uint32_t tile_bytes = dfb_out.get_entry_size();
+    const uint32_t zero_tile_bytes = dfb_zero.get_entry_size();
 
-    cb_zero.reserve_back(Wt);
-    uint32_t zero_l1_write_addr = cb_zero.get_write_ptr();
+    dfb_zero.reserve_back(Wt);
+    uint32_t zero_l1_write_addr = dfb_zero.get_write_ptr();
     for (uint32_t j = 0; j < Wt; j++) {
         zero_tile_at(zero_l1_write_addr, zero_tile_bytes);
         zero_l1_write_addr += zero_tile_bytes;
     }
-    cb_zero.push_back(Wt);
-    cb_zero.wait_front(Wt);
+    dfb_zero.push_back(Wt);
+    dfb_zero.wait_front(Wt);
 
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
@@ -52,10 +52,10 @@ void kernel_main() {
                 uint32_t output_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                 const bool write_rotary_output = seq_tile < rotary_Ht;
                 if (write_rotary_output) {
-                    cb_out.wait_front(Wt);
+                    dfb_out.wait_front(Wt);
                 }
 
-                uint32_t l1_read_addr = write_rotary_output ? cb_out.get_read_ptr() : cb_zero.get_read_ptr();
+                uint32_t l1_read_addr = write_rotary_output ? dfb_out.get_read_ptr() : dfb_zero.get_read_ptr();
                 const uint32_t l1_read_stride = write_rotary_output ? tile_bytes : zero_tile_bytes;
                 const uint32_t write_bytes = write_rotary_output ? tile_bytes : zero_tile_bytes;
                 for (uint32_t j = 0; j < Wt; j++) {
@@ -67,11 +67,11 @@ void kernel_main() {
                 noc.async_write_barrier();
 
                 if (write_rotary_output) {
-                    cb_out.pop_front(Wt);
+                    dfb_out.pop_front(Wt);
                 }
             }
         }
     }
 
-    cb_zero.pop_front(Wt);
+    dfb_zero.pop_front(Wt);
 }
