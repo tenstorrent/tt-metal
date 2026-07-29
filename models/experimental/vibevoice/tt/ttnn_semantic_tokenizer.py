@@ -51,6 +51,32 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
 )
 
 
+# ── FFN down-proj (linear2) decode program configs (VV_POST_L2_PROGCFG=1) ─────
+# The deepest tokenizer stages (dim 2048 / 1024) run one latent frame => T<=32 rows
+# (M_tiles=1) and their down-proj (linear2, K=4*dim) is the biggest post-phase matmul
+# on the auto config.  These swept 1D mcast_in0 configs (per_core_M=1) recovered
+# ~1.8x/1.5x when originally measured.  Keyed by dim, gated on T<=32; the up-proj is
+# already DRAM-BW-bound at auto so it stays auto.
+def _mm1d_post(cx, cy, in0_block_w, per_core_n):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+_FFN_DOWN_PROGCFG = {
+    2048: _mm1d_post(8, 4, 8, 2),  # 8192x2048  145 -> 81 us (1.8x)
+    1024: _mm1d_post(8, 2, 8, 2),  # 4096x1024   60 -> 40 us (1.5x)
+}
+
+
 # ──────────────────────────────────────────────────────────────
 # Host-side weight containers (torch tensors, not TTNN)
 # ──────────────────────────────────────────────────────────────
@@ -420,7 +446,24 @@ class TTConv1d:
             # A full-height single block > ~1600 rows overflows L1 (the g=32/outw=3200 last decoder
             # stage needs ~2.9 MB > 1.5 MB), so cap it — that conv stays on auto (multi-block).
             _sb_cap = int(os.environ.get("VV_CONV_SB_CAP", "1600"))
-            if out_w <= _sb_cap:
+            # HEIGHT_SHARDED pin (default on; VV_CONV_HS=0 to force the act_block_h_override pin):
+            # act_block_h stays at the full per-core height (single block) while the work spreads
+            # over many cores — no oversized act_block_h_override and none of its "not a valid
+            # override" spam.  It only fits the wide-output stages: high-channel/tiny-width stages
+            # (out_w < VV_CONV_HS_MIN_OUTW) overflow L1 under HEIGHT_SHARDED, so they keep the
+            # act_block_h_override pin.  VV_CONV_HS_MAX_OUTW>0 caps the HS set, so HS coverage can be
+            # made identical to the override pin's — isolating the layout mechanism from the pinned-set
+            # change.  Default flipped on after the 4p_climate_100min traced render (0/81 anomalous
+            # minutes, 0% clipping) validated it.
+            _hs_max = int(os.environ.get("VV_CONV_HS_MAX_OUTW", "0"))
+            _hs = (
+                os.environ.get("VV_CONV_HS", "1") == "1"
+                and out_w >= int(os.environ.get("VV_CONV_HS_MIN_OUTW", "128"))
+                and (_hs_max == 0 or out_w <= _hs_max)
+            )
+            if _hs:
+                _conv_cfg = ttnn.Conv2dConfig(shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+            elif out_w <= _sb_cap:
                 _conv_cfg = ttnn.Conv2dConfig(act_block_h_override=abh)
             if os.environ.get("VV_CONV_DBG") == "1":
                 print(
@@ -477,12 +520,39 @@ class TTBlock1DDevice:
         self.dim = bw.dim
 
         tdtype = torch.bfloat16 if compute_dtype == ttnn.bfloat16 else torch.float32
-        self.dw_conv = TTConv1d(bw.dw_conv, device, compute_dtype=compute_dtype)
+
+        # VV_POST_SCALE_FOLD=1: fold the per-channel layer scales into the weights that
+        # produce the scaled tensors — gamma into the depthwise conv weight/bias, ffn_gamma
+        # into linear2's — removing two eltwise muls per block.  Both are exact
+        # output-channel scales, but folding pre-scales the weights (rounded to bf16 once)
+        # instead of scaling the bf16 product, so it is NOT bit-identical.
+        _fold = os.environ.get("VV_POST_SCALE_FOLD") == "1"
+        dw = bw.dw_conv
+        l2_w_host, l2_b_host = bw.linear2_w, bw.linear2_b
+        self._fold_gamma = _fold and bw.gamma is not None
+        self._fold_ffn_gamma = _fold and bw.ffn_gamma is not None
+        if self._fold_gamma:
+            g = bw.gamma.float()
+            dw = ConvWeightsHost(
+                weight=dw.weight.float() * g.view(-1, 1, 1),
+                bias=(dw.bias.float() * g) if dw.bias is not None else None,
+                stride=dw.stride,
+                groups=dw.groups,
+                causal_pad=dw.causal_pad,
+            )
+        if self._fold_ffn_gamma:
+            fg = bw.ffn_gamma.float()
+            l2_w_host = bw.linear2_w.float() * fg.view(-1, 1)
+            l2_b_host = (bw.linear2_b.float() * fg) if bw.linear2_b is not None else None
+
+        self.dw_conv = TTConv1d(dw, device, compute_dtype=compute_dtype)
         self.norm_w = _norm_w_tt(bw.norm_w, device, dtype=compute_dtype)
         self.ffn_norm_w = _norm_w_tt(bw.ffn_norm_w, device, dtype=compute_dtype)
         # linear1_w is [ffn_dim, C] in PyTorch → _tile_linear transposes to [C, ffn_dim]
         self.linear1_w = _tile_linear(bw.linear1_w, device, dtype=compute_dtype)
-        self.linear2_w = _tile_linear(bw.linear2_w, device, dtype=compute_dtype)
+        self.linear2_w = _tile_linear(l2_w_host.contiguous(), device, dtype=compute_dtype)
+        # Tuned down-proj config for the deep (dim 2048/1024) stages; auto otherwise.
+        self._l2_progcfg = _FFN_DOWN_PROGCFG.get(self.dim) if os.environ.get("VV_POST_L2_PROGCFG", "1") == "1" else None
 
         def _bias(b: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:
             if b is None:
@@ -508,9 +578,9 @@ class TTBlock1DDevice:
             )
 
         self.linear1_b = _bias(bw.linear1_b)
-        self.linear2_b = _bias(bw.linear2_b)
-        self.gamma = _scale(bw.gamma)
-        self.ffn_gamma = _scale(bw.ffn_gamma)
+        self.linear2_b = _bias(l2_b_host)
+        self.gamma = None if self._fold_gamma else _scale(bw.gamma)
+        self.ffn_gamma = None if self._fold_ffn_gamma else _scale(bw.ffn_gamma)
 
     def reset_cache(self) -> None:
         self.dw_conv.reset_cache()
@@ -543,8 +613,15 @@ class TTBlock1DDevice:
             x, self.linear1_w, bias=self.linear1_b, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # per_core_M=1 config is valid only when T<=32 rows (M_tiles=1); else auto.
+        l2_pc = self._l2_progcfg if (self._l2_progcfg is not None and x.shape[2] <= 32) else None
         x = ttnn.linear(
-            x, self.linear2_w, bias=self.linear2_b, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            x,
+            self.linear2_w,
+            bias=self.linear2_b,
+            compute_kernel_config=_HIFI4,
+            program_config=l2_pc,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if self.ffn_gamma is not None:
             x = ttnn.mul(x, self.ffn_gamma, memory_config=ttnn.DRAM_MEMORY_CONFIG)
