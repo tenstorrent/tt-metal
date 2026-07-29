@@ -39,6 +39,7 @@ import torch
 import ttnn
 
 from models.experimental.vibevoice.common.config import DEFAULT_TXT_PATH, TEXT_EXAMPLES_DIR, VIBEVOICE_ROOT
+from models.experimental.vibevoice.common.safe_paths import safe_join, safe_output_path
 from models.experimental.vibevoice.common.model_utils import ensure_model_weights
 from models.experimental.vibevoice.common.resource_utils import (
     DEMO_VOICE_CLONES,
@@ -98,14 +99,18 @@ def _split_script(script: str, n: int) -> list[str]:
 
 
 def _demo_output_paths(out_dir: Path, demo_id: str) -> dict[str, Path]:
-    """Per-demo output layout: ``{out_dir}/{demo_id}/{demo_id}_*.wav``."""
-    demo_dir = out_dir / demo_id
+    """Per-demo output layout: ``{out_dir}/{demo_id}/{demo_id}_*.wav``.
+
+    ``demo_id`` is derived from a ``--demo`` / ``--text`` argument, so every artifact is
+    pinned under ``out_dir``.
+    """
+    demo_dir = safe_join(out_dir, demo_id)
     demo_dir.mkdir(parents=True, exist_ok=True)
     return {
         "dir": demo_dir,
-        "tt": demo_dir / f"{demo_id}_tt.wav",
-        "script": demo_dir / f"{demo_id}_script.txt",
-        "meta": demo_dir / f"{demo_id}_meta.json",
+        "tt": safe_join(demo_dir, f"{demo_id}_tt.wav"),
+        "script": safe_join(demo_dir, f"{demo_id}_script.txt"),
+        "meta": safe_join(demo_dir, f"{demo_id}_meta.json"),
     }
 
 
@@ -208,14 +213,16 @@ def main() -> int:
         print("[vibevoice_demo] trace disabled (--no-trace): eager decode", flush=True)
 
     if args.text:
-        text_path = Path(args.text)
+        # An explicitly named script file; normalized, with no base to pin it under.
+        text_path = safe_output_path(args.text)
     elif args.demo:
-        text_path = TEXT_EXAMPLES_DIR / f"{args.demo}.txt"
+        # A script id indexing into the bundled resources — pin it inside that tree.
+        text_path = safe_join(TEXT_EXAMPLES_DIR, f"{args.demo}.txt")
     else:
         text_path = Path(DEFAULT_TXT_PATH)
     demo_id = text_path.stem
 
-    out_dir = Path(args.output_dir)
+    out_dir = safe_output_path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:

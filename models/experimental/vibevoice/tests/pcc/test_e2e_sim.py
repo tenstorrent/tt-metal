@@ -51,6 +51,7 @@ import pytest
 import torch
 
 from models.experimental.vibevoice.common.config import MODEL_PATH, TEXT_EXAMPLES_DIR, VIBEVOICE_ROOT, VOICES_DIR
+from models.experimental.vibevoice.common.safe_paths import safe_join
 from models.experimental.vibevoice.common.resource_utils import (
     CLIMATE_4P_SPEAKER_NAMES,
     CLIMATE_4P_VOICE_FILES,
@@ -192,7 +193,7 @@ def test_e2e_sim_tt_voice_clone(mesh_device):
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
     import soundfile as sf
 
-    tt_wav_path = _OUT_DIR / f"{TEXT_ID}_{Path(TARGET_VOICE).stem}{_OUT_TAG}_tt.wav"
+    tt_wav_path = safe_join(_OUT_DIR, f"{TEXT_ID}_{Path(TARGET_VOICE).stem}{_OUT_TAG}_tt.wav")
     if os.environ.get("VV_SIM_REUSE_TT") == "1" and tt_wav_path.is_file():
         gen_16k = _load_wav_16k(tt_wav_path)
         tt_sec = gen_16k.numel() / SV_SR
@@ -241,7 +242,7 @@ def test_e2e_sim_tt_voice_clone(mesh_device):
         "all_sims": sims,
         "thresholds": {"target_floor": SIM_TARGET_FLOOR, "margin": SIM_MARGIN},
     }
-    (_OUT_DIR / f"{TEXT_ID}_{Path(TARGET_VOICE).stem}{_OUT_TAG}_sim.json").write_text(
+    safe_join(_OUT_DIR, f"{TEXT_ID}_{Path(TARGET_VOICE).stem}{_OUT_TAG}_sim.json").write_text(
         json.dumps(metrics, indent=2) + "\n", encoding="utf-8"
     )
 
@@ -313,7 +314,7 @@ def test_e2e_sim_4speaker(mesh_device):
     gen_emb: dict[str, torch.Tensor] = {}
     gen_sec: dict[str, float] = {}
     for name in names:
-        wav_path = _OUT_DIR / f"4speaker_{name}{_OUT_TAG}_tt.wav"
+        wav_path = safe_join(_OUT_DIR, f"4speaker_{name}{_OUT_TAG}_tt.wav")
         if reuse and wav_path.is_file():
             speech_16k = _load_wav_16k(wav_path)
             gen_sec[name] = round(speech_16k.numel() / SV_SR, 2)
@@ -372,7 +373,9 @@ def test_e2e_sim_4speaker(mesh_device):
         "thresholds": {"target_floor": SIM_TARGET_FLOOR, "margin": SIM_MARGIN},
         "all_pass": all(r["pass"] for r in per_speaker),
     }
-    (_OUT_DIR / f"4speaker{_OUT_TAG}_sim.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+    safe_join(_OUT_DIR, f"4speaker{_OUT_TAG}_sim.json").write_text(
+        json.dumps(metrics, indent=2) + "\n", encoding="utf-8"
+    )
 
     # Print the confusion matrix (diagonal = self; should dominate each row).
     col_hdr = "gen\\ref".ljust(10) + " ".join(f"{n:>10}" for n in names)
