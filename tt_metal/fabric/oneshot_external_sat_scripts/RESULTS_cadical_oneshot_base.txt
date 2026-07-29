@@ -1,0 +1,8 @@
+size   vars     cad_oneshot  verdict    elim_vars     
+64     27440    38ms         s SATISFIABLE ?             
+80     34336    43ms         s SATISFIABLE ?             
+96     41232    52ms         s SATISFIABLE ?             
+112    48128    64ms         s SATISFIABLE ?             
+128    55024    43656ms      s SATISFIABLE 18751         
+144    61920    113094ms     s SATISFIABLE 31110         
+[21:22:03] CAD ONE-SHOT SWEEP DONE

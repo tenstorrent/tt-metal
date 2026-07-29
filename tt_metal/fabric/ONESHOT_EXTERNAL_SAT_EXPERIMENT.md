@@ -149,3 +149,70 @@ cp -f build/tt_metal/libtt_metal.so build/lib/libtt_metal.so
 
 # 5. sweeps: scripts/gim_sweep.sh , scripts/cad_sweep.sh
 ```
+
+---
+
+# UPDATE — the host-cap reality check (this is the important part)
+
+Everything above is the BASE embedding (host minimization OFF, `NO_MINHOST`). That is the *easy* problem. The
+production solve applies a **host cap** (minimize/limit hosts used). Re-running the whole comparison with the cap on
+reverses the conclusion.
+
+## Engine map (what runs what — avoid conflating these)
+| measurement | engine | notes |
+|---|---|---|
+| the ablation table below | **our CaDiCaL**, in-solver, incremental | env-knob configs of our own solver; cap ON |
+| base + with-cap gimsatul rows | **gimsatul** (external) | standalone binary on an *exported static CNF* — NO infrastructure, NO descent |
+| one-shot CaDiCaL rows | **standalone CaDiCaL** (external) | vendored binary, one-shot, on exported CNF |
+
+## CNF-capture bug + fix (prerequisite for any with-cap export)
+`CaDiCaL::write_dimacs` silently **drops clauses added incrementally after a `solve()`** — so the exported hardcap
+CNF came out byte-identical to the base CNF (the occupancy/cap clauses were missing). Fixed with a **clause tee** in
+the wrapper (record every `add()` literal when `TT_TOPO_SAT_DUMP_DIMACS` is set; emit DIMACS from the tape). Also:
+setting `target`/`phase` (fastsat) **after** encode aborts CaDiCaL (SIGABRT) — must be set pre-encode. (Code on
+branch `ridvan/gen-rank-bindings-all-solutions`.)
+
+## 2x4-128 WITH host cap (occupied ≤ 32; 178,426 clauses) — the reversal
+| solver | time |
+|---|---|
+| one-shot standalone CaDiCaL | **> 400s (timeout)** |
+| gimsatul t8 | **> 900s (timeout)** |
+| gimsatul t16 | 530s |
+| **gimsatul t32** | **67s** ✅ |
+| incremental warm-descent (our prod) | ~22 min |
+
+The base-embedding win does **not** transfer cleanly: cold one-shot / low-thread solvers *fail* on the capped
+problem. gimsatul only wins at **t32** (67s, ~20× vs incremental), and it is fragile / non-monotonic. The
+incremental warm-descent does real work cold solving can't replicate at low thread counts.
+
+## In-solver optimization ablation (our CaDiCaL; host cap ON; ONE solve each)
+Each column toggles one optimization vs the lean cold-cap baseline. Time = inter-mesh solve seconds. (`mode3` = cold
+single capped solve; `mode1` = warm feasible + cap lock; `mode0` = warm + soft descent + cap lock, the prod default;
+`+fastsat` = CaDiCaL target=2,phase=1; `+seed7` = fixed seed, a portfolio-spread proxy.) Sweep in progress — cells
+fill over hours; `…` = still running.
+
+| shape·stages | mode3 cold cap | mode1 warm+lock | mode0 warm+**descent**+lock | mode3+fastsat | mode3+seed7 |
+|---|--:|--:|--:|--:|--:|
+| 2x4·64  | **11.9s** | 17.2s | 240s | 44.5s | 17.3s |
+| 2x4·96  | **32.6s** | … | … | 176s | … |
+| 2x4·112 | … | … | … | … | … |
+| 2x4·128 | … | … | … | … | … |
+| 4x4·32  | … | … | … | … | … |
+| 4x4·48  | … | … | … | … | … |
+| 4x4·64  | … | … | … | … | … |
+
+How to read: **mode0−mode1** = the soft descent's cost/benefit; **mode1−mode3** = the warm solve's; **+fastsat/+seed
+− mode3** = those knobs. Early signal (2x4·64, ·96): **cold cap (mode3) is the clear winner**, the descent is a big
+overhead on dense packings (240s vs 11.9s on 64), and **fastsat HURTS** the capped solve (44.5s / 176s vs 11.9s /
+32.6s). All `occupied` land on the minimal host count (64→16, 96→24), i.e. correct.
+
+Not columns here (by design): **preferred at-least-k** (pipeline MGDs have no pinnings — measured separately later
+as the cost of adding it); **multithread portfolio & variable-elimination** (not wired into the cap path — that's
+the hybrid).
+
+## Next: hybrid integration (in progress)
+Gimsatul standalone can't keep the infrastructure (no incremental, no descent, no enumeration, no assumptions). The
+hybrid keeps our CaDiCaL driving (encode / occupancy / cap / descent / decode / preferred / symmetry / enumeration)
+and delegates each heavy SAT `solve()` to gimsatul (export tape + current assumption units → subprocess → parse
+model → import). Goal: measure *integrated* speed with warm solve + all features on. Being built on
+`ridvan/gen-rank-bindings-all-solutions`.
