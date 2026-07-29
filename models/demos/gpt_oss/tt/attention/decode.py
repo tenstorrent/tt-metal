@@ -60,7 +60,12 @@ def decode_forward(
     # constraint for DRAM-interleaved inputs; before that fix this path
     # produced silent corruption (every odd Q/K/V head returned the previous
     # user's row).
-    qkv_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mesh_config.tp > 1 else ttnn.DRAM_MEMORY_CONFIG
+    # TP=1: use L1_INTERLEAVED (not DRAM). nlp_create_qkv_heads_decode reads the
+    # DRAM-interleaved input on a SINGLE core at ~44us/op (tracy); reading from L1
+    # interleaved is much faster and avoids the per-core CB overflow that width-
+    # sharding the TP-larger QKV would cause. (The PR #43292 aligned-read fix applies
+    # to interleaved inputs regardless of DRAM vs L1.)
+    qkv_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mesh_config.tp > 1 else ttnn.L1_MEMORY_CONFIG
     # Fuse the qkv bias into the matmul (ttnn.linear bias=) instead of a separate
     # in-place add, removing one op/layer.
     xqkv_fused = ttnn.linear(
