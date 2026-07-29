@@ -39,6 +39,13 @@ x86 host (RoCE requester)  --RoCEv2 WRITE_IMM/SEND-->  BF3 Arm: [ SF mlx5_2  RoC
 | A3.2 | doorbell via `flexio_window` + arrival-driven drain | live read; preset+arrival exact |
 | A3.3a| cross-**process** shared-mmap seam (shm_writer stand-in) | exact; **superseded by b-1** |
 | A3.3b-1 | **merged** memory model: one process, one buffer, mlx5_0 lkey + mlx5_2 rkey | egress verified |
+| A3.3b-2 | RDMA-CM RC responder in the merged process (`TTDPA_ROCE=1`) | listens; ESTABLISHED |
+| **A3.3b-3** | **REAL RoCE E2E**: host WRITE_IMM → responder → doorbell → DPA egress | **100000 exact, p0 verified** |
+
+**★ A3 COMPLETE (with a simulated-payload, single-slot landing).** Real RoCEv2 WRITE_IMM from the x86 host →
+ConnectX HW-terminates on the SF → responder bumps the doorbell → PF DPA re-heads via HW gather → p0 egress,
+one merged process, no shm, Arm off the data path. Remaining: BH-pool byte-exact landing (pool run), generic-app
+interop (ib_send_bw/ib_write_bw -R), and the production refinements below.
 
 Key gotcha baked in: **`flexio_window` config shares the DPA thread config slot with the SQ outbox** — restore
 an explicit outbox after each window read or SQ doorbells silently stop egressing.
@@ -110,15 +117,35 @@ increasing sequence/footer at a known offset per frame, and the DPA/Arm advances
 the next seq. This keeps the Arm off the data path and needs no app cooperation beyond a footer convention.
 Defer until a real silent-WRITE workload requires it; document `SEND`/`WRITE_IMM` as the supported contract.
 
-## A3.3b-3 — end-to-end validation
+## A3.3b-3 — end-to-end validation ✅ (2026-07-29)
 
-1. Run the merged gateway on the DPU Arm (responder on mlx5_2 + DPA drain on mlx5_0, one buffer, doorbell).
-2. From the **x86 host**, drive RoCEv2 with a stock tool first (proves generic interop):
-   `ib_send_bw -R -d <host-CX> ... 10.99.0.1`  and  `ib_write_bw -R ... 10.99.0.1`.
-3. Confirm: responder completions → doorbell advances → DPA egresses to p0 → **BH pool lands byte-exact**
-   (delivered==processed, drop=0, exactly-once). Requires the BH pool up (and check AICLK — see
-   `tt-rdma-drainer-pool`).
-4. Then the genuine multi-in-flight generator (Part B) for real interop throughput (removes the burst crutch).
+**Validated:** host `tt_roce_client 10.99.0.1 18515 100000 256` → RDMA CM connect, read advertised rkey
+0x53d00 → 100000 WRITE_IMM. Gateway: responder ESTABLISHED → "100000 WRITE_IMM/SEND landed → produced=100000"
+→ DPA drain "100000 frames egressed [exact]" → **p0 delta = 100002 pkts**, clean exit. No shm, Arm off the
+data path, RDMA CM.
+
+### Working recipe (after a DPU reboot — runtime IP state is wiped; OVS ovsbr1/2 persists)
+```bash
+# 1. DPU: re-add the SF's RoCE IP (lost on reboot)
+ssh ubuntu@192.168.100.2 'sudo ip addr add 10.99.0.1/24 dev enp3s0f0s0; sudo ip link set enp3s0f0s0 up'
+# 2. host: re-add the RoCE-port IP (sudo -n ip is allowlisted on desktop-0)
+sudo -n ip addr add 10.99.0.10/24 dev enp193s0f0np0
+ping -c2 10.99.0.1          # must show ARP REACHABLE before RDMA CM will resolve (else ADDR_ERROR)
+# 3. DPU: launch the gateway DETACHED (survives ssh/tmfifo bounce; times out its connect-wait after 120s)
+ssh ubuntu@192.168.100.2 'bash /tmp/launch_gw.sh'   # setsid + stdbuf -oL -> /tmp/gw.log; "RDMA CM listening on :18515"
+# 4. host: drive the requester (no sudo needed; /dev/infiniband is world-rw)
+./tt_roce_client 10.99.0.1 18515 100000 256
+# 5. DPU: confirm  grep -E 'landed|drain done|DOORBELL done' /tmp/gw.log ; ethtool -S p0 (tx_vport_unicast delta)
+```
+launch_gw.sh runs: `sudo setsid bash -c "stdbuf -oL -eL env TTDPA_DOORBELL=1 TTDPA_ROCE=1 TTDPA_HOSTSRC=1
+TTDPA_COUNT=<N> TTDPA_PLEN=<plen> TTDPA_NOCRC=1 <bin> mlx5_0 >/tmp/gw.log 2>&1" </dev/null >/dev/null 2>&1 &`
+
+### Remaining
+1. **BH-pool byte-exact**: bring the drainer pool up, confirm delivered==processed, drop=0, exactly-once
+   (check AICLK — see `tt-rdma-drainer-pool`).
+2. **Generic-app interop**: `ib_send_bw -R … 10.99.0.1` / `ib_write_bw -R …` (our responder is CM-based;
+   perftest layers its own MR-exchange, so this validates *connect* + confirms the trigger contract).
+3. **Part B** multi-in-flight generator for real interop throughput (removes the burst crutch).
 
 ## Production refinements (after b-3 basic E2E)
 
