@@ -77,6 +77,11 @@ def tag_rank(inputs, axes):
 
 
 def tag_double_buffer(inputs, axes):
+    # A scenario that omits the key does not forward `use_double_buffer` at all,
+    # so the op runs its gated default ("auto"). Kept as bool(True) because that
+    # is the value the golden TARGET declares for those cells, and "auto" never
+    # exceeds depth-2 -- both are in SUPPORTED, so no xfail/xpass drift either
+    # way.
     return bool(inputs[0].get("use_double_buffer", True))
 
 
@@ -116,7 +121,12 @@ SUPPORTED = {
         ttnn.int32,
     ],
     "use_multicore": [False, True],
-    "double_buffer": [False, True],
+    # "auto" is the gated default added by Refinement 1 (lever C16): the caller
+    # leaves `use_double_buffer` unset and the planner picks depth-2 only where it
+    # was measured to pay (< the DRAM bandwidth-saturation knee AND >= 2 blocks
+    # per core). True/False keep their documented force-depth-2 / force-depth-1
+    # meaning, so the axis now has three values.
+    "double_buffer": [False, True, "auto"],
     "shard_api": ["none", "legacy_2d", "nd"],
     "out_scheme": ["interleaved", _HEIGHT, _WIDTH, _BLOCK, "nd"],
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
@@ -191,7 +201,7 @@ def validate(
     *,
     output_dtype,
     use_multicore=True,
-    use_double_buffer=True,
+    use_double_buffer=None,
 ) -> None:
     """Runtime support gate. SUPPORTED first (per-axis), then EXCLUSIONS (cell)."""
     in_memory_config = input_tensor.memory_config()
@@ -200,7 +210,9 @@ def validate(
         "dtype": input_tensor.dtype,
         "output_dtype": output_dtype,
         "use_multicore": bool(use_multicore),
-        "double_buffer": bool(use_double_buffer),
+        # None == "let the planner gate the depth" (the public default); True /
+        # False force depth-2 / depth-1. Three-valued, matching SUPPORTED.
+        "double_buffer": "auto" if use_double_buffer is None else bool(use_double_buffer),
         "shard_api": _shard_api_axis(in_memory_config, out_memory_config),
         "out_scheme": _out_scheme_axis(out_memory_config),
         "buffer": (
@@ -290,7 +302,7 @@ def tilize(
     *,
     dtype: ttnn.DataType = None,
     use_multicore: bool = True,
-    use_double_buffer: bool = True,
+    use_double_buffer: bool = None,
 ) -> ttnn.Tensor:
     """Convert ``input_tensor`` from ROW_MAJOR to TILE layout.
 
@@ -299,7 +311,14 @@ def tilize(
         memory_config: output memory config; defaults to the input's.
         dtype: output dtype; defaults to the input's (value-preserving cast).
         use_multicore: distribute the work over the compute grid (default True).
-        use_double_buffer: depth-2 circular buffers (default True).
+        use_double_buffer: depth-2 circular buffers. ``True`` forces depth-2,
+            ``False`` forces depth-1, and ``None`` (the default) lets the planner
+            decide: depth-2 only below the DRAM bandwidth-saturation knee and with
+            at least 2 chunk-blocks per core to pipeline, which is where depth-2
+            was measured to pay (+32-36 % on the single-core regimes). At or above
+            the knee DRAM aggregate bandwidth is the binding resource, both depths
+            reach it, and depth-1 halves the per-core CB L1 at no measured cost.
+            See ``tilize_program_descriptor.depth2_pays``.
 
     Returns:
         A TILE_LAYOUT tensor with the same logical shape and values.

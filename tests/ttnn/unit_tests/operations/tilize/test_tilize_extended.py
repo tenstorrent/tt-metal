@@ -32,6 +32,7 @@ import torch
 import ttnn
 from ttnn.operations.tilize import tilize
 from ttnn.operations.tilize.tilize_program_descriptor import (
+    A0_KNEE_CORES,
     L1_CB_BUDGET_BYTES,
     build_plan,
 )
@@ -119,10 +120,11 @@ def test_tilize_plan_invariants(device, shape):
 
     grid = device.compute_with_storage_grid_size()
     assert plan["wt"] % plan["chunk_wt"] == 0, "chunk_wt must divide Wt exactly"
-    # A0: every core with work is launched, and no more.
-    assert plan["ncores"] == min(
-        grid.x * grid.y, plan["total_tiles"]
-    ), f"expected {min(grid.x * grid.y, plan['total_tiles'])} cores, got {plan['ncores']}"
+    # A0 (gated form, master.md Part 2 A0): every core with work is launched, and
+    # no more, up to the measured bandwidth knee. See test_tilize_refinement1.py
+    # for why A0_KNEE_CORES is identity on this op.
+    expected_cores = min(grid.x * grid.y, plan["total_tiles"], A0_KNEE_CORES)
+    assert plan["ncores"] == expected_cores, f"expected {expected_cores} cores, got {plan['ncores']}"
     # Per-core CB L1 is bounded by a constant, not by W.
     assert plan["cb_bytes_per_core"] <= L1_CB_BUDGET_BYTES
     # The 2D split covers the tile grid exactly once.

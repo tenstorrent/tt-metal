@@ -45,7 +45,12 @@ import torch
 
 import ttnn
 from ttnn.operations.tilize import tilize
-from ttnn.operations.tilize.tilize_program_descriptor import L1_CB_BUDGET_BYTES, build_plan
+from ttnn.operations.tilize import tilize_program_descriptor as tpd
+from ttnn.operations.tilize.tilize_program_descriptor import (
+    L1_CB_BUDGET_BYTES,
+    a0_active_cores,
+    build_plan,
+)
 
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
@@ -114,7 +119,22 @@ REGIMES = {
     "e_square_fp32_to_bf16": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.float32, out_dtype=ttnn.bfloat16),
     # --- Mode-C counterfactuals: the same regime with ONE lever flipped off ----
     # C16 depth-2 CBs off -> reader/writer serialize instead of pipelining.
+    # NB since Refinement 1 the *default* on this regime IS depth-1 (the gate),
+    # so this row is the "explicitly forced depth-1" witness and
+    # x_square_depth2 below is the counterfactual for the new default.
     "x_square_depth1": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, double_buffer=False),
+    # C16 counterfactual for the gated default: force depth-2 back on where the
+    # gate turned it off. `delta` here is what the gate costs/saves in ns; the
+    # cbB/core column is what it saves in L1.
+    "x_square_depth2": dict(shape=(1, 1, 2048, 2048), dtype=ttnn.bfloat16, double_buffer=True),
+    "x_tall_narrow_depth2": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, double_buffer=True),
+    "x_single_core_depth1": dict(shape=(1, 1, 512, 512), dtype=ttnn.bfloat16, multicore=False, double_buffer=False),
+    # A0 counterfactual: force the ~16-core dram_saturation bandwidth knee as a
+    # core cap on the regime it was proposed for. Refinement 1 measured this
+    # 2.4x SLOWER than the full grid (the op is read-transaction-rate bound, so
+    # the bandwidth knee never binds) -- kept as a bench row so the verdict is
+    # re-measurable rather than a claim in a changelog.
+    "x_tall_narrow_16c": dict(shape=(1, 1, 2048, 32), dtype=ttnn.bfloat16, core_cap=16),
     # A0 2D split off -> the wide-short shape (nt_h=1) collapses onto one core,
     # which is exactly what a height-only split_work_to_cores(nt_h) would do.
     "x_wide_short_1core": dict(shape=(1, 1, 32, 16384), dtype=ttnn.bfloat16, multicore=False),
@@ -197,7 +217,11 @@ def _build(device, spec):
 
 
 def _plan_for(device, tt_input, spec, out_cfg):
-    """Rebuild the plan host-side to report ncores / chunk_wt / CB bytes."""
+    """Rebuild the plan host-side to report ncores / chunk_wt / depth / CB bytes.
+
+    ``double_buffer`` defaults to ``None`` == the op's *gated* default, so the
+    bench measures what a caller actually gets (Refinement 1, lever C16).
+    """
     out_dtype = spec.get("out_dtype") or tt_input.dtype
     probe_out = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(tt_input.shape)), out_dtype, ttnn.TILE_LAYOUT, device, out_cfg
@@ -207,7 +231,7 @@ def _plan_for(device, tt_input, spec, out_cfg):
         probe_out,
         device,
         use_multicore=spec.get("multicore", True),
-        use_double_buffer=spec.get("double_buffer", True),
+        use_double_buffer=spec.get("double_buffer"),
     )
 
 
@@ -219,24 +243,38 @@ _VARIANTS = (
 
 
 def _assert_structural_gates(name, spec, plan, grid_cores):
-    """Machine-check the two *structural* perf gates (no correctness involved).
+    """Machine-check the *structural* perf gates (no correctness involved).
 
-    A0 (``master.md`` Part 2 §A): the program must launch on every core that has
-    work — ``min(grid_cores, total_tiles)`` on the interleaved/generic path, the
-    shard's own cores on the zero-copy alias path, 1 when the caller forced
-    single-core. Eyeballing this is exactly how a height-only split ships: the
-    wide-short regime (``nt_h == 1``) looks healthy in the duration column while
-    running on ONE core.
+    A0 (``master.md`` Part 2 §A) states the criterion as
+    ``active == min(grid, total_tiles, bandwidth_knee)`` — the **gated** form, with
+    the knee term included (Refinement 1). The gate lives in the op
+    (``a0_active_cores``); this asserts the criterion independently, so a
+    height-only-split regression on the wide-short regime (``nt_h == 1``, which
+    would strand it on ONE core while the duration column still looks healthy)
+    still fails the bench. On the zero-copy alias path the criterion is the
+    shard's own cores; ``use_multicore=False`` is exactly 1.
+
+    Refinement 1 measured tilize's own knee at the full grid (the op is
+    read-transaction-rate bound, not DRAM-bandwidth bound — capping at the
+    16-core ``dram_saturation`` knee is 2.4x SLOWER, see ``x_tall_narrow_16c``),
+    so ``A0_KNEE_CORES`` is identity here and the assert below reduces to
+    ``min(grid, total_tiles)`` on any current compute grid. Lowering that
+    constant without re-running ``probes/probe_009.py`` will trip this assert.
 
     Bounded CB: per-core CB L1 must stay inside the planner's budget, i.e. be a
     constant in ``W`` — the claim ``PROPERTIES["bounded_cb"]`` makes.
+
+    Gated depth (C16): the depth the planner picked must match the declared gate
+    whenever the regime does not force ``use_double_buffer``.
     """
     if plan["path"] == "alias":
         expected = plan["ncores"]  # the shard's own cores, by construction
     elif not spec.get("multicore", True):
         expected = 1
     else:
-        expected = min(grid_cores, plan["total_tiles"])
+        expected = min(grid_cores, plan["total_tiles"], tpd.A0_KNEE_CORES)
+        if spec.get("core_cap") is not None:  # A0 counterfactual row
+            expected = min(expected, spec["core_cap"])
     assert plan["ncores"] == expected, (
         f"A0 violation on {name}: launched {plan['ncores']} cores, "
         f"expected {expected} (total_tiles={plan['total_tiles']}, path={plan['path']})"
@@ -247,6 +285,13 @@ def _assert_structural_gates(name, spec, plan, grid_cores):
             f"CB budget violation on {name}: {plan['cb_bytes_per_core']} B/core "
             f"> {L1_CB_BUDGET_BYTES} B (chunk_wt={plan['chunk_wt']}, depth={plan['depth']})"
         )
+        if spec.get("double_buffer") is None:
+            want = 2 if tpd.depth2_pays(plan["ncores"], plan["blocks_per_core"]) else 1
+            assert plan["depth"] == want, (
+                f"C16 gate violation on {name}: depth={plan['depth']} but the gate "
+                f"wants {want} (ncores={plan['ncores']}, "
+                f"blocks_per_core={plan['blocks_per_core']})"
+            )
 
 
 def test_bench_tilize(device):
@@ -259,6 +304,8 @@ def test_bench_tilize(device):
 
     for name in REGIME_NAMES:
         spec = REGIMES[name]
+        # A0 counterfactual rows force a core cap through the planner's sweep hook.
+        tpd.CORE_CAP_OVERRIDE = spec.get("core_cap")
         tt_input, out_cfg = _build(device, spec)
         plan = _plan_for(device, tt_input, spec, out_cfg)
         _assert_structural_gates(name, spec, plan, grid_cores)
@@ -277,7 +324,7 @@ def test_bench_tilize(device):
                 c,
                 dtype=s.get("out_dtype"),
                 use_multicore=s.get("multicore", True),
-                use_double_buffer=s.get("double_buffer", True),
+                use_double_buffer=s.get("double_buffer"),
             )
             ns, std = _measure_median_ns(device, run_fn)
             assert ns is not None, f"profiler produced no data for {name}/{variant}"
@@ -288,6 +335,8 @@ def test_bench_tilize(device):
                     path=plan["path"],
                     ncores=plan["ncores"],
                     chunk_wt=plan["chunk_wt"],
+                    depth=plan["depth"],
+                    blocks=plan["blocks_per_core"],
                     cb_bytes=plan["cb_bytes_per_core"],
                     ns=ns,
                     cv=(std / ns * 100.0) if ns else 0.0,
@@ -297,22 +346,26 @@ def test_bench_tilize(device):
 
         os.environ["TILIZE_SKIP_DM"] = "0"
         os.environ["TILIZE_SKIP_COMPUTE"] = "0"
+        tpd.CORE_CAP_OVERRIDE = None
 
     arch = os.environ.get("ARCH_NAME", "unknown")
     lines = [
         "",
         "=== tilize device perf bench ===",
         f"    grid={grid.x}x{grid.y}  arch={arch}  rounds={N_ROUNDS}x{N_TRIALS} launches  ablate={ABLATE}",
-        "    A0 gate: interleaved -> ncores == min(grid_cores, total_tiles); sharded -> shard's own cores",
-        f"    {'regime':<20} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} "
-        f"{'cbB/core':>9} {'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
+        f"    A0 gate: interleaved -> ncores == min(grid_cores, total_tiles, "
+        f"A0_KNEE_CORES={tpd.A0_KNEE_CORES}); sharded -> shard's own cores",
+        f"    C16 gate: depth 2 iff ncores < {tpd.BANDWIDTH_KNEE_CORES} and "
+        f"blk/core >= {tpd.MIN_BLOCKS_FOR_DEPTH2}",
+        f"    {'regime':<22} {'variant':<11} {'path':<8} {'cores':>5} {'chk':>4} {'d':>2} "
+        f"{'blk':>4} {'cbB/core':>9} {'ns':>10} {'cv%':>5} {'MB':>7} {'GB/s':>7}",
     ]
     for r in rows:
         gbps = (r["traffic"] / r["ns"]) if (r["traffic"] and r["ns"]) else 0.0
         lines.append(
-            f"    {r['regime']:<20} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
-            f"{r['chunk_wt']:>4} {r['cb_bytes']:>9} {r['ns']:>10.1f} {r['cv']:>5.1f} "
-            f"{r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
+            f"    {r['regime']:<22} {r['variant']:<11} {r['path']:<8} {r['ncores']:>5} "
+            f"{r['chunk_wt']:>4} {r['depth']:>2} {r['blocks']:>4} {r['cb_bytes']:>9} "
+            f"{r['ns']:>10.1f} {r['cv']:>5.1f} {r['traffic'] / 1e6:>7.2f} {gbps:>7.1f}"
         )
     print("\n".join(lines))
 

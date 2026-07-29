@@ -25,6 +25,12 @@ Two dataflow paths (see ``op_design.md`` "Dataflow Strategy"):
 Only two CBs in either path — tilize is a single-phase compute with no
 intermediate.  Per-core CB L1 is ``depth * chunk_wt * (tile_in + tile_out)``
 with ``chunk_wt <= WT_CHUNK_MAX``, i.e. bounded by a constant in ``W``.
+
+``depth`` itself is gated (Refinement 1, lever C16): ``use_double_buffer=None``
+— the public default — asks the planner for depth-2 only in the regime where it
+was *measured* to pay (``depth2_pays``); ``True``/``False`` force it. See
+``A0_KNEE_CORES`` and ``BANDWIDTH_KNEE_CORES`` for the measurements behind both
+gates.
 """
 
 from __future__ import annotations
@@ -51,6 +57,50 @@ L1_CB_BUDGET_BYTES = 131072
 # Fast-tilize LLK limit (`can_use_fast_tilize`: block_width_tiles < 256).
 MAX_BLOCK_WIDTH_TILES = 256
 
+# --- A0 active-core criterion: min(grid, total_tiles, A0_KNEE_CORES) ----------
+#
+# master.md Part 2 A0 states the criterion as `active == min(grid, total_tiles,
+# bandwidth_knee)`, and `examples/dram_saturation/report.md` measures that knee at
+# ~16 cores @ 190.9 GB/s for a *large-transaction* DRAM copy (16 -> 64 buys
+# +1.5 %). tilize's knee was MEASURED for tilize's own transfer shapes
+# (probes/probe_009.py + probe_010.py, Refinement 1) and it is **the whole grid**:
+#
+#   d_tall_narrow [1,1,2048,32], forced core cap -> device ns (median of 5x10)
+#     64c 3 623 | 32c 5 186 | 16c 8 580 | 8c 14 780 | 4c 27 950 | 1c 107 561
+#
+# i.e. latency is ~linear in tiles-per-core: capping at 16 cores is 2.4x SLOWER,
+# not ~2x faster. Two measured reasons the bandwidth knee never binds here:
+#   1. a W=32 bf16 ROW_MAJOR input has 64 B DRAM pages, so the reader issues 64 B
+#      transactions. The NoC model puts 64 B interleaved DRAM reads at
+#      0.68-1.41 B/cyc/core, i.e. 45-90 GB/s aggregate over 64 cores -- the
+#      190.9 GB/s knee is UNREACHABLE for this shape at any core count. The op is
+#      read-transaction-rate bound, not DRAM-bandwidth bound.
+#   2. the sync/dispatch floor scales with BLOCKS PER CORE, not with core count
+#      (sync_only: 64c/1blk 1 202 ns, 16c/4blk 3 079 ns, 4c/16blk 10 677 ns
+#      ~= 590 + 612*blocks), so shedding cores *adds* sync cost.
+#
+# Keep the term in the formula (it is A0's criterion, and a future shape family
+# with big transactions could re-introduce a real knee) but set it above any
+# current compute grid => identity. Changing this constant requires re-running
+# probes/probe_009.py.
+A0_KNEE_CORES = 64
+
+# --- C16 depth-2 default gate (master.md C16 "but only when it pays") ---------
+# Measured (probes/probe_010.py): depth-2 pays only where a core's reader and
+# writer serialize on that core's own NoC issue rate AND there are blocks to
+# pipeline -- i.e. below the DRAM bandwidth-saturation knee with >= 2 blocks per
+# core (c_single_core depth1/depth2 = 1.321, x_wide_short_1core = 1.360). At or
+# above the knee the binding resource is DRAM aggregate bandwidth, which both
+# depths already reach, so depth-2 is inside the noise floor on every 64-core
+# regime (a_square 1.002, b_wide_short 0.995, e_square_fp32 1.013,
+# g_dram_to_sharded 0.996, g_sharded_to_dram 1.009, n_tiny 1.010) while costing
+# 2x the per-core CB L1.
+BANDWIDTH_KNEE_CORES = 16
+MIN_BLOCKS_FOR_DEPTH2 = 2
+# Sweep hook: probes set this to force a core cap while re-measuring the knee.
+# None => A0_KNEE_CORES decides. Never set in production.
+CORE_CAP_OVERRIDE = None
+
 CB_RM_INPUT = 0
 CB_TILED_OUTPUT = 16
 
@@ -72,6 +122,30 @@ def _largest_divisor_le(n: int, limit: int) -> int:
         if n % d == 0:
             return d
     return 1
+
+
+def a0_active_cores(grid_cores: int, total_tiles: int) -> int:
+    """master.md A0: ``min(grid, total_tiles, bandwidth_knee)``.
+
+    The single place the active-core count is decided for the generic path, so
+    the bench / unit-test A0 assert can check the *declared* criterion instead of
+    re-deriving it. See ``A0_KNEE_CORES`` for why the knee term is identity on
+    this op (measured, not assumed).
+    """
+    cap = A0_KNEE_CORES if CORE_CAP_OVERRIDE is None else int(CORE_CAP_OVERRIDE)
+    return max(1, min(grid_cores, total_tiles, cap))
+
+
+def depth2_pays(ncores: int, blocks_per_core: int) -> bool:
+    """C16 gate: is depth-2 worth 2x the per-core CB L1 on this plan?
+
+    True only below the DRAM bandwidth-saturation knee (so the core's own
+    read/write serialization, not DRAM aggregate bandwidth, is the binding
+    resource) *and* with at least ``MIN_BLOCKS_FOR_DEPTH2`` blocks to pipeline
+    (with one block there is nothing to overlap, so depth-2 is pure L1 cost).
+    Measured deltas are in the ``BANDWIDTH_KNEE_CORES`` comment above.
+    """
+    return ncores < BANDWIDTH_KNEE_CORES and blocks_per_core >= MIN_BLOCKS_FOR_DEPTH2
 
 
 def _split_contiguous(total: int, parts: int):
@@ -153,8 +227,12 @@ def _alias_eligible(in_geo, out_geo, folded_h: int, width: int) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def build_plan(input_tensor, output_tensor, device, *, use_multicore=True, use_double_buffer=True):
+def build_plan(input_tensor, output_tensor, device, *, use_multicore=True, use_double_buffer=None):
     """Evaluate the host planner once per program build.
+
+    ``use_double_buffer=None`` (the public default) means *the planner decides*:
+    depth-2 only where it was measured to pay (see ``depth2_pays``). ``True`` /
+    ``False`` force depth-2 / depth-1 and keep their documented meaning.
 
     The tile grid is derived from the **output** tensor's padded shape — that is
     the page grid the writer addresses. A ROW_MAJOR-*sharded* input can carry
@@ -215,13 +293,35 @@ def build_plan(input_tensor, output_tensor, device, *, use_multicore=True, use_d
     if use_multicore and _alias_eligible(in_geo, out_geo, folded_h, width):
         return _plan_alias(plan, in_geo)
 
+    chunk_cap = None
+    if use_double_buffer is None:
+        # C16 gate. The depth feeds the L1 chunk-width budget, which feeds the
+        # 2D split, which decides ncores / blocks-per-core -- i.e. the gate's own
+        # inputs. Resolve it with a depth-2 trial plan (pure host arithmetic, no
+        # device work) and re-plan once at the chosen depth.
+        trial = _plan_generic(dict(plan), input_tensor, device, in_geo, use_multicore=use_multicore, depth_request=2)
+        if depth2_pays(trial["ncores"], trial["blocks_per_core"]):
+            depth_request = 2
+        else:
+            depth_request = 1
+            # Pin the chunk width to the depth-2 plan's, so the *only* difference
+            # between the gated plan and the ungated one is that the CB has half
+            # the pages. Letting the freed L1 grow the chunk instead would change
+            # the reader's transaction size and the work split behind the caller's
+            # back -- measured a 1.3 % LOSS on e_square_fp32 (chunk 8 -> 16) with
+            # zero L1 saved. Non-regression is then structural, not just measured.
+            chunk_cap = trial["chunk_wt"]
+    else:
+        depth_request = 2 if use_double_buffer else 1
+
     return _plan_generic(
         plan,
         input_tensor,
         device,
         in_geo,
         use_multicore=use_multicore,
-        use_double_buffer=use_double_buffer,
+        depth_request=depth_request,
+        chunk_cap=chunk_cap,
     )
 
 
@@ -245,7 +345,8 @@ def _plan_alias(plan, geo):
             "chunk_wt": chunk_wt,
             "shard_tiles": shard_tiles,
             "num_blocks": num_blocks,
-            "depth": 1,  # the CB *is* the shard
+            "blocks_per_core": num_blocks,
+            "depth": 1,  # the CB *is* the shard; use_double_buffer is inert here
             "row_page_stride": 1,
             "source_page_bytes": shard_w * plan["elem_in"],
             "chunk_row_bytes": shard_w * plan["elem_in"],
@@ -256,8 +357,12 @@ def _plan_alias(plan, geo):
     return plan
 
 
-def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, use_double_buffer):
-    """Path A/C: 2D height-first rectangular split over the compute grid."""
+def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, depth_request, chunk_cap=None):
+    """Path A/C: 2D height-first rectangular split over the compute grid.
+
+    ``chunk_cap`` pins the chunk width from a previous (depth-2) pass so the C16
+    depth gate cannot change the transaction shape — see ``build_plan``.
+    """
     nt_h, wt = plan["nt_h"], plan["wt"]
     tile_in, tile_out = plan["tile_in"], plan["tile_out"]
     elem_in = plan["elem_in"]
@@ -288,7 +393,13 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, use_doub
     # --- planner (op_design.md "Host planner") ------------------------------
     grid = device.compute_with_storage_grid_size()
     grid_cores = grid.x * grid.y
-    max_cores = 1 if not use_multicore else min(grid_cores, plan["total_tiles"])
+    if not use_multicore:
+        # use_multicore=False means EXACTLY one core (the acceptance test and the
+        # c_single_core bench regime depend on it) -- the A0 knee term is a G clamp
+        # inside the multicore path, never a new user-visible mode.
+        max_cores = 1
+    else:
+        max_cores = a0_active_cores(grid_cores, plan["total_tiles"])
 
     bytes_per_chunk_tile = tile_in + tile_out
     # "Depth-2 only if it fits": the smallest possible depth-2 footprint is one
@@ -296,7 +407,7 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, use_doub
     # rather than OOM (the ttnn.concat pattern). Decided BEFORE the chunk width
     # so `max_chunk_l1` is computed against the depth actually used; the
     # post-loop assert below is then an invariant, not a second clamp.
-    depth = 2 if use_double_buffer else 1
+    depth = depth_request
     if depth * bytes_per_chunk_tile > L1_CB_BUDGET_BYTES:
         depth = 1
     max_chunk_l1 = max(1, L1_CB_BUDGET_BYTES // (depth * bytes_per_chunk_tile))
@@ -305,6 +416,8 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, use_doub
     want_chunks = _div_up(max_cores, n_h)
     max_chunk_par = max(1, wt // want_chunks)
     max_chunk = min(WT_CHUNK_MAX, max_chunk_l1, max_chunk_par)
+    if chunk_cap is not None:
+        max_chunk = min(max_chunk, chunk_cap)
 
     chunk_wt = _largest_divisor_le(chunk_unit, max_chunk)
     assert wt % chunk_wt == 0, f"chunk_wt={chunk_wt} must divide Wt={wt}"
@@ -352,6 +465,10 @@ def _plan_generic(plan, input_tensor, device, in_geo, *, use_multicore, use_doub
             "n_h": n_h,
             "n_w": n_w,
             "ncores": ncores,
+            # Busiest core's chunk-block count -- the C16 gate's "is there
+            # anything to pipeline?" input, and the per-block sync cost's
+            # multiplier (measured ~612 ns/block, see A0_KNEE_CORES).
+            "blocks_per_core": max(u["row_count"] * u["chunk_count"] for u in work),
             "cb_bytes_per_core": depth * chunk_wt * bytes_per_chunk_tile,
         }
     )
