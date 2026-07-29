@@ -756,10 +756,18 @@ def _merge_cumulative(cum_path, attempts) -> list:
     for a in list(prior) + list(attempts or []):
         if not isinstance(a, dict):
             continue
+        # THE MEASUREMENT IS PART OF THE IDENTITY. Keying on the note's first 200 characters alone
+        # collapsed distinct attempts whose rationale shared a long prefix -- the agent writes
+        # "Hypothesis: ..." openings that routinely match for 200 chars -- while re-measurements that
+        # differed only past char 200 survived as separate rows. A restart merges prior attempts into
+        # this file, so both directions were visible in one report: the same trace lever appearing
+        # several times, its win counted twice across two columns. Hash the WHOLE note and include the
+        # measured value, so two rows collapse only when they are genuinely the same attempt.
         key = (
             a.get("op_signature") or a.get("op_code") or "",
             a.get("kernel_kind") or "",
-            (a.get("note") or "")[:200],
+            hashlib.sha1((a.get("note") or "").encode("utf-8", "replace")).hexdigest()[:16],
+            a.get("measured_ms"),
             bool(a.get("wedged")),
         )
         if key in seen:
