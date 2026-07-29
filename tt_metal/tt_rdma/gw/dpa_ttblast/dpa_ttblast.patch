@@ -11,7 +11,7 @@
  
  /* Structure for transfer CQ data */
  struct app_transfer_cq {
-@@ -83,6 +83,36 @@
+@@ -83,6 +83,40 @@
  	struct app_transfer_cq sq_cq_transf;
  	/* SQ transfer information. */
  	struct app_transfer_wq sq_transf;
@@ -45,12 +45,16 @@
 +	 * (INTERLEAVED so all N drain in parallel as the monotonic doorbell grows). */
 +	uint32_t tt_thread_idx;
 +	uint32_t tt_nthreads;
++	/* Option-1 (scaling hedge): if nonzero, the `produced` doorbell lives in DPA-HEAP memory at this address.
++	 * The DPA drain reads it with a plain load -- NO flexio_window, so NO per-batch window<->outbox config
++	 * toggle, so N drain threads don't serialize on that config path (the window-doorbell drain's ~40G wall). */
++	flexio_uintptr_t tt_db_daddr;
  	uint8_t not_first_run;
  } __attribute__((__packed__, aligned(8)));
  
 --- a/packet_processor/dev/flexio_packet_processor_dev.c
 +++ b/packet_processor/dev/flexio_packet_processor_dev.c
-@@ -178,6 +178,293 @@
+@@ -178,6 +178,354 @@
  	flexio_dev_dbr_rq_inc_pi(app_ctx.rq_ctx.rq_dbr);
  }
  
@@ -245,6 +249,67 @@
 +	tt_ctx_init(&c, d);
 +	if (!d->tt_no_crc)
 +		tt_crc_init();
++
++	/* ---- Option-1: DPA-HEAP doorbell (scaling hedge) ---- If produced lives in DPA heap, read it with a
++	 * plain load: NO flexio_window, hence NO per-batch window<->outbox config toggle. The RPC's default outbox
++	 * stays valid across every batch (exactly like the A5 blast), so N drain threads DON'T serialize on the
++	 * config path -> this is the version that should scale to ~146G. */
++	if (d->tt_db_daddr) {
++		volatile uint64_t *produced = (volatile uint64_t *)d->tt_db_daddr;
++
++		while (consumed < d->tt_count) {
++			uint64_t p;
++
++			__dpa_thread_fence(__DPA_MEMORY, __DPA_R, __DPA_R);
++			p = *produced; /* plain DPA-heap load */
++			if (p > d->tt_count)
++				p = d->tt_count;
++			if (consumed >= p) {
++				if (++spin > SPIN_MAX)
++					break;
++				continue;
++			}
++			spin = 0;
++			while (consumed < p) { /* drain all available in batches; no toggle between them */
++				uint32_t j;
++
++				for (j = 0; j < BATCH && consumed < p; j++) {
++					uint8_t *f = (uint8_t *)get_next_dte(&c.dt_ctx, DATA_IDX_MASK, LOG_WQD_CHUNK_BSIZE);
++					union flexio_dev_sqe_seg *cseg, *swqe;
++					int is_last = (consumed + nthreads >= p) || (j == BATCH - 1);
++
++					tt_build_frame(f, d, plen, (uint32_t)(consumed + 1), src, gather);
++					cseg = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++					flexio_dev_swqe_seg_ctrl_set(cseg, c.sq_ctx.sq_pi, c.sq_ctx.sq_number,
++								     is_last ? FLEXIO_CTRL_SEG_CE_CQE_ALWAYS
++									     : FLEXIO_CTRL_SEG_CE_CQE_ON_CQE_ERROR,
++								     FLEXIO_CTRL_SEG_TYPE_SEND_EN);
++					if (gather)
++						((uint8_t *)&cseg->ctrl.qpn_ds)[3] = 4u;
++					swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++					flexio_dev_swqe_seg_eth_set(swqe, 0, 0, 0, NULL);
++					swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++					flexio_dev_swqe_seg_mem_ptr_data_set(swqe, gather ? hdr_len : flen, c.lkey, (uint64_t)f);
++					swqe = get_next_sqe(&c.sq_ctx, SQ_IDX_MASK);
++					if (gather)
++						flexio_dev_swqe_seg_mem_ptr_data_set(swqe, plen, d->tt_src_mkey, d->tt_src_daddr);
++					c.sq_ctx.sq_pi++;
++					consumed += nthreads;
++					egressed++;
++				}
++				__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
++				flexio_dev_qp_sq_ring_db(c.sq_ctx.sq_pi, c.sq_ctx.sq_number);
++				__dpa_thread_fence(__DPA_MEMORY, __DPA_W, __DPA_W);
++				while (flexio_dev_cqe_get_owner(c.sq_cq_ctx.cqe) != c.sq_cq_ctx.cq_hw_owner_bit)
++					;
++				com_step_cq(&c.sq_cq_ctx);
++			}
++		}
++		flexio_dev_print("TT-RDMA drain[dpaheap %u/%u] done: %u frames egressed (peek %u)\n", d->tt_thread_idx,
++				 nthreads, (uint32_t)egressed, (uint32_t)*produced);
++		return egressed;
++	}
++
 +	flexio_dev_get_thread_ctx(&dtctx);
 +	/* Resolve the host doorbell address once (window entity 0). NOTE: window config and the SQ's outbox share
 +	 * the thread's config slot -> after ANY window access the outbox MUST be restored or SQ doorbells go to
@@ -344,7 +409,7 @@
  /* Entry point function that host side call for the execute.
   *  thread_arg - pointer to the host2dev_packet_processor_data structure
   *     to transfer data from the host side.
-@@ -194,6 +481,15 @@
+@@ -194,6 +542,15 @@
  		data_from_host->not_first_run = 1;
  	}
  
@@ -710,7 +775,7 @@
  	/* Set APP data info for first run. */
  	h2d_data->not_first_run = 0;
  
-@@ -887,6 +1163,756 @@
+@@ -887,6 +1163,778 @@
  /* dev msg stream buffer built from chunks of 2^FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE each */
  #define MSG_HOST_BUFF_BSIZE (512 * L2V(FLEXIO_MSG_DEV_LOG_DATA_CHUNK_BSIZE))
  
@@ -1032,6 +1097,10 @@
 +	struct tt_worker_arg *dargs = NULL;
 +	pthread_t *dtids = NULL;
 +	int dcreated = 0, dlaunched = 0, di;
++	/* Option-1: DPA-heap doorbell (scaling hedge) -- produced lives in DPA heap, DPA reads it with a plain
++	 * load (no window toggle). PRESET here (host writes total once) to prove the drain scales. */
++	int dpaheap = getenv("TTDPA_DB_DPAHEAP") && strtoul(getenv("TTDPA_DB_DPAHEAP"), NULL, 0) > 0;
++	flexio_uintptr_t db_daddr = 0;
 +
 +	total = tt_fill_hdr_params(&h);
 +	if (!total)
@@ -1115,6 +1184,19 @@
 +	}
 +	h.tt_outbox_id = flexio_outbox_get_id(outbox);
 +
++	if (dpaheap) {
++		/* Allocate + PRESET a DPA-heap doorbell = total. The DPA drain reads it with a plain load (no window
++		 * toggle) -> the scaling test. (Arrival-driven DPA-heap doorbell writes are a separate follow-up.) */
++		uint64_t init = total;
++
++		if (flexio_copy_from_host(app_ctx->flexio_process, &init, sizeof(init), &db_daddr)) {
++			fprintf(stderr, "doorbell: DPA-heap doorbell alloc failed\n");
++			rc = -1;
++			goto out;
++		}
++		h.tt_db_daddr = db_daddr;
++	}
++
 +	if (flexio_copy_from_host(app_ctx->flexio_process, &h, sizeof(h), &app_data)) {
 +		fprintf(stderr, "doorbell: copy app_data failed\n");
 +		rc = -1;
@@ -1128,7 +1210,10 @@
 +				   : (preset ? "PRESET(produced=total)" : "ARRIVAL-DRIVEN(bump thread)")),
 +	       shmfile ? "SHM-MEM" : (app_ctx->tt_src_ibv_mr ? "HOST-MEM" : (app_ctx->tt_src_mkey ? "DPA-heap-gather" : "none")));
 +
-+	if (use_roce) {
++	if (dpaheap) {
++		/* Doorbell is PRESET in DPA heap (= total); the DPA reads it with a plain load. No host producer. */
++		printf("Option-1: DPA-HEAP doorbell PRESET=%u (no window, no toggle) -> scaling test\n", total);
++	} else if (use_roce) {
 +		/* A3.3b-2: the real RoCE responder thread bumps `produced` per WRITE_IMM. Needs the HOST landing
 +		 * buffer (TTDPA_HOSTSRC) so it can be registered on the connected device's PD for REMOTE_WRITE. */
 +		int waited = 0;
@@ -1256,6 +1341,8 @@
 +	free(dsqs);
 +	free(dargs);
 +	free(dtids);
++	if (db_daddr)
++		flexio_buf_dev_free(app_ctx->flexio_process, db_daddr);
 +	if (app_data)
 +		flexio_buf_dev_free(app_ctx->flexio_process, app_data);
 +	if (outbox)
@@ -1467,7 +1554,7 @@
  /* Application name in string format for Flex IO app get. */
  #define DEV_APP_NAME_STR(_app_name) #_app_name
  #define DEV_APP_NAME_XSTR(_app_name) DEV_APP_NAME_STR(_app_name)
-@@ -1068,20 +2094,63 @@
+@@ -1068,20 +2116,63 @@
  
  	printf("Ready to receive messages\n");
  
@@ -1542,7 +1629,7 @@
  	}
  
  cleanup:
-@@ -1096,6 +2165,28 @@
+@@ -1096,6 +2187,28 @@
  		err = -1;
  	}
  
