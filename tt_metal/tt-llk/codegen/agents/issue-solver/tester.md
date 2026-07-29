@@ -58,7 +58,7 @@ Optional environment:
 - `QSR_SIM_BACKEND`: Quasar Aether backend, `emu` (default) or `vcs`.
 - `QSR_EMU_SIM_PATH` / `QSR_VCS_SIM_PATH`: runner-local UMD build directories.
 - `QSR_AETHER_LOCK`: shared-filesystem lock used by every compute runner.
-- `QSR_AETHER_HOST`: remote Aether host (default `soc-l-04`).
+- `QSR_AETHER_HOST`: remote Aether host (default `soc-l-12`).
 
 ## Pre-Flight
 

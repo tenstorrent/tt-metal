@@ -13,12 +13,12 @@
 # reap regardless — e.g. from a batch trap after its child runs are killed.
 #
 # Usage:
-#   reap_stale_emu.sh [--arch quasar] [--emu-host soc-l-04]
+#   reap_stale_emu.sh [--arch quasar] [--emu-host soc-l-12]
 #                     [--lock /shared/quasar-aether.lock] [--force]
 set -u
 
 ARCH="quasar"
-EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-04}}}"
+EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}}"
 LOCKFILE="${QSR_AETHER_LOCK:-/tmp/tt-llk-test.lock}"
 FORCE="false"
 while [[ $# -gt 0 ]]; do

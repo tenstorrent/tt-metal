@@ -83,7 +83,7 @@ GRACE_SECS="${GRACE_SECS:-30}"          # wait after SIGINT before SIGKILL
 # a fallback for 4B-mode configs that surface it).
 READY_RE='tt-exalens ready|\[4B MODE\]'
 QSR_SIM_BACKEND="${QSR_SIM_BACKEND:-emu}"
-EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-04}}}"
+EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}}"
 NNG_LOCAL_BASE="5555"                   # local NNG bind (infra-forwarded; fixed)
 DBD_BASE="54910"                        # NNG_SOCKET_ADDR debuda port (fixed)
 
