@@ -9,6 +9,7 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
@@ -46,30 +47,30 @@ void kernel_main() {
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(6);
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(7);
 
-    constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
-    constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
-    constexpr uint32_t cb_input_mask_id = tt::CBIndex::c_7;
-    constexpr uint32_t cb_ones_id = tt::CBIndex::c_26;
+    constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
+    constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
+    constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
+    constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
+    constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
 
     Noc noc;
-    CircularBuffer cb_gamma(cb_gamma_id);
-    CircularBuffer cb_beta(cb_beta_id);
-    CircularBuffer cb_input_mask(cb_input_mask_id);
+    DataflowBuffer dfb_gamma(dfb_gamma_id);
+    DataflowBuffer dfb_beta(dfb_beta_id);
+    DataflowBuffer dfb_input_mask(dfb_input_mask_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma_id);
-    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
+    const uint32_t single_tile_size_bytes = get_tile_size(dfb_gamma_id);
+    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(dfb_input_mask_id);
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
-    constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
+    constexpr uint32_t eps_dfb_id = tt::CBIndex::c_3;
     const uint32_t eps = get_arg_val<uint32_t>(0);
-    generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
+    generate_bcast_col_scalar(CircularBuffer(eps_dfb_id), eps);
 
     uint32_t input_mask_tile_id = input_mask_tile_start_id;
     for (uint32_t i = 0; i < num_groups_per_core; ++i) {
-        cb_input_mask.reserve_back(block_w);
-        uint32_t l1_write_addr_input_mask = cb_input_mask.get_write_ptr();
+        dfb_input_mask.reserve_back(block_w);
+        uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
         for (uint32_t j = 0; j < block_w; ++j) {
             noc.async_read(
                 mask,
@@ -81,18 +82,18 @@ void kernel_main() {
             input_mask_tile_id += 1;
         }
         noc.async_read_barrier();
-        cb_input_mask.push_back(block_w);
+        dfb_input_mask.push_back(block_w);
     }
 
     if constexpr (fuse_gamma) {
-        constexpr uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
+        constexpr uint32_t gamma_tile_bytes = get_tile_size(dfb_gamma_id);
         constexpr uint32_t gamma_element_bytes = gamma_tile_bytes / TILE_HW;
         constexpr uint32_t gamma_face_bytes = gamma_element_bytes * tt::constants::FACE_HW;
         constexpr uint32_t gamma_face_w_bytes = gamma_element_bytes * tt::constants::FACE_WIDTH;
         const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
-        cb_gamma.reserve_back(num_cols_tile_gamma_beta);
-        auto l1_write_addr_gamma = cb_gamma.get_write_ptr();
+        dfb_gamma.reserve_back(num_cols_tile_gamma_beta);
+        auto l1_write_addr_gamma = dfb_gamma.get_write_ptr();
 
         // We want this data to appear as the first row of the tile.
         // This is 32B at the start of the first face, 32B at the start of the second face
@@ -139,20 +140,20 @@ void kernel_main() {
             l1_write_addr_gamma += gamma_tile_bytes;
         }
         noc.async_read_barrier();
-        cb_gamma.push_back(num_cols_tile_gamma_beta);
+        dfb_gamma.push_back(num_cols_tile_gamma_beta);
     }
 
     if constexpr (fuse_beta) {
         // Just like gamma, we read at a 64 byte granularity for Blackhole NOC compatibility
         // Then copy the second set of 32 bytes into the second face
-        constexpr uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
+        constexpr uint32_t beta_tile_bytes = get_tile_size(dfb_beta_id);
         constexpr uint32_t beta_element_bytes = beta_tile_bytes / TILE_HW;
         constexpr uint32_t beta_face_bytes = beta_element_bytes * tt::constants::FACE_HW;
         constexpr uint32_t beta_face_w_bytes = beta_element_bytes * tt::constants::FACE_WIDTH;
         const auto beta = TensorAccessor(beta_args, beta_addr);
 
-        cb_beta.reserve_back(num_cols_tile_gamma_beta);
-        auto l1_write_addr_beta = cb_beta.get_write_ptr();
+        dfb_beta.reserve_back(num_cols_tile_gamma_beta);
+        auto l1_write_addr_beta = dfb_beta.get_write_ptr();
 
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
             uint32_t tile_id = beta_tile_start_id + w;
@@ -192,6 +193,6 @@ void kernel_main() {
             l1_write_addr_beta += beta_tile_bytes;
         }
         noc.async_read_barrier();
-        cb_beta.push_back(num_cols_tile_gamma_beta);
+        dfb_beta.push_back(num_cols_tile_gamma_beta);
     }
 }

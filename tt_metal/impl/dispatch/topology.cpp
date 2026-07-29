@@ -16,6 +16,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
@@ -430,7 +431,11 @@ DispatchTopology::DispatchTopology(
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
     const bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
-    for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+    std::vector<CoreType> core_types{CoreType::WORKER, CoreType::ETH};
+    if (descriptor_.hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        core_types.push_back(CoreType::DISPATCH);
+    }
+    for (CoreType core_type : core_types) {
         const auto& layout = this->get_dispatch_query_manager_().cq_dispatch_layout(core_type);
         dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<DispatchMemMap>(
             core_type, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster, layout, descriptor_.rtoptions());

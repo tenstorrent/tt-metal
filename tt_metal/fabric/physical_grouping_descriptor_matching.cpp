@@ -834,17 +834,24 @@ std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_po
     return node_to_position;
 }
 
-std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>> filter_pinnings_for_mesh_ids(
-    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings,
+std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> filter_pinnings_for_mesh_ids(
+    const std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>& pinnings,
     const std::set<uint32_t>& applicable_mesh_ids) {
     if (!pinnings.has_value()) {
         return std::nullopt;
     }
-    std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>> filtered;
+    std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> filtered;
     filtered.reserve(pinnings->size());
-    for (const auto& pinning : *pinnings) {
-        if (applicable_mesh_ids.contains(pinning.second.mesh_id.get())) {
-            filtered.push_back(pinning);
+    for (const auto& group : *pinnings) {
+        tt::tt_metal::experimental::tt_fabric::PinningConstraint filtered_group;
+        filtered_group.asic_positions = group.asic_positions;
+        for (const auto& fabric_node : group.fabric_nodes) {
+            if (applicable_mesh_ids.contains(fabric_node.mesh_id.get())) {
+                filtered_group.fabric_nodes.push_back(fabric_node);
+            }
+        }
+        if (!filtered_group.fabric_nodes.empty()) {
+            filtered.push_back(std::move(filtered_group));
         }
     }
     if (filtered.empty()) {
@@ -853,25 +860,26 @@ std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>> 
     return filtered;
 }
 
-// Returns the number of required constraints added (one per MGD node that resolved to >=1 PGD node). May be
-// 0 even when `pinnings` is non-empty (e.g. no pinned ASIC position maps to a PGD node in this grouping); the
-// caller skips that PGD variant when pinnings were required.
+// Returns the number of required constraints added (one per many-to-many pinning group that resolved to >=1 PGD
+// node per side). May be 0 even when `pinnings` is non-empty (e.g. no pinned ASIC position maps to a PGD node in
+// this grouping); the caller skips that PGD variant when pinnings were required.
 std::size_t add_mgd_to_pgd_asic_position_pinning_constraints(
     MappingConstraints<uint32_t, uint32_t>& constraints,
     const GroupingInfo& pgd_grouping,
-    const std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>& pinnings) {
-    std::map<uint32_t, std::set<uint32_t>> mgd_node_to_pgd_nodes;
-    for (const auto& [position, fabric_node] : pinnings) {
-        const auto pgd_nodes = find_pgd_nodes_at_asic_position(pgd_grouping, position);
-        if (pgd_nodes.empty()) {
-            continue;
-        }
-        mgd_node_to_pgd_nodes[fabric_node.chip_id].insert(pgd_nodes.begin(), pgd_nodes.end());
-    }
+    const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinnings) {
     std::size_t constraints_added = 0;
-    for (const auto& [mgd_node, pgd_nodes] : mgd_node_to_pgd_nodes) {
-        if (!pgd_nodes.empty()) {
-            constraints.add_required_constraint(mgd_node, pgd_nodes);
+    for (const auto& group : pinnings) {
+        std::set<uint32_t> mgd_nodes;
+        std::set<uint32_t> pgd_nodes;
+        for (const auto& fabric_node : group.fabric_nodes) {
+            mgd_nodes.insert(fabric_node.chip_id);
+        }
+        for (const auto& position : group.asic_positions) {
+            const auto found_pgd_nodes = find_pgd_nodes_at_asic_position(pgd_grouping, position);
+            pgd_nodes.insert(found_pgd_nodes.begin(), found_pgd_nodes.end());
+        }
+        if (!mgd_nodes.empty() && !pgd_nodes.empty()) {
+            constraints.add_required_constraint(mgd_nodes, pgd_nodes);
             ++constraints_added;
         }
     }
@@ -885,14 +893,14 @@ namespace tt::tt_fabric {
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings) const {
+    const std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>& pinnings) const {
     return get_valid_groupings_for_mgd(mesh_graph_descriptor, &physical_system_descriptor, pinnings);
 }
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
-    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings) const {
+    const std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>& pinnings) const {
     ValidGroupingsMap result;
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====

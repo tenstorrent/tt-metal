@@ -10,6 +10,7 @@ import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
+    ApproximationMode,
     DataCopyType,
     DestAccumulation,
     DestSync,
@@ -34,6 +35,7 @@ from helpers.stimuli_generator import (
 )
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    APPROX_MODE,
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
@@ -64,6 +66,16 @@ SFPU_UNARY_FORMATS = input_output_formats(
         DataFormat.Float16_b,
     ]
 )
+
+# The trigonometry / inverse-hyperbolic transcendentals. Float-only (they share the
+# SFPU_UNARY_FORMATS set), each with its own safe input domain (see prepare_trig_inputs).
+TRIGONOMETRY_OPS = [
+    MathOperation.Sin,
+    MathOperation.Cos,
+    MathOperation.Acosh,
+    MathOperation.Asinh,
+    MathOperation.Atanh,
+]
 
 # The six comparison-to-zero modes. These run integer formats too (and UInt16 via
 # the Int16 container), so the sweep adds them to the float formats above.
@@ -338,9 +350,62 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Clamp:
+        # Clamp bounds are fixed to [-1, 1]; span past both to exercise the lower/upper/pass-through
+        # cases (mirrors sfpu_domains' Clamp spec).
+        min_val = -2.0
+        max_val = 2.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Neg:
+        # Negation is exact for any representable value; span both signs (mirrors sfpu_domains' Neg spec).
+        min_val = -10.0
+        max_val = 10.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Softplus:
+        # Span both signs and past the linear threshold (20) so the kernel's polynomial region, the
+        # negative saturation region, and the linear passthrough (t > threshold -> softplus ~= x) are
+        # all covered (mirrors sfpu_domains' Softplus spec).
+        min_val = -8.0
+        max_val = 30.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
     # else: keep src_A as-is
 
     return src_A
+
+
+def prepare_trig_inputs(
+    src_A: torch.Tensor,
+    mathop: MathOperation,
+    input_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Map the uniform [0, 1] stimulus into each op's safe domain so the Quasar kernel
+    stays in its accurate range:
+      sin / cos — [-pi, pi] (argument reduction is valid far wider, but a small domain
+                  keeps the Maclaurin polynomial precise).
+      asinh    — [-10, 10] (log polynomial stable away from overflow).
+      acosh    — [1.1, 50]  (x >= 1 domain; avoid near-1 where the 3rd-order log loses
+                  precision).
+      atanh    — [-0.9, 0.9] (|x| < 1 domain with margin so RECIP does not blow up).
+    """
+    torch_format = format_dict[input_format]
+    u = src_A.to(torch.float32)  # uniform [0, 1] from the uniform stimuli spec
+
+    if mathop in (MathOperation.Sin, MathOperation.Cos):
+        lo, hi = -math.pi, math.pi
+    elif mathop == MathOperation.Asinh:
+        lo, hi = -10.0, 10.0
+    elif mathop == MathOperation.Acosh:
+        lo, hi = 1.1, 50.0
+    elif mathop == MathOperation.Atanh:
+        lo, hi = -0.9, 0.9
+    else:
+        return src_A
+
+    return (lo + u * (hi - lo)).to(torch_format)
 
 
 def prepare_unary_inputs(
@@ -355,6 +420,8 @@ def prepare_unary_inputs(
         return prepare_abs_inputs(src_A, src_B, input_format, output_format)
     if mathop == MathOperation.Square:
         return prepare_square_inputs(src_A, src_B, input_format, output_format)
+    if mathop in TRIGONOMETRY_OPS:
+        return prepare_trig_inputs(src_A, mathop, input_format)
     if mathop in COMP_OPS:
         # Unsigned formats need non-negative stimuli (a signed split would wrap under the unsigned
         # dtype); signed formats use the sign-vs-magnitude builder.
@@ -583,7 +650,16 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
+    # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
+    # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
+    *[
+        OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
+        for op in TRIGONOMETRY_OPS
+    ],
 ] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_OPS]
 
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
@@ -650,6 +726,14 @@ def generate_sfpu_unary_combinations():
     """
     combinations = []
     for cfg in OP_CONFIGS:
+        # Ops that expose both a non-approximate and an approximate kernel are swept over both
+        # ApproximationMode values; every other op has a single implementation (ApproximationMode.No).
+        approx_modes = (
+            (ApproximationMode.No, ApproximationMode.Yes)
+            if cfg.mathop
+            in (MathOperation.Exp, MathOperation.Reciprocal, MathOperation.Rsqrt)
+            else (ApproximationMode.No,)
+        )
         for fmt in formats_for_op(cfg):
             in_fmt = fmt.input_format
 
@@ -678,17 +762,19 @@ def generate_sfpu_unary_combinations():
                         ImpliedMathFormat.No,
                         ImpliedMathFormat.Yes,
                     ]:
-                        for input_dimensions in cfg.input_dims:
-                            combinations.append(
-                                (
-                                    cfg.mathop,
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    implied_math_format,
-                                    runtime(input_dimensions),
+                        for approx_mode in approx_modes:
+                            for input_dimensions in cfg.input_dims:
+                                combinations.append(
+                                    (
+                                        cfg.mathop,
+                                        fmt,
+                                        dest_acc,
+                                        dest_sync,
+                                        implied_math_format,
+                                        approx_mode,
+                                        runtime(input_dimensions),
+                                    )
                                 )
-                            )
 
     return combinations
 
@@ -707,9 +793,15 @@ def test_eltwise_unary_sfpu_quasar(
     UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
     every other op sweeps the shared format matrix.
     """
-    mathop, formats, dest_acc, dest_sync, implied_math_format, input_dimensions = (
-        mathop_formats_dest_acc_sync_implied_math_input_dims[0]
-    )
+    (
+        mathop,
+        formats,
+        dest_acc,
+        dest_sync,
+        implied_math_format,
+        approx_mode,
+        input_dimensions,
+    ) = mathop_formats_dest_acc_sync_implied_math_input_dims[0]
 
     is_typecast = mathop == MathOperation.Typecast
 
@@ -766,6 +858,7 @@ def test_eltwise_unary_sfpu_quasar(
         formats,
         templates=[
             MATH_OP(mathop=mathop),
+            APPROX_MODE(approx_mode),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
@@ -823,5 +916,7 @@ def test_eltwise_unary_sfpu_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

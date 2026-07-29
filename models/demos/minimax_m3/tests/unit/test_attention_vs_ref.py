@@ -159,7 +159,7 @@ def test_attention_prefill_vs_ref(mesh_device, device_params, seq_len, reset_see
         ccl_manager=ccl_manager,
         mesh_config=mesh_config,
         program_config=MiniMaxM3AttentionProgramConfig(),
-        layer_idx=0,
+        global_layer_idx=0,
         transformation_mats=trans_mats,
     )
 
