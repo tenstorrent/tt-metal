@@ -615,6 +615,82 @@ TEST_F(SemScopeFixture, TestCachedSemLivesInPoolNotRing) {
            "to the kernel_config ring.";
 }
 
+// TWO DISTINCT cached-eligible semaphores, each with its own single binder kernel, co-resident on one
+// node. Each passes the per-semaphore single-binder-kernel rule, but the injected pool seeder
+// rendezvouses on ONE node-wide barrier slot -- so caching both would mix rendezvous groups (unequal
+// thread counts hang at kernel entry; equal counts let a seed land after an increment). Both must be
+// demoted to EXTERNAL. Uses different thread counts, which is the hanging variant.
+TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "the cached pool is Quasar-only";
+    }
+    if (num_dms_ < 3) {
+        GTEST_SKIP() << "needs >= 3 user DMs to give the two kernels different thread counts";
+    }
+    std::vector<uint32_t> sentinel(3, kNoReport);
+    tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+
+    // Two semaphores, two kernels of DIFFERENT thread counts, both on `core`, one kernel per semaphore.
+    const experimental::SemaphoreSpecName SEM_A{"sem_a"};
+    const experimental::SemaphoreSpecName SEM_B{"sem_b"};
+    experimental::SemaphoreSpec sem_a{.unique_id = SEM_A, .target_nodes = core};
+    experimental::SemaphoreSpec sem_b{.unique_id = SEM_B, .target_nodes = core};
+    const experimental::KernelSpecName KA{"cached_ka"};
+    const experimental::KernelSpecName KB{"cached_kb"};
+    const uint32_t threads_a = 2;
+    const uint32_t threads_b = num_dms_ - threads_a;  // different count -> the hanging variant
+
+    auto make_k = [&](const experimental::KernelSpecName& name,
+                      const experimental::SemaphoreSpecName& sem_name,
+                      uint32_t threads) {
+        return experimental::KernelSpec{
+            .unique_id = name,
+            .source = kernel_path_census,
+            .num_threads = threads,
+            .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter"}},
+            .hw_config = experimental::DataMovementGen2Config{},
+        };
+    };
+    experimental::WorkUnitSpec wu{.name = "wu", .kernels = {KA, KB}, .target_nodes = core};
+    experimental::ProgramSpec spec{
+        .name = "two_cached_one_node",
+        .kernels = {make_k(KA, SEM_A, threads_a), make_k(KB, SEM_B, threads_b)},
+        .semaphores = {sem_a, sem_b},
+        .work_units = {wu}};
+    Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = KA,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                core,
+                {{"report_addr", report_addr}, {"increment_times", concurrent_iterations}, {"is_reporter", 1u}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = KB,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                core,
+                {{"report_addr", report_addr}, {"increment_times", concurrent_iterations}, {"is_reporter", 0u}}),
+        },
+    };
+    experimental::SetProgramRunArgs(program, params);
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinate zero_coord{0, 0};
+    workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
+    RunProgram(mesh_device_, workload);  // must COMPLETE (a cached pick here would hang at entry)
+
+    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
+    ASSERT_EQ(result.size(), 3u);
+    ASSERT_NE(result[0], kNoReport) << "reporter never ran (the program hung or the seeder deadlocked)";
+    log_info(LogTest, "two cached sems on one node: scope={} count={}", result[0], result[1]);
+    EXPECT_EQ(result[0], scope_val(SemScope::EXTERNAL))
+        << "two co-resident cached-binder kernels share one node-wide seeder barrier slot -> both must "
+           "be demoted to EXTERNAL, not cached";
+    EXPECT_EQ(result[1], threads_a * concurrent_iterations);
+}
+
 // TWO binder kernels must NOT be cached, even on one node: the pool slot is seeded by an init
 // injected into each binding kernel's entry as an unsynchronised destructive store, so a co-resident
 // binder could reset a counter its sibling is incrementing. Must fall through to EXTERNAL.

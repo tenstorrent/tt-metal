@@ -120,6 +120,13 @@ struct CollectedSpecData {
         // incrementing. The cached path is therefore restricted to exactly ONE binder kernel, which is
         // also the case it exists for: one multi-threaded kernel synchronising its own threads.
         uint32_t binder_kernel_count = 0;
+        // Set when ANOTHER kernel on this semaphore's node also binds a cached semaphore. The injected
+        // pool seeder rendezvouses on ONE node-wide barrier slot (KERNEL_BARRIER_CACHED_SEM_INIT), and
+        // wait_threads releases on the ARRIVING hart's own participant count -- so two co-resident
+        // cached-binder kernels mix rendezvous groups: different thread counts hang at kernel entry,
+        // equal counts let a hart leave before its own seed store lands. The per-semaphore
+        // binder_kernel_count==1 rule does NOT catch this (two DISTINCT semaphores, one kernel each).
+        bool cached_blocked_by_node_conflict = false;
         // Derived in Pass 2 (needs kernel_node_set): sum over writers of
         // num_cores(kernel_node_set) * num_threads = the count of concurrent writer instances.
         uint32_t writer_instance_count = 0;
@@ -257,6 +264,18 @@ bool all_binders_are_dm(const CollectedSpecData::SemaphoreBinderInfo& binders) {
     return true;
 }
 
+// Structural ("geometric") eligibility for the cached pool, EXCLUDING the arch gate and the per-node
+// conflict check. Shared by the classifier and by the per-node conflict pre-pass in CollectSpecData so
+// the two cannot drift apart: the pool is a per-core region in the DM cache domain, seeded once at the
+// binding kernel's entry, so it needs a single-cell semaphore whose every binder is one data-movement
+// kernel living on that same node.
+bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
+    const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
+    return sem_nodes.num_cores() == 1 && binders.binder_kernel_count == 1 &&
+           sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores() &&
+           all_binders_are_dm(binders);
+}
+
 SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
     switch (sem.scope) {
         case SemaphoreScope::EXTERNAL: return SemScope::EXTERNAL;
@@ -291,6 +310,16 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 "or use SemaphoreScope::EXTERNAL.",
                 sem.unique_id,
                 binders.binder_kernel_count);
+            // Same reason, one level up: the seeder's rendezvous slot is node-wide, so only ONE kernel
+            // per node may bind cached semaphores -- even across DIFFERENT semaphores.
+            TT_FATAL(
+                !binders.cached_blocked_by_node_conflict,
+                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but another kernel on the same node also "
+                "binds a cached semaphore. The pool seeder rendezvouses on a single node-wide barrier "
+                "slot, so two co-resident cached-binder kernels mix rendezvous groups: unequal thread "
+                "counts hang at kernel entry, equal counts let a seed land after an increment. Bind all "
+                "cached semaphores on a node from the SAME kernel, or use SemaphoreScope::EXTERNAL.",
+                sem.unique_id);
             // Re-checked here rather than trusting ValidateProgramSpec's compute-binding ban, because
             // the scope is baked unconditionally and the validator can be skipped.
             TT_FATAL(
@@ -363,8 +392,11 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             // Anything unproven => EXTERNAL.
             const bool binders_confined_to_sem_node =
                 sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores();
-            if (is_gen2_arch() && single_node && binders_confined_to_sem_node &&
-                binders.binder_kernel_count == 1 && all_binders_are_dm(binders)) {
+            //   - no other kernel on this node binds a cached semaphore: the injected seeder
+            //     rendezvouses on ONE node-wide barrier slot, so two co-resident cached-binder kernels
+            //     would mix rendezvous groups (hang, or a seed landing after an increment).
+            (void)binders_confined_to_sem_node;  // folded into cached_geometry_ok()
+            if (is_gen2_arch() && cached_geometry_ok(sem, binders) && !binders.cached_blocked_by_node_conflict) {
                 return SemScope::DM_LOCAL_CACHED;
             }
             return SemScope::EXTERNAL;
@@ -869,6 +901,50 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             }
         }
         sem_info.binder_kernel_count = static_cast<uint32_t>(binder_kernels.size());
+    }
+
+    // Per-NODE cached-pool conflict pass. The injected pool seeder rendezvouses on a single node-wide
+    // barrier slot, so at most ONE kernel per node may bind cached semaphores -- a constraint the
+    // per-semaphore binder_kernel_count rule cannot express (two distinct semaphores, one kernel each,
+    // co-resident on a node, both eligible). Collect every cached CANDIDATE, group by node, and flag
+    // all candidates on any node reached by more than one distinct kernel. Order-independent, so the
+    // decision is stable regardless of spec ordering.
+    {
+        std::unordered_map<uint64_t, std::unordered_set<const KernelSpec*>> kernels_by_node;
+        std::unordered_map<uint64_t, std::vector<SemaphoreSpecName>> candidates_by_node;
+        for (const auto& semaphore : spec.semaphores) {
+            const auto it = collected.semaphore_endpoints.find(semaphore.unique_id);
+            if (it == collected.semaphore_endpoints.end() || it->second.binder_kernel_count != 1) {
+                continue;  // unbound, or already ineligible on the per-semaphore rule
+            }
+            const auto& binders = it->second;
+            // A forced cached semaphore counts as a candidate even if its geometry is bad (that FATALs
+            // separately); an AUTO one only when it would actually reach the cached branch.
+            const bool forced_cached = semaphore.scope == SemaphoreScope::DM_LOCAL_CACHED;
+            const bool auto_cached = semaphore.scope == SemaphoreScope::AUTO && is_gen2_arch() &&
+                                     cached_geometry_ok(semaphore, binders) && binders.writer_instance_count >= 2;
+            if (!forced_cached && !auto_cached) {
+                continue;
+            }
+            const NodeRangeSet sem_nodes = to_node_range_set(semaphore.target_nodes);
+            if (sem_nodes.ranges().empty()) {
+                continue;
+            }
+            const auto& node = sem_nodes.ranges().front().start_coord;
+            const uint64_t node_key = (static_cast<uint64_t>(node.x) << 32) | static_cast<uint64_t>(node.y);
+            const KernelSpec* binder = binders.writers.empty() ? binders.readers.front().kernel
+                                                              : binders.writers.front().kernel;
+            kernels_by_node[node_key].insert(binder);
+            candidates_by_node[node_key].push_back(semaphore.unique_id);
+        }
+        for (const auto& [node_key, kernels] : kernels_by_node) {
+            if (kernels.size() <= 1) {
+                continue;
+            }
+            for (const auto& sem_name : candidates_by_node[node_key]) {
+                collected.semaphore_endpoints[sem_name].cached_blocked_by_node_conflict = true;
+            }
+        }
     }
 
     // Derive each local DFB's allocation node set: union of binding-kernels' node sets.
