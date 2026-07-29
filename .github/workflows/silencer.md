@@ -146,6 +146,18 @@ CI logs are enormous (tens of MB; issue #47891's run alone emits thousands of wa
 lines). Reading them into the model context is the single biggest way this workflow can
 waste money. **You must treat logs as files to grep, not text to read.**
 
+**Parse structurally, do not keyword-hunt.** A hand-written keyword-OR grep
+(`warning:|deprecated|-W...`) can only ever catch the categories someone thought to enumerate,
+and it fails silently when it misses one. Measured against a real `stable_diffusion model_perf`
+job log, the old keyword grep matched 187 lines and **zero of them were `info`-severity** — yet
+that same log holds 46 real `info` lines, including `Op | Throttle matmul perf to max 33%`
+repeated 23× (a stronger log-spam case than anything the grep found) and the
+`UMD | Starting devices in cluster` lifecycle pair a maintainer flagged by hand. An entire
+severity level — and with it category 6, *demote verbose info/warning to debug* — was
+structurally invisible. So: classify **every** line by the fixed *shape* it matches, keep a
+**residue** channel for lines matching no known shape, and always emit a
+**severity × subsystem histogram** so a whole missed severity class cannot recur unnoticed.
+
 Do all of the following with `bash`, keeping only small, aggregated results in context:
 
 1. **Download once, to disk.** Fetch logs to a working dir and never re-download. Use
@@ -153,43 +165,129 @@ Do all of the following with `bash`, keeping only small, aggregated results in c
    `/tmp/gh-aw/agent/` as the agent artifact on every run, so multi-megabyte CI logs
    parked there would be re-uploaded each time (artifact storage + transfer cost).
    ```bash
-   mkdir -p /tmp/silencer/logs
+   mkdir -p /tmp/silencer/logs /tmp/silencer/parsed
    gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/silencer/logs/$RUN_ID.log 2>&1 \
      || gh run download "$RUN_ID" --repo "${{ github.repository }}" --dir /tmp/silencer/logs
    ```
    For a specific failed/large job, prefer `gh run view --job <job-id> --log`.
-2. **Grep for warning signatures, don't read.** Extract only the lines that matter:
+2. **Normalize once.** Strip ANSI colour codes, then the per-line GHA timestamp prefix that
+   `gh run view --log` prepends. Keep both forms: the logger parser needs the log's own
+   timestamps (`$CLEAN`), the line-oriented parsers want them gone (`$NOGHA`).
    ```bash
-   grep -nE 'warning:|-W[A-Za-z0-9=_-]+|[|][[:space:]]*[Ww]arning[[:space:]]*[|]|DeprecationWarning|FutureWarning|SyntaxWarning|deprecated|\[WARN(ING)?\]|WARN(ING)?[: ]' \
-     /tmp/silencer/logs/*.log > /tmp/silencer/hits.txt
+   RAW=/tmp/silencer/logs/${RUN_ID}_${JOB_ID}.log
+   CLEAN=/tmp/silencer/logs/${RUN_ID}_${JOB_ID}.clean.log
+   NOGHA=/tmp/silencer/logs/${RUN_ID}_${JOB_ID}.nogha.log
+   sed -E 's/\x1b\[[0-9;]*m//g' "$RAW" > "$CLEAN"
+   sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z //' "$CLEAN" > "$NOGHA"
    ```
-   The `[|] *[Ww]arning *[|]` alternative is **essential**: tt-metal's **runtime logger** prints
-   `<timestamp> | warning  | <subsystem> | <message> (file.cpp:line)` — a pipe-delimited format
-   with **no** `warning:` token — so a naive `warning:`-only grep silently misses every runtime
-   and log-spam line (e.g. the matmul `allowed_worker_cores` spam in #48660). When in doubt,
-   broaden the signature set, never narrow it: a missed pattern is noise that never gets fixed.
-3. **Aggregate and rank by frequency — but rank only real warnings.** The *count* is what
-   tells you what to fix first and what is "spam". Before ranking, **drop lines that are not
-   themselves warnings**, or the ranking points you at non-fixes: compiler `note:` lines are
-   *follow-ups* to a preceding `warning:` (they say where the deprecated symbol was declared);
-   `#define ..._DEPRECATED` lines are macro definitions that merely contain the word; and
-   `::warning::` / `::error::` are **GitHub Actions infra annotations** (cache/S3/runner
-   hiccups like "CPM cache upload failed, continuing") — operational, not code-emitted, and
-   out of scope for Silencer. Then normalize away line numbers/addresses/timestamps so
-   identical messages collapse together:
+3. **Run the four shape parsers.** Each appends TSV rows to `/tmp/silencer/parsed/`. Define the
+   shared regexes once — later steps reuse them for the residue channel:
    ```bash
-   grep -vE 'note:|^[[:space:]]*#[[:space:]]*define|::(warning|error)::' /tmp/silencer/hits.txt \
-     | sed -E 's/[0-9]+/N/g; s/0x[0-9a-fA-F]+/0xADDR/g' \
-     | sort | uniq -c | sort -rn | head -50 > /tmp/silencer/top_noise.txt
+   LOGGER_RE='[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} \|'
+   DIAG_RE='^[ \t]*[^:]+:[0-9]+:([0-9]+:)? *(warning|error|[A-Za-z]+Warning):'
+   CONT_RE='^[ \t]*[0-9]+[ \t]*\||^[ \t]*\|[ \t]*\^|(In file included )?from .+:[0-9]+[,:]?[ \t]*$|: In (function|member function|constructor|destructor|lambda function|instantiation) |note:'
+   GHA_RE='^##\[(warning|error|notice)\]|^::?(warning|error|notice)(\s[^:]*)?::'
    ```
-   Keep the unfiltered `hits.txt` around: once you have picked a target `warning:` you *do*
-   want its trailing `note:` lines, because they name the exact file/line to fix.
-4. **Only then** read the *small* summary files (`top_noise.txt`, a handful of representative
-   lines per pattern) into context. Pull the full source-file/line for a pattern from the
-   grep hit, then read **just that source file** — not the log — to design the fix.
+   **(a) Logger shape** — tt-metal's spdlog runtime logger:
+   `<ts> | <severity> | <subsystem> | <message> (<file>:<line>)`. This captures **every**
+   severity, not just warning-flavoured ones, which is what makes categories 5 and 6 reachable.
+   You must `grep -oE` from the spdlog timestamp *forward* before field-splitting: tqdm progress
+   bars and pytest output contain literal `|` and can precede a real log line on the same
+   physical line, so a naive direct `awk -F'|'` silently undercounts.
+   ```bash
+   grep -oE "${LOGGER_RE}.*" "$CLEAN" > /tmp/silencer/parsed/${JOB_ID}.spdlog_only.log
+   awk -F'|' -v job="$JOB_ID" '
+     NF>=4 {
+       sev=$2; subsys=$3; msg=$4; for(i=5;i<=NF;i++) msg = msg "|" $i
+       gsub(/^[ \t]+|[ \t]+$/,"",sev); gsub(/^[ \t]+|[ \t]+$/,"",subsys); gsub(/^[ \t]+|[ \t]+$/,"",msg)
+       if (sev ~ /^(trace|debug|info|warning|error|critical)$/) {
+         loc=""
+         if (match(msg, /\([A-Za-z0-9_.\/-]+:[0-9]+\)[ \t]*$/)) {
+           loc=substr(msg,RSTART,RLENGTH); gsub(/^\(|\)[ \t]*$/,"",loc)
+           msg=substr(msg,1,RSTART-1); gsub(/[ \t]+$/,"",msg)
+         }
+         print job "\t" sev "\t" subsys "\t" loc "\t" msg
+       }
+     }' /tmp/silencer/parsed/${JOB_ID}.spdlog_only.log >> /tmp/silencer/parsed/all_logger.tsv
+   ```
+   **(b) Colon-diagnostic shape** — one grammar covers *both* GCC/Clang
+   (`<file>:<line>[:<col>]: warning|error: <msg> [-Wflag]`) *and* Python's `warnings` module
+   (`<file>:<line>: FooWarning: <msg>`, no `[-W...]` suffix); no third parser is needed for
+   Python. Keep the shape **general** — do not narrow it to an allowlist of specific flags, or
+   you lose `-Wsign-compare`, `-Wreorder`, `-Wdouble-promotion`, and everything else nobody
+   enumerated. Flagless warnings degrade gracefully to an empty `flag` field rather than being
+   dropped. Treat `.github/problem-matchers/*.json` as optional supplementary metadata, never a
+   gate. `$CONT_RE` exists because GCC's multi-line diagnostic continuations (source snippet,
+   `^~~~~` caret, `In function`, `from ...:N,` include chains) otherwise flood the residue
+   channel — 14% of it in testing.
+   ```bash
+   grep -E "$DIAG_RE" "$NOGHA" | \
+     sed -E 's/^[ \t]*([^:]+):([0-9]+):(([0-9]+):)? *(warning|error|[A-Za-z]+Warning): (.*)$/\1\t\2\t\4\t\5\t\6/' | \
+     awk -F'\t' -v job="$JOB_ID" '{
+       file=$1; line=$2; cat=$4; msg=$5; flag=""
+       if (match(msg, /\[-W[A-Za-z0-9=_-]+\]$/)) { flag=substr(msg,RSTART+1,RLENGTH-2); msg=substr(msg,1,RSTART-1); gsub(/[ \t]+$/,"",msg) }
+       print job "\t" cat "\t" flag "\t" file "\t" line "\t" msg
+     }' >> /tmp/silencer/parsed/all_diagnostic.tsv
+   ```
+   **(c) Bare GHA-annotation-command shape.** tt-metal's CI *already* renders Python warnings as
+   live GitHub annotations today, by a mechanism separate from Silencer: every
+   `warnings.warn()` fires **twice** in the raw log — once immediately as a bare workflow
+   command with **no file/line** (`##[warning]Unknown config option: timeout`, or
+   `##[warning]Converting a tensor with requires_grad=True...` wrapped across lines), which is
+   what the Checks UI renders; and again in pytest's end-of-run *warnings summary* in the
+   ordinary colon-diagnostic form that parser (b) already catches. Without its own parser the
+   bare form falls to residue — undercounted and unattributed.
+   ```bash
+   grep -E "$GHA_RE" "$NOGHA" | \
+     sed -E 's/^##\[(warning|error|notice)\]|^::?(warning|error|notice)(\s[^:]*)?:://' | \
+     awk -v job="$JOB_ID" '{print job "\t" "gha-annotation" "\t" $0}' >> /tmp/silencer/parsed/all_gha_annotations.tsv
+   ```
+   Keep this as its **own** ledger channel rather than force-merging it into `diagnostic`.
+   The same underlying warning may therefore yield two ledger entries sharing message text —
+   accepted, visible redundancy, not a correctness bug, and not worth cross-channel fuzzy
+   matching. Note this channel is genuinely mixed: some of it is **GitHub Actions infra noise**
+   (cache/S3/runner hiccups like "CPM cache upload failed, continuing") which is operational,
+   not code-emitted, and out of scope for Silencer — but as the evidence above shows, real
+   code-emitted Python warnings arrive here too, so triage the channel rather than discarding
+   it wholesale as the old grep did.
+   **(d) Residue** — every line matching *neither* known shape and not a GCC continuation,
+   template-normalized and ranked. This is the actual mechanism for discovering the *next*
+   unanticipated format; testing surfaced 40+ Python C-level crash-frame lines a fixed keyword
+   list would never have caught. Note `$LOGGER_RE` is deliberately **unanchored** here so it
+   excludes exactly what parser (a) captured, including lines with tqdm junk prefixed.
+   ```bash
+   grep -vE "$LOGGER_RE" "$NOGHA" | grep -vE "$DIAG_RE" | grep -vE "$CONT_RE" | grep -vE "$GHA_RE" | \
+     sed -E -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.]+Z?/<TS>/g' \
+            -e 's/0x[0-9a-fA-F]+/<HEX>/g' -e 's/\b[0-9]+\b/<N>/g' \
+     >> /tmp/silencer/parsed/residue_templated.log
+   ```
+4. **Always emit the histogram, then rank.** The histogram runs **unconditionally**, regardless
+   of what makes any top-N cut — that is precisely what makes a missed severity class
+   structurally impossible to repeat. Read it every run and ask "which severity/subsystem is
+   loudest?", not just "which warning is loudest?".
+   ```bash
+   cut -f2,3 /tmp/silencer/parsed/all_logger.tsv | sort | uniq -c \
+     | sed -E 's/^ *([0-9]+) /\1\t/' | awk -F'\t' '{print $2"\t"$3"\t"$1}' \
+     | sort -t$'\t' -k3,3nr > /tmp/silencer/histogram.tsv
+
+   sort /tmp/silencer/parsed/residue_templated.log | uniq -c | sort -rn | head -50 \
+     > /tmp/silencer/residue_top.txt
+   ```
+   Only the **top 50** residue templates are ever surfaced. Residue is 90%+ of all lines
+   pre-normalization, so that truncation is load-bearing, not optional — do not "simplify" it
+   away. Rank the final target list through the Noise ledger's
+   `distinct_jobs_count × count_total` (see *Memory*) into `/tmp/silencer/top_noise.txt`:
+   "shows up in every job scanned" is the real noise signal, whereas a 23× burst confined to a
+   single job may just be local.
+5. **Only then** read the *small* summary files into context. **What reaches your context is
+   exactly three files**: `histogram.tsv`, `residue_top.txt`, `top_noise.txt` — never the raw
+   or cleaned logs, never the full TSVs, never `all_gha_annotations.tsv` itself. The raw logs
+   stay on disk for targeted on-demand `grep -B2 -A2 '<fragment>'` lookups when you need
+   context around one specific line. Pull the file/line for your chosen pattern out of the
+   TSV row, then read **just that source file** — not the log — to design the fix.
 
 Rule of thumb: if you are about to put more than a few dozen log lines into your context,
-stop and grep/aggregate instead. Cache the aggregated summaries in repo memory so the next
+stop and parse/aggregate instead. Cache the aggregated summaries in repo memory so the next
 run does not re-analyze noise you have already triaged.
 
 ## What counts as noise (the six categories)
@@ -233,6 +331,13 @@ rule of silence). For each, **root-cause and fix the emitter**:
    `log_trace`, `TT_LOG_*`). The bar: on a *healthy* build the message should not appear at
    default verbosity, but a developer debugging can still turn it back on. This is demotion,
    not deletion — the information stays available, it just stops shouting.
+   **This category is only reachable because of the structural logger parser** (*Token
+   discipline* step 3a) and the unconditional severity × subsystem histogram: the previous
+   keyword-grep matched *zero* `info`-severity lines, so demotion candidates could never
+   surface at all. Read `histogram.tsv` specifically for this category — a subsystem with a
+   large `info` (or `debug`-worthy `warning`) row count is the signal. Confirmed live targets
+   from that histogram: `Op | Throttle matmul perf to max 33%` (23× in one job) and the
+   `UMD | Starting devices in cluster` / `...completed.` lifecycle pair.
 
 **Suppression is a last resort, and only with justification.** If a warning genuinely cannot
 be fixed at its source (e.g. it originates in a third-party/vendored header tt-metal does not
@@ -313,8 +418,15 @@ a fresh scan always governs priority, and new patterns you discover there are in
 2. **Deduplicate against memory.** Read your memory index of already-scanned run IDs and
    already-fixed noise patterns. **Skip** runs/patterns you have already handled or that
    already have an open `[silencer]` PR. Do not re-open a PR for a pattern in flight.
-3. **Fetch + grep + aggregate** exactly as in *Token discipline* above. Produce a ranked
-   `top_noise.txt`.
+3. **Fetch + structurally parse + aggregate** exactly as in *Token discipline* above. Run all
+   four shape parsers (logger, colon-diagnostic, bare GHA-annotation, residue) over every job
+   log you sampled, then produce the three summary artifacts — `histogram.tsv`,
+   `residue_top.txt`, and the ledger-ranked `top_noise.txt` — and read **only** those into
+   context. The histogram is not optional even when `top_noise.txt` already looks conclusive:
+   it is how you notice a whole severity or subsystem you would otherwise never have looked at.
+   Scan `residue_top.txt` for a shape none of the three parsers recognized; if a recurring
+   unrecognized shape turns out to be real emitted noise, say so in your PR/issue so a fourth
+   parser can be added rather than leaving it in residue forever.
 4. **Select ONE high-value target** for this run (occasionally two if trivially related) —
    the highest-frequency pattern that you can fix cleanly and validate. Small, focused PRs
    review faster and are safer than a sweeping one.
@@ -400,8 +512,38 @@ any open `[silencer]` items) and comment on the existing one rather than duplica
 Use persistent repo memory to stay efficient and non-repetitive across runs:
 
 - **Scanned runs**: run IDs already analyzed (so you never re-grep them).
-- **Noise ledger**: each pattern (normalized signature), its category, peak frequency, and
-  status (`open-pr #N` / `merged` / `issue #N` / `wontfix-with-reason`).
+- **Noise ledger**: one **JSONL** file at
+  `/tmp/gh-aw/repo-memory/default/silencer/noise_ledger.jsonl` — one JSON object per line, one
+  line per noise signature. JSONL specifically, **not** a single JSON array: git's line-based
+  diff then touches only genuinely-changed entries, where a reformatted array would rewrite its
+  whole body against the 10KB/push repo-memory cap.
+  ```json
+  {"id":"a1b2c3d4e5f6","channel":"logger","severity":"info","subsystem":"UMD","template":"Starting devices in cluster","count_total":47,"jobs_seen":["90670819186","90670900011"],"distinct_jobs_count":9,"first_seen":"2026-07-14","last_seen":"2026-07-29","status":"open","category":6,"notes":"lifecycle line, demotion candidate"}
+  ```
+  - `id`: first 12 hex chars of `sha1(channel + severity/category + subsystem/file + template)`.
+  - `channel`: `logger` | `diagnostic` (covers compiler *and* Python, discriminated by
+    `severity` being `warning`/`error` versus a `*Warning` class name) | `gha-annotation`
+    (bare `##[warning]` / `::warning::` lines with no file/line of their own) | `residue`.
+    A `gha-annotation` entry and a `diagnostic` entry may legitimately describe the *same*
+    underlying warning under different ids — accepted redundancy, deliberately not deduped
+    across channels.
+  - `template`: the normalized signature (numbers/addresses/timestamps replaced), so identical
+    messages collapse together.
+  - `status`: `open` / `open-pr #N` / `merged` / `issue #N` / `wontfix-with-reason`.
+  - `category`: `1`–`6` per the six categories above, or `7` for residue/unclassified.
+  - `jobs_seen`: ring buffer capped at the **20** most recent distinct job IDs (oldest evicted
+    at cap).
+  - `distinct_jobs_count`: monotonic counter, incremented when a job ID *not currently in the
+    window* is seen. This, **not** `len(jobs_seen)`, drives ranking. Known tradeoff: a
+    signature that ages out of the 20-slot window and later resurfaces can double-count —
+    documented, not silent.
+  - **Ranking formula**: `distinct_jobs_count × count_total`. Not raw same-run count — "shows
+    up in every job scanned" is the real noise signal.
+  - **Cap**: append at most **50** new signatures per run (mirrors the top-50 convention).
+  - **Compaction**: if the file exceeds 80KB, drop entries whose `status` is `merged` or
+    `wontfix-with-reason` **and** whose `last_seen` is more than 90 days old **and** which have
+    not recurred since. `open` / `open-pr` / `issue` entries are **never** pruned regardless of
+    age.
 - **Backlog cursor**: which category/pattern to tackle next, so successive runs chip away at
   the noise instead of re-fighting the same top warning.
 - **CI validations in flight**: PR → build-run-ID, to check outcomes on later runs.
