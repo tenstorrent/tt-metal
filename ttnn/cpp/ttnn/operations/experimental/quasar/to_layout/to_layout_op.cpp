@@ -8,6 +8,8 @@
 #include <limits>
 #include <string_view>
 
+#include <tt_stl/reflection.hpp>
+
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/experimental/quasar/pad/pad.hpp"
 #include "ttnn/operations/experimental/quasar/tilize/tilize.hpp"
@@ -22,19 +24,55 @@
 namespace ttnn::operations::experimental::quasar::CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
-bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
+tt::tt_metal::Tile resolve_effective_tile(
+    const ttnn::Tensor& tensor,
+    ttnn::Layout layout,
+    ttsl::optional_reference<const tt::tt_metal::Tile> requested_tile) {
+    TT_FATAL(layout == Layout::TILE, "Effective tile is only defined for TILE conversions");
+    if (tensor.layout() == Layout::TILE) {
+        return requested_tile.has_value() ? *requested_tile : tensor.tensor_spec().tile();
+    }
+    return requested_tile.has_value() ? *requested_tile : tt::tt_metal::Tile{};
+}
+
+void validate_tile_semantics(
+    const ttnn::Tensor& tensor,
+    ttnn::Layout layout,
+    ttsl::optional_reference<const tt::tt_metal::Tile> requested_tile) {
+    if (layout == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            !requested_tile.has_value(),
+            "ttnn::experimental::quasar::to_layout: tile argument is only supported when converting to TILE_LAYOUT");
+        return;
+    }
+
+    // Retile (#50129) can change tile height/width. Metadata-only differences (e.g. transpose_tile)
+    // with the same geometry are not a supported retilize conversion.
+    if (layout == Layout::TILE && tensor.layout() == Layout::TILE && requested_tile.has_value()) {
+        const auto& current = tensor.tensor_spec().tile();
+        const auto& requested = requested_tile.value();
+        if (current != requested && current.get_width() == requested.get_width() &&
+            current.get_height() == requested.get_height()) {
+            TT_FATAL(
+                false,
+                "ttnn::experimental::quasar::to_layout: TILE tensor already uses tile {}, cannot convert to tile {} "
+                "without retilize",
+                current,
+                requested);
+        }
+    }
+}
+
+bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout, const tt::tt_metal::Tile& target_tile) {
     if (layout == Layout::ROW_MAJOR) {
         // There shouldn't be extra paddings for Row Major layout
         return tensor.logical_shape() != tensor.padded_shape();
     }
     // It's okay for conversion to tile layout to preserve arbitrary padding as long as it satisfies the alignment
-    tt::tt_metal::PageConfig page_config = tt::tt_metal::PageConfig(layout);
-    if (tensor.layout() == Layout::TILE) {
-        page_config = tt::tt_metal::PageConfig(layout, tensor.tensor_spec().tile());
-    }
+    tt::tt_metal::PageConfig page_config = tt::tt_metal::PageConfig(layout, target_tile);
 
-    // Padded shape only (dtype-independent). Use TensorLayout, not a tt::tt_metal::TensorSpec: tt::tt_metal::TensorSpec
-    // rejects FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input.
+    // Padded shape only (dtype-independent). Use TensorLayout, not a TensorSpec: TensorSpec rejects
+    // FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input.
     const auto padded_shape = tt::tt_metal::TensorLayout(tensor.dtype(), page_config, tensor.memory_config())
                                   .compute_padded_shape(tensor.padded_shape());
     return tensor.padded_shape() != padded_shape;
@@ -58,8 +96,14 @@ Tensor to_layout_impl(
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const float pad_value) {
-    if (tensor_arg.layout() == layout) {
+    const float pad_value,
+    ttsl::optional_reference<const tt::tt_metal::Tile> tile) {
+    validate_tile_semantics(tensor_arg, layout, tile);
+
+    const bool needs_retile = layout == ttnn::TILE_LAYOUT && tile.has_value() &&
+                              tensor_arg.layout() == ttnn::TILE_LAYOUT &&
+                              tensor_arg.tensor_spec().tile() != tile.value();
+    if (tensor_arg.layout() == layout && !needs_retile) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
             log_warning(
                 tt::LogOp,
@@ -91,13 +135,12 @@ Tensor to_layout_impl(
     auto output_memory_config =
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
 
-    tt::tt_metal::PageConfig page_config = tt::tt_metal::PageConfig(Layout::TILE);
-    if (tensor_arg.layout() == Layout::TILE) {
-        page_config = tt::tt_metal::PageConfig(Layout::TILE, tensor_arg.tensor_spec().tile());
-    }
-    // Padded shape only (dtype-independent). Use TensorLayout, not a tt::tt_metal::TensorSpec: tt::tt_metal::TensorSpec
-    // rejects FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input; the real output dtype flows
-    // through `dtype` into tilize()/untilize() below.
+    const auto effective_tile =
+        layout == Layout::TILE ? resolve_effective_tile(tensor_arg, layout, tile) : tt::tt_metal::Tile{};
+    tt::tt_metal::PageConfig page_config = tt::tt_metal::PageConfig(Layout::TILE, effective_tile);
+    // Padded shape only (dtype-independent). Use TensorLayout, not a TensorSpec: TensorSpec rejects
+    // FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input; the real output dtype
+    // flows through `dtype` into tilize()/untilize() below.
     auto padded_output_shape = tt::tt_metal::TensorLayout(tensor_arg.dtype(), page_config, output_memory_config)
                                    .compute_padded_shape(tensor_arg.logical_shape());
     auto original_rank = tensor_arg.logical_shape().rank();
@@ -122,21 +165,22 @@ Tensor to_layout_impl(
     if (ttnn::is_device_tensor(tensor_arg)) {
         bool use_multicore_untilize = true;
         bool use_multicore_tilize = true;
+        const bool converting_to_row_major = layout == ttnn::ROW_MAJOR_LAYOUT;
+        const bool converting_to_tile = layout == ttnn::TILE_LAYOUT;
 
-        if (not requires_padding_change(tensor, layout)) {
-            if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-                TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
+        if (converting_to_row_major) {
+            TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
+        }
+
+        if (not requires_padding_change(tensor, layout, effective_tile)) {
+            if (converting_to_row_major) {
                 return ttnn::operations::experimental::quasar::untilize(
                     tensor, output_memory_config, use_multicore_untilize, sub_core_grids);
             }
-            if (layout == ttnn::TILE_LAYOUT) {
+            if (converting_to_tile) {
                 if (tensor.is_sharded()) {
-                    tt::tt_metal::Tile tensor_tile = tt::tt_metal::Tile();
-                    if (tensor.layout() == ttnn::TILE_LAYOUT) {
-                        tensor_tile = tensor.tensor_spec().tile();
-                    }
-                    uint32_t tile_height = tensor_tile.get_height();
-                    uint32_t tile_width = tensor_tile.get_width();
+                    uint32_t tile_height = effective_tile.get_height();
+                    uint32_t tile_width = effective_tile.get_width();
                     const auto mem_config = get_memory_config(tensor).value();
                     uint32_t shard_h, shard_w;
                     if (mem_config.shard_spec().has_value()) {
@@ -159,13 +203,12 @@ Tensor to_layout_impl(
                     dtype,
                     use_multicore_tilize,
                     false /* low perf mode */,
+                    effective_tile,
                     sub_core_grids);
             }
             throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
         }
-        if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-            TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
-
+        if (converting_to_row_major) {
             if (tensor.is_sharded()) {
                 output_memory_config =
                     memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
@@ -178,7 +221,7 @@ Tensor to_layout_impl(
             return ttnn::operations::experimental::quasar::untilize_with_unpadding(
                 tensor, output_tensor_end, output_memory_config, use_multicore_untilize, sub_core_grids);
         }
-        if (layout == ttnn::TILE_LAYOUT) {
+        if (converting_to_tile) {
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
@@ -190,7 +233,7 @@ Tensor to_layout_impl(
                 TT_FATAL(!sub_core_grids.has_value(), "Pad OP does not currently support sub core grid");
                 tensor = ttnn::operations::experimental::quasar::pad(tensor, padding, pad_value, true, std::nullopt);
                 return ttnn::operations::experimental::quasar::tilize(
-                    tensor, output_memory_config, dtype, use_multicore_tilize);
+                    tensor, output_memory_config, dtype, use_multicore_tilize, false, effective_tile, std::nullopt);
             } else {
                 PadValue pad_value_variant;
                 if (tensor.dtype() == ttnn::DataType::BFLOAT16 or tensor.dtype() == ttnn::DataType::FLOAT32) {
@@ -217,7 +260,8 @@ Tensor to_layout_impl(
                     output_memory_config,
                     dtype,
                     use_multicore_tilize,
-                    sub_core_grids);
+                    sub_core_grids,
+                    effective_tile);
             }
             if (original_rank < 2) {
                 return ttnn::operations::experimental::quasar::reshape(
@@ -233,8 +277,9 @@ Tensor to_layout_impl(
         TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
     }
     TT_ASSERT(!dtype.has_value(), "dtype cannot be specified when converting layout on host!");
-    if (!requires_padding_change(tensor, layout)) {
-        return tensor.to_layout(layout);
+    if (!requires_padding_change(tensor, layout, effective_tile)) {
+        return tensor.to_layout(
+            layout, layout == ttnn::TILE_LAYOUT ? std::make_optional(effective_tile) : std::nullopt);
     }
     if (layout == ttnn::ROW_MAJOR_LAYOUT) {
         tensor = tensor.to_layout(layout);
@@ -253,7 +298,7 @@ Tensor to_layout_impl(
             padded_input_start.push_back(0);
         }
         tensor = tensor.pad(ttnn::Shape(padded_output_shape), ttnn::Shape(std::move(padded_input_start)), pad_value);
-        tensor = tensor.to_layout(layout);
+        tensor = tensor.to_layout(layout, effective_tile);
         return ttnn::experimental::view(tensor, output_shape, padded_output_shape);
     }
     TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
@@ -270,8 +315,10 @@ Tensor to_layout(
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const float pad_value) {
-    return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value);
+    const float pad_value,
+    ttsl::optional_reference<const tt::tt_metal::Tile> tile) {
+    return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(
+        tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value, tile);
 }
 
 }  // namespace ttnn::operations::experimental::quasar

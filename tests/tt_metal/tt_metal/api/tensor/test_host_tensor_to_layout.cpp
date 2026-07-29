@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Tests for the host-only layout conversion tt::tt_metal::to_layout(const HostTensor&, Layout).
+// Tests for the host-only layout conversion helpers in tt::tt_metal.
 //
 // Group 1 (no sharding): a matrix of {conversion direction} x {dtype}. For each cell, to_layout's
 // output is compared against an INDEPENDENTLY constructed reference tensor built directly in the
@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -108,7 +109,7 @@ TEST_P(HostTensorToLayoutMatrix, MatchesFreshConstruction) {
         const auto data = make_ramp<T>(shape.volume());
 
         const auto source = HostTensor::from_vector<T>(data, make_spec(shape, dtype, src));
-        const auto result = to_layout(source, tgt);
+        const auto result = (tgt == Layout::TILE) ? to_tile_layout(source, Tile{}) : to_row_major_layout(source);
         const auto expected = HostTensor::from_vector<T>(data, make_spec(shape, dtype, tgt));
 
         EXPECT_EQ(result.layout(), tgt);
@@ -238,7 +239,7 @@ TEST(HostTensorToLayout, Bfloat8BToRowMajorDoesNotThrow) {
     const auto data = make_ramp<float>(shape.volume());
     const auto source = HostTensor::from_vector<float>(data, make_spec(shape, DataType::BFLOAT8_B, Layout::TILE));
 
-    EXPECT_NO_THROW(std::ignore = to_layout(source, Layout::ROW_MAJOR));
+    EXPECT_NO_THROW(std::ignore = to_row_major_layout(source));
 }
 
 TEST(HostTensorToLayout, Bfloat4BToRowMajorDoesNotThrow) {
@@ -246,7 +247,7 @@ TEST(HostTensorToLayout, Bfloat4BToRowMajorDoesNotThrow) {
     const auto data = make_ramp<float>(shape.volume());
     const auto source = HostTensor::from_vector<float>(data, make_spec(shape, DataType::BFLOAT4_B, Layout::TILE));
 
-    EXPECT_NO_THROW(std::ignore = to_layout(source, Layout::ROW_MAJOR));
+    EXPECT_NO_THROW(std::ignore = to_row_major_layout(source));
 }
 
 // G3: dtypes that cannot be converted to TILE. FP8_E4M3 is constrained to ROW_MAJOR, so tilizing it
@@ -256,8 +257,78 @@ TEST(HostTensorToLayout, Fp8E4m3CannotConvertToTile) {
     const auto data = make_ramp<float>(shape.volume());
     const auto source = HostTensor::from_vector<float>(data, make_spec(shape, DataType::FP8_E4M3, Layout::ROW_MAJOR));
 
-    EXPECT_ANY_THROW(std::ignore = to_layout(source, Layout::TILE));
+    EXPECT_ANY_THROW(std::ignore = to_tile_layout(source, Tile{}));
 }
+
+// ----------------------------------------------------------------------------------------------------
+// Round-trip RM <-> TILE. With padding: logical H/W are not tile-aligned, so padded_shape is larger.
+// ----------------------------------------------------------------------------------------------------
+
+using RoundTripTileParam = std::array<uint32_t, 2>;
+
+std::string round_trip_tile_param_name(const ::testing::TestParamInfo<RoundTripTileParam>& info) {
+    return "Tile" + std::to_string(info.param[0]) + "x" + std::to_string(info.param[1]);
+}
+
+// Default 32x32 plus two custom tiles (see TILE_FACE_HW_CHOICES in tile.cpp).
+const auto k_round_trip_tiles =
+    ::testing::Values(RoundTripTileParam{32, 32}, RoundTripTileParam{16, 32}, RoundTripTileParam{16, 16});
+
+class HostTensorLayoutRoundTripNoPadding : public ::testing::TestWithParam<RoundTripTileParam> {};
+
+TEST_P(HostTensorLayoutRoundTripNoPadding, PreservesData) {
+    const Tile tile{GetParam()};
+    // Tile-aligned logical shape: padded_shape == logical_shape in both layouts.
+    const Shape shape{2 * tile.get_height(), 2 * tile.get_width()};
+    const auto data = make_ramp<float>(shape.volume());
+
+    const auto source = HostTensor::from_vector<float>(data, make_spec(shape, DataType::FLOAT32, Layout::ROW_MAJOR));
+    const auto tiled = to_tile_layout(source, tile);
+    const auto round_tripped = to_row_major_layout(tiled);
+    const auto expected = HostTensor::from_vector<float>(data, make_spec(shape, DataType::FLOAT32, Layout::ROW_MAJOR));
+
+    EXPECT_EQ(tiled.layout(), Layout::TILE);
+    EXPECT_EQ(tiled.tensor_spec().tile(), tile);
+    EXPECT_EQ(tiled.logical_shape(), shape);
+    EXPECT_EQ(tiled.padded_shape(), shape);
+    EXPECT_EQ(round_tripped.layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(round_tripped.logical_shape(), shape);
+    EXPECT_EQ(round_tripped.padded_shape(), shape);
+    expect_equal_shard_data(round_tripped, expected);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    HostTensorToLayout, HostTensorLayoutRoundTripNoPadding, k_round_trip_tiles, round_trip_tile_param_name);
+
+class HostTensorLayoutRoundTripWithPadding : public ::testing::TestWithParam<RoundTripTileParam> {};
+
+TEST_P(HostTensorLayoutRoundTripWithPadding, PreservesData) {
+    const Tile tile{GetParam()};
+    // Not tile-aligned: PageConfig(TILE, tile) infers padded_shape > logical_shape. Round-trip
+    // TILE -> RM -> TILE; compare logical data only (pad bytes are not part of the contract).
+    const Shape logical_shape{tile.get_height() - 2, tile.get_width() + 2};
+    const Shape padded_shape{tile.get_height(), 2 * tile.get_width()};
+    const auto data = make_ramp<float>(logical_shape.volume());
+
+    const auto source = HostTensor::from_vector<float>(data, make_tile_spec(logical_shape, DataType::FLOAT32, tile));
+    const auto row_major = to_row_major_layout(source);
+    const auto round_tripped = to_tile_layout(row_major, tile);
+
+    EXPECT_EQ(source.padded_shape(), padded_shape);
+    EXPECT_EQ(row_major.layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(row_major.logical_shape(), logical_shape);
+    EXPECT_EQ(row_major.padded_shape(), padded_shape);
+    EXPECT_EQ(round_tripped.layout(), Layout::TILE);
+    EXPECT_EQ(round_tripped.tensor_spec().tile(), tile);
+    EXPECT_EQ(round_tripped.logical_shape(), logical_shape);
+    EXPECT_EQ(round_tripped.padded_shape(), padded_shape);
+    EXPECT_EQ(source.to_vector<float>(), data);
+    EXPECT_EQ(row_major.to_vector<float>(), data);
+    EXPECT_EQ(round_tripped.to_vector<float>(), data);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    HostTensorToLayout, HostTensorLayoutRoundTripWithPadding, k_round_trip_tiles, round_trip_tile_param_name);
 
 }  // namespace
 }  // namespace tt::tt_metal

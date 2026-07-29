@@ -907,6 +907,10 @@ void pytensor_module(nb::module_& mod) {
             .. code-block:: python
 
                 tt_tensor = tt_tensor.to(ttnn.Layout.TILE)
+
+            Note:
+                This method always uses the default tile. Use ``ttnn.to_layout(tensor, layout, tile=...)``
+                when you need a custom tile.
         )doc")
         .def(
             "pad",

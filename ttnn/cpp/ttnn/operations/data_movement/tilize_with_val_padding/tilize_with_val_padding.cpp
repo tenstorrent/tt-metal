@@ -4,6 +4,8 @@
 
 #include "tilize_with_val_padding.hpp"
 
+#include <tt_stl/reflection.hpp>
+
 #include "device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -71,10 +73,28 @@ ttnn::Tensor tilize_with_val_padding(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const tt::tt_metal::Tile& tile) {
     if (input_tensor.layout() == Layout::TILE) {
+        TT_FATAL(
+            input_tensor.tensor_spec().tile() == tile,
+            "ttnn::tilize_with_val_padding: TILE tensor already uses tile {}, cannot reinterpret as {}",
+            input_tensor.tensor_spec().tile(),
+            tile);
+        TT_FATAL(
+            !memory_config.has_value() || memory_config.value() == input_tensor.memory_config(),
+            "ttnn::tilize_with_val_padding: cannot silently drop requested memory_config on already-TILE input");
+        TT_FATAL(
+            !output_dtype.has_value() || output_dtype.value() == input_tensor.dtype(),
+            "ttnn::tilize_with_val_padding: cannot silently drop requested dtype on already-TILE input");
         return input_tensor;
     }
+
+    TT_FATAL(
+        tile == tt::tt_metal::Tile{},
+        "Custom tile is not supported for tilize_with_val_padding (See: #50508). Please transfer the tensor to host "
+        "and "
+        "use `tt::tt_metal::to_tile_layout(HostTensor, Tile)` instead.");
 
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
@@ -83,7 +103,7 @@ ttnn::Tensor tilize_with_val_padding(
             output_padded_shape,
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
-                PageConfig(Layout::TILE),
+                PageConfig(Layout::TILE, tile),
                 memory_config.value_or(input_tensor.memory_config())));
         return create_device_tensor(spec, input_tensor.device());
     }
@@ -94,8 +114,8 @@ ttnn::Tensor tilize_with_val_padding(
         output_dtype.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
                                  : input_single_tile_size;
 
-    uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
-    uint32_t num_tiles_per_col = output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_row = output_padded_shape[-1] / tile.get_width();
+    uint32_t num_tiles_per_col = output_padded_shape[-2] / tile.get_height();
 
     // Fold in the block factory's c_1 staging CB so routing sees the true CB budget.
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
@@ -140,7 +160,14 @@ ttnn::Tensor tilize_with_val_padding(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const tt::tt_metal::Tile& tile) {
+    TT_FATAL(
+        tile == tt::tt_metal::Tile{},
+        "Custom tile is not supported for tilize_with_val_padding (See: #50508). Please transfer the tensor to host "
+        "and "
+        "use `tt::tt_metal::to_tile_layout(HostTensor, Tile)` instead.");
+
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
@@ -148,7 +175,7 @@ ttnn::Tensor tilize_with_val_padding(
             ttnn::Shape{output_padded_shape},
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
-                PageConfig(Layout::TILE),
+                PageConfig(Layout::TILE, tile),
                 memory_config.value_or(input_tensor.memory_config())));
         return create_device_tensor(spec, input_tensor.device());
     }
@@ -160,7 +187,8 @@ ttnn::Tensor tilize_with_val_padding(
         memory_config,
         output_dtype,
         use_multicore,
-        sub_core_grids);
+        sub_core_grids,
+        tile);
 }
 
 ttnn::Tensor tilize_with_zero_padding(
@@ -168,17 +196,34 @@ ttnn::Tensor tilize_with_zero_padding(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const tt::tt_metal::Tile& tile) {
     using namespace tt::constants;
+    if (input_tensor.layout() == Layout::TILE) {
+        TT_FATAL(
+            input_tensor.tensor_spec().tile() == tile,
+            "ttnn::tilize_with_zero_padding: TILE tensor already uses tile {}, cannot reinterpret as {}",
+            input_tensor.tensor_spec().tile(),
+            tile);
+        TT_FATAL(
+            !memory_config.has_value() || memory_config.value() == input_tensor.memory_config(),
+            "ttnn::tilize_with_zero_padding: cannot silently drop requested memory_config on already-TILE input");
+        TT_FATAL(
+            !output_dtype.has_value() || output_dtype.value() == input_tensor.dtype(),
+            "ttnn::tilize_with_zero_padding: cannot silently drop requested dtype on already-TILE input");
+        return input_tensor;
+    }
+
+    TT_FATAL(
+        tile == tt::tt_metal::Tile{},
+        "Custom tile is not supported for tilize_with_zero_padding (See: #50508). Please transfer the tensor to host "
+        "and "
+        "use `tt::tt_metal::to_tile_layout(HostTensor, Tile)` instead.");
+
     auto padded_shape = input_tensor.padded_shape();
 
-    tt::tt_metal::Tile tile =
-        (input_tensor.layout() == Layout::TILE) ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
-    uint32_t input_tile_width = tile.get_width();
-    uint32_t input_tile_height = tile.get_height();
-
-    padded_shape[-2] = tt::round_up(padded_shape[-2], input_tile_height);
-    padded_shape[-1] = tt::round_up(padded_shape[-1], input_tile_width);
+    padded_shape[-2] = tt::round_up(padded_shape[-2], tile.get_height());
+    padded_shape[-1] = tt::round_up(padded_shape[-1], tile.get_width());
 
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
@@ -187,7 +232,7 @@ ttnn::Tensor tilize_with_zero_padding(
             padded_shape,
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
-                PageConfig(Layout::TILE),
+                PageConfig(Layout::TILE, tile),
                 memory_config.value_or(input_tensor.memory_config())));
         return create_device_tensor(spec, input_tensor.device());
     }
@@ -199,7 +244,7 @@ ttnn::Tensor tilize_with_zero_padding(
         pad_value = (uint32_t)0;
     }
     return tilize_with_val_padding(
-        input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore, sub_core_grids);
+        input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore, sub_core_grids, tile);
 }
 
 }  // namespace ttnn
