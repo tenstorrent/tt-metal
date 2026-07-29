@@ -196,7 +196,12 @@ void kernel_main() {
 
         // Preserve cb_xmm for the normalization pass; the variance path consumes only its square.
         ckl::square<
-            ckl::input(cb_xmm, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::OperandKind::Block),
+            ckl::input(
+                cb_xmm,
+                ckl::WaitPolicy::Cumulative,
+                ckl::PopPolicy::None,
+                ckl::OperandKind::Block,
+                ckl::DataFormatReconfig::Disabled),
             ckl::output(
                 cb_xmm2, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled)>(
             row_shape);
@@ -243,40 +248,69 @@ void kernel_main() {
 
             if constexpr (do_gamma) {
                 constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
+#if defined RMSNORM and not defined FUSE_PRE_ADD
+                reconfig_data_format_srca(cb_xmm, cb_fusion);
+#endif
+                if constexpr (!do_beta) {
+                    pack_reconfig_data_format(cb_out);
+                }
+                reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<
                         ckl::input(
-                            cb_fusion, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                            cb_fusion,
+                            ckl::WaitPolicy::PerChunk,
+                            ckl::PopPolicy::PerChunk,
+                            ckl::OperandKind::Block,
+                            ckl::DataFormatReconfig::Disabled),
                         ckl::input(
                             cb_gamma,
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::None,
                             ckl::OperandKind::Block,
-                            ckl::DataFormatReconfig::Enabled,
+                            ckl::DataFormatReconfig::Disabled,
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Row>{0u, block.start()},
                     ckl::OptionalChainElement<activate_after_gamma, FusedActivation>{},
-                    ckl::PackTile<ckl::output(cb_outg, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
+                    ckl::PackTile<ckl::output(
+                        cb_outg,
+                        ckl::ReservePolicy::PerChunk,
+                        ckl::PushPolicy::PerChunk,
+                        ckl::DataFormatReconfig::Disabled)>{});
             }
             if constexpr (do_beta) {
+                pack_reconfig_data_format(cb_out);
+                if constexpr (do_gamma) {
+                    reconfig_data_format_srcb(cb_gamma, cb_beta);
+                } else {
+                    reconfig_data_format_srcb(cb_ex2pe, cb_beta);
+                }
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<
                         ckl::input(
-                            cb_fusion, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                            cb_fusion,
+                            ckl::WaitPolicy::PerChunk,
+                            ckl::PopPolicy::PerChunk,
+                            ckl::OperandKind::Block,
+                            ckl::DataFormatReconfig::Disabled),
                         ckl::input(
                             cb_beta,
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::None,
                             ckl::OperandKind::Block,
-                            ckl::DataFormatReconfig::Enabled,
+                            ckl::DataFormatReconfig::Disabled,
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Add,
                         ckl::BroadcastDim::Row>{0u, block.start()},
                     ckl::OptionalChainElement<fused_activation_enabled, FusedActivation>{},
-                    ckl::PackTile<ckl::output(cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
+                    ckl::PackTile<ckl::output(
+                        cb_out,
+                        ckl::ReservePolicy::PerChunk,
+                        ckl::PushPolicy::PerChunk,
+                        ckl::DataFormatReconfig::Disabled)>{});
             }
         }
         cb_ex2pe_obj.pop_front(1);
