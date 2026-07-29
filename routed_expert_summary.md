@@ -83,6 +83,12 @@ Why one tile per request is forced: DRAM is interleaved with page = tile, so
 same-bank tiles (stride 8) are 4608 B apart, not contiguous. So 576 B/request is
 structural for the current weight layout.
 
+Important qualifier added later (§7d): the ~37-43 cy/request is **not** slack in our kernel.
+The hardware floor for a request of this size class is 32.2 cy, so we are within 14% of it —
+that residual is `TensorAccessor` page->address generation plus the D2.0 `Noc::async_read`
+wrapper. "Issue-bound" here means *the request count is too high*, not *our issue path is
+slow*. The fix is fewer/larger requests (§8 item 3), not a cheaper issue path.
+
 ## 4. Change landed: staggered DRAM-read sender placement
 
 Weight senders were all on row 0 and x senders all on column 0, so **(0,0) owned both
@@ -117,6 +123,7 @@ Result: core (0,0) 92% → **75%** busy, isl-256 276K → 246K cycles, **1.12× 
 | Weight all-gather across the N-column (readers/column = 1/2/4/8) | sum 4836 / 4754 / 5081 / **6083** µs | Cut per-core weight read 3.3× at 8 readers but total regressed 26%: the extra readers were the gx=0 column, which *already* carried the whole x read, and the per-block gather barrier widened. Worth retrying now that the remap made those sets disjoint. |
 | Distribute the x row-major tilize (each core tilizes only its own tile-rows, mcast bfp8) | **2× slower** | The tilize was already overlapped with the reader's x DRAM read; turning it into a cross-core dependency added two 11-way barriers per K-block. |
 | Full 11×10 grid (110 cores, 2 weight passes instead of 3 at isl-5120) | **hangs** | Top grid rows are needed by dispatch — wedged the board, needed `tt-smi -r`. |
+| Option B: strided-by-8 column ownership to get multi-tile reads with NO host relayout (GRID_X 8, 64 cores) | **rejected on paper, 0.87×** | Three independent problems. (a) `bank = (64k + gx) % 8 = gx` for every k, so each core is pinned to ONE DRAM bank and stuck on the `READ 1 DRAM` curve: 8 × 29.4 = 235 GB/s, *below* today's 310 (§7e). (b) 64 cores raise token work by 88/64 = 1.375×. (c) `per_core_N_d` 21→28 grows L1 by 390 KB against ~184 KB of headroom, forcing `per_core_M` 8→6 so isl-2048 goes 1→2 chunks and isl-5120 3→4. Also cannot be a runtime A/B switch, because CBs would have to be sized for the union of both modes. |
 
 ## 6. Secondary findings
 
@@ -214,64 +221,122 @@ request size.** That is the single most important correction to §3's framing: t
 issue-bound per core, but in aggregate the op is already close to what 576 B pages can
 deliver. Scheduling is no longer the problem; the page size is.
 
-## 8. Revised path to 3× on isl-256
+### 7d. Cross-check against the P150 NoC/DRAM characterisation table
 
-Ranked by measured value. Target: 198 → ~70 µs (≈350–410 GB/s of total traffic).
+An independent BH-P150 NoC/DRAM sweep (provided by the op owner; per-transfer-size bandwidth
+for one core, plus latencies) agrees with everything in §7a–c and adds one constraint we had
+missed. Reading its 11 data columns as skipping the two with no rows (`WRITE 1 DRAM`,
+`All workers READ 1 DRAM`):
 
-1. **Multi-tile weight pages — the only change that can reach 3×.** Make each core's
-   (K-row × `per_core_N`) slice a *single* DRAM page (6 tiles = 3456 B) instead of 6
-   separate 576 B pages. Two compounding effects: request count ÷6 (issue 113.7K → ~18K cy)
-   **and** the ceiling moves 310 → ~400 GB/s per §7b. Needs host-side weight relayout
-   (DRAM-sharded or custom page size) in `TtRoutedExpert` plus the matching
-   `TensorAccessor` in the reader — i.e. it changes the layout the model hands the op.
-   Open question for the op owner: relayout upstream, or accept both layouts behind a flag?
-2. **2 weight senders per column.** Now safe: the remap made the weight-sender and
-   x-sender sets disjoint, and 22 issuing cores sits inside the 16–32 sweet spot. Its real
-   value is halving the **multicast** on the critical RISC (50.8K → 25.4K) — multicast
-   volume itself is irreducible (it is already a true multicast), it can only be split
-   across senders. Expect ~1.7× on its own; read time improves only 249 → ~310 GB/s.
-3. **Residual sync (~61K cy)** — deeper weight CBs (3–4 slots) plus per-subset
-   (transaction-ID) barriers so the mcast of K-row *n* starts while *n+1* is still in
-   flight, instead of one `async_read_barrier` over everything.
+| quantity | table | our measurement | |
+|---|---|---|---|
+| 1-core DRAM read @512–576 B | 21.47 GB/s | 21.2 GB/s | match, 1% |
+| flat cost per request, ≤1024 B | 32.2 cy | 36.6 cy | match, 14% |
+| 1-core NoC port ceiling | ~83 GB/s | 64 B/cy × 1.35 GHz = 86.4 | match, 96% |
+| aggregate ceiling ≥2048 B | 8 banks × 47.4 = 379 GB/s | 380 GB/s (§7b) | match |
+| our column multicast | MCAST FAR 49.7 / MANY-LINKED 57.7 / NEAR 78 | 61.3 GB/s | in band |
 
-Hard arithmetic: 24.8 MB of weights at the 576 B ceiling (310 GB/s) is **80 µs**, so
-without item 1 the best possible isl-256 is ~2.5×. At the ≥1024 B ceiling (400 GB/s) it is
-62 µs, so **3× is right at the hardware limit and requires item 1.**
+The knee agrees too: flat per-request cost up to 1024 B (23.85 ns at every size from 16 B to
+1024 B), then size/64 link-bound from 2048 B. And LINKED multicast is 1.67x unlinked
+(57.7 vs 34.5 GB/s), which validates the `linked=true` the kernels already use.
+
+Two corrections it forces on earlier sections:
+
+1. **§3's "stateful NoC reads" idea is worth at most 14%, not 2x.** The floor is 32.2 cy per
+   request, we spend 36.6; the residual is `TensorAccessor` page->address generation plus the
+   D2.0 `Noc::async_read` wrapper. Not worth chasing.
+2. **The 379 GB/s ceiling is a BANK limit shared by gate + up + down.** All three hit the same
+   8 banks regardless of which NoC issues them, so the weight-read floor is
+   24.8 MB / 379 GB/s = **65 us per chunk**, not the 41 us an earlier draft assumed. Neither
+   cheaper issue nor more reader cores can go below it.
+
+### 7e. New constraint: reads must ROTATE banks
+
+`READ 1 DRAM` (one core pinned to a single bank) saturates at **29.4 GB/s @4096 B** (31.5 at
+16 KB, 47.4 only at 64 KB), against `READ ALL DRAMS` at **81.4 GB/s @4096 B**. So a read
+pattern must land a core's *consecutive* requests on *different* banks. Since
+`bank = page_id % 8`, that is a property of the page-index arithmetic:
+
+- **Option A** — `page = k * num_N_blocks + n_block`, `num_N_blocks = 11` ⇒
+  `bank = (11k + n) % 8`. For k = 0..7 that is banks `[0,3,6,1,4,7,2,5]` — all eight, rotating.
+  A lands on the `READ ALL DRAMS` curve. GOOD.
+- **Option B** — `page = k*64 + gx + 8j` ⇒ `bank = (64k + gx) % 8 = gx` **for every k**. Each
+  core is pinned to one bank for the entire read, so it is stuck on the `READ 1 DRAM` curve:
+  8 cores x 29.4 = **235 GB/s aggregate, BELOW today's 310**. B is a regression on the read
+  itself, before counting its 64-core compute penalty or its extra chunks.
+
+**Option B is therefore dead** (see §5), and with it the question of switching A/B at runtime
+from the device-side count — there is nothing worth switching to.
+
+## 8. Revised path, with the bank-limited floor
+
+The weight read has a **hard floor of 65 us per chunk** (24.8 MB / 379 GB/s, §7d). Multicast
+is 37.6 us and divides cleanly by sender count. So the per-chunk FIXED cost decomposes as
+`read (>=65, currently 99.7) + mcast (37.6 / senders_per_column)`.
+
+Ranked by measured value:
+
+1. **Producer column (token side) — the biggest single lever, 1.44x on a total run.**
+   `gx=0` does x read + tilize + bfp8 multicast and **no matmul**; the other 10 columns only
+   matmul. See §6 for why the two cheaper variants of "tilize once per M-row" are ruled out
+   (one gives zero gain, the other measured 2x slower). Costs: 10% more N work per matmul
+   core, `per_core_N_gu` 6->7 and `per_core_N_d` 21->23 (~10% more L1 against a tight
+   budget), phase-4 activated rotation over 10 cores not 11, changed writer column mapping.
+2. **N weight senders per column — now the primary WEIGHT-side lever**, not the secondary one
+   it was ranked as. Since the read is floored at 65 us, multicast is 37.6 of the remaining
+   FIXED budget and is the only part that still divides: 37.6 -> 18.8 (2 senders) -> 9.4 (4).
+   Multicast volume itself is irreducible (it is already a true multicast). Free of L1 cost —
+   it only splits an already-sized block among more issuers — so it can be a **kernel-level
+   runtime decision from the device-side count**, exactly like `adaptive_chunk` picks
+   `per_core_M`: more senders at small counts where FIXED dominates, one at large counts
+   where extra issuers only add contention (§7a: past 32 issuing cores the aggregate is flat
+   while per-core issue cost inflates 6x). The compile-time `kWeightReadersPerColumn`
+   prototype should become count-derived.
+3. **Multi-tile weight pages (option A)** — takes the read 99.7 -> 65 us, i.e. down to the
+   bank floor. Make each core's (K-row x `per_core_N`) slice a *single* DRAM page (6 tiles =
+   3456 B). Needs a host-side weight relayout (DRAM-sharded or custom page size) in
+   `TtRoutedExpert` plus the matching `TensorAccessor` in the reader — it changes the layout
+   the model hands the op. Verified bank-rotating (§7e). Open question for the op owner:
+   relayout upstream, or accept both layouts behind a flag?
+4. **Residual sync (~61K cy)** — deeper weight CBs (3-4 slots) plus per-subset
+   (transaction-ID) barriers so the mcast of K-row *n* starts while *n+1* is still in flight,
+   instead of one `async_read_barrier` over everything. Bounded at ~11% of the critical core.
 
 ### 8a. Estimated device time on a total run
 
-Model `T = sum_chunks (FIXED + TOKEN * per_core_M)` with FIXED = 137 us (weight read 99.7 +
-mcast 37.6, ISL-independent per chunk) and TOKEN = 56.8 us per per_core_M unit, validated
-against measured times to 2% on the total (worst point 11% at isl-1024). TOKEN decomposes as
-tilize 18.8 + rest 38.0.
+Model `T = sum_chunks (FIXED + TOKEN * per_core_M)`, validated against measured times to 2%
+on the total (worst point 11% at isl-1024). Currently FIXED = 99.7 (read) + 37.6 (mcast) =
+137 us per chunk and TOKEN = 56.8 us per `per_core_M` unit, decomposing as tilize 18.8 +
+rest 38.0.
 
-| scenario | 128 | 256 | 512 | 1024 | 2048 | 4096 | 5120 | TOTAL | vs now |
-|---|---|---|---|---|---|---|---|---|---|
-| measured now | 180 | 198 | 256 | 329 | 591 | 1175 | 1489 | 4218 | 1.00x |
-| A: multi-tile pages | 110 | 139 | 196 | 310 | 538 | 1076 | 1386 | 3756 | 1.15x |
-| A + 2 senders/column | 93 | 122 | 178 | 292 | 519 | 1038 | 1330 | 3573 | 1.20x |
-| B: strided cols, 64 cores + 2 senders | 109 | 148 | 227 | 384 | 767 | 1464 | 1848 | 4948 | **0.87x** |
-| A + 2 senders + producer column | 86 | 107 | 149 | 232 | 399 | 799 | 1031 | **2803** | **1.53x** |
+| scenario | 128 | 256 | 512 | 1024 | 2048 | 4096 | 5120 | TOTAL | vs now | isl-256 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| measured now | 180 | 198 | 256 | 329 | 591 | 1175 | 1489 | 4218 | 1.00x | 1.00x |
+| 2 senders/column only (no relayout) | 147 | 175 | 232 | 346 | 572 | 1145 | 1490 | 4108 | 1.05x | 1.13x |
+| A: multi-tile pages only | 131 | 159 | 216 | 330 | 557 | 1113 | 1443 | 3949 | 1.09x | 1.24x |
+| A + 2 senders/column | 112 | 141 | 197 | 311 | 538 | 1076 | 1386 | 3761 | 1.14x | 1.41x |
+| A + 4 senders/column | 103 | 131 | 188 | 301 | 528 | 1057 | 1358 | 3667 | 1.17x | 1.51x |
+| **A + 2 senders + producer column** | 105 | 126 | 167 | 251 | 418 | 836 | 1087 | **2991** | **1.44x** | 1.58x |
+
+(An earlier draft of this table quoted 1.20x for A + 2 senders and 1.53x for the producer
+column. Both were optimistic: they used a 41 us weight-read floor instead of the correct
+bank-limited 65 us. Option B's row is gone -- see §7e.)
 
 Three things this settles:
 
 1. **Any weight-side work is capped at 1.48x on a total run.** The sweep contains 10 chunks,
-   so the entire weight cost is 10 x 137 = 1370 us of 4218 (32%); even a free weight read
-   leaves 2848 us. A + 2 senders captures 632 us = 46% of that headroom.
-2. **Option A is a short-ISL optimization**: 1.9x at isl-128, 1.12x at isl-5120.
-3. **Option B is a net regression (0.87x)** and should be dropped unless the production
-   distribution is entirely short-ISL. It wins only at ISL <= 512; above that, 64 cores raise
-   token work by 88/64 = 1.375x and the L1 growth forces per_core_M 8->6, pushing isl-5120
-   from 3 chunks to 4.
+   so the entire weight cost is 10 x 137 = 1370 us of 4218 (32%); even a *free* weight read
+   and multicast leaves 2848 us. Item 3 + item 2 together capture 457 us = 33% of that.
+2. **3x on a total run is not reachable** by anything in this list. 3x at **isl-256 alone** is
+   also out: the FIXED floor is 65 (read, hard) + ~9 (mcast at 4 senders) = 74 us, plus 57 us
+   of token work = 131 us, i.e. **1.51x** at isl-256. Reaching 3x there would need the token
+   side too, and the producer column only takes TOKEN 56.8 -> 41.8.
+3. **The token side is where the remaining time is**: 2848 of the 4218 us. Only the producer
+   column attacks it, and it is the one lever whose value grows with ISL.
 
 Open input needed: which ISLs dominate production DeepSeek prefill? The table above is the
-artificial sweep. If experts typically see <=512 tokens, item 1 alone is a 1.4-1.9x win; if
-they see thousands, the token side (producer column) is where the time is.
-
-Superseded from the pre-reference plan: "stateful NoC reads (`set_state`/`read_with_state`)
-to cut per-request issue cost" — still real for the per-core rate, but §7a shows aggregate
-bandwidth is capped by the 576 B page size well before per-core issue cost matters, so it
-is a second-order fix behind item 1.
+artificial sweep. If experts typically see <=512 tokens, items 2+3 are a 1.4-1.5x win; if
+they see thousands, the producer column is the only thing that matters.
 
 ## 9. How to reproduce
 
