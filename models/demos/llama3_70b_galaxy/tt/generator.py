@@ -278,6 +278,16 @@ class Generator(WarmupForwardMixin):
         self._disable_decode_tracing = False  # Whether to disable decode traces
         self._decode_inputs_need_reset = False
 
+    def _model_kv_cache(self, model_id=0):
+        """Per-layer ``[k, v]`` list owned by the model. Used for cache geometry
+        (block size, max blocks). The galaxy generator wraps a single model."""
+        return self.model.kv_cache_per_layer()
+
+    def _assert_kv_cache_ready(self):
+        assert self.model.kv_cache_allocated, (
+            "KV cache not initialized — vLLM must call allocate_kv_cache before forward/warmup"
+        )
+
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
         # Model-level CCL references may differ from layer-level ones (e.g. after the
@@ -303,7 +313,6 @@ class Generator(WarmupForwardMixin):
         self,
         tokens: torch.Tensor,
         page_table=None,
-        kv_cache=None,
         prompt_lens=None,
         enable_trace=True,
         sampling_params=None,
@@ -313,6 +322,7 @@ class Generator(WarmupForwardMixin):
         # Avoids an infinite loop
         self.already_warmed_up_prefill = True
         self.warming_up_prefill = True
+        self._assert_kv_cache_ready()
 
         # Llama70b always supports on-device sampling from metal
         on_device_sampling_enabled = True
@@ -323,7 +333,7 @@ class Generator(WarmupForwardMixin):
         self.model.switch_mode("prefill")
         logger.info("Warming up prefill for all supported sequence lengths up to max sequence length")
         warmup_sequence_lengths = get_prefill_warmup_sequence_lengths(self.model.args.max_seq_len)
-        block_size = get_block_size(kv_cache[0]) if kv_cache else 64
+        block_size = get_block_size(self._model_kv_cache())
         # Phase 1: sp0 traces (no prefix caching) - batch 1 and 32
         for warmup_sequence_length in warmup_sequence_lengths:
             # Capture trace for both
@@ -367,7 +377,6 @@ class Generator(WarmupForwardMixin):
                     self.prefill_forward_text(
                         warmup_tokens,
                         warmup_page_table,
-                        kv_cache,
                         warmup_prompt_lens,
                         enable_trace,
                         sampling_params,
@@ -410,7 +419,6 @@ class Generator(WarmupForwardMixin):
             self.prefill_forward_text(
                 warmup_tokens,
                 page_table_phase2,
-                kv_cache,
                 warmup_prompt_lens,
                 enable_trace,
                 sampling_params,
@@ -427,7 +435,6 @@ class Generator(WarmupForwardMixin):
         self,
         tokens: torch.Tensor,  # All tokens, including the cached ones
         page_table=None,
-        kv_cache=None,
         prompt_lens=None,  # Full prompt lengths, including the cached ones
         enable_trace=True,
         sampling_params=None,
@@ -440,11 +447,12 @@ class Generator(WarmupForwardMixin):
         if getattr(self, "_disable_prefill_tracing", False):
             enable_trace = False
 
+        self._assert_kv_cache_ready()
+
         if not self.already_warmed_up_prefill:
             self.prefill_warmup(
                 tokens,
                 page_table,
-                kv_cache,
                 prompt_lens,
                 enable_trace,
                 None,
@@ -457,7 +465,7 @@ class Generator(WarmupForwardMixin):
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
 
-        kv_cache = kv_cache[0]
+        kv_cache = self._model_kv_cache()
         batch, batch_seq_len = tokens.shape
         output_toks = torch.zeros(batch)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
@@ -1092,7 +1100,6 @@ class Generator(WarmupForwardMixin):
             chunk_start_idx=tt_chunk_start_idx,
             start_pos=prefill_start_pos,
             get_last_token=prefill_get_last_token,
-            kv_cache=kv_cache,
             rot_mats=full_rot_mats,
             batch_size=batch_size,
         )
@@ -1254,7 +1261,6 @@ class Generator(WarmupForwardMixin):
             chunk_page_table=tt_chunk_page_table,
             chunk_start_idx=tt_chunk_start_idx,
             start_pos=start_pos,
-            kv_cache=kv_cache,
             get_last_token=last_token_idx,
             rot_mats=full_rot_mats,
             batch_size=batch_size,
@@ -1293,7 +1299,6 @@ class Generator(WarmupForwardMixin):
             chunk_page_table=tt_chunk_page_table,
             chunk_start_idx=tt_chunk_start_idx,
             start_pos=start_pos,
-            kv_cache=kv_cache,
             get_last_token=last_token_idx,
             rot_mats=full_rot_mats,
             batch_size=batch_size,
@@ -1361,7 +1366,6 @@ class Generator(WarmupForwardMixin):
         tokens,
         start_pos,
         page_table=None,
-        kv_cache=None,
         enable_trace=True,
         read_from_device=True,
         async_read=False,
@@ -1378,6 +1382,8 @@ class Generator(WarmupForwardMixin):
     ):
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False
+
+        self._assert_kv_cache_ready()
 
         reset_reasons = []
         if sampling_params is None and not defer_device_sampling:
@@ -1444,7 +1450,6 @@ class Generator(WarmupForwardMixin):
             reset_inputs = True
             reset_reasons.append("reset_batch")
 
-        kv_cache = kv_cache[0]
         active_seed_slots = None
         if start_pos is not None:
             active_seed_slots = [
@@ -1454,7 +1459,6 @@ class Generator(WarmupForwardMixin):
             "current_pos": start_pos,
             "tokens": tokens,
             "page_table": page_table,
-            "kv_cache": kv_cache,
             "is_cur_pos_sharded": is_cur_pos_sharded,
             "is_page_table_sharded": is_page_table_sharded,
         }
@@ -1524,7 +1528,6 @@ class Generator(WarmupForwardMixin):
         tokens,
         current_pos,
         page_table=None,
-        kv_cache=None,
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
@@ -1542,7 +1545,6 @@ class Generator(WarmupForwardMixin):
             tt_current_pos,
             rot_mat_idxs=rot_mat_idxs,
             page_table=tt_page_table,
-            kv_cache=kv_cache,
             tt_out_logits_saved=tt_out_logits_saved,
             is_cur_pos_sharded=is_cur_pos_sharded,
             on_device_logits=on_device_logits,
@@ -1557,7 +1559,6 @@ class Generator(WarmupForwardMixin):
         tokens,
         current_pos,
         page_table=None,
-        kv_cache=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
         on_device_logits=False,
@@ -1571,7 +1572,6 @@ class Generator(WarmupForwardMixin):
             tokens,
             current_pos,
             page_table=page_table,
-            kv_cache=kv_cache,
             is_cur_pos_sharded=is_cur_pos_sharded,
             is_page_table_sharded=is_page_table_sharded,
             on_device_logits=on_device_logits,
@@ -1590,7 +1590,6 @@ class Generator(WarmupForwardMixin):
             current_pos_tt,
             rope_idxs_tt,
             page_table_tt,
-            kv_cache=kv_cache,
             is_cur_pos_sharded=is_cur_pos_sharded,
             on_device_logits=on_device_logits,
         )
@@ -1621,7 +1620,6 @@ class Generator(WarmupForwardMixin):
         tokens,
         current_pos,
         page_table=None,
-        kv_cache=None,
         reset_inputs=False,
         page_table_changed=False,
         is_cur_pos_sharded=False,
@@ -1638,7 +1636,6 @@ class Generator(WarmupForwardMixin):
                 tokens,
                 current_pos,
                 page_table=page_table,
-                kv_cache=kv_cache,
                 is_cur_pos_sharded=is_cur_pos_sharded,
                 is_page_table_sharded=is_page_table_sharded,
                 on_device_logits=on_device_logits,
@@ -1900,14 +1897,13 @@ class Generator(WarmupForwardMixin):
 
         return padded_page_table
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False) -> None:
+    def warmup_model_prefill(self, enable_trace, can_sample_on_device, greedy_only: bool = False) -> None:
         # page_table gets padded properly in prefill_forward_text
         # be sure to pad correctly for non traced sequences in future warmup calls
         page_table = torch.zeros(1, 1, dtype=torch.int32)
         self.prefill_warmup(
             tokens=None,
             page_table=page_table,
-            kv_cache=kv_cache,
             prompt_lens=None,
             enable_trace=enable_trace,
             sampling_params=None,

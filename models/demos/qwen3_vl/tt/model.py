@@ -464,7 +464,7 @@ class Transformer(TTTransformer):
         state_dict,
         weight_cache_path,
         paged_attention_config=None,
-        use_paged_kv_cache=False,
+        create_kv_cache=True,
     ):
         # Call parent constructor with vision-specific classes
         super().__init__(
@@ -474,7 +474,7 @@ class Transformer(TTTransformer):
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
+            create_kv_cache=create_kv_cache,
             rope_setup_class=RotarySetup,
         )
 
@@ -560,7 +560,6 @@ class Transformer(TTTransformer):
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
-        kv_cache=None,
         deepstack_visual_embeds=None,
     ):
         return self.forward(
@@ -574,7 +573,6 @@ class Transformer(TTTransformer):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
-            kv_cache=kv_cache,
             deepstack_visual_embeds=deepstack_visual_embeds,
         )
 
@@ -590,7 +588,6 @@ class Transformer(TTTransformer):
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
-        kv_cache=None,
         visual_pos_masks=None,
         deepstack_visual_embeds=None,
         page_tables_per_layer=None,
@@ -625,7 +622,6 @@ class Transformer(TTTransformer):
                 page_table=layer_page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
             if deepstack_visual_embeds is not None and i in range(len(deepstack_visual_embeds)):
                 x = self.deepstack_process(x, deepstack_visual_embeds[i])

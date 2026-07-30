@@ -49,9 +49,10 @@ API surface
   ``kv_shared_layer_map``.
 
 * :func:`allocate_vllm_kv_cache` — build a ``list[list[k_tt, v_tt]]``
-  matching that layout (HMA + kv-share aliasing), suitable for passing
-  directly to ``Gemma4Model.__call__`` as ``kv_caches=`` or to the
-  attention layer in unit tests as ``kv_cache=``.
+  matching that layout (HMA + kv-share aliasing). The KV cache is
+  model-owned now, so unit tests install the result onto the model
+  (``model.tt_kv_cache`` / each ``self_attn.kv_cache``) rather than
+  passing it as a forward argument.
 
 * :class:`Gemma4VllmRequestPool` — block-ID allocator that mimics
   vLLM's ``BlockPool`` invariant of disjoint allocations across groups.

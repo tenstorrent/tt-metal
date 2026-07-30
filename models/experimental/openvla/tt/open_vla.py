@@ -418,7 +418,6 @@ class OpenVLALanguageModel(GenerationMixin):
 
         model_args_list = []
         model_list = []
-        tt_kv_cache_list = []
 
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
@@ -455,11 +454,8 @@ class OpenVLALanguageModel(GenerationMixin):
                 paged_attention_config=paged_attention_config,
             )
 
-            tt_kv_cache_i = [l.attention.layer_past for l in model_i.layers] if paged_attention_config else None
-
             model_args_list.append(tt_model_args)
             model_list.append(model_i)
-            tt_kv_cache_list.append(tt_kv_cache_i)
 
         self.page_table = create_tt_page_table(
             global_batch_size=global_batch_size,
@@ -469,7 +465,6 @@ class OpenVLALanguageModel(GenerationMixin):
 
         self.model_args = model_args_list
         self.model = model_list
-        self.tt_kv_cache = tt_kv_cache_list
         self.tokenizer = self.model_args[0].tokenizer
         self.processor = self.model_args[0].processor
         self.generator = Generator(self.model, self.model_args, device, self.tokenizer)
@@ -505,7 +500,6 @@ class OpenVLALanguageModel(GenerationMixin):
         logits = self.generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=self.page_table,
-            kv_cache=self.tt_kv_cache,
             prompt_lens=decoding_pos,
         )
         prefilled_token = torch.argmax(logits, dim=-1)
@@ -533,7 +527,6 @@ class OpenVLALanguageModel(GenerationMixin):
                 out_tok,
                 current_pos,
                 page_table=self.page_table,
-                kv_cache=self.tt_kv_cache,
                 sampling_params=device_sampling_params,
             )
             # decode_forward returns (logits, log_probs) tuple
@@ -650,7 +643,9 @@ class OpenVLALanguageModel(GenerationMixin):
             self.model[0].rope_setup.cos_matrix[:, :, : inputs_embeds.shape[2], :],
             self.model[0].rope_setup.sin_matrix[:, :, : inputs_embeds.shape[2], :],
         ]
-        page_table_user = self._get_prefill_user_page_table(self.page_table, self.tt_kv_cache[0], seq_len)
+        page_table_user = self._get_prefill_user_page_table(
+            self.page_table, self.model[0].kv_cache_per_layer(), seq_len
+        )
         tt_page_table = ttnn.from_torch(
             page_table_user,
             device=inputs_embeds.device(),
@@ -665,7 +660,6 @@ class OpenVLALanguageModel(GenerationMixin):
             rot_mats_global=tt_rot_mats_prefill_global,
             mode="prefill",
             page_table=tt_page_table,
-            kv_cache=self.tt_kv_cache[0],
             get_last_token=((seq_len - 1) // 32) * 32,
         )
 
@@ -691,15 +685,13 @@ class OpenVLALanguageModel(GenerationMixin):
         # Use cropped page_table_user for decode (same as prefill)
         for i in range(self.num_actions):
             # Run decode forward
-            # CUse self.tt_kv_cache[0] to match what prefill write to
-            # Prefill: model[0].forward(..., kv_cache=self.tt_kv_cache[0], ...)
-            # Decode must read from the SAME KV cache object
+            # The model owns its KV cache (model[0].kv_cache_per_layer()); prefill
+            # wrote into the SAME layer_past tensors decode now reads from.
             CHECKPOINTS.checkpoint("start_LLM_DECODE")
             decode_output = self.generator.decode_forward(
                 out_tok,
                 current_pos,
                 page_table=page_table_user,
-                kv_cache=[self.tt_kv_cache[0]],
                 sampling_params=None,
                 enable_trace=False,
             )
@@ -1533,7 +1525,7 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
         - Without reset, subsequent runs read stale K/V values from earlier runs
         - This causes the model to produce identical outputs for different inputs
 
-        KV cache structure: tt_kv_cache[model_id][layer_id] -> list of [k_cache, v_cache] tensors
+        KV cache is model-owned: model[model_id].kv_cache_per_layer()[layer_id] -> [k_cache, v_cache]
         """
         if self.ttnn_device is None:
             return
@@ -1541,17 +1533,18 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
         if not hasattr(self, "language_model"):
             return
 
-        if not hasattr(self.language_model, "tt_kv_cache"):
+        if not hasattr(self.language_model, "model"):
             return
 
         reset_count = 0
         error_count = 0
 
-        # tt_kv_cache is structured as: [model_id][layer_tensors]
-        # where layer_tensors can be a list of [k_cache, v_cache] for each layer
-        for model_idx, kv_cache_per_model in enumerate(self.language_model.tt_kv_cache):
-            if kv_cache_per_model is None:
+        # The model owns its KV cache: pull per-model [layer -> [k, v]] lists
+        # straight from each Transformer's layer_past via kv_cache_per_layer().
+        for model_idx, sub_model in enumerate(self.language_model.model):
+            if sub_model is None or not sub_model.kv_cache_allocated:
                 continue
+            kv_cache_per_model = sub_model.kv_cache_per_layer()
 
             # kv_cache_per_model is a list of layer caches
             # Each layer cache is typically [k_cache, v_cache]

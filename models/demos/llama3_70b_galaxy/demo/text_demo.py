@@ -216,7 +216,6 @@ def create_tt_model(
     state_dict = tt_model_args.load_state_dict()
     page_table = None
     paged_attention_config = None
-    tt_kv_cache = None
 
     if use_paged_kv_cache:
         paged_attention_config = PagedAttentionConfig(
@@ -242,10 +241,8 @@ def create_tt_model(
         enable_prefetcher_performance_mode=True,
     )
 
-    if use_paged_kv_cache:
-        tt_kv_cache = [l.attention.layer_past for l in model.layers]
-
-    return tt_model_args, model, page_table, [tt_kv_cache]
+    # Model owns its KV cache (built at construction via create_kv_cache=True default).
+    return tt_model_args, model, page_table
 
 
 # List of supported Parameters for demo.py
@@ -976,7 +973,7 @@ def test_demo_text(
             [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
         )
 
-    model_args, model, page_table, tt_kv_cache = create_tt_model(
+    model_args, model, page_table = create_tt_model(
         mesh_device,
         instruct=instruct,
         max_batch_size=batch_size,
@@ -1112,7 +1109,6 @@ def test_demo_text(
                 toks = generator.prefill_forward_text(
                     input_tokens_prefill_pt,
                     page_table=page_table,
-                    kv_cache=tt_kv_cache,
                     prompt_lens=decoding_pos,
                     enable_trace=prefill_enable_trace,
                     tt_out_logits_all_users=tt_out_logits_all_users,
@@ -1134,7 +1130,6 @@ def test_demo_text(
                 generator.prefill_forward_text(
                     input_tokens_prefill_pt,
                     page_table=page_table,
-                    kv_cache=tt_kv_cache,
                     prompt_lens=decoding_pos,
                     enable_trace=prefill_enable_trace,
                     tt_out_logits_all_users=None,  # no PCC on phase 1
@@ -1153,7 +1148,6 @@ def test_demo_text(
                 toks = generator.prefill_forward_text(
                     input_tokens_prefill_pt,
                     page_table=page_table,
-                    kv_cache=tt_kv_cache,
                     prompt_lens=decoding_pos,
                     enable_trace=prefill_enable_trace,
                     tt_out_logits_all_users=tt_out_logits_all_users,
@@ -1167,7 +1161,6 @@ def test_demo_text(
                 toks = generator.prefill_forward_text(
                     input_tokens_prefill_pt,
                     page_table=page_table,
-                    kv_cache=tt_kv_cache,
                     prompt_lens=decoding_pos,
                     enable_trace=prefill_enable_trace,
                     tt_out_logits_all_users=tt_out_logits_all_users,
@@ -1286,7 +1279,6 @@ def test_demo_text(
                     current_pos,
                     enable_trace=is_enable_trace,
                     page_table=page_table,
-                    kv_cache=tt_kv_cache,
                     read_from_device=True,
                     async_read=decode_async_read,
                     sampling_params=device_sampling_params,

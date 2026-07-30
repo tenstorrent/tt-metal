@@ -160,6 +160,11 @@ def _run_direct_model_prefill_last_logit(generator, tokens, prompt_lens):
             max_seq_len=model_args.max_seq_len,
             paged_attention_config=None,
         )
+        # Model owns its KV cache now: install the freshly-allocated per-layer
+        # caches into the model rather than passing them as a forward arg.
+        for attn, kv_pair in zip(model._layer_attentions(), kv):
+            attn.kv_cache = kv_pair
+        model.tt_kv_cache = kv
         tokens_slice = tokens[batch_idx : batch_idx + 1, :kernel_len]
         if tokens_slice.shape[1] < kernel_len:
             tokens_slice = F.pad(tokens_slice, (0, kernel_len - tokens_slice.shape[1]), value=0)
@@ -181,7 +186,6 @@ def _run_direct_model_prefill_last_logit(generator, tokens, prompt_lens):
         tt_logits = model.ttnn_prefill_forward(
             embeds,
             page_table=None,
-            kv_cache=kv,
             input_ids_torch=tokens_slice,
             embeds_torch=embeds_torch,
             get_last_token=(last_token_idx // 32) * 32,

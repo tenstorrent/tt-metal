@@ -91,7 +91,6 @@ def run_attention_component(
         rope_mats=rope_mats,
         position_idx=tt_position_idx,
         page_table=page_table,
-        kv_cache=None,
         is_decode=is_decode,
     )
 
@@ -1093,7 +1092,6 @@ def run_model_forward_test(
             current_pos=tt_current_pos,
             rot_mat_idxs=tt_rope_idxs,
             page_table=None,
-            kv_cache=None,
         )
     else:
         # Prefill mode: use ttnn_prefill_forward
@@ -1114,7 +1112,6 @@ def run_model_forward_test(
             user_id=0,
             rot_mats_global=None,  # Let model compute RoPE
             page_table=None,
-            kv_cache=None,
             get_last_token=-1,  # Get all tokens
         )
 

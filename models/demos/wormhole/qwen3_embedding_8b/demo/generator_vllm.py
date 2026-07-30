@@ -91,7 +91,6 @@ class Qwen3ForEmbedding:
         self.processor = None
         self.tokenizer = None
         self._is_initialized = False
-        self._kv_cache = None  # Will be allocated during initialization
         self.paged_attention_config = None  # Will be set during initialization
 
         # Set pooler to None to satisfy vLLM wrapper (pooling is handled in forward method)
@@ -205,14 +204,16 @@ class Qwen3ForEmbedding:
             optimizations=optimizations_wrapper,
         )
 
-        # Set paged_attention_config on all attention layers
-        # The model was created with use_paged_kv_cache=True, but paged_attention_config was None
-        # We need to set it and reinitialize the KV cache with the correct paged attention shape
+        # Build the model-owned paged KV cache.
+        # The model was created with create_kv_cache=False (no cache at construction),
+        # so we set the paged_attention_config on each attention layer and call
+        # init_kv_cache to allocate layer_past. After this loop each model owns its
+        # cache (model.kv_cache_allocated is True), which is what the shared Generator
+        # requires; nothing is threaded through forward as a kv_cache argument.
         for model_idx, model in enumerate(self.model):
             for layer in model.layers:
                 layer.attention.paged_attention_config = self.paged_attention_config
-                # Reinitialize KV cache with paged attention config
-                # This will create paged attention KV cache: [max_num_blocks, n_local_kv_heads, block_size, head_dim]
+                # Allocate paged attention KV cache: [max_num_blocks, n_local_kv_heads, block_size, head_dim]
                 layer.attention.init_kv_cache(
                     self.model_args[model_idx], self.model_args[model_idx].weight_cache_path(dtype)
                 )
@@ -229,10 +230,6 @@ class Qwen3ForEmbedding:
             processor=self.processor,
             tokenizer=self.tokenizer,
         )
-
-        # Get KV cache from attention layers (paged attention)
-        # Each layer has layer_past which contains [k_cache, v_cache] for paged attention
-        self._kv_cache = [[layer.attention.layer_past for layer in model.layers] for model in self.model]
 
         self._is_initialized = True
 
@@ -352,7 +349,6 @@ class Qwen3ForEmbedding:
         hidden_states = self.generator.prefill_forward_text(
             input_tokens_pt,
             page_table=page_table,
-            kv_cache=self._kv_cache,
             prompt_lens=[original_seq_len] * batch_size,  # Use original_seq_len, not padded seq_len!
             enable_trace=True,  # Explicitly enable trace for best performance
             return_hidden_states=True,  # Return hidden states before LM head, not logits

@@ -15,7 +15,7 @@ from models.demos.gemma4.tt.generator_trace import (
 )
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import create_submeshes
-from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM, allocate_vllm_kv_cache
+from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
 
 class _Gemma4VllmOptimizations:
@@ -480,56 +480,15 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
             # the same skip pattern as the GptOssForCausalLM sibling.
             return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
 
-    def allocate_kv_cache(self, *args, **kwargs):
-        # Legacy uniform path (vLLM falls back here when ``get_kv_cache_spec``
-        # isn't consulted). The hybrid path uses ``allocate_kv_cache_per_layer``
-        # inherited from :class:`HybridAttentionForCausalLM`.
-        return allocate_vllm_kv_cache(
-            *args,
-            **kwargs,
-            dp_model=self.model,
-            tt_cache_path=self.cache_path,
-        )
-
-    def allocate_kv_cache_per_layer(self, per_layer_specs):
-        """Allocate per-layer KV cache, then alias KV-shared layers to
-        their source layer's buffer.
-
-        Gemma4-E2B / -E4B have a Gemma3n-style "num_kv_shared_layers"
-        optimization where the last N layers reuse an earlier layer's
-        K/V instead of computing+storing their own. The model side
-        encodes this via ``self.kv_shared_layer_map`` (layer_idx →
-        source_idx) and ``attention/{prefill,decode}.py`` skips
-        ``paged_{fill,update}_cache`` whenever a layer is flagged as
-        shared. vLLM's hybrid kv-cache manager is unaware of this
-        TT-specific reuse and allocates a distinct buffer for every
-        layer; without the post-allocator alias the shared layers'
-        SDPA reads land on zero-initialized buffers.
-
-        Important: aliasing the buffer is *necessary but not sufficient*.
-        Source and shared layers share an attention *type* (sliding or
-        full), but vLLM's hybrid manager constructs more groups than
-        just "one per type" — for Gemma4-E2B with 35 layers in the
-        4-sliding-then-1-full pattern, vLLM produces 5 groups of 7
-        layers each (4 sliding sub-groups + 1 full group), and each
-        physical tensor is shared by one layer from each group. That
-        means layer 13 (sliding, in group[3]) and layer 15 (sliding,
-        in group[0]) have *different* per-layer page_tables, so
-        aliasing only the buffer leaves layer 15 reading the wrong
-        slot of the shared tensor — whatever group[0]'s layer 10 wrote
-        there, not what layer 13 wrote. The buffer alias must be
-        paired with a per-layer-page-table alias in
-        :meth:`_block_tables_per_layer_with_kv_share` so the shared
-        layer indexes the buffer the same way the source did.
-        """
-        kv_cache = super().allocate_kv_cache_per_layer(per_layer_specs)
-        for submesh_idx, submesh_kv in enumerate(kv_cache):
-            kv_shared_map = getattr(self.model[submesh_idx], "kv_shared_layer_map", None)
-            if not kv_shared_map:
-                continue
-            for layer_idx, source_idx in kv_shared_map.items():
-                submesh_kv[layer_idx] = submesh_kv[source_idx]
-        return kv_cache
+    # KV cache allocation is inherited from :class:`Generator`
+    # (``allocate_kv_cache`` / ``allocate_kv_cache_per_layer``), which calls
+    # ``Gemma4Model.allocate_kv_cache(per_layer_specs)`` on each submesh. That
+    # model method materializes BOTH vLLM HMA tensor_idx sharing AND Gemma4's
+    # architectural ``kv_shared_layer_map`` reuse (sink layers alias their
+    # source layer's buffer), so no bridge-side override is needed. The paired
+    # per-layer page-table alias (necessary because HMA-shared buffers index
+    # different slots per group) still lives in
+    # :meth:`_apply_kv_share_to_per_layer_page_tables` below.
 
     def _build_per_layer_page_tables(self, page_tables_per_layer, legacy_page_table):
         """Compose the inherited per-layer broadcast/passthrough with

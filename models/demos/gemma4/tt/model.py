@@ -516,13 +516,69 @@ class Gemma4Model:
             sin = sin[:, :, :seq_len, :]
         return (cos, sin)
 
+    # ── KV cache ownership (model owns the cache) ─────────────────────────
+    # Gemma4Model is a standalone model class (not a tt_transformers.Transformer
+    # subclass), so the model-owns-cache API the shared Generator relies on is
+    # implemented here. Layers name attention ``self_attn``; the per-layer cache
+    # lives on ``self_attn.kv_cache``. ``self.tt_kv_cache`` is the per-layer
+    # aliased ``[k, v]`` list (kv-shared layers point at their source layer).
+    def _layer_attentions(self):
+        return [layer.self_attn for layer in self.layers]
+
+    @property
+    def kv_cache_allocated(self):
+        """Sentinel: True once every layer's attention has a KV cache."""
+        return all(getattr(attn, "kv_cache", None) is not None for attn in self._layer_attentions())
+
+    def kv_cache_per_layer(self):
+        """Per-layer ``[k, v]`` list (the owned cache, kv-share aliased)."""
+        return self.tt_kv_cache
+
+    def allocate_kv_cache(self, per_layer_specs):
+        """Late KV-cache allocation for the vLLM (model-owns-cache) path.
+
+        ``per_layer_specs`` is one ``(shape, dtype, tensor_idx)`` per attention
+        layer in layer-index order, where ``shape = (num_blocks, num_kv_heads,
+        block_size, head_size)`` already carries vLLM's chosen ``num_blocks``.
+
+        Two levels of sharing are materialized, in order:
+
+        1. vLLM HMA tensor sharing: layers sharing a ``tensor_idx`` get the SAME
+           ``[k, v]`` object (one buffer per unique tensor_idx, built at the first
+           layer encountered for that idx — matching the harness'
+           ``allocate_vllm_kv_cache``).
+        2. Gemma4 architectural KV reuse: ``self.kv_shared_layer_map`` (a sink
+           layer → its source layer) re-points sink layers at the source layer's
+           buffer, layered on top of the tensor_idx assignment.
+
+        Each ``self_attn.kv_cache`` is assigned, ``self.tt_kv_cache`` is refreshed
+        to the per-layer aliased list, and that list is returned.
+        """
+        attns = self._layer_attentions()
+        assert len(per_layer_specs) == len(attns), (
+            f"allocate_kv_cache got {len(per_layer_specs)} specs for {len(attns)} layers"
+        )
+        # 1. One buffer per unique tensor_idx (vLLM HMA tensor sharing).
+        by_tensor_idx = {}
+        for attn, (shape, _dtype, tensor_idx) in zip(attns, per_layer_specs):
+            if tensor_idx not in by_tensor_idx:
+                num_blocks, _num_kv_heads, block_size, _head_size = shape
+                by_tensor_idx[tensor_idx] = attn._build_kv_pair(num_blocks, block_size)
+            attn.kv_cache = by_tensor_idx[tensor_idx]
+        # 2. Gemma4 architectural KV reuse: alias sink layers to their source.
+        for layer_idx, source_idx in self.kv_shared_layer_map.items():
+            if 0 <= layer_idx < len(attns) and 0 <= source_idx < len(attns):
+                attns[layer_idx].kv_cache = attns[source_idx].kv_cache
+        # Refresh the externally-visible per-layer aliased list.
+        self.tt_kv_cache = [attn.kv_cache for attn in attns]
+        return self.tt_kv_cache
+
     def __call__(
         self,
         hidden_states,
         rope_mats=None,
         position_idx=None,
         page_table=None,
-        kv_caches=None,
         is_decode=True,
         token_index=None,
         input_ids_torch=None,
@@ -551,7 +607,6 @@ class Gemma4Model:
             rope_mats: (cos, sin) override, or dict {layer_type: (cos, sin)} for pre-sliced decode
             position_idx: decode position tensor ([1,32] uint32 for embedding RoPE, or [1] int32 legacy)
             page_table: paged attention table
-            kv_caches: list of [k, v] per layer, or None (uses self.tt_kv_cache)
             is_decode: True for decode, False for prefill
             token_index: int for decode RoPE slicing (None when using embedding-based RoPE)
             input_ids_torch: CPU tensor of input_ids for per-layer input computation (E2B)
@@ -568,7 +623,6 @@ class Gemma4Model:
         """
         seq_len = hidden_states.shape[2]
         rope_seq_len = seq_len // batch_size if (not is_decode and batch_size > 1) else seq_len
-        caches = kv_caches or self.tt_kv_cache
 
         # Real (unpadded) prefill length: the prompt is padded up to a power of 2
         # for the single prefill chunk, and bounded sliding layers must NOT write
@@ -652,8 +706,6 @@ class Gemma4Model:
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
                 )
 
-            kv_cache = caches[i] if caches else None
-
             # KV sharing: determine if this layer shares or provides K/V
             shared_kv = None
             keep_kv = False
@@ -670,7 +722,6 @@ class Gemma4Model:
                 rope_mats=layer_rope,
                 position_idx=position_idx,
                 page_table=layer_page_table,
-                kv_cache=kv_cache,
                 is_decode=is_decode,
                 token_index=token_index,
                 per_layer_input=pli_tt,
@@ -828,7 +879,7 @@ class Gemma4Model:
         return {lt: self.tt_kv_cache[idx] for lt, idx in self.last_kv_layer_by_type.items()}
 
     def ttnn_verify_forward(
-        self, x, current_pos, current_pos_cache=None, page_table=None, kv_cache=None, page_tables_per_layer=None
+        self, x, current_pos, current_pos_cache=None, page_table=None, page_tables_per_layer=None
     ):
         """Multi-token speculative *verify* forward (batch holds the candidates).
 
@@ -846,7 +897,6 @@ class Gemma4Model:
             x: [1, K] uint32 candidate token ids (or precomputed [1,1,K,hidden] embeds).
             current_pos: [1,32] uint32 padded positions (first K = p+1..p+K).
             page_table: [K, num_blocks] int32 (the user's row replicated K times).
-            kv_cache: optional KV cache override (defaults to self.tt_kv_cache).
 
         Returns:
             (logits, hidden) — logits [1,1,K,vocab] from the post-norm hidden;
@@ -870,7 +920,6 @@ class Gemma4Model:
             hidden_states=input_embeds,
             position_idx=current_pos,
             page_table=page_table,
-            kv_caches=kv_cache,
             is_decode=True,
             token_index=token_index,
             position_idx_cache=current_pos_cache if current_pos_cache is not None else current_pos,
@@ -1147,7 +1196,6 @@ class Gemma4Model:
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
-        kv_cache=None,
         batch_size=1,
         input_ids_torch=None,
         embeds_torch=None,
@@ -1188,7 +1236,6 @@ class Gemma4Model:
             hidden_states=x,
             position_idx=None,
             page_table=page_table,
-            kv_caches=kv_cache,
             is_decode=False,
             input_ids_torch=input_ids_torch,
             embeds_torch=embeds_torch,
@@ -1334,7 +1381,6 @@ class Gemma4Model:
         current_pos,
         rot_mat_idxs=None,
         page_table=None,
-        kv_cache=None,
         on_device_logits=False,
         pli_combined=None,
         page_tables_per_layer=None,
@@ -1349,7 +1395,6 @@ class Gemma4Model:
             current_pos: [1,32] uint32 position tensor for RoPE embedding lookup.
             rot_mat_idxs: Unused (RoPE computed internally from current_pos).
             page_table: Optional paged attention table.
-            kv_cache: Optional KV cache override.
             on_device_logits: If True, return logits in on-device sampling layout.
             pli_combined: Optional [1,1,n_layers,pli_size] device tensor of host-precomputed
                 per-layer inputs (E2B/E4B). Required for Gemma3n-style models in decode.
@@ -1391,7 +1436,6 @@ class Gemma4Model:
             hidden_states=input_embeds,
             position_idx=current_pos,
             page_table=page_table,
-            kv_caches=kv_cache,
             is_decode=True,
             token_index=token_index,
             position_idx_cache=position_idx_cache,

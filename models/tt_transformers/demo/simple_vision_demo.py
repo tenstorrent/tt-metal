@@ -193,7 +193,9 @@ def create_multimodal_model(
             weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
             dtype=ttnn.bfloat8_b,
             args=tt_model_args,
-            use_paged_kv_cache=use_paged_kv_cache,
+            # MistralTransformer (shared Transformer subclass) is model-owns now:
+            # build the cache at construction unless vLLM defers it.
+            create_kv_cache=not use_paged_kv_cache,
         )
     else:
         model = CrossAttentionTransformer(
@@ -501,7 +503,6 @@ def test_multimodal_demo_text(
                             next_token_tensor,
                             position_id,
                             page_table=None,
-                            kv_cache=None,
                             enable_trace=enable_trace,
                         )
                     else:

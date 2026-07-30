@@ -230,7 +230,7 @@ def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
     prompt_tokens = [int(encoded[0][pp]) for pp in prompt_positions]
     logger.info(f"prompt_positions={prompt_positions} prompt_tokens={prompt_tokens}")
 
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     seq_arg = []
     seq_logits = []
     for tok, pos in zip(prompt_tokens, prompt_positions):
@@ -240,7 +240,7 @@ def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
         seq_arg.append(int(torch.argmax(logits[0])))
     logger.info(f"[read-iso] sequential argmax: {seq_arg}")
 
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     blogits, bh = spec._verify(prompt_tokens, prompt_positions)
     bh.deallocate(True)
     batch_logits = [blogits[j].float() for j in range(L)]
@@ -250,7 +250,7 @@ def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
     logger.info(f"[read-iso] READ {'OK' if read_ok else 'BROKEN'} (batched==sequential: {read_ok})")
 
     # Now the write+read path (anchor + generated chain) for completeness.
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     seq2 = []
     seq2_logits = []
     tok, pos = anchor_token, anchor_pos
@@ -261,7 +261,7 @@ def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
         a = int(torch.argmax(logits[0]))
         seq2.append(a)
         tok, pos = a, pos + 1
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     bw, bh2 = spec._verify([anchor_token] + seq2[:L], [anchor_pos + j for j in range(L + 1)])
     bh2.deallocate(True)
     batch2_logits = [bw[j].float() for j in range(L + 1)]
@@ -274,7 +274,7 @@ def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
 
     # Drafter quality: how many of the drafter's K proposals match the target
     # greedy chain (seq2)? Low overlap => drafter (assistant) is mis-wired.
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     h0 = spec.seed(anchor_token, anchor_pos)
     drafts, _ = spec._draft(anchor_token, h0, anchor_pos)
     h0.deallocate(True)
@@ -524,12 +524,12 @@ def test_assistant_step_pcc_vs_hf(mesh_device, reset_seeds):
     tt_caps = {"pre_proj": _dev0(h, mesh_device)}
     for i, layer in enumerate(assistant.layers):
         lt = layer_types[i]
+        layer.self_attn.kv_cache = shared_kv[lt]
         h = layer(
             h,
             rope_mats=assistant.rope_caches_2d[lt],
             position_idx=pos_u,
             page_table=page_tables[lt],
-            kv_cache=shared_kv[lt],
             is_decode=True,
             token_index=None,
             is_kv_shared=True,
@@ -556,12 +556,12 @@ def test_assistant_step_pcc_vs_hf(mesh_device, reset_seeds):
         lt = layer_types[i]
         src = hf_caps["pre_proj"] if i == 0 else hf_caps[f"layer{i-1}"]
         h_tf = _to_dev_hidden(src)
+        layer.self_attn.kv_cache = shared_kv[lt]
         h_tf = layer(
             h_tf,
             rope_mats=assistant.rope_caches_2d[lt],
             position_idx=pos_u,
             page_table=page_tables[lt],
-            kv_cache=shared_kv[lt],
             is_decode=True,
             token_index=None,
             is_kv_shared=True,
@@ -694,7 +694,7 @@ def test_assistant_first_step_vs_hf_realistic(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=4,
     )
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
 
     # Target greedy first token (acceptance target).
     logits_v, hv = spec._verify([anchor_token], [anchor_pos])
@@ -880,7 +880,7 @@ def test_export_tt_spec_features(mesh_device, reset_seeds):
         draft_len=int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 4)),
     )
 
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
 
     steps, greedy = [], []
     tok, pos = anchor_token, anchor_pos
@@ -993,7 +993,7 @@ def test_assistant_recurrent_vs_hf_realistic(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=K,
     )
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
 
     mapper = target._replicate_to_mesh_mapper()
     pos_u, pos_i = spec._pos_tensors([anchor_pos])
@@ -1170,7 +1170,7 @@ def test_assistant_step_pcc_real(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=4,
     )
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
 
     text_args = assistant.text_args
     layer_types = list(assistant.layer_types)
@@ -1238,12 +1238,12 @@ def test_assistant_step_pcc_real(mesh_device, reset_seeds):
     tt_caps = {"pre_proj": _dev0(h, mesh_device)}
     for i, layer in enumerate(assistant.layers):
         lt = layer_types[i]
+        layer.self_attn.kv_cache = spec._shared_kv[lt]
         h = layer(
             h,
             rope_mats=assistant.rope_caches_2d[lt],
             position_idx=pos_u,
             page_table=page_tables[lt],
-            kv_cache=spec._shared_kv[lt],
             is_decode=True,
             token_index=None,
             is_kv_shared=True,
@@ -1272,12 +1272,12 @@ def test_assistant_step_pcc_real(mesh_device, reset_seeds):
         lt = layer_types[i]
         src = hf_caps["pre_proj"] if i == 0 else hf_caps[f"layer{i-1}"]
         h_tf = _to_dev(src)
+        layer.self_attn.kv_cache = spec._shared_kv[lt]
         h_tf = layer(
             h_tf,
             rope_mats=assistant.rope_caches_2d[lt],
             position_idx=pos_u,
             page_table=page_tables[lt],
-            kv_cache=spec._shared_kv[lt],
             is_decode=True,
             token_index=None,
             is_kv_shared=True,
@@ -1380,7 +1380,7 @@ def test_drafter_per_position_tt_vs_hf(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=K,
     )
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     backbone = assistant.backbone_hidden_size
 
     def _hf_drafts(seed_host, shared_hf, first_tok, pos):
@@ -1522,7 +1522,7 @@ def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=K,
     )
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
 
     greedy_chain, draft_records = [], []
     tok, pos = anchor_token, anchor_pos
@@ -1625,11 +1625,11 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
     )
 
     # Reference: prefill, then plain greedy decode.
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     ref = _plain_greedy(spec, anchor_token, anchor_pos, n_new)
 
     # Spec decode: re-prefill (resets the prompt KV), then greedy spec decode.
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     gen, accepts = spec.generate(anchor_token, anchor_pos, max_new_tokens=len(ref), temperature=0.0)
 
     mean_accept = (sum(accepts) / len(accepts)) if accepts else 0.0
@@ -1644,7 +1644,7 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
 
     # Divergence allowed only at a target near-tie. Re-verify (batch=1) the
     # plain-greedy prefix up to the divergence and inspect the top-2 logit gap.
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     tok, pos = anchor_token, anchor_pos
     for _ in range(first_div):
         lg, hd = spec._verify([tok], [pos])
@@ -1733,9 +1733,9 @@ def test_verify_batchsize_invariance(mesh_device, reset_seeds):
         draft_len=4,
     )
 
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     g1 = _plain_greedy(spec, anchor_token, anchor_pos, n_new)
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     gN = _plain_greedy_bN(spec, anchor_token, anchor_pos, n_new, pad)
 
     first_div = next((i for i in range(min(len(g1), len(gN))) if g1[i] != gN[i]), None)
@@ -1745,7 +1745,7 @@ def test_verify_batchsize_invariance(mesh_device, reset_seeds):
         logger.info("[batch-inv] batch=1 and batched verify are TOKEN-IDENTICAL")
     else:
         # Inspect the target's batch=1 logit gap at the divergence position.
-        generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+        generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
         tok, pos = anchor_token, anchor_pos
         for _ in range(first_div):
             lg, hd = spec._verify([tok], [pos])
@@ -1831,7 +1831,7 @@ def test_spec_decode_perf_breakdown(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=K,
     )
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
 
     def _time_verify(tokens, positions):
         x = spec._tokens_tensor(tokens)
@@ -1839,7 +1839,7 @@ def test_spec_decode_perf_breakdown(mesh_device, reset_seeds):
         pt = spec._page_table(len(tokens))
         for _ in range(3):  # warmup
             lo, hi = target.ttnn_verify_forward(
-                x=x, current_pos=pos_u, current_pos_cache=pos_i, page_table=pt, kv_cache=spec.tt_kv_cache
+                x=x, current_pos=pos_u, current_pos_cache=pos_i, page_table=pt
             )
             lo.deallocate(True)
             hi.deallocate(True)
@@ -1847,7 +1847,7 @@ def test_spec_decode_perf_breakdown(mesh_device, reset_seeds):
         t0 = time.perf_counter()
         for _ in range(reps):
             lo, hi = target.ttnn_verify_forward(
-                x=x, current_pos=pos_u, current_pos_cache=pos_i, page_table=pt, kv_cache=spec.tt_kv_cache
+                x=x, current_pos=pos_u, current_pos_cache=pos_i, page_table=pt
             )
             lo.deallocate(True)
             hi.deallocate(True)
@@ -1972,7 +1972,7 @@ def test_spec_decode_sampling_acceptance(mesh_device, reset_seeds):
         draft_len=4,
     )
 
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     torch.manual_seed(0)
     gen, accepts = spec.generate(
         anchor_token, anchor_pos, max_new_tokens=n_new, temperature=temperature, top_p=top_p, top_k=top_k
@@ -2057,12 +2057,12 @@ def test_spec_decode_traced(mesh_device, reset_seeds):
 
     # Untraced greedy reference.
     spec._use_trace = False
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     ref = _plain_greedy(spec, anchor_token, anchor_pos, n_new)
 
     # Traced greedy spec-decode.
     spec._use_trace = True
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     t0 = time.perf_counter()
     gen, accepts = spec.generate(anchor_token, anchor_pos, max_new_tokens=n_new, temperature=0.0)
     ttnn.synchronize_device(mesh_device)
@@ -2079,7 +2079,7 @@ def test_spec_decode_traced(mesh_device, reset_seeds):
         logger.info("[traced] spec-decode TOKEN-IDENTICAL to untraced plain greedy")
         return
     spec._use_trace = False
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     tok, pos = anchor_token, anchor_pos
     for _ in range(first_div):
         lg, hd = spec._verify([tok], [pos])
@@ -2169,7 +2169,7 @@ def test_verify_trace_batched_capture(mesh_device, reset_seeds):
         draft_len=K,
     )
     logger.info("[vtrace] prefill")
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
 
     # Build a realistic batch=K+1 verify call (anchor + K drafts at consecutive pos).
     spec._use_trace = False
@@ -2297,7 +2297,7 @@ def test_ondevice_argmax_probe(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=K,
     )
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
 
     spec._use_trace = False
     anchor_hidden = spec.seed(anchor_token, anchor_pos)
@@ -2346,7 +2346,7 @@ def test_ondevice_argmax_probe(mesh_device, reset_seeds):
     vpu, vpi = spec._pos_tensors(verify_pos)
     vpt = spec._page_table(len(verify_tokens))
     vl_d, vh_d = target.ttnn_verify_forward(
-        x=vx, current_pos=vpu, current_pos_cache=vpi, page_table=vpt, kv_cache=spec.tt_kv_cache
+        x=vx, current_pos=vpu, current_pos_cache=vpi, page_table=vpt
     )
     logger.info(f"[probe] verify logits shape={list(vl_d.shape)} dtype={vl_d.dtype} layout={vl_d.layout}")
     vidx = ttnn.argmax(vl_d, dim=-1, keepdim=False)
@@ -2426,7 +2426,7 @@ def test_fused_iter_eager(mesh_device, reset_seeds):
     spec._use_trace = False
 
     def _one_fused():
-        generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+        generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
         anchor_hidden = spec.seed(anchor_token, anchor_pos)
         anchor_tok_tt = spec._tokens_tensor([anchor_token])
         drafts, target, vh = spec._fused_iter(anchor_tok_tt, anchor_hidden, anchor_pos)
@@ -2520,11 +2520,11 @@ def test_fused_loop_eager(mesh_device, reset_seeds):
     spec._use_trace = False
 
     # Plain greedy reference.
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     ref = _plain_greedy(spec, anchor_token, anchor_pos, n_new)
 
     # Fused eager loop.
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     gen, accepts = spec.generate_fused(anchor_token, anchor_pos, max_new_tokens=n_new)
     mean_accept = (sum(accepts) / len(accepts)) if accepts else 0.0
     logger.info(f"[fused-loop] ref ={ref}")
@@ -2536,7 +2536,7 @@ def test_fused_loop_eager(mesh_device, reset_seeds):
         logger.info("[fused-loop] TOKEN-IDENTICAL to plain greedy")
         return
     # Allow divergence only at a target near-tie.
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     tok, pos = anchor_token, anchor_pos
     for _ in range(first_div):
         lg, hd = spec._verify([tok], [pos])
@@ -2625,7 +2625,7 @@ def test_fused_loop_traced(mesh_device, reset_seeds):
 
     # Eager fused loop reference.
     spec._use_trace = False
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     t0 = time.perf_counter()
     ref, ref_acc = spec.generate_fused(anchor_token, anchor_pos, max_new_tokens=n_new)
     ttnn.synchronize_device(mesh_device)
@@ -2635,7 +2635,7 @@ def test_fused_loop_traced(mesh_device, reset_seeds):
 
     # Traced fused loop.
     spec._use_trace = True
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     t0 = time.perf_counter()
     gen, accepts = spec.generate_fused(anchor_token, anchor_pos, max_new_tokens=n_new)
     ttnn.synchronize_device(mesh_device)
@@ -2722,7 +2722,7 @@ def test_fused_trace_minimal(mesh_device, reset_seeds):
         draft_len=K,
     )
 
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
     spec._use_trace = True
     t0 = time.perf_counter()
     gen, accepts = spec.generate_fused(anchor_token, anchor_pos, max_new_tokens=n_new)
@@ -2804,7 +2804,7 @@ def test_verify_seqkv_cost(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=K,
     )
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
 
     reps = 20
 
@@ -2815,14 +2815,14 @@ def test_verify_seqkv_cost(mesh_device, reset_seeds):
         pu, pi = spec._pos_tensors(positions)
         pt = spec._page_table(batch)
         logits, hidden = target.ttnn_verify_forward(
-            x=x, current_pos=pu, current_pos_cache=pi, page_table=pt, kv_cache=spec.tt_kv_cache
+            x=x, current_pos=pu, current_pos_cache=pi, page_table=pt
         )
         ttnn.synchronize_device(mesh_device)
         logits.deallocate(True)
         hidden.deallocate(True)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         logits, hidden = target.ttnn_verify_forward(
-            x=x, current_pos=pu, current_pos_cache=pi, page_table=pt, kv_cache=spec.tt_kv_cache
+            x=x, current_pos=pu, current_pos_cache=pi, page_table=pt
         )
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.synchronize_device(mesh_device)
@@ -2916,7 +2916,7 @@ def test_draft_step_breakdown(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=K,
     )
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, page_table=page_table, prompt_lens=decoding_pos)
 
     anchor_hidden = spec.seed(anchor_token, anchor_pos)  # [1,1,1,backbone]
     tok = spec._tokens_tensor([anchor_token])

@@ -29,7 +29,7 @@ class Transformer(LightweightModule):
         state_dict,
         weight_cache_path,
         paged_attention_config=None,
-        use_paged_kv_cache=False,
+        create_kv_cache=True,
         attention_class=None,
         rope_setup_class=None,
         prefetcher=None,
@@ -112,7 +112,7 @@ class Transformer(LightweightModule):
                 layer_num=i,
                 transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
-                use_paged_kv_cache=use_paged_kv_cache,
+                create_kv_cache=create_kv_cache,
                 attention_class=attention_class,
                 prefetcher=prefetcher,
             )
@@ -608,6 +608,51 @@ class Transformer(LightweightModule):
         tt_out = tt_out[:, :, :B, : self.vocab_size].view(B, S, -1)
         return tt_out
 
+    # --- KV cache ownership (model owns the cache) -------------------------------
+    # The model owns its KV cache: each attention's ``layer_past`` IS the cache.
+    # Demos build it at construction (create_kv_cache=True). The vLLM path builds
+    # the model with create_kv_cache=False and calls ``allocate_kv_cache`` once
+    # vLLM has chosen ``num_blocks`` — same allocation routine, late.
+    def _layer_attentions(self):
+        """Per-layer attention submodule. Subclasses whose layer names the
+        attention differently (e.g. ``self_attn``) override this."""
+        return [layer.attention for layer in self.layers]
+
+    @property
+    def kv_cache_allocated(self):
+        """Sentinel: True once every layer has its KV cache."""
+        return all(getattr(attn, "layer_past", None) is not None for attn in self._layer_attentions())
+
+    def kv_cache_per_layer(self):
+        """Per-layer ``[k, v]`` list (the owned cache). Used by the Generator for
+        cache geometry (block size, max blocks); valid only post-allocation."""
+        return [attn.layer_past for attn in self._layer_attentions()]
+
+    def allocate_kv_cache(self, per_layer_specs):
+        """Late KV-cache allocation for the vLLM path.
+
+        ``per_layer_specs`` is one ``(shape, dtype, tensor_idx)`` per attention
+        layer in layer-index order, where ``shape = (num_blocks, num_kv_heads,
+        block_size, head_size)`` already carries vLLM's chosen ``num_blocks``.
+        Layers sharing a ``tensor_idx`` get the SAME tensor object (vLLM hybrid
+        HMA buffer packing). Builds via each attention's ``_build_kv_pair`` so the
+        allocation logic stays in one place. Returns the per-layer list.
+        """
+        attns = self._layer_attentions()
+        assert len(per_layer_specs) == len(attns), (
+            f"allocate_kv_cache got {len(per_layer_specs)} specs for {len(attns)} layers"
+        )
+        # Note: the spec's torch dtype is intentionally ignored — each attention
+        # picks its own kv_cache_dtype from the model's per-layer optimizations
+        # (matching the previous allocate_vllm_kv_cache behavior).
+        by_tensor_idx = {}
+        for attn, (shape, _dtype, tensor_idx) in zip(attns, per_layer_specs):
+            if tensor_idx not in by_tensor_idx:
+                num_blocks, _num_kv_heads, block_size, _head_size = shape
+                by_tensor_idx[tensor_idx] = attn._build_kv_pair(num_blocks, block_size)
+            attn.layer_past = by_tensor_idx[tensor_idx]
+        return self.kv_cache_per_layer()
+
     def ttnn_prefill_forward(
         self,
         x,
@@ -618,7 +663,6 @@ class Transformer(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
-        kv_cache=None,
         batch_size=1,
         page_tables_per_layer=None,
     ):
@@ -644,7 +688,6 @@ class Transformer(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
-            kv_cache=kv_cache,
             batch_size=batch_size,
             page_tables_per_layer=page_tables_per_layer,
         )
@@ -777,7 +820,6 @@ class Transformer(LightweightModule):
         current_pos,
         rot_mat_idxs=None,
         page_table=None,
-        kv_cache=None,
         on_device_logits=False,
         page_tables_per_layer=None,
     ):
@@ -803,7 +845,6 @@ class Transformer(LightweightModule):
             rot_mats_local=rot_mats_local,
             mode=Mode.DECODE,
             page_table=page_table,
-            kv_cache=kv_cache,
             page_tables_per_layer=page_tables_per_layer,
         )
 
@@ -861,7 +902,6 @@ class Transformer(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
-        kv_cache=None,
         batch_size=1,
         page_tables_per_layer=None,
     ):
@@ -916,7 +956,6 @@ class Transformer(LightweightModule):
                 page_table=layer_page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
             )
 

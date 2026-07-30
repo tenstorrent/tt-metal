@@ -60,7 +60,7 @@ def create_multimodal_model(
     max_batch_size,
     max_seq_len,
     dtype=ttnn.bfloat16,
-    use_paged_kv_cache=False,
+    create_kv_cache=True,
     checkpoint=None,
     optimizations=None,
     num_layers=None,
@@ -100,7 +100,7 @@ def create_multimodal_model(
         weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
         dtype=ttnn.bfloat8_b,
         args=tt_model_args,
-        use_paged_kv_cache=use_paged_kv_cache,
+        create_kv_cache=create_kv_cache,
         paged_attention_config=paged_attention_config,
     )
     return tt_model_args, model, checkpoint
@@ -113,7 +113,7 @@ def prepare_generator_args(
     max_batch_size,
     max_seq_len,
     dtype=ttnn.bfloat16,
-    use_paged_kv_cache=False,
+    create_kv_cache=True,
     optimizations=None,
     num_layers=None,
     dummy_weights: bool = False,
@@ -131,7 +131,7 @@ def prepare_generator_args(
             max_batch_size=max_batch_size // data_parallel,
             max_seq_len=max_seq_len,
             dtype=dtype,
-            use_paged_kv_cache=use_paged_kv_cache,
+            create_kv_cache=create_kv_cache,
             checkpoint=state_dict,
             optimizations=optimizations,
             num_layers=num_layers,
@@ -288,7 +288,6 @@ def test_multimodal_demo_text(
 
     logger.info("Warming up model...")
     generator.warmup_model_prefill(
-        kv_cache=None,
         enable_trace=enable_trace,
         can_sample_on_device=can_sample_on_device,
         greedy_only=greedy_only,

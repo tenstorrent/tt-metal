@@ -150,7 +150,6 @@ class TtLlamaDecoder_optimized:
         user_id: int = 0,
         cache_idxs=None,
         page_table=None,
-        kv_cache=None,
         mode="decode",
         chunk_page_table=None,
         chunk_start_idx=None,
@@ -162,12 +161,11 @@ class TtLlamaDecoder_optimized:
                 start_pos,
                 user_id,
                 page_table=page_table,
-                kv_cache=kv_cache,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
             )
         elif mode == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache)
+            return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table)
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
 
@@ -178,7 +176,6 @@ class TtLlamaDecoder_optimized:
         start_pos: int,
         cache_idxs,
         page_table=None,
-        kv_cache=None,
     ) -> List[ttnn.Tensor]:
         ### xs (residual stream) is fractured on all chips
         # xs_replicated = ttnn.all_gather(
@@ -207,7 +204,6 @@ class TtLlamaDecoder_optimized:
             start_pos,
             cache_idxs=cache_idxs,
             page_table=page_table,
-            kv_cache=kv_cache,
             mode="decode",
         )
 
@@ -287,7 +283,6 @@ class TtLlamaDecoder_optimized:
         start_pos: int,
         user_id: int = 0,
         page_table=None,
-        kv_cache=None,
         chunk_page_table=None,
         chunk_start_idx=None,
     ) -> List[ttnn.Tensor]:
@@ -307,7 +302,6 @@ class TtLlamaDecoder_optimized:
             start_pos,
             user_id=user_id,
             page_table=page_table,
-            kv_cache=kv_cache,
             mode="prefill",
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,

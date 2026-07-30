@@ -53,16 +53,24 @@ class TtLlamaModelForGeneration:
 
         del state_dict
 
-    def forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None, prompt_lens=None):
+    def _model_kv_cache(self):
+        """Per-layer ``[k, v]`` list owned by the model. Used for cache geometry
+        (block size, max blocks)."""
+        return self.tt_model.kv_cache_per_layer()
+
+    def _assert_kv_cache_ready(self):
+        assert self.tt_model.kv_cache_allocated, (
+            "KV cache not initialized — vLLM must call allocate_kv_cache before forward"
+        )
+
+    def forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, prompt_lens=None):
         _, seq_len = tokens.shape
         if seq_len == 1:
-            return self.decode_forward(tokens, start_pos, page_table=page_table, kv_cache=kv_cache)
+            return self.decode_forward(tokens, start_pos, page_table=page_table)
         else:
-            return self.prefill_forward(
-                tokens, start_pos, page_table=page_table, kv_cache=kv_cache, prompt_lens=prompt_lens
-            )
+            return self.prefill_forward(tokens, start_pos, page_table=page_table, prompt_lens=prompt_lens)
 
-    def capture_trace(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
+    def capture_trace(self, tokens: torch.Tensor, start_pos: int, page_table=None):
         # Get inputs on device
         (
             tt_inp_emb,
@@ -88,7 +96,6 @@ class TtLlamaModelForGeneration:
             start_pos,
             cache_idxs=cache_idxs_tt,
             page_table=tt_page_table,
-            kv_cache=kv_cache,
             mode="decode",
         )
         logger.info("Done Compiling Model")
@@ -106,7 +113,6 @@ class TtLlamaModelForGeneration:
             start_pos,
             cache_idxs=cache_idxs_tt,
             page_table=tt_page_table,
-            kv_cache=kv_cache,
             mode="decode",
         )
 
@@ -172,7 +178,6 @@ class TtLlamaModelForGeneration:
         tokens: torch.Tensor,
         start_pos: int,
         page_table=None,
-        kv_cache=None,
         enable_trace=False,
         read_from_device=True,
     ):
@@ -190,24 +195,23 @@ class TtLlamaModelForGeneration:
                 start_pos,
                 cache_idxs=cache_idxs_tt,
                 page_table=tt_page_table,
-                kv_cache=kv_cache,
                 mode="decode",
             )
         else:
-            tt_logits = self._easy_trace(tokens, start_pos, page_table, kv_cache)
+            tt_logits = self._easy_trace(tokens, start_pos, page_table)
 
         if read_from_device:
             return self.read_decode_output(tt_logits, unpadded_batch=batch)
         else:
             return tt_logits
 
-    def _easy_trace(self, tokens, start_pos, page_table=None, kv_cache=None):
+    def _easy_trace(self, tokens, start_pos, page_table=None):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
         if not hasattr(self, "trace_id"):
             trace_id, tt_inp, rot_idxs_tt, cache_idxs_tt, tt_logits, tt_page_table = self.capture_trace(
-                tokens, start_pos, page_table=page_table, kv_cache=kv_cache
+                tokens, start_pos, page_table=page_table
             )
             self.trace_id = trace_id
             self.trace_inputs = {
@@ -234,7 +238,7 @@ class TtLlamaModelForGeneration:
         return trace_logits_rm
 
     def prefill_forward_single_user(
-        self, tokens: torch.Tensor, start_pos: int, user_id: int, last_token_idx=None, page_table=None, kv_cache=None
+        self, tokens: torch.Tensor, start_pos: int, user_id: int, last_token_idx=None, page_table=None
     ):
         batch, seq_len = tokens.shape
         assert batch == 1
@@ -252,9 +256,9 @@ class TtLlamaModelForGeneration:
              - due to the above point, we must always set user_id to 0 for chunked prefill.
             """
             assert page_table is not None, "page_table must be provided for chunked prefill"
-            assert kv_cache is not None, "kv_cache must be provided for chunked prefill"
+            self._assert_kv_cache_ready()
             chunk_size = get_max_prefill_chunk_size(seq_len, self.tt_model.model_config["MAX_PREFILL_SEQ_LEN"])
-            block_size = get_block_size(kv_cache)
+            block_size = get_block_size(self._model_kv_cache())
             last_token_idx_in_chunk = last_token_idx % chunk_size if last_token_idx is not None else None
             # Calculate which chunk contains the last_token_idx
             last_chunk_start = (last_token_idx // chunk_size) * chunk_size if last_token_idx is not None else None
@@ -297,7 +301,6 @@ class TtLlamaModelForGeneration:
                     user_id=CHUNK_USER_ID,
                     last_token_idx=last_token_idx_in_chunk,
                     page_table=page_table_tt,
-                    kv_cache=kv_cache,
                     mode="prefill",
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
@@ -338,7 +341,6 @@ class TtLlamaModelForGeneration:
                 user_id=user_id,
                 last_token_idx=last_token_idx,
                 page_table=tt_page_table,
-                kv_cache=kv_cache,
                 mode="prefill",
             )
 
@@ -351,10 +353,12 @@ class TtLlamaModelForGeneration:
             del tt_logits
             return logits
 
-    def prefill_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None, prompt_lens=None):
+    def prefill_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, prompt_lens=None):
         batch, batch_seq_len = tokens.shape
         output_logits = torch.zeros(batch, 1, self.params.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
+
+        self._assert_kv_cache_ready()
 
         if page_table is not None:
             assert isinstance(
@@ -370,7 +374,7 @@ class TtLlamaModelForGeneration:
                 [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
             if page_table is not None:
-                page_table_user = _get_prefill_user_page_table(page_table, kv_cache, seq_len)
+                page_table_user = _get_prefill_user_page_table(page_table, self._model_kv_cache(), seq_len)
 
             logger.info(f"Filling kv cache for user {user_id + 1}")
 
@@ -380,7 +384,6 @@ class TtLlamaModelForGeneration:
                 user_id,
                 last_token_idx=last_token_idx,
                 page_table=page_table_user if page_table is not None else None,
-                kv_cache=kv_cache,
             )
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned

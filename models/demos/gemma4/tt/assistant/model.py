@@ -209,12 +209,17 @@ class Gemma4AssistantModel:
         for i, layer in enumerate(self.layers):
             lt = self.layer_types[i]
             pt = page_tables[lt] if isinstance(page_tables, dict) else page_tables
+            # Model-owns-cache: the drafter cross-attends into the *target's*
+            # KV cache (read-only, ``is_kv_shared=True`` skips K/V proj + cache
+            # write), so point this layer's own ``self_attn.kv_cache`` at the
+            # target's per-type shared cache before invoking it. Reference
+            # assignment only — no allocation.
+            layer.self_attn.kv_cache = shared_kv[lt]
             h = layer(
                 h,
                 rope_mats=self.rope_caches_2d[lt],
                 position_idx=pos_uint32,
                 page_table=pt,
-                kv_cache=shared_kv[lt],
                 is_decode=True,
                 token_index=None,
                 is_kv_shared=True,

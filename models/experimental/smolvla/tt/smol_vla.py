@@ -2503,7 +2503,6 @@ class SmolVLATextModel:
 
         self.model_args = [tt_model_args]
         self.model = [model]
-        self.tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
         self.page_table = None
         self.tokenizer = tt_model_args.tokenizer if hasattr(tt_model_args, "tokenizer") else None
         self.processor = tt_model_args.processor if hasattr(tt_model_args, "processor") else None
@@ -2546,7 +2545,9 @@ class SmolVLATextModel:
         ]
 
         # Get page table
-        page_table_user = self._get_prefill_user_page_table(self.page_table, self.tt_kv_cache[0], seq_len)
+        page_table_user = self._get_prefill_user_page_table(
+            self.page_table, self.model[0].kv_cache_per_layer(), seq_len
+        )
         tt_page_table = ttnn.from_torch(
             page_table_user,
             device=self.device,
@@ -2562,7 +2563,6 @@ class SmolVLATextModel:
             rot_mats_global=tt_rot_mats_prefill,
             mode="prefill",
             page_table=tt_page_table,
-            kv_cache=self.tt_kv_cache[0],
             get_last_token=-1,  # Return all tokens
         )
 

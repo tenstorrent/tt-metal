@@ -106,7 +106,7 @@ def test_prefill_prefix_caching_benchmark(mesh_device):
     page_params = {"page_block_size": PREFILL_BENCHMARK_BLOCK_SIZE, "page_max_num_blocks": 2048}
     batch_size = 1
 
-    model_args, model, page_table, tt_kv_cache = create_tt_model(
+    model_args, model, page_table = create_tt_model(
         mesh_device,
         instruct=True,
         max_batch_size=batch_size,
@@ -152,7 +152,6 @@ def test_prefill_prefix_caching_benchmark(mesh_device):
                     generator.prefill_forward_text(
                         input_tokens_prefill_pt,
                         page_table=page_table,
-                        kv_cache=tt_kv_cache,
                         prompt_lens=decoding_pos,
                         enable_trace=True,
                         tt_out_logits_all_users=None,
@@ -165,7 +164,6 @@ def test_prefill_prefix_caching_benchmark(mesh_device):
                     generator.prefill_forward_text(
                         input_tokens_prefill_pt,
                         page_table=page_table,
-                        kv_cache=tt_kv_cache,
                         prompt_lens=decoding_pos,
                         enable_trace=True,
                         tt_out_logits_all_users=None,

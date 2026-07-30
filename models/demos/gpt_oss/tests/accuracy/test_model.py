@@ -78,7 +78,6 @@ def run_accuracy(
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt_tensor,
             page_table=None,  # No paged attention for simple test
-            kv_cache=tt_kv_cache,  # Use the actual KV cache
             prompt_lens=[prefill_len],  # Use the correct prefill length
         )
 
@@ -109,7 +108,6 @@ def run_accuracy(
                 current_pos,  # current_pos
                 enable_trace=False,  # enable_trace
                 page_table=None,  # page_table
-                kv_cache=tt_kv_cache,  # kv_cache
             )
 
         # Get predicted token

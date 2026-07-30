@@ -28,27 +28,6 @@ from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
-def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer, model_args: ModelArgs, tt_cache_path):
-    for layer_idx in range(num_layers):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
-
-        model.layers[layer_idx].attention.layer_past = [
-            ttnn.as_tensor(
-                cache_kv,
-                device=model.mesh_device,
-                dtype=ttnn.bfloat8_b,
-                layout=model_args.model_config["ATTN_W_LAYOUT_TILE"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
-                # Separate cache files for K and V to avoid collision.
-                cache_file_name=f"{tt_cache_path}/{kv}cache_{kv_cache_shape}",
-            )
-            for kv in ["k", "v"]
-        ]
-
-    return [l.attention.layer_past for l in model.layers]
-
-
 def get_platform_specific_optimizations(model_name):
     max_seq_len = 131072
 
@@ -87,7 +66,7 @@ def initialize_vllm_text_transformer(
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        use_paged_kv_cache=True,  # [INFO] use paged kv cache provided by this generator
+        create_kv_cache=False,  # [INFO] vLLM allocates the paged KV cache later via allocate_kv_cache
     )
 
     return tt_model_args, model
@@ -195,19 +174,21 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         return self.model_args.model_cache_path
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(
-            *args, **kwargs, model=self.model, model_args=self.model_args, tt_cache_path=self.cache_path
-        )
+        # Delegate to the inner shared Generator, which builds the model-owned
+        # KV cache (model.allocate_kv_cache) per submesh.
+        return self._ttt_generator.allocate_kv_cache(*args, **kwargs)
 
     def prefill_forward(
         self,
         tokens,
         page_table,
-        kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
         enable_trace,
         **kwargs,  # pixel_values and image_grid_thw
     ):
+        # KV cache is model-owned now; defensively drop any stray kv_cache vLLM
+        # may still pass so it can't reach prefill_forward_text.
+        kwargs.pop("kv_cache", None)
         start_pos = kwargs.get("start_pos", None)
         assert (start_pos is None) or all(
             x == 0 for x in start_pos
@@ -291,12 +272,14 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             input_prefill_pt,
             rot_mats=rot_mats,
             page_table=page_table,
-            kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
         return logits, rope_deltas
 
     def decode_forward(self, *args, **kwargs):
+        # KV cache is model-owned now; defensively drop any stray kv_cache so
+        # it can't reach the inner decode_forward (which no longer accepts it).
+        kwargs.pop("kv_cache", None)
         rope_deltas_list: list = kwargs.pop(
             "rope_deltas_all_users", None
         )  # [INFO] update the cos/sin matrices for the current users in the batch

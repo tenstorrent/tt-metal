@@ -201,7 +201,6 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device, reset_seeds,
         rope_mats=(cos_tt, sin_tt),
         position_idx=None,
         page_table=None,
-        kv_cache=None,
         is_decode=False,
     )
     tt_output_torch = (
@@ -354,7 +353,6 @@ def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
         rope_mats=(cos_tt, sin_tt),
         position_idx=position_idx_tt,
         page_table=None,
-        kv_cache=kv_cache,
         is_decode=True,
         token_index=cache_len,
     )

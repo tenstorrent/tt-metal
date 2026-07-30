@@ -80,7 +80,6 @@ class WarmupForwardMixin:
 
     def warmup_model_decode(
         self,
-        kv_cache,
         enable_trace,
         max_batch_size,
         num_blocks,
@@ -89,7 +88,8 @@ class WarmupForwardMixin:
         greedy_only: bool = False,
     ):
         """
-        This function is called by vLLM
+        This function is called by vLLM. The KV cache is owned by the model
+        (allocated via Transformer.allocate_kv_cache); it is no longer passed in.
         """
         sampling_params = self._create_sampling_params(can_sample_on_device, max_batch_size, greedy_only=greedy_only)
 
@@ -106,7 +106,6 @@ class WarmupForwardMixin:
                 tokens=tokens,
                 start_pos=start_pos,
                 page_table=page_table,
-                kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 read_from_device=read_from_device,
                 sampling_params=param,

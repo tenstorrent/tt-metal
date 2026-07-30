@@ -125,9 +125,7 @@ def create_tt_model(
         paged_attention_config=paged_attention_config,
     )
 
-    tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
-
-    return tt_model_args, model, tt_kv_cache, state_dict
+    return tt_model_args, model, state_dict
 
 
 class TokenAccuracy:
@@ -273,7 +271,6 @@ def prepare_generator_args(
     # Hybrid requires a model per submesh
     model_args = []
     model = []
-    tt_kv_cache = []
 
     paged_attention_config = (
         PagedAttentionConfig(
@@ -285,7 +282,7 @@ def prepare_generator_args(
     )
 
     for submesh in submesh_devices:
-        model_args_i, model_i, tt_kv_cache_i, state_dict = create_tt_model(
+        model_args_i, model_i, state_dict = create_tt_model(
             submesh,
             instruct=instruct,
             max_batch_size=global_batch_size // data_parallel,
@@ -299,7 +296,6 @@ def prepare_generator_args(
         )
         model_args.append(model_args_i)
         model.append(model_i)
-        tt_kv_cache.append(tt_kv_cache_i)
 
     page_table = create_tt_page_table(
         global_batch_size=global_batch_size,
@@ -310,7 +306,7 @@ def prepare_generator_args(
     tokenizer = model_args[
         0
     ].tokenizer  # TODO Should we support Data Parallel different models? If so, we need to support multiple tokenizers
-    return model_args, model, page_table, tt_kv_cache, tokenizer
+    return model_args, model, page_table, tokenizer
 
 
 def _gemma3_text_demo_device_params():
@@ -892,7 +888,7 @@ def test_demo_text(
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
 
-    model_args, model, page_table, tt_kv_cache, tokenizer = prepare_generator_args(
+    model_args, model, page_table, tokenizer = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
         mesh_device=mesh_device,
@@ -935,13 +931,11 @@ def test_demo_text(
         else 0
     )
     generator.warmup_model_prefill(
-        kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
         can_sample_on_device=can_sample_on_device,
         greedy_only=greedy_only,
     )
     generator.warmup_model_decode(
-        kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
         max_batch_size=global_batch_size,
         num_blocks=num_blocks,
@@ -1012,7 +1006,6 @@ def test_demo_text(
         prefill_out = generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=page_table,
-            kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
             warmup_prefill=False,
             sampling_params=device_sampling_params,
@@ -1059,7 +1052,6 @@ def test_demo_text(
                 current_pos,
                 enable_trace=enable_trace,
                 page_table=page_table,
-                kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
             )
 

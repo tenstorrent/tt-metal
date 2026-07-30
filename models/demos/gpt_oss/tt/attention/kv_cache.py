@@ -18,6 +18,8 @@ def init_kv_cache(
     paged_attention_config=None,
     cache_dtype=ttnn.bfloat8_b,
     tensor_cache_path=None,
+    num_blocks_override=None,
+    block_size_override=None,
 ):
     """
     Initialize KV cache for both paged and non-paged attention.
@@ -29,13 +31,29 @@ def init_kv_cache(
         paged_attention_config: Optional paged attention configuration
         cache_dtype: Data type for cache tensors (default: bfloat8_b)
         tensor_cache_path: Optional path for cache file
+        num_blocks_override: Optional explicit number of paged blocks (per DP).
+            Used by late (vLLM) allocation where the block count is chosen at
+            runtime. When set, ``block_size_override`` must also be provided.
+        block_size_override: Optional explicit paged block size. See above.
 
     Returns:
         List [k_cache, v_cache]
     """
     # Determine cache shape based on paged vs non-paged attention
     kv_cache_repeats = mesh_device.shape[0] if config.users_row_sharded else 1
-    if paged_attention_config:
+    if num_blocks_override is not None or block_size_override is not None:
+        # Late paged allocation: caller supplies num_blocks/block_size directly
+        # (vLLM picks these at runtime). Both must be provided together.
+        assert num_blocks_override is not None and block_size_override is not None, (
+            "init_kv_cache: num_blocks_override and block_size_override must be provided together"
+        )
+        cache_shape = [
+            num_blocks_override * kv_cache_repeats,
+            config.num_kv_heads // mesh_device.shape[1],
+            block_size_override,
+            config.head_dim,
+        ]
+    elif paged_attention_config:
         # Paged attention cache shape: [max_num_blocks, num_kv_heads, block_size, head_dim]
         cache_shape = [
             paged_attention_config.max_num_blocks * kv_cache_repeats,

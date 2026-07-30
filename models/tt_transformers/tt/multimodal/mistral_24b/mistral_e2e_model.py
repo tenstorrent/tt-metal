@@ -24,7 +24,7 @@ class MistralTransformer(Transformer):
         state_dict,
         weight_cache_path,
         paged_attention_config=None,
-        use_paged_kv_cache=False,
+        create_kv_cache=True,
     ):
         super().__init__(
             args,
@@ -33,7 +33,7 @@ class MistralTransformer(Transformer):
             state_dict,
             weight_cache_path,
             paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
+            create_kv_cache=create_kv_cache,
         )
 
         self.vision_model = TtMistralVisionTransformer(

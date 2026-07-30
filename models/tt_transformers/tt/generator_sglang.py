@@ -2,55 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
-import torch
-from loguru import logger
-from tqdm import tqdm
-
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
-
-
-def allocate_sglang_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
-    logger.warning("[TT-METAL-SGLANG-LOG] allocate_sglang_kv_cache called in generator")
-    submesh_devices = [model.mesh_device for model in dp_model]
-    kv_cache = []
-    for mesh_idx, submesh in enumerate(submesh_devices):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
-        kv_tt = []
-        for layer_num in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
-            # Get the dtype for the kv cache based on the configured optimizations in the model
-            if dp_model[mesh_idx].args.optimizations is not None:
-                kv_cache_dtype = dp_model[mesh_idx].args.optimizations.get_tensor_dtype(
-                    decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
-                )
-            else:
-                kv_cache_dtype = None
-            # Set default to bfloat8_b when no optimizations are configured
-            kv_cache_dtype = ttnn.bfloat8_b if kv_cache_dtype is None else kv_cache_dtype
-            kv_tt_i = [
-                ttnn.as_tensor(
-                    cache_kv,
-                    device=submesh,
-                    # TODO: this could be ShardTensorToMesh, removing the need for sglang to know about TP for num_kv_heads.
-                    # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=kv_cache_dtype,
-                    # Separate cache files for K and V to avoid collision.
-                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
-                )
-                for kv in ["k", "v"]
-            ]
-
-            kv_tt.append(kv_tt_i)
-        kv_cache.append(kv_tt)
-    return kv_cache
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
 def initialize_sglang_text_transformer(
@@ -95,7 +51,7 @@ def initialize_sglang_text_transformer(
             dtype=dtype,
             state_dict=state_dict,
             weight_cache_path=model_args[i].weight_cache_path(dtype),
-            use_paged_kv_cache=True,
+            create_kv_cache=False,
         )
         tt_model.append(tt_model_i)
 
@@ -154,9 +110,6 @@ class LlamaForCausalLM(Generator):
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward_text(*args, **kwargs)
 
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
 
 class QwenForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
@@ -197,9 +150,6 @@ class QwenForCausalLM(Generator):
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward_text(*args, **kwargs)
 
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
 
 class MistralForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
@@ -239,9 +189,6 @@ class MistralForCausalLM(Generator):
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward_text(*args, **kwargs)
-
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 class GptOssForCausalLM(Generator):
@@ -303,6 +250,3 @@ class GptOssForCausalLM(Generator):
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward_text(*args, **kwargs)
-
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)

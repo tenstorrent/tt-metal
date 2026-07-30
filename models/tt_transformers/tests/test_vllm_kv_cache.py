@@ -1,141 +1,91 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Unit tests for the vLLM-side KV cache allocator helpers in
-``generator_vllm.py``.
+"""Unit tests for model-owned KV cache allocation (``Transformer.allocate_kv_cache``).
 
-Verifies the new per-layer entry point (``allocate_vllm_kv_cache_per_layer``)
-and that the legacy uniform-shape entry point (``allocate_vllm_kv_cache``)
-still delegates to it bit-for-bit.
+The model now owns its KV cache: ``allocate_kv_cache(per_layer_specs)`` builds one
+``[k, v]`` pair per unique ``tensor_idx`` (vLLM HMA buffer sharing) and installs it
+into each attention layer's ``layer_past``. Layers sharing a ``tensor_idx`` get the
+SAME tensor object.
 
-Real ttnn allocation requires a mesh device, so this test mocks
-``ttnn.as_tensor`` / ``ttnn.ReplicateTensorToMesh`` and the ``dp_model``
-handles. We verify call structure and shape routing, not the resulting
-tensor contents.
+Real ttnn allocation requires a mesh device, so we stub each attention's
+``_build_kv_pair`` (the single tensor-construction primitive) and verify call
+structure + sharing, not tensor contents. The model instance is built via
+``Transformer.__new__`` (skipping ``__init__``) with fake layers, so we exercise the
+real ``allocate_kv_cache`` / ``kv_cache_per_layer`` / ``_layer_attentions`` logic.
 """
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
-import pytest
 import torch
 
-
-@pytest.fixture
-def dp_model():
-    """One submesh handle whose optimizations return None (so the allocator
-    falls back to the bfloat8_b default — keeps the test independent of
-    the model's optimization config table)."""
-    submesh = MagicMock()
-    args = MagicMock()
-    args.optimizations = None  # Force the bfloat8_b fallback path.
-    model = MagicMock()
-    model.mesh_device = submesh
-    model.args = args
-    return [model]
+from models.tt_transformers.tt.model import Transformer
 
 
-def _make_ttnn_mock():
-    ttnn_mock = MagicMock()
-    ttnn_mock.as_tensor.side_effect = lambda *a, **kw: ("tt-tensor", kw.get("dtype"), kw.get("cache_file_name"))
-    ttnn_mock.bfloat8_b = "bfloat8_b-sentinel"
-    ttnn_mock.bfloat16 = "bfloat16-sentinel"
-    return ttnn_mock
+class _FakeAttention:
+    """Stands in for a decoder layer's attention: records build calls and
+    returns a unique ``[k, v]`` object per call so sharing can be checked by
+    identity."""
+
+    def __init__(self):
+        self.layer_past = None
+        self.build_calls = []
+
+    def _build_kv_pair(self, num_blocks, block_size, dtype=None, weight_cache_path=None, dummy_weights=False):
+        self.build_calls.append((num_blocks, block_size))
+        return [object(), object()]  # fresh (k, v) per call
 
 
-def test_per_layer_allocates_one_kv_pair_per_unique_tensor(dp_model):
-    """Each unique ``tensor_idx`` allocates one (k, v) pair; layers that
-    share a ``tensor_idx`` reuse the same handles."""
-    from models.tt_transformers.tt import generator_vllm
+def _make_model(num_layers):
+    model = Transformer.__new__(Transformer)  # skip __init__ (no device needed)
+    model.layers = [SimpleNamespace(attention=_FakeAttention()) for _ in range(num_layers)]
+    return model
 
-    # Layers 0, 1, 2 all use tensor_idx=0,1,2 respectively → three buffers.
-    per_layer = [
+
+def test_allocates_one_pair_per_unique_tensor_idx():
+    """Each unique ``tensor_idx`` builds exactly one (k, v) pair."""
+    model = _make_model(3)
+    specs = [
         ((4, 2, 32, 64), torch.bfloat16, 0),
         ((4, 2, 32, 64), torch.bfloat16, 1),
         ((4, 2, 32, 64), torch.bfloat16, 2),
     ]
+    per_layer = model.allocate_kv_cache(specs)
 
-    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
-        kv_cache = generator_vllm.allocate_vllm_kv_cache_per_layer(
-            per_layer, dp_model=dp_model, tt_cache_path=Path("/tmp/tt-test-cache")
-        )
-
-    # One submesh, three layers, two tensors per layer (k, v) = 6 calls.
-    assert ttnn_mock.as_tensor.call_count == 6
-    assert len(kv_cache) == 1  # one submesh
-    assert len(kv_cache[0]) == 3  # three layers
-    assert all(len(layer) == 2 for layer in kv_cache[0])  # k, v
+    # One build per layer (all unique idx); num_blocks/block_size routed from shape.
+    assert [a.build_calls for a in model._layer_attentions()] == [[(4, 32)], [(4, 32)], [(4, 32)]]
+    assert len(per_layer) == 3
+    assert all(len(layer) == 2 for layer in per_layer)
+    assert model.kv_cache_allocated
 
 
-def test_shared_tensor_idx_reuses_one_buffer(dp_model):
-    """Layers sharing a ``tensor_idx`` (HMA tensor sharing) point at the
-    same underlying ttnn handles and only one allocation runs per
-    ``tensor_idx``."""
-    from models.tt_transformers.tt import generator_vllm
-
-    # Layers 0 and 2 share tensor 0; layer 1 has its own tensor 1.
-    per_layer = [
+def test_shared_tensor_idx_reuses_one_buffer():
+    """Layers sharing a ``tensor_idx`` reference the same handle; build runs once
+    per unique idx."""
+    model = _make_model(3)
+    specs = [
         ((4, 2, 32, 64), torch.bfloat16, 0),
         ((4, 2, 32, 64), torch.bfloat16, 1),
-        ((4, 2, 32, 64), torch.bfloat16, 0),
+        ((4, 2, 32, 64), torch.bfloat16, 0),  # shares buffer with layer 0
     ]
+    per_layer = model.allocate_kv_cache(specs)
 
-    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
-        kv_cache = generator_vllm.allocate_vllm_kv_cache_per_layer(
-            per_layer, dp_model=dp_model, tt_cache_path=Path("/tmp/tt-test-cache")
-        )
-
-    # 2 unique tensor_idx values × 2 (k, v) = 4 allocations.
-    assert ttnn_mock.as_tensor.call_count == 4
-    # Layers 0 and 2 must reference the *same* handle list.
-    assert kv_cache[0][0] is kv_cache[0][2]
-    assert kv_cache[0][0] is not kv_cache[0][1]
-
-
-def test_per_layer_keys_cache_filename_on_tensor_idx(dp_model):
-    """Cache filenames must distinguish independent buffers even when
-    shapes are identical, so on-disk caches can't collide across layers
-    that don't share a ``tensor_idx``."""
-    from models.tt_transformers.tt import generator_vllm
-
-    per_layer = [
-        ((4, 2, 32, 64), torch.bfloat16, 0),
-        ((4, 2, 32, 64), torch.bfloat16, 1),
-    ]
-
-    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
-        generator_vllm.allocate_vllm_kv_cache_per_layer(
-            per_layer, dp_model=dp_model, tt_cache_path=Path("/tmp/tt-test-cache")
-        )
-
-    cache_filenames = [str(call.kwargs["cache_file_name"]) for call in ttnn_mock.as_tensor.call_args_list]
-    assert sum("_t0" in f for f in cache_filenames) == 2
-    assert sum("_t1" in f for f in cache_filenames) == 2
+    attns = model._layer_attentions()
+    # Only tensor_idx 0 and 1 built → layer 0 built once, layer 1 once, layer 2 reused.
+    assert attns[0].build_calls == [(4, 32)]
+    assert attns[1].build_calls == [(4, 32)]
+    assert attns[2].build_calls == []  # reused layer 0's buffer, no new build
+    # Layers 0 and 2 are the SAME object; layer 1 is distinct.
+    assert per_layer[0] is per_layer[2]
+    assert per_layer[0] is not per_layer[1]
 
 
-def test_legacy_uniform_shape_delegates_to_per_layer(dp_model):
-    """The legacy ``allocate_vllm_kv_cache`` must produce identical output to
-    calling ``allocate_vllm_kv_cache_per_layer`` with a per-layer triple
-    list (each layer its own ``tensor_idx``), so existing single-group
-    callers keep working unchanged."""
-    from models.tt_transformers.tt import generator_vllm
+def test_uniform_path_gives_unique_buffer_per_layer():
+    """The legacy uniform entry point (Generator.allocate_kv_cache → unique
+    tensor_idx per layer) yields one independent buffer per layer."""
+    model = _make_model(3)
+    specs = [((8, 2, 32, 64), torch.bfloat16, i) for i in range(3)]
+    per_layer = model.allocate_kv_cache(specs)
 
-    shape = (4, 2, 32, 64)
-    dtype = torch.bfloat16
-    num_layers = 3
-
-    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
-        legacy = generator_vllm.allocate_vllm_kv_cache(
-            shape, dtype, num_layers, dp_model=dp_model, tt_cache_path=Path("/tmp/c")
-        )
-    legacy_call_count = ttnn_mock.as_tensor.call_count
-
-    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
-        per_layer = generator_vllm.allocate_vllm_kv_cache_per_layer(
-            [(shape, dtype, i) for i in range(num_layers)],
-            dp_model=dp_model,
-            tt_cache_path=Path("/tmp/c"),
-        )
-    per_layer_call_count = ttnn_mock.as_tensor.call_count
-
-    assert legacy_call_count == per_layer_call_count
-    assert len(legacy[0]) == len(per_layer[0]) == num_layers
+    assert all(a.build_calls == [(8, 32)] for a in model._layer_attentions())
+    # All distinct objects.
+    assert len({id(p) for p in per_layer}) == 3

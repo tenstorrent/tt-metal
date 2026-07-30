@@ -86,9 +86,7 @@ def create_tt_model(
         paged_attention_config=paged_attention_config,
     )
 
-    tt_kv_cache = [l.attention.layer_past for l in model.layers] if use_paged_kv_cache else None
-
-    return tt_model_args, model, paged_attention_config, tt_kv_cache
+    return tt_model_args, model, paged_attention_config
 
 
 # List of supported Parameters for demo.py
@@ -353,7 +351,7 @@ def test_demo(
     for i in range(repeat_batches):
         repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    model_args, model, paged_attention_config, tt_kv_cache = create_tt_model(
+    model_args, model, paged_attention_config = create_tt_model(
         mesh_device,
         instruct=instruct,
         max_batch_size=batch_size,
@@ -469,7 +467,6 @@ def test_demo(
             input_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
             rot_mats=(cos, sin),
             page_table=page_table,
-            kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
         )
         profiler.end(f"compile_prefill", iteration=batch_idx)
@@ -481,7 +478,6 @@ def test_demo(
             input_prefill_pt,
             rot_mats=(cos, sin),
             page_table=page_table,
-            kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
         )
         # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
@@ -534,7 +530,6 @@ def test_demo(
                 current_pos,
                 enable_trace=enable_trace,
                 page_table=page_table,
-                kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
             )
 

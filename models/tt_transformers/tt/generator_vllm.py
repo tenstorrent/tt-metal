@@ -6,9 +6,7 @@ from types import SimpleNamespace
 from typing import List, Mapping, Union
 
 import torch
-from loguru import logger
 from PIL.Image import Image
-from tqdm import tqdm
 from vllm.model_executor.models.gemma3_mm import (
     Gemma3DummyInputsBuilder,
     Gemma3MultiModalProcessor,
@@ -30,90 +28,6 @@ from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
-
-
-def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer], tt_cache_path):
-    """Allocate KV cache tensors with optional cross-layer DRAM sharing.
-
-    Args:
-        per_layer_specs: list of ``(kv_cache_shape, dtype, tensor_idx)``
-            triples, one per layer in model layer-index order. Layers with
-            the same ``tensor_idx`` share one underlying TT tensor — this
-            is upstream's HMA tensor-sharing layout (e.g. for Gemma3 5:1,
-            one full-attention layer and several sliding-window layers
-            collapse to a single DRAM buffer; per-group block tables keep
-            their slot accesses disjoint at runtime). Layers with unique
-            ``tensor_idx`` get their own buffer.
-        dp_model: list of replicated TT model handles, one per data-parallel
-            submesh.
-        tt_cache_path: path used for on-disk weight cache file naming.
-
-    Returns:
-        ``list[submesh][layer_idx][k_or_v]`` of TT tensors. Multiple
-        ``layer_idx`` entries may refer to the same underlying tensor
-        objects when they share a ``tensor_idx``.
-    """
-    submesh_devices = [model.mesh_device for model in dp_model]
-    kv_cache = []
-    for mesh_idx, submesh in enumerate(submesh_devices):
-        # tensor_idx -> [k, v] ttnn handles; reused across all layers that
-        # share a buffer.
-        unique_buffers: dict[int, list] = {}
-        kv_tt = []
-        for layer_num, (kv_cache_shape, dtype, tensor_idx) in enumerate(
-            tqdm(per_layer_specs, desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})")
-        ):
-            existing = unique_buffers.get(tensor_idx)
-            if existing is not None:
-                kv_tt.append(existing)
-                continue
-            cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
-            # Get the dtype for the kv cache based on the configured optimizations in the model
-            if dp_model[mesh_idx].args.optimizations is not None:
-                kv_cache_dtype = dp_model[mesh_idx].args.optimizations.get_tensor_dtype(
-                    decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
-                )
-            else:
-                logger.info("No dtype specified for the model KV cache - defaulting to ttnn.bfloat8_b.")
-                kv_cache_dtype = None
-            # Set default to bfloat8_b when no optimizations are configured
-            kv_cache_dtype = ttnn.bfloat8_b if kv_cache_dtype is None else kv_cache_dtype
-            kv_tt_i = [
-                ttnn.as_tensor(
-                    cache_kv,
-                    device=submesh,
-                    # TODO: this could be ShardTensorToMesh, removing the need for vLLM to know about TP for num_kv_heads.
-                    # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=kv_cache_dtype,
-                    # Separate cache files for K and V to avoid collision.
-                    # ``tensor_idx`` distinguishes shared buffers that have the
-                    # same shape but back different layer subsets.
-                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}_t{tensor_idx}",
-                )
-                for kv in ["k", "v"]
-            ]
-
-            unique_buffers[tensor_idx] = kv_tt_i
-            kv_tt.append(kv_tt_i)
-        kv_cache.append(kv_tt)
-    return kv_cache
-
-
-def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
-    """Uniform-shape KV cache allocator for non-hybrid models.
-
-    Hybrid attention models should use :func:`allocate_vllm_kv_cache_per_layer`,
-    which takes a per-layer ``(shape, dtype, tensor_idx)`` list so layers
-    can share DRAM buffers per upstream's HMA tensor-sharing model.
-    """
-    return allocate_vllm_kv_cache_per_layer(
-        [(kv_cache_shape, dtype, i) for i in range(num_layers)],
-        dp_model=dp_model,
-        tt_cache_path=tt_cache_path,
-    )
 
 
 class HybridAttentionForCausalLM(Generator):
@@ -138,8 +52,9 @@ class HybridAttentionForCausalLM(Generator):
       ``block_tables_per_group`` into this per-layer view at submission
       time so bridges don't have to re-derive vLLM's group construction
       order — see ``TTModelRunner._block_tables_per_layer``.
-    * ``allocate_kv_cache_per_layer``: typically just delegates to
-      :func:`allocate_vllm_kv_cache_per_layer` with the model handles.
+    KV cache allocation (``allocate_kv_cache`` /
+    ``allocate_kv_cache_per_layer``) is inherited from the base
+    :class:`Generator`, which delegates to the model's own allocator.
 
     Until a subclass overrides them, ``prefill_forward`` and
     ``decode_forward`` raise :class:`NotImplementedError` to make the
@@ -231,9 +146,6 @@ class HybridAttentionForCausalLM(Generator):
             "`page_tables_per_layer` and pass each entry to the matching "
             "attention layer."
         )
-
-    def allocate_kv_cache_per_layer(self, per_layer_specs):
-        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
     def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
         """When invoked outside the vLLM hybrid plugin (e.g. by warmup
@@ -369,7 +281,7 @@ def initialize_vllm_text_transformer(
             dtype=dtype,
             state_dict=state_dict,
             weight_cache_path=model_args[i].weight_cache_path(dtype),
-            use_paged_kv_cache=True,
+            create_kv_cache=False,
         )
         tt_model.append(tt_model_i)
 
@@ -441,7 +353,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
                 mesh_device=submesh,
                 max_batch_size=max_batch_size // tt_data_parallel,
                 max_seq_len=max_seq_len,
-                use_paged_kv_cache=True,
+                create_kv_cache=False,
                 checkpoint=state_dict,
             )
             model_args.append(model_args_i)
@@ -471,12 +383,10 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
             image_sizes = [im.image_sizes for im in data if hasattr(im, "image_sizes")]
 
         page_table = kwargs.get("page_table", None)
-        kv_cache = kwargs.get("kv_cache", None)
 
         return super().prefill_forward_text(
             tokens=inputs.input_ids,
             page_table=page_table,
-            kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             pixel_values=pixel_values if pixel_values else None,
             image_sizes=image_sizes if image_sizes else None,
@@ -484,9 +394,6 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward(*args, **kwargs)
-
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 # Mllama is currently not supported in vLLM V1.
@@ -552,7 +459,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
                 mesh_device=submesh,
                 max_batch_size=max_batch_size // tt_data_parallel,
                 max_seq_len=max_seq_len,
-                use_paged_kv_cache=True,
+                create_kv_cache=False,
                 checkpoint=state_dict,
             )
             model_args.append(model_args_i)
@@ -573,7 +480,6 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         tokens: torch.Tensor,
         images: Union[List[Image], List[List[Image]]],
         page_table: torch.Tensor,
-        kv_cache,
         prompt_lens,
         cross_page_table: torch.Tensor,
     ):
@@ -603,7 +509,6 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
             total_lens,
             prompt_lens,
             page_table=page_table,
-            kv_cache=kv_cache,
             cross_page_table=cross_page_table,
         )
 
@@ -613,9 +518,6 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
             return logits[0]
         else:
             return logits
-
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 class LlamaForCausalLM(Generator):
@@ -699,9 +601,6 @@ class LlamaForCausalLM(Generator):
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward(*args, **kwargs)
 
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
 
 class QwenForCausalLM(Generator):
     # Class-level capabilities
@@ -778,9 +677,6 @@ class QwenForCausalLM(Generator):
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward(*args, **kwargs)
 
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
 
 class MistralForCausalLM(Generator):
     # Class-level capabilities
@@ -849,9 +745,6 @@ class MistralForCausalLM(Generator):
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward(*args, **kwargs)
-
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 @MULTIMODAL_REGISTRY.register_processor(
@@ -941,7 +834,7 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
                 mesh_device=submesh,
                 max_batch_size=max_batch_size // tt_data_parallel,
                 max_seq_len=max_seq_len,
-                use_paged_kv_cache=True,
+                create_kv_cache=False,
                 checkpoint=state_dict,
                 optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
             )
@@ -955,6 +848,9 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # KV cache is model-owned now; defensively drop any stray kv_cache so
+        # it can't reach the base forward (which no longer accepts it).
+        kwargs.pop("kv_cache", None)
         # While hybrid KV cache groups are disabled (one full-attention group
         # for every layer), the per-layer page-table routing inside this
         # bridge is buggy for users_row_sharded models: it shards page tables
@@ -981,6 +877,9 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
             return super().prefill_forward_text(**kwargs)
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # KV cache is model-owned now; defensively drop any stray kv_cache so
+        # it can't reach the base forward (which no longer accepts it).
+        kwargs.pop("kv_cache", None)
         # See prefill_forward note above. Skip the hybrid path while
         # _HYBRID_KV_CACHE_GROUPS_ENABLED is False.
         if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
@@ -995,9 +894,6 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
             # NotImplementedError placeholder; route to ``Generator``'s
             # actual decode implementation.
             return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
-
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 class GptOssForCausalLM(HybridAttentionForCausalLM):
@@ -1031,6 +927,9 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
         super().__init__(*args, **kwargs)
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # KV cache is model-owned now; defensively drop any stray kv_cache so
+        # it can't reach the base forward (which no longer accepts it).
+        kwargs.pop("kv_cache", None)
         # While hybrid KV cache groups are disabled (one full-attention group
         # for every layer), the per-layer page-table routing inside this
         # bridge is buggy for users_row_sharded models: it shards page tables
@@ -1054,6 +953,9 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
             return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # KV cache is model-owned now; defensively drop any stray kv_cache so
+        # it can't reach the base forward (which no longer accepts it).
+        kwargs.pop("kv_cache", None)
         # See prefill_forward note above. Skip the hybrid path while
         # _HYBRID_KV_CACHE_GROUPS_ENABLED is False.
         if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
@@ -1121,7 +1023,5 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
         return self.model_args[0].weight_cache_path(ttnn.bfloat8_b)
 
     # prefill_forward / decode_forward are defined above with the
-    # per-layer page-table stash; allocate_kv_cache_per_layer is inherited
-    # from HybridAttentionForCausalLM.
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+    # per-layer page-table stash; allocate_kv_cache / allocate_kv_cache_per_layer
+    # are inherited from the base Generator.

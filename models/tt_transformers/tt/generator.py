@@ -117,16 +117,53 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         total_sampling_batch = group_batch * sampling_dp if group_batch is not None else None
         return sampling_module, sampling_dp, group_batch, total_sampling_batch
 
-    def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
+    def _model_kv_cache(self, model_id):
+        return self.model[model_id].kv_cache_per_layer()
+
+    def _layer_attention(self, model_id):
+        layer0 = self.model[model_id].layers[0]
+        return getattr(layer0, "attention", None) or layer0.self_attn
+
+    def _paged_block_size(self, model_id):
+        attn = self._layer_attention(model_id)
+        if getattr(attn, "paged_attention_config", None) is None:
+            return None
+        return get_block_size(self._model_kv_cache(model_id))
+
+    def _assert_kv_cache_ready(self):
+        # Models that don't expose the sentinel (e.g. the llama-vision
+        # CrossAttentionTransformer, which self-manages its self-attn + xattn
+        # caches) are treated as ready.
+        assert all(getattr(m, "kv_cache_allocated", True) for m in self.model), (
+            "KV cache not initialized — vLLM must call allocate_kv_cache before forward/warmup"
+        )
+
+    # --- vLLM KV-cache allocation (model owns the cache) -------------------------
+    # vLLM builds the model with create_kv_cache=False (no cache at construction)
+    # and calls one of these once it has chosen num_blocks. Each delegates to the
+    # model's own allocate_kv_cache, which builds and installs layer_past.
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        """Hybrid / per-layer path: ``per_layer_specs`` is a list of
+        ``(shape, dtype, tensor_idx)`` per attention layer (layers sharing a
+        tensor_idx share one buffer). Allocated identically on every DP submesh."""
+        for m in self.model:
+            m.allocate_kv_cache(per_layer_specs)
+        return [m.kv_cache_per_layer() for m in self.model]
+
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        """Legacy uniform-shape path: every layer gets its own buffer."""
+        per_layer_specs = [(kv_cache_shape, dtype, i) for i in range(num_layers)]
+        return self.allocate_kv_cache_per_layer(per_layer_specs)
+
+    def _mock_tokens(self, batch_size, seq_len, model_id):
         ret = dict()
         ret["tokens"] = torch.zeros(batch_size, seq_len, dtype=torch.long)
         ret["prompt_lens"] = torch.tensor([seq_len] * batch_size, dtype=torch.long)
         ret["empty_slots"] = list(range(batch_size))
 
         page_table_warmup = None
-        # second check is some tests set the kv_cache to [None] instead of None
-        if kv_cache is not None and kv_cache[model_id] is not None:
-            block_size = get_block_size(kv_cache[model_id])
+        block_size = self._paged_block_size(model_id)
+        if block_size is not None:
             num_blocks = num_blocks_in_seq(seq_len, block_size)
             page_table_warmup = torch.zeros(batch_size, num_blocks, dtype=torch.int32)
 
@@ -134,7 +171,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         return ret
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
+    def warmup_model_prefill(self, enable_trace, can_sample_on_device, greedy_only: bool = False):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
@@ -167,7 +204,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         )
                         continue
 
-                    warmup_args = self._mock_tokens(batch_size, supported_length, kv_cache, model_id)
+                    warmup_args = self._mock_tokens(batch_size, supported_length, model_id)
 
                     # chunked prefill not supported without paged attention
                     if warmup_args["page_table"] is None and max_prefill_chunk_size_cutoff(
@@ -194,7 +231,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         )
                         self.prefill_forward_text(
                             **warmup_args,
-                            kv_cache=kv_cache,
                             enable_trace=enable_trace,
                             model_id_warmup=model_id,
                             sampling_params=param,
@@ -217,13 +253,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
             # Minimal text tokens for vision warmup pass, prefill expects non-empty tokens
             batch_size = 1  # VLMs support only batch=1 for now
-            prefill_forward_args = self._mock_tokens(batch_size, 128, kv_cache, model_id)
+            prefill_forward_args = self._mock_tokens(batch_size, 128, model_id)
 
             logger.info(f"Warming up vision encoder with image size {vision_chunk_size}x{vision_chunk_size}")
 
             self.prefill_forward_text(
                 **prefill_forward_args,
-                kv_cache=kv_cache,
                 enable_trace=False,  # Vision encoder warmup doesn't support trace
                 model_id_warmup=model_id,
                 sampling_params=None,
@@ -237,7 +272,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         prefill_ids,
         page_table=None,
         chunk_page_table=None,
-        kv_cache=None,
         model_id=-1,
         global_user_id=None,
         batch_size=1,
@@ -269,7 +303,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table=transformed_inputs[1],
                 chunk_page_table=transformed_inputs[2],
                 chunk_start_idx=transformed_inputs[3],
-                kv_cache=kv_cache,
                 batch_size=batch_size,
                 user_id=user_id,
             )
@@ -286,7 +319,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table=transformed_inputs[1],
                 chunk_page_table=transformed_inputs[2],
                 chunk_start_idx=transformed_inputs[3],
-                kv_cache=kv_cache,
                 batch_size=batch_size,
                 user_id=user_id,
             )
@@ -317,7 +349,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table=transformed_inputs[1],
                 chunk_page_table=transformed_inputs[2],
                 chunk_start_idx=transformed_inputs[3],
-                kv_cache=kv_cache,
             )
             ttnn.synchronize_device(self.model_args[model_id].mesh_device)
             logger.info("Done Compiling Model")
@@ -332,7 +363,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table=transformed_inputs[1],
                 chunk_page_table=transformed_inputs[2],
                 chunk_start_idx=transformed_inputs[3],
-                kv_cache=kv_cache,
             )
             ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
             ttnn.synchronize_device(self.model_args[model_id].mesh_device)
@@ -383,7 +413,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self,
         tokens,
         page_table,
-        kv_cache,
         prompt_lens,
         prefill_seq_lens,
         enable_trace=True,
@@ -401,7 +430,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         return self.model[0].row_sharded_batched_prefill(
             tokens,
             page_table,
-            kv_cache[0],
             prompt_lens,
             prefill_seq_lens,
             enable_trace=enable_trace,
@@ -422,7 +450,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         full_page_table=None,
         user_id=0,
         last_token_idx=None,
-        kv_cache=None,
         model_id=-1,
         prefill_seq_len=None,
         batch_size=1,
@@ -435,7 +462,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         use_prefix_caching = num_cached_tokens > 0
         chunk_start_idx = num_cached_tokens
-        block_size = get_block_size(kv_cache)
+        block_size = get_block_size(self._model_kv_cache(model_id))
 
         if page_table is not None and batch_size == 1:
             page_table = page_table[user_id : user_id + 1, :]
@@ -443,7 +470,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             full_page_table = full_page_table[user_id : user_id + 1, :]
 
         chunk_page_table = None
-        max_blocks_prefill = _get_max_blocks_prefill(kv_cache)
+        max_blocks_prefill = _get_max_blocks_prefill(self._model_kv_cache(model_id))
         # Preserve full per-user page IDs for traced APC slicing.
         source_page_table = full_page_table if full_page_table is not None else page_table
         if source_page_table is None:
@@ -462,7 +489,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 prefill_ids,
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
-                kv_cache=kv_cache,
                 model_id=model_id,
                 global_user_id=global_user_id,
                 batch_size=batch_size,
@@ -529,7 +555,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self,
         tokens: torch.Tensor,  # All tokens, including the cached ones
         page_table=None,
-        kv_cache=None,
         prompt_lens=None,  # Full prompt lengths, including the cached ones
         empty_slots=None,
         enable_trace=True,
@@ -540,6 +565,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         warmup_prefill=True,
         **kwargs,
     ):
+        self._assert_kv_cache_ready()
         self.mode = Mode.PREFILL
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
@@ -566,7 +592,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
 
             self.warmup_model_prefill(
-                kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=on_device_sampling_enabled,
             )
@@ -625,7 +650,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             return self._row_sharded_batched_prefill(
                 tokens,
                 page_table,
-                kv_cache,
                 prompt_lens,
                 prefill_seq_lens=prefill_seq_lens,
                 enable_trace=enable_trace,
@@ -769,7 +793,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table_for_user = page_table if use_batched_prefill else page_table[idx : idx + 1]
                 page_table_user = self._get_prefill_user_page_table(
                     page_table_for_user,
-                    kv_cache[model_id],
+                    self._model_kv_cache(model_id),
                     seq_len,
                     trace_enabled=enable_trace_current_prompt,
                     prefill_seq_len=prefill_seq_len,
@@ -782,7 +806,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     # Keep the full per-user mapping for traced APC page slicing.
                     full_page_table_user = self._get_prefill_user_page_table(
                         page_table_for_user,
-                        kv_cache[model_id],
+                        self._model_kv_cache(model_id),
                         seq_len,
                         trace_enabled=False,
                         prefill_seq_len=prefill_seq_len,
@@ -808,8 +832,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     list(page_table_user.shape),
                     sample,
                 )
-            model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
-
             # Check if 'pixel_values' exists and index it safely
             if local_kwargs.get("pixel_values", None) is not None:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
@@ -842,7 +864,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     full_page_table=full_page_table_user,
                     user_id=batch_user_ids if use_batched_prefill else group_user_id,
                     last_token_idx=last_token_idx,
-                    kv_cache=model_kv_cache,
                     model_id=model_id,
                     prefill_seq_len=prefill_seq_len,
                     batch_size=padded_batch if use_batched_prefill else 1,
@@ -855,7 +876,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     page_table=page_table_user,
                     user_id=batch_user_ids if use_batched_prefill else group_user_id,
                     last_token_idx=last_token_idx,
-                    kv_cache=model_kv_cache,
                     model_id=model_id,
                     num_cached_tokens=0 if use_batched_prefill else num_cached_tokens,
                     batch_size=padded_batch if use_batched_prefill else 1,
@@ -1074,7 +1094,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         page_table,  # Cached and new pages
         user_id,
         last_token_idx,  # Last token index of the full prompt, including the cached tokens
-        kv_cache=None,
         model_id=-1,
         num_cached_tokens: int = 0,
         batch_size=1,
@@ -1094,7 +1113,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
              - due to the above point, we must always set user_id to 0 for chunked prefill.
             """
             assert page_table is not None, "page_table must be provided for chunked prefill"
-            assert kv_cache is not None, "kv_cache must be provided for chunked prefill"
+            assert self._paged_block_size(model_id) is not None, "chunked prefill requires paged attention"
             assert last_token_idx is not None and last_token_idx < seq_len + num_cached_tokens, (
                 f"last_token_idx must be provided and less than seq_len + num_cached_tokens: "
                 f"last_token_idx={last_token_idx}, seq_len={seq_len}, num_cached_tokens={num_cached_tokens}"
@@ -1108,7 +1127,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 chunk_size = seq_len
 
             last_token_idx_in_seq = last_token_idx - num_cached_tokens  # Excluding the cached tokens
-            block_size = get_block_size(kv_cache)
+            block_size = get_block_size(self._model_kv_cache(model_id))
             last_token_idx_in_chunk = last_token_idx_in_seq % chunk_size
             # Calculate which chunk contains the last_token_idx
             last_chunk_start = (last_token_idx_in_seq // chunk_size) * chunk_size
@@ -1170,7 +1189,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
-                    kv_cache=kv_cache,
                     batch_size=batch_size,
                     **kwargs,
                 )
@@ -1196,7 +1214,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=-1 if batch_size > 1 else (last_token_idx // 32) * 32,
-                kv_cache=kv_cache,
                 batch_size=batch_size,
             )
             return tt_logits
@@ -1207,7 +1224,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         tokens,
         start_pos,
         page_table=None,
-        kv_cache=None,
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
@@ -1218,6 +1234,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         defer_device_sampling: bool = False,
         **kwargs,
     ):
+        self._assert_kv_cache_ready()
         mode_switched = False
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
@@ -1303,7 +1320,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             "current_pos": start_pos,
             "tokens": tokens,
             "page_table": page_table,
-            "kv_cache": kv_cache,
             "on_device_sampling": on_device_sampling,
         }
 
@@ -1346,7 +1362,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         tokens,
         current_pos,
         page_table=None,
-        kv_cache=None,
         on_device_sampling=False,
     ):
         """
@@ -1378,13 +1393,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             tt_page_table.append(tt_page_table_i)
 
         for i in range(self.data_parallel):
-            user_kv_cache = kv_cache[i] if kv_cache is not None else None
             decode_out = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
                 rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
-                kv_cache=user_kv_cache,
                 on_device_logits=on_device_sampling,
             )
             if isinstance(decode_out, tuple):
@@ -1400,7 +1413,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         tokens,
         current_pos,
         page_table=None,
-        kv_cache=None,
         on_device_sampling=False,
     ):
         """
@@ -1412,7 +1424,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             tokens,
             current_pos,
             page_table=page_table,
-            kv_cache=kv_cache,
             on_device_sampling=on_device_sampling,
         )
         logger.info("Done Compiling Model")
@@ -1436,7 +1447,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             sampling_trace_enabled = on_device_sampling and sampling_module is not None
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
-            user_kv_cache = kv_cache[i] if kv_cache is not None else None
             model_inputs = device_inputs[i][:4] if len(device_inputs[i]) > 4 else device_inputs[i]
             # Models that produce extra device inputs beyond the first
             # four (e.g. Gemma4's host-precomputed per-layer-input at
@@ -1454,7 +1464,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
                     *model_inputs,
-                    kv_cache=user_kv_cache,
                     on_device_logits=on_device_sampling,
                 )
             )
@@ -1482,7 +1491,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         tokens,
         current_pos,
         page_table=None,
-        kv_cache=None,
         on_device_sampling=False,
         reset_batch=False,
     ):
@@ -1492,7 +1500,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # The trace is different depending on whether we are doing device sampling or not
         if not self.trace_ids_decode[on_device_sampling]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, on_device_sampling=on_device_sampling
+                tokens, current_pos, page_table=page_table, on_device_sampling=on_device_sampling
             )
             self.trace_ids_decode[on_device_sampling] = trace_ids
             self.trace_inputs_decode[on_device_sampling] = device_inputs
@@ -1686,7 +1694,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         total_len,
         prefill_len,
         page_table=None,
-        kv_cache=None,
         cross_page_table=None,
         model_id=-1,
     ):
@@ -1714,7 +1721,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
             if cross_page_table is not None:
                 num_vision_tokens = vision_tokens.shape[2]
-                cross_page_table = self._get_prefill_user_page_table(cross_page_table, kv_cache, num_vision_tokens)
+                cross_page_table = self._get_prefill_user_page_table(
+                    cross_page_table, self._model_kv_cache(model_id), num_vision_tokens
+                )
         else:
             (
                 vision_tokens,
@@ -1725,7 +1734,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             ) = (None, None, None, None, None)
 
         if page_table is not None:
-            page_table = self._get_prefill_user_page_table(page_table, kv_cache, prefill_len)
+            page_table = self._get_prefill_user_page_table(page_table, self._model_kv_cache(model_id), prefill_len)
 
         (
             tt_h,
@@ -1755,7 +1764,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             user_id,
             vision_tokens,
             page_table=tt_page_table,
-            kv_cache=kv_cache,
             get_last_token=(last_token_idx // 32) * 32,
             cross_page_table=tt_cross_page_table,
             text_only_inference=text_only_inference,
@@ -1783,16 +1791,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         total_lens,
         prompt_lens,
         page_table=None,
-        kv_cache=None,
         cross_page_table=None,
         empty_slots=None,
         **kwargs,
     ):
+        self._assert_kv_cache_ready()
         if not self.model_args[0].is_llama_vision():
             logits = self.prefill_forward_text(
                 tokens,
                 page_table=page_table,
-                kv_cache=kv_cache,
                 prompt_lens=prompt_lens,
                 pixel_values=vision_images,
                 **kwargs,
@@ -1815,7 +1822,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 total_lens,
                 prompt_lens,
                 page_table=page_table,
-                kv_cache=kv_cache,
                 cross_page_table=cross_page_table,
                 empty_slots=empty_slots,
             )
@@ -1838,13 +1844,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         total_lens,
         prompt_lens,
         page_table=None,
-        kv_cache=None,
         cross_page_table=None,
         empty_slots=None,
     ):
         """
         Batched version of _prefill_forward_single_user for vision model.
         """
+        self._assert_kv_cache_ready()
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         if cross_page_table is not None:
@@ -1872,8 +1878,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
             user_page_table = page_table[idx : idx + 1] if page_table is not None else None
-            user_cross_page_table = cross_page_table[idx : idx + 1] if kv_cache is not None else None
-            model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
+            user_cross_page_table = cross_page_table[idx : idx + 1] if cross_page_table is not None else None
             model_xattn_cache = xattn_caches[model_id] if xattn_caches is not None else None
 
             (
@@ -1892,7 +1897,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 total_len=total_lens[idx],
                 prefill_len=seq_len,
                 page_table=user_page_table,
-                kv_cache=model_kv_cache,
                 cross_page_table=user_cross_page_table,
                 model_id=model_id,
             )
@@ -1936,11 +1940,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         decode_full_text_row_masked_out_mask,
         xattn_caches=None,
         page_table=None,
-        kv_cache=None,
         cross_page_table=None,
         enable_trace=True,
         read_from_device=True,
     ):
+        self._assert_kv_cache_ready()
         B = tokens.shape[0]
         data_parallel = min(B, self.data_parallel)
         batch_per_device = B // data_parallel
@@ -1976,7 +1980,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             "decode_full_text_row_masked_out_mask": decode_full_text_row_masked_out_mask,
             "xattn_caches": xattn_caches,
             "page_table": page_table,
-            "kv_cache": kv_cache,
             "cross_page_table": cross_page_table,
         }
         if enable_trace:
@@ -2149,7 +2152,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         decode_full_text_row_masked_out_mask,
         xattn_caches=None,
         page_table=None,
-        kv_cache=None,
         cross_page_table=None,
     ):
         """
@@ -2206,7 +2208,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         tt_logits = []
         tt_log_probs = []
         for i in range(self.data_parallel):
-            user_kv_cache = kv_cache[i] if kv_cache is not None else None
             xattn_cache = xattn_caches[i] if xattn_caches is not None else None
             tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
                 tt_h[i],
@@ -2217,7 +2218,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 tt_position_id[i],
                 tt_rot_mats[i],
                 page_table=tt_page_table[i],
-                kv_cache=user_kv_cache,
                 cross_page_table=tt_cross_page_table[i],
             )
             tt_logits.append(tt_logits_i)
@@ -2235,7 +2235,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         decode_full_text_row_masked_out_mask,
         xattn_caches,
         page_table=None,
-        kv_cache=None,
         cross_page_table=None,
     ):
         """
@@ -2283,7 +2282,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         # Compile run
         for i in range(self.data_parallel):
-            user_kv_cache = kv_cache[i] if kv_cache is not None else None
             xattn_cache = xattn_caches[i] if xattn_caches is not None else None
             # tt_logits_rm and tt_log_probs_rm unused later, no need to make a list
             tt_logits_rm, tt_log_probs_rm = self.model[i].ttnn_decode_forward(
@@ -2295,7 +2293,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 tt_position_id[i],
                 tt_rot_mats[i],
                 page_table=tt_page_table[i],
-                kv_cache=user_kv_cache,
                 cross_page_table=tt_cross_page_table[i],
             )
         logger.info("Done Compiling Model")
@@ -2374,7 +2371,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
             B = tokens[i].shape[0]
-            user_kv_cache = kv_cache[i] if kv_cache is not None else None
             xattn_cache = xattn_caches[i] if xattn_caches is not None else None
             (
                 tt_h_transform,
@@ -2400,7 +2396,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 tt_position_id[i],
                 tt_rot_mats,
                 page_table=tt_page_table[i],
-                kv_cache=user_kv_cache,
                 cross_page_table=tt_cross_page_table[i],
             )
             tt_logits_rm.append(tt_logits_rm_i)
@@ -2506,7 +2501,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         decode_full_text_row_masked_out_mask,
         xattn_caches=None,
         page_table=None,
-        kv_cache=None,
         cross_page_table=None,
     ):
         """
@@ -2534,7 +2528,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 decode_full_text_row_masked_out_mask,
                 xattn_caches,
                 page_table=page_table,
-                kv_cache=kv_cache,
                 cross_page_table=cross_page_table,
             )
             self.trace_ids = trace_ids

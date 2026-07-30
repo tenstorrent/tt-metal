@@ -81,9 +81,7 @@ def create_tt_model(
         paged_attention_config=paged_attention_config,
     )
 
-    tt_kv_cache = [l.attention.layer_past for l in model.layers] if use_paged_kv_cache else None
-
-    return tt_model_args, model, paged_attention_config, tt_kv_cache
+    return tt_model_args, model, paged_attention_config
 
 
 # List of supported Parameters for demo.py
@@ -345,7 +343,7 @@ def test_demo(
     for i in range(repeat_batches):
         repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    model_args, model, paged_attention_config, tt_kv_cache = create_tt_model(
+    model_args, model, paged_attention_config = create_tt_model(
         mesh_device,
         instruct=instruct,
         max_batch_size=batch_size,
@@ -533,7 +531,7 @@ def test_demo(
             # Get page table for this user
             if page_table is not None:
                 page_table_user = generator._ttt_generator._get_prefill_user_page_table(
-                    page_table, tt_kv_cache, decoding_pos
+                    page_table, generator.model.kv_cache_per_layer(), decoding_pos
                 )
             else:
                 page_table_user = None
@@ -546,7 +544,6 @@ def test_demo(
                 user_id=user_id,
                 last_token_idx=decoding_pos - 1,
                 rot_mats=(cos, sin),
-                kv_cache=tt_kv_cache,
                 deepstack_visual_embeds=deepstack_visual_embeds_processed,
             )
             profiler.end(f"inference_prefill_user_{user_id}", iteration=batch_idx)
@@ -610,7 +607,6 @@ def test_demo(
                 current_pos,
                 enable_trace=enable_trace,
                 page_table=page_table,
-                kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
             )
 

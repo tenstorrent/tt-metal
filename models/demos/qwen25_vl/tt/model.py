@@ -343,7 +343,7 @@ class Transformer(TTTransformer):
         state_dict,
         weight_cache_path,
         paged_attention_config=None,
-        use_paged_kv_cache=False,
+        create_kv_cache=True,
     ):
         # Call parent constructor with vision-specific classes
         super().__init__(
@@ -353,7 +353,7 @@ class Transformer(TTTransformer):
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
+            create_kv_cache=create_kv_cache,
             attention_class=Attention,
             rope_setup_class=RotarySetup,
         )

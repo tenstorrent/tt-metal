@@ -671,7 +671,6 @@ def test_layer_forward_decode_via_harness(mesh_device, reset_seeds, request):
         rope_mats=(cos_tt, sin_tt),
         position_idx=position_idx_tt,
         page_table=pt_tt,
-        kv_cache=kv_per_layer[layer_idx],
         is_decode=True,
         token_index=cache_len,
     )
@@ -763,8 +762,10 @@ def test_full_model_parity_uniform_vs_vllm(mesh_device, reset_seeds, request):
     tt_embeds = tt_model.embed_tokens(tt_tokens)
     tt_embeds = ttnn.reshape(tt_embeds, (1, 1, seq_len, model_args.hidden_size))
     tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
+    uniform_kv = list(tt_model.tt_kv_cache)
+    _install_kv_cache(tt_model, uniform_kv)
     uniform_prefill_logits = tt_model(
-        tt_embeds, rope_mats=None, position_idx=None, page_table=None, kv_caches=None, is_decode=False
+        tt_embeds, rope_mats=None, position_idx=None, page_table=None, is_decode=False
     )
     uniform_prefill_torch = _from_device(uniform_prefill_logits, mesh_device).float()
     uniform_prefill_logits.deallocate(True)
@@ -799,10 +800,10 @@ def test_full_model_parity_uniform_vs_vllm(mesh_device, reset_seeds, request):
     tt_embeds_v = tt_model.embed_tokens(tt_tokens_v)
     tt_embeds_v = ttnn.reshape(tt_embeds_v, (1, 1, seq_len, model_args.hidden_size))
     tt_embeds_v = ttnn.to_layout(tt_embeds_v, ttnn.TILE_LAYOUT)
+    _install_kv_cache(tt_model, kv_per_layer)
     vllm_prefill_logits = tt_model.ttnn_prefill_forward(
         tt_embeds_v,
         page_table=None,
-        kv_cache=kv_per_layer,
         input_ids_torch=tokens,
         embeds_torch=None,
         page_tables_per_layer=per_layer_pts,
@@ -854,14 +855,14 @@ def _build_parity_models(
     26B-A4B (128 experts × 6 layers) two weight copies plus the
     harness cache overflow the per-bank DRAM budget on wh_llmbox.
 
-    Now returns the *same* instance twice: the model's internal kv-cache
-    feeds the uniform pass (``kv_caches=None`` fall-through), and the
-    vLLM pass supplies its harness-allocated cache + per-layer page
-    tables as explicit ``kv_cache=`` / ``page_tables_per_layer=`` kwargs.
-    Both passes touch disjoint cache buffers, so weights stay shared
-    without state cross-pollution. The two-variable signature is kept
-    so existing call sites (uniform / vllm method calls on separately
-    named locals) need no churn.
+    Now returns the *same* instance twice. The KV cache is model-owned,
+    so each pass flips the model between caches via :func:`_install_kv_cache`
+    before its forward: the uniform pass installs the model's built-in
+    cache, the vLLM pass installs the harness-allocated cache (and routes
+    per-layer page tables via ``page_tables_per_layer=``). Both caches are
+    disjoint buffers, so weights stay shared without state cross-pollution.
+    The two-variable signature is kept so existing call sites (uniform /
+    vllm method calls on separately named locals) need no churn.
 
     The ``_active_page_tables_per_layer`` stash on the vllm side is
     fine under this single-model arrangement because every vllm caller
@@ -885,6 +886,23 @@ def _build_parity_models(
         paged_attention_config=uniform_paged_cfg,
     )
     return tt_model, tt_model
+
+
+def _install_kv_cache(model, kv_per_layer):
+    """Install a per-layer ``[k, v]`` list as the model's owned KV cache.
+
+    The KV cache is model-owned now (forwards no longer take a ``kv_cache=``
+    argument), so the parity tests swap the cache the model uses by re-pointing
+    each ``self_attn.kv_cache`` and refreshing ``tt_kv_cache``. Used to flip the
+    *single* shared parity model between its built-in uniform cache and the
+    harness-allocated vLLM-shape cache around each pass. ``kv_per_layer`` is
+    already kv-share aliased (the harness applies ``kv_shared_layer_map``), so a
+    plain reference assignment per layer reproduces both HMA tensor sharing and
+    Gemma4's architectural KV reuse.
+    """
+    for attn, kv_pair in zip(model._layer_attentions(), kv_per_layer):
+        attn.kv_cache = kv_pair
+    model.tt_kv_cache = list(kv_per_layer)
 
 
 def _decode_step_inputs(model, mesh_device, token_id, position):
@@ -1149,17 +1167,18 @@ def test_full_model_parity_decode_uniform_vs_vllm(layer_set, decode_steps, mesh_
         torch.arange(uniform_num_blocks, dtype=torch.int32).reshape(1, uniform_num_blocks), mesh_device
     )
 
+    uniform_kv = list(tt_model_uniform.tt_kv_cache)
+    _install_kv_cache(tt_model_uniform, uniform_kv)
     uniform_prefill_logits = tt_model_uniform.ttnn_prefill_forward(
         embeds_u,
         page_table=uniform_pt_prefill,
-        kv_cache=None,  # uses tt_model_uniform.tt_kv_cache (paged uniform)
         input_ids_torch=tokens,
         embeds_torch=None,
     )
+    _install_kv_cache(tt_model_vllm, kv_vllm)
     vllm_prefill_logits = tt_model_vllm.ttnn_prefill_forward(
         embeds_v,
         page_table=None,
-        kv_cache=kv_vllm,
         input_ids_torch=tokens,
         embeds_torch=None,
         page_tables_per_layer=pts_prefill_torch,
@@ -1204,8 +1223,9 @@ def test_full_model_parity_decode_uniform_vs_vllm(layer_set, decode_steps, mesh_
             mesh_device,
         )
 
+        _install_kv_cache(tt_model_uniform, uniform_kv)
         u_logits, _ = tt_model_uniform.ttnn_decode_forward(
-            u_embeds, u_pos, u_pos_int32, u_pt, kv_cache=None, pli_combined=u_pli
+            u_embeds, u_pos, u_pos_int32, u_pt, pli_combined=u_pli
         )
 
         # vLLM decode: refresh persistent buffers, build the legacy
@@ -1214,12 +1234,12 @@ def test_full_model_parity_decode_uniform_vs_vllm(layer_set, decode_steps, mesh_
         tt_model_vllm.update_persistent_per_layer_page_tables(pts_step_torch)
         v_embeds, v_pos, v_pos_int32, v_pli = _decode_step_inputs(tt_model_vllm, mesh_device, cur_tok, position)
         v_pt = _page_table_to_tt(pool.legacy_page_table(req), mesh_device)
+        _install_kv_cache(tt_model_vllm, kv_vllm)
         v_logits, _ = tt_model_vllm.ttnn_decode_forward(
             v_embeds,
             v_pos,
             v_pos_int32,
             v_pt,
-            kv_cache=kv_vllm,
             page_tables_per_layer=pts_step_torch,
             pli_combined=v_pli,
         )
@@ -1425,17 +1445,18 @@ def test_full_model_parity_decode_with_pli(layer_set, decode_steps, mesh_device,
     embed_w = tt_model_uniform._embed_weight_cpu
     embeds_torch_cpu = (F.embedding(tokens.long(), embed_w) * tt_model_uniform.embed_scale).float()
 
+    uniform_kv = list(tt_model_uniform.tt_kv_cache)
+    _install_kv_cache(tt_model_uniform, uniform_kv)
     uniform_prefill_logits = tt_model_uniform.ttnn_prefill_forward(
         embeds_u,
         page_table=uniform_pt_prefill,
-        kv_cache=None,
         input_ids_torch=tokens,
         embeds_torch=embeds_torch_cpu,
     )
+    _install_kv_cache(tt_model_vllm, kv_vllm)
     vllm_prefill_logits = tt_model_vllm.ttnn_prefill_forward(
         embeds_v,
         page_table=None,
-        kv_cache=kv_vllm,
         input_ids_torch=tokens,
         embeds_torch=embeds_torch_cpu,
         page_tables_per_layer=pts_prefill_torch,
@@ -1467,19 +1488,20 @@ def test_full_model_parity_decode_with_pli(layer_set, decode_steps, mesh_device,
             torch.arange(uniform_num_blocks, dtype=torch.int32).reshape(1, uniform_num_blocks)[0:1],
             mesh_device,
         )
+        _install_kv_cache(tt_model_uniform, uniform_kv)
         u_logits, _ = tt_model_uniform.ttnn_decode_forward(
-            u_embeds, u_pos, u_pos_int32, u_pt, kv_cache=None, pli_combined=u_pli
+            u_embeds, u_pos, u_pos_int32, u_pt, pli_combined=u_pli
         )
 
         tt_model_vllm.update_persistent_per_layer_page_tables(pts_step_torch)
         v_embeds, v_pos, v_pos_int32, v_pli = _decode_step_inputs(tt_model_vllm, mesh_device, cur_tok, position)
         v_pt = _page_table_to_tt(pool.legacy_page_table(req), mesh_device)
+        _install_kv_cache(tt_model_vllm, kv_vllm)
         v_logits, _ = tt_model_vllm.ttnn_decode_forward(
             v_embeds,
             v_pos,
             v_pos_int32,
             v_pt,
-            kv_cache=kv_vllm,
             page_tables_per_layer=pts_step_torch,
             pli_combined=v_pli,
         )
@@ -1655,17 +1677,18 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
 
     # Prefill once on both sides (same path as the existing parity
     # tests — trace coverage is exclusively for decode).
+    uniform_kv = list(tt_model_uniform.tt_kv_cache)
+    _install_kv_cache(tt_model_uniform, uniform_kv)
     uniform_prefill_logits = tt_model_uniform.ttnn_prefill_forward(
         embeds_u,
         page_table=uniform_pt_prefill,
-        kv_cache=None,
         input_ids_torch=tokens,
         embeds_torch=embeds_torch_cpu,
     )
+    _install_kv_cache(tt_model_vllm, kv_vllm)
     vllm_prefill_logits = tt_model_vllm.ttnn_prefill_forward(
         embeds_v,
         page_table=None,
-        kv_cache=kv_vllm,
         input_ids_torch=tokens,
         embeds_torch=embeds_torch_cpu,
         page_tables_per_layer=pts_prefill_torch,
@@ -1692,11 +1715,14 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
         pos_step = torch.tensor([position], dtype=torch.int32).reshape(1)
 
         # Uniform path: straight Generator.decode_forward, no per-layer routing.
+        # Model owns its cache now; install the uniform cache before the call so
+        # the (single shared) model — and the decode trace captured at step 0 —
+        # binds to the uniform buffers.
+        _install_kv_cache(tt_model_uniform, uniform_kv)
         u_out = gen_uniform.decode_forward(
             tokens=tokens_step,
             start_pos=pos_step,
             page_table=torch.arange(uniform_num_blocks, dtype=torch.int32).reshape(1, uniform_num_blocks),
-            kv_cache=None,  # uses tt_model_uniform.tt_kv_cache
             enable_trace=True,
             read_from_device=False,
             sampling_params=None,
@@ -1711,12 +1737,12 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
         pts_step_torch = pool.per_layer_page_tables(req)
         tt_model_vllm.update_persistent_per_layer_page_tables(pts_step_torch)
         tt_model_vllm._active_page_tables_per_layer = pts_step_torch
+        _install_kv_cache(tt_model_vllm, kv_vllm)
         try:
             v_out = gen_vllm.decode_forward(
                 tokens=tokens_step,
                 start_pos=pos_step,
                 page_table=pool.legacy_page_table(req),
-                kv_cache=[kv_vllm],
                 enable_trace=True,
                 read_from_device=False,
                 sampling_params=None,
@@ -1867,6 +1893,9 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
         num_devices=num_devices,
     )
     kv_vllm = allocate_vllm_kv_cache(mesh_device, layout, dtype=ttnn.bfloat16)
+    # Snapshot the (model-owned) uniform cache up front so warmup + decode can
+    # flip the single shared model between it and the vLLM-shape cache.
+    uniform_kv = list(tt_model_uniform.tt_kv_cache)
 
     # ── Phase 1: warmup decode trace capture (zero inputs) ───────────
     # This is the exact thing the plugin does in ``TTModelRunner.warmup``:
@@ -1887,9 +1916,10 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
     warmup_page_table_per_layer = [torch.zeros(1, warmup_num_blocks, dtype=torch.int32) for _ in range(num_layers)]
 
     # Uniform warmup — passes ``page_table`` as a single tensor,
-    # broadcast trivially by the model.
+    # broadcast trivially by the model. Install the uniform cache first so the
+    # (model-owned) cache and the warmup-captured trace bind the uniform buffers.
+    _install_kv_cache(tt_model_uniform, uniform_kv)
     gen_uniform.warmup_model_decode(
-        kv_cache=None,  # model uses self.tt_kv_cache (paged uniform)
         enable_trace=True,
         max_batch_size=1,
         num_blocks=uniform_num_blocks,
@@ -1904,9 +1934,9 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
     # writes wouldn't reach anything the trace actually reads.
     tt_model_vllm.update_persistent_per_layer_page_tables(warmup_page_table_per_layer)
     tt_model_vllm._active_page_tables_per_layer = warmup_page_table_per_layer
+    _install_kv_cache(tt_model_vllm, kv_vllm)
     try:
         gen_vllm.warmup_model_decode(
-            kv_cache=[kv_vllm],  # list-of-DP: harness kv-cache
             enable_trace=True,
             max_batch_size=1,
             num_blocks=warmup_num_blocks,
@@ -1944,17 +1974,18 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
     uniform_pt_prefill = _page_table_to_tt(
         torch.arange(uniform_num_blocks, dtype=torch.int32).reshape(1, uniform_num_blocks), mesh_device
     )
+    uniform_kv = list(tt_model_uniform.tt_kv_cache)
+    _install_kv_cache(tt_model_uniform, uniform_kv)
     uniform_prefill_logits = tt_model_uniform.ttnn_prefill_forward(
         embeds_u,
         page_table=uniform_pt_prefill,
-        kv_cache=None,
         input_ids_torch=tokens,
         embeds_torch=embeds_torch_cpu,
     )
+    _install_kv_cache(tt_model_vllm, kv_vllm)
     vllm_prefill_logits = tt_model_vllm.ttnn_prefill_forward(
         embeds_v,
         page_table=None,
-        kv_cache=kv_vllm,
         input_ids_torch=tokens,
         embeds_torch=embeds_torch_cpu,
         page_tables_per_layer=pts_prefill_torch,
@@ -1976,11 +2007,11 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
         tokens_step = torch.tensor([cur_tok], dtype=torch.int32).reshape(1)
         pos_step = torch.tensor([position], dtype=torch.int32).reshape(1)
 
+        _install_kv_cache(tt_model_uniform, uniform_kv)
         u_out = gen_uniform.decode_forward(
             tokens=tokens_step,
             start_pos=pos_step,
             page_table=torch.arange(uniform_num_blocks, dtype=torch.int32).reshape(1, uniform_num_blocks),
-            kv_cache=None,
             enable_trace=True,
             read_from_device=False,
             sampling_params=None,
@@ -1991,12 +2022,12 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
         pts_step_torch = pool.per_layer_page_tables(req)
         tt_model_vllm.update_persistent_per_layer_page_tables(pts_step_torch)
         tt_model_vllm._active_page_tables_per_layer = pts_step_torch
+        _install_kv_cache(tt_model_vllm, kv_vllm)
         try:
             v_out = gen_vllm.decode_forward(
                 tokens=tokens_step,
                 start_pos=pos_step,
                 page_table=pool.legacy_page_table(req),
-                kv_cache=[kv_vllm],
                 enable_trace=True,
                 read_from_device=False,
                 sampling_params=None,

@@ -28,7 +28,7 @@ class Attention(LightweightModule):
         transformation_mats,
         configuration,
         paged_attention_config=None,
-        use_paged_kv_cache=False,
+        create_kv_cache=True,
         prefetcher=None,
     ):
         super().__init__()
@@ -361,8 +361,15 @@ class Attention(LightweightModule):
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
-        if not use_paged_kv_cache:
-            # vLLM provides its own kv cache
+        # Model owns the KV cache. Demos/tests build it now (create_kv_cache=True).
+        # The vLLM path passes create_kv_cache=False and defers allocation to
+        # Transformer.allocate_kv_cache (once vLLM has chosen num_blocks), which
+        # calls build_paged_kv_pair below. layer_past stays None until then; the
+        # forwards assert on it (sentinel).
+        self.layer_past = None
+        self._configuration = configuration
+        self._weight_cache_path = weight_cache_path
+        if create_kv_cache:
             self.init_kv_cache(configuration, weight_cache_path)
 
         if configuration.query_pre_attn_scalar is not None:
@@ -379,61 +386,65 @@ class Attention(LightweightModule):
 
             self.prefetcher.register_callback(register_weights)
 
+    def _build_kv_pair(self, max_num_blocks, block_size, dtype=None, weight_cache_path=None, dummy_weights=False):
+        """Allocate one empty paged ``[k, v]`` cache pair on device.
+
+        Single source of KV-cache tensor construction. Used by ``init_kv_cache``
+        (construction-time, demos) and by ``Transformer.allocate_kv_cache`` (late,
+        vLLM — once num_blocks is known). Shape is the paged layout
+        ``(max_num_blocks, n_local_kv_heads, block_size, head_dim)``.
+        """
+        dtype = self.kv_cache_dtype if dtype is None else dtype
+        shape = (max_num_blocks, self.n_local_kv_heads, block_size, self.head_dim)
+        return [
+            ttnn.as_tensor(
+                torch.zeros(shape),
+                dtype=dtype,
+                layout=self.args.get_attn_weights_layout(),
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                cache_file_name=(
+                    f"{weight_cache_path}/kvcache_{tuple(shape)}"
+                    if weight_cache_path and not dummy_weights
+                    else None
+                ),
+            )
+            for _ in range(2)
+        ]
+
     def init_kv_cache(self, configuration, weight_cache_path):
         """
-        Generates empty KV cache and pushed to device memory
+        Generates empty KV cache and pushes to device memory (construction time).
         """
-
         if self.paged_attention_config:
-            cache_k = torch.zeros(
-                (
-                    self.paged_attention_config.max_num_blocks,
-                    self.n_local_kv_heads,
-                    self.paged_attention_config.block_size,
-                    self.head_dim,
-                )
+            self.layer_past = self._build_kv_pair(
+                self.paged_attention_config.max_num_blocks,
+                self.paged_attention_config.block_size,
+                weight_cache_path=weight_cache_path,
+                dummy_weights=configuration.dummy_weights,
             )
-            cache_v = torch.zeros(
-                (
-                    self.paged_attention_config.max_num_blocks,
-                    self.n_local_kv_heads,
-                    self.paged_attention_config.block_size,
-                    self.head_dim,
-                )
-            )
-        else:
-            cache_k = torch.zeros(
-                (
-                    self.batch_size_per_device_group,
-                    self.n_local_kv_heads,
-                    self.max_seq_len,
-                    self.head_dim,
-                )
-            )
-            cache_v = torch.zeros(
-                (
-                    self.batch_size_per_device_group,
-                    self.n_local_kv_heads,
-                    self.max_seq_len,
-                    self.head_dim,
-                )
-            )
+            return
 
+        # Non-paged (contiguous) cache: shape keyed on batch + max_seq_len.
+        cache = torch.zeros(
+            (self.batch_size_per_device_group, self.n_local_kv_heads, self.max_seq_len, self.head_dim)
+        )
         self.layer_past = [
             ttnn.as_tensor(
-                k_or_v,
+                cache,
                 dtype=self.kv_cache_dtype,
                 layout=self.args.get_attn_weights_layout(),
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=(
-                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                    f"{weight_cache_path}/kvcache_{cache.shape}"
                     if weight_cache_path and not configuration.dummy_weights
                     else None
                 ),
             )
-            for k_or_v in [cache_k, cache_v]
+            for _ in range(2)
         ]
 
     def to_qk_fused_memory_config(self, q_tensor: ttnn.Tensor, k_tensor: ttnn.Tensor):
@@ -580,7 +591,7 @@ class Attention(LightweightModule):
 
         return q_heads_1QSD, k_heads_1KSD
 
-    def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
+    def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
@@ -673,12 +684,11 @@ class Attention(LightweightModule):
         ###
         # KV update
         ###
-        if kv_cache:
-            keys = kv_cache[0]
-            values = kv_cache[1]
-        else:
-            keys = self.layer_past[0]
-            values = self.layer_past[1]
+        assert self.layer_past is not None, (
+            "KV cache not initialized; vLLM must call Transformer.allocate_kv_cache before decode"
+        )
+        keys = self.layer_past[0]
+        values = self.layer_past[1]
 
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
@@ -875,7 +885,6 @@ class Attention(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
-        kv_cache=None,
     ):
         # For batched prefill, x_11SH has shape [B, 1, S, H] where B is batch_size
         # concat before QKV matmul, then reshape back to batch after
@@ -976,10 +985,10 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
         # Fill KV-Cache
-        if kv_cache:
-            keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
-        else:
-            keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
+        assert self.layer_past is not None, (
+            "KV cache not initialized; vLLM must call Transformer.allocate_kv_cache before prefill"
+        )
+        keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=keys_BKSD.dtype)
         ttnn.deallocate(k_heads_1KSD)
@@ -1191,7 +1200,6 @@ class Attention(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
-        kv_cache=None,
     ):
         if mode == Mode.PREFILL:
             return self.forward_prefill(
@@ -1201,10 +1209,9 @@ class Attention(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache,
             )
         else:
-            return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
+            return self.forward_decode(x, current_pos, rot_mats, page_table=page_table)
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
         tensor_copy = ttnn.clone(key_or_value_layer)

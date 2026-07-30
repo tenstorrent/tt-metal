@@ -26,7 +26,7 @@ class TransformerBlock(LightweightModule):
         weight_cache_path,
         transformation_mats,
         paged_attention_config=None,
-        use_paged_kv_cache=False,
+        create_kv_cache=True,
         attention_class=None,
         prefetcher=None,
     ):
@@ -61,7 +61,7 @@ class TransformerBlock(LightweightModule):
             transformation_mats=transformation_mats,
             configuration=args,
             paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
+            create_kv_cache=create_kv_cache,
             prefetcher=prefetcher,
         )
 
@@ -227,7 +227,6 @@ class TransformerBlock(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
-        kv_cache=None,
         batch_size=1,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
@@ -262,7 +261,6 @@ class TransformerBlock(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
-            kv_cache=kv_cache,
         )
         # To match the batch-related reshape inside the attention module
         # Use the batch_size parameter instead of inferring from shape[-3]

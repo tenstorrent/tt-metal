@@ -107,6 +107,39 @@ class TtLlamaModel_optimized:
         for layer in self.layers:
             layer.set_model_config(model_config)
 
+    # --- KV cache ownership (model owns the cache) -------------------------------
+    # Each attention's ``layer_past`` IS the cache. Demos build it at construction.
+    # The vLLM path builds the model cache-less (vllm=True) and calls
+    # ``allocate_kv_cache`` once vLLM has chosen ``num_blocks``.
+    @property
+    def kv_cache_allocated(self):
+        """Sentinel: True once every layer has its KV cache."""
+        return all(getattr(layer.attention, "layer_past", None) is not None for layer in self.layers)
+
+    def kv_cache_per_layer(self):
+        """Per-layer ``[k, v]`` list (the owned cache)."""
+        return [layer.attention.layer_past for layer in self.layers]
+
+    def allocate_kv_cache(self, per_layer_specs):
+        """Late KV-cache allocation for the vLLM path.
+
+        ``per_layer_specs`` is one ``(shape, dtype, tensor_idx)`` per layer in
+        layer-index order, where ``shape = (num_blocks, num_kv_heads, block_size,
+        head_size)`` already carries vLLM's chosen ``num_blocks``. Layers sharing a
+        ``tensor_idx`` get the SAME tensor object. Builds via each attention's
+        ``_build_kv_pair`` so the allocation logic stays in one place.
+        """
+        assert len(per_layer_specs) == len(self.layers), (
+            f"allocate_kv_cache got {len(per_layer_specs)} specs for {len(self.layers)} layers"
+        )
+        by_tensor_idx = {}
+        for layer, (shape, _dtype, tensor_idx) in zip(self.layers, per_layer_specs):
+            if tensor_idx not in by_tensor_idx:
+                num_blocks, _num_kv_heads, block_size, _head_size = shape
+                by_tensor_idx[tensor_idx] = layer.attention._build_kv_pair(num_blocks, block_size)
+            layer.attention.layer_past = by_tensor_idx[tensor_idx]
+        return self.kv_cache_per_layer()
+
     def load_weights(self):
         norm_str = "norm.weight"
         norm_sharded_str = "norm_sharded.weight"
@@ -342,14 +375,12 @@ class TtLlamaModel_optimized:
         cache_idxs=None,
         last_token_idx=None,
         page_table=None,
-        kv_cache=None,
         mode="decode",
         chunk_page_table=None,
         chunk_start_idx=None,
     ) -> ttnn.Tensor:
         if self.vllm:
             assert page_table is not None
-            assert kv_cache is not None
         if mode == "prefill":
             return self.prefill_forward(
                 xs,
@@ -358,12 +389,11 @@ class TtLlamaModel_optimized:
                 user_id,
                 last_token_idx=last_token_idx,
                 page_table=page_table,
-                kv_cache=kv_cache,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
             )
         elif mode == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache)
+            return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table)
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
 
@@ -374,12 +404,11 @@ class TtLlamaModel_optimized:
         start_pos: int,
         cache_idxs,
         page_table=None,
-        kv_cache=None,
     ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
             xs = layer(
-                xs, rot_mats, start_pos, cache_idxs=cache_idxs, page_table=page_table, kv_cache=kv_cache, mode="decode"
+                xs, rot_mats, start_pos, cache_idxs=cache_idxs, page_table=page_table, mode="decode"
             )  # xs is sharded
 
         # xs = ttnn.all_gather(
@@ -453,7 +482,6 @@ class TtLlamaModel_optimized:
         user_id: int = 0,
         last_token_idx=None,
         page_table=None,
-        kv_cache=None,
         chunk_page_table=None,
         chunk_start_idx=None,
     ) -> ttnn.Tensor:
@@ -465,7 +493,6 @@ class TtLlamaModel_optimized:
                 start_pos,
                 user_id,
                 page_table=page_table,
-                kv_cache=kv_cache,
                 mode="prefill",
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,

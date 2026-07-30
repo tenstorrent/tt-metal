@@ -57,7 +57,6 @@ class GemmaMultimodalGenerator(Generator):
         self,
         tokens: torch.Tensor,
         page_table=None,
-        kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
         enable_trace: bool = True,
@@ -75,7 +74,6 @@ class GemmaMultimodalGenerator(Generator):
         return self.prefill_forward_text(
             tokens,
             page_table=page_table,
-            kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             enable_trace=enable_trace,
@@ -96,7 +94,6 @@ class GemmaMultimodalGenerator(Generator):
         total_lens,
         prompt_lens,
         page_table=None,
-        kv_cache=None,
         cross_page_table=None,
         empty_slots=None,
         **kwargs,
@@ -105,7 +102,6 @@ class GemmaMultimodalGenerator(Generator):
         return self.prefill_forward_multimodal(
             tokens,
             page_table=page_table,
-            kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             pixel_values=vision_images,
@@ -116,7 +112,6 @@ class GemmaMultimodalGenerator(Generator):
         self,
         tokens: torch.Tensor,  # All tokens, including the cached ones
         page_table=None,
-        kv_cache=None,
         prompt_lens=None,  # Full prompt lengths, including the cached ones
         empty_slots=None,
         enable_trace=True,
@@ -145,7 +140,6 @@ class GemmaMultimodalGenerator(Generator):
             )
 
             self.warmup_model_prefill(
-                kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=on_device_sampling_enabled,
             )
@@ -193,7 +187,6 @@ class GemmaMultimodalGenerator(Generator):
             return self._row_sharded_batched_prefill(
                 tokens,
                 page_table,
-                kv_cache,
                 prompt_lens,
                 prefill_seq_lens=prefill_seq_lens,
                 enable_trace=enable_trace,
@@ -311,7 +304,7 @@ class GemmaMultimodalGenerator(Generator):
                 page_table_for_user = page_table if use_batched_prefill else page_table[idx : idx + 1]
                 page_table_user = self._get_prefill_user_page_table(
                     page_table_for_user,
-                    kv_cache[model_id],
+                    self._model_kv_cache(model_id),
                     seq_len,
                     trace_enabled=enable_trace_current_prompt,
                     prefill_seq_len=prefill_seq_len,
@@ -335,8 +328,6 @@ class GemmaMultimodalGenerator(Generator):
                     list(page_table_user.shape),
                     sample,
                 )
-            model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
-
             # Per-user multimodal kwargs (Gemma3 uses vision_embeddings via GemmaMultimodalGenerator;
             # other models typically omit these keys.)
             if "vision_embeddings" in local_kwargs and local_kwargs["vision_embeddings"] is not None:
@@ -371,7 +362,6 @@ class GemmaMultimodalGenerator(Generator):
                     page_table=page_table_user,
                     user_id=batch_user_ids if use_batched_prefill else group_user_id,
                     last_token_idx=last_token_idx,
-                    kv_cache=model_kv_cache,
                     model_id=model_id,
                     prefill_seq_len=prefill_seq_len,
                     batch_size=padded_batch if use_batched_prefill else 1,
@@ -383,7 +373,6 @@ class GemmaMultimodalGenerator(Generator):
                     page_table=page_table_user,
                     user_id=batch_user_ids if use_batched_prefill else group_user_id,
                     last_token_idx=last_token_idx,
-                    kv_cache=model_kv_cache,
                     model_id=model_id,
                     num_cached_tokens=0 if use_batched_prefill else num_cached_tokens,
                     batch_size=padded_batch if use_batched_prefill else 1,
@@ -568,7 +557,7 @@ class GemmaMultimodalGenerator(Generator):
         else:
             return output_tensor
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
+    def warmup_model_prefill(self, enable_trace, can_sample_on_device, greedy_only: bool = False):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
@@ -601,7 +590,7 @@ class GemmaMultimodalGenerator(Generator):
                         )
                         continue
 
-                    warmup_args = self._mock_tokens(batch_size, supported_length, kv_cache, model_id)
+                    warmup_args = self._mock_tokens(batch_size, supported_length, model_id)
 
                     # chunked prefill not supported without paged attention
                     if warmup_args["page_table"] is None and max_prefill_chunk_size_cutoff(
@@ -628,7 +617,6 @@ class GemmaMultimodalGenerator(Generator):
                         )
                         self.prefill_forward_text(
                             **warmup_args,
-                            kv_cache=kv_cache,
                             enable_trace=enable_trace,
                             model_id_warmup=model_id,
                             sampling_params=param,
@@ -653,7 +641,7 @@ class GemmaMultimodalGenerator(Generator):
 
             # Minimal text tokens for vision warmup pass, prefill expects non-empty tokens
             batch_size = 1  # VLMs support only batch=1 for now
-            prefill_forward_args = self._mock_tokens(batch_size, 128, kv_cache, model_id)
+            prefill_forward_args = self._mock_tokens(batch_size, 128, model_id)
 
             logger.info(f"Warming up vision encoder with image size {vision_chunk_size}x{vision_chunk_size}")
 
@@ -662,7 +650,6 @@ class GemmaMultimodalGenerator(Generator):
                 multimodal_prefill(
                     prefill_forward_args["tokens"],
                     page_table=prefill_forward_args["page_table"],
-                    kv_cache=kv_cache,
                     prompt_lens=prefill_forward_args["prompt_lens"],
                     empty_slots=prefill_forward_args["empty_slots"],
                     enable_trace=False,  # Vision encoder warmup doesn't support trace
@@ -674,7 +661,6 @@ class GemmaMultimodalGenerator(Generator):
             else:
                 self.prefill_forward_text(
                     **prefill_forward_args,
-                    kv_cache=kv_cache,
                     enable_trace=False,  # Vision encoder warmup doesn't support trace
                     model_id_warmup=model_id,
                     sampling_params=None,

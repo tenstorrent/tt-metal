@@ -21,7 +21,7 @@ class TtTransformerBlock(LightweightModule):
         weight_cache_path,
         transformation_mats,
         paged_attention_config=None,
-        use_paged_kv_cache=False,
+        create_kv_cache=True,
         prefetcher_setup=None,
         tt_ccl=None,
     ):
@@ -58,7 +58,7 @@ class TtTransformerBlock(LightweightModule):
             transformation_mats=transformation_mats,
             configuration=args,
             paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
+            create_kv_cache=create_kv_cache,
             prefetcher_setup=prefetcher_setup,
             tt_ccl=tt_ccl,
         )
@@ -130,7 +130,6 @@ class TtTransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         chunk_start_idx_tensor=None,
-        kv_cache=None,
         batch_size=1,
     ) -> ttnn.Tensor:
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
@@ -166,7 +165,6 @@ class TtTransformerBlock(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             chunk_start_idx_tensor=chunk_start_idx_tensor,
-            kv_cache=kv_cache,
             batch_size=batch_size,
         )
         if mode == "prefill":

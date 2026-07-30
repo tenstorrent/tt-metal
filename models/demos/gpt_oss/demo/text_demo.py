@@ -670,7 +670,6 @@ def test_gpt_oss_demo(
                     page_table=user_page_table,
                     user_id=0,
                     last_token_idx=user_prefill_len - 1,
-                    kv_cache=tt_kv_cache[model_id],
                     model_id=model_id,
                     global_user_id=user_id,  # Pass actual global user_id for mesh row targeting
                 )
@@ -704,7 +703,6 @@ def test_gpt_oss_demo(
             generator.prefill_forward_text(
                 input_tokens_prefill_pt,
                 page_table=page_table,
-                kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 enable_trace=enable_prefill_trace,
                 warmup_prefill=warmup_prefill,
@@ -724,7 +722,6 @@ def test_gpt_oss_demo(
             prefill_result = generator.prefill_forward_text(
                 input_tokens_prefill_pt,
                 page_table=page_table,
-                kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 enable_trace=enable_prefill_trace,
                 warmup_prefill=False,
@@ -744,7 +741,6 @@ def test_gpt_oss_demo(
             generator.prefill_forward_text(
                 input_tokens_prefill_pt[:1],
                 page_table=page_table,
-                kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 enable_trace=enable_prefill_trace,
                 warmup_prefill=warmup_prefill,
@@ -757,7 +753,6 @@ def test_gpt_oss_demo(
             logits = generator.prefill_forward_text(
                 input_tokens_prefill_pt,
                 page_table=page_table,
-                kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 enable_trace=enable_prefill_trace,
                 warmup_prefill=warmup_prefill,
@@ -807,7 +802,6 @@ def test_gpt_oss_demo(
                     current_pos,
                     enable_trace=enable_decode_trace,
                     page_table=page_table,
-                    kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
                 )
             else:
@@ -817,7 +811,6 @@ def test_gpt_oss_demo(
                     current_pos,
                     enable_trace=enable_decode_trace,
                     page_table=page_table,
-                    kv_cache=tt_kv_cache,
                     sampling_params=None,
                 )
                 out_tok = torch.argmax(logits, dim=-1).view(-1)

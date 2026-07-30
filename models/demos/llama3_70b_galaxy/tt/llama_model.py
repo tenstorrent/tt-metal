@@ -28,7 +28,7 @@ class TtTransformer(LightweightModule):
         state_dict,
         weight_cache_path,
         paged_attention_config=None,
-        use_paged_kv_cache=False,
+        create_kv_cache=True,
         enable_prefetcher_performance_mode=False,
         mode="decode",
         allocate_prefill_buffers=True,
@@ -89,7 +89,7 @@ class TtTransformer(LightweightModule):
                 n_layers=self.n_layers,
                 transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
-                use_paged_kv_cache=use_paged_kv_cache,
+                create_kv_cache=create_kv_cache,
                 prefetcher_setup=self.prefetcher_setup,
                 tt_ccl=self.tt_ccl,
             )
@@ -164,6 +164,41 @@ class TtTransformer(LightweightModule):
                 start_pos=0,
             )
         return self.tt_rot_mats_prefill
+
+    # --- KV cache ownership (model owns the cache) -------------------------------
+    # Each attention's ``layer_past`` IS the cache. Demos build it at construction
+    # (create_kv_cache=True). The vLLM path builds the model with
+    # create_kv_cache=False and calls ``allocate_kv_cache`` once vLLM has chosen
+    # ``num_blocks`` — same allocation routine, late.
+    @property
+    def kv_cache_allocated(self):
+        """Sentinel: True once every layer has its KV cache."""
+        return all(getattr(layer.attention, "layer_past", None) is not None for layer in self.layers)
+
+    def kv_cache_per_layer(self):
+        """Per-layer ``[k, v]`` list (the owned cache). Used by the Generator for
+        cache geometry (block size, max blocks); valid only post-allocation."""
+        return [layer.attention.layer_past for layer in self.layers]
+
+    def allocate_kv_cache(self, per_layer_specs):
+        """Late KV-cache allocation for the vLLM path.
+
+        ``per_layer_specs`` is one ``(shape, dtype, tensor_idx)`` per layer in
+        layer-index order, where ``shape = (num_blocks, num_kv_heads, block_size,
+        head_size)`` already carries vLLM's chosen ``num_blocks``. Layers sharing a
+        ``tensor_idx`` get the SAME tensor object. Builds via each attention's
+        ``_build_kv_pair`` so the allocation logic stays in one place.
+        """
+        assert len(per_layer_specs) == len(self.layers), (
+            f"allocate_kv_cache got {len(per_layer_specs)} specs for {len(self.layers)} layers"
+        )
+        by_tensor_idx = {}
+        for layer, (shape, _dtype, tensor_idx) in zip(self.layers, per_layer_specs):
+            if tensor_idx not in by_tensor_idx:
+                num_blocks, _num_kv_heads, block_size, _head_size = shape
+                by_tensor_idx[tensor_idx] = layer.attention._build_kv_pair(num_blocks, block_size)
+            layer.attention.layer_past = by_tensor_idx[tensor_idx]
+        return self.kv_cache_per_layer()
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
@@ -652,7 +687,6 @@ class TtTransformer(LightweightModule):
         chunk_start_idx=None,  # ttnn.Tensor, shape [1]; index of cached-token split for prefix caching, replicated across all devices
         start_pos=0,  # int, starting position in sequence for attention (used in SDPA path decision)
         get_last_token=-1,  # int or list[int], output mode: which token to return (last idx or indices)
-        kv_cache=None,  # ttnn.Tensor, data parallel across cols, head parallel across rows
         rot_mats=None,  # Tuple[ttnn.Tensor, ttnn.Tensor], each of shape [1, 1, max_seq_len, head_dim]; RoPE matrices for full (0..max_seq_len) replicated across all devices
         batch_size=1,  # int, number of users or batch size for prefill; controls input slicing and paging
     ):
@@ -677,7 +711,6 @@ class TtTransformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             start_pos=start_pos,
             get_last_token=get_last_token,
-            kv_cache=kv_cache,
             batch_size=batch_size,
         )
         return tt_logits
@@ -701,7 +734,6 @@ class TtTransformer(LightweightModule):
         current_pos,
         rot_mat_idxs,
         page_table=None,
-        kv_cache=None,
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         on_device_logits=False,
@@ -718,7 +750,6 @@ class TtTransformer(LightweightModule):
             rot_mats=rot_mats,
             mode="decode",
             page_table=page_table,
-            kv_cache=kv_cache,
         )
         self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
 
@@ -795,7 +826,6 @@ class TtTransformer(LightweightModule):
         chunk_start_idx=None,  # On-device
         start_pos=0,  # Python int
         get_last_token=-1,
-        kv_cache=None,
         batch_size=1,
     ):
         if mode == "decode":
@@ -837,7 +867,7 @@ class TtTransformer(LightweightModule):
 
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
-        for i, layer in enumerate(self.layers):
+        for layer in self.layers:
             x, h = layer(
                 x,
                 h,
@@ -849,7 +879,6 @@ class TtTransformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=start_pos,
                 chunk_start_idx_tensor=chunk_start_idx if mode == "prefill" else None,
-                kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
             )
         # ttnn.deallocate(h)

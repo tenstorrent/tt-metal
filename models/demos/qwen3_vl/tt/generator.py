@@ -49,7 +49,6 @@ class Generator(WarmupForwardMixin):
         tokens: torch.Tensor,
         rot_mats,
         page_table=None,
-        kv_cache=None,
         prompt_lens=None,
         deepstack_visual_embeds=None,
     ):
@@ -68,7 +67,9 @@ class Generator(WarmupForwardMixin):
             last_token_idx = seq_len - 1
 
             if page_table is not None:
-                page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
+                page_table_user = self._ttt_generator._get_prefill_user_page_table(
+                    page_table, self.model.kv_cache_per_layer(), seq_len
+                )
 
             logits = self.prefill_forward_single_user_text(
                 tokens[user_id : user_id + 1],
@@ -76,7 +77,6 @@ class Generator(WarmupForwardMixin):
                 user_id=user_id,
                 last_token_idx=last_token_idx,
                 rot_mats=rot_mats,
-                kv_cache=kv_cache,
                 deepstack_visual_embeds=deepstack_visual_embeds[user_id]
                 if deepstack_visual_embeds is not None
                 else None,
@@ -109,7 +109,6 @@ class Generator(WarmupForwardMixin):
         tokens,
         start_pos,
         page_table=None,
-        kv_cache=None,
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
@@ -118,14 +117,13 @@ class Generator(WarmupForwardMixin):
             tokens=tokens,
             start_pos=start_pos,
             page_table=page_table,
-            kv_cache=[kv_cache],
             enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
         )
 
     def prefill_forward_single_user_text(
-        self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None, deepstack_visual_embeds=None
+        self, tokens, page_table, user_id, last_token_idx, rot_mats, deepstack_visual_embeds=None
     ):
         seq_len = tokens.shape[1]
         use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
@@ -140,12 +138,11 @@ class Generator(WarmupForwardMixin):
              - due to the above point, we must always set user_id to 0 for chunked prefill.
             """
             assert page_table is not None, "page_table must be provided for chunked prefill"
-            assert kv_cache is not None, "kv_cache must be provided for chunked prefill"
             assert (
                 last_token_idx is not None and last_token_idx < seq_len
             ), "last_token_idx must be provided and less than seq_len"
             chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args.max_prefill_chunk_size)
-            block_size = get_block_size(kv_cache)
+            block_size = get_block_size(self.model.kv_cache_per_layer())
             last_token_idx_in_chunk = last_token_idx % chunk_size
             # Calculate which chunk contains the last_token_idx
             last_chunk_start = (last_token_idx // chunk_size) * chunk_size
@@ -193,7 +190,6 @@ class Generator(WarmupForwardMixin):
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
-                    kv_cache=kv_cache,
                     deepstack_visual_embeds=deepstack_visual_embeds_chunk,
                 )
 
@@ -225,7 +221,6 @@ class Generator(WarmupForwardMixin):
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
-                kv_cache=kv_cache,
                 deepstack_visual_embeds=deepstack_visual_embeds,
             )
 

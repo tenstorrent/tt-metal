@@ -45,7 +45,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def processor(self):
         return self._ttt_generator.processor
 
-    def prefill_forward_text(self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None):
+    def prefill_forward_text(self, tokens: torch.Tensor, rot_mats, page_table=None, prompt_lens=None):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
@@ -61,7 +61,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             last_token_idx = seq_len - 1
 
             if page_table is not None:
-                page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
+                page_table_user = self._ttt_generator._get_prefill_user_page_table(
+                    page_table, self.model.kv_cache_per_layer(), seq_len
+                )
 
             logits = self.__prefill_forward_single_user_text(
                 tokens[user_id : user_id + 1],
@@ -69,7 +71,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 user_id=user_id,
                 last_token_idx=last_token_idx,
                 rot_mats=rot_mats,
-                kv_cache=kv_cache,
             )
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
@@ -99,7 +100,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         tokens,
         start_pos,
         page_table=None,
-        kv_cache=None,
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
@@ -108,13 +108,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             tokens=tokens,
             start_pos=start_pos,
             page_table=page_table,
-            kv_cache=[kv_cache],
             enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
         )
 
-    def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None):
+    def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, rot_mats):
         seq_len = tokens.shape[1]
         use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
         if use_chunked_prefill:
@@ -128,12 +127,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
              - due to the above point, we must always set user_id to 0 for chunked prefill.
             """
             assert page_table is not None, "page_table must be provided for chunked prefill"
-            assert kv_cache is not None, "kv_cache must be provided for chunked prefill"
             assert (
                 last_token_idx is not None and last_token_idx < seq_len
             ), "last_token_idx must be provided and less than seq_len"
             chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args.max_prefill_chunk_size)
-            block_size = get_block_size(kv_cache)
+            block_size = get_block_size(self.model.kv_cache_per_layer())
             last_token_idx_in_chunk = last_token_idx % chunk_size
             # Calculate which chunk contains the last_token_idx
             last_chunk_start = (last_token_idx // chunk_size) * chunk_size
@@ -173,7 +171,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
-                    kv_cache=kv_cache,
                 )
 
                 if chunk_start == last_chunk_start:
@@ -196,7 +193,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
-                kv_cache=kv_cache,
             )
 
             logits = self.model.process_output_prefill(tt_logits.cpu(), last_token_idx=(last_token_idx % 32))

@@ -232,7 +232,6 @@ def run_generation_exactly_like_test_end2end(
 
     logger.info("Running Vision Model...")
     generator = Generator([text_model], [model_args], vision_model.mesh_device, tokenizer=model_args.tokenizer)
-    tt_kv_cache = [[l.attention.layer_past for l in text_model.layers]] if paged_attention_config else None
 
     input_tokens_prefill = input_ids
     batch_size = input_tokens_prefill.shape[0]
@@ -260,7 +259,6 @@ def run_generation_exactly_like_test_end2end(
     logits = generator.prefill_forward_text(
         input_tokens_prefill_pt,
         page_table=page_table,
-        kv_cache=tt_kv_cache,
         prompt_lens=decoding_pos,
         vision_model=vision_model,
         processed_inputs=processed_inputs,
@@ -308,7 +306,6 @@ def run_generation_exactly_like_test_end2end(
             current_pos,
             enable_trace=False,
             page_table=page_table,
-            kv_cache=tt_kv_cache,
         )
 
         # decode_forward returns (logits, log_probs) tuple when read_from_device=True

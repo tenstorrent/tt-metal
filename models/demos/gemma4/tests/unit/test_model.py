@@ -298,7 +298,7 @@ def test_single_layer_model(mesh_device, layer_group, reset_seeds, request):
     tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
     # Don't pass rope_mats — let model use internal per-layer-type RoPE caches
-    tt_logits = tt_model(tt_embeds, rope_mats=None, position_idx=None, page_table=None, kv_caches=None, is_decode=False)
+    tt_logits = tt_model(tt_embeds, rope_mats=None, position_idx=None, page_table=None, is_decode=False)
     tt_logits_torch = (
         (ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]) if is_mesh else ttnn.to_torch(tt_logits))
         .squeeze(0)
@@ -417,7 +417,6 @@ def test_full_model(mesh_device, reset_seeds, request):
     tt_logits = tt_model.ttnn_prefill_forward(
         embeds,
         page_table=None,
-        kv_cache=tt_kv_cache,
         input_ids_torch=input_ids_padded,
         embeds_torch=embeds_torch,
     )
@@ -548,7 +547,6 @@ def test_full_model_decode(mesh_device, reset_seeds, request):
     tt_model.ttnn_prefill_forward(
         embeds,
         page_table=None,
-        kv_cache=tt_kv_cache,
         input_ids_torch=input_ids_padded,
         embeds_torch=None,
     ).deallocate(True)
@@ -560,7 +558,6 @@ def test_full_model_decode(mesh_device, reset_seeds, request):
         current_pos=device_inputs[1],
         rot_mat_idxs=device_inputs[2],
         page_table=device_inputs[3],
-        kv_cache=tt_kv_cache,
     )
     if is_mesh and tp > 1:
         shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(logits)]
@@ -663,8 +660,7 @@ def _build_decode_harness(mesh_device, model_path, decode_pos, max_seq_len=8192,
             current_pos=inputs["position"],
             rot_mat_idxs=inputs["position_int32"],
             page_table=page_table_tt,
-            kv_cache=tt_kv_cache,
-            pli_combined=inputs.get("pli"),
+                pli_combined=inputs.get("pli"),
         )
         return logits
 
@@ -875,7 +871,6 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
     warm = model.ttnn_prefill_forward(
         x=_embed(),
         page_table=page_table_tt,
-        kv_cache=tt_kv_cache,
         get_last_token=get_last_token,
         user_id=0,
         pli_device_tensors=prefill_pli_device_tensors,
@@ -891,7 +886,6 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
     trace_out = model.ttnn_prefill_forward(
         x=x,
         page_table=page_table_tt,
-        kv_cache=tt_kv_cache,
         user_id=0,
         pli_device_tensors=prefill_pli_device_tensors,
     )
@@ -1041,8 +1035,7 @@ def test_single_decode(mesh_device, reset_seeds, request):
             current_pos=inputs["position"],
             rot_mat_idxs=inputs["position_int32"],
             page_table=page_table_tt,
-            kv_cache=tt_kv_cache,
-            pli_combined=inputs.get("pli"),
+                pli_combined=inputs.get("pli"),
         )
         return logits
 

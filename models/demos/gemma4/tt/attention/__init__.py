@@ -106,6 +106,9 @@ class Gemma4Attention:
             weight_dtype=weight_dtype,
         )
 
+        self._max_batch_size = max_batch_size
+        self._max_seq_len = max_seq_len
+        self._kv_cache_path = tensor_cache_path
         if create_kv_cache:
             self.kv_cache = init_kv_cache(
                 mesh_device=mesh_device,
@@ -117,13 +120,38 @@ class Gemma4Attention:
         else:
             self.kv_cache = None
 
+    def _build_kv_pair(self, num_blocks, block_size):
+        """Build a paged ``[k_cache, v_cache]`` for this layer's config.
+
+        Used by ``Gemma4Model.allocate_kv_cache`` (the model-owns-cache vLLM
+        path) to materialize one buffer per unique ``tensor_idx`` from the
+        per-layer spec shape ``(num_blocks, num_kv_heads, block_size, head_size)``.
+        Mirrors the paged branch of :func:`init_kv_cache` so the buffer geometry
+        matches what the attention forward expects.
+        """
+
+        class _PagedCfg:
+            pass
+
+        paged_cfg = _PagedCfg()
+        paged_cfg.max_num_blocks = num_blocks
+        paged_cfg.block_size = block_size
+        return init_kv_cache(
+            mesh_device=self.mesh_device,
+            config=self.config,
+            max_batch_size=self._max_batch_size,
+            max_seq_len=self._max_seq_len,
+            paged_attention_config=paged_cfg,
+            cache_dtype=ttnn.bfloat16,
+            tensor_cache_path=self._kv_cache_path,
+        )
+
     def __call__(
         self,
         hidden_states,
         rope_mats=None,
         position_idx=None,
         page_table=None,
-        kv_cache=None,
         is_decode=True,
         token_index=None,
         shared_kv=None,
@@ -138,19 +166,31 @@ class Gemma4Attention:
         """
         Attention forward pass — dispatches to on-device decode or prefill.
 
+        The KV cache is model-owned: the forward always uses ``self.kv_cache``
+        (set at construction with ``create_kv_cache=True`` or later via
+        ``Gemma4Model.allocate_kv_cache`` on the vLLM path). It is never passed
+        in as a forward argument.
+
         Args:
             hidden_states: [1, 1, seq_len, hidden_size] on device
             rope_mats: (cos_cache, sin_cache) TT tensors, shape [1, 1, max_seq_len, head_dim]
             position_idx: position tensor for KV cache update (decode only)
             page_table: paged attention page table
-            kv_cache: [k_cache, v_cache] or None
             is_decode: True for decode mode
             token_index: int position for decode RoPE slicing (decode only)
             shared_kv: optional (tt_k, tt_v) from source layer for KV sharing (prefill only)
             keep_kv: if True, keep K/V alive for sharing with later layers (prefill only)
             is_kv_shared: if True, this layer shares KV from source (skip K/V proj + cache update)
         """
-        cache = kv_cache or self.kv_cache
+        cache = self.kv_cache
+        # Decode and paged prefill always need a materialized cache. A cache-free
+        # prefill (no paging, non-shared) is still valid for pure attention-math
+        # PCC checks, so the sentinel only fires when the cache is genuinely
+        # required — catching a "forgot to allocate" bug without breaking those.
+        assert cache is not None or (not is_decode and page_table is None and not is_kv_shared), (
+            f"Gemma4Attention layer {self.layer_idx} has no KV cache; build the model "
+            "with create_kv_cache=True or call Gemma4Model.allocate_kv_cache(specs) first"
+        )
         cos_cache, sin_cache = rope_mats
 
         if is_decode:

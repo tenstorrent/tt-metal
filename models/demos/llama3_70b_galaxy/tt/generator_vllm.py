@@ -3,42 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch
-from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.generator import Generator
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
-
-
-def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
-    submesh_devices = [model.mesh_device]
-    kv_cache = []
-
-    for mesh_idx, submesh in enumerate(submesh_devices):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
-        kv_tt = []
-        for _ in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
-            kv_tt_i = [
-                ttnn.as_tensor(
-                    cache_kv,
-                    device=submesh,
-                    # TODO: this could be ShardTensorToMesh, removing the need for vLLM to know about TP for num_kv_heads.
-                    # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat8_b,
-                    # Separate cache files for K and V to avoid collision.
-                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
-                )
-                for kv in ["k", "v"]
-            ]
-
-            kv_tt.append(kv_tt_i)
-        kv_cache.append(kv_tt)
-    return kv_cache
 
 
 def initialize_vllm_text_transformer(
@@ -87,7 +56,7 @@ def initialize_vllm_text_transformer(
             dtype=dtype,
             state_dict=state_dict,
             weight_cache_path=model_args[i].weight_cache_path(dtype),
-            use_paged_kv_cache=True,
+            create_kv_cache=False,
             mode="prefill",
             enable_prefetcher_performance_mode=True,
         )
@@ -142,7 +111,7 @@ def initialize_vllm_text_transformer_qwen(
             dtype=dtype,
             state_dict=state_dict,
             weight_cache_path=model_args[i].weight_cache_path(dtype),
-            use_paged_kv_cache=True,
+            create_kv_cache=False,
             mode="prefill",
             enable_prefetcher_performance_mode=True,
         )
@@ -207,8 +176,11 @@ class LlamaForCausalLM(Generator):
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward(*args, **kwargs)
 
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, model=self.model, tt_cache_path=self.cache_path)
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        # Model owns the cache: build one (shape, dtype, tensor_idx) per layer
+        # (unique tensor_idx => one buffer per layer) and install into the model.
+        per_layer_specs = [(kv_cache_shape, dtype, i) for i in range(num_layers)]
+        return self.model.allocate_kv_cache(per_layer_specs)
 
 
 # @INPUT_REGISTRY.register_input_processor(input_processor_for_qwen_text)
@@ -257,5 +229,6 @@ class QwenForCausalLM(Generator):
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward(*args, **kwargs)
 
-    def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, model=self.model, tt_cache_path=self.cache_path)
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        per_layer_specs = [(kv_cache_shape, dtype, i) for i in range(num_layers)]
+        return self.model.allocate_kv_cache(per_layer_specs)

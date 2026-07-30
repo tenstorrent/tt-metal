@@ -199,7 +199,6 @@ class Gemma4DecoderLayer:
         rope_mats,
         position_idx,
         page_table,
-        kv_cache,
         is_decode,
         token_index=None,
         per_layer_input=None,
@@ -220,7 +219,6 @@ class Gemma4DecoderLayer:
             rope_mats: precomputed RoPE matrices
             position_idx: current position index
             page_table: paged attention page table
-            kv_cache: KV cache for this layer
             is_decode: True for decode mode
             shared_kv: optional (tt_k, tt_v) from source layer for KV sharing (prefill only)
             keep_kv: if True, keep K/V alive for sharing with later layers (prefill only)
@@ -241,7 +239,6 @@ class Gemma4DecoderLayer:
             rope_mats=rope_mats,
             position_idx=position_idx,
             page_table=page_table,
-            kv_cache=kv_cache,
             is_decode=is_decode,
             token_index=token_index,
             shared_kv=shared_kv,

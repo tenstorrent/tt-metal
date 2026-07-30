@@ -221,7 +221,7 @@ class SpeculativeDecoder:
         # Compile run (warm program cache before capture).
         _lg.info(f"[spec-trace] capture verify batch={batch}: compile run")
         logits, hidden = self.target.ttnn_verify_forward(
-            x=x_dev, current_pos=pu_dev, current_pos_cache=pi_dev, page_table=pt_dev, kv_cache=self.tt_kv_cache
+            x=x_dev, current_pos=pu_dev, current_pos_cache=pi_dev, page_table=pt_dev
         )
         ttnn.synchronize_device(self.mesh_device)
         logits.deallocate(True)
@@ -229,7 +229,7 @@ class SpeculativeDecoder:
         _lg.info(f"[spec-trace] capture verify batch={batch}: begin_trace_capture")
         tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         logits, hidden = self.target.ttnn_verify_forward(
-            x=x_dev, current_pos=pu_dev, current_pos_cache=pi_dev, page_table=pt_dev, kv_cache=self.tt_kv_cache
+            x=x_dev, current_pos=pu_dev, current_pos_cache=pi_dev, page_table=pt_dev
         )
         _lg.info(f"[spec-trace] capture verify batch={batch}: end_trace_capture")
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
@@ -292,7 +292,7 @@ class SpeculativeDecoder:
         pos_u, pos_i = self._pos_tensors(positions)
         pt = self._page_table(len(tokens))
         logits, hidden = self.target.ttnn_verify_forward(
-            x=x, current_pos=pos_u, current_pos_cache=pos_i, page_table=pt, kv_cache=self.tt_kv_cache
+            x=x, current_pos=pos_u, current_pos_cache=pos_i, page_table=pt
         )
         lh = self._logits_to_host(logits).reshape(len(tokens), -1)
         logits.deallocate(True)
@@ -508,7 +508,7 @@ class SpeculativeDecoder:
         v_pu, v_pi = self._pos_tensors(v_pos)
         v_pt = self._page_table(K + 1)
         vlogits, vhidden = self.target.ttnn_verify_forward(
-            x=verify_x, current_pos=v_pu, current_pos_cache=v_pi, page_table=v_pt, kv_cache=self.tt_kv_cache
+            x=verify_x, current_pos=v_pu, current_pos_cache=v_pi, page_table=v_pt
         )
         vidx = self._argmax_last(vlogits, rows=K + 1)  # [1,1,K+1] uint32 RM (fast multicore argmax)
 
@@ -664,7 +664,6 @@ class SpeculativeDecoder:
                 current_pos=tr["d_pu"],
                 current_pos_cache=tr["d_pi"],
                 page_table=tr["d_pt"],
-                kv_cache=self.tt_kv_cache,
             )
             seed_idx = self._argmax_last(seed_logits, rows=1)
             seed_logits.deallocate(True)
@@ -689,7 +688,6 @@ class SpeculativeDecoder:
             current_pos=tr["v_pu"],
             current_pos_cache=tr["v_pi"],
             page_table=tr["v_pt"],
-            kv_cache=self.tt_kv_cache,
         )
         tail_rows = K if self._fused_reseed else K + 1
         tail_idx = self._argmax_last(vlogits, rows=tail_rows)  # [1,1,K or K+1] uint32 RM

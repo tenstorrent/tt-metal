@@ -59,68 +59,58 @@ class TtLlamaAttention_optimized:
         self.kv_dtype = ttnn.bfloat8_b
 
         self.load_weights()
+        # Model owns the KV cache. Demos/tests build it now. The vLLM path defers
+        # allocation to TtLlamaModel.allocate_kv_cache (once vLLM has chosen
+        # num_blocks), which calls _build_kv_pair below. layer_past stays None
+        # until then; the forwards assert on it (sentinel).
+        self.layer_past = None
         if not vllm:
-            # vLLM provides its own kv cache
             self.init_kv_cache()
 
     def set_model_config(self, model_config):
         self.model_config = model_config
 
-    def init_kv_cache(self):
-        """
-        Generates empty KV cache and pushed to device memory
-        """
+    def _build_kv_pair(self, num_blocks_or_batch, seq_len_or_block_size):
+        """Allocate one empty paged ``[k, v]`` cache pair on device.
 
-        if self.paged_attention_config:
-            cache_k = torch.zeros(
-                (
-                    self.paged_attention_config.max_num_blocks,
-                    self.n_kv_heads,
-                    self.paged_attention_config.block_size,
-                    self.head_dim,
-                )
-            )
-            cache_v = torch.zeros(
-                (
-                    self.paged_attention_config.max_num_blocks,
-                    self.n_kv_heads,
-                    self.paged_attention_config.block_size,
-                    self.head_dim,
-                )
-            )
-        else:
-            cache_k = torch.zeros(
-                (
-                    self.max_batch_size,
-                    self.n_kv_heads,
-                    self.model_config["MAX_CONTEXT_LEN"],
-                    self.head_dim,
-                )
-            )
-            cache_v = torch.zeros(
-                (
-                    self.max_batch_size,
-                    self.n_kv_heads,
-                    self.model_config["MAX_CONTEXT_LEN"],
-                    self.head_dim,
-                )
-            )
-        layer_past = [cache_k, cache_v]
-        self.layer_past = [
+        Single source of KV-cache tensor construction. Used by ``init_kv_cache``
+        (construction-time, demos) and by ``TtLlamaModel.allocate_kv_cache``
+        (late, vLLM — once num_blocks is known). Shape is
+        ``(num_blocks_or_batch, n_kv_heads, seq_len_or_block_size, head_dim)``;
+        the n_kv_heads dim is sharded across the mesh.
+        """
+        shape = (num_blocks_or_batch, self.n_kv_heads, seq_len_or_block_size, self.head_dim)
+        cache = torch.zeros(shape)
+        return [
             ttnn.to_device(
                 ttnn.as_tensor(
-                    lp,
+                    cache,
                     device=self.mesh_device,
                     mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=1),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.kv_dtype,
-                    cache_file_name=self.cache_path / f"empty_attn_cache{cache_k.shape}",
+                    cache_file_name=self.cache_path / f"empty_attn_cache{cache.shape}",
                 ),
                 self.mesh_device,
             )
-            for lp in layer_past
+            for _ in range(2)
         ]
+
+    def init_kv_cache(self):
+        """
+        Generates empty KV cache and pushed to device memory (construction time).
+        """
+        if self.paged_attention_config:
+            self.layer_past = self._build_kv_pair(
+                self.paged_attention_config.max_num_blocks,
+                self.paged_attention_config.block_size,
+            )
+        else:
+            self.layer_past = self._build_kv_pair(
+                self.max_batch_size,
+                self.model_config["MAX_CONTEXT_LEN"],
+            )
 
     def load_weights(self):
         assert not hasattr(self, "qkv_list"), "qkv_list is already an attribute of this object"
@@ -205,7 +195,6 @@ class TtLlamaAttention_optimized:
         user_id: int = 0,
         cache_idxs=None,
         page_table=None,
-        kv_cache=None,
         mode="decode",
         chunk_page_table=None,
         chunk_start_idx=None,
@@ -218,7 +207,6 @@ class TtLlamaAttention_optimized:
                 start_pos,
                 cache_idxs,
                 page_table=page_table,
-                kv_cache=kv_cache,
             )
         # Prefill should have input tensor of shape (1, batch=1, seqlen, hidden_size)
         elif mode == "prefill":
@@ -227,17 +215,16 @@ class TtLlamaAttention_optimized:
                 rot_mats,
                 user_id,
                 page_table=page_table,
-                kv_cache=kv_cache,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
             )
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
 
-    def decode_forward(self, xs, rot_mats, start_pos: int, cache_idxs, page_table=None, kv_cache=None):
+    def decode_forward(self, xs, rot_mats, start_pos: int, cache_idxs, page_table=None):
         query_layer, key_layer, value_layer = self.attn_qkv(xs, rot_mats)
         attn_outputs = self.attn_mqa(
-            query_layer, key_layer, value_layer, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache
+            query_layer, key_layer, value_layer, start_pos, cache_idxs, page_table=page_table
         )
         return self.attn_selfout(attn_outputs)
 
@@ -290,14 +277,13 @@ class TtLlamaAttention_optimized:
 
         return query_layer_ret, key_layer_ret, value_layer
 
-    def attn_mqa(self, query_layer, key_layer, value_layer, start_pos: int, cache_idxs, page_table=None, kv_cache=None):
+    def attn_mqa(self, query_layer, key_layer, value_layer, start_pos: int, cache_idxs, page_table=None):
         # K CACHE UPDATE
-        if kv_cache:
-            keys = kv_cache[self.layer_num][0]
-            values = kv_cache[self.layer_num][1]
-        else:
-            keys = self.layer_past[0]
-            values = self.layer_past[1]
+        assert self.layer_past is not None, (
+            "KV cache not initialized — vLLM must call allocate_kv_cache before forward"
+        )
+        keys = self.layer_past[0]
+        values = self.layer_past[1]
         # ttnn.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
         ttnn.experimental.paged_update_cache(keys, key_layer, update_idxs_tensor=cache_idxs, page_table=page_table)
 
@@ -367,7 +353,6 @@ class TtLlamaAttention_optimized:
         rot_mats,
         user_id: int = 0,
         page_table=None,
-        kv_cache=None,
         chunk_page_table=None,
         chunk_start_idx=None,
     ):
@@ -378,7 +363,6 @@ class TtLlamaAttention_optimized:
             value_layer,
             user_id,
             page_table=page_table,
-            kv_cache=kv_cache,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
         )
@@ -463,16 +447,14 @@ class TtLlamaAttention_optimized:
         value_layer,
         user_id: int = 0,
         page_table=None,
-        kv_cache=None,
         chunk_page_table=None,
         chunk_start_idx=None,
     ):
-        if kv_cache:
-            keys = kv_cache[self.layer_num][0]
-            values = kv_cache[self.layer_num][1]
-        else:
-            keys = self.layer_past[0]
-            values = self.layer_past[1]
+        assert self.layer_past is not None, (
+            "KV cache not initialized — vLLM must call allocate_kv_cache before forward"
+        )
+        keys = self.layer_past[0]
+        values = self.layer_past[1]
 
         if page_table:
             # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.

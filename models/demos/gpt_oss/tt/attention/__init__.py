@@ -78,6 +78,8 @@ class Attention:
             tensor_cache_path=tensor_cache_path,
         )
 
+        self.tensor_cache_path = tensor_cache_path
+
         # Initialize KV cache
         if create_kv_cache:
             self.kv_cache = init_kv_cache(
@@ -107,13 +109,29 @@ class Attention:
         self.head_dim = config.head_dim
         self.scaling = config.scaling
 
+    def _build_kv_pair(self, num_blocks, block_size):
+        """Build a fresh ``[k_cache, v_cache]`` pair parameterized by an
+        explicit ``num_blocks`` / ``block_size`` (paged geometry chosen at
+        runtime by the vLLM path). The KV cache is now model-owned; the model's
+        ``allocate_kv_cache`` calls this late and installs the result onto
+        ``self.kv_cache`` / ``self.layer_past``.
+        """
+        return init_kv_cache(
+            mesh_device=self.mesh_device,
+            config=self.config,
+            mesh_config=self.mesh_config,
+            paged_attention_config=self.paged_attention_config,
+            tensor_cache_path=self.tensor_cache_path,
+            num_blocks_override=num_blocks,
+            block_size_override=block_size,
+        )
+
     def __call__(
         self,
         hidden_states,
         rope_mats,
         position_idx=None,
         page_table=None,
-        kv_cache=None,
         is_decode=True,
         user_id=0,
         batch_size=1,
@@ -126,21 +144,19 @@ class Attention:
             rope_mats: Tuple of (cos, sin) matrices for RoPE
             position_idx: Position index for KV cache update
             page_table: Page table for paged attention (optional)
-            kv_cache: External KV cache (optional, uses internal if not provided)
             is_decode: Whether this is decode mode (default: True)
             user_id: User/batch index for KV cache fill in prefill mode (default: 0)
 
         Returns:
             Attention output [batch, seq_len, hidden_size]
         """
-        # batch_size, seq_len, hidden_size = hidden_states.shape
-
-        # Determine mode based on sequence length
-        # is_decode = seq_len == 1
-        # is_decode = True
-
-        # Use provided kv_cache or internal cache
-        cache = kv_cache if kv_cache is not None else self.kv_cache
+        # KV cache is model-owned and installed onto this attention via
+        # allocate_kv_cache (vLLM) or at construction (create_kv_cache=True).
+        # Always read self.kv_cache (== self.layer_past).
+        assert self.kv_cache is not None, (
+            "Attention.kv_cache is None — model.allocate_kv_cache must run before forward"
+        )
+        cache = self.kv_cache
 
         # Get transformation matrix for the mode
         mode = "decode" if is_decode else "prefill"

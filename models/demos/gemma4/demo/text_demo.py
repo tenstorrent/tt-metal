@@ -619,7 +619,6 @@ def run_generation(
             warmup_logits = model.ttnn_prefill_forward(
                 warmup_embeds,
                 page_table=page_table_tt,
-                kv_cache=tt_kv_cache,
                 get_last_token=get_last_token,
                 input_ids_torch=input_ids_padded.unsqueeze(0),
                 embeds_torch=embeds_torch,
@@ -640,7 +639,6 @@ def run_generation(
             logits = model.ttnn_prefill_forward(
                 embeds,
                 page_table=page_table_tt,
-                kv_cache=tt_kv_cache,
                 get_last_token=get_last_token,
                 input_ids_torch=input_ids_padded.unsqueeze(0),
                 embeds_torch=embeds_torch,
@@ -725,7 +723,6 @@ def run_generation(
                 current_pos=device_inputs["position"],
                 rot_mat_idxs=device_inputs["position_int32"],  # pos_int32 passed as rot_mat_idxs
                 page_table=page_table_tt,
-                kv_cache=tt_kv_cache,
                 on_device_logits=on_device_sampling,
                 pli_combined=device_inputs.get("pli"),
             )

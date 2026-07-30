@@ -24,7 +24,7 @@ class TtGemmaModel(Transformer):
         state_dict,
         weight_cache_path,
         paged_attention_config=None,
-        use_paged_kv_cache=False,
+        create_kv_cache=True,
     ):
         super().__init__(
             args,
@@ -33,7 +33,7 @@ class TtGemmaModel(Transformer):
             state_dict,
             weight_cache_path,
             paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
+            create_kv_cache=create_kv_cache,
         )
 
         self.vision_model = TtGemmaTransformerVision(
@@ -293,7 +293,6 @@ class GemmaMultimodalGenerator(Generator):
         self,
         tokens: torch.Tensor,
         page_table=None,
-        kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
         enable_trace=True,
@@ -308,7 +307,6 @@ class GemmaMultimodalGenerator(Generator):
         return super().prefill_forward_text(
             tokens,
             page_table=page_table,
-            kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             enable_trace=enable_trace,
@@ -329,7 +327,6 @@ class GemmaMultimodalGenerator(Generator):
         total_lens,
         prompt_lens,
         page_table=None,
-        kv_cache=None,
         cross_page_table=None,
         empty_slots=None,
         **kwargs,
@@ -338,7 +335,6 @@ class GemmaMultimodalGenerator(Generator):
         return self.prefill_forward_multimodal(
             tokens,
             page_table=page_table,
-            kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             pixel_values=vision_images,
@@ -349,7 +345,6 @@ class GemmaMultimodalGenerator(Generator):
         self,
         tokens: torch.Tensor,
         page_table=None,
-        kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
         enable_trace=True,
@@ -363,7 +358,6 @@ class GemmaMultimodalGenerator(Generator):
         return self.prefill_forward_multimodal(
             tokens,
             page_table=page_table,
-            kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             enable_trace=enable_trace,

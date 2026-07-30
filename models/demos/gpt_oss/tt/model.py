@@ -323,13 +323,50 @@ class Model:
         # No-op; required by tt_transformers generator interface.
         return None
 
+    # --- Model-owned KV cache (shared Generator delegates here) -----------------
+    @property
+    def kv_cache_allocated(self):
+        """Sentinel: True once every layer's attention has its KV cache."""
+        return all(getattr(l.self_attn, "layer_past", None) is not None for l in self.layers)
+
+    def kv_cache_per_layer(self):
+        """Per-layer ``[k, v]`` list (the owned cache). Used by the Generator for
+        cache geometry (block size, max blocks); valid only post-allocation."""
+        return [l.self_attn.layer_past for l in self.layers]
+
+    def allocate_kv_cache(self, per_layer_specs):
+        """Late KV-cache allocation for the vLLM path.
+
+        ``per_layer_specs`` is one ``(shape, dtype, tensor_idx)`` per attention
+        layer in layer-index order, where ``shape = (num_blocks, num_kv_heads,
+        block_size, head_size)`` carries vLLM's chosen ``num_blocks``. Layers
+        sharing a ``tensor_idx`` get the SAME tensor object (vLLM hybrid HMA
+        buffer packing). gpt_oss is 1:1 hybrid, but uniform fallback (all
+        ``tensor_idx`` unique) works identically. Builds via each attention's
+        ``_build_kv_pair`` so the allocation logic stays in one place. Installs
+        onto both ``self_attn.layer_past`` and ``self_attn.kv_cache`` (kept
+        consistent). Returns the per-layer list.
+        """
+        attns = [l.self_attn for l in self.layers]
+        assert len(per_layer_specs) == len(attns), (
+            f"allocate_kv_cache got {len(per_layer_specs)} specs for {len(attns)} layers"
+        )
+        by_tensor_idx = {}
+        for attn, (shape, _dtype, tensor_idx) in zip(attns, per_layer_specs):
+            if tensor_idx not in by_tensor_idx:
+                num_blocks, _num_kv_heads, block_size, _head_size = shape
+                by_tensor_idx[tensor_idx] = attn._build_kv_pair(num_blocks, block_size)
+            kv = by_tensor_idx[tensor_idx]
+            attn.layer_past = kv
+            attn.kv_cache = kv
+        return self.kv_cache_per_layer()
+
     def _forward_layers_and_head(
         self,
         hidden_states,
         rope_mats,
         current_pos,
         page_table,
-        kv_cache,
         get_last_token=-1,
         is_decode=True,
         user_id=0,
@@ -346,7 +383,6 @@ class Model:
             current_pos: Current position (for decode) or None (for prefill)
             page_table: Single page table; used for every layer when
                 ``page_tables_per_layer`` is None (legacy / uniform attention).
-            kv_cache: KV cache list per layer.
             page_tables_per_layer: Optional list of per-layer page tables, one
                 entry per decoder layer. When set, each layer's attention
                 receives ``page_tables_per_layer[i]`` instead of ``page_table``.
@@ -369,14 +405,12 @@ class Model:
 
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
-            layer_kv_cache = kv_cache[i] if kv_cache is not None else None
             layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
             hidden_states = decoder_layer(
                 hidden_states,
                 position_embeddings=rope_mats,
                 position_idx=current_pos,
                 page_table=layer_page_table,
-                kv_cache=layer_kv_cache,
                 is_decode=is_decode,
                 user_id=user_id,
                 batch_size=batch_size,
@@ -495,7 +529,6 @@ class Model:
         current_pos,
         rot_mat_idxs=None,
         page_table=None,
-        kv_cache=None,
         on_device_logits=False,
         page_tables_per_layer=None,
     ):
@@ -529,7 +562,6 @@ class Model:
             rope_mats=rope_mats,
             current_pos=current_pos,
             page_table=page_table,
-            kv_cache=kv_cache,
             is_decode=True,
             page_tables_per_layer=page_tables_per_layer,
         )
@@ -558,7 +590,6 @@ class Model:
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
-        kv_cache=None,
         batch_size=1,
         skip_lm_head=False,
         page_tables_per_layer=None,
@@ -587,7 +618,6 @@ class Model:
             rope_mats=rope_mats,
             current_pos=None,  # No current_pos for prefill
             page_table=page_table,
-            kv_cache=kv_cache,
             get_last_token=get_last_token,
             is_decode=False,
             user_id=user_id,
@@ -644,9 +674,7 @@ class Model:
         pt_stacked = torch.cat(pt_list, dim=0)
         return tokens_packed, pt_stacked, last_idxs, user_indices
 
-    def run_row_sharded_prefill_forward(
-        self, tokens_iter, pt_iter, kv_cache, fixed_glt, skip_lm_head=False, batch_size=1
-    ):
+    def run_row_sharded_prefill_forward(self, tokens_iter, pt_iter, fixed_glt, skip_lm_head=False, batch_size=1):
         """Run one non-traced row-sharded prefill iteration."""
         host_out = self.prepare_inputs_prefill(tokens_iter, page_table=pt_iter, batched_prefill=True)
         return self.ttnn_prefill_forward(
@@ -656,7 +684,6 @@ class Model:
             user_id=0,
             page_table=host_out[3],
             get_last_token=fixed_glt,
-            kv_cache=kv_cache,
             batch_size=batch_size,
             skip_lm_head=skip_lm_head,
         )
@@ -701,7 +728,6 @@ class Model:
         self,
         tokens,
         page_table,
-        kv_cache,
         prompt_lens,
         prefill_seq_lens,
         enable_trace=True,
@@ -790,7 +816,7 @@ class Model:
         num_iters = users_per_row // upr
 
         max_padded_len = max(prefill_seq_lens)
-        block_size = get_block_size(kv_cache)
+        block_size = get_block_size(self.kv_cache_per_layer())
         max_num_blocks = num_blocks_in_seq(max_padded_len, block_size)
         all_last_idxs = [int(prompt_lens[uid]) - 1 for uid in range(batch_size)]
         fixed_glt = (min(all_last_idxs) // 32) * 32
@@ -829,7 +855,6 @@ class Model:
                     user_id=0,
                     page_table=tr[1],
                     get_last_token=fixed_glt,
-                    kv_cache=kv_cache,
                     batch_size=upr,
                     skip_lm_head=skip_lm,
                 )
@@ -852,7 +877,6 @@ class Model:
                     user_id=0,
                     page_table=tr[1],
                     get_last_token=fixed_glt,
-                    kv_cache=kv_cache,
                     batch_size=upr,
                     skip_lm_head=skip_lm,
                 )
@@ -893,7 +917,7 @@ class Model:
                     users_per_row_per_iter=upr,
                 )
                 tt_out = self.run_row_sharded_prefill_forward(
-                    ti, pi, kv_cache, fixed_glt, skip_lm_head=skip_lm, batch_size=upr
+                    ti, pi, fixed_glt, skip_lm_head=skip_lm, batch_size=upr
                 )
                 if not skip_lm:
                     self.extract_prefill_logits_to_host(
