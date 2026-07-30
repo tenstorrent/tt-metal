@@ -42,6 +42,22 @@
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
+// [#48552] Self-contained copy of the canonical minimal tilize+reduce re-init from the (not-yet-merged)
+// amokan/tilizeA_B_init_short compute-API change. It re-programs ONLY UNPACK (tilizeA_B) and MATH (reduce)
+// for a mid-kernel change of input CB or tiles-to-reduce, deliberately WITHOUT the one-time llk_*_hw_configure
+// that the full tilizeA_B_reduce_init runs at kernel start -- re-running hw_configure per c-block corrupts
+// unpacker state. PACK is re-init'd separately via pack_untilize_dest_init in the loop. This mirrors the LLK
+// team's canonical short init (UNPACK tilizeA_B + MATH reduce only; no pack-sync / pack init / dest-init),
+// which passes test_max_pool2d_strided_reduce.py. Both llk_* signatures match the full tilizeA_B_reduce_init
+// used at kernel start. Remove once amokan/tilizeA_B_init_short lands and this branch picks it up.
+template <bool neginf_srcA = true, bool zero_srcA_reduce = false>
+ALWI void tilizeA_B_reduce_init_short(uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb) {
+    UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
+        icb0, icb1_scaler, block)));
+    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1_scaler)));
+    (void)ocb;  // PACK re-init handled by pack_untilize_dest_init; ocb kept for call-site compatibility.
+}
+
 void kernel_main() {
 #if DEBUG_PRINT == 1
     PACK(DPRINT("POOL2D_ENTER (compute kernel_main reached)\n"));
