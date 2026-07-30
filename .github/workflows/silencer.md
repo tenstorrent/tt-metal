@@ -53,6 +53,14 @@ tools:
     toolsets: [actions, repos, issues, pull_requests, search, context]
     lockdown: false
     min-integrity: none
+    # Exempt the built-in `github` MCP server from the gateway's default
+    # sink-visibility="public" enforcement. The gateway tags job-log content
+    # secrecy=private, so once the agent has read a log it carries a private
+    # secrecy tag and a write to a public sink (PR/issue) would be refused.
+    # The list form is deliberate: the blanket `allow` form is a compile error
+    # here (incompatible with strict mode) and would also disable
+    # forcePublicRepos, which we want to keep.
+    private-to-public-flows: [github]
   # bash is REQUIRED: Silencer downloads CI logs to disk and greps/aggregates them
   # locally instead of streaming whole logs through the model. This is the primary
   # token-cost control for this workflow.
