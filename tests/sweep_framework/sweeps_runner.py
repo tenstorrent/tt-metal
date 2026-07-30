@@ -944,7 +944,10 @@ def _execute_vector_with_retry(
                     p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
                 result["_child_process"] = p
-                result["_abort_suite"] = config.skip_on_timeout
+                # OR, not assignment: never downgrade an abort another rule already
+                # requested for this vector (e.g. the wedged-device rule in
+                # _populate_result_from_response) just because skip_on_timeout is off.
+                result["_abort_suite"] = result.get("_abort_suite", False) or config.skip_on_timeout
                 return result
 
             # A transient kernel-ELF build/load failure (tt_elffile.cpp:405),
@@ -1004,7 +1007,14 @@ def _execute_vector_with_retry(
                 return result
 
             result["_child_process"] = p
-            result["_abort_suite"] = False
+            # setdefault, NOT assignment. This is the NORMAL in-loop return -- the path a
+            # vector takes whenever the child returned a response -- so it is the path the
+            # wedged-device rule (profiler readback failed + vector failed, set in
+            # _populate_result_from_response) actually reaches. Assigning False here threw
+            # the abort away, leaving execute_suite with _infra_abort but no _abort_suite:
+            # it skipped the mark-remaining-NOT_RUN-and-break branch and kept feeding the
+            # rest of the suite to the device just declared wedged.
+            result.setdefault("_abort_suite", False)
             return result
 
         except Empty:
