@@ -364,9 +364,10 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_sfpu_binop_scalar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
+            "binop_mathop",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
@@ -376,7 +377,6 @@ PERF_TEST_SCHEMAS = {
             "iterations",
             "loop_factor",
             "marker",
-            "mathop",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
@@ -386,7 +386,9 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_within_face",
             "value_bits",
         ],
-        "aliases": {},
+        "aliases": {
+            "mathop": "binop_mathop",
+        },
     },
     "perf_sfpu_comp": {
         "version": 1,
@@ -504,7 +506,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
     },
     "perf_sfpu_ternary": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "dest_acc",
@@ -516,17 +518,20 @@ PERF_TEST_SCHEMAS = {
             "iterations",
             "loop_factor",
             "marker",
-            "mathop",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "ternary_mathop",
+            "ternary_scalar_bits",
             "tile_cnt",
             "unpack_to_dest",
             "unpack_transpose_faces",
             "unpack_transpose_within_face",
-            "value_bits",
         ],
-        "aliases": {},
+        "aliases": {
+            "mathop": "ternary_mathop",
+            "value_bits": "ternary_scalar_bits",
+        },
     },
     "perf_unpack_a_bcast_eltwise": {
         "version": 1,
