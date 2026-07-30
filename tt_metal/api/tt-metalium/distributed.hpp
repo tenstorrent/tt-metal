@@ -106,38 +106,25 @@ void EventSynchronize(const MeshEvent& event);
 // Returns true if the CQ has completed recording the event, false otherwise.
 bool EventQuery(const MeshEvent& event);
 
-// Prefer the MeshCommandQueue& overload; pass the command queue object directly instead of a raw id.
 MeshTraceId BeginTraceCapture(MeshCommandQueue& mesh_cq);
 
-// Finish work on a command queue. Pass a specific queue to finish just that one; pass std::nullopt (an empty
-// optional_reference) to finish all command queues on the device.
 void Synchronize(
     MeshDevice* device,
     ttsl::optional_reference<MeshCommandQueue> mesh_cq,
     ttsl::Span<const SubDeviceId> sub_device_ids = {});
-
-namespace detail {
-// Non-deprecated shared implementation for the id-based Synchronize, defined in distributed.cpp (where MeshDevice is
-// complete). Used only by the deprecated Synchronize template overload below, which cannot resolve the id itself
-// because MeshDevice is incomplete in this header.
-void SynchronizeByOptionalId(
-    MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids);
-}  // namespace detail
 
 [[deprecated("Use BeginTraceCapture(MeshCommandQueue&) instead. Pass the command queue object, not a raw id.")]]
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
 // Intentionally a function template so the non-template optional_reference<MeshCommandQueue> overload above wins
 // overload resolution for Synchronize(device, std::nullopt, ...) instead of being ambiguous with it. A raw
-// std::optional<uint8_t>/uint8_t argument still selects this deprecated overload (and warns).
-template <typename = void>
+// std::optional<uint8_t>/uint8_t argument still selects this deprecated overload (and warns). Defined in
+// distributed.cpp, where MeshDevice is complete, and explicitly instantiated there for both values.
+template <bool deprioritize_selection = true>
 [[deprecated(
     "Use Synchronize(MeshDevice*, ttsl::optional_reference<MeshCommandQueue>, ...) instead. Pass the command queue "
     "object (or std::nullopt for all queues), not a raw id.")]]
-void Synchronize(
-    MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids = {}) {
-    detail::SynchronizeByOptionalId(device, cq_id, sub_device_ids);
-}
+void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
