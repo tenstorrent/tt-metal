@@ -93,12 +93,12 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
 
     // Called to process the user kernel resource bindings (Metal 2.0 APIs)
-    //  - DFB accessors
-    //  - Semaphore accessors
-    //  - Tensor accessors
-    virtual void process_dataflow_buffer_local_accessor_handles(
+    //  - DFB bindings
+    //  - Semaphore bindings
+    //  - Tensor bindings
+    virtual void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
-    virtual void process_semaphore_local_accessor_handles(
+    virtual void process_semaphore_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
@@ -120,7 +120,7 @@ public:
 
     // Scratchpad binding callback emits the codegen-relevant fields:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
-    //  - size_bytes: the scratchpad's per-node size, emitted as the accessor's compile-time size
+    //  - size_bytes: the scratchpad's per-node size, emitted as the binding token's compile-time size
     //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
     //    scratchpad's (framework-allocated) L1 base address
     virtual void process_scratchpad_binding_handles(

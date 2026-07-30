@@ -109,14 +109,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Sort them to ensure the file output is deterministic for the JIT build cache
     // (aka the on-disk per-object dephash cache)
     vector<pair<string, uint16_t>> dfb_entries;
-    settings.process_dataflow_buffer_local_accessor_handles(
+    settings.process_dataflow_buffer_binding_handles(
         [&dfb_entries](const string& name, uint16_t id) { dfb_entries.emplace_back(name, id); });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
     // Get the semaphore bindings from the settings callback
     // Sort them to ensure the file output is deterministic, as explained above
     vector<pair<string, uint16_t>> sem_entries;
-    settings.process_semaphore_local_accessor_handles(
+    settings.process_semaphore_binding_handles(
         [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
@@ -149,18 +149,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         });
 
     // Emit the header content:
-    //  - DFB accessors are emitted into the dfb namespace
-    //  - Semaphore accessors are emitted into the sem namespace
+    //  - DFB binding tokens are emitted into the dfb namespace
+    //  - Semaphore ids are emitted into the sem namespace (semaphores have no binding-token type;
+    //    the kernel constructs a Semaphore straight from the bare id)
     //  - TensorBindings are emitted into the tensor namespace
+    //  - Scratchpad binding tokens are emitted into the scratch namespace
     //
-    // NOTE: DFB and Semaphore accessors are emitted as constexpr variables, i.e. as implicit CTAs.
+    // NOTE: DFB tokens and semaphore ids are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
-    //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-accessor basis.)
+    //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-binding basis.)
     //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
     //       We are starting simple and can adjust later if problems arise.
     //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
     //
-    //       TensorBindings are the first accessor category to use implicit CRTAs (for the tensor base address).
+    //       TensorBindings are the first binding category to use implicit CRTAs (for the tensor base address).
     //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArgument.
     //       The static layout tensor metadata (rank, shape, bank coords, etc.) comes in through positional CTAs,
     //       added automatically by the Metal 2.0 host API machinery.
@@ -182,8 +184,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "#include \"api/tensor/tensor_binding_token.h\"\n";
         }
         if (!scratch_entries.empty()) {
-            // The full Scratchpad accessor (NOC-free, so it compiles on both data-movement and
-            // compute/TRISC builds), which also pulls in the ScratchpadAccessor binding type.
+            // The full Scratchpad type (NOC-free, so it compiles on both data-movement and
+            // compute/TRISC builds), which also pulls in the ScratchpadBindingToken type.
             content << "#include \"api/scratchpad.h\"\n";
         }
         content << "\n";
@@ -191,7 +193,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         if (!dfb_entries.empty()) {
             content << "namespace dfb {\n";
             for (const auto& [name, id] : dfb_entries) {
-                content << "constexpr DFBAccessor " << name << "{" << id << "};\n";
+                content << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
             }
             content << "}  // namespace dfb\n";
         }
@@ -222,15 +224,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!scratch_entries.empty()) {
-            // ScratchpadAccessor scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
+            // ScratchpadBindingToken scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
             // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
             // and the scratchpad's compile-time per-node size.
-            // The kernel-side Scratchpad(accessor) constructor unpacks both.
-            // The accessor's members are opaque, so the framework can extend it later without touching
+            // The kernel-side Scratchpad(token) constructor unpacks both.
+            // The token's members are opaque, so the framework can extend it later without touching
             // kernel source.
             content << "namespace scratch {\n";
             for (const auto& entry : scratch_entries) {
-                content << "constexpr ScratchpadAccessor " << entry.name << "{" << entry.addr_crta_word << "u, "
+                content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
                         << entry.size_bytes << "u};\n";
             }
             content << "}  // namespace scratch\n";

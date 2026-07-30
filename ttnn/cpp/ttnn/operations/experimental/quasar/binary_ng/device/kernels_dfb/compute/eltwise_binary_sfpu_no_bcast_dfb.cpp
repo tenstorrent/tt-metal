@@ -8,7 +8,7 @@
 // CB->DFB swap. Handles the SFPU binary ops (int add/sub/mul, compares, bitwise/shift, div/remainder,
 // quant, gcd/lcm, xlogy, atan2, isclose, max/min, …) using the same define machinery the descriptor
 // factory builds: BINARY_SFPU_OP / BINARY_SFPU_INIT, HAS_ACTIVATIONS / PREPROCESS /
-// PROCESS_POST_ACTIVATIONS, ISCLOSE_* runtime args. Operand ids come from DFBAccessor's
+// PROCESS_POST_ACTIVATIONS, ISCLOSE_* runtime args. Operand ids come from DFBBindingToken's
 // `operator uint32_t()`. Layout-agnostic (reader/writer absorb sharded/interleaved/mixed).
 
 #include <cstdint>
