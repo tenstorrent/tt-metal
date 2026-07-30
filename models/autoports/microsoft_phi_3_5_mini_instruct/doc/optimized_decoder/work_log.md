@@ -197,6 +197,8 @@ alternate-shard gate/up search is preserved in
 `sweeps/gate_adapted_shard.log`; there are no unresolved correctness,
 capability, performance-evidence, fallback, or stage-contract findings.
 
+Stage implementation and evidence commit: `e43fd1e8a2f`.
+
 The first independent review returned more-work-needed for raw sweep evidence,
 same-dtype fidelity, output-subblock investigation, and stress evidence. Those
 findings produced the preserved sweep logs, a faster final geometry, the API
