@@ -713,6 +713,70 @@ fallback (0.9999381 against 0.9999408 — moved because that path still takes th
 *Verdict:* **`one_pass_stats=True` by default**, width-gated on the squares half. The whole
 knob is one argument; the constraint lives in the op, not in the caller.
 
+### P8 — `inter_block` reads the sealed set 49 times to serve 24 sites
+
+The split form hoists the reciprocal-RMS pass on the argument that a sealed snapshot is
+write-once. The dots and the mixture sat inside the loop anyway, so a 12-layer block read a
+70 MiB tensor 49 times to answer 24 read sites. Both loops are one contraction batched over
+sites. Priced per block, traced on `(2, 4)`, `S = 8`, against a floor of one pass over the
+sealed set (219.1 µs):
+
+| variant | µs/block | ×floor |
+|---|---|---|
+| floor: one pass over sealed | 219.1 | 1.00 |
+| dots: ×24 | 9 268.7 | 42.3 |
+| dots: **batched matmul** | **395.3** | **1.80** |
+| mix: ×24 | 14 867.7 | 67.9 |
+| mix: batched matmul, both conversions charged | 13 597.7 | 62.1 |
+
+**The two halves come apart completely, and the reason is which operand has to move.** The
+dots contract over `d`, already the last axis, so batching them reshapes the *queries* —
+24 × 3.5 KiB — and stacking them into `[1, 1, d/tp, 24]` turns 24 matvecs into one matmul:
+**23.4×**, and the 24-wide output idles 8 of 32 columns where the lone matvec idled 31
+(1.80× floor against P7's 1.97×). The mixture contracts over the candidate axis, which a
+matmul can only reach as a tile axis, so batching it reshapes the *sealed tensor* — 70 MiB,
+twice, and `S = 8` tile-pads to 32 on the way. The matmul itself is 3.2× the loop; after the
+permute in and the permute back out it is **1.09×**. Slicing 24 partials out of the padded
+output instead of permuting is worse still, 1.7 ms each against 14.9 ms for the whole loop.
+
+In-op A/B, per read site, traced on `(2, 4)`, swept over `S` because the sealed half is the
+part that grows with it. `direct` is untouched by this change and is the control:
+
+| `S` | direct (control) | split, before | split, after | |
+|---|---|---|---|---|
+| 1 | 649.6 | 767.3 | 710.9 | 1.08× |
+| 4 | 1 356.7 | 1 165.4 | 971.2 | 1.20× |
+| 8 | 2 231.6 | 1 741.4 | 1 386.5 | **1.26×** |
+
+1. **The control holds to 0.04%** — 2 232.2, 2 231.7, 2 231.3 µs at `S = 8` across three
+   independent runs on either side of the change. The direct form's fitted slope, 225.6 µs
+   per candidate, lands on the 225.7 P7 measured from a different test.
+2. **96% of the standalone win landed in the op**: 355.4 µs per site measured against 369.7
+   predicted, so the query concat costs ~14 µs per site. P6's lesson applied cleanly for the
+   second time — a layout conversion costs what it moves, and this one moves 84 KiB.
+3. Fits over the real schedule (186 reads, Σ(S+1) = 1 002), linear to 2%: direct
+   `209.4 + 225.6·(S+1)` → 265.0 ms; split **`481.1 + 139.4·(S+1)` → 229.2 ms** before,
+   **`506.0 + 96.9·(S+1)` → 191.2 ms** after. **1.20× on the forward, 38 ms.** The slope
+   falls 30% and the intercept rises 25 µs, which is the concat amortized over 24 sites.
+4. **The split form loses at `S = 1`** — 710.9 against direct's 649.6 — and the sweep is the
+   only reason that is visible. Its fixed cost is the second collective and `merge`'s own
+   stats pass; below ~2 sealed snapshots there is not enough sealed work to amortize them.
+   The crossover moves `S+1 = 3.15 → 2.30`, so P8 pulls one more block onto the split form.
+   The schedule seals at layer `12k`, which puts exactly 24 reads at `S = 1`: taking the
+   direct form for that one block is worth 1.5 ms of 191.2, **0.8%**. Documented as a
+   threshold, not built as a mechanism.
+5. The collective count is the part of P5 that this retires. The split form issued 49 per
+   block against the direct form's 24 — one for the sealed RMS, one *per site* for the
+   sealed dots, one per site in `merge`. Batching the dots makes it **26**, so the form that
+   was 1.43× faster while paying twice the collectives now pays 8% more of them.
+
+Correctness gate — 95 tests pass, and the 186-read depth walk moves by less than the noise
+band P6 characterized. The batched form needs the same two broadcasts the loop needed, one
+of them new: `[1, S, N, R] * [1, S, N, 1]` on the last dim, measured at one bf16 ULP.
+
+*Verdict:* **batched dots kept, batched mixture rejected.** The mixture is now 96% of the
+sealed half's traffic and 24 of its 26 passes, which is the whole of what Phase 10 is for.
+
 ---
 
 ## Learnings
@@ -1096,6 +1160,64 @@ headroom while the squares' 1.01× is done.
 have a model for. And measure the floor first — a one-pass control turns "is this fast?"
 into "how much is left?", which is the question that decides whether to keep going.*
 
+### Phase 9 — batching a loop is decided by which operand has to move
+
+P8 batched two loops of 24 iterations over the same 70 MiB tensor. One came out 23.4× faster
+and one 1.09×, and the arithmetic was not the difference: the bare matmul beat its loop 3.2×
+in both cases. What separated them is which operand needed reshaping to reach the matmul.
+
+The dots contract over `d`. `d` is already the last axis, so the batch axis had somewhere
+free to go and the only thing that moved was the queries — 84 KiB of them. The mixture
+contracts over the candidate axis, which a matmul can only reach as a tile axis, so batching
+it moves the 70 MiB sealed tensor twice and tile-pads `S = 8` to 32 while it is there. The
+same 3.2× of arithmetic saving was there to collect and the conversions took all of it.
+
+This is P6's lesson (*a layout conversion costs what it moves*) turned into something you can
+check before writing any code: **ask which side of the contraction the batch axis has to
+displace.** If the contracted axis is already last, batching is free and you should just do
+it. If reaching it means promoting a short axis to a tile axis, the padding tax lands on the
+largest tensor in the op and composed primitives will not win — that work belongs in a kernel
+that never materializes the layout at all.
+
+*Lesson: before batching a loop, find the contracted axis. Batching along an axis that is
+already last is free; batching along one that has to become a tile axis costs a padded pass
+over the big operand in each direction, which is the whole win.*
+
+### Phase 9 — one shape is not a sweep, even at the peak
+
+`inter_block`'s A/B was measured at `S = 8`, the peak shape, where the split form is 1.61×
+the direct one. Sweeping `S` to fit the schedule turned up something the peak could not show:
+at `S = 1` the split form is 9% **slower** than the form it replaced. Its fixed costs — a
+second collective, `merge`'s own statistics pass — need about two sealed snapshots of work to
+amortize, and 24 of the schedule's 186 reads sit below that line.
+
+The peak shape is the right place to look for a bottleneck and the wrong place to conclude
+from. Every phase before this one quoted `S = 8` numbers because that is where the bytes are;
+what it hid is a *sign change* at the other end of the same axis, in a regime the model
+actually spends 13% of its reads in.
+
+*Lesson: a candidate measured at one shape is a candidate whose shape dependence you have
+assumed. Sweep the axis the schedule sweeps — the interesting failures are at the small end,
+where fixed costs stop being rounding error.*
+
+### Phase 9 — a full-extent `ttnn.slice` aliases its input
+
+Batching produced `[1, S, N, R]` intermediates that get sliced back into per-site columns, and
+the module frees the batch afterwards. At `R == 1` that slice spans its input, and `ttnn.slice`
+short-circuits: it returns a **new Python object pointing at the same device buffer**
+(`buffer_address()` matches; a narrower slice's does not). Freeing the batch therefore freed
+the column, and the next read of it segfaulted the process — inside `ttnn.to_torch`, several
+ops downstream of the actual mistake.
+
+Worth knowing generally: in ttnn, "this op returned a different tensor" is not evidence that
+it copied. A no-op slice, and plausibly other shape ops with no-op cases, hand back a view.
+Any code that slices a tensor and then deallocates the parent has a degenerate case where the
+two are the same buffer, and it will present as a crash far from its cause.
+
+*Lesson: when a helper hands out pieces of a tensor whose parent it then frees, check the
+degenerate case where the piece is the whole. `buffer_address()` answers it in one line, which
+is cheaper than reading a segfault traceback in a foreign frame.*
+
 ---
 
 ## Backlog
@@ -1105,8 +1227,20 @@ into "how much is left?", which is the question that decides whether to keep goi
 - [x] Phase 3 — `API_SPEC.md`.
 - [x] Phase 4 — `torch_functional/`, numeric ladder (D9, amended by D11).
 - [x] Phase 5 — `tt/` composite, single device.
-- [ ] Measure the `N`-batched matmul `[N,R,S] × [N,S,d]` against 24 broadcast passes;
+- [x] Measure the `N`-batched matmul `[N,R,S] × [N,S,d]` against 24 broadcast passes;
       decides whether the split form's remaining ~1.9× is reachable in composed ops.
+      **It is not.** P8: the matmul is 3.2× the loop and the two permutes that reach its
+      layout give back all but **1.09×** — 13 597.7 µs against 14 867.7 per block, on a
+      70 MiB tensor that `S = 8` tile-pads to 32 planes each way. Per-site slices out of the
+      padded output are worse (1.7 ms each). The mixture stays composed until Phase 10.
+- [x] Batch `inter_block`'s dots across read sites — **23.4×** on that half, 49 sealed-set
+      passes per block down to 26 and 49 collectives down to 26. **1.26× on the read at
+      `S = 8`, 1.20× on the forward** (229.2 → 191.2 ms). The other half of the same
+      backlog item, and the opposite answer, because the dots' contracted axis is already
+      last.
+- [ ] Let the caller pick the read form per block: the split form is 9% slower at `S = 1`
+      (crossover at `S+1 = 2.30`), which is 24 of the schedule's 186 reads and 0.8% of the
+      forward. Threshold documented in P8; no mechanism yet.
 - [x] Phase 6 — device correctness + 93-layer depth harness.
 - [x] Phase 7 — remove host fallbacks; `T=5120`.
 - [x] Verify D10's launch count with the Phase-9 profiler — **28.3 device programs per
@@ -1151,11 +1285,17 @@ into "how much is left?", which is the question that decides whether to keep goi
       to price the conversions before believing the 563 µs.
 - [ ] Phase 10 — fused C++ op, only on measured evidence. `ROOFLINE.md` §7 puts the
       ceiling at 10.8× DRAM (215.5 ms → 20 ms per forward) with `v` resident in L1 at
-      every shape that matters. Phase 9 sharpens it twice: the fused kernel is measured
-      against 380 ms traced, not 622 ms untraced — and after P7 against **~267 ms**, so the
-      realizable win is **~5.3×**, not 7.6×. What is left is exactly what composed ops
-      cannot do: P7 pays 682 µs to read `v` twice for two reductions whose one-read floor
-      is 229 µs, and `_mix` reads it a third time.
+      every shape that matters. Phase 9 sharpens it three times: the fused kernel is
+      measured against 380 ms traced, not 622 ms untraced — after P7 against ~267 ms — and
+      after P8 against **~191 ms** on the split form, so the realizable win is **~3.8×**,
+      not 7.6×. The mandate narrows with it. P8 leaves the mixture as **24 of the sealed
+      half's 26 passes and 96% of its traffic**, and it is the one contraction composed
+      primitives provably cannot batch, because reaching it needs the candidate axis as a
+      tile axis. `deepseek_moe_fast_reduce_nc_fused` already does this arithmetic —
+      `init_bcast<ELWMUL, COL>` with MATH's `acc_to_dest=1`, so `mul_tiles_bcast_cols`
+      MACs into `dst0` in one pass — but requires an L1-resident input and gathers its
+      scores through the MoE routing convention, so the technique is liftable and the op
+      is not.
 - [ ] Phase 11 — `PIPELINE.md` + socket round-trip.
 - [ ] Fold `rms_inv` at seal time (needs the batched form first).
 - [ ] Decode path (`T=1`).
@@ -1415,3 +1555,34 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
   moves it, which is why the gate falls back rather than asserting. The matvec is still
   **1.97×** off the floor (`N = 1` wastes 31 of 32 output columns) and `_mix` is untouched at
   3.47×. Nothing here is asserted — the perf harness logs.
+
+- **2026-07-30** — Phase 9 **P8**: `inter_block`'s 24 dot products batched into one matmul
+  and one collective (`_dots_by_site`), the score chain batched with them. **95 passed** in
+  165.79 s.
+
+  **VALIDATED:** **1.26× on the split read at `S = 8`** (1 741.4 → 1 386.5 µs per site),
+  1.20× on the forward by the schedule fit (**229.2 → 191.2 ms**), from 49 passes over the
+  sealed set per 12-layer block down to 26 and 49 collectives down to 26 — which retires
+  P5's standing worry that the split form pays twice the collectives to buy its 1.43×. The
+  standalone row said 23.4× on that half (9 268.7 → 395.3 µs per block) and **96% of it
+  landed in the op**, because the only thing the layout change moves is 84 KiB of queries.
+  The direct form, untouched, reproduces to **0.04%** across three runs either side of the
+  change, and its fitted 225.6 µs per candidate lands on the 225.7 P7 measured elsewhere.
+
+  **REFUTED:** the batched **mixture**, and this is the more useful half of the result. The
+  matmul alone is 3.2× its loop; charged for the permute in and the permute back out it is
+  **1.09×** (13 597.7 against 14 867.7 µs per block), because its contracted axis is the
+  candidate axis and reaching it drags 70 MiB through a 4× tile pad twice. Per-site slices
+  out of the padded output are worse still (1.7 ms each against 14.9 for the whole loop). The
+  backlog item that asked whether the split form's remaining ~1.9× is reachable in composed
+  ops is now answered: no, and Phase 10's mandate is exactly that mixture.
+
+  Also refuted, by the sweep rather than by a candidate: that `S = 8` is a safe place to
+  conclude from. **The split form is 9% slower at `S = 1`** (710.9 against direct's 649.6);
+  the crossover sits at `S+1 = 2.30` and 24 of the schedule's 186 reads are below it.
+
+  **NOT VALIDATED:** the forward figures are three-point fits (linear to 2%), the same
+  convention as P7's — 191.2 ms assumes the split form at *every* read, including the 24
+  where direct is faster, so a form-selecting caller would see ~189.7. The 1.09× mixture row
+  uses a `ttnn.ones` stand-in for the real weights, which is the right traffic and not the
+  right numerics. Nothing here is asserted — the perf harness logs.
