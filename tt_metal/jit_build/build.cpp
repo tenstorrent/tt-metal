@@ -86,19 +86,25 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     if (!ec) {
         return;
     }
-    // The link may already exist and already resolve to target -- e.g. a sibling
-    // process that inherited our FileRenamer::unique_id_ across fork() created it
-    // first. copy_file() reports file_exists when from and to are the same inode,
-    // so an equivalent existing link is success, not a failure.
-    std::error_code equivalent_ec;
-    if (std::filesystem::equivalent(target, link, equivalent_ec) && !equivalent_ec) {
-        return;
-    }
-    // Use the non-throwing overload: the throwing one turns a recoverable
-    // filesystem condition into a fatal "Failed to generate binaries" build error.
+    // Fall back to copying, but use the non-throwing overload so a failure is
+    // reported with both paths and both error codes instead of escaping as a bare
+    // std::filesystem_error.
+    //
+    // Note we deliberately do NOT treat an already-existing `link` as reusable, even
+    // when it is already equivalent to `target`. Temp object names are per-process
+    // (see FileRenamer::generate_temp_path) and the caller removes them once linking
+    // finishes, so adopting another process's temp file would let that process delete
+    // it while our LTO link still has it open.
+    const std::error_code link_ec = ec;
+    ec.clear();
     std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing, ec);
     if (ec) {
-        TT_THROW("Failed to hard link or copy {} to {}: {}", target.string(), link.string(), ec.message());
+        TT_THROW(
+            "Failed to hard link or copy {} to {}: copy failed with '{}' (hard link failed with '{}')",
+            target.string(),
+            link.string(),
+            ec.message(),
+            link_ec.message());
     }
 }
 
