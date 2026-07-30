@@ -176,7 +176,7 @@ def snap_ibw(in0_block_w, Kt):
     return ibw
 
 
-def build_pc(cx, cy, per_core_N, in0_block_w, Kt, out_subblock_h=1, out_subblock_w=1):
+def build_pc(cx, cy, per_core_N, in0_block_w, Kt, out_subblock_h=1, out_subblock_w=1, obw_mult=1):
     ibw = snap_ibw(in0_block_w, Kt)
     # out_subblock_w must divide per_core_N; out_subblock_h must divide per_core_M (=1).
     # Also the DST register caps out_subblock_h*out_subblock_w (<=8 for bf8/bf16 dest).
@@ -187,6 +187,13 @@ def build_pc(cx, cy, per_core_N, in0_block_w, Kt, out_subblock_h=1, out_subblock
     osh = out_subblock_h if (1 % out_subblock_h == 0) else 1
     if osh * osw > 8:
         osw = max(1, 8 // osh)
+    # out_block_w axis. in1_num_subblocks = out_block_w / out_subblock_w, so
+    # obw_mult is that subblock count. obw_mult=1 is Lucas Chin's obw=osw;
+    # obw_mult=per_core_N/osw is obw=per_core_N. Must divide per_core_N.
+    obw = osw * max(1, obw_mult)
+    if obw > per_core_N or per_core_N % obw != 0:
+        cands = [m for m in range(max(1, obw_mult), 0, -1) if per_core_N % (osw * m) == 0]
+        obw = osw * (cands[0] if cands else 1)
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
         in0_block_w=ibw,
@@ -195,7 +202,7 @@ def build_pc(cx, cy, per_core_N, in0_block_w, Kt, out_subblock_h=1, out_subblock
         out_block_h=1,
         # Lucas Chin (Anduril), PR #51514: out_block_w=1 forced in1_num_subblocks=0
         # for osw>1, so no osw>1 config was ever really exercised. Derive from osw.
-        out_block_w=osw,
+        out_block_w=obw,
         per_core_M=1,
         per_core_N=per_core_N,
         fuse_batch=False,
@@ -282,6 +289,7 @@ def run_worker(args):
                 Kt,
                 out_subblock_h=args.out_subblock_h,
                 out_subblock_w=args.out_subblock_w,
+                obw_mult=args.obw_mult,
             )
 
             # nnz semantics (see ttnn.sparse_matmul docs + decode.py):
@@ -414,9 +422,10 @@ def run_orchestrator(args):
     trials = []
     seen_eff = set()
     for cx, cy, nc, pcn in grids:
-        for ibw, osw, osh, fid, adt, fp32, pl1, wmem, omem, amem in _it.product(
+        for ibw, osw, obwm, osh, fid, adt, fp32, pl1, wmem, omem, amem in _it.product(
             args.in0_block_ws,
             args.out_subblock_ws,
+            args.obw_mults,
             args.out_subblock_hs,
             args.fidelities,
             args.act_dtypes,
@@ -443,7 +452,12 @@ def run_orchestrator(args):
             # needed, so it is disabled to let the full osw axis run.
             # if eff_osw > 1 and pcn < 2 * eff_osw:
             #     continue
-            key = (cx, cy, pcn, eff_ibw, eff_osw, osh, fid, adt, fp32, pl1, wmem, omem, amem)
+            # effective obw_mult after the same clamping build_pc applies
+            eff_obwm = max(1, obwm)
+            if eff_osw * eff_obwm > pcn or pcn % (eff_osw * eff_obwm) != 0:
+                cands = [m for m in range(eff_obwm, 0, -1) if pcn % (eff_osw * m) == 0]
+                eff_obwm = cands[0] if cands else 1
+            key = (cx, cy, pcn, eff_ibw, eff_osw, eff_obwm, osh, fid, adt, fp32, pl1, wmem, omem, amem)
             if key in seen_eff:
                 continue
             seen_eff.add(key)
@@ -455,6 +469,7 @@ def run_orchestrator(args):
                     pcn=pcn,
                     ibw=eff_ibw,
                     osw=eff_osw,
+                    obwm=eff_obwm,
                     osh=osh,
                     fid=fid,
                     adt=adt,
@@ -558,7 +573,7 @@ def run_orchestrator(args):
     for gi, t in enumerate(trials):
         cx, cy, nc, pcn = t["cx"], t["cy"], t["nc"], t["pcn"]
         label = (
-            f"grid{cx}x{cy}_nc{nc}_pcN{pcn}_ib{t['ibw']}_sb{t['osh']}x{t['osw']}"
+            f"grid{cx}x{cy}_nc{nc}_pcN{pcn}_ib{t['ibw']}_sb{t['osh']}x{t['osw']}_obwm{t['obwm']}"
             f"_{t['fid']}_{t['adt']}_fp32d{t['fp32']}_pl1{t['pl1']}"
             f"_w{t['wmem']}_o{t['omem']}_a{t['amem']}"
         )
@@ -574,6 +589,8 @@ def run_orchestrator(args):
             str(t["ibw"]),
             "--out-subblock-w",
             str(t["osw"]),
+            "--obw-mult",
+            str(t["obwm"]),
             "--out-subblock-h",
             str(t["osh"]),
             "--fidelity",
@@ -645,6 +662,7 @@ def run_orchestrator(args):
                 per_core_N=pcn,
                 in0_block_w=t["ibw"],
                 out_subblock_w=t["osw"],
+                obw_mult=t["obwm"],
                 out_subblock_h=t["osh"],
                 fidelity=t["fid"],
                 act_dtype=t["adt"],
@@ -693,6 +711,7 @@ def run_orchestrator(args):
             "per_core_N",
             "in0_block_w",
             "out_subblock_w",
+            "obw_mult",
             "out_subblock_h",
             "fidelity",
             "act_dtype",
@@ -756,6 +775,15 @@ def main():
         help="in0_block_w values to sweep (snapped to a divisor of Kt)",
     )
     ap.add_argument(
+        "--obw-mults",
+        type=int,
+        nargs="+",
+        default=[1],
+        help="out_block_w = obw_mult * out_subblock_w (i.e. in1_num_subblocks). "
+        "1 = Lucas Chin's obw=osw. Higher explores out_block_w > out_subblock_w, "
+        "which was never tested. Must divide per_core_N.",
+    )
+    ap.add_argument(
         "--out-subblock-ws",
         type=int,
         nargs="+",
@@ -805,6 +833,7 @@ def main():
     ap.add_argument("--in0-block-w", type=int, default=2)
     ap.add_argument("--out-subblock-h", type=int, default=1)
     ap.add_argument("--out-subblock-w", type=int, default=1)
+    ap.add_argument("--obw-mult", type=int, default=1)
     ap.add_argument("--fp32-dest", type=int, default=0)
     ap.add_argument("--packer-l1-acc", type=int, default=1)
     ap.add_argument("--weight-mem", default="dram", choices=list(MEMCFGS.keys()))
