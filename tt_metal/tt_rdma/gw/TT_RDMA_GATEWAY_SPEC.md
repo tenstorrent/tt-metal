@@ -323,6 +323,16 @@ Arm-driven HW-TX (`doca_eth_txq`, ~198 G) remains an option but is Arm-in-the-lo
      **d.2b's first task = make the recv-post depth-parametric** (post/track N recvs at RQ>4 without the RPC
      failing) before any pipelining or N-EU fan-out. This is a DOCA-`doca_dpa_dev_verbs`-API-level fix, not a host
      constant bump. Until it's solved, single-EU is capped at ~0.3 Mpps (depth-4, 1-in-flight synchronous kernel).
+     **★ Deep-research done (8-agent workflow) → `gw/D2B_RESEARCH_PLAN.md`.** Root cause converges: the gateway
+     hand-rolls an RC QP sharing ONE completion hard-baked to 4 (`:1447`, decoupled from the depth macro) vs the
+     stock DOCA-managed `doca_verbs_eth_rq` single-knob (CQ==RQ==posts) pattern. The trivial "tie `:1447` to the
+     macro" fix is **already disproven** (RQ=CQ=8 = the critic's E1 = FAIL). Live fixes: separate recv-only
+     completion + batch N-post/1-commit, or the **SRQ** device path (escape hatch + Stage-3 buffer model).
+     **CRITICAL REORDER:** the true go/no-go is **E3, a bandwidth-wall kill-switch needing NO code change** —
+     re-run the DPA-heap 2-SGE gather blast at **8 KB** (N4/N6): if it stays ~146 G (byte-bandwidth-bound), 200 G
+     is unreachable on the DPA path → **pivot to Arm-HW-TX** (`doca_ttblast` 198 G, proven, latency cost); if it
+     scales past ~180 G, the DPA rewrite is justified. **Run E3 before any Stage-1 recv-post work.** The
+     ~0.95 Mpps/EU target is unmeasured (real 0.30) — the whole N-EU 200 G math rests on it.
 
 ### Ordering
 Stage-1 byte-exact **DONE** (§10 (e): validated on silicon). d.1 depth-bump bisect **DONE** (root cause
