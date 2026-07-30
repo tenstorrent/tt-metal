@@ -99,6 +99,149 @@ void reduce_add_block(uint32_t a_cb, uint32_t b_cb, uint32_t out_cb, uint32_t M_
 }
 
 #ifdef RSCATTER
+// Fused epilogue for ONE fully-reduced reduce-scatter slice. The writer feeds bias / residual / gate for the
+// slice in SLICE ORDER, so every operand tile index equals the slice tile index -- no broadcast variants and no
+// row streaming are needed here, unlike the block epilogue. Applied exactly once per slice, by its owner.
+//
+// out = ta + scalar * act(acc + bias) * tb, with each stage compiled in only when its define is set. Stage 1
+// rewrites acc_cb in place using the reserve/push refill idiom (same as add_bias_and_addcmul_block).
+// BROADCAST MATTERS even though the operands are index-aligned: bias and a [1,N] gate hold their values only in
+// ROW 0 of each tile (the rest is tile padding), so they must be applied with a ROW broadcast. Plain elementwise
+// ops there consume 31 rows of padding -- measured PCC 0.18 for the gate, and for bias a FALSE PASS at 0.9997,
+// because a bias applied to only 1 row in 32 barely moves PCC. The residual is a true [M,N] tensor and is
+// correctly applied elementwise.
+[[maybe_unused]] void rs_epilogue_slice(
+    uint32_t acc_cb,
+    uint32_t bias_cb,
+    uint32_t ta_cb,
+    uint32_t tb_cb,
+    uint32_t scalar_value,
+    uint32_t out_cb,
+    uint32_t nt,
+    uint32_t slot,
+    uint32_t broadcast_ternary_b) {
+    // `nt` is the owner's slice length; `slot` is the CB slot size (the LARGEST slice). All acc_cb bookkeeping
+    // uses `slot` while the tile loops use `nt`: with an uneven partition nt < slot for some owners, and
+    // popping nt after the caller pushed slot would desynchronise the CB.
+    constexpr uint32_t DST_ID = 0;
+    [[maybe_unused]] uint32_t fused_act_dst_id = DST_ID;
+
+#if defined(FUSE_BIAS) || defined(SFPU_OP_INIT_ACTIVATION)
+    // ---- stage 1: acc = act(acc + bias), in place ----
+    cb_wait_front(acc_cb, slot);
+#ifdef FUSE_BIAS
+    cb_wait_front(bias_cb, nt);
+    add_bcast_rows_init_short(acc_cb, bias_cb);  // bias is [1,N]: row broadcast, not elementwise
+    reconfig_data_format(acc_cb, bias_cb);
+#else
+    copy_tile_to_dst_init_short(acc_cb);
+    reconfig_data_format_srca(acc_cb);
+#endif
+    pack_reconfig_data_format(acc_cb);
+    for (uint32_t i = 0; i < nt; ++i) {
+        tile_regs_acquire();
+#ifdef FUSE_BIAS
+        add_tiles_bcast<BroadcastType::ROW>(acc_cb, bias_cb, i, i, DST_ID);
+#else
+        copy_tile(acc_cb, i, DST_ID);
+#endif
+#ifdef SFPU_OP_INIT_ACTIVATION
+        SFPU_OP_FUNC_ACTIVATION
+#endif
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(DST_ID, acc_cb);
+        tile_regs_release();
+    }
+#ifdef FUSE_BIAS
+    cb_pop_front(bias_cb, nt);
+#endif
+    cb_pop_front(acc_cb, slot);
+    cb_reserve_back(acc_cb, slot);
+    cb_push_back(acc_cb, slot);
+#endif  // bias or activation
+
+#ifdef FUSE_TERNARY
+    // ---- stage 2: acc = acc * tb * scalar, in place ----
+    cb_wait_front(acc_cb, slot);
+    cb_wait_front(tb_cb, nt);
+#ifndef TERNARY_B_IS_FLOAT32
+    if (broadcast_ternary_b) {
+        mul_bcast_rows_init_short(acc_cb, tb_cb);  // gate [1,N]: values in row 0 only
+    } else {
+        mul_tiles_init(acc_cb, tb_cb);  // gate [M,N]: genuine elementwise
+    }
+#endif
+    binop_with_scalar_tile_init();
+    reconfig_data_format(acc_cb, tb_cb);
+    pack_reconfig_data_format(acc_cb);
+    for (uint32_t i = 0; i < nt; ++i) {
+        tile_regs_acquire();
+#ifndef TERNARY_B_IS_FLOAT32
+        if (broadcast_ternary_b) {
+            mul_tiles_bcast<BroadcastType::ROW>(acc_cb, tb_cb, i, i, DST_ID);
+        } else {
+            mul_tiles(acc_cb, tb_cb, i, i, DST_ID);
+        }
+#else
+        constexpr uint32_t TB_DST_ID = 1;
+        if (broadcast_ternary_b) {
+            unary_bcast_init<BroadcastType::ROW>(tb_cb, acc_cb);
+            unary_bcast<BroadcastType::ROW>(tb_cb, i, TB_DST_ID);
+        } else {
+            copy_tile_to_dst_init_short(tb_cb);
+            copy_tile(tb_cb, i, TB_DST_ID);
+        }
+        copy_tile_to_dst_init_short(acc_cb);
+        copy_tile(acc_cb, i, DST_ID);
+        mul_binary_tile_init();
+        mul_binary_tile(DST_ID, TB_DST_ID, DST_ID);
+#endif
+        mul_unary_tile(DST_ID, scalar_value);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(DST_ID, acc_cb);
+        tile_regs_release();
+    }
+    cb_pop_front(tb_cb, nt);
+    cb_pop_front(acc_cb, slot);
+    cb_reserve_back(acc_cb, slot);
+    cb_push_back(acc_cb, slot);
+
+    // ---- stage 3: out = ta + acc ----
+    cb_wait_front(acc_cb, slot);
+    cb_wait_front(ta_cb, nt);
+    add_tiles_init(acc_cb, ta_cb);
+    reconfig_data_format(acc_cb, ta_cb);
+    pack_reconfig_data_format(out_cb);
+    for (uint32_t i = 0; i < nt; ++i) {
+        tile_regs_acquire();
+        add_tiles(acc_cb, ta_cb, i, i, DST_ID);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(DST_ID, out_cb);
+        tile_regs_release();
+    }
+    cb_pop_front(ta_cb, nt);
+    cb_pop_front(acc_cb, slot);
+#else
+    // no addcmul: move the (bias/activation-applied) slice to out_cb
+    cb_wait_front(acc_cb, slot);
+    copy_tile_to_dst_init_short(acc_cb);
+    reconfig_data_format_srca(acc_cb);
+    pack_reconfig_data_format(out_cb);
+    for (uint32_t i = 0; i < nt; ++i) {
+        tile_regs_acquire();
+        copy_tile(acc_cb, i, DST_ID);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(DST_ID, out_cb);
+        tile_regs_release();
+    }
+    cb_pop_front(acc_cb, slot);
+#endif  // FUSE_TERNARY
+}
+
 // Ring reduce-scatter helpers. rs_copy_chunk: copy n_tiles from in_cb starting at tile in_tile_off -> out_cb,
 // used to SEED the ring with this core's own chunk. No cb push/pop (the caller manages both CBs).
 void rs_copy_chunk(uint32_t in_cb, uint32_t in_tile_off, uint32_t out_cb, uint32_t n_tiles) {
@@ -578,8 +721,8 @@ void kernel_main() {
                 const uint32_t max_chunk = cbase + (crem ? 1u : 0u);
                 auto csize = [=](uint32_t c) { return cbase + (c < crem ? 1u : 0u); };
                 auto coff = [=](uint32_t c) { return c * cbase + (c < crem ? c : crem); };
-                constexpr uint32_t cb_send_cb = tt::CBIndex::c_4;     // compute -> writer send chunk (bf16)
-                constexpr uint32_t cb_recv_cb = tt::CBIndex::c_5;     // incoming chunk (bf16), 2 slots
+                constexpr uint32_t cb_send_cb = tt::CBIndex::c_8;     // NOT c_4/c_5: those are fusion operands
+                constexpr uint32_t cb_recv_cb = tt::CBIndex::c_9;     // incoming slice (bf16), 2 slots
                 cb_wait_front(intermediate_cb, out_block_num_tiles);  // resident; popped after the ring
                 cb_reserve_back(cb_send_cb, max_chunk);
                 rs_copy_chunk(intermediate_cb, coff(rs_ring_pos), cb_send_cb, csize(rs_ring_pos));
@@ -592,10 +735,32 @@ void kernel_main() {
                         cb_reserve_back(cb_send_cb, max_chunk);
                         rs_add_chunk(intermediate_cb, coff(d), cb_recv_cb, cb_send_cb, dn);
                         cb_push_back(cb_send_cb, max_chunk);
-                    } else {  // last round: fully reduced AND owned by this core -> writer writes it to DRAM
+                    } else {  // last round: fully reduced AND owned by this core
+#ifdef REGIME_A_FUSED
+                        // Land the reduced slice in the scratch CB, then apply the epilogue ONCE to it. Every
+                        // owner does this for its own slice, so the epilogue is applied exactly once per output
+                        // tile -- the property the single-root chain gets for free.
+                        constexpr uint32_t cb_epi_cb = tt::CBIndex::c_10;
+                        cb_reserve_back(cb_epi_cb, max_chunk);
+                        rs_add_chunk(intermediate_cb, coff(d), cb_recv_cb, cb_epi_cb, dn);
+                        cb_push_back(cb_epi_cb, max_chunk);
+                        cb_reserve_back(out_cb, max_chunk);
+                        rs_epilogue_slice(
+                            cb_epi_cb,
+                            in2_cb,
+                            ternary_a_cb,
+                            ternary_b_cb,
+                            fused_ternary_scalar_uint,
+                            out_cb,
+                            dn,
+                            max_chunk,
+                            broadcast_ternary_b);
+                        cb_push_back(out_cb, max_chunk);
+#else
                         cb_reserve_back(out_cb, max_chunk);
                         rs_add_chunk(intermediate_cb, coff(d), cb_recv_cb, out_cb, dn);
                         cb_push_back(out_cb, max_chunk);
+#endif
                     }
                     cb_pop_front(cb_recv_cb, max_chunk);
                 }

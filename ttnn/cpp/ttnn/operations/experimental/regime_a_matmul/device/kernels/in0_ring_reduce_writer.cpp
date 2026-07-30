@@ -90,9 +90,10 @@ void kernel_main() {
     //   Pk==1 (use_reduce==0): every core is its own root; Pk>1: only the top band (is_top).
     // The compute kernel consumes these CBs and applies the epilogue exactly once. All gated by defines so
     // the no-fusion compile is byte-identical. ----
-#if defined(FUSE_BIAS) || defined(FUSE_TERNARY) || defined(OUT_CHUNKS)
-    uint32_t fidx = 17u;  // fusion/chunk runtime args follow the base 17 writer args
-#endif
+    // ONE running index over the optional runtime args, consumed in the exact order the factory pushes them:
+    // bias, ternary, chunk info, then reduce-scatter. A single counter is what lets fusion / chunked output /
+    // reduce-scatter be active simultaneously (they used to be mutually exclusive at index 17).
+    [[maybe_unused]] uint32_t fidx = 17u;
 #if defined(FUSE_BIAS)
     constexpr uint32_t bias_cb = 4;
     const uint32_t bias_addr = get_arg_val<uint32_t>(fidx++);
@@ -186,6 +187,59 @@ void kernel_main() {
 #endif
     };
 
+    // Feed the fused-epilogue operands for the SLICE [beg, beg+nt) of output sub-block `nb`, in SLICE ORDER, so
+    // compute indexes every operand 0..nt-1 with no modular arithmetic. Used by reduce-scatter, where each owner
+    // applies the epilogue exactly once to its own fully reduced slice. Slice tile j is sub-block tile beg+j,
+    // i.e. (m, n) = ((beg+j)/N_block, (beg+j)%N_block); bias/broadcast-gate depend only on n, residual and a
+    // full gate on (m, n). Invalid tail positions are zero-filled and never DRAM-read, exactly as feed_fused.
+    [[maybe_unused]] auto feed_fused_slice = [&](uint32_t nb, uint32_t beg, uint32_t nt) {
+        [[maybe_unused]] const uint32_t n_off = n_start + nb * N_block;
+#if defined(FUSE_BIAS)
+        cb_reserve_back(bias_cb, nt);
+        uint32_t pb = get_write_ptr(bias_cb);
+        for (uint32_t j = 0; j < nt; ++j) {
+            const uint32_t idx = beg + j;
+            const uint32_t n = idx - (idx / N_block) * N_block;
+            if ((nb * N_block + n) < valid_n) {
+                noc_async_read_page(n_off + n, bias, pb);
+            } else {
+                zero_tile(pb);
+            }
+            pb += tile_bytes;
+        }
+        noc_async_read_barrier();
+        cb_push_back(bias_cb, nt);
+#endif
+#if defined(FUSE_TERNARY)
+        cb_reserve_back(ta_cb, nt);
+        cb_reserve_back(tb_cb, nt);
+        uint32_t pa = get_write_ptr(ta_cb);
+        uint32_t pg = get_write_ptr(tb_cb);
+        for (uint32_t j = 0; j < nt; ++j) {
+            const uint32_t idx = beg + j;
+            const uint32_t m = idx / N_block;
+            const uint32_t n = idx - m * N_block;
+            const bool ok = (m < valid_m) && ((nb * N_block + n) < valid_n);
+            if (ok) {
+                noc_async_read_page((m_start + m) * Nt + (n_off + n), ta, pa);
+            } else {
+                zero_tile(pa);
+            }
+            // gate: [1,N] broadcast reads by column only; [M,N] reads the same (m,n) as the residual
+            if (ok) {
+                noc_async_read_page(bcast_gate ? (n_off + n) : ((m_start + m) * Nt + (n_off + n)), tb, pg);
+            } else {
+                zero_bytes(pg, gate_tile_bytes);
+            }
+            pa += tile_bytes;
+            pg += gate_tile_bytes;
+        }
+        noc_async_read_barrier();
+        cb_push_back(ta_cb, nt);
+        cb_push_back(tb_cb, nt);
+#endif
+    };
+
     // Chunked output support (regime_a_matmul_split): route each output tile to the chunk buffer that owns
     // its global N column. chunk = global_n / out_ntc, col = global_n % out_ntc; write page (m)*out_ntc+col
     // into chunk-buffer `chunk`. All chunk buffers share the output TensorAccessorArgs (same [M, N/chunks]
@@ -208,50 +262,15 @@ void kernel_main() {
     };
 #endif
 
-    // ---- TEST-ONLY in0-read-skip flag. Appended at index 17 by the factory ONLY for the unfused/
-    // single-output diagnostic build (bit0/bit1 set); never present in production, so this read + the guard
-    // below compile to nothing in the mask-0 binary. 1 => skip this core's in0 DRAM read (leave stale L1,
-    // preserve CB reserve/push/pop, pointer advance, barrier, ring forwarding, semaphores, compute). ----
-    constexpr uint32_t kDiagBase0 = 17u;
-#if defined(SKIP_ALL_IN0_READ) || defined(SKIP_REDUNDANT_IN0_READ)
-    const uint32_t in0_skip = get_arg_val<uint32_t>(kDiagBase0);
-    constexpr uint32_t kDiagBase1 = kDiagBase0 + 1u;
-#else
-    constexpr uint32_t kDiagBase1 = kDiagBase0;
-#endif
-#define DIAG_ARG_BASE kDiagBase1
-    // ---- TEST-ONLY ring-forward PERTURBATION args (bit6 FWD_NEAR): nearest program core on this core's
-    // writer NoC. Payload only; the readiness semaphore below still targets the TRUE ring successor, so the
-    // ring's step count / dependency chain is unchanged and only hop distance is removed. ----
-#if defined(FWD_NEAR)
-    const uint32_t near_x = get_arg_val<uint32_t>(kDiagBase1);
-    const uint32_t near_y = get_arg_val<uint32_t>(kDiagBase1 + 1);
-    constexpr uint32_t kDiagBase2 = kDiagBase1 + 2u;
-#else
-    constexpr uint32_t kDiagBase2 = kDiagBase1;
-#endif
-    // ---- MEET-IN-THE-MIDDLE reduction args (bit20). red_nrecv: incoming partials at this core (2 only at the
-    // meet root). red_channel: which of the root's two channels THIS core sends on - channel 0 uses red_sem /
-    // red_prev, channel 1 uses red_sem2 / red_prev2, so the two arrivals can never be confused for each other
-    // (a single shared counter would be fungible and is exactly what corrupted earlier reduction work). ----
-#if defined(REDUCE_MEET)
-    const uint32_t red_nrecv = get_arg_val<uint32_t>(kDiagBase2);      // my incoming partials (0, 1 or 2)
-    const uint32_t red_send_ord = get_arg_val<uint32_t>(kDiagBase2 + 1);  // my ordinal at my destination
-    const uint32_t red_prev2_x = get_arg_val<uint32_t>(kDiagBase2 + 2);
-    const uint32_t red_prev2_y = get_arg_val<uint32_t>(kDiagBase2 + 3);
-    const uint32_t red_dest_nrecv = get_arg_val<uint32_t>(kDiagBase2 + 4);  // inputs my DESTINATION has
-    const uint32_t red_cb_slots = get_arg_val<uint32_t>(kDiagBase2 + 5);    // cb_reduce depth in blocks
-#endif
-
-    // ---- RING REDUCE-SCATTER args (index 17+; unfused/single-chunk/no-diag, so index 17 is free). ----
+    // ---- RING REDUCE-SCATTER args, read AFTER any fusion/chunk args via the shared running index. ----
 #if defined(RSCATTER)
-    const uint32_t rs_next_x = get_arg_val<uint32_t>(17);  // next core in the Pk cycle (I send to it)
-    const uint32_t rs_next_y = get_arg_val<uint32_t>(18);
-    const uint32_t rs_prev_x = get_arg_val<uint32_t>(19);  // prev core (it sends to me)
-    const uint32_t rs_prev_y = get_arg_val<uint32_t>(20);
-    const uint32_t rs_owned_chunk = get_arg_val<uint32_t>(21);  // tile-chunk this core owns + writes to DRAM
-    const uint32_t rs_P = get_arg_val<uint32_t>(22);            // cycle size = Pk
-    const uint32_t rs_T = get_arg_val<uint32_t>(23);            // tiles per output sub-block = M_block*N_block
+    const uint32_t rs_next_x = get_arg_val<uint32_t>(fidx++);  // next core in the Pk cycle (I send to it)
+    const uint32_t rs_next_y = get_arg_val<uint32_t>(fidx++);
+    const uint32_t rs_prev_x = get_arg_val<uint32_t>(fidx++);  // prev core (it sends to me)
+    const uint32_t rs_prev_y = get_arg_val<uint32_t>(fidx++);
+    const uint32_t rs_owned_chunk = get_arg_val<uint32_t>(fidx++);  // slice this core owns + writes to DRAM
+    const uint32_t rs_P = get_arg_val<uint32_t>(fidx++);            // cycle size = Pk
+    const uint32_t rs_T = get_arg_val<uint32_t>(fidx++);            // tiles per sub-block = M_block*N_block
 #endif
 
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
@@ -268,16 +287,7 @@ void kernel_main() {
                     for (uint32_t k = 0; k < K_block; ++k) {
                         const uint32_t l = sb * K_block + k;  // capacity-local K index within the slice
                         if (m < valid_m && l < valid_k) {
-#if defined(SKIP_ALL_IN0_READ) || defined(SKIP_REDUNDANT_IN0_READ)
-                            // Diagnostic: skip ONLY the DRAM read; leave the L1 slot's stale contents and
-                            // keep the pointer advance / loop / barrier / push / ring forwarding intact so
-                            // downstream work is measured unchanged (output is intentionally invalid).
-                            if (!in0_skip) {
-                                noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
-                            }
-#else
                             noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
-#endif
                         } else {
                             zero_tile(p);  // pad M row or K tail -> local zero (no DRAM read)
                         }
@@ -290,23 +300,10 @@ void kernel_main() {
             noc_semaphore_wait_min(fwd_ptr, step);  // wait for prev to forward a shard into our slot `step`
         }
         if (step + 1 < G) {  // forward this slot to the next core's slot (step+1) + signal
-            uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + (step + 1) * shard_bytes);
-#if !defined(SKIP_IN0_RING_FORWARD)
-#if defined(FWD_NEAR)
-            // diagnostic: same bytes, ~1 hop. Destination is the SAME cb0 offset on a near core (identical CB
-            // layout on every core, so the address is in-bounds); its slot is also written by its true
-            // predecessor -> content is garbage, which is expected for a diagnostic mask.
-            dst = get_noc_addr(near_x, near_y, base0 + (step + 1) * shard_bytes);
-#endif
-#if defined(FWD_HALF)
-            noc_async_write(slot, dst, shard_bytes / 2u);  // diagnostic: half the payload, true destination
-#else
+            const uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + (step + 1) * shard_bytes);
             noc_async_write(slot, dst, shard_bytes);
-#endif
-#else
-            (void)dst;  // diagnostic: drop the ring PAYLOAD write; keep the readiness/credit semaphore below
-#endif
-            noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);  // credit preserved (stale L1)
+            // payload THEN readiness, same peer + same NoC, so the successor cannot observe the credit early
+            noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);
         }
         cb_push_back(in0_cb, W * in0_blk);  // compute consumes this shard (W blocks)
     }
@@ -327,9 +324,7 @@ void kernel_main() {
             for (uint32_t m = 0; m < M_block; ++m) {
                 for (uint32_t n = 0; n < N_block; ++n) {
                     if (m < valid_m && (nb * N_block + n) < valid_n) {  // write only valid_m x valid_n
-#if defined(SKIP_OUTPUT_WRITE)
-                        // diagnostic: drop the DRAM payload write; keep the iteration + CB consumption below.
-#elif defined(OUT_CHUNKS)
+#if defined(OUT_CHUNKS)
                         write_out_tile(m_start + m, n_off + n, r + (m * N_block + n) * tile_bytes);
 #else
                         noc_async_write_page((m_start + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
@@ -358,8 +353,8 @@ void kernel_main() {
     // max-size slot (only the useful prefix is ever written or read), so the FIFO period stays 2 and the remote
     // write offset is a constant stride even when the chunks are uneven.
     const uint32_t P = rs_P;
-    constexpr uint32_t cb_send = 4;
-    constexpr uint32_t cb_recv = 5;
+    constexpr uint32_t cb_send = 8;  // NOT 4/5: those are fusion operands, which reduce-scatter now supports
+    constexpr uint32_t cb_recv = 9;
     const uint32_t rs_base_tiles = rs_T / P;  // floor size; the first rs_rem chunks carry one more
     const uint32_t rs_rem = rs_T - rs_base_tiles * P;
     const uint32_t max_chunk = rs_base_tiles + (rs_rem ? 1u : 0u);
@@ -404,6 +399,11 @@ void kernel_main() {
         // global (m_start+m, n_start + n_base + n); valid iff m < valid_m and (n_base+n) < valid_n.
         const uint32_t own_tiles = csize(rs_owned_chunk);
         const uint32_t own_off = coff(rs_owned_chunk);
+#if defined(FUSE_BIAS) || defined(FUSE_TERNARY)
+        // Supply this owner's slice operands BEFORE waiting on out_cb: compute applies the epilogue to the
+        // fully reduced slice, so the operands must already be queued when the last ring round completes.
+        feed_fused_slice(nb, own_off, own_tiles);
+#endif
         cb_wait_front(out_cb, max_chunk);
         const uint32_t rr = get_read_ptr(out_cb);
         for (uint32_t j = 0; j < own_tiles; ++j) {
@@ -411,7 +411,11 @@ void kernel_main() {
             const uint32_t m = idx / N_block;
             const uint32_t n = idx - m * N_block;
             if (m < valid_m && (n_base + n) < valid_n) {
+#if defined(OUT_CHUNKS)
+                write_out_tile(m_start + m, n_start + n_base + n, rr + j * tile_bytes);
+#else
                 noc_async_write_page((m_start + m) * Nt + (n_start + n_base + n), out, rr + j * tile_bytes);
+#endif
             }
         }
         noc_async_writes_flushed();  // output pages departed L1 -> out_cb slot safe to reuse
@@ -425,12 +429,6 @@ void kernel_main() {
     // write ptr drifts after receives).
     const uint32_t reduce_base = get_write_ptr(cb_reduce);
     const uint32_t red_addr = get_semaphore(red_sem_id);
-#if defined(REDUCE_MEET)
-    // ONE shared receive counter is sufficient: a root waits for the TOTAL number of arrivals for this
-    // sub-block (nrecv per nb), not for a specific one, and the two senders write to DIFFERENT slots decided
-    // by their ordinal. So there is no fungibility problem and no second semaphore.
-    const uint64_t prev2_redfree = get_noc_addr(red_prev2_x, red_prev2_y, get_semaphore(redfree_sem_id));
-#endif
     volatile tt_l1_ptr uint32_t* red_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_addr);
     const uint32_t redfree_addr = get_semaphore(redfree_sem_id);
     volatile tt_l1_ptr uint32_t* redfree_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(redfree_addr);
@@ -438,49 +436,12 @@ void kernel_main() {
     const uint64_t next_recv = get_noc_addr(red_next_x, red_next_y, red_addr);
 
     for (uint32_t nb = 0; nb < N_bpc; ++nb) {
-#if defined(SKIP_REDUCTION)
-        // Diagnostic: remove the split-K chain (non-root sends, root receives/accumulation). compute copied
-        // this band's LOCAL partial into out_cb; every band writes it to DRAM directly (unless output skipped).
-        (void)reduce_base;
-        (void)red_ptr;
-        (void)redfree_ptr;
-        (void)prev_redfree;
-        (void)next_recv;
-        cb_wait_front(out_cb, out_blk);
-        uint32_t r = get_read_ptr(out_cb);
-        const uint32_t n_off = n_start + nb * N_block;
-        for (uint32_t m = 0; m < M_block; ++m) {
-            for (uint32_t n = 0; n < N_block; ++n) {
-                if (m < valid_m && (nb * N_block + n) < valid_n) {
-#if !defined(SKIP_OUTPUT_WRITE)
-                    noc_async_write_page((m_start + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
-#endif
-                }
-            }
-        }
-        noc_async_writes_flushed();
-        cb_pop_front(out_cb, out_blk);
-#else
-#if defined(REDUCE_MEET)
-        // Return a credit to each predecessor, then wait for ALL of this sub-block's partials to land, then
-        // push them in ordinal order. Pushing only after every arrival is what lets one counter serve both.
-        if (red_nrecv > 0u) {
-            cb_reserve_back(cb_reduce, red_nrecv * out_blk);
-            noc_semaphore_inc(prev_redfree, 1);
-            if (red_nrecv > 1u) {
-                noc_semaphore_inc(prev2_redfree, 1);
-            }
-            noc_semaphore_wait_min(red_ptr, (nb + 1) * red_nrecv);
-            cb_push_back(cb_reduce, red_nrecv * out_blk);
-        }
-#else
         if (!is_bottom) {
             cb_reserve_back(cb_reduce, out_blk);  // wait our compute freed slot (nb-2)
             noc_semaphore_inc(prev_redfree, 1);   // tell prev: our slot (nb%2) is free for block nb
             noc_semaphore_wait_min(red_ptr, nb + 1);  // prev forwarded block nb into it (chain latency)
             cb_push_back(cb_reduce, out_blk);  // compute reduce_add's it -> out_cb, pops cb_reduce
         }
-#endif
 #if defined(FUSE_BIAS) || defined(FUSE_TERNARY)
         if (is_top) {
             feed_fused(nb);  // ROOT only: supply bias/residual/gate for compute's single fused epilogue
@@ -490,24 +451,12 @@ void kernel_main() {
         uint32_t r = get_read_ptr(out_cb);
         if (!is_top) {
             noc_semaphore_wait_min(redfree_ptr, nb + 1);  // next signalled its slot is free
-#if defined(REDUCE_MEET)
-            // My destination pushes red_dest_nrecv blocks per sub-block in ordinal order, so the FIFO slot for
-            // (nb, my ordinal) is exactly this. Both senders to a root therefore target distinct slots, and a
-            // single-input receiver gets the plain nb-indexed slot.
-            const uint32_t red_slot = (nb * red_dest_nrecv + red_send_ord) % red_cb_slots;
-            uint64_t dst = get_noc_addr(red_next_x, red_next_y, reduce_base + red_slot * out_blk_bytes);
-#else
-            uint64_t dst = get_noc_addr(red_next_x, red_next_y, reduce_base + (nb % red_depth) * out_blk_bytes);
-#endif
+            const uint64_t dst = get_noc_addr(red_next_x, red_next_y, reduce_base + (nb % red_depth) * out_blk_bytes);
             noc_async_write(r, dst, out_blk_bytes);
             // Pipelined: payload THEN signal to the SAME peer on the SAME NoC (ordered, like the in0 ring) so
             // the receiver never observes readiness before its partial-sum has landed. Flush (not a full
             // barrier) so the out_cb source slot is reusable; completion is deferred to the final barrier.
-#if defined(REDUCE_MEET)
-            noc_semaphore_inc(get_noc_addr(red_next_x, red_next_y, red_addr), 1);
-#else
             noc_semaphore_inc(next_recv, 1);  // block nb delivered (ordered after the payload write)
-#endif
             noc_async_writes_flushed();       // payload departed L1 -> out_cb slot safe to reuse
         } else {
             // ROOT: issue output DRAM pages + flush (the reduction tail on the wall).
@@ -515,9 +464,7 @@ void kernel_main() {
             for (uint32_t m = 0; m < M_block; ++m) {
                 for (uint32_t n = 0; n < N_block; ++n) {
                     if (m < valid_m && (nb * N_block + n) < valid_n) {  // write only valid_m x valid_n
-#if defined(SKIP_OUTPUT_WRITE)
-                        // diagnostic: drop the DRAM payload write; keep iteration + CB consumption.
-#elif defined(OUT_CHUNKS)
+#if defined(OUT_CHUNKS)
                         write_out_tile(m_start + m, n_off + n, r + (m * N_block + n) * tile_bytes);
 #else
                         noc_async_write_page((m_start + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
@@ -528,7 +475,6 @@ void kernel_main() {
             noc_async_writes_flushed();  // output pages departed L1 -> out_cb slot safe to reuse
         }
         cb_pop_front(out_cb, out_blk);
-#endif  // SKIP_REDUCTION
     }
 #endif  // RSCATTER vs chain
     // Pipelined: single deferred completion before return — drain this core's forwarded partial-sums / DRAM
