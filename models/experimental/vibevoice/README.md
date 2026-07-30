@@ -16,6 +16,14 @@ Override the checkpoint location with:
 export VIBEVOICE_MODEL_PATH=/path/to/VibeVoice-1.5B
 ```
 
+## Supported Devices
+
+Validated on Tenstorrent Blackhole:
+
+| Device | Configuration |
+|--------|---------------|
+| **Blackhole P150** | 1 × Blackhole ASIC (`ARCH_NAME=blackhole`) |
+
 ## Layout
 
 ```
@@ -174,11 +182,12 @@ helpers live in `tests/pcc/pcc_helpers.py`; fixtures (`vv_config`, `lm_state`) a
 
 - **Decoder layer (regression):** `test_decoder_layer_pcc.py::test_decoder_layer_decode_pcc` —
   Devstral-style layer-0 decode; random hidden states `[1, 1, H]`, empty KV cache, positions 0–9,
-  no prefill. Isolates decode SDPA at low cache depth (min PCC ~0.99997).
+  no prefill. Isolates decode SDPA at low cache depth (measured min PCC ≈ 0.99819; gate ≥ 0.9975).
 - **Full prefill chain:** `test_prefill.py::test_full_prefill_chain_pcc` — the integrated
   prefill path (acoustic tokenizer → connector → scatter into embeddings → LM prefill →
   `last_hidden_state`) plus per-layer KV cache, vs the bf16 HF Qwen2 reference; synthetic-input ISL
-  sweep 2k … 64k, gated at `PCC >= 0.99`.
+  sweep. Speech embeds / KV are gated at `PCC >= 0.99`; LM hidden is gated on per-position
+  **median** `>= 0.96` (flattened PCC can be pulled down by a few text-token outliers).
 - **Full decode chain:** `test_decode.py::test_decode_ref_cond_frame_pcc` — **open-loop,
   per-stage parity** of the whole decode vs the fp32 reference over a teacher-forced stream. Each
   frame compares all three decode stages, each fed the *reference* input for that stage (open loop
@@ -209,6 +218,78 @@ pytest models/experimental/vibevoice/tests/pcc/test_prefill.py \
 
 Individual component PCC tests (acoustic/semantic tokenizers, connector, diffusion head, DPM
 scheduler, LM head) live alongside these in `tests/pcc/`.
+
+## PCC Results
+
+Measured on **Blackhole P150** against the PyTorch / HuggingFace reference paths
+(values from `tests/logs/` suite runs + component re-measure).
+
+| File Name | Test Case | PCC / metric |
+|-----------|-----------|-------------:|
+| `test_connector_pcc.py` | Acoustic connector | 0.99999803 |
+| | Semantic connector | 0.99999753 |
+| `test_dpm_scheduler_pcc.py` | DPM scheduler (10 steps) | 0.99993365 |
+| `test_lm_head_pcc.py` | LM head last-token logits | 0.99995073 |
+| `test_diffusion_head_pcc.py` | Diffusion head | 0.99985695 |
+| `test_semantic_tokenizer_pcc.py` | Semantic tokenizer encode | 0.99943061 |
+| `test_acoustic_tokenizer_pcc.py` | Acoustic encode | 0.99985584 |
+| | Acoustic decode (scaled random latents) | 0.99974055 |
+| | Acoustic decode (real encoder latents) | 0.99980000 |
+| `test_decoder_layer_pcc.py` | Layer-0 decode min / mean (steps 0–9) | 0.99819 / 0.99858 |
+| `test_decode.py` | Open-loop diffusion latent min / mean | 0.9996 / 0.9999 |
+| | Open-loop chain (fused) min / mean | 0.9999 / 1.0000 |
+| | Open-loop LM hidden min / mean | 0.9991 / 0.9995 |
+| `test_e2e_wer.py` | Teacher-forced WER (`4p_climate_45min`, cap=512) | 0.0000 |
+| `test_e2e_sim.py` | Voice-clone SIM (Carter vs best impostor) | 0.9914 / margin +0.3854 |
+| | 4-speaker self-ID (Alice / Carter / Frank / Maya) | 0.9805 / 0.9914 / 0.9957 / 0.9761 |
+
+### Prefill chain ISL sweep (`test_prefill.py`)
+
+Speech embeds + KV gated at ≥ 0.99; LM hidden gated on per-position **median** ≥ 0.96.
+
+| ISL | speech_PCC | hidden_med | kv_K_med | kv_V_med |
+|----:|-----------:|-----------:|---------:|---------:|
+| 32 | 0.999976 | 0.99643 | 0.99859 | 0.99718 |
+| 64 | 0.999932 | 0.99705 | 0.99888 | 0.99769 |
+| 128 | 0.999932 | 0.99814 | 0.99917 | 0.99800 |
+| 256 | 0.999930 | 0.99408 | 0.99810 | 0.99701 |
+| 512 | 0.999929 | 0.96330 | 0.99620 | 0.99709 |
+| 1024 | 0.999924 | 0.98275 | 0.98640 | 0.99708 |
+| 2048 | 0.999936 | 0.98755 | 0.95016 | 0.99691 |
+| 4096 | 0.999939 | 0.99080 | 0.86048 | 0.99626 |
+| 8192 | 0.999940 | 0.99232 | 0.86293 | 0.99581 |
+| 16384 | 0.999915 | 0.99433 | 0.75053 | 0.99521 |
+| 24000 | 0.999942 | 0.99529 | 0.69571 | 0.99499 |
+
+> Post fused-RoPE K layout remapping. Speech / hidden_med / V stay high; **K median drops with
+> ISL** (below the 0.99 KV gate from ISL≥1024 — worst layer often 13). Gate / remapping follow-up
+> tracked separately from these measured values.
+
+## Performance Summary
+
+### Prefill / decode ISL sweep (`4p_climate_100min`)
+
+Wall-clock `tests/perf/test_e2e_isl_sweep_perf.py` on Blackhole P150 with fused-frame trace
+enabled (`VV_TRACE_SEGMENT=1`). Prompt cropped to each ISL after tokenization; warmup then timed
+`max_new_tokens=None` (until EOS / `max_length_times×ISL`). AR toks may stop early on EOS before
+the 2× ISL cap.
+
+| ISL | Prefill tok/s | Decode tok/s | ms/tok | E2E | AR toks |
+|----:|-------------:|-------------:|-------:|----:|--------:|
+| 32 | 5.3 | 14.03 | 71 | 11s | 64 |
+| 64 | 10.5 | 13.78 | 73 | 15s | 128 |
+| 128 | 21.1 | 15.39 | 65 | 23s | 256 |
+| 256 | 42.2 | 9.84 | 102 | 58s | 512 |
+| 512 | 82.2 | 11.71 | 85 | 96s | 1024 |
+| 1024 | 160.5 | 18.14 | 55 | 121s | 2048 |
+| 2048 | 300.2 | 19.94 | 50 | 200s | 3802 (EOS before 2×) |
+| 4096 | 508.8 | 20.14 | 50 | 417s | 8192 |
+| 8192 | 809.1 | 19.18 | 52 | 730s | 13770 (EOS before 2×) |
+| 16384 | 850.9 | 18.86 | 53 | 1717s | 31971 |
+| 23038 | 730.0 | 17.96 | 56 | 2088s | 36895 |
+
+Steady-state decode peaks around **~20 tok/s** (≈50 ms/tok) for mid/long ISLs; prefill scales
+roughly linearly up to ~16k tokens (~850 tok/s), then drops at the full ~23k prompt.
 
 ## Performance tests (Tracy)
 
