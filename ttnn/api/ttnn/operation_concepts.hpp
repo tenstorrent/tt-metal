@@ -263,8 +263,77 @@ consteval bool attributes_fully_declared() {
     if constexpr (!HasAttributeNames<attributes_t> || !ttsl::concepts::Reflectable<attributes_t>) {
         return true;  // no tuple at all -> full reflection already keys every field
     } else {
-        return std::tuple_size_v<decltype(attributes_t::attribute_names)> + excluded_attribute_count<attributes_t>() ==
-               reflect::size<attributes_t>();
+        // attribute_names is the op's identity: printing and graph capture read it too, so it names every
+        // field. Fields the key ignores stay named here and are listed again in attributes_excluded_from_key.
+        return std::tuple_size_v<decltype(attributes_t::attribute_names)> == reflect::size<attributes_t>();
+    }
+}
+
+// Counting alone is hackable: duplicate a name and the count matches while a field goes unnamed. Names must
+// be distinct.
+template <typename attributes_t>
+consteval bool attribute_names_are_distinct() {
+    if constexpr (!HasAttributeNames<attributes_t>) {
+        return true;
+    } else {
+        constexpr std::size_t n = std::tuple_size_v<decltype(attributes_t::attribute_names)>;
+        std::array<std::string_view, n> names{};
+        [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            ((names[Is] = std::string_view{std::get<Is>(attributes_t::attribute_names)}), ...);
+        }(std::make_index_sequence<n>{});
+        for (std::size_t i = 0; i < n; ++i) {
+            for (std::size_t j = i + 1; j < n; ++j) {
+                if (names[i] == names[j]) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+}
+
+// An exclusion naming something that is not an attribute silently excludes nothing -- a rename or a typo
+// would quietly put a field back in the key, or claim to have removed one that was never there.
+template <typename attributes_t>
+consteval bool excluded_attributes_exist() {
+    if constexpr (!HasExcludedAttributes<attributes_t> || !HasAttributeNames<attributes_t>) {
+        return true;
+    } else {
+        constexpr std::size_t num_names = std::tuple_size_v<decltype(attributes_t::attribute_names)>;
+        constexpr std::size_t num_excluded = excluded_attribute_count<attributes_t>();
+        std::array<std::string_view, num_names> names{};
+        std::array<std::string_view, num_excluded> excluded{};
+        [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            ((names[Is] = std::string_view{std::get<Is>(attributes_t::attribute_names)}), ...);
+        }(std::make_index_sequence<num_names>{});
+        [&]<std::size_t... Es>(std::index_sequence<Es...>) {
+            ((excluded[Es] = std::string_view{std::get<Es>(attributes_t::attributes_excluded_from_key)}), ...);
+        }(std::make_index_sequence<num_excluded>{});
+        for (const auto& excluded_name : excluded) {
+            bool found = false;
+            for (const auto& name : names) {
+                found = found || (name == excluded_name);
+            }
+            if (!found) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
+// attribute_values() must hand back the fields themselves, not values computed from them: std::forward_as_tuple
+// over members yields lvalue references, while a copy or a computed expression cannot. Without this, an op can
+// coarsen its key inside what reads as a field list -- a fourth way to key, invisible to the count check.
+template <typename attributes_t>
+consteval bool attribute_values_are_fields() {
+    if constexpr (!HasAttributeNames<attributes_t>) {
+        return true;
+    } else {
+        using values_t = decltype(std::declval<const attributes_t&>().attribute_values());
+        return []<std::size_t... Is>(std::index_sequence<Is...>) {
+            return (std::is_lvalue_reference_v<std::tuple_element_t<Is, values_t>> && ...);
+        }(std::make_index_sequence<std::tuple_size_v<values_t>>{});
     }
 }
 

@@ -237,28 +237,34 @@ struct Conv2dParams {
         "full_inner_dim",
         "enable_activation_reuse",
         "config_tensors_in_dram",
-        "force_split_reader");
+        "force_split_reader",
+        "pre_op_l1_allocation_size_bytes");
+
+    // Recomputed per call from live allocator state and only read by the L1-accounting assertion in
+    // conv2d_op_program_factory_common.cpp -- keying it would give every call its own program.
+    static constexpr auto attributes_excluded_from_key = std::forward_as_tuple("pre_op_l1_allocation_size_bytes");
 
     auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->sliding_window_config),
+        return std::forward_as_tuple(
+            this->sliding_window_config,
             this->output_channels,
             this->groups,
             this->untilize_out,
             this->has_bias,
-            std::cref(this->activation),
+            this->activation,
             this->parallelization_config,
             this->block_config,
-            std::cref(this->memory_config),
+            this->memory_config,
             this->dtype,
             this->input_tensor_shape,
-            std::cref(this->compute_kernel_config),
+            this->compute_kernel_config,
             this->enable_act_double_buffer,
             this->enable_weights_double_buffer,
             this->full_inner_dim,
             this->enable_activation_reuse,
             this->config_tensors_in_dram,
-            this->force_split_reader);
+            this->force_split_reader,
+            this->pre_op_l1_allocation_size_bytes);
     }
 };
 

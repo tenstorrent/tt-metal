@@ -259,6 +259,29 @@ public:
         "An operation must not define both compute_program_hash and the declarative keying that supersedes it -- "
         "only compute_program_hash would be used.");
 
+    static_assert(
+        !HasSpecProgramFactory<DeviceOperation> ||
+            !ttsl::reflection::detail::supports_to_hash_v<operation_attributes_t>,
+        "operation_attributes_t::to_hash() silently replaces the whole attribute hash (it outranks "
+        "attribute_names). A Metal 2.0 operation states its key through attributes_excluded_from_key instead.");
+    static_assert(
+        !HasSpecProgramFactory<DeviceOperation> || attributes_fully_declared<operation_attributes_t>(),
+        "attribute_names leaves fields out of operation_attributes_t, which silently drops them from the cache "
+        "key. List every field in attribute_names, and name the deliberate omissions in "
+        "attributes_excluded_from_key.");
+    static_assert(
+        !HasSpecProgramFactory<DeviceOperation> || attribute_names_are_distinct<operation_attributes_t>(),
+        "attribute_names repeats a name, so the count can match while a field goes unnamed.");
+    static_assert(
+        !HasSpecProgramFactory<DeviceOperation> || excluded_attributes_exist<operation_attributes_t>(),
+        "attributes_excluded_from_key names something that is not in attribute_names -- a typo or a rename "
+        "excludes nothing and silently puts the field back in the key.");
+    static_assert(
+        !HasSpecProgramFactory<DeviceOperation> || attribute_values_are_fields<operation_attributes_t>(),
+        "attribute_values() returns values computed from the fields rather than the fields themselves, which "
+        "coarsens the cache key inside what reads as a field list. Return std::forward_as_tuple of the members; "
+        "state exclusions in attributes_excluded_from_key.");
+
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         return detail::compute_op_hash<DeviceOperation>(attrs, tensor_args);
