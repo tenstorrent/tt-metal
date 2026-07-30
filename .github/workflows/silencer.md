@@ -530,43 +530,6 @@ acceptable — but you must say so explicitly in the PR, explain why the root ca
 unreachable, and keep the suppression as tight as possible. Never reach for a blanket
 `-w`/`-Wno-*` at the build-system level.
 
-## Known warning complaints (seed targets)
-
-Maintainers have already filed issues about specific noise. Treat these as a **starting
-backlog** — confirm each is still present in current logs (grep, token-frugally), then fix at
-the source. Search for an existing issue/PR before opening a new one, and cross-link the
-issue your PR addresses. This list is a seed, **not** a limit: the ranked `top_noise.txt` from
-a fresh scan always governs priority, and new patterns you discover there are in scope too.
-
-**Check each referenced issue is still open before treating it as a target** (`issue_read`), and
-skip any that are closed — this list ages, and a closed issue is not a live target no matter what
-it says here. Fresh log evidence always outranks this list.
-
-- **#48660** (runtime log spam from matmul): repeated
-  `MatmulDeviceOperation::...: program_config.allowed_worker_cores not populated ...
-  (matmul_device_operation.cpp:465)` — hundreds of lines per pipeline. A category-5 log-spam +
-  category-3 runtime case: root-cause the missing `normalize_program_config()` call path, don't
-  mute it. Note it also says "will become a hard error" — fixing the emitter is the real ask.
-- **#22639**: enabling `-Wdouble-promotion` surfaces unintended `float`→`double` conversions
-  (also a perf issue). A category-1 target if/when it is in the build's warning set.
-- **#38338** (tt-train): a `-Wno-deprecated-declarations` workaround that must **stay in
-  place until the build moves to libstdc++ 14+**. The emitter is libstdc++ 12's internal
-  `std::stable_sort` implementation — the suppression is documented and currently necessary
-  on the clang-20/libstdc++-12 toolchain that `pr-gate.yaml` uses. Treat this as a
-  **category-4 deprecation to migrate only after the toolchain upgrade lands**, not an
-  "unsuppress + fix now" target: removing it today produces a predictably failing PR.
-  Also note the current gate builds tt-train (`skip-tt-train: false`), so any change here
-  is fully exercised by CI.
-- **#31345 / #31591 / #43380 / #18933**: runtime `log_warning` messages (firmware-version
-  mismatch, conv2d weight-prep hint, non-fatal constraint warnings, ring-buffer dispatch note)
-  — evaluate each for category 3 (fix condition) vs category 6 (demote severity).
-
-> **Note on external corpora.** Wilder asked to also mine Glean for warning complaints. Glean's
-> MCP server is not authenticated in this environment (`needs_auth`), so this seed list was
-> built from the **tt-metal issue tracker** instead (MCP `search_issues`), which is the most
-> on-point corpus available here. When Glean is connected (BrAInClaw Dashboard → Glean →
-> Connect), a maintainer can extend this list with any Slack/Jira/doc complaints it surfaces.
-
 ## Scan procedure (scheduled mode)
 
 1. **Pick runs to scan — from the repo's canonical tracked-workflow list.** The set of
@@ -638,68 +601,8 @@ it says here. Fresh log evidence always outranks this list.
 
 ## Validating changes via CI
 
-Because you cannot build locally, changes are validated through
-`.github/workflows/build-artifact.yaml`, invoked by `pr-gate.yaml` on `pull_request`. At time
-of writing (`pr-gate.yaml:130-160`) the gate calls it with platform **Ubuntu 24.04**, toolchain
-`cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake`, build-type **ASan**, `tracy: true`,
-`build-wheel: false`, `skip-tt-train: false`, `checkout-filter: tree:0` — **not** the older
-Release/2204/skip-tt-train=true defaults. When reasoning about what your PR will be validated
-against, trust the current `pr-gate.yaml` contents, not this prose — it drifts.
-
-**Two things this validation does *not* do, that you must not imply in a PR:**
-
-1. **It does not run automatically.** Unlike a human-authored PR, `pr-gate.yaml`'s
-   `pull_request` trigger does not fire on its own for Silencer's bot-authored PRs — a
-   maintainer has to approve the workflow run first (visible as a pending/"waiting for
-   approval" check on the PR). This is a deliberate human-in-the-loop control, not something
-   to work around. Since ready-for-review buys nothing here, Silencer opens its PRs as
-   **draft** — draft accurately reflects "not yet CI-validated," and a maintainer marks it
-   ready (or just approves the run) when they choose to review it.
-2. **Passing it only proves the code compiles** (ASan build, `tracy` on). For categories 1/2/4
-   (compile-time / JIT / deprecation warnings) that *is* the proof. For categories 3/5/6
-   (runtime warnings, log spam, over-verbose messages) it is not: `build-artifact.yaml` never
-   runs the model/perf/sanity suite whose logs the noise came from, so a green gate does not
-   mean the targeted pattern is actually gone.
-
-**What would close that gap, and why it isn't wired in yet:** the correct fix is to also
-launch the specific tracked workflow the noise pattern came from (not just build-artifact) via
-gh-aw's `dispatch-workflow` safe-output — it dispatches an allow-listed `workflow_dispatch`
-target through the same safe-outputs mechanism as `create-pull-request`, so it wouldn't need
-any elevated permission on your own turn. This was investigated and is **currently blocked**:
-`dispatch-workflow`'s same-repo file resolution (as of the `gh-aw v0.84.0` compiler pinned in
-this repo) only matches a bare workflow name to `.md`, `.lock.yml`, or `.yml` — **not
-`.yaml`**, and every tracked workflow in tt-metal (`pr-gate.yaml`, `sanity-tests.yaml`, all
-`t3000-*.yaml`/`galaxy-*.yaml`/etc.) uses `.yaml`. So there is currently no allow-listable
-target. Do not attempt to add a `dispatch-workflow` block yourself expecting it to work — it
-will fail to compile. Revisit once gh-aw resolves `.yaml` names (or some other mechanism is
-added); until then, this gap stays a known limitation, not a silent gap.
-
-Given that, the actual procedure:
-
-- **Do not block waiting for anything.** gh-aw creates the PR in the `safe_outputs` job
-  *after* your agent turn, so on the current run you cannot know the PR number. Note under
-  **Test Status** that the build requires maintainer approval before it will even start, and
-  that CI (once it runs) only validates compilation — the runtime pattern itself still needs a
-  maintainer to re-run the relevant tracked workflow (name it) on this branch to confirm.
-  Record only the pattern + branch name in memory; resolve the PR number and any run ID on the
-  next invocation.
-- **On a later run**, find the PR from the branch name with the `github` MCP tool —
-  `search_pull_requests` (`query: "repo:${{ github.repository }} is:pr [silencer] <branch>"`) —
-  then check for a build with `pull_request_read` (`method: "get_check_runs"`, `pullNumber:
-  <pr>`) and/or `actions_get` (`method: "get_workflow_run"`, `resource_id: "<run-id>"`). The
-  `gh` CLI is unauthenticated in this sandbox; do not reach for `gh pr checks` or `gh run
-  view`. Then:
-  - **No check run yet** → the build is still awaiting maintainer approval (or the PR is still
-    draft). Leave **Test Status** as-is; this is expected, not a failure.
-  - Build **failed due to your change** → push a fix commit to the same branch and update
-    **Test Status**. After a couple of failed attempts, stop, mark the PR unverified, and
-    explain.
-  - Build **succeeded** → update **Test Status** to reflect compilation is confirmed, but
-    reiterate (for categories 3/5/6) that the runtime pattern itself is still unconfirmed
-    pending a maintainer re-running the source tracked workflow, and invite review.
-  - **Infra failure** (no runner / transient) → mark unverified and ask a maintainer to re-run.
-- Always link whatever build run exists in **Test Status**, and be explicit about what it does
-  and does not prove. Nothing merges without a human reviewing the PR and its evidence.
+We should attempt a fresh run of the targeted workflow with our PR branch. However, that is not working yet.
+Thus, nothing to do at the moment.
 
 ## Pull request conventions
 
@@ -723,7 +626,7 @@ Given that, the actual procedure:
     do not exist until gh-aw's `safe_outputs` job runs after your agent turn, so no run ID
     is available yet. On later runs, update with whatever build link/state exists, keeping
     that same distinction explicit.
-- Follow `CONTRIBUTING.md` and match tt-metal's existing C++/Python style. **No new
+- Match tt-metal's existing C++/Python style. **No new
   dependencies, no broad refactors, no behavior changes** — noise removal must be
   behavior-preserving (a demoted log still logs at lower severity; a removed unused variable
   changes nothing observable).
