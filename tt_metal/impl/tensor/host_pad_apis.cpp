@@ -422,11 +422,6 @@ HostTensor pad(
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for padding");
-    TT_FATAL(
-        !tensor.memory_config().is_sharded(),
-        "pad: sharded host tensors are not supported (legacy and ND). "
-        "legacyShapeToAlignment short-circuits on shard_spec and ignores output_padded_shape for convertible ND; "
-        "rederiving shard geometry under pad is out of scope.");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::pad_impl<T>(tensor, output_padded_shape, input_tensor_start, pad_value);
     });
@@ -463,11 +458,6 @@ HostTensor unpad(
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for unpadding");
-    TT_FATAL(
-        !tensor.memory_config().is_sharded(),
-        "unpad: sharded host tensors are not supported (legacy and ND). "
-        "legacyShapeToAlignment short-circuits on shard_spec and ignores cropped geometry for convertible ND; "
-        "rederiving shard geometry under unpad is out of scope.");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::unpad_impl<T>(tensor, output_tensor_start, output_tensor_end);
     });

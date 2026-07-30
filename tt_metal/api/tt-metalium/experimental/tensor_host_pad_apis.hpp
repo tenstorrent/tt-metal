@@ -24,11 +24,12 @@ namespace tt::tt_metal {
  *
  * pre-conditions:
  * - **tensor** layout must be ROW_MAJOR.
- * - **tensor** must not be sharded.
  * - **tensor** dtype is not FP8_E4M3.
  *
  * post-conditions:
  * - Result padded shape equals **output_padded_shape**.
+ * - Result MemoryConfig is default-constructed (DRAM Interleaved); input memory
+ *   config is not preserved.
  */
 HostTensor pad(
     const HostTensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value);
@@ -40,7 +41,6 @@ HostTensor pad(
  *
  * pre-conditions:
  * - **tensor** layout must be ROW_MAJOR.
- * - **tensor** must not be sharded.
  * - **tensor** dtype is not FP8_E4M3.
  *
  * post-conditions:
@@ -56,7 +56,6 @@ HostTensor unpad(const HostTensor& tensor, const Shape& output_tensor_start, con
  *
  * pre-conditions:
  * - **input_tensor** layout must be ROW_MAJOR.
- * - **input_tensor** must not be sharded.
  * - **input_tensor** dtype is not FP8_E4M3.
  *
  * post-conditions:
@@ -74,7 +73,6 @@ HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value);
  *
  * pre-conditions:
  * - **tensor** layout must be ROW_MAJOR.
- * - **tensor** must not be sharded.
  * - **tensor** dtype is not FP8_E4M3.
  * - Leading dims (all but last two) of logical shape must match **output_tensor_shape**.
  * - Input last two padded dims must be multiples of the default tile.
