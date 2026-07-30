@@ -217,6 +217,37 @@ jobs:
       image: ${{ matrix.image }}
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
+  # The prefill worker is a thin layer ON TOP of the release-models image just
+  # published above, so it cannot be another entry in that matrix (matrix legs
+  # have no ordering between them) - it needs its own job gated on the whole
+  # matrix. It rebuilds nothing: the release image supplies tt-metal, and the
+  # dev image is only a throwaway toolchain for compiling tt-llm-engine's
+  # migration client. Requires the TENSTORRENT_ORG_READ_TOKEN secret to have
+  # contents read on the private tenstorrent/tt-llm-engine repo; the job
+  # precheck verifies that up front.
+  create-prefill-worker-image:
+    needs:
+      - build-artifact-release
+      - check-harbor
+      - parse-platform
+      - create-docker-release-image
+    uses: ./.github/workflows/publish-release-image.yaml
+    secrets: inherit
+    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    with:
+      platform: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
+      version: ${{ inputs.tag-version }}
+      tag-latest: ${{ inputs.is-release-candidate != 'true' }}
+      dry-run: ${{ inputs.dry-run }}
+      image: prefill-worker
+      derive-from: release-models
+      builder-image: ${{ needs.build-artifact-release.outputs.dev-docker-image }}
+      # No on-device smoke tests for this image yet: it only adds a python
+      # extension module on top of an image the matrix above already smoke-tested,
+      # and the build itself fails if that module cannot be imported.
+      skip-smoke-test: true
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+
   resolve-docs-version:
     runs-on: ubuntu-slim
     outputs:

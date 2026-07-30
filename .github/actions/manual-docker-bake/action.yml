@@ -76,6 +76,17 @@ inputs:
     required: false
     default: ""
 
+  gh-token:
+    description: >-
+      GitHub token exported as GH_TOKEN for the bake run. Only targets that
+      declare a BuildKit secret sourced from that env var consume it - today
+      docker-bake.hcl's prefill-worker target, which clones the private
+      tenstorrent/tt-llm-engine. A secret (not a build arg): it is mounted for
+      the duration of a RUN and never lands in the image history. Leave empty
+      for every target that needs no token.
+    required: false
+    default: ""
+
   enrich-sbom:
     description: >-
       After a successful attested push, replace BuildKit's SBOM attestation with
@@ -114,6 +125,10 @@ runs:
         INPUT_HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
         INPUT_SYFT_SCANNER_IMAGE: ${{ inputs.syft-scanner-image }}
         INPUT_ORAS_IMAGE: ${{ inputs.oras-image }}
+        # Not an INPUT_* the script reads: BuildKit resolves the targets'
+        # `secret = ["type=env,id=...,env=GH_TOKEN"]` against the bake process
+        # environment, so this only has to be present here.
+        GH_TOKEN: ${{ inputs.gh-token }}
       run: |
         set -euo pipefail
         # All logic lives in .github/scripts/manual-docker-bake.sh (kept small
