@@ -870,7 +870,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";               // Needed for split reader
         writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
-        reader_compile_time_args.push_back(conv_reader_indices_buffer->address());
+        reader_compile_time_args.push_back(
+            conv_reader_indices_buffer->address());  // smuggled-rta-ok: pre-existing code
         reader_compile_time_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(reader_compile_time_args);
     } else {

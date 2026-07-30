@@ -107,8 +107,7 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
 
 namespace detail {
 
-::dfb::PackedTileCounter TileCounterAllocator::allocate(
-    const CoreCoord& core, uint8_t tensix_id, bool use_t6_only) {
+::dfb::PackedTileCounter TileCounterAllocator::allocate(const CoreCoord& core, uint8_t tensix_id, bool use_t6_only) {
     TT_FATAL(tensix_id < ::dfb::NUM_TENSIX, "Invalid tensix_id: {}", tensix_id);
     auto& counters = next_tc_id_[core];
 
@@ -117,13 +116,17 @@ namespace detail {
         TT_FATAL(
             ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id] < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX,
             "Out of Tensix-only tile counters for tensix {} on core ({}, {})",
-            tensix_id, core.x, core.y);
+            tensix_id,
+            core.x,
+            core.y);
         tc_id = ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id]++;
     } else {
         TT_FATAL(
             counters.dm_next[tensix_id] < ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM,
             "Out of DM-visible tile counters for tensix {} on core ({}, {})",
-            tensix_id, core.x, core.y);
+            tensix_id,
+            core.x,
+            core.y);
         tc_id = counters.dm_next[tensix_id]++;
     }
     return static_cast<::dfb::PackedTileCounter>(
