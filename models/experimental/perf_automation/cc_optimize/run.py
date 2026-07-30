@@ -1012,6 +1012,18 @@ def _bridge_depth_env(
     return env
 
 
+def _declared_depth(model_root, model_id: str = ""):
+    """The block count the model itself declares, or None when nothing declares one."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from agent.layer_depth import full_depth_from_config
+
+        n = full_depth_from_config(model_id=model_id, model_dir=model_root)
+    except Exception:  # noqa: BLE001
+        return None
+    return n if isinstance(n, int) and n > 0 else None
+
+
 def _cov_ladder(model_root, model_id: str = "") -> list:
     """The coverage-search rungs, BOUNDED BY THE MODEL'S DECLARED DEPTH.
 
@@ -1030,15 +1042,8 @@ def _cov_ladder(model_root, model_id: str = "") -> list:
     """
     raw = os.environ.get("PERF_MCP_COV_LADDER", "2,4,8,16")
     rungs = [int(x) for x in raw.split(",") if x.strip().isdigit()]
-    full = None
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-        from agent.layer_depth import full_depth_from_config
-
-        full = full_depth_from_config(model_id=model_id, model_dir=model_root)
-    except Exception:  # noqa: BLE001
-        full = None
-    if not isinstance(full, int) or full <= 0:
+    full = _declared_depth(model_root, model_id)
+    if full is None:
         return rungs
     out = [d for d in rungs if d < full]
     out.append(full)
@@ -1069,7 +1074,31 @@ def _measure_cov(repo_root: Path, mcp_env: dict, devices: str, node, case, full_
         got = set(sigs_d)
         if want <= got:
             return d, [], "measured"
-    return (ladder[-1] if ladder else 16), sorted(want - got), "measured"
+    # THE SEARCH FAILED. This used to return "measured" -- the same label a real hit gets -- so
+    # "16 covers every op type" and "16 was just the last rung and 2 op types were never seen" were
+    # indistinguishable, and the run proceeded on a window known not to cover the model.
+    missing = sorted(want - got)
+    last = ladder[-1] if ladder else 16
+    # The DECLARED depth, not the ladder's last rung -- the two are equal whenever a depth was
+    # declared, so comparing against the rung would be circular and would also mislabel an
+    # undeclared-depth model (whose ladder merely stops at 16) as having an inert knob.
+    _full = _declared_depth(model_root)
+    if missing and _full is not None and last >= _full:
+        # An op type CANNOT be absent at full depth -- full depth is the whole model. So the cap is
+        # not taking effect: the knob names something the model never acts on, and every rung just
+        # profiled the identical full model. Reporting a coverage number here would launder a
+        # broken knob into a measurement.
+        print(
+            f"  [optimize/cc] coverage: {len(missing)} op-type(s) still absent at the model's FULL depth "
+            f"({last}) -- impossible unless the depth knob is not slicing. Treating the knob as INERT "
+            f"rather than reporting a coverage window. Missing: {missing}"
+        )
+        return None
+    print(
+        f"  [optimize/cc] coverage: ladder exhausted at {last} with {len(missing)} op-type(s) never seen "
+        f"{missing}; this window does NOT cover the model"
+    )
+    return last, missing, "measured-incomplete"
 
 
 def _coverage_layers(
