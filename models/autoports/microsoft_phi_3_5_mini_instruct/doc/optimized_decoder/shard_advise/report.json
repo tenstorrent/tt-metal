@@ -498,8 +498,8 @@
     ]
   },
   "artifacts": {
-    "final_ir": "/tmp/phi35-shard-advice-b32-third/final_ir.mlir",
-    "report_txt": "/tmp/phi35-shard-advice-b32-third/report.txt",
-    "decision_trace": "/tmp/phi35-shard-advice-b32-third/decision_trace/decode_decision_trace.json"
+    "final_ir": "/tmp/phi35-shard-advice-current/final_ir.mlir",
+    "report_txt": "/tmp/phi35-shard-advice-current/report.txt",
+    "decision_trace": "/tmp/phi35-shard-advice-current/decision_trace/decode_decision_trace.json"
   }
 }

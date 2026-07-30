@@ -143,3 +143,42 @@ Nanobind reference-leak diagnostics occur during Python teardown after the
 tests pass, the watcher reports no kernel error, and device close succeeds;
 they are binding teardown noise rather than a decoder/watcher failure.
 Commands and additional evidence are in `work_log.md`.
+
+## Current-pass refresh (2026-07-30)
+
+The stage was re-run from branch `skillexp-cell/nofuse-advise/phi` after the
+optimized candidate was restored. The mandatory advisor capture was performed
+again from pinned tt-mlir commit `618cd4e75d`. The refreshed `report.json`
+records 38 ops, 35 final choices, one spill, and
+`dram_sharded_considered=5`; all five dense linears are advised as
+DRAM-sharded. The authoritative `final_ir.mlir` is unchanged because the
+rewritten graph and compiler selection are unchanged.
+
+The precision-locked real-weight advisor-seed/default A/B was also rerun:
+
+| Geometry | Batch-1 traced decode | Batch-32 traced decode | PCC b1 / b32 |
+| --- | ---: | ---: | ---: |
+| Advisor seed, 8 cores, max block 32 | 555.616 us | 756.719 us | 0.999778 / 0.999530 |
+| Final default, 16 cores, max block 16 | 522.067 us | 723.259 us | 0.999790 / 0.999541 |
+
+Fresh functional measurements are 2.030 ms prefill and 1.053 ms traced decode
+at batch 1, 26.238 ms prefill and 1.216 ms traced decode at batch 32. The
+current optimized measurements are 2.082 ms prefill and 0.522 ms traced decode
+at batch 1, 20.241 ms prefill and 0.723 ms traced decode at batch 32. The
+batch-1 prefill point is noise-level slower in this isolated current run; the
+primary batch-1 decode improves by 50.4%, batch-32 decode improves by 40.5%,
+and batch-32 prefill improves by 22.9%.
+
+Current advice-enabled reports use the `*_current_pass.{txt,csv}` suffix.
+Batch-1 decode has 62 device ops, zero host ops, 500 us device time, and 59 us
+of op gaps; batch-32 decode has 59 device ops, zero host ops, 635 us device
+time, and 86 us of gaps. The paired profiled E2E values are 569.705 us and
+735.354 us. Every dominant projection row is
+`LoFi BF16 x BFP4 => BF16`, and paged attention consumes BFP8 cache tensors.
+
+The refreshed default suite passes seven tests with three expensive tests
+opted out. Separate current-pass runs pass prefill lengths 32769, 131071, and
+131072, full-context decode at logical 131072, and five watcher-10 tests.
+Watcher and profiler collection remained separate. The profiler again reports
+buffer-full warnings only after the retained complete signposted window; the
+independent 200-replay timings above reproduce the selected default.

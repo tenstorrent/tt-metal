@@ -186,3 +186,49 @@ Post-advisor final-default validation:
 - Closing review/documentation checkpoint: the commit immediately following
   `ed12648255e` on this branch.
 - Push: not performed
+
+## Current-pass refresh: 2026-07-30
+
+1. Restored the stage-owned optimized candidate onto
+   `skillexp-cell/nofuse-advise/phi`; unrelated GPT-OSS and prompt artifacts
+   remained untouched.
+2. Verified four local Blackhole p300c devices with
+   `timeout 60 tt-smi -ls --local`; this stage opens a single 1x1 mesh.
+3. Set `TTMLIR_ADVISOR_HOME=/home/mvasiljevic/tt-mlir`, sourced
+   `tools/ttnn-jit/integrations/agentic-research/shard-advise/scripts/bootstrap.sh`
+   in a separate shell, and ran:
+   `SHARD_ADVISE_BATCH=32 ttnn-advise capture .../shard_advise/advise_phi35.py:decode --out /tmp/phi35-shard-advice-current`.
+   The pinned checkout was commit `618cd4e75d`; capture produced 38 ops,
+   35 choices, one spill, and five considered/advised DRAM-sharded matmuls.
+   The generated `report.json`, `report.txt`, and `final_ir.mlir` were copied
+   into `doc/optimized_decoder/shard_advise/`.
+4. Reran the real-weight, precision-locked advisor geometry at both logical
+   batches with 200 traced replays. The 8-core/max-block-32 seed measured
+   555.616/756.719 us with PCC 0.999778/0.999530; the final
+   16-core/max-block-16 default measured 522.067/723.259 us with PCC
+   0.999790/0.999541. The exact advisor geometry remains rejected by current
+   whole-layer evidence; its DRAM-sharded family remains applied.
+5. Reran the default optimized suite: 7 passed, 3 opt-in tests skipped. Real
+   weights, batch-32 traced PCC, non-aligned length 33, repeated determinism,
+   and the static no-fallback audit passed.
+6. Reran functional before metrics: batch-1 prefill 2.030315 ms, batch-1
+   traced decode 1.052860 ms, batch-32 traced decode 1.216250 ms, and
+   same-shape batch-32 prefill 26.238423 ms.
+7. Reran long-context gates separately: prefill 32769, 131071, and exact
+   131072 all passed; decode at logical context 131072 passed.
+8. Reran watcher separately from profiling:
+   `TT_METAL_WATCHER=10 ... -k 'synthetic_prefill_decode... or ...'`;
+   five representative tests passed and the watcher log contains no kernel
+   error, assert, or hang.
+9. Collected reduced single-layer Tracy windows separately for batch 1,
+   batch-32 decode, and batch-32 prefill. An initial combined b32 `-k` selector
+   was parsed incorrectly by the Tracy wrapper (`or` became a path), produced
+   no device data, and was discarded; the two corrected narrow runs passed.
+10. Generated advice-enabled human-readable and CSV reports with the
+    `*_current_pass` suffix. Decode reports prove BFP4/LoFi on all five
+    dominant matmuls, BFP8 cache use, zero host ops, and device/gap totals of
+    500/59 us at b1 and 635/86 us at b32.
+
+Current-pass evidence logs are under `logs/current_pass_*`,
+`watcher_current_pass*`, and `tracy/final/*_current_pass*`. The fresh
+independent review and final checkpoint SHA are appended after review.
