@@ -98,6 +98,13 @@ struct TopologyMappingConfig {
     // has exactly one rank binding (all ASICs on the same host map to fabric nodes with the same rank).
     // Used even when some ASICs have UNSET rank. Default empty.
     std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
+
+    // Optional user-supplied host pinnings from the Phase 1 rank pinning file: logical mesh -> hostname ->
+    // mesh host rank. Only the ranks the user chose to pin appear here; everything else stays fully
+    // auto-mapped. Applied as hard inter-mesh constraints (a pinned logical mesh may only map to physical
+    // meshes whose ASICs live on the named host). Requires hostname_to_asics to be populated. Default empty,
+    // which leaves mapping behavior unchanged.
+    std::map<MeshId, std::map<std::string, MeshHostRankId>> host_rank_pinnings;
 };
 
 /**

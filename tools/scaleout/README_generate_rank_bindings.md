@@ -39,6 +39,7 @@ Ensure **`LD_LIBRARY_PATH`** includes `<build>/lib` (or your install `lib`) when
 | `--mesh-graph-descriptor` | `-m` | **Yes** | Path to the Mesh Graph Descriptor (`.textproto`). |
 | `--physical-grouping-descriptor` | `-p` | No | Path to the Physical Grouping Descriptor (`.textproto`). If omitted, a default file is chosen automatically (see [Default Physical Grouping Descriptor](#default-physical-grouping-descriptor-omitting--p)). |
 | `--output-dir` | `-o` | No | Directory for outputs. Default: `generated/ttrun` (created if needed). |
+| `--rank-pinning-file` | `-r` | No | Path to an optional YAML pinning specific ranks to specific hosts (see [Rank pinning file](#rank-pinning-file-optional)). |
 | `--help` | `-h` | No | Print usage and exit (does not require MPI work beyond parsing). |
 
 Example:
@@ -60,6 +61,46 @@ mpirun -np <N> <mpi-args> \
   --mesh-graph-descriptor /absolute/or/repo/path/to/mesh_graph_descriptor.textproto \
   --output-dir /path/to/out
 ```
+
+---
+
+## Rank pinning file (optional)
+
+By default the auto-mapper decides which physical host backs which logical mesh host rank. Pass
+`--rank-pinning-file` to hard-pin **a subset** of ranks to named hosts; every rank you do not list keeps
+the fully automatic placement. Omitting the option leaves behavior unchanged.
+
+```yaml
+rank_pinnings:
+  - rank: 0                              # global MPI rank
+    host: host-A
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3"      # optional
+  - mesh_id: 1                           # explicit (mesh, host rank) form
+    mesh_host_rank: 0
+    host: host-B
+```
+
+Each entry uses exactly one key form: either `rank`, or both `mesh_id` and `mesh_host_rank`. Global ranks
+are translated to `(mesh_id, mesh_host_rank)` using the same canonical ordering the outputs use — mesh id
+ascending, then mesh host rank — which is fixed by the MGD's `host_topology` before any solving happens.
+
+Host pinning is enforced as a hard constraint during the inter-mesh solve, so an unsatisfiable pin fails
+Phase 1 (exit code 1) rather than being silently dropped. `TT_VISIBLE_DEVICES` is not a solver constraint:
+it is validated against the devices discovery found on that host and then overrides the auto-computed
+value in `rank_bindings.yaml`.
+
+**Limitation:** pinning is currently supported only for logical meshes that occupy a single host rank.
+Because the constraint is applied at the inter-mesh level, it can force a mesh to *include* the named host
+but cannot choose which host rank within a multi-host mesh lands there. Pinning a rank in a multi-host
+mesh is rejected with an explicit error rather than silently under-constrained.
+
+Failures reported before launch include:
+
+- a pinned hostname that physical system discovery did not find (the discovered hosts are listed);
+- `TT_VISIBLE_DEVICES` requesting more devices than the host has;
+- a pinned rank the MGD does not define;
+- a pin that conflicts with MGD or galaxy corner pinnings.
 
 ---
 

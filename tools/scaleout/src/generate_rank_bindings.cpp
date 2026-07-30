@@ -38,6 +38,7 @@
 #include <llrt/tt_cluster.hpp>
 
 #include "generate_rank_bindings_helpers.hpp"
+#include "rank_pinning_file.hpp"
 
 #ifdef OPEN_MPI
 #include <mpi.h>
@@ -146,7 +147,9 @@ TopologyMappingWithLocalMaps run_topology_mapping(
     const PhysicalSystemDescriptor& psd,
     const PhysicalGroupingDescriptor& pgd,
     const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
-    const std::vector<std::filesystem::path>& mgd_paths_in_order) {
+    const std::vector<std::filesystem::path>& mgd_paths_in_order,
+    const std::vector<RankPinning>& rank_pinnings,
+    std::vector<ResolvedRankPinning>& resolved_pinnings_out) {
     if (mesh_graph_descriptors.size() != mgd_paths_in_order.size() || mesh_graph_descriptors.empty()) {
         throw std::invalid_argument(
             "run_topology_mapping: mesh_graph_descriptors and mgd_paths_in_order size must match and be non-empty");
@@ -249,6 +252,71 @@ TopologyMappingWithLocalMaps run_topology_mapping(
     log_logical_multi_mesh_adjacency_histograms(logical_graph);
     log_physical_multi_mesh_adjacency_histograms(physical_graph);
 
+    // Rank-pinning files currently describe the rank space of one MGD. Local mesh ids can overlap between
+    // sub-contexts, so accepting the mesh form for a multi-MGD mapping would be ambiguous.
+    if (!rank_pinnings.empty()) {
+        if (mesh_graphs.size() != 1) {
+            throw std::runtime_error(
+                "Rank pinning is currently supported only with a single Mesh Graph Descriptor (-m), not a "
+                "multi-MGD mapping (-M).");
+        }
+
+        const MeshGraph& mesh_graph = mesh_graphs.front();
+        std::map<int, std::vector<int>> mesh_host_ranks_per_mesh;
+        for (const MeshId mesh_id_local : mesh_graph.get_all_mesh_ids()) {
+            auto& host_ranks = mesh_host_ranks_per_mesh[static_cast<int>(*mesh_id_local)];
+            for (const MeshHostRankId host_rank : mesh_graph.get_host_ranks(mesh_id_local).values()) {
+                host_ranks.push_back(static_cast<int>(*host_rank));
+            }
+        }
+        resolved_pinnings_out =
+            resolve_rank_pinnings(rank_pinnings, build_mesh_host_rank_order(mesh_host_ranks_per_mesh));
+
+        const auto& local_to_global = per_part_local_to_global_mesh_ids.front();
+        for (const ResolvedRankPinning& pinning : resolved_pinnings_out) {
+            const auto& host_ranks_for_mesh = mesh_host_ranks_per_mesh.at(pinning.mesh_id);
+            if (host_ranks_for_mesh.size() > 1) {
+                throw std::runtime_error(fmt::format(
+                    "Constraint validation failed: rank {} belongs to mesh {}, which spans {} host ranks. "
+                    "Rank pinning is currently supported only for meshes that occupy a single host.",
+                    pinning.rank,
+                    pinning.mesh_id,
+                    host_ranks_for_mesh.size()));
+            }
+            if (!config.hostname_to_asics.contains(pinning.host)) {
+                std::string known_hosts;
+                for (const auto& [hostname, _] : config.hostname_to_asics) {
+                    if (!known_hosts.empty()) {
+                        known_hosts += ", ";
+                    }
+                    known_hosts += hostname;
+                }
+                throw std::runtime_error(fmt::format(
+                    "Constraint validation failed: rank {} is pinned to host '{}', which physical system "
+                    "discovery did not find. Discovered hosts: [{}]",
+                    pinning.rank,
+                    pinning.host,
+                    known_hosts));
+            }
+
+            const MeshId local_mesh_id{static_cast<uint32_t>(pinning.mesh_id)};
+            const auto global_it = local_to_global.find(local_mesh_id);
+            if (global_it == local_to_global.end()) {
+                throw std::runtime_error(fmt::format(
+                    "Constraint validation failed: mesh {} has no merged topology mapping", pinning.mesh_id));
+            }
+            config.host_rank_pinnings[global_it->second][pinning.host] =
+                MeshHostRankId{static_cast<uint32_t>(pinning.mesh_host_rank)};
+            log_info(
+                tt::LogFabric,
+                "Rank pinning: rank {} (mesh {} host rank {}) pinned to host {}",
+                pinning.rank,
+                pinning.mesh_id,
+                pinning.mesh_host_rank,
+                pinning.host);
+        }
+    }
+
     for (std::size_t gi = 0; gi < mesh_graphs.size(); ++gi) {
         const auto& mesh_graph = mesh_graphs[gi];
         for (const auto& mid_local : mesh_graph.get_all_mesh_ids()) {
@@ -311,6 +379,60 @@ TopologyMappingWithLocalMaps run_topology_mapping(
 }
 
 /**
+ * @brief Verify the solver honored every rank pinning, then apply the pinned env overrides.
+ *
+ * The host placement itself is enforced during solving (hard inter-mesh constraints), so the check here is
+ * a guard against a mapper regression silently producing a rankfile that contradicts the user's file.
+ * TT_VISIBLE_DEVICES is not a solver constraint: it is validated against what discovery found on the host
+ * and then overrides the auto-computed value.
+ */
+void apply_rank_pinning_overrides(
+    const PhysicalSystemDescriptor& psd,
+    const std::vector<ResolvedRankPinning>& resolved_pinnings,
+    std::vector<RankBindingConfig>& rank_bindings) {
+    for (const auto& pinning : resolved_pinnings) {
+        auto binding_it =
+            std::find_if(rank_bindings.begin(), rank_bindings.end(), [&pinning](const RankBindingConfig& binding) {
+                return binding.mesh_id == pinning.mesh_id && binding.mesh_host_rank == pinning.mesh_host_rank;
+            });
+        if (binding_it == rank_bindings.end()) {
+            throw std::runtime_error(fmt::format(
+                "Constraint validation failed: no rank binding was produced for mesh {} host rank {} "
+                "(pinned rank {}).",
+                pinning.mesh_id,
+                pinning.mesh_host_rank,
+                pinning.rank));
+        }
+        if (binding_it->hostname != pinning.host) {
+            throw std::runtime_error(fmt::format(
+                "Constraint validation failed: Cannot satisfy pinning constraint for Rank {} on {}. Topology "
+                "mapping placed it on {} instead.",
+                pinning.rank,
+                pinning.host,
+                binding_it->hostname));
+        }
+
+        for (const auto& [key, value] : pinning.env_overrides) {
+            if (key == "TT_VISIBLE_DEVICES") {
+                const std::size_t requested =
+                    value.empty() ? 0 : static_cast<std::size_t>(std::count(value.begin(), value.end(), ',') + 1);
+                const std::size_t available = psd.get_asics_connected_to_host(pinning.host).size();
+                if (requested > available) {
+                    throw std::runtime_error(fmt::format(
+                        "Constraint validation failed: Cannot satisfy pinning constraint for Rank {} on {}. "
+                        "Requested {} visible devices, but only {} are available.",
+                        pinning.rank,
+                        pinning.host,
+                        requested,
+                        available));
+                }
+            }
+            binding_it->env_overrides[key] = value;
+        }
+    }
+}
+
+/**
  * @brief Extract rank bindings from topology mapping result with topology-aware splitting.
  *
  * Bindings are one row per (mesh_id, PSD hostname, mesh_host_rank), after sorting by PSD MPI rank
@@ -337,7 +459,8 @@ std::vector<RankBindingConfig> extract_rank_bindings(
     const TopologyMappingResult& mapping_result,
     const std::vector<MeshGraph>& mesh_graphs,
     const std::vector<std::map<MeshId, MeshId>>& per_part_local_to_global_mesh_ids,
-    bool emit_local_mesh_ids_for_mgd_partition = true) {
+    bool emit_local_mesh_ids_for_mgd_partition = true,
+    const std::vector<ResolvedRankPinning>& resolved_pinnings = {}) {
     if (mesh_graphs.empty()) {
         throw std::invalid_argument("extract_rank_bindings: at least one MeshGraph is required");
     }
@@ -501,6 +624,8 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         rank_bindings.push_back(binding);
     }
 
+    apply_rank_pinning_overrides(psd, resolved_pinnings, rank_bindings);
+
     return rank_bindings;
 }
 
@@ -589,6 +714,7 @@ struct ProgramArgs {
     std::map<int, std::filesystem::path> subcontext_id_to_mgd_path;
     std::optional<std::string> physical_grouping_descriptor_path;
     std::optional<std::string> output_dir;
+    std::optional<std::string> rank_pinning_file_path;
 };
 
 /**
@@ -618,6 +744,9 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         cxxopts::value<std::string>())(
         "o,output-dir",
         "Output directory for rank_bindings.yaml, rankfile, etc. (default: generated/ttrun)",
+        cxxopts::value<std::string>())(
+        "r,rank-pinning-file",
+        "Path to optional rank pinning YAML pinning specific ranks to specific hosts - OPTIONAL",
         cxxopts::value<std::string>())("h,help", "Print usage information");
 
     try {
@@ -650,6 +779,9 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         }
         if (result.contains("output-dir")) {
             args.output_dir = result["output-dir"].as<std::string>();
+        }
+        if (result.contains("rank-pinning-file")) {
+            args.rank_pinning_file_path = result["rank-pinning-file"].as<std::string>();
         }
 
         return args;
@@ -707,13 +839,22 @@ int main(int argc, char** argv) {
                 : std::nullopt,
             &psd);
 
+        // Stage: Load the optional rank pinning file (host pins for a subset of ranks)
+        std::vector<RankPinning> rank_pinnings;
+        if (args.rank_pinning_file_path.has_value()) {
+            log_info(tt::LogFabric, "Stage: Loading rank pinning file from: {}", *args.rank_pinning_file_path);
+            rank_pinnings = parse_rank_pinning_file(*args.rank_pinning_file_path);
+            log_info(tt::LogFabric, "Loaded {} rank pinning(s)", rank_pinnings.size());
+        }
+
         // Get current rank - only rank 0 performs topology mapping and file generation
         auto current_rank = *context->rank();
         if (current_rank == 0) {
             // Stage: Run topology mapping
             log_info(tt::LogFabric, "Stage: Running topology mapping...");
-
-            TopologyMappingWithLocalMaps topology = run_topology_mapping(psd, pgd, mgds, mgd_paths_in_order);
+            std::vector<ResolvedRankPinning> resolved_pinnings;
+            TopologyMappingWithLocalMaps topology =
+                run_topology_mapping(psd, pgd, mgds, mgd_paths_in_order, rank_pinnings, resolved_pinnings);
 
             if (!topology.mapping.success) {
                 log_error(tt::LogFabric, "Topology mapping failed: {}", topology.mapping.error_message);
@@ -760,8 +901,10 @@ int main(int argc, char** argv) {
                 const int subctx_id = subcontext_ids_in_order[mgi];
                 std::vector<MeshGraph> one_graph = {mesh_graphs_for_extract[mgi]};
                 std::vector<std::map<MeshId, MeshId>> one_map = {topology.per_part_local_to_global_mesh_ids[mgi]};
-                std::vector<RankBindingConfig> rank_bindings =
-                    extract_rank_bindings(psd, topology.mapping, one_graph, one_map);
+                const std::vector<ResolvedRankPinning>& pinnings_for_extract =
+                    multi_mgd ? std::vector<ResolvedRankPinning>{} : resolved_pinnings;
+                std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(
+                    psd, topology.mapping, one_graph, one_map, true, pinnings_for_extract);
 
                 if (rank_bindings.empty()) {
                     if (multi_mgd) {

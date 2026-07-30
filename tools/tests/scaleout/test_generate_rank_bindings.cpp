@@ -14,6 +14,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "generate_rank_bindings_helpers.hpp"
+#include "rank_pinning_file.hpp"
 
 namespace {
 
@@ -263,4 +264,165 @@ TEST(GenerateRankBindingsHelpersTest, AllWritersProduceThreeFilesInTempDir) {
         ++n;
     }
     EXPECT_EQ(n, 3);
+}
+
+// ---------------------------------------------------------------------------
+// Rank pinning file (optional Phase 1 host pinning input)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::filesystem::path write_pinning_file(const std::filesystem::path& dir, const std::string& contents) {
+    const auto path = dir / "pinned_ranks.yaml";
+    std::ofstream out(path);
+    out << contents;
+    out.close();
+    return path;
+}
+
+}  // namespace
+
+TEST(RankPinningFileTest, ParsesGlobalRankFormWithEnvOverrides) {
+    const auto dir = make_temp_dir("pin_global");
+    const auto path = write_pinning_file(dir, R"(rank_pinnings:
+  - rank: 0
+    host: host-A
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3"
+  - rank: 3
+    host: host-B
+)");
+
+    const auto pinnings = parse_rank_pinning_file(path.string());
+    ASSERT_EQ(pinnings.size(), 2u);
+    EXPECT_EQ(pinnings[0].rank.value(), 0);
+    EXPECT_EQ(pinnings[0].host, "host-A");
+    EXPECT_EQ(pinnings[0].env_overrides.at("TT_VISIBLE_DEVICES"), "0,1,2,3");
+    EXPECT_FALSE(pinnings[0].mesh_id.has_value());
+    EXPECT_EQ(pinnings[1].rank.value(), 3);
+    EXPECT_TRUE(pinnings[1].env_overrides.empty());
+}
+
+TEST(RankPinningFileTest, ParsesMeshHostRankForm) {
+    const auto dir = make_temp_dir("pin_mesh");
+    const auto path = write_pinning_file(dir, R"(rank_pinnings:
+  - mesh_id: 1
+    mesh_host_rank: 0
+    host: host-B
+)");
+
+    const auto pinnings = parse_rank_pinning_file(path.string());
+    ASSERT_EQ(pinnings.size(), 1u);
+    EXPECT_FALSE(pinnings[0].rank.has_value());
+    EXPECT_EQ(pinnings[0].mesh_id.value(), 1);
+    EXPECT_EQ(pinnings[0].mesh_host_rank.value(), 0);
+    EXPECT_EQ(pinnings[0].host, "host-B");
+}
+
+TEST(RankPinningFileTest, EmptyPinningListIsAccepted) {
+    const auto dir = make_temp_dir("pin_empty");
+    const auto path = write_pinning_file(dir, "rank_pinnings: []\n");
+    EXPECT_TRUE(parse_rank_pinning_file(path.string()).empty());
+}
+
+TEST(RankPinningFileTest, RejectsMissingTopLevelKey) {
+    const auto dir = make_temp_dir("pin_nokey");
+    const auto path = write_pinning_file(dir, "pinnings:\n  - rank: 0\n    host: host-A\n");
+    EXPECT_THROW(parse_rank_pinning_file(path.string()), std::runtime_error);
+}
+
+TEST(RankPinningFileTest, RejectsUnknownKey) {
+    const auto dir = make_temp_dir("pin_unknown");
+    const auto path = write_pinning_file(dir, "rank_pinnings:\n  - rank: 0\n    host: host-A\n    slot: 1\n");
+    EXPECT_THROW(parse_rank_pinning_file(path.string()), std::runtime_error);
+}
+
+TEST(RankPinningFileTest, RejectsMissingHost) {
+    const auto dir = make_temp_dir("pin_nohost");
+    const auto path = write_pinning_file(dir, "rank_pinnings:\n  - rank: 0\n");
+    EXPECT_THROW(parse_rank_pinning_file(path.string()), std::runtime_error);
+}
+
+TEST(RankPinningFileTest, RejectsBothKeyForms) {
+    const auto dir = make_temp_dir("pin_bothforms");
+    const auto path =
+        write_pinning_file(dir, "rank_pinnings:\n  - rank: 0\n    mesh_id: 0\n    mesh_host_rank: 0\n    host: h\n");
+    EXPECT_THROW(parse_rank_pinning_file(path.string()), std::runtime_error);
+}
+
+TEST(RankPinningFileTest, RejectsPartialMeshForm) {
+    const auto dir = make_temp_dir("pin_partial");
+    const auto path = write_pinning_file(dir, "rank_pinnings:\n  - mesh_id: 0\n    host: h\n");
+    EXPECT_THROW(parse_rank_pinning_file(path.string()), std::runtime_error);
+}
+
+TEST(RankPinningFileTest, RejectsNegativeAndDuplicateRanks) {
+    const auto neg_dir = make_temp_dir("pin_neg");
+    const auto neg = write_pinning_file(neg_dir, "rank_pinnings:\n  - rank: -1\n    host: h\n");
+    EXPECT_THROW(parse_rank_pinning_file(neg.string()), std::runtime_error);
+
+    const auto dup_dir = make_temp_dir("pin_dup");
+    const auto dup =
+        write_pinning_file(dup_dir, "rank_pinnings:\n  - rank: 1\n    host: hA\n  - rank: 1\n    host: hB\n");
+    EXPECT_THROW(parse_rank_pinning_file(dup.string()), std::runtime_error);
+}
+
+TEST(RankPinningFileTest, BuildsCanonicalMeshHostRankOrder) {
+    // Two meshes: mesh 0 with two host ranks, mesh 1 with one. Global ranks follow mesh id, then host rank.
+    const std::map<int, std::vector<int>> per_mesh = {{0, {1, 0}}, {1, {0}}};
+    const auto order = build_mesh_host_rank_order(per_mesh);
+    ASSERT_EQ(order.size(), 3u);
+    EXPECT_EQ(order[0], std::make_pair(0, 0));
+    EXPECT_EQ(order[1], std::make_pair(0, 1));
+    EXPECT_EQ(order[2], std::make_pair(1, 0));
+}
+
+TEST(RankPinningFileTest, ResolvesGlobalRanksToMeshHostRanks) {
+    const MeshHostRankOrder order = {{0, 0}, {0, 1}, {1, 0}};
+    std::vector<RankPinning> pinnings(2);
+    pinnings[0].rank = 2;
+    pinnings[0].host = "host-C";
+    pinnings[1].mesh_id = 0;
+    pinnings[1].mesh_host_rank = 1;
+    pinnings[1].host = "host-B";
+
+    const auto resolved = resolve_rank_pinnings(pinnings, order);
+    ASSERT_EQ(resolved.size(), 2u);
+    EXPECT_EQ(resolved[0].rank, 2);
+    EXPECT_EQ(resolved[0].mesh_id, 1);
+    EXPECT_EQ(resolved[0].mesh_host_rank, 0);
+    EXPECT_EQ(resolved[0].host, "host-C");
+    // The mesh form resolves back to its global rank so error messages can name it.
+    EXPECT_EQ(resolved[1].rank, 1);
+    EXPECT_EQ(resolved[1].mesh_id, 0);
+    EXPECT_EQ(resolved[1].mesh_host_rank, 1);
+}
+
+TEST(RankPinningFileTest, ResolveRejectsOutOfRangeRank) {
+    const MeshHostRankOrder order = {{0, 0}, {0, 1}};
+    std::vector<RankPinning> pinnings(1);
+    pinnings[0].rank = 5;
+    pinnings[0].host = "host-A";
+    EXPECT_THROW(resolve_rank_pinnings(pinnings, order), std::runtime_error);
+}
+
+TEST(RankPinningFileTest, ResolveRejectsUndefinedMeshHostRank) {
+    const MeshHostRankOrder order = {{0, 0}};
+    std::vector<RankPinning> pinnings(1);
+    pinnings[0].mesh_id = 7;
+    pinnings[0].mesh_host_rank = 0;
+    pinnings[0].host = "host-A";
+    EXPECT_THROW(resolve_rank_pinnings(pinnings, order), std::runtime_error);
+}
+
+TEST(RankPinningFileTest, ResolveRejectsTwoFormsColldingOnSameHostRank) {
+    // rank 1 and (mesh 0, host rank 1) are the same slot; pinning both to different hosts must fail.
+    const MeshHostRankOrder order = {{0, 0}, {0, 1}};
+    std::vector<RankPinning> pinnings(2);
+    pinnings[0].rank = 1;
+    pinnings[0].host = "host-A";
+    pinnings[1].mesh_id = 0;
+    pinnings[1].mesh_host_rank = 1;
+    pinnings[1].host = "host-B";
+    EXPECT_THROW(resolve_rank_pinnings(pinnings, order), std::runtime_error);
 }

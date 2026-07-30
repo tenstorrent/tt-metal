@@ -2666,6 +2666,38 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
         }
     }
 
+    // User-supplied host pinnings (Phase 1 rank pinning file): a pinned logical mesh may only map to a
+    // physical mesh that actually contains the named host's ASICs. Hard constraints, so an unsatisfiable
+    // pin fails the solve instead of being silently ignored. Unpinned meshes are untouched and keep the
+    // host-cover bias below.
+    for (const auto& [logical_mesh_id, host_to_rank] : config.host_rank_pinnings) {
+        std::set<MeshId> allowed_physical_meshes;
+        for (const auto& [hostname, _] : host_to_rank) {
+            for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
+                for (const auto& asic_id : physical_mesh_graph.get_nodes()) {
+                    auto asic_hostname = hostname_for_asic_from_hostname_map(asic_id, config.hostname_to_asics);
+                    if (asic_hostname.has_value() && *asic_hostname == hostname) {
+                        allowed_physical_meshes.insert(physical_mesh_id);
+                        break;
+                    }
+                }
+            }
+        }
+        if (allowed_physical_meshes.empty()) {
+            TT_THROW(
+                "Rank pinning: no physical mesh contains ASICs on the host(s) pinned to logical mesh {}. "
+                "Check that the pinned hostnames appear in physical system discovery.",
+                *logical_mesh_id);
+        }
+        if (!inter_mesh_constraints.add_required_constraint(logical_mesh_id, allowed_physical_meshes)) {
+            TT_THROW(
+                "Rank pinning: pinning logical mesh {} to its named host(s) conflicts with the other required "
+                "constraints (MGD pinnings or galaxy corner pinnings). Relax the rank pinning file or the MGD "
+                "pinnings.",
+                *logical_mesh_id);
+        }
+    }
+
     if (!config.disable_rank_bindings && !asic_id_to_mesh_rank.empty()) {
         for (const auto& mesh_id : mesh_logical_level_graph.get_nodes()) {
             if (asic_id_to_mesh_rank.contains(mesh_id)) {
