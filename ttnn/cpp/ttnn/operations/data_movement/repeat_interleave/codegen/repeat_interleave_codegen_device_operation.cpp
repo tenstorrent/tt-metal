@@ -10,17 +10,6 @@
 
 namespace ttnn::prim {
 
-namespace {
-
-// operation_attributes_t.rep_dim is stored left-padded to this rank (see
-// repeat_interleave.cpp's codegen dispatch helper, the single writer of this field), regardless
-// of the input tensor's real rank, so it must be recovered before indexing a real-rank shape.
-constexpr uint32_t kRepDimPadRank = 4;
-
-uint32_t recover_rep_dim(uint32_t padded_rep_dim, uint32_t ndim) { return padded_rep_dim - (kRepDimPadRank - ndim); }
-
-}  // namespace
-
 RepeatInterleaveCodegenDeviceOperation::program_factory_t
 RepeatInterleaveCodegenDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {

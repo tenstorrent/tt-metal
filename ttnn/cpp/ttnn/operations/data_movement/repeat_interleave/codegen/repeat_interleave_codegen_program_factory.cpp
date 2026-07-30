@@ -30,9 +30,6 @@ constexpr uint32_t kCbDepth = std::max(2 * std::max(kReadBatch, kWriteBatch), 8u
 // sequencers.h SEQ_REPEAT_INTERLEAVE (ops/repeat_interleave/builder.py's SEQ_REPEAT_INTERLEAVE).
 constexpr uint32_t kSeqRepeatInterleave = 9;
 
-// repeat_interleave_codegen_device_operation.cpp's rep_dim left-padding rank.
-constexpr uint32_t kRepDimPadRank = 4;
-
 constexpr const char* kTileReaderSrc =
     "ttnn/cpp/ttnn/operations/data_movement/repeat_interleave/codegen/kernels/"
     "reader_tile_interleaved_unified.cpp";
@@ -44,8 +41,6 @@ constexpr const char* kRmReaderSrc =
 constexpr const char* kRmWriterSrc =
     "ttnn/cpp/ttnn/operations/data_movement/repeat_interleave/codegen/kernels/"
     "writer_repeat_interleave_rm.cpp";
-
-uint32_t recover_rep_dim(uint32_t padded_rep_dim, uint32_t ndim) { return padded_rep_dim - (kRepDimPadRank - ndim); }
 
 uint32_t align_up(uint32_t value, uint32_t alignment) { return ((value + alignment - 1) / alignment) * alignment; }
 
