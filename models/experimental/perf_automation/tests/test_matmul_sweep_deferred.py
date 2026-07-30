@@ -150,7 +150,7 @@ def test_wired_into_run_cc_optimize_after_discovery():
 
 
 def test_optimize_no_longer_runs_the_prepass_before_the_engine():
-    src = (Path("/home/ttuser/tt-metal/scripts/tt_hw_planner/commands/optimize.py")).read_text()
+    src = (_PA.parents[2] / "scripts" / "tt_hw_planner" / "commands" / "optimize.py").read_text()
     i_run = src.index("result = run_cc(")
     head = src[:i_run]
     assert "_run_matmul_sweep_prepass(args, run_root, run_demo)" not in head, (

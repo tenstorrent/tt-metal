@@ -293,10 +293,12 @@ def run_prepass(
     max_shapes: int = 0,
     repo_root: Optional[Path] = None,
 ) -> dict:
-    """The full pre-pass: enumerate -> parse distinct matmuls -> open a single-chip device -> sweep
-    fidelity x dtype per shape (PCC-gated) -> write out_path + return the summary. Opens its OWN 1x1
-    mesh (no fabric), so it is safe to run standalone before the optimize loop. Prints a dropped-shape
-    count when max_shapes caps coverage (never silently truncates)."""
+    """The full pre-pass: enumerate -> parse distinct matmuls -> open the run's planned mesh -> sweep
+    fidelity x dtype per shape (PCC-gated) -> write out_path + return the summary. Opens the SAME
+    topology the optimize loop uses (resolve_mesh_shape reads TT_PERF_MESH_ROWS/COLS; FABRIC_1D when
+    multi-chip), falling back to 1x1 no-fabric when the env is unset so it is still safe standalone.
+    Matching the loop's format means no 1x1<->NxM fabric transition to deadlock the next mesh open.
+    Prints a dropped-shape count when max_shapes caps coverage (never silently truncates)."""
     sigs = enumerate_matmul_sigs(node, case, repo_root)
     matmuls = parse_matmul_sigs(sigs)
     if not matmuls:
@@ -313,11 +315,23 @@ def run_prepass(
         matmuls = matmuls[:max_shapes]
     import ttnn  # lazy — only needed for the device sweep
 
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    from agent.perf_adapter import resolve_mesh_shape
+
+    _rows, _cols = resolve_mesh_shape(default_rows=1, default_cols=1)
+    rows, cols = int(_rows), int(_cols)
+    multichip = rows * cols > 1
+    if multichip:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
     try:
         table = sweep_matmuls(mesh, matmuls, pcc_threshold=pcc_threshold, iters=iters)
     finally:
         ttnn.close_mesh_device(mesh)
+        if multichip:
+            try:
+                ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+            except Exception:
+                pass
     summary = summarize(table, pcc_threshold)
     summary["ok"] = True
     summary["table"] = table

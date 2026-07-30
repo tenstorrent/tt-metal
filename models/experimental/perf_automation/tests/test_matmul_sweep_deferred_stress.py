@@ -99,14 +99,14 @@ def test_s2_ordering_against_real_source():
 
 
 def test_s2_no_prepass_survives_before_run_cc():
-    src = (Path("/home/ttuser/tt-metal/scripts/tt_hw_planner/commands/optimize.py")).read_text()
+    src = (_PA.parents[2] / "scripts" / "tt_hw_planner" / "commands" / "optimize.py").read_text()
     head = src[: src.index("result = run_cc(")]
     assert "_run_matmul_sweep_prepass(args, run_root, run_demo)" not in head
 
 
 def test_s2_engine_reads_the_flag_the_cli_writes():
     """The two halves must agree on the variable name -- a typo here silently disables the flag."""
-    cli = (Path("/home/ttuser/tt-metal/scripts/tt_hw_planner/commands/optimize.py")).read_text()
+    cli = (_PA.parents[2] / "scripts" / "tt_hw_planner" / "commands" / "optimize.py").read_text()
     eng = (_CC / "run.py").read_text()
     for var in (
         "PERF_MCP_MATMUL_SWEEP",
