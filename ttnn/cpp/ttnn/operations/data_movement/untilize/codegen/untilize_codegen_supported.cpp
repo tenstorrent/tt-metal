@@ -112,10 +112,6 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
 // phase-7 re-measured it on the ported kernel (native/ported=3.42x, generic/ported=0.997x) and it
 // clears the gate the seed was demoted ahead of -- removed per the phase-7 handoff. Empty demote
 // set: every in-scope case is expected to run on codegen under auto.
-bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
-    (void)input;
-    (void)output_mem_config;
-    return false;
-}
+bool is_demoted(const Tensor& /*input*/, const tt::tt_metal::MemoryConfig& /*output_mem_config*/) { return false; }
 
 }  // namespace ttnn::operations::data_movement::untilize_codegen
