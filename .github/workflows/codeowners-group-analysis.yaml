@@ -2958,7 +2958,7 @@ jobs:
             WARNING_JSON_FILE=$(mktemp)
             jq -n --arg body "⚠️ CodeOwners ping hit a GitHub API rate limit while resolving names above — some may be inaccurate." '{"body": $body}' > "$WARNING_JSON_FILE"
             curl -s -X POST \
-              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Authorization: Bearer ${{ github.token }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
               --data-binary @"$WARNING_JSON_FILE" \
