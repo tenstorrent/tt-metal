@@ -61,10 +61,14 @@ bitwise** equality. The 0.95 argmax-agreement gate is mis-specified and unreacha
 implementation; the usable floor is **≥0.992 at production-48 steps** — do not chase precision
 ([refuted list](../REFUTED.md)).
 
-**DONE primitives, not yet wired into `tt/diffusion_attention.py`:** `tt/attention_merge.py ::
-merge_attention_partials` (device 3/3, `tests/test_attention_merge.py`) and the `return_lse` SDPA
-kernel extension (12 C++ files, `tests/test_return_lse.py` 6/6 on QB2, `return_lse=False`
-byte-identical, LSE ≈ `torch.logsumexp`).
+**Primitive status — one half survives, the other was reverted.** `tt/attention_merge.py ::
+merge_attention_partials` is DONE and still in the tree (device 3/3, `tests/test_attention_merge.py`),
+but never wired into `tt/diffusion_attention.py`. Its producer, the `return_lse` SDPA kernel extension,
+**was reverted on 2026-07-30**: it lived in `ttnn/cpp/` with no live consumer, so the no-shared-edits
+rule took it out. It did pass 6/6 on QB2 first (`return_lse=False` byte-identical, LSE ≈
+`torch.logsumexp`) and is recoverable from `2e18c599bd3` — see
+[the T6 plan](return_lse_kernel_plan.md). **Wiring this section therefore now needs the ttnn extension
+re-landed as its own upstream PR first**, not just a call-site change.
 
 ## Sliding 25 layers — no paging needed
 

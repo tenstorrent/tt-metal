@@ -1,0 +1,28 @@
+# Shared-tree paths DiffusionGemma is allowed to have changed, with the reason.
+#
+# Read by .agent/scripts/check_no_shared_gemma4_edits.sh. Format: one path per line,
+# `#` comments and blank lines ignored. A path belongs here ONLY if it is load-bearing for the
+# live DG path AND structurally impossible to relocate into models/experimental/diffusion_gemma/
+# (which contains no C++ and no sources.cmake entry, so no kernel, program factory or device op
+# can live there). "It would be inconvenient to move" is not a reason.
+#
+# Every entry is a debt: it must ship as a standalone upstream PR and then be REMOVED from this
+# file. Do not add an entry to make the gate green.
+#
+# --- PR A (tt_metal): Blackhole ttnn.rand advances its PRNG per element (#48291) -------------
+# A genuine ttnn.rand defect on Blackhole: the SFPU PRNG was one sliding window, so draws were
+# not independent across a row. The fix (5 draws/element) is an LLK header compiled into every
+# kernel at JIT time; a model directory cannot inject its own copy. DG's device Gumbel sampling
+# is default-ON and depends on it.
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_rand.h
+tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py
+#
+# --- PR B (ttnn): compact sparse_matmul output ------------------------------------------------
+# Lets a caller pass an output tensor sized for exactly `nnz` blocks and have the writer
+# front-pack one block per non-zero sparsity entry. tt/sparse_moe.py's ragged prefill cannot
+# express its packing without it and would otherwise have to materialize a 128x-expanded MoE
+# intermediate. The behaviour lives in a device kernel and its program factory.
+ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp
+ttnn/cpp/ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.cpp
+ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py

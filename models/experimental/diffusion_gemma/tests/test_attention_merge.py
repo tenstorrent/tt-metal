@@ -19,7 +19,9 @@ Two layers:
    opens a device.
 
 The merge is the Phase-2 companion to the ``return_lse`` SDPA extension; see
-``doc/optimize_perf/paged_prefix_denoise_design.md`` §1a and task T7.
+``doc/optimize_perf/paged_prefix_denoise_design.md`` §1a and task T7. That producer was reverted
+out of ``ttnn/cpp/`` on 2026-07-30, so this test is now the only thing exercising the merge — it
+builds its LSE inputs from torch and never needed the kernel, which is exactly why it still passes.
 """
 
 import os
@@ -41,7 +43,8 @@ def _group_softmax(scores_g, values_g):
     Returns:
         ``(out, lse)`` with ``out`` ``[H, C, vhd]`` = softmax(scores_g) @ values_g
         and ``lse`` ``[H, C, 1]`` = logsumexp(scores_g) — the exact statistic the
-        ``return_lse=True`` SDPA kernel emits (``m + log(l)``).
+        ``return_lse=True`` SDPA kernel emitted (``m + log(l)``) before that extension
+        was reverted.
     """
     probs = torch.softmax(scores_g, dim=-1)
     out = probs @ values_g

@@ -1,20 +1,41 @@
 # `return_lse` for ttnn plain + chunked SDPA (paged-prefix task T6)
 
-Status: current, but provenance-only as a *plan* — the work SHIPPED and device-verified on QB2 on
-2026-07-19, and the shipped code diverged from the original design sketches, so the sketches were
-deleted rather than kept (git history is the archive). Its subject lives **outside**
-`models/experimental/diffusion_gemma/`, in `ttnn/cpp/ttnn/operations/transformer/sdpa/`.
+Status: **REVERTED 2026-07-30 — archaeology only.** The work did ship and was device-verified on QB2
+on 2026-07-19 (6/6), but its subject lived **outside** `models/experimental/diffusion_gemma/`, in
+`ttnn/cpp/ttnn/operations/transformer/sdpa/`, and it had **no consumer**: nothing in the live model
+or serving path ever called `return_lse=True`, because the Phase-2 merge it was built for was never
+wired into `tt/diffusion_attention.py`. Under the no-shared-edits rule it was therefore reverted with
+the rest of the out-of-folder changes, and `tests/test_return_lse.py` was deleted with it. The
+11-file diff is recoverable in full from commit `2e18c599bd3`; re-land it as a standalone ttnn PR
+**before** wiring the merge, not as a DiffusionGemma-branch carry. `tt/attention_merge.py` (the T7
+half) survives untouched — it is pure ttnn and never depended on the reverted producer.
 Owns: the LSE identity and scale convention, the two bringup bugs the plan got wrong, the streaming
 byte-identity strategy, the remaining scope gap and the flash-merge identity.
 See also: [refuted list](../REFUTED.md), [early halt](early_halt.md#absorbed-recon-verdicts) for
 why T6 exists.
 
-## What shipped
+## What shipped (and was then reverted)
 
-`ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa.hpp` declares the T6 `return_lse` variants of
+`ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa.hpp` declared the T6 `return_lse` variants of
 `scaled_dot_product_attention` and `chunked_scaled_dot_product_attention`, emitting the per-row
-log-sum-exp as an optional second output so a later step can merge attention over KV partials.
-`tests/test_return_lse.py` passes **6/6**.
+log-sum-exp as an optional second output so a later step could merge attention over KV partials.
+`tests/test_return_lse.py` passed **6/6** on QB2. Both are gone from the tree as of 2026-07-30; the
+torch reference the test gated against is kept below so the re-land recipe survives the deletion.
+
+```python
+def _reference_lse(q, k, scale, is_causal):
+    """torch fp32 reference for the emitted LSE.
+
+    q, k: ``[B, H, S, D]`` fp32. Returns ``[B, H, S, 1]`` fp32 =
+    ``logsumexp(scale * Q @ Kᵀ [+ causal mask], dim=-1)``.
+    """
+    scores = scale * torch.matmul(q, k.transpose(-1, -2))  # [B, H, Sq, Sk]
+    if is_causal:
+        sq, sk = scores.shape[-2], scores.shape[-1]
+        causal = torch.tril(torch.ones(sq, sk, dtype=torch.bool))
+        scores = scores.masked_fill(~causal, float("-inf"))
+    return torch.logsumexp(scores, dim=-1, keepdim=True)
+```
 
 The gate has two halves: `return_lse=False` must be **byte-identical** to today for every existing
 caller, and the emitted LSE must match `torch.logsumexp`.

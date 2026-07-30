@@ -47,5 +47,48 @@ if [ -n "$all" ]; then
   exit 2
 fi
 
+# ---------------------------------------------------------------------------------------------
+# Second gate: ANY file outside models/experimental/diffusion_gemma/ that is not allowlisted.
+#
+# The check above only ever watched three model dirs, which is how 25 files of ttnn/, tt_metal/,
+# shared-test and repo-root changes accumulated unnoticed (audited and reduced 2026-07-30). The
+# allowlist carries the few paths that are load-bearing AND unrelocatable, each with its reason;
+# see .agent/shared_change_allowlist.txt.
+DG_DIR="models/experimental/diffusion_gemma"
+ALLOWLIST="$DG_DIR/.agent/shared_change_allowlist.txt"
+
+if [ ! -f "$ALLOWLIST" ]; then
+  echo "CHECKER ERROR: allowlist $ALLOWLIST not found" >&2
+  exit 3
+fi
+
+outside="$(
+  {
+    git diff --name-only "$BASE"...HEAD -- . ":(exclude)$DG_DIR/**" 2>/dev/null
+    git diff --name-only -- . ":(exclude)$DG_DIR/**" 2>/dev/null
+    git diff --name-only --cached -- . ":(exclude)$DG_DIR/**" 2>/dev/null
+  } | sort -u | sed '/^$/d'
+)"
+
+# Strip comments/blanks from the allowlist, then drop allowlisted paths from the finding set.
+allowed="$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$ALLOWLIST")"
+unexpected="$(printf '%s\n' "$outside" | grep -vxF "$allowed" 2>/dev/null | sed '/^$/d')"
+
+if [ -n "$unexpected" ]; then
+  echo "CRITICAL: out-of-folder changes vs $BASE that are not in $ALLOWLIST:" >&2
+  echo "$unexpected" | sed 's/^/  /' >&2
+  echo "" >&2
+  echo "Fix one of these ways, in order of preference:" >&2
+  echo "  1. Revert it — most such changes turn out to be dead scaffolding with no live caller." >&2
+  echo "  2. Copy the file into $DG_DIR/ and edit the copy (Python: import or monkeypatch the" >&2
+  echo "     shared module from the DG copy, as tt/expert_operations.py does for apply_geglu)." >&2
+  echo "  3. Only if it is genuinely unrelocatable (C++ kernel / program factory / device op /" >&2
+  echo "     LLK header — DG has no C++ build), add it to the allowlist WITH its reason and open" >&2
+  echo "     a standalone upstream PR for it." >&2
+  exit 2
+fi
+
 echo "OK: no shared-directory edits vs $BASE (models/demos/gemma4, models/common, models/tt_transformers clean)"
+n_allowed="$(printf '%s\n' "$allowed" | sed '/^$/d' | wc -l | tr -d ' ')"
+echo "OK: no out-of-folder changes vs $BASE beyond the $n_allowed allowlisted, upstream-PR-owed paths"
 exit 0

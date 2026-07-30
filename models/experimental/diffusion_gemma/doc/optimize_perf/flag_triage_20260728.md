@@ -49,7 +49,7 @@ Legacy trace knobs that still appear in dated artifacts and select nothing: `DG_
 
 ## Not done
 
-`DG_MOE_FUSED_GATHER`'s scaffold spans the shared `ttnn/cpp` tree and needs a `_ttnncpp.so` rebuild, so it is out of scope under the no-shared-edits rule; the DG-side `raise NotImplementedError` stays as the loud signal.
+*(Resolved 2026-07-30.)* `DG_MOE_FUSED_GATHER`'s scaffold spanned the shared `ttnn/cpp` tree, which is why it was left alone here — but the out-of-folder audit removed it at the source instead: the ttnn in0-gather hook and the `TTNN_SPARSE_MATMUL_IN0_GATHER` gate were reverted (`9f3f558319d`), and the DG-side flag had already gone with the token-gather path in `7417bd7d69d`. Nothing is left to gate.
 
 ## What only one kind of check could catch
 

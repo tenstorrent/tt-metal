@@ -215,15 +215,6 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     SparseMatmulDeviceOperation::tensor_return_value_t output_tensors;
     const auto& optional_output_tensors = tensor_args.optional_output_tensors;
     const auto& input_tensors = tensor_args.input_tensors;
-    const auto& sparsity = input_tensors.at(2);
-    const bool compact_output =
-        !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
-        operation_attributes.nnz.has_value() &&
-        optional_output_tensors[0]->logical_volume() == static_cast<uint64_t>(operation_attributes.nnz.value()) *
-                                                            input_tensors.at(0).logical_shape()[-2] *
-                                                            input_tensors.at(1).logical_shape()[-1];
-    const bool initialize_output = !compact_output && (!operation_attributes.nnz.has_value() ||
-                                                       operation_attributes.nnz.value() != sparsity.logical_volume());
 
     if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
         output_tensors.reserve(optional_output_tensors.size());
@@ -233,26 +224,6 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
                 "If using optional output tensors, all output tensors must have a value");
             output_tensors.emplace_back(optional_output_tensor.value());
         }
-        if (initialize_output) {
-            for (auto& output_tensor : output_tensors) {
-                output_tensor = ttnn::zeros_like(
-                    output_tensor,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    std::optional<Tensor>(output_tensor));
-            }
-        }
-        return output_tensors;
-    }
-    const auto& device = input_tensors.at(0).device();
-    const auto& output_specs = compute_output_specs(operation_attributes, tensor_args);
-    output_tensors.reserve(output_specs.size());
-    for (const auto& output_spec : output_specs) {
-        output_tensors.emplace_back(create_device_tensor(output_spec, device));
-    }
-    if (initialize_output) {
         for (auto& output_tensor : output_tensors) {
             output_tensor = ttnn::zeros_like(
                 output_tensor,
@@ -262,6 +233,22 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
                 std::nullopt,
                 std::optional<Tensor>(output_tensor));
         }
+        return output_tensors;
+    }
+    const auto& device = input_tensors.at(0).device();
+    const auto& output_specs = compute_output_specs(operation_attributes, tensor_args);
+    output_tensors.reserve(output_specs.size());
+    for (const auto& output_spec : output_specs) {
+        output_tensors.emplace_back(create_device_tensor(output_spec, device));
+    }
+    for (auto& output_tensor : output_tensors) {
+        output_tensor = ttnn::zeros_like(
+            output_tensor,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::optional<Tensor>(output_tensor));
     }
     return output_tensors;
 }

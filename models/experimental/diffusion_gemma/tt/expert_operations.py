@@ -14,8 +14,6 @@ import models.demos.gemma4.tt.experts.prefill as gemma4_expert_prefill
 
 _tanh_expert_active: ContextVar[bool] = ContextVar("diffusion_gemma_tanh_expert", default=False)
 _dispatcher_lock = Lock()
-_original_decode_geglu = gemma4_expert_decode.apply_geglu
-_original_prefill_geglu = gemma4_expert_prefill.apply_geglu
 
 
 def apply_gelu(value):
@@ -54,10 +52,29 @@ def shared_mlp_forward(mlp, hidden_states):
     return output
 
 
+def _legacy_geglu_with_release(gate, up):
+    """Run gemma4's own GeGLU math, but release the activation temporary here.
+
+    Reproduces ``models.demos.gemma4.tt.experts.operations.apply_geglu`` exactly --
+    ``fast_and_approximate_mode`` GELU, *not* this checkpoint's tanh variant -- and adds the
+    ``deallocate`` that the shared copy does not do. DiffusionGemma used to get that free by
+    editing the shared file; keeping the release DG-local is what lets ``models/demos/gemma4``
+    stay byte-identical to ``main`` (see ``.agent/scripts/check_no_shared_gemma4_edits.sh``).
+
+    Only reachable when the tanh contextvar is unset, which the live path never does
+    (``prefill_moe.py`` pins ``tanh_gelu = True``); it exists so that a future caller which
+    forgets the context still cannot leak.
+    """
+    activated = ttnn.gelu(gate, fast_and_approximate_mode=True)
+    result = ttnn.mul(activated, up)
+    activated.deallocate(True)
+    return result
+
+
 def _contextual_geglu(gate, up):
     if _tanh_expert_active.get():
         return apply_geglu(gate, up)
-    return _original_decode_geglu(gate, up)
+    return _legacy_geglu_with_release(gate, up)
 
 
 def _install_contextual_geglu() -> None:

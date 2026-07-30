@@ -233,25 +233,25 @@ cheapest first: (1) keep combine as a reduction over the compact route-weighted 
 + `fast_reduce_nc`; (2) home-core reduction with a per-(token, k-slot) scratch page nobody else owns;
 (3) serialize by semaphore — **REJECTED**, it serializes the hot path.
 
-**LANDED AND STILL IN THE TREE — two ttnn env gates (not DG flags).**
-`TTNN_SPARSE_MATMUL_WRITER_SCALE` emits a `WRITER_SCALE` define into the shared sparse writer kernel
-`reader_bmm_tile_layout_in1_sender_writer_padding.cpp`, scaling every output tile of an active batch by
-the bf16 value already in the `cb_sparsity` L1 page; this is legal **with no new host tensor** because the
-op uses only `== 0` of that value as an active/skip gate — confirmed by `test_sparse_matmul_with_nnz`,
-which puts `torch.rand` values in `sparsity` and compares against a plain `torch.matmul` with no scale.
-`TTNN_SPARSE_MATMUL_IN0_GATHER` emits `SPARSE_MATMUL_IN0_GATHER` from the sparse mcast-1d factory (main
-and quasar mirrors) into `mm_kernel_in0_sender_writer_defines`, with a reader hook in
-`reader_bmm_tile_layout_in0_sender_padding.cpp` whose `#else` path is textually identical to the
-pre-scaffold read — so the flag is a no-op on or off.
+**REVERTED 2026-07-30 — two ttnn env gates that no longer exist.** Both were scaffolds for the
+fused-MoE experiment this doc records as refuted, both lived in the shared `ttnn/cpp` tree, and neither
+had a caller: `TTNN_SPARSE_MATMUL_WRITER_SCALE` (a `WRITER_SCALE` define into the shared sparse writer
+kernel `reader_bmm_tile_layout_in1_sender_writer_padding.cpp`, scaling every output tile of an active
+batch by the bf16 value already in the `cb_sparsity` L1 page) and `TTNN_SPARSE_MATMUL_IN0_GATHER` (a
+`SPARSE_MATMUL_IN0_GATHER` define plus an in0-reader hook whose `#else` path was textually identical to
+the pre-scaffold read, i.e. a no-op on or off). They went out with the rest of the out-of-folder
+changes; recover from `af08af2c304` and `9f3f558319d` respectively. Their tests
+(`test_sparse_matmul_writer_scale`, `::test_sparse_matmul_in0_gather_scaffold`,
+`::test_sparse_matmul_in0_gather_reference`) were deleted in the same commit.
 
-**PROGRAM-CACHE TRAP:** both env gates are read inside the factory and are **not part of the program
-hash**, so a run must not reuse a cached program built with the flag in the opposite state for the same
-shapes; the test uses a distinct shape and sets the env var before the first op.
-**TESTS:** `tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py::test_sparse_matmul_writer_scale`
-and `::test_sparse_matmul_in0_gather_scaffold` are device-runnable;
-`::test_sparse_matmul_in0_gather_reference` self-skips until the `gather_index` op input exists. The
-writer kernel is JIT-compiled on device, so these tests are host-buildable but **REQUIRE a Tenstorrent
-device to run** — a `.so` build/link proves nothing about them.
+**Two facts from that work worth keeping.** (1) The writer-scale trick is legal **with no new host
+tensor**, because the op uses only `== 0` of the sparsity value as an active/skip gate — confirmed by
+`test_sparse_matmul_with_nnz`, which puts `torch.rand` values in `sparsity` and compares against a plain
+`torch.matmul` with no scale. (2) **PROGRAM-CACHE TRAP:** an env gate read inside a program factory is
+**not part of the program hash**, so a run must not reuse a cached program built with the flag in the
+opposite state for the same shapes — any future gate of this shape needs a distinct shape per arm, or
+the env var set before the first op. Also: these kernels are JIT-compiled on device, so such tests are
+host-buildable but **REQUIRE a Tenstorrent device to run** — a `.so` build/link proves nothing.
 
 **DO-NOT-REINVENT** if anyone revives this: the `cb_sparsity` per-batch skip page;
 `SPARSE_OUTPUT`/`compact_output`, which packs only the nnz active batch pairs so the output is

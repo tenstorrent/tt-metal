@@ -13,7 +13,6 @@
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <cstdlib>
 
 namespace ttnn::prim::qsr {
 
@@ -197,14 +196,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     uint32_t interm0_CB_size = interm0_CB_tiles * interm0_single_tile_size;
 
     CoreCoord start_core = {0, 0};
-    if (operation_attributes.sub_device_id.has_value()) {
-        const auto sub_device_cores = a.device()->worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
-        start_core = sub_device_cores.bounding_box().start_coord;
-    }
 
     // The matmul region is the rectangle of size `compute_with_storage_grid_size`
-    // anchored at `start_core`, including offset sub-device worker grids.
+    // anchored at `start_core`. The sparse 1D matmul path does not yet anchor at a sub-device
+    // start, but keeping the rectangle expression here keeps the API uniform with the dense 1D
+    // path and is safe (matmul_core_rect == full compute grid when start_core == (0, 0)).
     CoreRangeSet matmul_core_rect(CoreRange(
         start_core,
         CoreCoord(
@@ -267,13 +263,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
     uint32_t num_batch_compute = nnz.value_or(sparsity.logical_volume());
-    // Compact output packs only the `nnz` active batch pairs in scan order. Detect it exactly as the
-    // device op (device/sparse/sparse_matmul_device_operation.cpp): a caller-supplied nnz AND an output
-    // sized to nnz*M*N. Gating on nnz.has_value() prevents a normal expanded output — whose volume
-    // coincides with sparsity_volume*M*N — from being misclassified as compact when nnz is unset (#H1).
-    const bool compact_output =
-        nnz.has_value() && output_tensor.logical_volume() ==
-                               static_cast<uint64_t>(nnz.value()) * a.logical_shape()[-2] * b.logical_shape()[-1];
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -386,8 +375,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)0,  // in3_tensor_stride_w
         // fuse op args
         (std::uint32_t)false,  // fuse_op
-        (std::uint32_t)false,  // fuse_op_reduce_scatter
-        (std::uint32_t)compact_output,
+        (std::uint32_t)false   // fuse_op_reduce_scatter
     };
 
     // Append TensorAccessorArgs
@@ -432,32 +420,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
-    mm_kernel_in1_sender_writer_defines["SPARSE_OUTPUT"] = "1";
-
-    // WRITER_SCALE (DiffusionGemma fused-MoE increment 1, opt-in): when TTNN_SPARSE_MATMUL_WRITER_SCALE
-    // is set, the writer kernel folds the per-batch route-weight carried in the cb_sparsity page into
-    // the output write. Off by default -> the define is not emitted and the write path is byte-identical.
-    // The scale rides in the existing sparsity page, so no new op input / CB / kernel arg is needed.
-    // Caveat: this env-gate is not part of the program hash; do not reuse a cached program built with the
-    // flag in the opposite state for the same shapes. See
-    // models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md.
-    if (std::getenv("TTNN_SPARSE_MATMUL_WRITER_SCALE") != nullptr) {
-        mm_kernel_in1_sender_writer_defines["WRITER_SCALE"] = "1";
-    }
-
-    // SPARSE_MATMUL_IN0_GATHER (DiffusionGemma fused-MoE increment 3 scaffold, opt-in): when
-    // TTNN_SPARSE_MATMUL_IN0_GATHER is set, the in0 sender reader compiles a per-row gather hook that
-    // would read each expert's assigned token rows from a [S,H] activation via a gather-index side
-    // page (folding away the denoise MoE's `disp^T @ hidden` gather matmul + its [EC,H]
-    // materialization). Off by default -> the define is not emitted and the read path is
-    // byte-identical (the dense matmul factories that share this kernel never emit it). The gather
-    // itself is not yet implemented: the hook falls back to the contiguous read, so this flag is a
-    // no-op today and lands only the gate + reader hook. Caveat: this env-gate is not part of the
-    // program hash; do not reuse a cached program built with the flag in the opposite state for the
-    // same shapes. See models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md.
-    if (std::getenv("TTNN_SPARSE_MATMUL_IN0_GATHER") != nullptr) {
-        mm_kernel_in0_sender_writer_defines["SPARSE_MATMUL_IN0_GATHER"] = "1";
-    }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());

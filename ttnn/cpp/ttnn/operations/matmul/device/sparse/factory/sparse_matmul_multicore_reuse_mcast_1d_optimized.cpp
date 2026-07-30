@@ -13,7 +13,6 @@
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <cstdlib>
 
 namespace ttnn::prim {
 
@@ -97,6 +96,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const uint32_t in0_aligned_tile_size = tt::align(in0_single_tile_size, dram_alignment);
     const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    const auto interm0_single_tile_size = output_tile.get_tile_size(output_data_format);
 
     auto* const in0_buffer = a.buffer();
     auto* const in1_buffer = b.buffer();
@@ -164,7 +164,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto interm0_data_format = packer_l1_acc_en
                                          ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                          : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
-    const auto interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -196,14 +195,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     uint32_t interm0_CB_size = interm0_CB_tiles * interm0_single_tile_size;
 
     CoreCoord start_core = {0, 0};
-    if (operation_attributes.sub_device_id.has_value()) {
-        const auto sub_device_cores = a.device()->worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
-        start_core = sub_device_cores.bounding_box().start_coord;
-    }
 
     // The matmul region is the rectangle of size `compute_with_storage_grid_size`
-    // anchored at `start_core`, including offset sub-device worker grids.
+    // anchored at `start_core`. The sparse 1D matmul path does not yet anchor at a sub-device
+    // start, but keeping the rectangle expression here keeps the API uniform with the dense 1D
+    // path and is safe (matmul_core_rect == full compute grid when start_core == (0, 0)).
     CoreRangeSet matmul_core_rect(CoreRange(
         start_core,
         CoreCoord(
@@ -432,31 +428,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
     mm_kernel_in1_sender_writer_defines["SPARSE_OUTPUT"] = "1";
-
-    // WRITER_SCALE (DiffusionGemma fused-MoE increment 1, opt-in): when TTNN_SPARSE_MATMUL_WRITER_SCALE
-    // is set, the writer kernel folds the per-batch route-weight carried in the cb_sparsity page into
-    // the output write. Off by default -> the define is not emitted and the write path is byte-identical.
-    // The scale rides in the existing sparsity page, so no new op input / CB / kernel arg is needed.
-    // Caveat: this env-gate is not part of the program hash; do not reuse a cached program built with the
-    // flag in the opposite state for the same shapes. See
-    // models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md.
-    if (std::getenv("TTNN_SPARSE_MATMUL_WRITER_SCALE") != nullptr) {
-        mm_kernel_in1_sender_writer_defines["WRITER_SCALE"] = "1";
-    }
-
-    // SPARSE_MATMUL_IN0_GATHER (DiffusionGemma fused-MoE increment 3 scaffold, opt-in): when
-    // TTNN_SPARSE_MATMUL_IN0_GATHER is set, the in0 sender reader compiles a per-row gather hook that
-    // would read each expert's assigned token rows from a [S,H] activation via a gather-index side
-    // page (folding away the denoise MoE's `disp^T @ hidden` gather matmul + its [EC,H]
-    // materialization). Off by default -> the define is not emitted and the read path is
-    // byte-identical (the dense matmul factories that share this kernel never emit it). The gather
-    // itself is not yet implemented: the hook falls back to the contiguous read, so this flag is a
-    // no-op today and lands only the gate + reader hook. Caveat: this env-gate is not part of the
-    // program hash; do not reuse a cached program built with the flag in the opposite state for the
-    // same shapes. See models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md.
-    if (std::getenv("TTNN_SPARSE_MATMUL_IN0_GATHER") != nullptr) {
-        mm_kernel_in0_sender_writer_defines["SPARSE_MATMUL_IN0_GATHER"] = "1";
-    }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());

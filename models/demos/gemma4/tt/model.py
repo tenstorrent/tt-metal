@@ -15,6 +15,7 @@ Supports both prefill and decode modes with paged attention.
 Compatible with tt_transformers Generator interface.
 """
 
+
 import torch
 from loguru import logger
 from tracy import signpost
@@ -935,7 +936,7 @@ class Gemma4Model:
 
         if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
             if self.sampling is not None and is_decode:
-                pass  # Caller consumes the TP-sharded [1,1,M,vocab/TP] logits directly
+                pass  # Sampling module handles TP-sharded logits directly
             else:
                 from models.demos.gemma4.tt.ccl import ccl_allgather
 
