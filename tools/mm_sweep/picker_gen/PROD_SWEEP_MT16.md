@@ -1,3 +1,9 @@
+> **SUPERSEDED by `HEAD_SWEEP_UNIFIED.md`**, which re-measures every shape from this report plus the
+> other one on HEAD (7bdab431417) in a single table. These numbers were taken on the PRE-rebase build.
+> They still hold (the re-run agrees to a median +0.1%, worst +1.7%, and no pick moved), but the
+> `FAILED / not measured` row below for `512x15360x768` is STALE -- the picker bug it hit is fixed and
+> the shape now runs at 144.33 us / 277.9 GB/s.
+
 | shape | Mt | Pk,Ns,Sm,kb,nsb | core | reduction | placement | dev us | eff GB/s | %pk | TFLOP/s | FPU%grid | FPU%core | sch/val | PCC | blk% | it% |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 256x2048x512 | 8 | 4,1,3,2,2 | 96 | reduce-scatter | mesh | 13.76 | 247.6 | 48% | 39.0 | 12.8% | 14.7% | 1.05 | 0.99999 | 0.4 | 7.2 |

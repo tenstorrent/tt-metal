@@ -1,3 +1,9 @@
+> **SUPERSEDED by `HEAD_SWEEP_UNIFIED.md`**, which re-measures every shape from this report plus the
+> other one on HEAD (7bdab431417) in a single table. These numbers were taken on the PRE-rebase build.
+> They still hold (the re-run agrees to a median +0.1%, worst +1.7%, and no pick moved), but the
+> `FAILED / not measured` row below for `32x128x30720` is still accurate: Kt=4 < the 8 a k-slice must
+> span, which is structural.
+
 | shape | Mt | Pk,Ns,Sm,kb,nsb | core | reduction | placement | dev us | eff GB/s | %pk | TFLOP/s | FPU%grid | FPU%core | sch/val | PCC | blk% | it% |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 32x256x512 | 1 | 1,2,1,1,1 | 16 | chain | bank-local | 4.29 | 76.4 | 15% | 2.0 | 0.6% | 4.4% | 1.00 | 0.99999 | 0.3 | 5.6 |
