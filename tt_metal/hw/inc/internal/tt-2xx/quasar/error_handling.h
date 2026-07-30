@@ -24,9 +24,8 @@ enum class DmErrors : uint32_t {
 // Values are taken from https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/564527286/Error+Aggregator, additional
 // error information is available in `ERR_DATA` register for errors 0-3.
 //
-// This is the block ID in error_code[13:8]. The other fields are error_code[15:14] = compute
-// core (Neo) ID and error_code[7:0] = error index within the block. The index is decoded by
-// one of the per-block enums below; it has no meaning on its own.
+// Block ID, error_code[13:8]. The rest of the word is [15:14] = Neo ID and [7:0] = error index
+// within the block. The index only means anything alongside its block, see the enums below.
 enum class TriscErrors : uint32_t {
     ERROR_TRISC0 = 0,
     ERROR_TRISC1 = 1,
@@ -53,17 +52,17 @@ enum class TriscErrors : uint32_t {
 
 // Index for TriscErrors::ERROR_TRISC0..3. Values come from
 // https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/461602877 via
-// https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/565445671, which defines the
-// per-TRISC error report. They are the bases of the legacy ranges on the former page
-// (22-26, 31-34, 40-44). Those ranges are no longer a per-TRISC spread, so read the TRISC
-// from error_code[13:8], not from here. The faulting PC is in `ERR_DATA`.
+// https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/565445671.
 //
-// Only one is reported at a time, in this priority order:
+// These are the bases of the old 22-26 / 31-34 / 40-44 ranges. Those ranges used to spread
+// across the TRISCs, they don't any more, so take the TRISC from error_code[13:8] and not from
+// the value here. Faulting PC lands in `ERR_DATA`.
+//
+// Only one gets reported, in this order:
 //   L1_ILLEGAL_ACCESS > STACK_OVERFLOW > MEM_ACCESS_HANG > TTI_BUFFER_HANG
-// If several conditions are live, the higher one wins and the lower is never seen. Note that
-// MEM_ACCESS_HANG (25) outranks TTI_BUFFER_HANG (22) and the two can overlap: a store to a
-// full instruction buffer stalls the load/store queue, so it may report as 25. Use the PC in
-// `ERR_DATA` to tell them apart.
+// so a lower one is invisible while a higher one is live. Watch out for 25 vs 22: a store to a
+// full instruction buffer stalls the load/store queue, so it can come back as 25 even though
+// it started as an instruction buffer problem. The PC is the way to tell.
 enum class TriscRiscErrors : uint32_t {
     TTI_BUFFER_HANG = 22,  // TT instruction buffer is full
     // A load/store did not complete. Can also be a blocked instruction buffer push, since

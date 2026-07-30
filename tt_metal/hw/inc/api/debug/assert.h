@@ -44,16 +44,15 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
             // error_code[15:14] = Neo ID, [13:8] = block ID, [7:0] = error index.
             // See TriscErrors in internal/tt-2xx/quasar/error_handling.h.
             //
-            // Read the register once. It's volatile, so re-reading per field costs extra
-            // MMIO and can mix fields from different samples if a new error arrives.
+            // Grab the register once. It's volatile, so a read per field is extra MMIO and can
+            // end up mixing fields from different samples if another error shows up.
             uint32_t error_reg = RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX];
             uint32_t neo_id = (error_reg >> 14) & 0x3;
             uint32_t error_code = (error_reg >> 8) & 0x3f;
             v->hw_fault_info =
                 (static_cast<uint64_t>(RISCV_DEBUG_REGS->ERR_DATA) << 32) | static_cast<uint64_t>(error_reg);
-            // Get the TRISC ID from the block ID for errors 0-3 and 32-35. For 32-35 the
-            // TRISC order is reversed, so subtract from 35. Other blocks are Neo-level and
-            // are attributed to TRISC 0.
+            // TRISC ID comes from the block ID for errors 0-3 and 32-35. 32-35 count backwards
+            // so subtract from 35. The rest are Neo-level, put those on TRISC 0.
             uint32_t trisc_id = 0;
             if (error_code <= 3) {
                 trisc_id = error_code;

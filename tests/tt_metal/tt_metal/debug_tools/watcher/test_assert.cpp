@@ -285,12 +285,27 @@ static void RunTest(
     // DM errors are using the error values, as they are directly returned by the hardware
     // TRISC errors are spread and have different meanings, so using 5,7 the same as DM (illegal access)
     // and adding new cases 8 and 9.
+    //
+    // Build the compute codes from the TRISC under test instead of hardcoding them, so a cause
+    // can run on any TRISC. Layout is [13:8] block, [7:0] index.
     if (processor.processor_class == HalProcessorClassType::COMPUTE) {
+        const uint32_t trisc = static_cast<uint32_t>(processor.processor_type);
         switch (hw_assert_cause) {
+            // ERROR_TRISC<n>, illegal access.
             case 5:
-            case 7: hw_assert_cause = 0x128; break;
-            case 8: hw_assert_cause = 0x23bc; break;
-            case 9: hw_assert_cause = 0xc03; break;
+            case 7:
+                hw_assert_cause = (trisc << 8) | static_cast<uint32_t>(TriscRiscErrors::L1_ILLEGAL_ACCESS);
+                break;
+            // ILLEGAL_INSTRUCTION_TRISC<n>, backwards numbered, plus the opcode the kernel hits.
+            case 8:
+                hw_assert_cause =
+                    ((static_cast<uint32_t>(TriscErrors::ILLEGAL_INSTRUCTION_TRISC0) - trisc) << 8) | 0xbc;
+                break;
+            // Neo level, so the same code on every TRISC.
+            case 9:
+                hw_assert_cause = (static_cast<uint32_t>(TriscErrors::NEO_SEMAPHORES) << 8) |
+                                  static_cast<uint32_t>(SemaphoreErrors::GET_ON_UNINITIALIZED);
+                break;
             default: hw_assert_cause = 0; break;
         }
     } else {
@@ -502,6 +517,11 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"ComputeHWFaultWrite", {TENSIX, COMPUTE, 1}, dev_msgs::DebugAssertHwFault, 7},
         WatcherTestParams{"ComputeHWFaultIllegalInstruction", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertHwFault, 8},
         WatcherTestParams{"ComputeHWFaultSemaphore", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertHwFault, 9},
+        // Both ends of the block numbering on real silicon: block 0, and block 32 where the
+        // backwards ordering starts. These hang the board, so keep it to two.
+        WatcherTestParams{"ComputeHWFaultReadTrisc0", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertHwFault, 5},
+        WatcherTestParams{
+            "ComputeHWFaultIllegalInstructionTrisc3", {TENSIX, COMPUTE, 3}, dev_msgs::DebugAssertHwFault, 8},
         WatcherTestParams{"Trisc0", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped},
         WatcherTestParams{"Trisc1", {TENSIX, COMPUTE, 1}, dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped},
         WatcherTestParams{"Trisc2", {TENSIX, COMPUTE, 2}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
@@ -512,5 +532,135 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"Drisc", {DRAM, DM, 0}, dev_msgs::DebugAssertTripped},
         WatcherTestParams{"DispatchDM2", {DISPATCH, DM, 2}, dev_msgs::DebugAssertTripped}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
+
+}  // namespace
+
+//////////////////////////////////////////////////////////////////////////////////////////
+// Decoding of the Quasar hw fault error codes. No device needed here, so we can cover the
+// codes the tests above can't reach: the kernel only knows how to trigger a few real faults.
+// Checking substrings, otherwise every reworded message churns the whole table.
+//////////////////////////////////////////////////////////////////////////////////////////
+namespace {
+
+struct HwFaultMessageParams {
+    std::string test_name;
+    uint32_t error_code;
+    uint32_t err_data;
+    std::vector<std::string> expected;
+    std::vector<std::string> forbidden;
+};
+
+class WatcherHwFaultMessageTest : public ::testing::TestWithParam<HwFaultMessageParams> {};
+
+TEST_P(WatcherHwFaultMessageTest, Decodes) {
+    const auto& p = GetParam();
+    const uint64_t hw_fault_info = (static_cast<uint64_t>(p.err_data) << 32) | p.error_code;
+    const std::string msg = get_debug_assert_message(dev_msgs::DebugAssertHwFault, 0, hw_fault_info);
+
+    ASSERT_FALSE(msg.empty()) << "no message for error_code 0x" << std::hex << p.error_code;
+    for (const auto& s : p.expected) {
+        EXPECT_NE(msg.find(s), std::string::npos) << "missing \"" << s << "\" in: " << msg;
+    }
+    for (const auto& s : p.forbidden) {
+        EXPECT_EQ(msg.find(s), std::string::npos) << "unexpected \"" << s << "\" in: " << msg;
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    WatcherHwFaultMessageTests,
+    WatcherHwFaultMessageTest,
+    ::testing::Values(
+        // These report the PC up front, same as the DM faults.
+        HwFaultMessageParams{
+            "Trisc0TtiBufferHang", 0x0016, 0x1234, {"at PC 0x00001234", "Neo 0 TRISC0", "TTI_BUFFER_HANG"}, {}},
+        HwFaultMessageParams{"Trisc1MemAccessHang", 0x0119, 0x1234, {"Neo 0 TRISC1", "MEM_ACCESS_HANG"}, {}},
+        HwFaultMessageParams{"Trisc2StackOverflow", 0x021f, 0x1234, {"Neo 0 TRISC2", "STACK_OVERFLOW"}, {}},
+        HwFaultMessageParams{"Trisc3L1IllegalAccess", 0x0328, 0x1234, {"Neo 0 TRISC3", "L1_ILLEGAL_ACCESS"}, {}},
+        HwFaultMessageParams{"Neo3Trisc1", 0xc128, 0x1234, {"Neo 3 TRISC1", "L1_ILLEGAL_ACCESS"}, {}},
+        HwFaultMessageParams{"TriscUnknownIndex", 0x0099, 0x1234, {"Neo 0 TRISC0", "unknown code 0x99"}, {}},
+
+        // Blocks 32..35 run backwards: 32 is TRISC3, 35 is TRISC0.
+        HwFaultMessageParams{
+            "IllegalInstructionTrisc3",
+            0x2041,
+            0x1234,
+            {"Neo 0 TRISC3", "ILLEGAL_INSTRUCTION_TRISC3", "opcode 0x41", "offending instruction: 0x00001234"},
+            {"at PC"}},
+        HwFaultMessageParams{
+            "IllegalInstructionTrisc0", 0x2341, 0x1234, {"Neo 0 TRISC0", "ILLEGAL_INSTRUCTION_TRISC0"}, {}},
+
+        // Blocks 5,6,7 are the unpackers, 8,9 the packers.
+        HwFaultMessageParams{"Unpacker0BadFormat", 0x0500, 0, {"UNPACKER_0", "ILLEGAL_FORMAT_CONVERSION"}, {"TRISC"}},
+        HwFaultMessageParams{"Unpacker2LimitBelowStart", 0x0701, 0, {"UNPACKER_2", "BUFFER_LIMIT_BELOW_START"}, {}},
+        HwFaultMessageParams{"Packer0BadTileSize", 0x0802, 0, {"PACKER_0", "ILLEGAL_TILE_SIZE"}, {}},
+        HwFaultMessageParams{"Packer1BadFormat", 0x0900, 0, {"PACKER_1", "ILLEGAL_FORMAT_CONVERSION"}, {}},
+
+        // Semaphore number comes back in ERR_DATA.
+        HwFaultMessageParams{
+            "NeoSemaphoreGetUninit",
+            0x0c03,
+            0x0100,
+            {"NEO_SEMAPHORES", "GET_ON_UNINITIALIZED", "semaphore index: 0x00000100"},
+            {"TRISC", "at PC"}},
+        HwFaultMessageParams{"NeoSemaphoreWaitUninit", 0x0c01, 0, {"WAIT_ON_UNINITIALIZED"}, {}},
+        HwFaultMessageParams{"GlobalSemaphoreGetUnderflow", 0x0d05, 0, {"GLOBAL_SEMAPHORES", "GET_UNDERFLOW"}, {}},
+        HwFaultMessageParams{"GlobalSemaphorePostOverflow", 0x0d04, 0, {"GLOBAL_SEMAPHORES", "POST_OVERFLOW"}, {}},
+        HwFaultMessageParams{"SemaphoreUnknownIndex", 0x0c07, 0, {"NEO_SEMAPHORES", "unknown code 0x07"}, {}},
+
+        // Sticky bitmask, so both bits can be set at once.
+        HwFaultMessageParams{"SfpuCcStackOverflow", 0x0e01, 0, {"SFPU", "CC_STACK_OVERFLOW"}, {"CC_STACK_UNDERFLOW"}},
+        HwFaultMessageParams{"SfpuCcStackUnderflow", 0x0e02, 0, {"SFPU", "CC_STACK_UNDERFLOW"}, {}},
+        HwFaultMessageParams{
+            "SfpuCcStackBothBits", 0x0e03, 0, {"SFPU", "CC_STACK_OVERFLOW + CC_STACK_UNDERFLOW"}, {}},
+
+        // No error index on these, so nothing in parens.
+        HwFaultMessageParams{"EdcFatal", 0x0a00, 0, {"EDC_FATAL_ERROR"}, {"(", "TRISC"}},
+        HwFaultMessageParams{"EdcCorrectable", 0x0b00, 0, {"EDC_CORRECTABLE_ERROR"}, {"("}},
+
+        // Index is which counter tripped, not a reason code.
+        HwFaultMessageParams{
+            "TileCounter7", 0x0f07, 0x0008, {"TILE_COUNTERS", "counter 7", "tile counter index: 0x00000008"}, {}},
+        HwFaultMessageParams{"TileCounter31", 0x0f1f, 0, {"counter 31"}, {}},
+
+        // Should still print something instead of a blank cause.
+        HwFaultMessageParams{"UnallocatedBlock04", 0x0400, 0, {"unknown code 0x04"}, {}},
+        HwFaultMessageParams{"UnallocatedBlock3f", 0x3f00, 0, {"unknown code 0x3f"}, {}},
+
+        // Anything <= 7 is a DM mcause, not a block code.
+        HwFaultMessageParams{
+            "DmLoadAccessFault",
+            static_cast<uint32_t>(DmErrors::LOAD_ACCESS_FAULT),
+            0x1234,
+            {"at PC", "LOAD_ACCESS_FAULT"},
+            {"Neo"}}),
+    [](const ::testing::TestParamInfo<HwFaultMessageParams>& info) { return info.param.test_name; });
+
+// Neo used to be read from the wrong bits and always came out as 0.
+TEST(WatcherHwFaultMessage, ReportsEveryNeoAndTrisc) {
+    for (uint32_t neo = 0; neo < 4; neo++) {
+        for (uint32_t trisc = 0; trisc < 4; trisc++) {
+            const uint32_t error_code = (neo << 14) | (trisc << 8) | 0x28;  // L1_ILLEGAL_ACCESS
+            const std::string msg = get_debug_assert_message(dev_msgs::DebugAssertHwFault, 0, error_code);
+            EXPECT_NE(msg.find(fmt::format("Neo {} TRISC{}", neo, trisc)), std::string::npos) << msg;
+        }
+    }
+}
+
+// Block 32 is the one an exclusive bound misses.
+TEST(WatcherHwFaultMessage, IllegalInstructionThreadOrderIsReversed) {
+    for (uint32_t block = 32; block <= 35; block++) {
+        const std::string msg =
+            get_debug_assert_message(dev_msgs::DebugAssertHwFault, 0, (block << 8) | 0x41);
+        EXPECT_NE(msg.find(fmt::format("Neo 0 TRISC{}", 35 - block)), std::string::npos) << msg;
+    }
+}
+
+// The caller reads an empty message as data corruption, so nothing should produce one.
+TEST(WatcherHwFaultMessage, NeverEmptyForAnyErrorCode) {
+    for (uint32_t error_code = 0; error_code <= 0xffff; error_code++) {
+        ASSERT_FALSE(get_debug_assert_message(dev_msgs::DebugAssertHwFault, 0, error_code).empty())
+            << "empty message for error_code 0x" << std::hex << error_code;
+    }
+}
 
 }  // namespace

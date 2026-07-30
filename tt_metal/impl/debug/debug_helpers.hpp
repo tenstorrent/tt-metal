@@ -123,17 +123,16 @@ inline constexpr uint32_t kQuasarErrBlockShift = 8;
 inline constexpr uint32_t kQuasarErrBlockMask = 0x3f;
 inline constexpr uint32_t kQuasarErrIndexMask = 0xff;
 
-// enchantum::to_string returns an empty view for unnamed values, which would show up as a
-// blank field in the watcher log.
+// enchantum::to_string gives back an empty view for unnamed values, which ends up as a blank
+// field in the watcher log.
 template <typename E>
 inline std::string quasar_enum_name_or_hex(uint32_t raw) {
     const auto name = enchantum::to_string(static_cast<E>(raw));
     return name.empty() ? fmt::format("unknown code 0x{:02x}", raw) : std::string{name};
 }
 
-// ERR_DATA is a PC only for the per-TRISC blocks, where it gets reported up front like the DM
-// faults do. Everything else reports it as a trailing field named by
-// get_quasar_error_data_name().
+// Only the per-TRISC blocks put a PC in ERR_DATA, and those print it up front like the DM
+// faults. Everything else gets it as a trailing field, see get_quasar_error_data_name().
 inline bool quasar_error_data_is_pc(TriscErrors block) {
     switch (block) {
         case TriscErrors::ERROR_TRISC0:
@@ -144,10 +143,10 @@ inline bool quasar_error_data_is_pc(TriscErrors block) {
     }
 }
 
-// What ERR_DATA holds, which varies by block. For the per-TRISC errors it's a PC: the last
-// instruction that committed, which for a hang is where the thread stopped rather than the
-// exact culprit. Disassemble there to find the real cause, e.g. whether a MEM_ACCESS_HANG was
-// a blocked instruction buffer push or a load/store that never returned.
+// What's in ERR_DATA, which depends on the block. For the per-TRISC errors it's a PC, the last
+// instruction to commit. On a hang that's where the thread stopped rather than the actual
+// culprit, so disassemble around it: that's how you tell a MEM_ACCESS_HANG that was a blocked
+// instruction buffer push from one that was a load/store that never came back.
 inline std::string_view get_quasar_error_data_name(TriscErrors block) {
     switch (block) {
         case TriscErrors::ERROR_TRISC0:
@@ -165,11 +164,11 @@ inline std::string_view get_quasar_error_data_name(TriscErrors block) {
     }
 }
 
-// Reporting TRISC, or nullopt for the Neo-level blocks (TDMA, EDC, semaphores, SFPU, tile
-// counters) which aren't tied to one thread.
+// Which TRISC reported, or nullopt for the Neo-level blocks (TDMA, EDC, semaphores, SFPU, tile
+// counters) since those aren't tied to a single thread.
 //
-// The illegal-instruction blocks number threads in reverse (32 = TRISC3 ... 35 = TRISC0),
-// opposite to ERROR_TRISC0..3. Keep that mapping here only; don't open-code it.
+// Careful: the illegal-instruction blocks count backwards, 32 is TRISC3 and 35 is TRISC0, the
+// opposite way round to ERROR_TRISC0..3. Keep that in here rather than open-coding it.
 inline std::optional<uint32_t> get_quasar_error_trisc_id(TriscErrors block) {
     const auto raw = static_cast<uint32_t>(block);
     if (raw <= static_cast<uint32_t>(TriscErrors::ERROR_TRISC3)) {
@@ -182,8 +181,8 @@ inline std::optional<uint32_t> get_quasar_error_trisc_id(TriscErrors block) {
     return std::nullopt;
 }
 
-// Decodes error_code[7:0]. Needs the block too, since the index means nothing on its own.
-// Returns empty for blocks that carry no index (EDC, unallocated IDs).
+// Decodes error_code[7:0]. Takes the block as well because the index means nothing on its own.
+// Empty for the blocks that don't carry an index (EDC, unallocated IDs).
 inline std::string get_quasar_error_index_description(TriscErrors block, uint32_t index) {
     switch (block) {
         case TriscErrors::ERROR_TRISC0:
@@ -200,7 +199,7 @@ inline std::string get_quasar_error_index_description(TriscErrors block, uint32_
         case TriscErrors::NEO_SEMAPHORES:
         case TriscErrors::GLOBAL_SEMAPHORES: return quasar_enum_name_or_hex<SemaphoreErrors>(index & 0x7);
 
-        // Sticky bitmask, not an enumerated value, so both bits may be set.
+        // Sticky bitmask rather than a single value, so both bits can be up at once.
         case TriscErrors::SFPU: {
             std::vector<std::string_view> flags;
             if (index & static_cast<uint32_t>(SfpuErrors::CC_STACK_OVERFLOW)) {
@@ -213,13 +212,13 @@ inline std::string get_quasar_error_index_description(TriscErrors block, uint32_
                                  : fmt::format("{}", fmt::join(flags, " + "));
         }
 
-        // Counter number that saw an invalid event, not a cause code.
+        // Which counter went bad, not a reason code.
         case TriscErrors::TILE_COUNTERS: return fmt::format("counter {}", index);
 
         case TriscErrors::EDC_FATAL_ERROR:
         case TriscErrors::EDC_CORRECTABLE_ERROR: return {};
 
-        // Just the opcode; the caller prints the full instruction from ERR_DATA.
+        // Only the opcode here, the caller prints the whole instruction out of ERR_DATA.
         case TriscErrors::ILLEGAL_INSTRUCTION_TRISC0:
         case TriscErrors::ILLEGAL_INSTRUCTION_TRISC1:
         case TriscErrors::ILLEGAL_INSTRUCTION_TRISC2:
@@ -276,8 +275,8 @@ inline std::string get_debug_assert_message(
                     quasar_enum_name_or_hex<TriscErrors>((error_code >> kQuasarErrBlockShift) & kQuasarErrBlockMask);
                 const std::string detail = get_quasar_error_index_description(block, index);
 
-                // Omitted for Neo-level blocks rather than defaulted to 0, so "no thread" and
-                // "thread 0" stay distinguishable.
+                // Left off entirely for Neo-level blocks instead of defaulting to 0, otherwise
+                // "no thread" and "thread 0" look the same.
                 const auto trisc = get_quasar_error_trisc_id(block);
                 const std::string where = fmt::format(
                     "Neo {}{}", neo, trisc.has_value() ? fmt::format(" TRISC{}", *trisc) : std::string{});
