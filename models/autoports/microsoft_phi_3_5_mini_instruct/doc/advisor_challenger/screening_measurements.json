@@ -1,0 +1,46 @@
+{
+  "decode_batch": 32,
+  "frozen_incumbent_ms": 1.100042574107647,
+  "noise_floor_ms": 0.0003755278885364,
+  "measurements": [
+    {
+      "chain": "mlp",
+      "candidate": "advisor DRAM-sharded matmul family, already present in shipped source",
+      "repeats_ms": [
+        1.10043004155159,
+        1.1005323566496372,
+        1.10060328617692
+      ],
+      "measured_ms": 1.10043004155159,
+      "verdict": "rejected",
+      "log": "screen_mlp_existing_ds.log"
+    },
+    {
+      "chain": "rope",
+      "candidate": "legal L1-sharded multiply/add tail with split/neg/concat retained in DRAM",
+      "repeats_ms": [
+        1.1165140941739082,
+        1.1163393594324589,
+        1.116996444761753
+      ],
+      "measured_ms": 1.1163393594324589,
+      "verdict": "rejected",
+      "full_advisor_geometry_failure": "Physical shard shape (32, 48) must be tile {32, 32} sized",
+      "reason": "Phi head_dim=96 produces a 48-wide split-half rotation; the legal-family isolate was slower."
+    },
+    {
+      "chain": "norm_residual",
+      "candidate": "nearest legal lower bracket: 8-core sharded norms",
+      "repeats_ms": [
+        1.150200329720974,
+        1.1499813757836819,
+        1.1505689937621355
+      ],
+      "measured_ms": 1.1499813757836819,
+      "verdict": "rejected",
+      "advisor_11_core_failure": "DRAM-sharded matmul requires K=96 tiles to divide evenly; per_core_K=9 is illegal",
+      "upper_12_core_failure": "Input shard width 8 tiles is not divisible by shipped in0_block_w=3",
+      "reason": "The legal lower bracket was materially slower and both adjacent advised/upper geometries violated shipped matmul constraints."
+    }
+  ]
+}

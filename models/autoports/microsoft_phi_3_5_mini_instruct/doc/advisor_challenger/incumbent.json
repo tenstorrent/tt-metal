@@ -1,0 +1,37 @@
+{
+  "cell_tag": "phi-exp17",
+  "commit": "3fb37af8707d051e5f57bca4cc3af15e3a83e439",
+  "harness": "doc/advisor_challenger/benchmark_batch32.py",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "repeats_ms": [
+    1.1004181019961834,
+    1.100042574107647,
+    1.1002904549241066,
+    1.1003041826188564,
+    1.1002390459179878
+  ],
+  "incumbent_ms": 1.100042574107647,
+  "noise_floor_ms": 0.0003755278885364,
+  "measured_at": "2026-07-30T20:15:59+00:00",
+  "shipped_policy": {
+    "batch": 32,
+    "decode_activation_layout": "L1 width-sharded",
+    "decode_head_layout": "L1 height-sharded 8x4",
+    "decode_weight_layout": "DRAM width-sharded",
+    "decode_matmul_program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+    "matmul_compute_kernel": "HiFi2",
+    "norm_compute_kernel": "HiFi4",
+    "sdpa_compute_kernel": "HiFi2"
+  },
+  "shipped_weight_dtypes": {
+    "attention.qkv": "BFLOAT8_B",
+    "attention.o": "BFLOAT8_B",
+    "mlp.gate_up": "BFLOAT4_B",
+    "mlp.down": "BFLOAT4_B",
+    "norm": "BFLOAT16"
+  },
+  "shipped_policy_source": "doc/advisor_challenger/tracy/incumbent_decode_perf_report.csv and doc/datatype_sweep/selected_precision_config.json",
+  "perf_report": "tracy/incumbent_decode_perf_report.csv",
+  "measurement_log": "incumbent_measurement.log"
+}

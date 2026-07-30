@@ -1,0 +1,106 @@
+{
+  "layer_kind": "dense",
+  "layers_of_kind": 32,
+  "total_layers": 32,
+  "measured_window_us": 996.91,
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, NOT per-op",
+  "incumbent_perf_report": "tracy/incumbent_decode_perf_report.csv",
+  "reconcile_command": "python .agents/skills/advisor-challenger/scripts/reconcile.py --report shard_advise/dense/report.json --ir shard_advise/dense/final_ir.mlir --perf tracy/incumbent_decode_perf_report.csv --layer-kind dense --layers-of-kind 32 --total-layers 32 --threshold-pct 1.0 --out reconciliation.json",
+  "reconcile_compatibility_note": "The mandated script was run, but its current regexes parsed neither #ttnn_layout references in this MLIR nor Device Time in the v2.1 tt-perf-report CSV. The chains below are the corrected parse of those same two inputs.",
+  "dram_sharded_considered": 4,
+  "dram_sharded_advised": 4,
+  "chains": [
+    {
+      "chain": "mlp",
+      "ops": [
+        "ttnn.linear gate_up",
+        "ttnn.multiply silu_gate",
+        "ttnn.linear down"
+      ],
+      "op_count": 3,
+      "summed_window_share_pct": 35.436,
+      "verdict": "rejected",
+      "measured_ms": 1.10043004155159,
+      "reason": "The shipped source already uses DRAM-sharded BFP4 weights and the DRAM-sharded matmul family. Re-measuring that advised set was 0.000387 ms slower than the frozen best, just outside the 0.000376 ms noise floor; ties and regressions go to the incumbent."
+    },
+    {
+      "chain": "rope",
+      "ops": [
+        "ttnn.transpose/slice/neg/concat/multiply/add for Q",
+        "ttnn.transpose/slice/neg/concat/multiply/add for K"
+      ],
+      "op_count": 16,
+      "summed_window_share_pct": 17.947,
+      "verdict": "rejected",
+      "measured_ms": 1.1163393594324589,
+      "reason": "The full advised L1 chain is illegal for Phi head_dim=96 because split-half produces a 48-wide non-tile-aligned shard. The required legal-family isolate kept split/concat in DRAM and sharded the multiply/add tail; it was 0.016297 ms slower."
+    },
+    {
+      "chain": "norm_residual",
+      "ops": [
+        "ttnn.rms_norm input",
+        "ttnn.rms_norm post_attention"
+      ],
+      "op_count": 2,
+      "summed_window_share_pct": 1.412,
+      "verdict": "rejected",
+      "measured_ms": 1.1499813757836819,
+      "reason": "Advisor 11-core geometry is illegal with the shipped DRAM-sharded matmul K partition. The nearest legal lower bracket, 8 cores, measured 0.049939 ms slower; the 12-core upper bracket also violated the shipped in0_block_w constraint."
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "ttnn.linear/multiply/linear MLP chain",
+      "layer_kind": "dense",
+      "chain": "mlp",
+      "advised": {
+        "layout": "L1 width-sharded",
+        "program_config": "DRAM-sharded matmul family"
+      },
+      "shipped": {
+        "source": "DRAM-sharded BFP4 weights and DRAM-sharded matmul configs",
+        "csv_device_us": 353.261
+      },
+      "device_us": 353.261,
+      "window_share_pct": 35.436,
+      "verdict": "rejected",
+      "measured_ms": 1.10043004155159,
+      "reason": "No measured win over the already-shipped strategy."
+    },
+    {
+      "op": "ttnn RoPE Q/K chain",
+      "layer_kind": "dense",
+      "chain": "rope",
+      "advised": {
+        "layout": "L1 height-sharded"
+      },
+      "shipped": {
+        "layout": "DRAM interleaved rotation followed by L1 height-sharded Q/K",
+        "csv_device_us": 178.915
+      },
+      "device_us": 178.915,
+      "window_share_pct": 17.947,
+      "verdict": "rejected",
+      "measured_ms": 1.1163393594324589,
+      "reason": "Legal sharded-tail isolate was slower; full geometry is illegal at the 48-wide split."
+    },
+    {
+      "op": "ttnn.rms_norm pair",
+      "layer_kind": "dense",
+      "chain": "norm_residual",
+      "advised": {
+        "layout": "L1 block-sharded 1x11"
+      },
+      "shipped": {
+        "layout": "L1 width-sharded",
+        "csv_device_us": 14.072
+      },
+      "device_us": 14.072,
+      "window_share_pct": 1.412,
+      "verdict": "rejected",
+      "measured_ms": 1.1499813757836819,
+      "reason": "Nearest legal bracket was materially slower."
+    }
+  ]
+}

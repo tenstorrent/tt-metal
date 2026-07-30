@@ -1,0 +1,57 @@
+{
+  "outcome": "no_change",
+  "changed": false,
+  "incumbent_ms": 1.100042574107647,
+  "final_ms": 1.099775368347764,
+  "noise_floor_ms": 0.0003755278885364,
+  "delta_ms": -0.0002672057598831,
+  "delta_pct": -0.0242904929231904,
+  "tie_disposition": "The final remeasurement is within the frozen noise floor, so the incumbent configuration wins the tie.",
+  "best_single_ms": 1.10043004155159,
+  "winning_config": {
+    "advisor_changes": [],
+    "decode_batch": 32,
+    "policy": "frozen incumbent"
+  },
+  "oracle": "tests/test_optimized_decoder.py::test_optimized_dense_layer_synthetic_prefill_decode_pcc_and_traced_decode at PCC >= 0.995",
+  "oracle_passed": true,
+  "oracle_result": {
+    "prefill_pcc": 0.9999909379944513,
+    "decode_pcc": 0.9998426082085206
+  },
+  "combination": {
+    "screened_winners": [],
+    "pairwise_combinations_required": false,
+    "reason": "No single chain beat the frozen incumbent, so there is no cumulative or pairwise winner set to combine.",
+    "measured_sets": [
+      {
+        "chains": [
+          "incumbent"
+        ],
+        "measured_ms": 1.099775368347764,
+        "oracle_passed": true
+      }
+    ],
+    "best_set": [
+      "incumbent"
+    ]
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial frozen-incumbent advisor challenge",
+      "capture_count_by_layer_kind": {
+        "dense": 1
+      },
+      "profile": "tracy/incumbent_decode_perf_report.csv",
+      "reconciliation": "reconciliation.json",
+      "result": "no screened winner; stop without recapture"
+    }
+  ],
+  "final_repeats_ms": [
+    1.1002134066075087,
+    1.100341947749257,
+    1.099775368347764
+  ],
+  "final_measurement_log": "final_measurement.log"
+}
