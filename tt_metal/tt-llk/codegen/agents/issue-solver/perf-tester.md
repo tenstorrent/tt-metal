@@ -1,6 +1,6 @@
 ---
 name: perf-tester
-description: Compare a scoped LLK perf test against the branch base on direct local Blackhole or Wormhole silicon.
+description: Compare a scoped LLK perf test against the branch base on local or queued Blackhole/Wormhole silicon.
 tools: Bash, Read, Write, Glob, Grep
 ---
 
@@ -17,9 +17,10 @@ The goal comes from the analyzer's issue intent:
 
 ## Core Rules
 
-- Run only on direct local Blackhole or Wormhole silicon.
-- Do not run when `HW_TEST_DISPATCH_CMD` is set. The current queue does not
-  return perf CSVs; record the phase as not measured until it does.
+- Run only on Blackhole or Wormhole silicon.
+- When `HW_TEST_DISPATCH_CMD` is set, run both measurements through the shared
+  silicon queue. Its performance job publishes the generated CSV to shared
+  storage and copies it back to the requested compute-runner path.
 - Never stash, reset, checkout, or otherwise alter the fix worktree or index.
 - Measure the baseline in a unique detached worktree at the recorded base
   commit.
@@ -47,8 +48,9 @@ branch base captured before the worker changed the tree.
 
 Optional environment:
 
-- `HW_TEST_DISPATCH_CMD`: silicon runs use the shared queue. Performance is
-  currently not measurable on this route.
+- `HW_TEST_DISPATCH_CMD`: submit silicon runs to the shared queue. The command
+  must support `--kind perf`, `--k`, and `--artifact-out`.
+- `HW_TEST_SESSION`: queue session label (default `issue-${ISSUE_NUMBER}`).
 
 ## Result Contract
 
@@ -73,7 +75,8 @@ Every result includes:
 ```
 
 Successful comparisons also retain the evaluator's metric, deltas, worst
-variant, thread breakdown, and baseline/current artifact paths.
+variant, thread breakdown, baseline/current artifact paths, and queue job IDs
+when queued silicon was used.
 
 ## Applicability Gate
 
@@ -82,11 +85,7 @@ when any of these is true:
 
 - `TEST_BACKEND != local`;
 - `TARGET_ARCH` is not `blackhole` or `wormhole`;
-- `HW_TEST_DISPATCH_CMD` is set;
 - no existing perf test covers the changed operation.
-
-For the queue case, use reason:
-`shared silicon queue does not yet return perf CSV artifacts`.
 
 ## Select the Perf Test
 
@@ -149,10 +148,10 @@ BASELINE_LOG_DIR="$LOG_DIR/perf_runs/${TARGET_ARCH}/baseline_${BASE_SHORT}"
 Require `BASE_COMMIT` to resolve as a commit. A missing or invalid base is
 `PERF_ENV_ERROR`.
 
-Define the runner once and use it for both trees:
+For direct silicon, define the runner once and use it for both trees:
 
 ```bash
-run_perf_once() {  # $1=tt-llk root, $2=log directory
+run_perf_local() {  # $1=tt-llk root, $2=log directory
   local tree="$1" run_log="$2"
   local args=(run --worktree "$tree" --arch "$TARGET_ARCH" \
     --test "$PERF_TEST" --stall 1800 --maxfail 0 --log-dir "$run_log")
@@ -161,14 +160,38 @@ run_perf_once() {  # $1=tt-llk root, $2=log directory
 }
 ```
 
+For queued silicon, dispatch the tree and require the queue to copy its fresh
+CSV to the explicit destination:
+
+```bash
+run_perf_queued() {  # $1=tt-metal tree, $2=destination CSV, $3=log, $4=current|baseline
+  local tree="$1" destination="$2" run_log="$3" role="$4"
+  local args=(--kind perf --arch "$TARGET_ARCH" --test "$PERF_TEST" \
+    --worktree "$tree" --base "$BASE_COMMIT" \
+    --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}-perf-${TARGET_ARCH}-${role}" \
+    --timeout 1800 --artifact-out "$destination")
+  [ -n "$PERF_K" ] && args+=(--k "$PERF_K")
+  $HW_TEST_DISPATCH_CMD "${args[@]}" 2>&1 | tee -a "$run_log"
+  local rc=${PIPESTATUS[0]}
+  return "$rc"
+}
+```
+
+The queue selector is intentionally separate from `PERF_OP`: `--k` narrows
+pytest while `PERF_OP` narrows CSV comparison. Require exactly one
+`HW_TEST_RESULT arch=${TARGET_ARCH}` marker in each queue log and retain its job
+ID in the result and self-log. Current and baseline use distinct session labels
+so the queue's warm workspaces cannot overwrite one another.
+
 Runner exits for the fixed tree:
 
 | Exit | Outcome |
 |---|---|
 | 0 | continue only if a fresh non-empty CSV exists |
-| 1 or 2 | candidate `PERF_TEST_FAILED`; compare with the baseline outcome |
+| 1 | candidate `PERF_TEST_FAILED`; compare with the baseline outcome |
+| 2 | direct silicon only: candidate `PERF_TEST_FAILED`; compare with the baseline outcome |
 | 3 or 4 | `PERF_ENV_ERROR` |
-| 5 | candidate `PERF_TEST_FAILED` with hang evidence; compare with baseline |
+| 5 | direct silicon only: candidate `PERF_TEST_FAILED` with hang evidence; compare with baseline |
 | other | `PERF_ENV_ERROR` |
 
 Do not send environment errors to the worker. `PERF_TEST_FAILED` is a genuine
@@ -180,7 +203,7 @@ pre-existing failure from the fix.
 
 ## Measure the Fixed Tree
 
-The expected CSV is relative to the tree being measured:
+On direct silicon, the expected CSV is relative to the tree being measured:
 
 ```bash
 CURRENT_SOURCE="$LLK_ROOT/perf_data/${PERF_MODULE}/${PERF_MODULE}.post.csv"
@@ -188,17 +211,30 @@ mkdir -p "$CURRENT_LOG_DIR"
 rm -f -- "$CURRENT_SOURCE"
 
 set +e
-run_perf_once "$LLK_ROOT" "$CURRENT_LOG_DIR"
+run_perf_local "$LLK_ROOT" "$CURRENT_LOG_DIR"
+CURRENT_EXIT=$?
+set -e
+```
+
+On queued silicon, do not run a local producer or consumer. The queue builds
+the submitted diff on its silicon runner and copies the result back:
+
+```bash
+QUEUE_CURRENT_LOG="$CURRENT_LOG_DIR/dispatch.log"
+mkdir -p "$CURRENT_LOG_DIR"
+rm -f -- "$CURRENT"
+set +e
+run_perf_queued "$WORKTREE_DIR" "$CURRENT" "$QUEUE_CURRENT_LOG" current
 CURRENT_EXIT=$?
 set -e
 ```
 
 Classify exits 3, 4, and unknown exits immediately. For exits 1, 2, or 5,
 preserve the evidence and continue only to run or consult the baseline for
-attribution; do not evaluate CSVs. On exit zero, require `CURRENT_SOURCE` to be
-non-empty and copy it to `CURRENT`; otherwise return `PERF_ENV_ERROR`. Removing
-only this known generated CSV prevents a stale file from being mistaken for
-the current measurement.
+attribution; do not evaluate CSVs. On direct exit zero, require
+`CURRENT_SOURCE` to be non-empty and copy it to `CURRENT`. On queued exit zero,
+require `CURRENT` to be non-empty; the dispatch command copies only the artifact
+produced by that job. A missing result in either path is `PERF_ENV_ERROR`.
 
 ## Measure the Baseline Safely
 
@@ -220,27 +256,36 @@ trap cleanup_baseline EXIT
 
 git -C "$WORKTREE_DIR" worktree add --detach "$BASE_WT" "$BASE_COMMIT"
 
-# Use the same provisioned Python environment and SFPI toolchain as the fixed
-# tree. These paths are generated/ignored and absent from a clean base checkout.
-[ -d "$LLK_ROOT/tests/.venv" ] &&
-  ln -s "$LLK_ROOT/tests/.venv" "$BASE_LLK/tests/.venv"
-[ -d "$LLK_ROOT/tests/sfpi" ] &&
-  ln -s "$LLK_ROOT/tests/sfpi" "$BASE_LLK/tests/sfpi"
-
-BASELINE_SOURCE="$BASE_LLK/perf_data/${PERF_MODULE}/${PERF_MODULE}.post.csv"
 mkdir -p "$BASELINE_LOG_DIR"
 
-set +e
-run_perf_once "$BASE_LLK" "$BASELINE_LOG_DIR"
-BASELINE_EXIT=$?
-set -e
+if [ -n "${HW_TEST_DISPATCH_CMD:-}" ]; then
+  # The detached base tree produces an empty patch against BASE_COMMIT.
+  QUEUE_BASELINE_LOG="$BASELINE_LOG_DIR/dispatch.log"
+  rm -f -- "$BASELINE"
+  set +e
+  run_perf_queued "$BASE_WT" "$BASELINE" "$QUEUE_BASELINE_LOG" baseline
+  BASELINE_EXIT=$?
+  set -e
+else
+  # Generated toolchain paths are absent from a clean detached checkout.
+  [ -d "$LLK_ROOT/tests/.venv" ] &&
+    ln -s "$LLK_ROOT/tests/.venv" "$BASE_LLK/tests/.venv"
+  [ -d "$LLK_ROOT/tests/sfpi" ] &&
+    ln -s "$LLK_ROOT/tests/sfpi" "$BASE_LLK/tests/sfpi"
+  BASELINE_SOURCE="$BASE_LLK/perf_data/${PERF_MODULE}/${PERF_MODULE}.post.csv"
+  set +e
+  run_perf_local "$BASE_LLK" "$BASELINE_LOG_DIR"
+  BASELINE_EXIT=$?
+  set -e
+fi
 ```
 
 A baseline run failure does not prove the fix is broken, but it prevents a
 comparison. Return `PERF_ENV_ERROR` with the baseline evidence. If the fixed
 tree previously exited 1, 2, or 5 and the baseline succeeds, return
 `PERF_TEST_FAILED` with both outcomes as evidence. Otherwise, require a
-non-empty `BASELINE_SOURCE` and copy it to `BASELINE`.
+non-empty `BASELINE_SOURCE` and copy it to `BASELINE` on direct silicon, or
+require the queue-populated `BASELINE` on queued silicon.
 
 The cleanup trap removes only the unique detached worktree and its now-empty
 parent. It must remain active until the baseline run completes.
@@ -270,7 +315,8 @@ set -e
 
 `perf_eval.py` is stdlib-only; do not activate a venv for it. After evaluation,
 add `outcome`, `arch`, `filter`, `base_commit`, and the two artifact paths to
-its JSON object.
+its JSON object. For the queue route, also add `queue_jobs` with the current and
+baseline job IDs parsed from their authoritative marker lines.
 
 Map the evaluator result:
 
@@ -302,8 +348,9 @@ and thread breakdown, or the precise reason measurement did not run.
 ## Self-Log
 
 Create `${LOG_DIR}/agent_perf_tester.md`, or append
-`## Perf Attempt — <UTC timestamp>` when it exists. Record applicability,
-mapping and scope, exact commands, runner exits, baseline commit, evaluator
-summary, artifact and raw-log paths, outcome, and first meaningful evidence.
+`## Perf Attempt — <UTC timestamp>` when it exists. Record applicability, route
+(`direct` or `queue`), mapping and scope, exact commands, runner exits and queue
+job IDs, baseline commit, evaluator summary, artifact and raw-log paths,
+outcome, and first meaningful evidence.
 Never discard earlier attempts. If `LOG_DIR` is empty, report that self-logging
 was skipped.
