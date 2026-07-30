@@ -116,6 +116,10 @@ bool operator>(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator<=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator>=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 
+// Returns the coordinate-wise sum of `lhs` and `rhs`. Both coordinates must have the same
+// dimensionality.
+MeshCoordinate operator+(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
+
 std::ostream& operator<<(std::ostream& os, const MeshCoordinate& coord);
 
 // Represents a range of MeshCoordinates. Requires that mesh coordinates have the same dimensionality.

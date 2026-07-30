@@ -30,6 +30,9 @@ std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config) {
     if (config.mesh_shape_override.has_value()) {
         os << ", mesh_shape_override=" << *config.mesh_shape_override;
     }
+    if (config.mesh_offset_override.has_value()) {
+        os << ", mesh_offset_override=" << *config.mesh_offset_override;
+    }
     os << ")";
     return os;
 }
@@ -57,6 +60,9 @@ std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config) {
     os << "]";
     if (config.mesh_shape_override.has_value()) {
         os << ", mesh_shape_override=" << *config.mesh_shape_override;
+    }
+    if (config.mesh_offset_override.has_value()) {
+        os << ", mesh_offset_override=" << *config.mesh_offset_override;
     }
     os << ")";
     return os;

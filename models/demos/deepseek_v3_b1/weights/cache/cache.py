@@ -104,6 +104,25 @@ class TensorCacheProtocol(Protocol):
 def build_mesh_mapper_for_target(target: TensorTarget, device):
     """Reconstruct the runtime mesh_mapper from the declarative config + device."""
     mapper_config = target.mesh_mapper_config
+    override = getattr(mapper_config, "mesh_shape_override", None)
+    if override is not None:
+        # Distribute over the override (rows, cols) shape placed as a submesh on the
+        # device (e.g. (4,2) on a 4x4 -> cols 0-1). Express each variant as a
+        # per-axis MeshMapperConfig placement; create_mesh_mapper picks SUBMESH mode
+        # when the override fits the device with matching dims.
+        if isinstance(mapper_config, ReplicateMeshMapper):
+            placements = [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]
+        elif isinstance(mapper_config, ShardMeshMapper):
+            # 1-D shard: shard the tensor dim on axis 0, replicate axis 1.
+            placements = [ttnn.PlacementShard(mapper_config.dim), ttnn.PlacementReplicate()]
+        elif isinstance(mapper_config, Shard2dMeshMapper):
+            placements = [
+                ttnn.PlacementShard(d) if d is not None else ttnn.PlacementReplicate() for d in mapper_config.dims
+            ]
+        else:
+            raise TypeError(f"Unknown mesh mapper config type: {type(mapper_config)}")
+        cfg = ttnn.MeshMapperConfig(placements, ttnn.MeshShape(*override))
+        return ttnn.create_mesh_mapper(device, cfg)
     if isinstance(mapper_config, ReplicateMeshMapper):
         return ttnn.ReplicateTensorToMesh(device)
     if isinstance(mapper_config, ShardMeshMapper):

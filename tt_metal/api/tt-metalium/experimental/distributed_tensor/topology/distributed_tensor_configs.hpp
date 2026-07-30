@@ -69,6 +69,12 @@ struct MeshMapperConfig {
     // either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
     // entirely).
     std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape_override = std::nullopt;
+
+    // If provided, anchors the (sub)mesh distribution at this coordinate within the mesh device rather than the
+    // origin. Only supported when the distribution mode is SUBMESH (i.e. `mesh_shape_override` fits within the
+    // mesh device per-dimension and has the same dimensionality). The offset must have the same dimensionality as
+    // the mesh device, and `offset[i] + mesh_shape_override[i] <= device_shape[i]` must hold for every dimension.
+    std::optional<tt::tt_metal::distributed::MeshCoordinate> mesh_offset_override = std::nullopt;
 };
 
 bool operator==(const MeshMapperConfig::Placement& lhs, const MeshMapperConfig::Placement& rhs);
@@ -83,6 +89,10 @@ struct MeshComposerConfig {
     // in either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
     // entirely).
     std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape_override = std::nullopt;
+
+    // If provided, gathers shards from this coordinate within the mesh device rather than the origin. Symmetric to
+    // `MeshMapperConfig::mesh_offset_override`; only supported in SUBMESH mode.
+    std::optional<tt::tt_metal::distributed::MeshCoordinate> mesh_offset_override = std::nullopt;
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config);

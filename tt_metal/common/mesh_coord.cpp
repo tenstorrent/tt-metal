@@ -207,6 +207,17 @@ bool operator>(const MeshCoordinate& lhs, const MeshCoordinate& rhs) { return rh
 bool operator<=(const MeshCoordinate& lhs, const MeshCoordinate& rhs) { return !(lhs > rhs); }
 bool operator>=(const MeshCoordinate& lhs, const MeshCoordinate& rhs) { return !(lhs < rhs); }
 
+MeshCoordinate operator+(const MeshCoordinate& lhs, const MeshCoordinate& rhs) {
+    TT_FATAL(
+        lhs.dims() == rhs.dims(), "Cannot add coordinates with different dimensions: {} != {}", lhs.dims(), rhs.dims());
+    ttsl::SmallVector<uint32_t> result;
+    result.reserve(lhs.dims());
+    for (size_t i = 0; i < lhs.dims(); ++i) {
+        result.push_back(lhs[i] + rhs[i]);
+    }
+    return MeshCoordinate(result);
+}
+
 std::ostream& operator<<(std::ostream& os, const MeshCoordinate& coord) {
     os << "MeshCoordinate([";
     for (size_t i = 0; i < coord.dims(); ++i) {

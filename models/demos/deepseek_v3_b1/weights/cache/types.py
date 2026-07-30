@@ -26,11 +26,18 @@ class SourceTensorSelection:
     names: tuple[str, ...]
 
 
+# mesh_shape_override: distribute the tensor over this (rows, cols) shape instead
+# of the device's full mesh shape. When it is a strict sub-region of the device
+# mesh (e.g. (4,2) on a 4x4), the tensor is placed as a SUBMESH — allocated only on
+# that leading block of coords (e.g. cols 0-1), reporting the full device as its
+# mesh. Used by the 4x4 forward-replicate attention stage to keep weights on the
+# left 4x2. None -> use the device's full mesh shape (default, unchanged behaviour).
 @dataclass(frozen=True)
 class ReplicateMeshMapper:
     """Replicate the tensor on every device in the mesh."""
 
     strategy: Literal["replicate"] = "replicate"
+    mesh_shape_override: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,7 @@ class ShardMeshMapper:
 
     dim: int
     strategy: Literal["shard"] = "shard"
+    mesh_shape_override: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +55,7 @@ class Shard2dMeshMapper:
 
     dims: tuple[int | None, int | None]
     strategy: Literal["shard_2d"] = "shard_2d"
+    mesh_shape_override: tuple[int, int] | None = None
 
 
 MeshMapperConfig = Union[ReplicateMeshMapper, ShardMeshMapper, Shard2dMeshMapper]

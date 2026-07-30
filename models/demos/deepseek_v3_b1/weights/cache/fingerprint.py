@@ -30,10 +30,17 @@ from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpe
 def _canonical_mesh_mapper(mapper_config) -> dict:
     """Serialize a MeshMapperConfig variant to a dict compatible with existing fingerprint hashes."""
     if isinstance(mapper_config, ShardMeshMapper):
-        return {"strategy": "shard", "dim": mapper_config.dim, "dims": None}
-    if isinstance(mapper_config, Shard2dMeshMapper):
-        return {"strategy": "shard_2d", "dim": None, "dims": list(mapper_config.dims)}
-    return {"strategy": "replicate", "dim": None, "dims": None}
+        out = {"strategy": "shard", "dim": mapper_config.dim, "dims": None}
+    elif isinstance(mapper_config, Shard2dMeshMapper):
+        out = {"strategy": "shard_2d", "dim": None, "dims": list(mapper_config.dims)}
+    else:
+        out = {"strategy": "replicate", "dim": None, "dims": None}
+    # Only add the key when set, so default-path fingerprints stay byte-identical to
+    # existing cache hashes; a (4,2)-override tensor gets a distinct key.
+    override = getattr(mapper_config, "mesh_shape_override", None)
+    if override is not None:
+        out["mesh_shape_override"] = list(override)
+    return out
 
 
 def _canonical_core_range_set(crs: ttnn.CoreRangeSet) -> list:
