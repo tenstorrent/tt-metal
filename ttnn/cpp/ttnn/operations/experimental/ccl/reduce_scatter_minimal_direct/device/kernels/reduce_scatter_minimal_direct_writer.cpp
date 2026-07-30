@@ -47,7 +47,10 @@ void kernel_main() {
     // see the factory's CB comment. Off this path we write the interleaved staging tensor via its accessor.
     constexpr bool arrivals_in_cb = get_compile_time_arg_val(8) != 0;
     constexpr uint32_t half_stride_tiles = get_compile_time_arg_val(9);  // tiles in one parity half
-    constexpr auto staging_args = TensorAccessorArgs<10>();
+    // Start barrier: hold every send until all peers have entered this invocation. Needed only when the
+    // op allocates its own buffers -- see the block that runs it, below.
+    constexpr bool needs_init_sync = get_compile_time_arg_val(10) != 0;
+    constexpr auto staging_args = TensorAccessorArgs<11>();
     constexpr auto output_args = TensorAccessorArgs<staging_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t num_dests = num_devices - 1;
@@ -65,6 +68,11 @@ void kernel_main() {
     const uint8_t peer_core_x = get_arg_val<uint32_t>(ai++);    // mirror core (deterministic placement)
     const uint8_t peer_core_y = get_arg_val<uint32_t>(ai++);
     const uint32_t num_connections = get_arg_val<uint32_t>(ai++);  // 1 (fwd only) or 2 (fwd + bwd)
+    // Start-barrier counter (same address on every peer) and the two multicast hop ranges that between
+    // them cover the ring exactly once. Always passed so the arg layout does not depend on the CT flag.
+    const address_t init_sem = get_arg_val<uint32_t>(ai++);
+    const uint8_t fwd_mcast_range = static_cast<uint8_t>(get_arg_val<uint32_t>(ai++));
+    const uint8_t bwd_mcast_range = static_cast<uint8_t>(get_arg_val<uint32_t>(ai++));
     // Per-destination route, in send order (shared order with the reader's cb_send production).
     const size_t dest_conn = ai;
     ai += num_dests;
@@ -110,6 +118,47 @@ void kernel_main() {
     // already overlaps the reader's first input read, which runs on another RISC); the win on this axis came
     // from the SPLIT CLOSE at the end. Kept deferred anyway since it cannot hurt.
     fabric_connection.open_finish();
+
+    // ---- Optional start barrier ----
+    //
+    // Our sends target the peer's staging buffer at OUR OWN staging address (the mesh allocator is
+    // lockstep, so the buffer sits at the same address on every device). That identity holds only if the
+    // peer is on the same invocation as us -- and the parity double-buffer deliberately tolerates one
+    // invocation of skew. With persistent buffers that is harmless: the address is pinned for the cached
+    // program's lifetime, so a one-invocation-ahead sender writes the other parity half of the SAME
+    // buffer, which is exactly what the parity scheme is for. When the op allocates its own buffers the
+    // address is only stable as long as the allocator happens to repeat itself; a sender that has moved
+    // on to invocation i+1 would write at i+1's address into a peer still on i, where that address may
+    // belong to some other live buffer entirely (or not be allocated yet on the very first invocation).
+    //
+    // So: when either buffer is op-allocated, hold every send until all N-1 peers have entered this
+    // invocation. Two multicasts (one per direction, hop ranges chosen host-side to cover the ring
+    // exactly once) instead of N-1 unicasts. The counter is never reset -- like the arrival counters, we
+    // wait on an absolute position, so a peer that raced ahead cannot satisfy an earlier wait.
+    if constexpr (needs_init_sync) {
+        auto init_pkt = PacketHeaderPool::allocate_header(1);
+        const uint64_t init_noc_addr = safe_get_noc_addr(peer_core_x, peer_core_y, init_sem, 0);
+        // Connection 0 = forward, 1 = backward; a range is 0 only when that connection is not open.
+        if (fwd_mcast_range > 0) {
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc(
+                &fabric_connection.get(0).sender,
+                init_pkt,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_noc_addr, 1u},
+                /*start_distance=*/1,
+                fwd_mcast_range);
+            noc.async_writes_flushed();  // on the wire before the header is re-patched below
+        }
+        if (bwd_mcast_range > 0) {
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc(
+                &fabric_connection.get(1).sender,
+                init_pkt,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_noc_addr, 1u},
+                /*start_distance=*/1,
+                bwd_mcast_range);
+            noc.async_writes_flushed();
+        }
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_sem), (invocation + 1) * num_dests);
+    }
 
     for (uint32_t dst = 0; dst < num_dests; ++dst) {
         const uint8_t hops = static_cast<uint8_t>(get_arg_val<uint32_t>(dest_hops + dst));

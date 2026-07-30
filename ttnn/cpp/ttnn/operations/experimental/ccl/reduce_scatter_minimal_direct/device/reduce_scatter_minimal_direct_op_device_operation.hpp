@@ -29,6 +29,9 @@ struct ReduceScatterMinimalDirectDeviceOperation {
     // [0] = output slice, [1] = staging for the incoming contributions.
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    // Custom, because whether each persistent buffer was SUPPLIED (not just its spec) selects the
+    // writer's start barrier, which is a compile-time arg. See the factory.
+    static std::uint64_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim

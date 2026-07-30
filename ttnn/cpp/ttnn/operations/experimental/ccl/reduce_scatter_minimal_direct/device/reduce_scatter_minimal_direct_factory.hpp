@@ -75,6 +75,10 @@ struct ReduceScatterMinimalDirectMeshWorkloadFactory {
         tt::tt_metal::GlobalSemaphore reader_gen_sem;
         tt::tt_metal::GlobalSemaphore writer_gen_sem;
         tt::tt_metal::GlobalSemaphore compute_gen_sem;
+        // Writer start-barrier counter: every peer's mirror core increments it once per invocation, and
+        // the writer holds its sends until all N-1 have. Only read when the writer's init sync is
+        // compiled in (op-allocated buffers); held here so its address stays valid either way.
+        tt::tt_metal::GlobalSemaphore init_sync_sem;
         // Set only on the sharded path, where cb_reduce is globally allocated on top of the staging
         // tensor and so has to be rebound whenever that buffer moves.
         std::optional<tt::tt_metal::CBHandle> reduce_cb_handle;
@@ -106,7 +110,9 @@ private:
         const std::vector<tt::tt_metal::GlobalSemaphore>& arrival_sems,
         const tt::tt_metal::GlobalSemaphore& reader_gen_sem,
         const tt::tt_metal::GlobalSemaphore& writer_gen_sem,
-        const tt::tt_metal::GlobalSemaphore& compute_gen_sem);
+        const tt::tt_metal::GlobalSemaphore& compute_gen_sem,
+        const tt::tt_metal::GlobalSemaphore& init_sync_sem,
+        bool needs_init_sync);
 };
 
 }  // namespace ttnn::experimental::prim

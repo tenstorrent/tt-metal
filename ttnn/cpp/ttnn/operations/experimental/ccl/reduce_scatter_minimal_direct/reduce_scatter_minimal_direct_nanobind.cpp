@@ -73,6 +73,30 @@ void bind_reduce_scatter_minimal_direct(nb::module_& mod) {
         nb::arg("dim"),
         nb::kw_only(),
         nb::arg("cluster_axis") = nb::none());
+
+    ttnn::bind_function<"reduce_scatter_minimal_direct_create_staging_buffer", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Allocate just the staging buffer for reduce_scatter_minimal_direct, for callers that already own
+        their output tensor.
+
+        The output is an ordinary tiled tensor a caller can build directly (the input shape with `dim`
+        divided by the ring size). The staging buffer is the part that cannot be reproduced by hand: an
+        opaque chunk-paged UINT8 tensor whose page size follows the op's internal chunk granularity and
+        whose placement (L1 height-sharded across the whole compute grid, L1 interleaved, or DRAM) is
+        chosen from the shape. This helper reuses the op's own sizing, so the result is guaranteed to
+        match. Pass it through as persistent_buffers = [your_output, result]. Equivalent to element 1 of
+        reduce_scatter_minimal_direct_create_persistent_buffers, without allocating an output you would
+        throw away. `dim` and `cluster_axis` must match those passed to the op.
+
+        Returns:
+            ttnn.Tensor: the staging buffer, allocated on the input tensor's device.
+        )doc",
+        &ttnn::experimental::reduce_scatter_minimal_direct_create_staging_buffer,
+        nb::arg("input_tensor"),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("cluster_axis") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl
