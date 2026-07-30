@@ -88,6 +88,10 @@ if d:
         print("    - SLOWER %s %+.1f%% (%.2f -> %.2f us)" % (r["name"], r["delta"], r["old_us"], r["wall"]))
     for r in sorted(imp, key=lambda z: z["delta"])[:8]:
         print("    - FASTER %s %+.1f%% (%.2f -> %.2f us)" % (r["name"], r["delta"], r["old_us"], r["wall"]))
+rs = sum(1 for r in rows if r["red"] == "reduce-scatter")
+print("- reduction: %d reduce-scatter / %d chain    placement: %d mesh / %d in1-near / %d bank-local" % (
+    rs, n - rs, sum(1 for r in rows if r["place"] == "mesh"),
+    sum(1 for r in rows if r["place"] == "in1-near"), sum(1 for r in rows if r["place"] == "bank-local")))
 mv = [r for r in rows if r["moved"]]
 print("- config changes (*): %d" % len(mv))
 for r in mv:

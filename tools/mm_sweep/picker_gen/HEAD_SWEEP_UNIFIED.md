@@ -1,13 +1,13 @@
-# Unified perf table — corpus + HeyGen, measured on HEAD
+# Regime-A matmul perf — all shapes, measured on HEAD
 
-Re-measured at commit `7bdab431417` (post-rebase onto main, post AGMM-prep fixes),
-superseding PROD_SWEEP_MT16.md (66 shapes) and HEYGEN_SWEEP.md (11 shapes), which were taken on the
-pre-rebase build. Sorted ascending by effective DRAM bandwidth.
+The single perf report for this op. Measured at commit `fc71aea404c` (post-rebase onto main, post the
+AGMM-prep fixes). Supersedes and replaces PROD_SWEEP_MT16.md (66-shape LTX u FLUX corpus) and
+HEYGEN_SWEEP.md (11 filtered HeyGen shapes), both deleted; their numbers and rationale are folded in
+below and their full text remains in git history.
 
-`was us` / `Δ%` compare against those earlier reports. A `*` on the config marks a pick that moved.
-Same method as before: `config=None`, device-profiler time demuxed by run-host-id, 2 blocks x 12 timed
-iterations on resident inputs. Bytes = `Ns*M*K*2 + K*N*2 + M*N*2` (in0 read once per n-slice group; the
-ring forward is NoC-only). FPU%% is vs the full 110-core grid at bf16 HiFi2 (2048 FLOP/cycle/core, 1.35 GHz).
+`src` = which corpus a shape came from. `was us` / `Δ%` compare against those superseded reports
+(measured on the pre-rebase build); a `*` on the config would mark a pick that moved. Sorted ascending
+by effective DRAM bandwidth.
 
 | shape | src | Mt | Pk,Ns,Sm,kb,nsb | core | reduction | placement | dev us | was us | Δ% | eff GB/s | %pk | TFLOP/s | FPU% | PCC | blk% |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -98,9 +98,84 @@ ring forward is NoC-only). FPU%% is vs the full 110-core grid at bf16 HiFi2 (204
 - stability: median block spread 0.2%, worst 1.8% (256x2048x1024)
 - **vs the pre-fix reports (77 comparable): median +0.1%, best -0.7%, worst +1.7%**
   - beyond +-3%: 0 slower, 0 faster
+- reduction: 16 reduce-scatter / 62 chain    placement: 15 mesh / 9 in1-near / 54 bank-local
 - config changes (*): 0
 - reduction-strategy changes: 0
 
 **Not measured (1):**
 
 - `32x128x30720` (new): TT_FATAL @ /localdev/cglagovich/tt-metal/ttnn/cpp/ttnn/operations/experimental/regime_a_matmul/
+
+---
+
+## Method
+
+`config=None` throughout, i.e. the production picker chooses -- no diagnostic mask, no env override that
+changes behaviour. Device time comes from the device-profiler CSV demuxed by run-host-id, so it is the op
+alone rather than host wall. Each shape runs 2 blocks x (2 warmup + 12 timed) iterations on resident
+inputs; `dev us` is the median over all 24 timed iterations. One worker SUBPROCESS per shape, because the
+profiler CSV is only flushed at `close_device`.
+
+Regenerate: `python tools/mm_sweep/picker_gen/head_sweep.py` (resumable) then `unified_report.py`.
+The `was us` baseline is read from an `old.json` extracted from the superseded reports; without it the
+generator still produces the table, just without the comparison columns.
+
+### Column definitions
+
+- **eff GB/s** = `(Ns*M*K + K*N + M*N)*2 / device time`. in0 counts `Ns` times because each of the `Ns`
+  n-slice groups reads all of in0; within an 8-bank ring the 8 cores read DIFFERENT shards, so there is no
+  duplication across a ring, nor across `Pk` or `Sm`. The in0 ring FORWARD traffic is NoC-only and is
+  excluded -- this is a DRAM metric. Padded positions are never DRAM-read (balanced tails), so these bytes
+  are the bytes physically moved.
+- **%pk** against a 512 GB/s DRAM peak (the measured BH ceiling used throughout this campaign).
+- **FPU%** against this BOARD's full compute grid, device-queried at 11x10 = 110 cores => 304 TFLOP/s.
+  Per `tech_reports/GEMM_FLOPS/GEMM_FLOPS.md` the BH matrix engine computes 8x16 x 16x16 per cycle =
+  `2*8*16*16` = 4096 FLOP/cycle, and MATH_FIDELITY divides it; this op is bf16 in/out, HiFi2, fp32
+  accumulate => 2048 FLOP/cycle/core = 2.765 TFLOP/s per core at 1.35 GHz. Note 110 cores is NOT the
+  13x10 = 130 the tech report quotes for Blackhole generally -- this board has harvested columns.
+  fp32 dest accumulation costs DST capacity, not MAC throughput.
+- **blk%** = spread between the two 12-iteration blocks. The noise floor on this board is +-2.4% on the
+  small 2048-K shapes and +-1.5% on the large ones.
+- **cfg / reduction / placement** come from the factory's own log (`TT_REGIME_A_LOG_CFG=1`), i.e. ground
+  truth for what was actually built rather than a re-derivation of the picker.
+
+## Filter applied to the 23 HeyGen shapes
+
+Kept a shape only if it is BOTH memory-bound by roofline AND servable by regime-A. Machine balance on this
+board = 304 TFLOP/s (110 cores x 2.765 TFLOP/s, bf16 HiFi2) / 512 GB/s = **594 FLOP/byte**; a shape is
+memory-bound when its arithmetic intensity `MNK/(MK+KN+MN)` is below that.
+
+Regime-A structural requirements (not tunable -- they follow from the in0 8-bank ring and the in1 8-bank width
+shard):
+- **Nt wide enough to width-shard over 8 banks**: `7*ceil(Nt/8) < Nt`.
+- **Kt >= 8**: the k-slice is distributed over exactly 8 banks, so the smallest slice is 8 tiles; the picker
+  rejects anything needing more than 20% K padding.
+- **M < N**: regime A shards in1, so it assumes in1 is the big operand. M >= N is regime B.
+
+| shape | Mt | Kt | Nt | AI | t_dram us | t_comp us | verdict |
+|---|---|---|---|---|---|---|---|
+| 96x8192x5120 | 3 | 256 | 160 | 93 | 168.8 | 26.5 | KEEP |
+| 96x5120x5120 | 3 | 160 | 160 | 93 | 106.2 | 16.5 | KEEP |
+| 96x5120x2560 | 3 | 160 | 80 | 91 | 54.1 | 8.3 | KEEP |
+| 96x2048x5120 | 3 | 64 | 160 | 90 | 43.6 | 6.6 | KEEP |
+| 32x256x512 | 1 | 8 | 16 | 27 | 0.6 | 0.0 | KEEP |
+| 32x256x5120 | 1 | 8 | 160 | 28 | 5.8 | 0.3 | KEEP |
+| 32x5120x1280 | 1 | 160 | 40 | 31 | 26.4 | 1.4 | KEEP |
+| 32x1280x30720 | 1 | 40 | 960 | 31 | 157.6 | 8.3 | KEEP |
+| 512x4096x5120 | 16 | 128 | 160 | 418 | 100.4 | 70.6 | KEEP |
+| 512x5120x5120 | 16 | 160 | 160 | 427 | 122.9 | 88.3 | KEEP |
+| 512x5120x2560 | 16 | 160 | 80 | 394 | 66.6 | 44.1 | KEEP |
+| 32x128x30720 | 1 | 4 | 960 | 26 | 19.2 | 0.8 | kept by roofline, then REJECTED BY THE PICKER: Kt=4 < 8 |
+| 2656x5120x3840 | 83 | 160 | 120 | 1202 | 169.8 | 343.4 | drop: compute-bound |
+| 2656x5120x3456 | 83 | 160 | 108 | 1161 | 158.1 | 309.1 | drop: compute-bound |
+| 2656x5120x1280 | 83 | 160 | 40 | 739 | 92.0 | 114.5 | drop: compute-bound, M>=N |
+| 10560x5120x3840 | 330 | 160 | 120 | 1817 | 446.4 | 1365.3 | drop: compute-bound, M>=N |
+| 10560x5120x3456 | 330 | 160 | 108 | 1726 | 422.9 | 1228.8 | drop: compute-bound, M>=N |
+| 10560x3456x5120 | 330 | 108 | 160 | 1726 | 422.9 | 1228.8 | drop: compute-bound, M>=N |
+| 10560x5120x1280 | 330 | 160 | 40 | 933 | 289.6 | 455.1 | drop: compute-bound, M>=N |
+| 2656x5120x64 | 83 | 160 | 2 | 62 | 55.1 | 5.7 | drop: Nt=2 too narrow, M>=N |
+| 10560x5120x64 | 330 | 160 | 2 | 63 | 215.1 | 22.8 | drop: Nt=2 too narrow, M>=N |
+| 32x512x128 | 1 | 16 | 4 | 24 | 0.3 | 0.0 | drop: Nt=4 too narrow |
+| 10560x224x1280 | 330 | 7 | 40 | 187 | 63.2 | 19.9 | drop: M>=N (also Kt=7 < 8) |
+
+Column definitions: see "Method" above.
