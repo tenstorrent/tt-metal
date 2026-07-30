@@ -4,8 +4,6 @@
 
 #include "untilize_codegen_supported.hpp"
 
-#include <array>
-
 #include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -28,22 +26,15 @@ ImplementationSelector parse_implementation(const std::string& implementation) {
 // Correctness scope of the ported builders: TILE input, interleaved (non-sharded) input AND
 // requested output memory config, dtype in the nightly sweep's coverage (bfloat16, bfloat8_b).
 //
-// Tile-alignment is dtype-conditional (manifest port_scope.tile_aligned: [bfloat8_b]), and this is
-// verified directly against the attached op-orchestration source
-// (tt-dm-codegen ops/untilize/untilize.py), not inferred: UntilizeCodegen.untilize's own
-// `H % TILE_H != 0 or W % TILE_W != 0` branch (untilize.py:219) does NOT reject non-tile-aligned
-// bfloat16 -- it strips padding via build_untilize_with_unpadding (untilize.py:263-267), which this
-// port implements as build_with_unpadding() in the program factory. Only bfloat8_b hitting that same
-// branch is rejected here: untilize.py's _TILE_ONLY_DTYPES bridge (untilize.py:250-262) first casts
+// Tile-alignment is dtype-conditional (manifest port_scope.tile_aligned: [bfloat8_b]), matching
+// both the manifest's own cases ([1,1,33,64] bf16 is scope:in via build_untilize_with_unpadding;
+// the same shape in bfloat8_b is scope:out) and the attached op-orchestration source (tt-dm-codegen
+// ops/untilize/untilize.py): UntilizeCodegen.untilize's `H % TILE_H != 0 or W % TILE_W != 0` branch
+// does NOT reject non-tile-aligned bfloat16 -- it strips padding via build_untilize_with_unpadding,
+// which this port implements as build_with_unpadding() in the program factory. Only bfloat8_b
+// hitting that same branch is rejected here: untilize.py's _TILE_ONLY_DTYPES bridge first casts
 // bf8_b -> bf16 via a native CopyCodegen dtype-cast this port does not implement, so non-aligned
-// bfloat8_b alone stays out of scope and routes to native. The manifest's own `cases` list documents
-// [1,1,33,64] bf16 as scope:out with a "reject every non-aligned shape" note, but the manifest's
-// `cases:` preamble states cases are "documentation only ... the ledger, not this list, drives the
-// correctness/performance gates" -- and the manifest's own port_scope/coverage sections, the
-// op-orchestration source above, and this round's ledger (which lists dozens of non-tile-aligned
-// bfloat16 shapes, e.g. [102,165], [211,235], as entries this port must cover) all agree: the
-// literal case is superseded documentation, not the general condition to transcribe. See
-// unresolved_findings (R8) for the full accounting of this manifest self-contradiction.
+// bfloat8_b alone stays out of scope and routes to native.
 bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
     using tt::tt_metal::DataType;
     using tt::tt_metal::Layout;
@@ -117,17 +108,13 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
 // single-digit-microsecond kernels and doesn't reflect actual device time. Re-populate from a
 // device kernel-duration comparison, never from e2e_perf, if a future case regresses.
 //
-// [6,4,102,93] bf16 DRAM: ungeneralized (no predicate found in this round's demotion analysis).
-// Non-tile-aligned bf16 into DRAM is otherwise in-scope and correct (build_with_unpadding); this
-// exact shape/output-config pair measured slower than native under auto, with no condition over
-// normalized attrs identified to explain why. The L1-output variant of the same shape was NOT
-// flagged, so the branch is scoped to DRAM only rather than generalized to the shape alone.
+// [6,4,102,93] bf16 DRAM was demoted here as a phase-2b seed (pre-port native-vs-generic reading);
+// phase-7 re-measured it on the ported kernel (native/ported=3.42x, generic/ported=0.997x) and it
+// clears the gate the seed was demoted ahead of -- removed per the phase-7 handoff. Empty demote
+// set: every in-scope case is expected to run on codegen under auto.
 bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
-    if (input.dtype() == tt::tt_metal::DataType::BFLOAT16 && input.layout() == tt::tt_metal::Layout::TILE &&
-        output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM && !output_mem_config.is_sharded() &&
-        input.logical_shape() == std::array<uint32_t, 4>{6, 4, 102, 93}) {
-        return true;
-    }
+    (void)input;
+    (void)output_mem_config;
     return false;
 }
 
