@@ -129,6 +129,36 @@ for m in mism:
 sys.exit(1 if mism else 0)
 PY
 
+  # ---- 3b. BATCH: capture, incumbent and the requested batch must all agree -------------------
+  # Two of the three agreeing is what hid this: a cell captured AND measured at batch 1 while the driver
+  # had asked for 32, so it self-consistently answered a question nobody posed, on a model whose serving
+  # batch is 32. Judging advice at a batch it was not captured at can flip its sign outright (+12.3% at
+  # b1 vs -8.8% at b32 on the same advice). CHALLENGER_DECODE_BATCH is exported by the driver.
+  python3 - "$rj" "$INC" "$kind" "${CHALLENGER_DECODE_BATCH:-}" <<'PY' || fail=1
+import json, re, sys
+rep, inc, kind, want = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+r = json.load(open(rep))
+try: i = json.load(open(inc))
+except Exception: i = {}
+cb, ib = r.get("capture_batch"), i.get("decode_batch")
+bad = []
+if cb is None: bad.append("report.json records no capture_batch")
+if ib is None: bad.append("incumbent.json records no decode_batch")
+if cb is not None and ib is not None and int(cb) != int(ib):
+    bad.append(f"capture_batch {cb} != incumbent decode_batch {ib}: the advice was judged at a batch it "
+               "was not captured at, which can flip its sign")
+if want:
+    if cb is not None and int(cb) != int(want):
+        bad.append(f"capture_batch {cb} != requested DECODE_BATCH {want}")
+    if ib is not None and int(ib) != int(want):
+        bad.append(f"incumbent decode_batch {ib} != requested DECODE_BATCH {want}")
+else:
+    bad.append("CHALLENGER_DECODE_BATCH not exported, so the requested batch cannot be verified -- the "
+               "driver must set it")
+for b in bad: print(f"CRITICAL: {kind}: BATCH: {b}", file=sys.stderr)
+sys.exit(1 if bad else 0)
+PY
+
   # ---- 4. dram_sharded_considered == 0 must be classified ------------------------------------
   python3 - "$rj" "$kind" <<'PY' || fail=1
 import json, re, sys
@@ -169,6 +199,43 @@ rows = d.get("disagreements", d if isinstance(d, list) else [])
 if not isinstance(rows, list):
     print("CRITICAL: reconciliation.json: disagreements must be a list", file=sys.stderr); sys.exit(1)
 bad = []
+
+# ---- chains are the unit of judgement, not ops ------------------------------------------------
+# A chain split below the materiality bar is how the strongest advice class gets discarded unmeasured:
+# one RoPE chain arrived as 9 rows of 0.46-0.97%, each under a 1% per-op bar, none measured, summing to
+# 5.86% of the decode window. So: chains must exist, each material chain needs a number, and no set of
+# same-chain rows may be dropped while the chain's SUM clears the threshold.
+thr = d.get("threshold_pct")
+chains = d.get("chains")
+if not isinstance(chains, list) or not chains:
+    bad.append("no `chains` array. Group advised ops into chains and threshold on the chain's SUMMED "
+               "window share -- a single op resharded in isolation pays its edge conversions and only "
+               "the whole L1-resident chain pays off (OPT-003).")
+else:
+    for c in chains:
+        nm = c.get("chain", "<unnamed>")
+        v = (c.get("verdict") or "").lower()
+        s = c.get("summed_window_share_pct")
+        if v not in ("kept", "rejected", "below_threshold"):
+            bad.append(f"chain {nm}: verdict {v!r} not in kept|rejected|below_threshold"); continue
+        if v == "below_threshold":
+            if not isinstance(s, (int, float)):
+                bad.append(f"chain {nm}: below_threshold with no summed_window_share_pct")
+            elif isinstance(thr, (int, float)) and s >= thr:
+                bad.append(f"chain {nm}: dropped below_threshold but its SUMMED share {s}% clears the "
+                           f"{thr}% threshold -- this is the chain-shredding defect; measure it")
+        elif not isinstance(c.get("measured_ms"), (int, float)):
+            bad.append(f"chain {nm}: verdict {v} with no measured_ms. Measure the chain AS ONE UNIT.")
+    # cross-check: rows dropped whose chain is material
+    per = {}
+    for r in rows:
+        per.setdefault(r.get("chain", "<none>"), []).append(r)
+    for nm, rs in per.items():
+        tot = sum(r.get("window_share_pct") or 0.0 for r in rs)
+        if isinstance(thr, (int, float)) and tot >= thr and \
+           all((r.get("verdict") or "").lower() == "below_threshold" for r in rs):
+            bad.append(f"chain {nm}: every one of its {len(rs)} rows dropped below_threshold while their "
+                       f"sum is {tot:.3f}% >= {thr}%. Judge the chain, not the op.")
 for r in rows:
     op = r.get("op", "<unnamed>")
     v = (r.get("verdict") or "").lower()

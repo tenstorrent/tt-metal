@@ -79,6 +79,28 @@ def parse_ir(path: Path) -> dict:
     return advised
 
 
+# Ops that belong to one advised chain must be judged together. The grouping is deliberately coarse and
+# name-based: it only has to be good enough that a chain is not split below the materiality bar, and it is
+# recorded in the output so a reader can regroup differently.
+CHAIN_RULES = (
+    ("rope", ("rope", "rotary", "cos", "sin")),
+    ("norm_residual", ("rms_norm", "layer_norm", "residual", "add")),
+    ("attention_projections", ("qkv", "q_proj", "k_proj", "v_proj", "o_proj", "concat_heads")),
+    ("attention_core", ("sdpa", "scaled_dot", "softmax", "paged_cache", "cache_update")),
+    ("mlp", ("gate", "up_proj", "down", "silu", "mul", "glu")),
+    ("moe_router", ("router", "topk", "top_k", "sparse_matmul", "expert")),
+)
+
+
+def chain_of(op: str) -> str:
+    """Which advised chain this op belongs to. Unmatched ops become their own single-op chain."""
+    low = op.lower()
+    for name, keys in CHAIN_RULES:
+        if any(k in low for k in keys):
+            return name
+    return f"single:{low.split()[0] if low.split() else low}"
+
+
 def parse_perf(path: Path) -> tuple[dict, float]:
     """op-name -> {device_us, cores, sharded} as SHIPPED, plus the total measured window."""
     if not path.exists():
@@ -198,17 +220,54 @@ def main() -> int:
         rows.append(row)
 
     rows.sort(key=lambda r: (r["window_share_pct"] or 0.0), reverse=True)
+
+    # ---- group into CHAINS, and threshold on the chain, not the op ------------------------------
+    # The advice is a chain, not a set of independent ops: an op resharded in isolation pays the
+    # conversion cost at both its edges, and only the whole L1-resident chain wins (OPT-003). Applying
+    # the materiality bar per op therefore discards precisely the advice class with the best track
+    # record. Measured consequence: one RoPE chain arrived as 9 rows of 0.46-0.97% each, every one
+    # under a 1% per-op bar, all dropped unmeasured -- summed share 5.86% of the decode window.
+    chains: dict[str, dict] = {}
+    for r in rows:
+        r["chain"] = chain_of(r["op"])
+        c = chains.setdefault(r["chain"], {"chain": r["chain"], "ops": [], "summed_window_share_pct": 0.0,
+                                           "verdict": "pending", "measured_ms": None, "reason": None})
+        c["ops"].append(r["op"])
+        c["summed_window_share_pct"] += r.get("window_share_pct") or 0.0
+    for c in chains.values():
+        c["summed_window_share_pct"] = round(c["summed_window_share_pct"], 3)
+        c["op_count"] = len(c["ops"])
+        if c["summed_window_share_pct"] < a.threshold_pct:
+            c["verdict"] = "below_threshold"
+            c["reason"] = (f'{c["summed_window_share_pct"]}% of the window summed across '
+                           f'{c["op_count"]} op(s), under the {a.threshold_pct}% threshold')
+    # a row inherits its chain's disposition: no row may be dropped while its CHAIN is material
+    for r in rows:
+        cv = chains[r["chain"]]["verdict"]
+        if cv == "below_threshold":
+            r["verdict"] = "below_threshold"
+            r["reason"] = f'chain {r["chain"]} is below threshold ({chains[r["chain"]]["reason"]})'
+        else:
+            r["verdict"] = "pending"
+            r["reason"] = (f'chain {r["chain"]} is material at '
+                           f'{chains[r["chain"]]["summed_window_share_pct"]}% -- MEASURE THE CHAIN AS ONE '
+                           f'UNIT first; split per-op only after the chain has a number')
+    chain_list = sorted(chains.values(), key=lambda c: c["summed_window_share_pct"], reverse=True)
+
     out = {
         "layer_kind": a.layer_kind,
         "layers_of_kind": a.layers_of_kind,
         "total_layers": a.total_layers,
         "measured_window_us": round(window_us, 3),
         "threshold_pct": a.threshold_pct,
+        "threshold_applied_to": "chain summed window share, NOT per-op",
         "dram_sharded_considered": report.get("dram_sharded_considered"),
         "dram_sharded_advised": report.get("dram_sharded_advised"),
-        "note": "verdict=pending rows MUST be measured and flipped to kept/rejected with a measured_ms; "
-                "the stage gate refuses any row left pending. Advisor GEOMETRY is not evidence -- derive "
-                "your own, or sweep its value in both directions.",
+        "note": "Measure each material CHAIN as one unit and record its measured_ms; the gate refuses any "
+                "chain left pending, and refuses a set of same-chain rows dropped while their sum clears "
+                "the threshold. Advisor GEOMETRY is not evidence -- derive your own, or sweep its value in "
+                "both directions.",
+        "chains": chain_list,
         "disagreements": rows,
     }
     a.out.parent.mkdir(parents=True, exist_ok=True)
