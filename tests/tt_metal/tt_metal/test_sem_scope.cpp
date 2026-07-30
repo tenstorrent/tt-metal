@@ -467,7 +467,7 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
 }
 
 // NOTE: token-CTAD deduction (the S1 mechanism) is now exercised by EVERY test above and
-// below — after the S2b emitter flip, sem::counter IS a SemAccessor<id, baked-scope> token and
+// below — after the S2b emitter flip, sem::counter IS a SemaphoreBindingToken<id, baked-scope> token and
 // the kernels construct via plain `Semaphore s(sem::counter)`, so the standalone
 // TestTokenCtadDeduction became redundant and was removed.
 
