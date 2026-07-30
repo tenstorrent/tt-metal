@@ -240,6 +240,321 @@ const m2::KernelSpecName KERNEL_OUT_DRAIN{"out_drain"};  // Program A: credit-on
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
+// [#48552] Per-kernel runtime-arg population helpers, extracted from create_program_artifacts to keep its
+// clang-tidy cognitive complexity under threshold. Pure code motion: each fills the per-kernel run-args map
+// that the orchestration function then moves into ProgramRunArgs; no logic changes. Namespace scope here
+// (ttnn::prim::qsr, with `using namespace tt::tt_metal` and `namespace m2 = ...experimental` active) so all
+// types resolve.
+static std::array<uint32_t, 4> setup_mcast_args(
+    bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {
+    return is_noc_0 ? std::array<uint32_t, 4>{start_x, start_y, end_x, end_y}
+                    : std::array<uint32_t, 4>{end_x, end_y, start_x, start_y};
+}
+
+static void populate_reader_runtime_args(
+    m2::KernelRunArgs& reader_run_args,
+    bool block_sharded,
+    bool transpose_mcast,
+    bool is_conv_1d_depthwise_conv,
+    uint32_t in_num_cores_x,
+    uint32_t in_num_cores_y,
+    uint32_t num_cores_x,
+    uint32_t num_cores_y,
+    distributed::MeshDevice* device,
+    NOC reader_noc,
+    const CoreRangeSet& all_cores,
+    const CoreRangeSet& input_cores,
+    const CoreRangeSet& output_cores,
+    const CoreCoord& top_left_core_physical) {
+    if (block_sharded) {
+        std::vector<uint32_t> act_mcast_noc_y;  // X table for non-transpose, Y table for transpose
+        if (transpose_mcast) {
+            act_mcast_noc_y.reserve(in_num_cores_y);
+            for (uint32_t core_idx_y = 0; core_idx_y < in_num_cores_y; ++core_idx_y) {
+                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+            }
+        } else {
+            act_mcast_noc_y.reserve(in_num_cores_x);
+            for (uint32_t core_idx_x = 0; core_idx_x < in_num_cores_x; ++core_idx_x) {
+                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+            }
+        }
+        const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
+        const CoreCoord out_bottom_right_core_physical = device->worker_core_from_logical_core(out_bottom_right_core);
+        const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
+
+        for (const CoreRange& core_range : all_cores.ranges()) {
+            for (const CoreCoord& core : core_range) {
+                const bool is_receiver_core = output_cores.contains(core);
+                const bool is_sender_core = input_cores.contains(core);
+                std::array<uint32_t, 4> mcast;
+                uint32_t act_mcast_sender_id, act_mcast_sender_noc_x;
+                if (transpose_mcast) {
+                    CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
+                    CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                    mcast = setup_mcast_args(
+                        reader_is_noc_0,
+                        bottom_core_physical.x,
+                        top_left_core_physical.y,
+                        bottom_core_physical.x,
+                        bottom_core_physical.y);
+                    act_mcast_sender_id = core.y;
+                    act_mcast_sender_noc_x = bottom_core_physical.x;
+                } else {
+                    CoreCoord core_physical = device->worker_core_from_logical_core(core);
+                    mcast = setup_mcast_args(
+                        reader_is_noc_0,
+                        top_left_core_physical.x,
+                        core_physical.y,
+                        out_bottom_right_core_physical.x,
+                        core_physical.y);
+                    act_mcast_sender_id = core.x;
+                    act_mcast_sender_noc_x = core_physical.y;
+                }
+                m2::AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {
+                        {"mcast_dest_noc_start_x", mcast[0]},
+                        {"mcast_dest_noc_start_y", mcast[1]},
+                        {"mcast_dest_noc_end_x", mcast[2]},
+                        {"mcast_dest_noc_end_y", mcast[3]},
+                        {"act_mcast_sender_id", act_mcast_sender_id},
+                        {"act_mcast_sender_noc_x", act_mcast_sender_noc_x},
+                        {"is_receiver_core", (uint32_t)is_receiver_core},
+                        {"is_sender_core", (uint32_t)is_sender_core},
+                        {"dram_config_reader_index", transpose_mcast ? core.x : core.y},
+                    });
+                m2::AdvancedKernelRunArgs::Varargs varargs(act_mcast_noc_y.begin(), act_mcast_noc_y.end());
+                reader_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
+            }
+        }
+    } else if (is_conv_1d_depthwise_conv) {
+        // Depthwise reader has no runtime args.
+    } else {
+        // Height-sharded reader: {core_index, remaining_tiles_to_push}.  Activation reuse is deferred, so
+        // remaining_tiles_to_push is always 0.
+        uint32_t core_index = 0;
+        for (const CoreRange& core_range : input_cores.ranges()) {
+            for (const CoreCoord& core : core_range) {
+                m2::AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {
+                        {"core_index", core_index},
+                        {"remaining_tiles_to_push", 0u},
+                    });
+                core_index++;
+            }
+        }
+    }
+}
+
+static void populate_writer_sender_runtime_args(
+    m2::KernelRunArgs& writer_sender_run_args,
+    const CoreRangeSet& mcast_sender_cores,
+    const CoreRangeSet& input_cores,
+    const CoreRangeSet& output_cores,
+    bool populate_skipped_work_cores,
+    bool block_sharded,
+    bool transpose_mcast,
+    bool has_bias,
+    uint32_t per_core_out_matrix_width_ntiles,
+    uint32_t bias_ntiles,
+    uint32_t num_cores_x,
+    uint32_t num_cores_y,
+    uint32_t total_active_num_cores,
+    uint32_t total_num_cores,
+    distributed::MeshDevice* device,
+    NOC writer_mcast_noc,
+    const CoreCoord& top_left_core_physical,
+    const CoreCoord& top_left_core_plus_one_physical,
+    const CoreCoord& bottom_right_core_physical) {
+    m2::KernelRunArgs::RuntimeArgValues& writer_sender_rtas = writer_sender_run_args.runtime_arg_values;
+    for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            if (populate_skipped_work_cores && !output_cores.contains(core)) {
+                // Pad-out path: zeros with only the bias-flag/skip slots populated.
+                m2::AddRuntimeArgsForNode(
+                    writer_sender_rtas,
+                    core,
+                    {
+                        {"out_start_tile_id_w", 0u},
+                        {"bias_tile_offset", 0u},
+                        {"mcast_dest_noc_start_x", 0u},
+                        {"mcast_dest_noc_start_y", 0u},
+                        {"mcast_dest_noc_end_x", 0u},
+                        {"mcast_dest_noc_end_y", 0u},
+                        {"weights_mcast_num_dests", 0u},
+                        {"weights_mcast_num_cores", 0u},
+                        {"is_sender_core", 1u},
+                        {"skip_work", 1u},
+                    });
+                continue;
+            }
+            uint32_t weight_slice_i = ((block_sharded && transpose_mcast) || !block_sharded) ? core.y : core.x;
+            uint32_t out_start_tile_id_w = weight_slice_i * per_core_out_matrix_width_ntiles;
+            uint32_t bias_tile_offset = out_start_tile_id_w;
+            TT_FATAL(
+                bias_tile_offset < bias_ntiles || !has_bias,
+                "bias_tile_offset {} should be less than bias_ntiles {}",
+                bias_tile_offset,
+                bias_ntiles);
+
+            if (block_sharded) {
+                const bool is_sender_core = input_cores.contains(core);
+                std::array<uint32_t, 4> mcast;
+                if (transpose_mcast) {
+                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
+                    CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
+                    TT_FATAL(core.x == 0, "Expected core.x to be 0 for sender in 2D mcast setup");
+                    mcast = setup_mcast_args(
+                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                        top_left_core_plus_one_physical.x,
+                        right_core_physical.y,
+                        bottom_right_core_physical.x,
+                        right_core_physical.y);
+                    m2::AddRuntimeArgsForNode(
+                        writer_sender_rtas,
+                        core,
+                        {
+                            {"out_start_tile_id_w", out_start_tile_id_w},
+                            {"bias_tile_offset", bias_tile_offset},
+                            {"mcast_dest_noc_start_x", mcast[0]},
+                            {"mcast_dest_noc_start_y", mcast[1]},
+                            {"mcast_dest_noc_end_x", mcast[2]},
+                            {"mcast_dest_noc_end_y", mcast[3]},
+                            {"weights_mcast_num_dests", num_cores_x - 1},
+                            {"weights_mcast_num_cores", num_cores_x - 1},
+                            {"is_sender_core", (uint32_t)is_sender_core},
+                            {"skip_work", 0u},
+                        });
+                } else {
+                    CoreCoord top_core = {(std::size_t)core.x, 0};
+                    CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
+                    TT_FATAL(core.y == 0, "Expected core.y to be 0 for sender in 2D mcast setup");
+                    mcast = setup_mcast_args(
+                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                        top_core_physical.x,
+                        top_left_core_plus_one_physical.y,
+                        top_core_physical.x,
+                        bottom_right_core_physical.y);
+                    m2::AddRuntimeArgsForNode(
+                        writer_sender_rtas,
+                        core,
+                        {
+                            {"out_start_tile_id_w", out_start_tile_id_w},
+                            {"bias_tile_offset", bias_tile_offset},
+                            {"mcast_dest_noc_start_x", mcast[0]},
+                            {"mcast_dest_noc_start_y", mcast[1]},
+                            {"mcast_dest_noc_end_x", mcast[2]},
+                            {"mcast_dest_noc_end_y", mcast[3]},
+                            {"weights_mcast_num_dests", num_cores_y - 1},
+                            {"weights_mcast_num_cores", num_cores_y - 1},
+                            {"is_sender_core", (uint32_t)is_sender_core},
+                            {"skip_work", 0u},
+                        });
+                }
+            } else {
+                std::array<uint32_t, 4> mcast = setup_mcast_args(
+                    writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                    top_left_core_physical.x,
+                    top_left_core_physical.y,
+                    bottom_right_core_physical.x,
+                    bottom_right_core_physical.y);
+                m2::AddRuntimeArgsForNode(
+                    writer_sender_rtas,
+                    core,
+                    {
+                        {"out_start_tile_id_w", out_start_tile_id_w},
+                        {"mcast_dest_noc_start_x", mcast[0]},
+                        {"mcast_dest_noc_start_y", mcast[1]},
+                        {"mcast_dest_noc_end_x", mcast[2]},
+                        {"mcast_dest_noc_end_y", mcast[3]},
+                        {"weights_mcast_num_dests", total_active_num_cores - 1},
+                        {"weights_mcast_num_cores", total_num_cores - 1},
+                        // remaining_tiles_to_push is always in the 1D schema (activation reuse deferred -> 0).
+                        {"remaining_tiles_to_push", 0u},
+                    });
+                if (has_bias) {
+                    writer_sender_rtas["bias_tile_offset"][core] = bias_tile_offset;
+                }
+            }
+        }
+    }
+}
+
+static void populate_writer_receiver_runtime_args(
+    m2::KernelRunArgs& writer_receiver_run_args,
+    const CoreRangeSet& mcast_receiver_cores,
+    const CoreRangeSet& input_cores,
+    bool block_sharded,
+    bool transpose_mcast,
+    uint32_t num_cores_x,
+    distributed::MeshDevice* device,
+    const CoreCoord& top_left_core_physical) {
+    m2::KernelRunArgs::RuntimeArgValues& writer_receiver_rtas = writer_receiver_run_args.runtime_arg_values;
+    for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            if (block_sharded) {
+                uint32_t sender_noc_x, sender_noc_y;
+                if (transpose_mcast) {
+                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
+                    CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
+                    sender_noc_x = top_left_core_physical.x;
+                    sender_noc_y = right_core_physical.y;
+                } else {
+                    CoreCoord top_core = {(std::size_t)core.x, 0};
+                    CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
+                    sender_noc_x = top_core_physical.x;
+                    sender_noc_y = top_left_core_physical.y;
+                }
+                const bool is_sender_core = input_cores.contains(core);
+                m2::AddRuntimeArgsForNode(
+                    writer_receiver_rtas,
+                    core,
+                    {
+                        {"weights_mcast_sender_noc_x", sender_noc_x},
+                        {"weights_mcast_sender_noc_y", sender_noc_y},
+                        {"is_sender_core", (uint32_t)is_sender_core},
+                    });
+            } else {
+                bool is_no_op_core = !input_cores.contains(core);
+                m2::AddRuntimeArgsForNode(
+                    writer_receiver_rtas,
+                    core,
+                    {
+                        {"noop", (uint32_t)is_no_op_core},
+                        {"weights_mcast_sender_noc_x", top_left_core_physical.x},
+                        {"weights_mcast_sender_noc_y", top_left_core_physical.y},
+                        // remaining_tiles_to_push is always in the 1D receiver schema (reuse deferred -> 0).
+                        {"remaining_tiles_to_push", 0u},
+                    });
+            }
+        }
+    }
+}
+
+static void populate_compute_runtime_args(
+    m2::KernelRunArgs& compute_run_args,
+    bool check_skip_compute,
+    bool is_conv_1d_depthwise_conv,
+    bool transpose_mcast,
+    const CoreRangeSet& all_cores,
+    const CoreRangeSet& output_cores) {
+    if (check_skip_compute && !is_conv_1d_depthwise_conv) {
+        CoreCoord bottom_right_core_out = output_cores.bounding_box().end_coord;
+        uint32_t end_coord_x = bottom_right_core_out.x;
+        uint32_t end_coord_y = bottom_right_core_out.y;
+        for (const CoreRange& range : all_cores.ranges()) {
+            for (const CoreCoord& core : range) {
+                bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
+                compute_run_args.runtime_arg_values["skip_compute"][core] = (uint32_t)skip_compute;
+            }
+        }
+    }
+}
+
 ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_program_artifacts(
     const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
@@ -2077,275 +2392,71 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ============================================================================
     m2::ProgramRunArgs run_args;
 
-    auto setup_mcast_args = [&](bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {
-        return is_noc_0 ? std::array<uint32_t, 4>{start_x, start_y, end_x, end_y}
-                        : std::array<uint32_t, 4>{end_x, end_y, start_x, start_y};
-    };
-
     // ---- Reader RTAs ----
     m2::KernelRunArgs reader_run_args{.kernel = KERNEL_READER};
-    if (block_sharded) {
-        std::vector<uint32_t> act_mcast_noc_y;  // X table for non-transpose, Y table for transpose
-        if (transpose_mcast) {
-            act_mcast_noc_y.reserve(in_num_cores_y);
-            for (uint32_t core_idx_y = 0; core_idx_y < in_num_cores_y; ++core_idx_y) {
-                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
-            }
-        } else {
-            act_mcast_noc_y.reserve(in_num_cores_x);
-            for (uint32_t core_idx_x = 0; core_idx_x < in_num_cores_x; ++core_idx_x) {
-                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
-            }
-        }
-        const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
-        const CoreCoord out_bottom_right_core_physical = device->worker_core_from_logical_core(out_bottom_right_core);
-        const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
-
-        for (const CoreRange& core_range : all_cores.ranges()) {
-            for (const CoreCoord& core : core_range) {
-                const bool is_receiver_core = output_cores.contains(core);
-                const bool is_sender_core = input_cores.contains(core);
-                std::array<uint32_t, 4> mcast;
-                uint32_t act_mcast_sender_id, act_mcast_sender_noc_x;
-                if (transpose_mcast) {
-                    CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
-                    CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
-                    mcast = setup_mcast_args(
-                        reader_is_noc_0,
-                        bottom_core_physical.x,
-                        top_left_core_physical.y,
-                        bottom_core_physical.x,
-                        bottom_core_physical.y);
-                    act_mcast_sender_id = core.y;
-                    act_mcast_sender_noc_x = bottom_core_physical.x;
-                } else {
-                    CoreCoord core_physical = device->worker_core_from_logical_core(core);
-                    mcast = setup_mcast_args(
-                        reader_is_noc_0,
-                        top_left_core_physical.x,
-                        core_physical.y,
-                        out_bottom_right_core_physical.x,
-                        core_physical.y);
-                    act_mcast_sender_id = core.x;
-                    act_mcast_sender_noc_x = core_physical.y;
-                }
-                m2::AddRuntimeArgsForNode(
-                    reader_run_args.runtime_arg_values,
-                    core,
-                    {
-                        {"mcast_dest_noc_start_x", mcast[0]},
-                        {"mcast_dest_noc_start_y", mcast[1]},
-                        {"mcast_dest_noc_end_x", mcast[2]},
-                        {"mcast_dest_noc_end_y", mcast[3]},
-                        {"act_mcast_sender_id", act_mcast_sender_id},
-                        {"act_mcast_sender_noc_x", act_mcast_sender_noc_x},
-                        {"is_receiver_core", (uint32_t)is_receiver_core},
-                        {"is_sender_core", (uint32_t)is_sender_core},
-                        {"dram_config_reader_index", transpose_mcast ? core.x : core.y},
-                    });
-                m2::AdvancedKernelRunArgs::Varargs varargs(act_mcast_noc_y.begin(), act_mcast_noc_y.end());
-                reader_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
-            }
-        }
-    } else if (is_conv_1d_depthwise_conv) {
-        // Depthwise reader has no runtime args.
-    } else {
-        // Height-sharded reader: {core_index, remaining_tiles_to_push}.  Activation reuse is deferred, so
-        // remaining_tiles_to_push is always 0.
-        uint32_t core_index = 0;
-        for (const CoreRange& core_range : input_cores.ranges()) {
-            for (const CoreCoord& core : core_range) {
-                m2::AddRuntimeArgsForNode(
-                    reader_run_args.runtime_arg_values,
-                    core,
-                    {
-                        {"core_index", core_index},
-                        {"remaining_tiles_to_push", 0u},
-                    });
-                core_index++;
-            }
-        }
-    }
+    populate_reader_runtime_args(
+        reader_run_args,
+        block_sharded,
+        transpose_mcast,
+        is_conv_1d_depthwise_conv,
+        in_num_cores_x,
+        in_num_cores_y,
+        num_cores_x,
+        num_cores_y,
+        device,
+        reader_noc,
+        all_cores,
+        input_cores,
+        output_cores,
+        top_left_core_physical);
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
 
     // ---- Writer SENDER RTAs ----
     // OPTION B / Program A registers no writer kernels, so emit no writer run-args for it.
     if (!split_program_tilize_only) {
         m2::KernelRunArgs writer_sender_run_args{.kernel = KERNEL_WRITER_SENDER};
-        m2::KernelRunArgs::RuntimeArgValues& writer_sender_rtas = writer_sender_run_args.runtime_arg_values;
-        for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
-            for (const CoreCoord& core : core_range) {
-                if (populate_skipped_work_cores && !output_cores.contains(core)) {
-                    // Pad-out path: zeros with only the bias-flag/skip slots populated.
-                    m2::AddRuntimeArgsForNode(
-                        writer_sender_rtas,
-                        core,
-                        {
-                            {"out_start_tile_id_w", 0u},
-                            {"bias_tile_offset", 0u},
-                            {"mcast_dest_noc_start_x", 0u},
-                            {"mcast_dest_noc_start_y", 0u},
-                            {"mcast_dest_noc_end_x", 0u},
-                            {"mcast_dest_noc_end_y", 0u},
-                            {"weights_mcast_num_dests", 0u},
-                            {"weights_mcast_num_cores", 0u},
-                            {"is_sender_core", 1u},
-                            {"skip_work", 1u},
-                        });
-                    continue;
-                }
-                uint32_t weight_slice_i = ((block_sharded && transpose_mcast) || !block_sharded) ? core.y : core.x;
-                uint32_t out_start_tile_id_w = weight_slice_i * per_core_out_matrix_width_ntiles;
-                uint32_t bias_tile_offset = out_start_tile_id_w;
-                TT_FATAL(
-                    bias_tile_offset < bias_ntiles || !has_bias,
-                    "bias_tile_offset {} should be less than bias_ntiles {}",
-                    bias_tile_offset,
-                    bias_ntiles);
-
-                if (block_sharded) {
-                    const bool is_sender_core = input_cores.contains(core);
-                    std::array<uint32_t, 4> mcast;
-                    if (transpose_mcast) {
-                        CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
-                        CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
-                        TT_FATAL(core.x == 0, "Expected core.x to be 0 for sender in 2D mcast setup");
-                        mcast = setup_mcast_args(
-                            writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                            top_left_core_plus_one_physical.x,
-                            right_core_physical.y,
-                            bottom_right_core_physical.x,
-                            right_core_physical.y);
-                        m2::AddRuntimeArgsForNode(
-                            writer_sender_rtas,
-                            core,
-                            {
-                                {"out_start_tile_id_w", out_start_tile_id_w},
-                                {"bias_tile_offset", bias_tile_offset},
-                                {"mcast_dest_noc_start_x", mcast[0]},
-                                {"mcast_dest_noc_start_y", mcast[1]},
-                                {"mcast_dest_noc_end_x", mcast[2]},
-                                {"mcast_dest_noc_end_y", mcast[3]},
-                                {"weights_mcast_num_dests", num_cores_x - 1},
-                                {"weights_mcast_num_cores", num_cores_x - 1},
-                                {"is_sender_core", (uint32_t)is_sender_core},
-                                {"skip_work", 0u},
-                            });
-                    } else {
-                        CoreCoord top_core = {(std::size_t)core.x, 0};
-                        CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
-                        TT_FATAL(core.y == 0, "Expected core.y to be 0 for sender in 2D mcast setup");
-                        mcast = setup_mcast_args(
-                            writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                            top_core_physical.x,
-                            top_left_core_plus_one_physical.y,
-                            top_core_physical.x,
-                            bottom_right_core_physical.y);
-                        m2::AddRuntimeArgsForNode(
-                            writer_sender_rtas,
-                            core,
-                            {
-                                {"out_start_tile_id_w", out_start_tile_id_w},
-                                {"bias_tile_offset", bias_tile_offset},
-                                {"mcast_dest_noc_start_x", mcast[0]},
-                                {"mcast_dest_noc_start_y", mcast[1]},
-                                {"mcast_dest_noc_end_x", mcast[2]},
-                                {"mcast_dest_noc_end_y", mcast[3]},
-                                {"weights_mcast_num_dests", num_cores_y - 1},
-                                {"weights_mcast_num_cores", num_cores_y - 1},
-                                {"is_sender_core", (uint32_t)is_sender_core},
-                                {"skip_work", 0u},
-                            });
-                    }
-                } else {
-                    std::array<uint32_t, 4> mcast = setup_mcast_args(
-                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                        top_left_core_physical.x,
-                        top_left_core_physical.y,
-                        bottom_right_core_physical.x,
-                        bottom_right_core_physical.y);
-                    m2::AddRuntimeArgsForNode(
-                        writer_sender_rtas,
-                        core,
-                        {
-                            {"out_start_tile_id_w", out_start_tile_id_w},
-                            {"mcast_dest_noc_start_x", mcast[0]},
-                            {"mcast_dest_noc_start_y", mcast[1]},
-                            {"mcast_dest_noc_end_x", mcast[2]},
-                            {"mcast_dest_noc_end_y", mcast[3]},
-                            {"weights_mcast_num_dests", total_active_num_cores - 1},
-                            {"weights_mcast_num_cores", total_num_cores - 1},
-                            // remaining_tiles_to_push is always in the 1D schema (activation reuse deferred -> 0).
-                            {"remaining_tiles_to_push", 0u},
-                        });
-                    if (has_bias) {
-                        writer_sender_rtas["bias_tile_offset"][core] = bias_tile_offset;
-                    }
-                }
-            }
-        }
+        populate_writer_sender_runtime_args(
+            writer_sender_run_args,
+            mcast_sender_cores,
+            input_cores,
+            output_cores,
+            populate_skipped_work_cores,
+            block_sharded,
+            transpose_mcast,
+            has_bias,
+            per_core_out_matrix_width_ntiles,
+            bias_ntiles,
+            num_cores_x,
+            num_cores_y,
+            total_active_num_cores,
+            total_num_cores,
+            device,
+            writer_mcast_noc,
+            top_left_core_physical,
+            top_left_core_plus_one_physical,
+            bottom_right_core_physical);
         run_args.kernel_run_args.push_back(std::move(writer_sender_run_args));
     }  // if (!split_program_tilize_only) — writer SENDER RTAs
 
     // ---- Writer RECEIVER RTAs ----
     if (create_writer_mcast_receiver && !split_program_tilize_only) {
         m2::KernelRunArgs writer_receiver_run_args{.kernel = KERNEL_WRITER_RECEIVER};
-        m2::KernelRunArgs::RuntimeArgValues& writer_receiver_rtas = writer_receiver_run_args.runtime_arg_values;
-        for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
-            for (const CoreCoord& core : core_range) {
-                if (block_sharded) {
-                    uint32_t sender_noc_x, sender_noc_y;
-                    if (transpose_mcast) {
-                        CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
-                        CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
-                        sender_noc_x = top_left_core_physical.x;
-                        sender_noc_y = right_core_physical.y;
-                    } else {
-                        CoreCoord top_core = {(std::size_t)core.x, 0};
-                        CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
-                        sender_noc_x = top_core_physical.x;
-                        sender_noc_y = top_left_core_physical.y;
-                    }
-                    const bool is_sender_core = input_cores.contains(core);
-                    m2::AddRuntimeArgsForNode(
-                        writer_receiver_rtas,
-                        core,
-                        {
-                            {"weights_mcast_sender_noc_x", sender_noc_x},
-                            {"weights_mcast_sender_noc_y", sender_noc_y},
-                            {"is_sender_core", (uint32_t)is_sender_core},
-                        });
-                } else {
-                    bool is_no_op_core = !input_cores.contains(core);
-                    m2::AddRuntimeArgsForNode(
-                        writer_receiver_rtas,
-                        core,
-                        {
-                            {"noop", (uint32_t)is_no_op_core},
-                            {"weights_mcast_sender_noc_x", top_left_core_physical.x},
-                            {"weights_mcast_sender_noc_y", top_left_core_physical.y},
-                            // remaining_tiles_to_push is always in the 1D receiver schema (reuse deferred -> 0).
-                            {"remaining_tiles_to_push", 0u},
-                        });
-                }
-            }
-        }
+        populate_writer_receiver_runtime_args(
+            writer_receiver_run_args,
+            mcast_receiver_cores,
+            input_cores,
+            block_sharded,
+            transpose_mcast,
+            num_cores_x,
+            device,
+            top_left_core_physical);
         run_args.kernel_run_args.push_back(std::move(writer_receiver_run_args));
     }
 
     // ---- Compute RTAs ----
     m2::KernelRunArgs compute_run_args{.kernel = KERNEL_COMPUTE};
-    if (check_skip_compute && !is_conv_1d_depthwise_conv) {
-        CoreCoord bottom_right_core_out = output_cores.bounding_box().end_coord;
-        uint32_t end_coord_x = bottom_right_core_out.x;
-        uint32_t end_coord_y = bottom_right_core_out.y;
-        for (const CoreRange& range : all_cores.ranges()) {
-            for (const CoreCoord& core : range) {
-                bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
-                compute_run_args.runtime_arg_values["skip_compute"][core] = (uint32_t)skip_compute;
-            }
-        }
-    }
+    populate_compute_runtime_args(
+        compute_run_args, check_skip_compute, is_conv_1d_depthwise_conv, transpose_mcast, all_cores, output_cores);
     run_args.kernel_run_args.push_back(std::move(compute_run_args));
 
     // OPTION B / Program A OUT-drain: no per-node runtime args (all block counts are compile-time).
