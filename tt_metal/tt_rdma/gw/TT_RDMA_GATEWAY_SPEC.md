@@ -682,3 +682,47 @@ replicate in the mesh), tag with the group handle, collect the aggregated comple
 | few (≲8) | gateway DPA fan-out (one staging MR → N RC WRITEs) | BF DPA | ✅ |
 | many, cooperative | collective tree/ring (gateway feeds root) | endpoint fabric | ✅ scalable |
 | many, loss-tolerant | switch / UD multicast + app ARQ | switch | ⚠️ app-level |
+
+## 13.7 ttpacket-plan: eth-FW change list (traced in `bh-erisc-fpga/src/common/api/eth_init.cpp`)
+
+**Key finding:** the FW *already has* all the packet-mode machinery and already enables it at boot for TT links —
+the external path deliberately **skips** it. So the ttpacket FW delta is small and surgical, not a new subsystem.
+
+**What the FW does today (traced):**
+- `eth_enable_packet_mode(q, max_pkt, min_pkt, remote_seq_timeout, local_seq_update_timeout)` exists (eth_init.cpp
+  :236): sets `packet_mode=1` + `packet_resend_mode_active=1` + seq timeouts.
+- Called at boot on **all 3 queues** inside `send_chip_info` (eth_init.cpp:1153–1162) — because **the chip-info
+  handshake itself is a packet-mode exchange** (`eth_send_packet`, line 1165).
+- For an **external/NIC peer** (`chip_info_timeout==0`) the boot state machine **skips `chip_info_exchange`**
+  (eth_init.cpp:1241–1242) → `send_chip_info` never runs → **packet mode is never enabled on the external link**;
+  it's tagged external (`spare[0]=…EXTERNAL_ENDPOINT_MAGIC`, line 1269) and left raw for the pool. Path A works
+  *because* of this skip.
+
+**The FW change list (small):**
+1. **New boot param — external link-type / `ext_packet_mode`** (+ regen `eth_params.bin`): distinguish
+   `external-ttpacket` (packet-mode data, DPA peer) from `external-raw` (pool) and `TT-internal`. Files:
+   `eth_params.yaml`, `board_topology.h`.
+2. **Decouple "enable packet mode" from "send chip-info":** extract the `eth_enable_packet_mode` loop out of
+   `send_chip_info` (eth_init.cpp:1153–1162) so it can run without transmitting a `chip_info_t` (the BF has none).
+3. **New branch in `POSTCODE_ETH_INIT_PACKET`** (eth_init.cpp:1236–1245): for `external-ttpacket`, enable packet
+   mode on the data queue(s) with **external seq timeouts**, **skip** the chip-info handshake, report PASS.
+4. **Separate, larger seq timeouts for the external link** (`ext_remote_seq_timeout`,
+   `ext_local_seq_update_timeout` in `eth_params.yaml`): the DPA SW peer is slower/jittery vs a TT peer → avoid
+   spurious HW resends. This is the main *tuning* risk (§13.5).
+5. **Extend the external tag** (eth_init.cpp:1269) so tt-metal dispatches the **EDM-client** kernel (reads
+   HW-landed packet-mode data → mesh) for `external-ttpacket` vs the **raw pool drainer** for `external-raw`.
+
+**NOT an eth-FW change (scoping):**
+- **DPA packet-mode peer-half** (16B header build, TX/RX seq, seq-update packets, drop-flag/resend) — DOCA/DPA code.
+- **Gateway-BH EDM client** (reads HW-landed data → fabric-routes) — a **tt-metal RISC1 kernel** (the HW landing to
+  L1 is the eth controller's job; the kernel only forwards onward).
+- **Inner routing/endpoint header + the two maps** — kernel/DPA layer.
+
+**One subtlety — initial seq sync.** `eth_enable_packet_mode` starts the link's seq counters fresh (typ. 0). With
+no chip-info handshake to negotiate it, the DPA peer must start its TX/RX seq at the **same fixed convention** the
+FW initializes, or the first frame is dropped as out-of-order. Confirm the FW seq-init value and match it on the DPA.
+
+**Effort verdict:** because the HW engine + `eth_enable_packet_mode` + RXQ dest-addr routing (bcast→RXQ0,
+mcast→RXQ1, unicast→RXQ2) all already exist, the FW delta is **one param group + one boot branch + a one-function
+refactor + a tag variant**. The hard/novel work is the **DPA SW peer-half** and the **timing tuning** — not FW.
+Gated on **Spike A** (BF↔BH AN/LT link up). Cross-ref [[tt-link-packet-mode-fw-scoping]].
