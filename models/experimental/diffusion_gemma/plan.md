@@ -218,9 +218,12 @@ cliff belongs to the pre-fix `ec5b64b4891` control only. Current pure-prefill ev
   > 5.73 bf16 ULP / rel max 2.24e-2 — four orders of magnitude apart, never reconciled
   > ([l1_residency](doc/optimize_perf/l1_residency.md),
   > [perf hub](doc/optimize_perf/README.md)). Not explained.
-- **CURRENT BEST GPQA:** the 198-question full-canvas-norm run scored **71.21%** against **66.67%**
-  for the previous full run on the same questions, with 0 empty replies and 0 responses over the 2%
-  non-Latin threshold.
+- **CURRENT BEST GPQA:** the 198-question full-canvas-norm run scored **71.21%** (`max_gen_toks=13824`),
+  with 0 empty replies and 0 responses over the 2% non-Latin threshold. **There is no budget-matched
+  comparison for it** — no reference and no TT baseline was run at 13824. It was previously stated here
+  as beating the 66.67% full run; that run used `max_gen_toks=5632`, 2.45x smaller, so the two are not
+  comparable and the norm's effect on score is unmeasured. The only budget-matched TT-vs-reference
+  reading is **66.67% vs 65.66% at 5632**.
 - **CURRENT PERF:** at 238 ms/step the split is MoE 75.5, attention 29.6, shared MLP 9.1,
   self-conditioning 2.3, and **~120 ms outside the layer stack** — layer matmul is no longer the
   bottleneck. Commit is 0.27–0.37 s/block (7–10%).
