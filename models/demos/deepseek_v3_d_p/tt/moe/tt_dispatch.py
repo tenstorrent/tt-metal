@@ -40,6 +40,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.moe import moe_workload_probe
 
 
 class TtDispatchModule(LightweightModule):
@@ -266,6 +267,16 @@ class TtDispatchModule(LightweightModule):
             f"  metadata_len={self.metadata_len}, max_dispatch_buffer_token_size={self.max_dispatch_buffer_token_size}"
         )
         logger.debug(f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}")
+
+        # Per-(chunk, layer, column) routing-workload capture; no-op unless
+        # TT_DS_MOE_WORKLOAD_PROBE=1 (forces a host readback, so use num_iters=1).
+        if moe_workload_probe.enabled():
+            moe_workload_probe.record_dispatch(
+                indices,
+                layer_idx=getattr(self, "probe_layer_idx", -1),
+                num_routed_experts=self.num_routed_experts,
+                mesh_shape=tuple(self.mesh_device.shape),
+            )
 
         (
             tt_dispatched_buffer,

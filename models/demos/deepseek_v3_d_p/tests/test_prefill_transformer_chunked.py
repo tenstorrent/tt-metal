@@ -46,6 +46,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_positions,
     rotated_chip_positions,
 )
+from models.demos.deepseek_v3_d_p.tt.moe import moe_workload_probe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
@@ -1387,12 +1388,14 @@ def run_chunked_transformer_no_pcc(
         logger.info("[profile] warmup chunk 0 complete (kernels JITted); measured region begins")
         signpost("PROFILE_MEASURE_START")
 
+    moe_workload_probe.set_tag(f"{variant.name}_L{num_layers}_c{n_chunks}_i{num_iters}")
     profiler.start("tt_forward")
     for it in range(num_iters):
         iter_start = time.time()
         chunk_times: list[float] = []
         for c in range(n_chunks):
             kv_actual = preload_isl + c * CHUNK
+            moe_workload_probe.set_context(it, c)
             tt_tokens = ttnn.from_torch(
                 chunk_tok_host[c],
                 device=mesh_device,
@@ -1430,6 +1433,7 @@ def run_chunked_transformer_no_pcc(
     logger.success(
         f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, " f"num_iters={num_iters})"
     )
+    moe_workload_probe.dump()
     perf_failures, perf_table_lines = print_duration_table(iteration_chunk_times)
     timing_lines = [f"  {key}: {profiler.get(key) * 1000:.2f} ms" for key in profiler.times]
     if perf_table_lines:

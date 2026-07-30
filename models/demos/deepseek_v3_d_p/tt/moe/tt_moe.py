@@ -357,6 +357,8 @@ class TtMoe(LightweightModule):
             topology=self.row_topology,
             subdevice_id=self.dispatch_sd_id,
         )
+        # Tag for the per-(chunk, layer, column) workload probe (TT_DS_MOE_WORKLOAD_PROBE=1).
+        self.dispatch_module.probe_layer_idx = layer_idx
 
         # Initialize combine module (row axis: axis 0)
         self.combine_module = TtCombineModule(
