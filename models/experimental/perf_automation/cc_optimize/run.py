@@ -1012,6 +1012,90 @@ def _bridge_depth_env(
     return env
 
 
+def _env_int(key: str, default: int, allow_zero: bool = False) -> int:
+    """A positive int from the environment, or `default` for anything unusable. allow_zero because
+    max_shapes uses 0 to mean 'no cap', which is a legitimate value rather than a bad one."""
+    try:
+        v = int(os.environ.get(key, "") or default)
+    except (TypeError, ValueError):
+        return default
+    if v > 0 or (allow_zero and v == 0):
+        return v
+    return default
+
+
+def _env_float(key: str, default: float) -> float:
+    try:
+        v = float(os.environ.get(key, "") or default)
+    except (TypeError, ValueError):
+        return default
+    return v if v > 0 else default
+
+
+def _invoke_matmul_sweep(*, node, case, out_path, pcc_threshold, iters, max_shapes, repo_root):
+    """Load cc_optimize/matmul_sweep.py by path and run the pre-pass. Separate so the ordering logic
+    above it is testable without a device."""
+    import importlib.util as _ilu
+
+    spec = _ilu.spec_from_file_location("cc_matmul_sweep", str(Path(__file__).resolve().parent / "matmul_sweep.py"))
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.run_prepass(
+        node,
+        case=case,
+        out_path=out_path,
+        pcc_threshold=pcc_threshold,
+        iters=iters,
+        max_shapes=max_shapes,
+        repo_root=Path(repo_root),
+    )
+
+
+def _matmul_sweep_after_discovery(demo_dir, repo_root, pipes, devices: str = "0") -> None:
+    """Run the matmul fidelity x dtype sweep AFTER discovery, using the perf test just generated.
+
+    The sweep used to be a literal pre-pass, called before the engine ran, so the only node it could
+    possibly use was an operator-supplied --perf-test: `--matmul-sweep` on its own printed "no node
+    to sweep" and silently did nothing, and anyone who wanted the sweep had to hand over a perf test
+    the tool was about to generate anyway.
+
+    Nothing required that ordering. The output is a warm-start table consumed much later, when
+    next_target is a matmul on the knob:fidelity/knob:dtype rung. Running it here means the node
+    exists, no second test is asked for, and the shapes swept are the ones from the SAME node
+    optimize goes on to measure rather than a possibly-different hand-passed one.
+
+    Strictly opt-in (PERF_MCP_MATMUL_SWEEP=1) and strictly best-effort: the sweep is an
+    optimisation, not a prerequisite, so any failure is reported and the run continues.
+    """
+    if os.environ.get("PERF_MCP_MATMUL_SWEEP") != "1":
+        return
+    pipe = next((p for p in (pipes or []) if p.get("perf_test")), None)
+    if not pipe:
+        print("  [optimize/cc] matmul-sweep: no pipeline with a perf test to sweep; skipping")
+        return
+    out = str(Path(demo_dir) / "matmul_sweep.json")
+    node = pipe["perf_test"]
+    case = pipe.get("case")
+    print(f"  [optimize/cc] matmul-sweep: {node}{' -k ' + case if case else ''} -> {out}")
+    try:
+        s = _invoke_matmul_sweep(
+            node=node,
+            case=case,
+            out_path=out,
+            pcc_threshold=_env_float("PERF_MCP_MATMUL_SWEEP_PCC", 0.99),
+            iters=_env_int("PERF_MCP_MATMUL_SWEEP_ITERS", 5),
+            max_shapes=_env_int("PERF_MCP_MATMUL_SWEEP_MAX_SHAPES", 0, allow_zero=True),
+            repo_root=repo_root,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [optimize/cc] matmul-sweep failed ({type(exc).__name__}: {str(exc)[-300:]}); optimize continues")
+        return
+    if isinstance(s, dict):
+        print(
+            "  [optimize/cc] matmul-sweep: %s shape(s), %s seeded -> %s" % (s.get("shapes", 0), s.get("seeded", 0), out)
+        )
+
+
 def _declared_depth(model_root, model_id: str = ""):
     """The block count the model itself declares, or None when nothing declares one."""
     try:
@@ -3317,6 +3401,9 @@ def run_cc_optimize(
     pipes = pipelines_from_manifest(manifest, model_rel)
     is_mm = manifest.get("pathmap", {}).get("is_multimodal")
     print(f"  [optimize/cc] discovered pipelines: {[p['task'] for p in pipes]} (multimodal={is_mm})")
+    # AFTER discovery, so the sweep can use the perf test that was just generated instead of
+    # demanding a second one from the operator. No-op unless --matmul-sweep was passed.
+    _matmul_sweep_after_discovery(demo_dir, repo_root, pipes, devices)
     if e2e_only:
         os.environ["PERF_MCP_FULLPIPE_E2E"] = "1"
         for pipe in pipes:

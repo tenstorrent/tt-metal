@@ -60,11 +60,18 @@ def test_module_level_path_wires_the_sweep():
     assert "matmul_sweep" in src and "_run_matmul_sweep_prepass" in src and "node=node" in src
 
 
-def test_full_pipeline_path_still_wires_the_sweep():
+def test_full_pipeline_path_hands_the_flag_to_the_engine():
+    """The full-pipeline sweep is no longer run here. It used to be a pre-pass called before
+    run_cc, which is BEFORE the engine's discover() generates a perf test -- so its only possible
+    node was an operator-supplied --perf-test and `--matmul-sweep` alone did nothing. cmd_optimize
+    now hands the flag to the engine, which sweeps straight after discovery."""
     import inspect
 
     src = inspect.getsource(optimize.cmd_optimize)
-    assert "_run_matmul_sweep_prepass" in src
+    assert "PERF_MCP_MATMUL_SWEEP" in src, "the flag is not handed to the engine"
+    assert (
+        "_run_matmul_sweep_prepass(args, run_root, run_demo)" not in src
+    ), "cmd_optimize still sweeps before run_cc, so it still cannot see the generated perf test"
 
 
 # --------------------------------------------------------------------------- issue #14

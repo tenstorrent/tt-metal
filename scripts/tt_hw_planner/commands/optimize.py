@@ -559,7 +559,15 @@ def cmd_optimize(args) -> int:
 
             return run_module_level_optimize(args, run_demo, run_root, run_cc)
         if getattr(args, "matmul_sweep", False):
-            _run_matmul_sweep_prepass(args, run_root, run_demo)
+            # HAND THE FLAG TO THE ENGINE instead of sweeping here. This used to call the pre-pass
+            # directly, which ran BEFORE the engine's discover() generates a perf test -- so the
+            # sweep's only possible node was an operator-supplied --perf-test, and `--matmul-sweep`
+            # alone silently did nothing. The engine now runs it straight after discovery, where the
+            # generated node exists, so the same test serves both and nobody is asked for it twice.
+            os.environ["PERF_MCP_MATMUL_SWEEP"] = "1"
+            os.environ["PERF_MCP_MATMUL_SWEEP_PCC"] = str(getattr(args, "matmul_sweep_pcc", 0.99))
+            os.environ["PERF_MCP_MATMUL_SWEEP_ITERS"] = str(getattr(args, "matmul_sweep_iters", 5))
+            os.environ["PERF_MCP_MATMUL_SWEEP_MAX_SHAPES"] = str(getattr(args, "matmul_sweep_max_shapes", 0))
         result = run_cc(
             run_demo,
             run_root,

@@ -130,15 +130,19 @@ def test_s1b_the_regressing_cell_specifically(tmp_path, monkeypatch):
 
 # --------------------------------------------------------------------------- s2
 def test_s2_real_callers_are_shaped_as_this_test_assumes():
-    """Guard against the stress test drifting from the two call sites that actually exist."""
+    """Guard against this stress test drifting from the call sites that actually exist.
+
+    There is now exactly ONE direct caller: the per-module path. The full-pipeline sweep moved into
+    the engine (run.py::_matmul_sweep_after_discovery) so it can use the generated perf test, and
+    cmd_optimize only sets the flag. s1's oracle still describes _run_matmul_sweep_prepass itself,
+    which the per-module path and the engine both ultimately rely on for node/case resolution.
+    """
     import inspect
 
     from tt_hw_planner.commands import module_optimize
 
     full = inspect.getsource(optimize.cmd_optimize)
-    assert (
-        "_run_matmul_sweep_prepass(args, run_root, run_demo)" in full
-    ), "the full-pipeline caller changed shape; re-derive s1's oracle before trusting it"
+    assert "PERF_MCP_MATMUL_SWEEP" in full, "cmd_optimize no longer hands the sweep flag to the engine"
     per_mod = inspect.getsource(module_optimize.run_module_level_optimize)
     assert (
         "node=node" in per_mod and "case=" not in per_mod.split("_run_matmul_sweep_prepass")[1][:80]
