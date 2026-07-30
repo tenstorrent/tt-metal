@@ -134,6 +134,22 @@ def _window_indices(compress_rate: int, pos: int) -> tuple[int, int]:
     return pos % compress_rate, (pos + 1) // compress_rate - 1
 
 
+# --- Host -> device per-step packet socket (``recv_async_h2d``) ---------------- #
+# The per-step input packet is streamed into the traced decode over an H2D PCIe
+# socket, so the receive is a device op *inside* each submesh-0 trace rather than a
+# host-side ``copy_host_to_device_tensor`` around it.
+#
+# The socket moves whole pages over PCIe, so the packet's page (its single row) must
+# be PCIe-aligned; the three meaningful INT32 slots are padded out to that page.
+_PKT_PCIE_ALIGNMENT = 64
+# Room for many steps' packets, so the host can run ahead of the device without
+# blocking in ``H2DSocket::write`` while the FIFO drains.
+_PKT_FIFO_BYTES = 64 * _PKT_PCIE_ALIGNMENT
+# Receiver core for the packet socket, disjoint from the (0,0) / (0,1) cores the
+# cross-submesh direct sockets use.
+_PKT_SOCKET_CORE = (0, 2)
+
+
 class DeepSeekV4Model(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4Model`` (prefill).
 
@@ -328,6 +344,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.kv_caches: list[_StaticLayerCache] = []
         # Paged multi-session decode (traced path; see :meth:`prepare_static_decode`).
         self._paged: Optional[PagedKVManager] = None
+        # H2D socket carrying the per-step input packet into the traced decode
+        # (allocated by :meth:`prepare_static_decode`).
+        self._pkt_socket = None
         self._paged_groups: dict[str, PagedGroup] = {}
         self._external_pools: Optional[dict[int, ttnn.Tensor]] = None
         self._active_sid: Optional[int] = None
@@ -991,8 +1010,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         Builds, per submesh: the fixed-size in-place caches (empty / all-zero), the
         constant window-RoPE tables, and the persistent socket recv buffers
         (residual streams + the single fused per-step input packet). Submesh 0
-        additionally gets the only host-written per-step state: the position / token
-        scalars and the float-bits region. ``max_seq`` must be a multiple of every compress-rate (the caller
+        additionally gets the H2D socket the per-step packet arrives on — the only
+        host->device traffic of a traced step.
+        ``max_seq`` must be a multiple of every compress-rate (the caller
         pads it) so each compressor's fixed capacity tiles cleanly into windows.
         ``lm_head`` (optional) is folded into the last submesh's trace so a step
         returns logits directly.
@@ -1058,23 +1078,25 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         # --- Canonical per-step input packet layout (shared by every submesh) --- #
         # All per-step inputs are fused into ONE tiny fixed-shape INT32 packet
-        # ``[1, 1, 1, 3]`` (ROW_MAJOR), a single persistent buffer on submesh 0
-        # written from host *only* there and then flowed downstream over the existing
-        # socket (see :meth:`_decode_submesh_static`), so no submesh past the first
-        # needs a per-step host->device write.
+        # ``[1, 1, 1, 16]`` (ROW_MAJOR), a single persistent buffer on submesh 0
+        # streamed in from host *only* there over an H2D socket and then flowed
+        # downstream over the existing device-to-device socket (see
+        # :meth:`_decode_submesh_static`), so no submesh past the first sees any host
+        # traffic at all.
         #
-        #   idx 0 : token (INT32; embedding/hash use it typecast to uint32). Placed
-        #           first so the on-device sampling loop can re-inject the sampled id
-        #           by slicing off idx 0 and re-concatenating (see
-        #           :meth:`decode_sampled_burst`).
+        #   idx 0 : token (INT32; embedding/hash use it typecast to uint32)
         #   idx 1 : pos_sliding (INT32)
         #   idx 2 : pos_compress (INT32)
         #
         # The per-step RoPE rows and additive masks are *not* in the packet — they are
         # both generated on device from ``pos_compress`` against constant tables (see
         # :meth:`_device_rope` and :meth:`_device_mask`).
+        # Slots past the prefix are padding: the packet's row is one H2D socket page,
+        # so its width is set by the PCIe alignment, not by the payload. Nothing reads
+        # them.
         self._pkt_int_prefix = 3  # [token, pos_sliding, pos_compress]
-        self._pkt_w = self._pkt_int_prefix
+        self._pkt_page_bytes = _PKT_PCIE_ALIGNMENT
+        self._pkt_w = self._pkt_page_bytes // 4
         self._pkt_rd = rd
 
         # --- On-device RoPE generation constants ------------------------------- #
@@ -1161,15 +1183,30 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     )
                 )
                 sm["mask_gen"][lt] = (a_tt, b_tt, cr)
-            # Submesh 0 owns global layer 0, whose per-step inputs are host-written into
-            # the tiny fused packet (token + positions); everything downstream is fed over
-            # the sockets. A submesh needs recv buffers only for the layers whose
+            # Submesh 0 owns global layer 0, whose per-step inputs (token + positions)
+            # stream in from the host over the H2D socket into the tiny fused packet;
+            # everything downstream is fed over the device-to-device sockets. A submesh
+            # needs recv buffers only for the layers whose
             # *predecessor* sits on another submesh — under round-robin that is every
             # layer but global 0 (submesh 0 is revisited for layers S, 2S, ...), while
             # with a small pipeline group size a device's contiguous run of layers hands
             # off locally and only its first layer receives.
             if 0 in layers_k:
                 sm["pkt"] = _dev_zeros([1, 1, 1, self._pkt_w], device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+                # The one host->device transfer of the whole traced decode. Created
+                # here (before any capture) because the socket allocates L1 on its
+                # receiver core, which is unsafe once a trace exists on the device.
+                if self._pkt_socket is None:
+                    self._pkt_socket = ttnn.H2DSocket(
+                        device,
+                        ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(*_PKT_SOCKET_CORE)),
+                        ttnn.BufferType.L1,
+                        _PKT_FIFO_BYTES,
+                        ttnn.H2DMode.HOST_PUSH,
+                    )
+                    # ``recv_async_h2d`` cross-checks this against the packet's aligned
+                    # page size on every program-cache miss.
+                    self._pkt_socket.set_page_size(self._pkt_page_bytes)
             if any(li > 0 and ids[li - 1] != k for li in layers_k):
                 sm["streams_in"] = _dev_zeros([1, 1, hc, d], device)
                 sm["pkt_in"] = _dev_zeros([1, 1, 1, self._pkt_w], device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
@@ -1269,10 +1306,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         layer by layer, so this method drives a recv / run / send cycle *per layer*
         rather than once per submesh:
 
-          * The per-step inputs are ONE tiny fused INT32 packet ``[1,1,1,3]`` =
-            ``[token, pos_sliding, pos_compress]``. Global layer 0 (on submesh 0)
-            reads submesh 0's host-written packet; any other layer whose predecessor
-            lives on a *different* submesh receives the streams + packet from it.
+          * The per-step inputs are ONE tiny fused INT32 packet whose first three slots
+            are ``[token, pos_sliding, pos_compress]``. Global layer 0 (on submesh 0)
+            receives it from the host over the H2D socket; any other layer whose
+            predecessor lives on a *different* submesh receives the streams + packet
+            from it.
           * Each layer splits the packet on device and generates its RoPE rows and
             additive mask from ``pos_compress``.
           * Unless it is the global-last layer, it forwards the streams + packet to the
@@ -1300,7 +1338,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
             # predecessor submesh when that layer sits elsewhere, else from the previous
             # iteration on this submesh.
             if is_first:
+                # Stream this step's packet in from the host over the H2D socket. The
+                # op is part of the trace, so replay needs no host-side dispatch: the
+                # kernel parks on the socket until :meth:`_write_packet` pushes the
+                # page (which the host may well have done already).
                 pkt = sm["pkt"]
+                ttnn.experimental.recv_async_h2d(pkt, self._pkt_socket)
             elif recv:
                 # Receive the residual streams + fused packet from the submesh holding
                 # the previous layer into the persistent buffers. Captured inside the
@@ -1390,34 +1433,37 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     self.layers[next_on_device].self_attn.prefetch_weights()
         return out if out is not None else streams
 
-    def _build_packet(self, token_id: int, pos: int) -> ttnn.Tensor:
-        """Host-build the whole fused packet ``[1,1,1,3]`` as INT32:
-        ``[token, pos_sliding, pos_compress]``. The per-step RoPE rows and additive
-        masks are *not* in the packet — they are generated on device from
-        ``pos_compress`` (see :meth:`_device_rope` / :meth:`_device_mask`)."""
+    def _build_packet(self, token_id: int, pos: int) -> torch.Tensor:
+        """Host-build the whole fused packet as one INT32 socket page
+        ``[1,1,1,_pkt_w]``: ``[token, pos_sliding, pos_compress]`` then padding. The
+        per-step RoPE rows and additive masks are *not* in the packet — they are
+        generated on device from ``pos_compress`` (see :meth:`_device_rope` /
+        :meth:`_device_mask`)."""
         w = self.sliding_window
-        packet = torch.tensor([[[[token_id, pos % w, pos]]]], dtype=torch.int32)  # [1,1,1,3]
-        return ttnn.from_torch(packet, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        packet = torch.zeros(1, 1, 1, self._pkt_w, dtype=torch.int32)
+        packet[0, 0, 0, : self._pkt_int_prefix] = torch.tensor([token_id, pos % w, pos], dtype=torch.int32)
+        return packet
 
-    def _set_step_position_inputs(self, pos: int) -> None:
-        """Refresh the *position-dependent* per-step inputs (RoPE rows, masks, cache
-        positions) on submesh 0 *only* by rewriting the whole fused packet with a
-        placeholder token (``0`` at idx 0). They depend only on ``pos`` (a host-side
-        counter), never on a device readback, and flow downstream over the socket.
-        The on-device sampling loop overwrites the placeholder token with the sampled
-        id (see :meth:`decode_sampled_burst`), so the loop never stalls on device."""
-        ttnn.copy_host_to_device_tensor(self._build_packet(0, pos), self.submeshes_io[0]["pkt"])
+    def _write_packet(self, token_id: int, pos: int) -> None:
+        """Push one step's fused packet into the H2D socket FIFO.
 
-    def _set_step_inputs(self, token_id: int, pos: int) -> None:
-        """Write all per-step inputs (token id, RoPE rows, masks, cache positions) as
-        the single fused packet onto submesh 0 *only* (allocation-free on device, so
-        it is safe to interleave with ``execute_trace``). The packet is propagated to
-        the rest of the stack over the socket (so hash-MoE layers on any submesh see
-        the token)."""
-        ttnn.copy_host_to_device_tensor(self._build_packet(token_id, pos), self.submeshes_io[0]["pkt"])
+        This is the only host->device transfer of a traced step, and it is *not* a
+        device op: the write goes straight over PCIe into the socket's L1 FIFO,
+        independent of the command queue, so it can be issued before (or while) the
+        traces replay. Submesh 0's in-trace ``recv_async_h2d`` pops the page into the
+        persistent ``pkt`` buffer, from where it flows to the rest of the stack over
+        the device-to-device sockets (so hash-MoE layers on any submesh see the token).
 
-    def _capture_traces(self) -> None:
+        One page is consumed per submesh-0 program run, so every push must be matched
+        by exactly one compile run or trace replay, and vice versa.
+        """
+        self._pkt_socket.write_tensor(self._build_packet(token_id, pos))
+
+    def _capture_traces(self, token_id: int, pos: int) -> None:
         """Capture the decode traces: per submesh, one variant per (SDPA mode, phase).
+
+        ``token_id`` / ``pos`` describe the step about to be replayed; each compile run
+        below is fed that packet over the H2D socket (see :meth:`_write_packet`).
 
         A ttnn trace is a flat, fixed sequence of device ops, so it cannot skip the
         compressor pool on the steps that do not close a window, nor switch between
@@ -1482,6 +1528,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 continue
             causal, phase_idx = variant
             compile_outs = []
+            # The compile run *executes*, so submesh 0's in-trace ``recv_async_h2d``
+            # would park forever without a page of its own. Every round gets the
+            # upcoming step's packet, which is what the runs saw when the packet was
+            # copied to device around the traces rather than received inside them.
+            self._write_packet(token_id, pos)
             for sm in self.submeshes_io:
                 logger.info(
                     f"[traced-decode] compiling submesh {sm['index']} "
@@ -1513,11 +1564,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
     def decode_traced(self, token_id: int, pos: int) -> ttnn.Tensor:
         """One traced decode step: feed ``token_id`` at absolute position ``pos``.
 
-        Requires a prior :meth:`prepare_static_decode`. Captures
-        the per-submesh traces lazily on the first call, then (every call) refreshes
-        the per-step inputs and replays each submesh's trace in order. The residual
-        streams are socket-copied between submeshes from *inside* each trace
-        (device-to-device, no host hop and no per-step host op dispatch).
+        Requires a prior :meth:`prepare_static_decode`. Captures the per-submesh traces
+        lazily on the first call, then (every call) pushes this step's input packet onto
+        the H2D socket and replays each submesh's trace in order. Both the packet
+        receive and the residual-stream handoffs between submeshes happen from *inside*
+        the traces, so a step dispatches no device ops from the host at all.
         Returns the persistent output tensor of the submesh holding the global-last
         layer — logits ``[1,1,vocab]`` if an ``lm_head`` was passed to
         :meth:`prepare_static_decode`, else the pre-head hidden ``[1, 1, 1, hidden]``.
@@ -1531,9 +1582,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """
         if self._paged is not None:
             self.ensure_session_capacity(pos)
-        self._set_step_inputs(token_id, pos)
+        # Capture first: the compile runs inside consume a packet each, so pushing this
+        # step's packet before them would hand it to a compile run instead of to the
+        # replay below.
         if not self._traced_captured:
-            self._capture_traces()
+            self._capture_traces(token_id, pos)
+        self._write_packet(token_id, pos)
         # Pick the variant whose baked-in compressor-pool schedule and SDPA mode match
         # this position (see :meth:`_capture_traces`).
         variant = self._variant_key(pos)
@@ -1544,64 +1598,20 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return self.submeshes_io[self._output_sm_index]["outputs"][variant]
 
     def decode_sampled_burst(self, first_token_id: int, start_pos: int, n_steps: int) -> list[int]:
-        """Autoregressively decode ``n_steps`` tokens with greedy (top-1) sampling
-        done *on device*, feeding each sampled token back into the next step without
-        a device->host round trip, then return all ``n_steps`` token ids in a single
-        host transfer.
+        """Unsupported while the per-step packet arrives over the H2D socket.
 
-        Per step (all enqueued on cq0, so ordered without an explicit sync):
-        replay each submesh trace -> ``argmax`` the last submesh's logits -> re-inject
-        the sampled id into idx 0 of the first submesh's fused ``pkt`` buffer (the one
-        ``embed_tokens`` reads). Only the position-dependent inputs (RoPE rows / masks
-        / cache positions) are refreshed from the host each step; none of that reads
-        back from device, so the loop never stalls on the device.
+        This used to decode ``n_steps`` tokens with greedy sampling done on device,
+        re-injecting each sampled id into idx 0 of submesh 0's fused ``pkt`` buffer
+        between replays. That feedback was an *eager* write into ``pkt``, which the
+        in-trace ``recv_async_h2d`` at the head of every submesh-0 trace now
+        overwrites with the host's packet — so the sampled token would never reach
+        ``embed_tokens``.
 
-        Greedy feedback is fully on-device only when the model lives on a single
-        submesh (the sampled id and ``pkt`` share a device). Hash-MoE layers are
-        supported on device: they gather their expert mask from the packet token with
-        :func:`ttnn.embedding`, which the on-device feedback already refreshes.
+        Restoring it means splitting the packet: keep the host-fed positions on the
+        socket and read the token from a separate device-written buffer.
         """
-        if not self.use_submeshes:
-            raise NotImplementedError("traced sampling requires use_submeshes=True")
-        sm0, sm_last = self.submeshes_io[0], self.submeshes_io[self._output_sm_index]
-        if sm0["device"] != sm_last["device"]:
-            raise NotImplementedError(
-                "on-device sampling feedback currently requires a single submesh "
-                "(sampled id and token_in must share a device)"
-            )
-
-        if self._paged is not None:
-            self.ensure_session_capacity(start_pos)
-        self._set_step_inputs(first_token_id, start_pos)
-        if not self._traced_captured:
-            self._capture_traces()
-
-        pkt = sm0["pkt"]
-        w = self._pkt_w
-        sampled: list[ttnn.Tensor] = []
-        tok_i32: ttnn.Tensor | None = None
-        for i in range(n_steps):
-            if i > 0:
-                if self._paged is not None:
-                    self.ensure_session_capacity(start_pos + i)
-                # Refresh positions / RoPE / masks (token slot reset to a placeholder)
-                # then re-inject the previous step's device-sampled id into idx 0 of
-                # the fused packet: slice off the placeholder token and re-concatenate
-                # the real one, copied back in place. All eager (outside the trace).
-                self._set_step_position_inputs(start_pos + i)
-                rest = ttnn.slice(pkt, [0, 0, 0, 1], [1, 1, 1, w])  # everything past the token slot
-                fused = ttnn.concat([ttnn.reshape(tok_i32, ttnn.Shape([1, 1, 1, 1])), rest], dim=-1)
-                ttnn.copy(fused, pkt)
-            variant = self._variant_key(start_pos + i)
-            for sm in self.submeshes_io:
-                ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)
-            logits_rm = ttnn.to_layout(sm_last["outputs"][variant], ttnn.ROW_MAJOR_LAYOUT)  # [1, 1, vocab]
-            tok = ttnn.argmax(logits_rm, dim=-1, keepdim=True)  # [1, 1, 1]
-            sampled.append(
-                ttnn.reshape(tok if tok.dtype == ttnn.uint32 else ttnn.typecast(tok, ttnn.uint32), ttnn.Shape([1, 1]))
-            )
-            tok_i32 = tok if tok.dtype == ttnn.int32 else ttnn.typecast(tok, ttnn.int32)
-
-        # One-shot readback: concat all sampled ids and transfer once.
-        all_toks = ttnn.concat(sampled, dim=0)  # [n_steps, 1]
-        return ttnn.to_torch(all_toks).reshape(-1).to(torch.int64).tolist()
+        raise NotImplementedError(
+            "on-device sampled bursts are incompatible with the in-trace H2D packet "
+            "receive (the socket packet overwrites the device-sampled token slot); "
+            "use decode_traced() with host-side sampling"
+        )
