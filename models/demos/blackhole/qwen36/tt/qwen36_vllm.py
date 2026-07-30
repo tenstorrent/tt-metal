@@ -47,11 +47,13 @@ class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
 class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
 
-    # supports_async_decode=False: async decode assumes on-device token/position continuity, which
-    # corrupts Qwen's GDN scan. supports_sample_on_device=True: on-device sampling is decode-only.
+    # supports_async_decode: needs device continuity (sampler writes the next token; the trace
+    # advances cur_pos/rope). GDN is position-free and queue-ordered, so overlap is safe. Continuity
+    # and on-device sampling are TP-only; the plugin only overlaps those steps. Follow
+    # TT_QWEN36_DEVICE_DECODE (default on). supports_sample_on_device: decode-only.
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": False,
+        "supports_async_decode": os.environ.get("TT_QWEN36_DEVICE_DECODE", "1") == "1",
         "supports_sample_on_device": True,
     }
 
@@ -183,12 +185,18 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
         model = self.model[0]
+        # Mark slots this prefill refreshed (override bypasses Generator.prefill_forward_text).
+        # Fresh slots must take the host token on the next decode reset — the device buffer still
+        # holds another request's leftover; continuing slots keep the device token under async.
+        if not hasattr(self, "_slots_prefilled_since_decode"):
+            self._slots_prefilled_since_decode = set()
+        empty_slots = kwargs.get("empty_slots")
+        self._slots_prefilled_since_decode.update(
+            range(tokens.shape[0]) if empty_slots is None else [int(s) for s in empty_slots]
+        )
         if model.num_devices > 1 and model.args.max_batch_size > 1:
-            # Batched serving (max_num_seqs > 1): prefill each request in this step into its decode
-            # slot. Text-only — multimodal is single-sequence (get_supported_mm_limits: B=1). Check
-            # for REAL visual data (not just non-None): vLLM passes an empty pixel_values placeholder
-            # on text requests to a multimodal-registered model, which a bare `is None` check would
-            # misflag and crash the engine on every text request.
+            # Batched text prefill into decode slots (MM is B=1). Require real visual data, not a
+            # non-None empty pixel_values placeholder from vLLM on text requests.
             assert not self._has_visual(kwargs, "pixel_values") and not self._has_visual(
                 kwargs, "pixel_values_videos"
             ), (
@@ -267,8 +275,16 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         N = tokens.shape[0]
         plens = [int(prompt_lens[u]) for u in range(N)] if prompt_lens is not None else [tokens.shape[1]] * N
         if empty_slots is None:
+            # Fallback only: blind 0..N-1 overwrites live GDN rows. Runner should pass empty_slots.
+            logger.warning(
+                f"Qwen batched prefill got no empty_slots for {N} user(s); assuming rows 0..{N-1}. "
+                "If other requests are decoding, their GDN state is about to be overwritten."
+            )
             empty_slots = list(range(N))
         empty_slots = [int(s) for s in empty_slots]
+        assert (
+            len(set(empty_slots)) == len(empty_slots) == N
+        ), f"prefill slots must be distinct and one per request: N={N}, empty_slots={empty_slots}"
         token_ids_list = [tokens[u : u + 1, : plens[u]].to(torch.int32) for u in range(N)]
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         logger.info(f"Prefilling {N} user(s) into slots {empty_slots} (TP batched masked-bucket)")
@@ -284,32 +300,17 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             self._decode_logged = True
             logger.info("Decode trace replay active (Qwen)")
         model = self.model[0]
-        # Batched serving: apply vLLM's condense slot_remap to the per-slot GDN recurrent/conv state
-        # BEFORE the decode trace reads it. The plugin remaps its own buffers (and the seed RNG via
-        # super().decode_forward), but GDN state is model-internal, so mirror the same reindex here.
-        # slot_remap is passed through unchanged so the seed-RNG remap inside super() still runs.
+        # Remap GDN state before decode: vLLM rows move on eviction/condense; plugin remaps its
+        # buffers/seed in super(), but GDN is model-internal. Pass slot_remap through for that.
         if model.num_devices > 1 and model.args.max_batch_size > 1:
             slot_remap = kwargs.get("slot_remap")
             if slot_remap is not None:
                 model._remap_gdn_slots(slot_remap)
-        # DECODE-BATCH BUCKETING (opt-in via TT_DECODE_BUCKETING=1). The vLLM runner always pads the
-        # decode batch to max_num_seqs, filling unused rows with padding whose POSITION is -1. Active
-        # requests are a contiguous prefix [0:num_active) (vLLM InputBatch.condense guarantee). We
-        # slice the (host) decode inputs down to the smallest power-of-2 bucket >= num_active BEFORE
-        # the base forward, so the model runs the narrower (faster) width-`bucket` decode program.
-        # This keeps the whole change in tt-metal -- NO vLLM-runner edit -- and needs no output
-        # re-padding: the plugin reads the decode output by unpadded_batch_size (the true active
-        # count), and the bucket-width output holds those rows in slot order [0:num_active).
-        #
-        # Then multiplex the three decode-trace stores by width B: the base Generator keeps exactly
-        # one trace per on_device_sampling flag, and replaying it at a different B would mismatch the
-        # trace's baked input shapes, so each bucket width keeps its own captured trace. Correct
-        # because the model always refreshes decode-trace inputs
-        # (_tt_vllm_always_refresh_decode_trace_inputs=True): a replayed bucket trace gets this step's
-        # host tokens/positions/page_table copied in before replay. (Non-last buckets' traces are
-        # freed at device close, not via Generator.__del__ -- benign for a long-lived serving process.
-        # Currently validated for host sampling; the on-device-sampling async token path is untested
-        # with bucketing.)
+        # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
+        # smallest power-of-2 width >= active prefix [0:num_active) before the base forward.
+        # No runner edit / output re-pad — plugin reads unpadded_batch_size in slot order.
+        # One decode-trace store (+ token/pos/rope buffers) per width B; on a width switch, stage
+        # from host because the incoming bucket's device buffers are stale under continuity.
         args = list(args)
 
         def _read(name, pos):
@@ -324,12 +325,16 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 args[pos] = val
 
         tokens = _read("tokens", 0)
-        if os.environ.get("TT_DECODE_BUCKETING") == "1" and tokens is not None:
+        if os.environ.get("TT_DECODE_BUCKETING", "1") == "1" and tokens is not None:
             start_pos = _read("start_pos", 1)
             width = int(tokens.shape[0])
             num_active = int((start_pos != -1).sum()) if start_pos is not None else width
             num_active = max(1, min(num_active, width))
             bucket = min(width, 1 << max(0, (num_active - 1).bit_length()))  # smallest pow2 >= num_active
+            # Keep full width when slot_remap is set: remap indexes the full slot space (tokens /
+            # GDN). Rare (row moves only); bucketing resumes next step. Check kw + positional #10.
+            if _read("slot_remap", 10) is not None:
+                bucket = width
             if bucket < width:
                 _write("tokens", 0, tokens[:bucket])
                 if start_pos is not None:
@@ -347,18 +352,22 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             if B not in store:
                 store[B] = (defaultdict(lambda: None), defaultdict(lambda: None), defaultdict(lambda: None))
             self.trace_ids_decode, self.trace_inputs_decode, self.trace_output_decode = store[B]
-            # Namespace the on-device SAMPLING trace by the same bucket width. The base Generator
-            # binds a sampling trace to ONE decode-output logits tensor by identity
-            # (generator._validate_trace_inputs). Each bucket has its own decode trace -> its own
-            # logits tensor, so the sampling trace must be keyed per width too; otherwise replaying
-            # at width B against a width-B' logits tensor raises "logits tensor does not match the
-            # tensor used during trace capture". This runs at both warmup (self.decode_forward is
-            # called per width) and serving, so each width captures/replays its own sampling trace.
+            # Key the sampling trace by bucket width too: Generator binds it to one logits tensor
+            # by identity, and each decode-bucket width has its own.
             for _m in self.model:
                 _sm = getattr(_m, "sampling", None)
                 if _sm is not None and hasattr(_sm, "set_trace_bucket"):
                     _sm.set_trace_bucket(B)
+            self._note_bucket_switch(model, B)
         return super().decode_forward(*args, **kwargs)
+
+    def _note_bucket_switch(self, model, B):
+        """On a decode-width switch, force host tokens for every slot (incoming bucket buffers are stale)."""
+        prev_B = getattr(self, "_last_decode_bucket", None)
+        self._last_decode_bucket = B
+        if prev_B is None or prev_B == B or not getattr(model, "device_decode_continuity", False):
+            return
+        self._force_host_decode_tokens = True
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
         # Capture the chunk-prefill trace + warm the masked-bucket set so requests only replay
@@ -401,12 +410,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # Drop stale `non_greedy_decoding_on_device` from the old vLLM plugin; no-op for Qwen.
         kwargs.pop("non_greedy_decoding_on_device", None)
         max_b = kwargs.get("max_batch_size")
-        # DECODE-BATCH BUCKETING: pre-capture one decode trace per power-of-2 bucket
-        # [1,2,4,...,max_batch] so serving replays a compiled trace at every width the runner's
-        # bucketing may request (otherwise the first decode at a fresh width pays a one-time capture
-        # on the request's critical path). The wrapper's decode_forward multiplexes trace_ids_decode
-        # by width, so each super() call captures into its own bucket. No-op unless bucketing is on.
-        if os.environ.get("TT_DECODE_BUCKETING") == "1" and isinstance(max_b, int) and max_b > 1:
+        # Pre-capture one decode trace per power-of-2 width so serving never captures on the hot path.
+        if os.environ.get("TT_DECODE_BUCKETING", "1") == "1" and isinstance(max_b, int) and max_b > 1:
             widths, w = [], 1
             while w < max_b:
                 widths.append(w)

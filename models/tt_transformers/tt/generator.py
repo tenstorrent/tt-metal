@@ -1322,32 +1322,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     chunk = dev_toks.shape[0]
                     remap = slot_remap[i * chunk : (i + 1) * chunk]
                     remap_t = (remap if isinstance(remap, torch.Tensor) else torch.tensor(remap)).long()
-                    # slot_remap holds GLOBAL slot indices: the vLLM plugin offsets
-                    # each DP rank's local [0,B) remap by rank*B for the row-sharded
-                    # SeedManager. dev_toks/dev_pos are this rank's *local* size-B
-                    # tensors, so rebase the global indices back to [0,B) before
-                    # gathering -- otherwise rank i>=1 indexes past the end (e.g.
-                    # value 32 into a size-32 tensor).
+                    # slot_remap is global (rank*B offset for SeedManager); rebase to local [0,B).
                     remap_t = remap_t - i * chunk
                     dev_toks = dev_toks[remap_t]
                     dev_pos = dev_pos[remap_t]
-                # The device token is authoritative only for slots whose device
-                # position chain is continuous with the host view; slots that
-                # were re-added, resumed, or freshly prefilled take host tokens.
-                # The host position itself may lag the device by one step under
-                # async scheduling, so accept both.
+                # Keep device token only when device pos matches host (or host-1 under async);
+                # re-added / resumed / fresh-prefill slots take host tokens.
                 host_pos = start_pos[i].reshape(-1).to(torch.int64)
-                # The device token/position buffers are read from a single device
-                # shard (get_device_tensors(...)[0]). That holds the full per-chunk
-                # batch only when the decode inputs are replicated across the mesh
-                # (e.g. Llama-3.1-8B, which this async-ahead keep was designed for).
-                # Models that shard the decode batch across mesh devices
-                # (users_row_sharded, e.g. GPT-OSS) expose only B/num_shards entries
-                # on shard 0, so dev_toks/dev_pos are shorter than the full host
-                # chunk. Reconstructing the full batch needs the model's mesh layout,
-                # which the shared generator doesn't have; rather than crash on the
-                # mismatched comparison, fall back to the host-provided tokens and
-                # positions for this chunk (the pre-fix behaviour).
+                # Shard-0 read is full-batch only for replicated decode inputs; users_row_sharded
+                # exposes a partial shard — fall back to host tokens/pos rather than crash.
                 if dev_pos.shape[0] != host_pos.shape[0] or dev_toks.shape[0] != tok_chunk.reshape(-1).shape[0]:
                     new_tokens.append(tok_chunk)
                     new_start_pos.append(start_pos[i])
@@ -1356,9 +1339,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 prefilled = getattr(self, "_slots_prefilled_since_decode", None)
                 if prefilled:
                     bs = tok_chunk.shape[0]
-                    for slot in prefilled:
-                        if i * bs <= slot < (i + 1) * bs:
-                            use_dev[slot - i * bs] = False
+                    if slot_remap is not None:
+                        # ``use_dev`` is indexed by POST-remap row, while the set holds the slots
+                        # the prefill actually wrote (PRE-remap). Row j came from slot remap[j].
+                        for j in range(bs):
+                            if int(remap[j]) in prefilled:
+                                use_dev[j] = False
+                    else:
+                        for slot in prefilled:
+                            if i * bs <= slot < (i + 1) * bs:
+                                use_dev[slot - i * bs] = False
+                if getattr(self, "_force_host_decode_tokens", False):
+                    # Device buffers are discontinuous (e.g. width switch); take host for all slots.
+                    use_dev[:] = False
                 merged = torch.where(use_dev, dev_toks.view(-1), tok_chunk.view(-1)).view(tok_chunk.shape)
                 new_tokens.append(merged.to(tok_chunk.dtype))
                 merged_pos = torch.where(use_dev, dev_pos, host_pos)
@@ -1366,6 +1359,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             tokens = new_tokens
             start_pos = new_start_pos
         self._slots_prefilled_since_decode = set()
+        self._force_host_decode_tokens = False
 
         decode_kwargs = {
             "current_pos": start_pos,

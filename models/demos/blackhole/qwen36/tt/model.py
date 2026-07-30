@@ -37,8 +37,9 @@ class Qwen36Model:
             self.tt_ccl = None
         self.configuration = args  # Generator reads model.configuration.max_seq_len
         self.sampling_dp = 1
-        # Rope is host-recomputed each step (not advanced on-device) → force the trace to refresh decode inputs (else stale rope).
-        self._tt_vllm_always_refresh_decode_trace_inputs = True
+        # Decode advances token/position/rope on device, so async scheduling's one-step-stale host state is harmless.
+        self.device_decode_continuity = self.num_devices > 1 and os.environ.get("TT_QWEN36_DEVICE_DECODE", "1") == "1"
+        self._tt_vllm_always_refresh_decode_trace_inputs = not self.device_decode_continuity
         # Reuses the vocab-sharded lm_head as the sampler's shard: needs divisible vocab; 64K = top-k limit.
         self._supports_on_device_sampling = (
             self.num_devices > 1
@@ -927,8 +928,15 @@ class Qwen36Model:
         """
         x = self.embd(token_ids_buf)
         if self.num_devices > 1:
-            # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac].
-            x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
+            if len(token_ids_buf.shape) == 4:
+                # Sampler-shaped buffer is padded to slots; slice embd output back to live width B.
+                B = cur_pos_tensor.shape[0]
+                x = ttnn.unsqueeze_to_4D(x)  # [1,1,slots,dim_frac]
+                if x.shape[2] != B:
+                    x = ttnn.slice(x, (0, 0, 0, 0), (1, 1, B, x.shape[-1]))
+            else:
+                # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac].
+                x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
         for layer in self.layers:
             if layer.is_full_attention:
                 x = layer.forward(x, cos, sin, position_tensor=cur_pos_tensor, page_table=page_table, mode="decode")
@@ -1810,13 +1818,12 @@ class Qwen36Model:
             dn.write_slot(slot, rec, convs)
 
     def _remap_gdn_slots(self, remap):
-        """Apply a vLLM batch-condense slot_remap to every GDN layer's batched decode state
-        (device-side; slot i takes the state at slot remap[i]). Mirrors seed_manager.apply_slot_remap
-        for GDN's per-slot recurrent+conv state, which the plugin's slot_remap does not itself move.
-        No-op for an identity remap."""
+        """Move GDN decode state to match the plugin slot_remap; pad/trim remap to each layer's B."""
+        idx = [int(x) for x in remap]
         for layer in self.layers:
             if not layer.is_full_attention:
-                layer.attention.remap_slots(remap)
+                B = layer.attention.B
+                layer.attention.remap_slots(idx[:B] + list(range(len(idx), B)))
 
     def prefill_chunked_peruser(self, token_ids_list, page_table, valid_lens=None):
         """Batched per-user LONG-prefill (TP, eager). Runs the single-user chunk-outer path
@@ -3181,12 +3188,34 @@ class Qwen36Model:
 
     # Generator contract — decode
 
+    @property
+    def _decode_token_slots(self):
+        """Width of the device-continuity token buffer = the sampler's slot count (>=32)."""
+        n = self.sampling.tt_sampling.max_batch_size if self.sampling is not None else 32
+        return max(32, int(n))
+
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
-        """Build HOST decode inputs: (tokens_tt, cur_pos_tt, rope_packed, page_table_tt)."""
+        """Build HOST decode inputs: (tokens_tt, cur_pos_tt, rope, page_table_tt).
+
+        ``rope`` is a uint32 [1,B] POSITION index under device decode continuity (the graph
+        gathers cos/sin from it and then advances it), or host-packed cos/sin otherwise.
+        """
         from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host
 
         B = tokens.shape[0]
-        tokens_tt = ttnn.from_torch(tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if self.device_decode_continuity:
+            # The on-device sampler writes the sampled id straight back into this buffer, so it must
+            # be a legal ttnn.sampling / ttnn.argmax output_tensor: rank 4, uint32, ROW_MAJOR, one
+            # entry per sampler slot (measured — ttnn.sampling rejects rank 3). The decode graph
+            # embeds from it and slices back to the live width B.
+            slots = self._decode_token_slots
+            assert B <= slots, f"decode batch {B} exceeds sampler slots {slots}"
+            tok_padded = torch.nn.functional.pad(tokens.to(torch.int32).reshape(-1), (0, slots - B))
+            tokens_tt = ttnn.unsqueeze_to_4D(
+                ttnn.from_torch(tok_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            )
+        else:
+            tokens_tt = ttnn.from_torch(tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         # Per-user positions: current_pos may be a [B] tensor (each user at its own position) or a
         # scalar (lockstep). Build a [B] int32 vector so cur_pos and rope carry one rotation per user.
         if isinstance(current_pos, torch.Tensor):
@@ -3198,7 +3227,15 @@ class Qwen36Model:
         # space; post-image text has t==h==w so 1D RoPE at rope_pos is correct). cur_pos_tt below
         # stays the true KV position. rope_delta is 0 for text, so this is a no-op there.
         rope_pos_vec = pos_vec + self.rope.rope_delta
-        if self.num_devices > 1:
+        if self.device_decode_continuity:
+            # Hand the decode graph the rope POSITION, not a host-computed cos/sin: the graph
+            # gathers cos/sin from the device tables and then advances this index itself, so a
+            # step whose host position is stale (async scheduling) still rotates correctly.
+            # Allocated here, on the host side of the step, because the gather tables must exist
+            # before any trace capture runs.
+            self.rope._ensure_decode_gather_tables()
+            rope_packed = self.rope.get_decode_rot_idxs(rope_pos_vec, on_host=True)
+        elif self.num_devices > 1:
             # TP: rope_tp cos/sin [1,B,1,rope_dim] packed on host.
             rd = self.args.rope_head_dim
             inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
@@ -3242,7 +3279,14 @@ class Qwen36Model:
         """
         from models.demos.blackhole.qwen36.tt.generator_interface import unpack_rope
 
-        cos, sin = unpack_rope(rot_mat_idxs)
+        # rot_mat_idxs is either a uint32 [1,B] POSITION tensor (device continuity: gather cos/sin
+        # here, then advance the position on device below) or the host-packed cos/sin pair.
+        device_rope = rot_mat_idxs is not None and rot_mat_idxs.dtype == ttnn.uint32
+        if device_rope:
+            cos, sin = self.rope.get_rot_mats_from_idxs(rot_mat_idxs)
+        else:
+            cos, sin = unpack_rope(rot_mat_idxs)
+
         if on_device_logits:
             assert self.sampling is not None, "on_device_logits=True but self.sampling is None"
             logits = self._forward_decode(tokens, cos, sin, current_pos, page_table, sharded_lm_head=True)
@@ -3251,10 +3295,13 @@ class Qwen36Model:
             B = logits.shape[2]
             if B < sampler_batch:
                 logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, sampler_batch - B), (0, 0)], value=0.0)
-            # Bare tensor (not a tuple): the traced path passes this straight to capture_trace().
-            return logits
-        logits = self._forward_decode(tokens, cos, sin, current_pos, page_table)
-        return logits, None
+        else:
+            logits = self._forward_decode(tokens, cos, sin, current_pos, page_table)
+        if device_rope:
+            ttnn.plus_one(current_pos, skip_negative_entries=True)
+            ttnn.plus_one(rot_mat_idxs)
+        # On-device sampling consumes a bare tensor; host sampling expects the legacy tuple.
+        return logits if on_device_logits else (logits, None)
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """Convert decode output to host torch. Host-sampling returns logits [B,S,vocab];

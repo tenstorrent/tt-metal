@@ -88,6 +88,62 @@ class Qwen36RoPESetup:
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
+        # Device decode RoPE gather tables (lazy): embedding-shaped ROW_MAJOR cos/sin so the
+        # trace can gather from a device position under async (host pos lags). ~32 MB each @ 256K.
+        self._cos_gather = None
+        self._sin_gather = None
+
+    def _ensure_decode_gather_tables(self):
+        """Allocate the ROW_MAJOR gather tables. MUST be called outside trace capture (it
+        allocates device buffers, which is unsafe while a trace is live)."""
+        if self._cos_gather is not None:
+            return
+        self._cos_gather = ttnn.from_torch(
+            self.cos_cpu.unsqueeze(0).unsqueeze(0),  # [1, 1, max_seq_len, head_dim]
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        self._sin_gather = ttnn.from_torch(
+            self.sin_cpu.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+
+    def get_decode_rot_idxs(self, rope_positions: torch.Tensor, on_host: bool = True):
+        """HOST (or device) uint32 [1, B] rope-index tensor, one entry per decode slot.
+
+        `rope_positions` are ROPE positions (KV position + rope_delta), already offset by the
+        caller. Padded slots arrive as -1; uint32 cannot hold that and a negative index would read
+        out of bounds, so they are clamped to 0 — their output row is discarded anyway.
+        """
+        idx = rope_positions.reshape(1, -1).clamp_min(0).to(torch.int32)
+        if on_host:
+            return ttnn.from_torch(idx, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.from_torch(
+            idx,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+
+    def get_rot_mats_from_idxs(self, rot_idxs):
+        """Gather decode cos/sin on device from a [1, B] uint32 position tensor.
+
+        Returns (cos, sin), each [1, B, 1, head_dim] bf16 TILE — the same shape and the same
+        values the host path packs, so the two are interchangeable inside the decode graph.
+        """
+        assert self._cos_gather is not None, "_ensure_decode_gather_tables() must run before the trace"
+        cos = ttnn.embedding(rot_idxs, self._cos_gather, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sin = ttnn.embedding(rot_idxs, self._sin_gather, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        cos = ttnn.transpose(ttnn.unsqueeze_to_4D(cos), 1, 2)  # [1,B,head_dim] -> [1,B,1,head_dim]
+        sin = ttnn.transpose(ttnn.unsqueeze_to_4D(sin), 1, 2)
+        return cos, sin
+
     def get_rot_mats(self, position_ids: torch.Tensor):
         """Get cos/sin matrices for given positions.
 
