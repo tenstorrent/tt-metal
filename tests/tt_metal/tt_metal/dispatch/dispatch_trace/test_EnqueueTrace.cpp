@@ -901,8 +901,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
         const bool use_trace = (rand() % 2) == 0;
         if (use_trace) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            const distributed::MeshTraceId trace_id =
-                distributed::BeginTraceCapture(mesh_command_queue);
+            const distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             this->device_->end_mesh_trace(mesh_command_queue, trace_id);
             trace_ids.push_back(trace_id);
@@ -956,8 +955,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
         if (use_trace) {
             ;
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            const distributed::MeshTraceId trace_id =
-                distributed::BeginTraceCapture(mesh_command_queue);
+            const distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             this->device_->end_mesh_trace(mesh_command_queue, trace_id);
             trace_ids.push_back(trace_id);
@@ -1023,8 +1021,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
         if (use_trace) {
             ;
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            const distributed::MeshTraceId trace_id =
-                distributed::BeginTraceCapture(mesh_command_queue);
+            const distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             this->device_->end_mesh_trace(mesh_command_queue, trace_id);
             trace_ids.push_back(trace_id);
