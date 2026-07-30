@@ -627,6 +627,20 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         )
 
     def decode_forward(self, *args, **kwargs):
+        reload_inputs = kwargs.pop("reload_inputs")
+        reload_page_table = kwargs.pop("reload_page_table")
+        reload_sampling_params = kwargs.pop("reload_sampling_params")
+        reset_sampling_state = kwargs.pop("reset_sampling_state")
+        if (
+            not reload_inputs
+            or reload_page_table
+            or reload_sampling_params
+            or reset_sampling_state
+        ):
+            raise ValueError(
+                "Mllama requires a full host-input reload and has no "
+                "device sampling state"
+            )
         logits = super().decode_forward_llama_vision(*args, **kwargs)
         if isinstance(logits, tuple):
             return logits[0]
@@ -638,8 +652,6 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
 
 
 class LlamaForCausalLM(Generator):
-    decode_input_update_contract = 1
-
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -725,8 +737,6 @@ class LlamaForCausalLM(Generator):
 
 
 class QwenForCausalLM(Generator):
-    decode_input_update_contract = 1
-
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -806,8 +816,6 @@ class QwenForCausalLM(Generator):
 
 
 class MistralForCausalLM(Generator):
-    decode_input_update_contract = 1
-
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -905,8 +913,6 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
     picks up the stash via ``_active_page_tables_per_layer`` and routes
     each layer's attention to its own page table.
     """
-
-    decode_input_update_contract = 1
 
     # Class-level capabilities
     model_capabilities = {
@@ -1046,8 +1052,6 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
     cleared on the way out so a subsequent legacy single-page-table call
     isn't accidentally affected.
     """
-
-    decode_input_update_contract = 1
 
     # Class-level capabilities
     model_capabilities = {
