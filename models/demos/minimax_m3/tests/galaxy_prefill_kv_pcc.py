@@ -14,6 +14,9 @@ Env:
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
   PREFILL_SKIP_PCC    "1" -> perf only: skip the per-layer golden KV PCC (no kv_cache/ needed) [default 0]
+  PREFILL_EXPECTED_TPS  whole-sequence tok/s baseline; when set, assert measured median is
+                        within +/- PREFILL_PERF_MARGIN of this value                           [default: unset]
+  PREFILL_PERF_MARGIN fraction tolerance around PREFILL_EXPECTED_TPS (e.g. 0.05 = +/-5%)     [default 0.05]
   PREFILL_STANDALONE_CHUNKED_PCC  min K/V/index_k PCC gate (fail below this)                 [default 0.88]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs; also auto-sets
                       M3_LOAD_NLAYERS so only those layers' weight shards are read)          [default: all]
@@ -302,9 +305,10 @@ def main():
             )
 
         w = statistics.median(whole_times)
+        whole_tps = n_tokens / w
         print(
             f"[prefill-pcc] WHOLE SEQUENCE over {tps_iters} iters: {n_tokens} tok @ 0 cache, "
-            f"median {n_tokens / w:.1f} tok/s (real prompt), {total / w:.1f} tok/s (processed); "
+            f"median {whole_tps:.1f} tok/s (real prompt), {total / w:.1f} tok/s (processed); "
             f"wall median {w * 1000:.1f} ms [min {min(whole_times) * 1000:.1f}, max {max(whole_times) * 1000:.1f}]",
             flush=True,
         )
@@ -315,6 +319,23 @@ def main():
             f"wall median {lc * 1000:.1f} ms [min {min(last_times) * 1000:.1f}, max {max(last_times) * 1000:.1f}]",
             flush=True,
         )
+
+        # --- perf gate: whole-sequence tok/s vs PREFILL_EXPECTED_TPS +/- PREFILL_PERF_MARGIN ---
+        expected_tps_env = os.environ.get("PREFILL_EXPECTED_TPS")
+        if expected_tps_env is not None:
+            expected_tps = float(expected_tps_env)
+            margin = float(os.environ.get("PREFILL_PERF_MARGIN", "0.05"))
+            low = expected_tps * (1.0 - margin)
+            high = expected_tps * (1.0 + margin)
+            print(
+                f"[prefill-pcc] PERF GATE: measured {whole_tps:.1f} tok/s vs baseline "
+                f"{expected_tps:.1f} +/- {margin * 100:.1f}% band [{low:.1f}, {high:.1f}]",
+                flush=True,
+            )
+            assert low <= whole_tps <= high, (
+                f"whole-sequence throughput {whole_tps:.1f} tok/s outside baseline "
+                f"{expected_tps:.1f} tok/s +/- {margin * 100:.1f}% band [{low:.1f}, {high:.1f}]"
+            )
 
         # --- accuracy: per-layer KV PCC vs golden (skipped in perf-only mode; synthetic
         # traces carry only metadata.json, so there is no golden KV cache to compare against) ---
