@@ -319,6 +319,9 @@ if not f.get("oracle"):
     bad.append("oracle missing -- name the correctness oracle the shipped decoder passed")
 if f.get("oracle_passed") is not True:
     bad.append("oracle_passed is not true -- a faster decoder that fails its oracle is a regression")
+if not f.get("outcome"):
+    bad.append("outcome missing -- record it explicitly (e.g. no_change / improved); it is the first field "
+               "a reader scans and a null there makes the result look unresolved")
 if f.get("changed") is None and f.get("shipped_change") is None:
     bad.append("neither `changed` nor `shipped_change` recorded: a NO-CHANGE outcome is a valid, "
                "publishable result but it has to be stated explicitly")
@@ -341,6 +344,12 @@ if kept_any:
                            "MEASURED set, never an inferred one")
             if s.get("oracle_passed") is None:
                 bad.append(f"combination.measured_sets[{n}]: no oracle_passed")
+            # A measurement whose SET is unidentified is not auditable: an earlier batch recorded 12 sets
+            # with numbers and oracles but `chains: null` on every one, so you could see that twelve things
+            # were measured but not WHAT was measured.
+            if not s.get("chains"):
+                bad.append(f"combination.measured_sets[{n}]: no `chains` -- name the chain set this "
+                           "measurement corresponds to, or the number is unattributable")
         best = min((s.get("measured_ms") for s in sets
                     if isinstance(s.get("measured_ms"), (int, float))), default=None)
         if best is not None and isinstance(fm, (int, float)) and fm > best + floor:
