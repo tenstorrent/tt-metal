@@ -1,0 +1,14 @@
+Command:
+TT_METAL_WATCHER=10 pytest -q -s \
+  models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py
+
+Result:
+10 tests passed, 0 failures, 0 errors (12.044 s).
+Watcher completed without a NoC, kernel, assert, hang, or device error.
+The run includes non-aligned prefill, B1/B32 eager decode, direct paged
+prefill-to-decode transition, advertised context 131072, and five trace
+replays at B1/B32 with the shipped BFP4 default.
+
+Machine-readable raw runner result:
+`watcher_bfp4_final.xml` (pytest-generated JUnit XML, tests=10, failures=0,
+errors=0). This final run used decode block16 and explicit prefill-down block8.
