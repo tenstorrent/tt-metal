@@ -906,11 +906,12 @@ public:
             auto op_owned_tensors =
                 std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors));
 
-            const bool skip_validation = !ttnn::CONFIG.get<"validate_program_run_args">();
+            const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (const auto& range : tensor_coords.ranges()) {
-                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
+                auto program =
+                    tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec, skip_validation);
                 tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params, skip_validation);
                 shared_variables.emplace(
                     range, shared_variables_t{.bindings = bindings, .op_owned_tensors = op_owned_tensors});
@@ -964,7 +965,7 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            const bool skip_validation = !ttnn::CONFIG.get<"validate_program_run_args">();
+            const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto run_args = CustomSpecFactory::override_runtime_arguments(
                     attrs,
