@@ -147,7 +147,9 @@ struct KernelSpec {
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs a Semaphore from the emitted id: Semaphore(sem::<accessor_name>)
+    // The kernel constructs a Semaphore from the emitted binding token:
+    // Semaphore(sem::<accessor_name>) -- the token carries the host-resolved scope, which CTAD
+    // turns into the semaphore's physical mechanism.
     struct SemaphoreBinding {
         // How this kernel accesses the semaphore. Drives the AUTO scope classifier
         // (ResolveSemaphoreScope): the writer classes count toward concurrency; OBSERVE does not.

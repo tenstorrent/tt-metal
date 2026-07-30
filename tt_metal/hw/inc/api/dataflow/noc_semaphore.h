@@ -8,7 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/debug/assert.h"
 #include <hostdevcommon/sem_scope.h>       // enum class SemScope (shared host/device, Phase-2 baking)
-#include "api/dataflow/semaphore_token.h"  // SemAccessor<Id,Scope> baked-sem token (Phase-2 S1)
+#include "api/dataflow/semaphore_binding_token.h"  // SemaphoreBindingToken<Id,Scope> baked-sem token (Phase-2 S1)
 
 /**
  * @brief Semaphore synchronization primitive for programmable cores.
@@ -99,7 +99,7 @@ public:
     // mismatch case: an explicit `Semaphore<..., WrongScope>(sem::x)` fails to compile
     // instead of silently overriding the baked scope.
     template <uint32_t Id, SemScope TokenScope>
-    explicit Semaphore(SemAccessor<Id, TokenScope>) : l1_offset_(sem_l1_offset(Id)) {
+    explicit Semaphore(SemaphoreBindingToken<Id, TokenScope>) : l1_offset_(sem_l1_offset(Id)) {
 #ifdef ARCH_QUASAR
         // The cached-only pool is indexed by the semaphore's own id, so a high id must not run past
         // the pool into whatever follows it. Checkable here (unlike on the host) because both the id
@@ -397,8 +397,8 @@ private:
     }
 };
 
-// CTAD guide: `Semaphore s(sem::x)` where sem::x is a SemAccessor<Id, Scope> deduces
+// CTAD guide: `Semaphore s(sem::x)` where sem::x is a SemaphoreBindingToken<Id, Scope> deduces
 // Semaphore<TENSIX, Scope> — the host-baked scope — with no explicit template args.
 // (Semaphores are TENSIX-scoped; the token carries only Id + SemScope.)
 template <uint32_t Id, SemScope S>
-Semaphore(SemAccessor<Id, S>) -> Semaphore<ProgrammableCoreType::TENSIX, S>;
+Semaphore(SemaphoreBindingToken<Id, S>) -> Semaphore<ProgrammableCoreType::TENSIX, S>;
