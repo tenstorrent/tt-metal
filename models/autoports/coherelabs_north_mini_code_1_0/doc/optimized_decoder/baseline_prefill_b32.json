@@ -1,0 +1,54 @@
+{
+  "mean_ms": 147.9429499983477,
+  "min_ms": 147.82820199616253,
+  "samples_ms": [
+    147.82820199616253,
+    147.9432699852623,
+    148.0573780136183
+  ],
+  "decoder": "functional",
+  "candidate": null,
+  "real_weights": true,
+  "mode": "prefill",
+  "batch": 32,
+  "sequence": 128,
+  "layer": 1,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "effective_configuration": null,
+  "provenance": {
+    "git_head": "a2719cfecabce0124a96835b26eb31fb41928e2d",
+    "git_branch": "skillexp-work-northmini-fresh",
+    "sources": {
+      "models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py": {
+        "sha256": "5411462447d15f3dab370a951bb54c97a8f1216b911fd9b9c4c898bf74e04678",
+        "git_blob_sha": "265fdee60c2752af75f45e3a7a9bd54a69364984",
+        "git_status": "?? models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py"
+      },
+      "models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py": {
+        "sha256": "a28a7e7d2dce76d4da469f1af01f8e300d30911b9df2ebc7622ef07a4431289a",
+        "git_blob_sha": "e826a498707e7781751e9d331c6c0e33c1737aac",
+        "git_status": "?? models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py"
+      }
+    }
+  },
+  "argv": [
+    "models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py",
+    "--implementation",
+    "functional",
+    "--mode",
+    "prefill",
+    "--batch",
+    "32",
+    "--sequence",
+    "128",
+    "--real-weights",
+    "--warmups",
+    "1",
+    "--iterations",
+    "3",
+    "--json-out",
+    "models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/baseline_prefill_b32.json"
+  ],
+  "pcc": null,
+  "pcc_evidence": null
+}

@@ -1,331 +1,245 @@
-# North-Mini optimized decoder
+# North-Mini-Code-1.0 optimized decoder
 
-This directory records the single-device optimization of
+This stage adds the single-device optimized decoder for
 `CohereLabs/North-Mini-Code-1.0` revision
-`d11e61a842617a22dc328552fa5bb86231ee4f37`. The implementation is
-`tt/optimized_decoder.py`. It preserves the functional decoder's prefill,
-decode, paged KV-cache, trace, determinism, batch, and arbitrary logical
-sequence-length contracts. This stage contains no multichip, full-model, or
-vLLM work.
+`d11e61a842617a22dc328552fa5bb86231ee4f37`. Scope is limited to
+`tt/optimized_decoder.py`, its tests/performance harness, and decoder
+documentation. No multichip, full-model, or vLLM work is included.
 
-## Selected runtime
+## Result
 
-- Decode keeps the residual stream width-sharded in L1 through RMS norm,
-  packed QKV, attention, residual, and dense-MLP boundaries. QKV and output
-  projections use DRAM-width-sharded weights and explicit DRAM-sharded matmul
-  programs. Batch 1 and batch 32 have independently swept shard/program
-  contracts.
-- Attention weights are BFP8/LoFi. Dense non-expert MLP decode weights are
-  BFP4/LoFi; phase-specific prefill weights remain BFP8/HiFi2 because BFP4
-  failed authentic non-aligned prefill.
-- MoE routing is BF16/HiFi2. Sparse active-expert weights are BFP8/LoFi.
-  Dense serving-batch expert weights are independently selected BFP4/LoFi:
-  the branch-proven selected matrix passes two active-sparse prefill and six
-  dense-BFP4 rows, while a separate forced-dense BFP4 matrix passes all eight
-  rows. BFP4 is materially faster than BFP8.
-- Batch-1 decode and prefill execute active experts. Prefill groups routed
-  tiles in chunks of 24, keeps intermediate values in L1, and performs
-  device-side down projection, routing, and reduction. Batch-32 prefill uses
-  one packed gate/up expert projection with a phase-specific 80-core 2-D
-  program; batch-32 decode remains on its independently selected split,
-  framework-programmed dense-expert path.
-- Prefill uses DRAM-interleaved activations and explicit large-prefill
-  programs where legal. Logical lengths are padded/chunked internally; the
-  public API has no `seq_len % chunk == 0` restriction. For very large token
-  matrices the runtime uses TTNN's automatic program with interleaved QKV/O
-  weight copies because an explicit 500k program requested 77 MB of circular
-  buffers per core. The copies are present for every batch so large
-  multi-user prefill preserves the same public contract.
-- Paged cache fill/update and paged SDPA stay device-resident TTNN composites.
-  The cache remains BF16 with the functional page size and layout.
+The functional sparse-MoE path evaluated all 128 experts. The optimized path
+routes on device and executes only the active top-8 expert union with
+`ttnn.sparse_matmul`. Decode packs same-input gate/up weights into one sparse
+projection and splits on device. Packed QKV, paged cache operations, native
+SDPA, per-token sigmoid routing scores, and trace-safe stable inputs remain.
 
-`OptimizedDecoder` subclasses `FunctionalDecoder` only for public validation
-and shared contract helpers. Its measured forward, attention, norm, dense
-MLP, and MoE methods are overridden. Path-audit tests forbid a functional
-math fallback.
+The selected policy is:
 
-## Correctness and capacity
+- BFP8/LoFi attention weights and BFP8 KV cache;
+- BFP4/LoFi dense-layer gate/up and BFP8/LoFi down weights and matmuls;
+- two separately tuned 48-core, 8x6 dense gate/up projections at batch 1,
+  where they beat every correct packed candidate; a packed 64-core 1x3
+  projection at serving batch 32; dense down uses a 32-core interleaved 1x2
+  program at batch 1 and a DRAM-width-sharded program at batch 32;
+- BFP8/HiFi2 decode and small-prefill experts;
+- BF16/HiFi4 large-prefill expert matrices with FP32 destination accumulation;
+- packed decode gate/up and shared decode/prefill down storage;
+- batch-specific expert programs, plus a 32-core width-sharded residual/RMSNorm
+  chain at both decode batches;
+- an exact `nnz=8` sparse-expert count at one-token decode, derived from an
+  on-device top-k presence mask; batch-32 unions remain dynamic;
+- DRAM-width-sharded QKV/O weights and decode matmul programs at batch 1;
+  serving batch 32 retains interleaved attention because its sharded candidate
+  failed the exact correctness gate;
+- arbitrary public logical sequence lengths, internally padded/chunked by 32;
+- a 1024-token dense-expert composite for total prefill M at least 1024, with
+  the functional-compatible router accumulation policy.
 
-Final normal run:
+There is no functional-runtime fallback. Measured `prefill_forward` and
+`decode_forward` contain no Torch conversion, host round trip, or CPU fallback.
 
-```bash
-pytest -q -s --timeout=900 \
-  --junitxml=models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/artifacts/review5_full.xml \
-  models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py \
-  models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder_prefill_geometry.py
-```
+## Warmed latency
 
-Result: `38 passed, 16 skipped in 383.78s`. The skips are opt-in
-DRAM-sharded candidate cases, not selected-path coverage.
+Official real layer-1 weights were used. Decode is traced replay; prefill is
+warmed and untraced. The pre-review final JSONs record argv, effective
+policy/program configuration, Git state, model revision, and source SHA256.
+Their manually attached PCC fields are not treated as exact correctness
+bindings unless the evidence workload matches.
 
-The same final source was revalidated after transplanting the isolated
-model-only commit chain onto the current no-advisor experiment arm:
-`38 passed, 16 skipped in 381.19s`. The JUnit artifact is
-`artifacts/current_full.xml`. The current arm's `optimize` skill intentionally
-requires a manually derived and measured layout seed; it does not contain the
-historical OPT-015 shard-advisor gate discussed in the retained review-5
-history.
+| workload | functional | optimized | change |
+|---|---:|---:|---:|
+| prefill, batch 1, sequence 128 | 14.848 ms | 13.228 ms | 10.91% faster |
+| prefill, batch 32, sequence 128 | 147.841 ms | 135.064 ms | 8.64% faster |
+| traced decode, batch 1 | 9.570 ms | 0.604 ms | 93.69% faster |
+| traced decode, batch 32 | 11.155 ms | 3.846 ms | 65.52% faster |
 
-The full current-arm suite also passes under `TT_METAL_WATCHER=10`:
-`38 passed, 16 skipped in 414.59s` (`artifacts/current_watcher.xml`).
-`watcher/current_full/generated/watcher/watcher.log` has 3,247 lines and no
-fatal, invalid-NoC, CB-bounds, overflow, sanitizer, timeout, hang, tripped,
-kernel-error, watcher-error, or assert signature. Post-run `tt-smi 6.0.0`
-reports four live p300c boards, healthy DRAM, zero corrected or uncorrected
-GDDR errors, and zero thermal trips.
+The primary batch-1 result beats the best correct batch-1 baseline and does
+not regress either prefill batch or serving decode. Final records are
+`artifacts/final_{prefill,decode}_b{1,32}.json`; all four bind to optimized
+source SHA256
+`21d222646cffcb8c09c0fba1b60b0c1f30f117e6dc6a53b49b3f1af340602ecd`.
+Their correctness bindings are deliberately null: PCC is reported from the
+exact test logs below, never borrowed across workload or batch.
 
-| Check | Final evidence |
-|---|---:|
-| authentic layer-1 prefill b1 / b32 | PCC 0.999428 / 0.999428 |
-| authentic layer-1 decode b1 / b32 | PCC 0.997995 / 0.997995 |
-| authentic layer-4 prefill b1 / b32 | PCC 0.999990 / 0.999941 |
-| authentic layer-4 decode b1 / b32 | PCC 0.997234 / 0.997234 |
-| review-5 packed prefill b32, layers 1 / 4 | PCC 0.99923857 / 0.99993403 |
-| active-expert non-aligned prefill, layers 1 / 4 | sampled full-output PCC 0.99867 / 0.99871 |
-| dense non-aligned lengths 1/31/33/65 | PCC 0.99913–0.99914 |
-| traced layer kinds, batches 1/32 | PCC 0.99837–0.99927 |
-| repeated trace replay, 10 runs | deterministic; PCC 0.999398 |
-| permuted paged cache, positions 5/17/31/63 | K/V PCC 0.99957–0.99970 |
+## Correctness, determinism, and capacity
 
-The acceptance bar is PCC `>= 0.995`. The authentic dense-expert BFP4 matrix
-is the selection gate; synthetic random-weight BFP4 results remain diagnostic
-only and do not override equivalent target-weight evidence.
+The final aggregate watcher run passes 30 tests with five explicit opt-in
+skips in 245.36 s; `watcher_clean_final.txt` contains the complete log.
+It was captured from source `d4665e8a`; the committed source adds only the
+explicit `MODEL_ID` module export required by the performance harness. No
+runtime method changed, and the import smoke plus all final warmed/profile
+runs bind exactly to `21d22264`.
+The 4096-token populated-history trace is also watcher-clean in its required
+fresh process. Three other skips are isolated precision probes and one is the
+costly exact-context prefill, each with a dedicated retained log.
 
-Optimized prefill was also run at the advertised limit:
+| coverage | result |
+|---|---|
+| dense/full/forced-RoPE prefill, logical lengths 1/31/33/65 | PCC 0.99914 / 0.99629 / 0.99631 / 0.99528 |
+| sliding/RoPE/sparse-MoE prefill, lengths 33/65/1025 | PCC 0.99922 / 0.99933 / 0.99996 |
+| full/no-RoPE/sparse-MoE prefill, length 33 | PCC 0.99925 |
+| selected real-weight traced decode, batch 1 | PCC 0.998268 |
+| selected real-weight traced decode, batch 32 | PCC 0.997431 |
+| populated 4096-token sliding history | PCC 0.999130; watcher-clean fresh process |
+| official real-weight trace | five bitwise-identical replays |
+| exact real-weight batch-32, sequence-128 sparse prefill | optimized/functional 0.999871; optimized/HF 0.989082; functional/HF 0.988945 |
+| paged-cache nonzero slots | key/value PCC at least 0.99980 |
+| advertised context | optimized batch-1 prefill at 500000 returns expected finite output; batch-32 cache+weights coexist and last-position sparse decode executes; batch-1 all layer kinds execute |
 
-| Layer kind | Logical context | Result | Single pass |
-|---|---:|---|---:|
-| dense/full/forced-RoPE | 500,000 | finite output | 159,869.562 ms |
-| sliding/RoPE/MoE | 499,999 | finite output | 193,125.821 ms |
-| full/no-RoPE/MoE | 499,999 | finite output | 347,770.355 ms |
+The official router has close eighth/ninth expert boundaries. The prior
+HiFi4/FP32 router changed some expert memberships and reached only 0.982107
+direct optimized/functional PCC. Retaining the optimized 1024-token expert
+program but using the functional-compatible router kernel restores direct PCC
+to 0.999871. TTNN/CPU route-set agreement is 0.87179, while optimized/HF
+still exceeds functional/HF.
 
-The batch-1 BF16 KV allocation is 1.024 GB at context 500,000. Final-policy
-optimized batch-32 decode allocates and replays the 32.768-GB advertised
-cache at position 499,999 in 131.105 ms. After adding the selected packed
-prefill weights, layer-1 and layer-4 batch-32 construction plus traced decode
-also pass at context 500,000 in 3.307/132.660 ms. `doc/context_contract.json`
-records both prefill and decode optimized evidence; supported context remains
-500,000.
+BFP8 cache passes the official-weight populated-history control at PCC
+0.999373 (matched BF16 cache: 0.999373). Its physical batch-32/context-500000
+footprint is 17.408 GB. Cache plus all optimized sparse and phase-specific
+BF16 prefill weights is 19.702 GB on a 34.179 GB device. BF16 cache would
+exceed physical capacity with those required weights. The advertised
+500000-token capability is preserved; exact accounting is in
+`../context_contract.json`.
 
-## Warmed performance
-
-Means below use sequence 128, three warmups, and 20 samples. Decode measures
-complete-forward trace replay. Functional values are the stage-entry
-baselines.
-
-| Layer kind | Phase | Functional b1 | Optimized b1 | Functional b32 | Optimized b32 |
-|---|---|---:|---:|---:|---:|
-| dense/full/forced-RoPE | prefill | 0.636 ms | 0.516 ms | 13.758 ms | 4.708 ms |
-| dense/full/forced-RoPE | decode | 0.356 ms | 0.187 ms | 6.652 ms | 0.252 ms |
-| sliding/RoPE/MoE | prefill | 14.908 ms | 14.191 ms | 147.182 ms | **96.750 ms** |
-| sliding/RoPE/MoE | decode | 9.528 ms | 0.792 ms | 11.122 ms | 2.214 ms |
-| full/no-RoPE/MoE | prefill | 14.655 ms | 14.264 ms | 146.699 ms | **96.440 ms** |
-| full/no-RoPE/MoE | decode | 9.524 ms | 0.795 ms | 11.129 ms | 2.219 ms |
-
-Batch-1 decode improves 1.90x for dense and about 12x for MoE. Batch-32 MoE
-prefill improves about 1.52x and decode about 5.0x; no serving-batch row
-regresses. Exact final prefill/decode distributions are in
-`candidates/review5_prefill/`; unchanged rows remain under
-`candidates/review3_final_runtime/`.
-
-Review 5 selected a new batch-32 MoE prefill topology under the same
-BFP4/LoFi policy:
-
-| Candidate | Layer 1 | Layer 4 | Correctness |
-|---|---:|---:|---|
-| previous selected split/automatic | 139.959 ms | 139.855 ms | pass |
-| packed 80/80-core prefill | **96.844 ms** | **96.644 ms** | PCC 0.99923857 / 0.99993403 |
-
-The plain promoted default reproduces the winner at 96.750/96.440 ms and
-retains split decode at 2.214/2.219 ms.
+The canonical exact optimized 500000-token batch-1 prefill watcher test
+completed its pytest call in 331.01 s (332.92 s elapsed). The context contract
+records both its evidence hashes and the final source/test hashes, together
+with their audited import/export-only equivalence. The public contract is
+unchanged, including nonaligned logical lengths.
 
 ## Operation-topology audit
 
-| Area | Current topology / candidates | Action and evidence |
-|---|---|---|
-| Q/K/V | three same-input linears; packed QKV | Packed QKV selected, removing two weight-stream dispatches. |
-| dense gate/up | packed versus separate same-input projections | Separate wins 0.2535/0.3188 ms versus 0.2628/0.3401 ms at b1/b32. |
-| output/layout chain | 8/12/16/32-core coherent shards, direct inputs, reshards | 16 cores selected. Four required boundary conversions total about 6.4 us; eliminating them regressed the full layer. |
-| cache update | fused versus separate K/V updates | Fused b1; separate b32. Initial overlapping-grid error was adapted with disjoint grids before comparison. |
-| attention | explicit versus framework-selected paged SDPA | Framework-selected program wins 0.1865/0.2521 ms versus 0.1919/0.2545 ms. |
-| dense precision | BF16/BFP8/BFP4 and LoFi/HiFi2 | Decode MLP BFP4/LoFi selected; BFP4 attention and prefill fail authentic PCC, so BFP8 retained there. |
-| prefill programs | default, 8x8, 10x10, chunked, automatic large-M | 10x10 aligned large-prefill and 512-row compatibility chunks selected; automatic large-M plus interleaved QKV/O selected beyond 8192 after exact CB and sharding failures. |
-| RoPE layout | rectangular versus exact row-wise sub-core order | Exact order selected; rectangular layout corrupted decode lanes 8–31. |
-| MoE router | lower fidelity; BF16/HiFi2; FP32 accumulation | BF16/HiFi2 with FP32 destination accumulation preserves authentic top-k. |
-| sparse MoE | token-at-a-time, grouped active tiles, DRAM/L1 intermediates, chunk 4–128 | Grouped chunk 24/L1 selected for b1 prefill: 14.191/14.264 ms versus functional 14.908/14.655 ms. Chunk 128 screens at 10.331 ms on synthetic routes but collapses the route union across the entire sequence toward dense execution and lacks equivalent authentic correctness, so it is not an eligible active-expert selection. |
-| expert precision | sparse/dense BFP8 and BFP4 | Sparse BFP8 retained. A branch-proven selected mixed matrix passes 8/8; an independently forced-dense BFP4 matrix also passes 8/8 at PCC 0.997234–0.999990. BFP4 reduces b32 decode from about 3.39 to 2.22 ms. |
-| final dense-expert decode geometry | BFP4 auto; explicit 64/80/100 cores; gate/down widths 4/3, 8/6, 16/4, 16/12; split/packed | Auto split remains selected at 2.218/2.215 ms for layers 1/4. Best explicit is 2.243/2.244 ms; auto packed is 2.294/2.291 ms. |
-| final dense-expert prefill geometry | BFP4/LoFi split 64/80, split 88/88, packed 80/80 | Packed 80/80 selected at 96.844/96.644 ms for layers 1/4, versus previous 139.959/139.855 ms; authentic PCC passes. Packing is phase-specific, so it does not change the selected split decode topology. |
-| DRAM-sharded dense experts | real full chain; split/packed gate-up; groups 8/16/32/64; BFP4/BFP8; legal blocks | Split G8 BFP4 traces at 2.818 ms; packed G8 BFP4 passes PCC 0.99981–0.99985 and traces at 2.827 ms, versus selected 1.887–1.888 ms. G16 is numerically invalid (PCC 0.675–0.687); G32/G64 hit exact L1/CB capacity limits. Rejected after compatible full-chain evidence, not a first API error. |
-| composites | top-k, sigmoid, scatter, paged cache, SDPA | Kept device-resident. Scatter's internal untilize/scatter/tilize is intrinsic to its row-major mask contract. |
-| collectives | none | Not applicable to this single-device stage. |
+| current topology | candidate | action | evidence |
+|---|---|---|---|
+| packed same-input Q/K/V | split Q/K/V | retain packed QKV | one QKV matmul in final Tracy rows |
+| all-BFP8/HiFi2 dense MLP | BFP4/LoFi gate/up and BFP8/LoFi down | select lower precision | PCC 0.995275/0.998849/0.998981 remains above the 0.995 functional floor; faster at all four b1/b32 prefill/decode workloads |
+| packed same-input dense gate/up | two equivalently tuned projections | select separate at b1, packed at b32 | b1 0.19694 ms versus best correct packed 0.19884 ms; native packed wins b32 at 0.76639 ms |
+| generic dense down matmul | 32-core 1x2, block-w 8 | select b1 | 55.6 us to 18.8 us; warmed dense b1 0.2436 to 0.2075 ms |
+| interleaved dense down | DRAM-width-sharded down | select b32; reject b1 | 1.4983 to 1.0044 ms b32; 0.2066 to 0.2212 ms b1 |
+| packed dense gate/up K blocks 2/4/8/16/32 | native block 2 | select b32 | b1 legal block-4 retry 0.19884 ms still loses to separate; b32 block 4 is 0.97227 ms and blocks 8+ exceed L1 after corrected DRAM retries |
+| separate same-input expert gate/up | packed sparse gate/up | select for decode | one active-expert `2048x1536` projection |
+| dense all-128-expert decode | routed sparse experts | select | 9.570 ms to 0.604 ms at batch 1 |
+| runtime-inferred sparse active count | exact top-8 presence at one-token decode | select b1; retain dynamic b32 | 0.679 ms to 0.604 ms b1 at PCC 0.998268; official b32 union is 87 |
+| repeated routing | one top-k/scatter feeding both expert projections | select | one routing group in final path |
+| primitive attention sequence | native paged SDPA | retain | native SDPA/cache rows in final profile |
+| interleaved decode RMSNorm/residual | 32-core width-sharded RMSNorm/residual chain | select at b1 and b32 | PCC 0.998268/0.997431 in selected chain; 0.604/3.846 ms final |
+| interleaved QKV/O weights and generic decode matmuls | DRAM-sharded QKV/O weights with decode program configs | select b1; reject b32 | b1 PCC 0.998264; b32 legal retry reached 3.583 ms but failed PCC at 0.982460 |
+| separate same-input large-prefill gate/up | packed BF16 gate/up plus on-device split | reject | legal 8x8 retry: 142.395 ms b32 versus 135.011 ms split; b1 path is below the 1024-token applicability threshold |
+| routed sparse expert matmuls | dense DRAM-sharded expert family | reject only for the expert path | family has no active-expert operand and restores all-128-expert traffic; measured dense baseline is 9.564 ms |
+| generic decode router matmul | explicit 2-core 1-D router program | reject | PCC 0.998225/0.998236; 0.710 ms b1, slower than selected chain; combining it with the sharded chain requires batch fusion |
+| fixed public chunk multiple | internal padding/chunking | select | logical 1, 31, 33, 65, and 1025 pass |
+| optimized HiFi4/FP32 prefill router | functional-compatible router with optimized M=1024 experts | select | direct optimized/functional PCC 0.982107 to 0.999871; 135.064 ms final |
+| sparse large-M prefill | chunked sparse versus dense composite | select dense composite | sparse chunk-1024 646.509 ms; selected 135.064 ms |
 
-## Fresh profiler accounting
+Required tilize/untilize and reshapes remain only at routing/top-k layout
+boundaries. There is no unnecessary runtime `torch`, `from_torch`,
+`to_torch`, `.cpu()`, `.numpy()`, or functional decoder call.
 
-Tracy and watcher were collected separately. Each final profile is signposted;
-`tt-perf-report` 1.2.8 ran with advice enabled and `--active-experts 8` on
-batch-1 MoE rows.
+## Candidate evidence
 
-| Profile | Ops | Device | Profile wall | Gap | DRAM roofline | Dominant operation |
-|---|---:|---:|---:|---:|---:|---|
-| dense prefill b1 / b32 | 17 / 143 | 466.6 / 4102.9 us | 715.0 / 4750.1 us | 248.4 / 647.2 us | 18.9% / 13.0% | matmul 50.6% / 41.3% |
-| dense decode b1 / b32 | 27 / 28 | 166.7 / 236.3 us | 208.0 / 271.7 us | 41.4 / 35.3 us | 33.2% / 23.4% | matmul 60.3% / 42.5% |
-| layer-1 MoE prefill b1 / b32 | 202 / 231 | 13711.5 / 95720.0 us | 14598.3 / 97439.1 us | 886.8 / 785.0 us | 3.8% / 16.5% | sparse/dense matmul 60.7% / 40.3% |
-| layer-1 MoE decode b1 / b32 | 47 / 50 | 765.2 / 2185.9 us | 827.7 / 2255.4 us | 62.5 / 69.5 us | 14.6% / 31.9% | sparse/dense matmul 57.3% / 45.7% |
-| layer-4 MoE prefill b1 / b32 | 200 / 229 | 13714.2 / 94711.0 us | 14481.3 / 96457.5 us | 767.1 / 957.0 us | 3.8% / 16.6% | sparse/dense matmul 60.8% / 40.7% |
-| layer-4 MoE decode b1 / b32 | 43 / 46 | 764.7 / 2190.3 us | 826.7 / 2259.8 us | 62.0 / 69.6 us | 14.6% / 31.8% | sparse/dense matmul 58.0% / 46.0% |
+Decode candidates were measured independently at batch 1 and serving batch
+32. A faster timing is not accepted without its batch-specific correctness
+gate.
 
-The final profiles contain no Torch, `from_torch`, `to_torch`, or host
-fallback operation in the measured windows. Gzip-compressed raw ops CSVs,
-filtered CSVs, full human-readable tables/advice in `human_report.txt`,
-runtime JSON, and summary CSV/PNG are under
-`tracy/review3_selected/`. The profile confirms batch-1 MoE is limited by
-active sparse matmuls (85% of prefill device time across DRAM/L1 sparse
-rows), while batch-32 MoE is limited by dense expert matmuls and routing.
-The report's suggestion to increase dense-expert `in0_block_w` was swept
-under final BFP4/LoFi across legal explicit widths and core counts; automatic
-split remains 1.2% faster than the best explicit candidate.
+Official dense layer-0 precision evidence is batch-specific and uses the
+current topology. The selected BFP4/LoFi gate/up plus BFP8/LoFi down policy
+scores 0.995275 prefill and 0.998849/0.998981 decode b1/b32. The
+BFP8/HiFi2 control raises PCC to 0.999475/0.999343/0.999490, but the selected
+policy still meets the functional 0.995 floor and is faster at all four
+workloads: 0.582/12.278 ms prefill and 0.197/0.767 ms decode, versus
+0.581/12.311 and 0.207/0.843 ms for the control. Functional timing is
+0.629/13.691 and 0.356/6.648 ms. The material prefill PCC delta is accepted
+because it remains above the stated bar while delivering the required
+lowest-correct-precision policy. Exact evidence is in
+`artifacts/final_dense_selected_precision_correctness.txt`,
+`final_dense_bfp8_hifi2_control_correctness.txt`, and their source-bound JSONs.
 
-## Watcher and artifacts
+Dense topology/program evidence:
 
-Final watcher command:
+| candidate | batch 1 | batch 32 | decision |
+|---|---:|---:|---|
+| selected separate BFP4/LoFi, 48-core 8x6, block 16 | 0.19694 ms | — | select b1 |
+| native packed BFP4/LoFi block 2 | 0.20669 ms | 0.76530 ms | select b32 |
+| packed block 4 with interleaved input and DRAM output | 0.19884 ms | 0.97227 ms | best packed b1 control, still slower; reject b32 |
+| packed block 8 | 0.19892 ms | L1 allocation failure after DRAM retry | reject |
+| packed block 16 | 0.19994 ms | L1 allocation failure after DRAM retry | reject |
+| packed block 32 | 0.20110 ms | L1 allocation failure after DRAM retry | reject |
+| selected final full topology | 0.19694 ms | 0.76639 ms | select |
+
+The packed dense composite was not rejected on its first error:
+`ttnn.split` failed in the device compiler, while two legal `ttnn.slice`
+operations passed prefill and traced decode. Larger packed K blocks were
+retried with an interleaved input and DRAM output; block 4 passed exact PCC
+(0.995275/0.998898/0.998974), while the larger serving retries exposed a hard
+L1 circular-buffer allocation limit. The best correct packed batch-1 control
+still loses to the equivalently tuned separate family. Likewise, the
+DRAM-down retry fixed the dense K dimension, explicitly sharded the M-axis
+activation, and was measured at both batches before batch-32-only selection.
+
+| candidate | batch 1 | batch 32 | decision |
+|---|---:|---:|---|
+| functional all-expert | 9.570 ms | 11.155 ms | correctness/performance baseline |
+| prior correct routed default | 0.724 ms | 4.924 ms | baseline before reviewer follow-up |
+| sharded residual/RMSNorm | 0.692 ms | 3.845 ms | correct both batches; selected |
+| sharded residual plus DRAM attention | 0.678 ms | 3.583 ms | select b1; reject b32 at PCC 0.982460 |
+| final batch-aware selected chain | 0.604 ms | 3.846 ms | select: PCC 0.998268/0.997431 |
+| BFP8/HiFi2 experts, 16-core | 0.725 ms | 4.214 ms | b32 failed PCC 0.953752; historical b32 JSON marked unbound |
+| BFP8/HiFi2 gate 24-core/down 32-core | 0.740 ms | 4.049 ms | reject; historical b32 JSON has no exact bound PCC |
+| BFP8/HiFi2 8-core | 0.777 ms | 5.505 ms | reject: slower; historical PCC metadata cleared |
+| BFP4/LoFi experts with BF16 cache | faster historical kernels | — | reject: populated-history PCC 0.98240 |
+| BFP4 attention on selected chain | 0.602 ms | 3.832 ms | reject: exact official-weight PCC 0.981934 b1 / 0.980513 b32 despite small speed gains |
+| BF16 cache control | — | — | PCC 0.999373; reject on capacity |
+
+Large-prefill 2-D program candidates:
+
+| candidate | batch-32 sequence-128 | decision |
+|---|---:|---|
+| 8x4 grid | 193.055 ms | reject |
+| 8x8 grid, BF16/HiFi4/FP32 expert accumulation | 135.064 ms final | select with functional-compatible router |
+| packed gate/up, 8x8 | 142.395 ms | reject: slower than separate projections |
+
+The first API error for a block/subblock candidate was not treated as a
+rejection. A corrected legal retry was run; it stalled beyond 60 seconds, the
+exact process was terminated, and `tt-smi` showed all four devices healthy.
+
+## Profiler conclusions
+
+Final batch-1 sparse decode contains 0.5755 ms device operations plus
+0.0657 ms op-to-op gaps under profiling (0.6412 ms total) versus 0.6037 ms
+unprofiled wall latency. Matmuls use 0.2323 ms (36.23% of the profiled
+window). The selected DRAM-sharded QKV/O rows are explicitly marked
+`DRAM Sharded=True`; complete layout conversion costs about 0.0097 ms.
+Modeled roofline utilization is 19.4% (99 GB/s).
+
+Batch-32 prefill contains 129.726 ms device operations plus 1.220 ms gaps
+(130.946 ms profiled) versus 135.064 ms unprofiled wall latency. Dense expert
+matmuls use 81.413 ms (62.17%). Modeled roofline utilization is 20.9%
+(107 GB/s). Operation rows, stacked reports, exact commands, and source
+hashes are under `tracy/`; `final_profile_manifest.json` binds the collection.
+
+The official dense layer-0 batch-1 decode profile contains 0.173 ms device
+operations plus 0.029 ms gaps (0.202 ms total); matmuls account for 0.107 ms.
+Its modeled DRAM roofline utilization is 36.4% (186 GB/s). The necessary
+sharded-to-interleaved transition before the winning separate MLP family costs
+1.464 us and pays for itself versus packed. At batch 32, the packed gate/up
+row is 129.1 us and the selected DRAM-sharded down row is 25.7 us; the
+complete window is 0.766 ms. Retained rows and stacked reports are
+`tracy/final_dense_decode_b{1,32}_rows*`.
+
+## Reproduction
 
 ```bash
-TT_METAL_WATCHER=10 \
-TT_METAL_LOGS_PATH=models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/watcher/review3_final \
-pytest -q -s --timeout=900 \
-  --junitxml=models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/artifacts/review3_watcher.xml \
+TT_METAL_WATCHER=10 pytest -q -s \
   models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py
+
+NORTH_MINI_LONG_HISTORY_TRACE=1 TT_METAL_WATCHER=10 pytest -q -s \
+  models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_sliding_moe_populated_history_dynamic_trace_replay_matches_reference
+
+python -m models.autoports.coherelabs_north_mini_code_1_0.tests.optimized_decoder_perf \
+  --mode decode --batch 1 --layer 1 --candidate default --real-weights \
+  --warmups 10 --iterations 50
 ```
 
-Result: `30 passed, 16 skipped in 347.109s`. The 2,170-line watcher log has no
-fatal, invalid-NoC, CB-bounds, overflow, sanitizer, timeout, hang, tripped, or
-kernel-error signature. Post-run `tt-smi 6.0.0` reports four p300c boards,
-DRAM healthy, live heartbeats, zero GDDR errors, and zero thermal trips.
-
-- `artifacts/review3_{full,watcher}.xml`: final suite evidence.
-- `artifacts/review3_selected_authentic_matrix.xml`: eight authentic mixed
-  precision rows.
-- `artifacts/review4_selected_mixed_matrix.xml` and
-  `review4_forced_dense_bfp4_matrix.xml`: branch-proven selected and
-  all-dense authentic matrices.
-- `artifacts/review4_full.xml`: revised full suite, 30 passed and 16 opt-in
-  candidate skips.
-- `artifacts/review4_dense_bfp4_watcher.xml` and
-  `watcher/review4_dense_bfp4/`: layer-1/layer-4 forced-dense BFP4 serving
-  decode passed under watcher with no fault signature.
-- `artifacts/review4_dram_packed.xml` and
-  `candidates/review4_dram_full_chain_packed/`: packed DRAM full-chain PCC
-  and trace evidence.
-- `candidates/review4_dense_bfp4/`: final-precision geometry and packing
-  sweep.
-- `candidates/review5_prefill/` and
-  `artifacts/review5_packed_prefill_authentic.xml`: phase-specific packed
-  prefill selection and authentic correctness evidence.
-- `tracy/review5_selected/`: fresh selected layer-1/layer-4 batch-32 prefill
-  raw/filtered tables, advice, summaries, and runtime evidence.
-- `artifacts/review5_full.xml`: final 38-pass suite plus 16 opt-in skips.
-- `artifacts/review5_packed_prefill_watcher.xml` and
-  `watcher/review5_packed_prefill/`: final selected packed-prefill PCC under
-  watcher with no fault signature.
-- `context500000_decode_b32_layer{1,4}_review5.json`: advertised-context
-  construction and traced decode with the final packed-prefill resident
-  weights.
-- `candidates/review3_final_runtime/`: final 3-warmup/20-sample wall matrix.
-- `candidates/review3_dram_full_chain_*`: compatible DRAM-sharded sweep.
-- `prefill_layer{0,1,4}_context*_review3.json`: final optimized capacity.
-- `context500000_decode_b32_review3.json`: final-policy serving-capacity
-  allocation and trace replay.
-- `context500000_decode_b32_review3_watcher.json` and
-  `watcher/review3_capacity_final/`: watcher-clean replay with the final
-  resident-weight set.
-- `tracy/review3_selected/`: final 12-profile raw and analyzed evidence.
-- `watcher/review3_final/generated/watcher/watcher.log`: watcher evidence.
-- `AUTODEBUG_REVIEW3.md` and `STAGE_REVIEW_3.md`: diagnosis and review record.
-- `work_log.md`: full experiment, checklist, commands, and commit ledger.
-- `AUTODEBUG_CURRENT.md` / `AUTOFIX_CURRENT.md`: current-arm diagnosis,
-  authentic final-topology attention matrix, sparse-subblock promotion, and
-  the remaining shared-TTNN routed-output blocker.
-- `SPARSE_SUBBLOCK_HYPOTHESIS.md`: legal role-specific output-subblock matrix.
-- `ROUTED_MOE_HYPOTHESIS.md`: exhaustive model-local batch-32 routed-MoE
-  blocker analysis.
-
-## Phase-specific sparse remediation
-
-The independent authentic sparse sweep required by rereview is complete. All
-15 isolated rows and all four cumulative rows used checkpoint layer-1 weights
-and recorded checkpoint activations, three warmups, twenty traced replays, and
-preserved PCC `0.9993107116`.
-
-| result | traced b1 decode |
-|---|---:|
-| explicit all-role 1x1 control | 0.781748 ms |
-| prior cumulative 2/2 | 0.717877 ms |
-| selected gate 2/2 + up 2/1 + down 4/4 | **0.704813 ms** |
-| final default reproduction | 0.705102 ms |
-
-The selected policy is 9.84% faster than the authentic 1x1 control and 1.82%
-faster than the best prior correct cumulative policy. It is decode-only:
-directly applying it to prefill regressed both sequence 33
-(`4.099386 -> 4.443987 ms`) and sequence 128
-(`13.598431 -> 14.495682 ms`). Grouped prefill therefore retains 2/2, with
-final minima `4.077707 ms` and `13.491884 ms`. This phase split does not
-change allocations, KV dtype, cache layout, or the advertised 500,000-token
-context capacity, so `context_contract.json` is unchanged.
-
-A reviewer flagged that the first independent final seq33 run had a 5.30%
-higher mean despite the matching minimum. A five-warmup, fifty-pair
-same-session alternating comparison resolved it:
-
-| sequence | retained-S2 mean / median | final mean / median | final delta |
-|---:|---:|---:|---:|
-| 33 | 4.147100 / 4.102691 ms | **4.127520 / 4.099534 ms** | -0.47% / -0.08% |
-| 128 | 13.733069 / 13.737201 ms | **13.757862 / 13.804296 ms** | +0.18% / +0.49% |
-
-The final-default distribution is representative and the isolated 5.30%
-difference was host scheduling noise across separate processes. Evidence:
-`candidates/sparse_subblocks/interleaved_prefill{33,128}.json`.
-
-Real-weight layer-1/layer-4 decode PCC is `0.99931071/0.99974180`.
-Non-aligned sequence-33/128 active-expert prefill remains
-`0.99867303–0.99884130`, and ten traced replays are bitwise identical.
-Batch-32 dispatch and geometry are unchanged, so the previously measured
-serving batch does not regress.
-
-Fresh advice-enabled profiles under `tracy/review7_phase_specific/` prove
-BFP8/LoFi sparse rows with BF16 activation/output and exact final programs:
-decode uses 1x2/1x1/1x4 gate/up/down subblocks; both sequence-33 and
-sequence-128 prefill profiles use 1x2 for all three roles. DRAM roofline is
-16.2% for decode, 5.1% for seq33 prefill, and 3.9% for seq128 prefill. No
-Torch conversion or host operation appears in the measured windows.
-
-Final gates:
-
-- normal: `41 passed, 17 skipped in 383.22s`;
-- watcher: `41 passed, 17 skipped in 416.48s`;
-- watcher log: 3,247 lines with no error, assert, fatal, deadlock, hang, NoC,
-  CB, sanitizer, overflow, trip, or kernel-fault signature.
-
-Artifacts are under `candidates/sparse_subblocks/`,
-`tracy/review7_phase_specific/`, `artifacts/review7_phase_specific_*.xml`,
-and `watcher/review7_phase_specific/`. The only unresolved optimize gate is
-the batch-32 routed-output capability documented in
-`ROUTED_MOE_HYPOTHESIS.md`: its required shared-TTNN local combine is outside
-the explicitly model-local write scope.
-
-`STAGE_REVIEW_FINAL_REREVIEW.md` independently closes the prefill-variance
-finding after recomputing the interleaved distributions and checking the
-phase-specific fields. Its verdict remains `more-work-needed` solely because
-the batch-32 routed-output capability requires a shared-TTNN change outside
-this stage's authorized files; it identifies no further model-local fix.
-
-A fresh resumed-stage AutoFix audit is recorded in
-`AUTODEBUG_B32_FRESH.md`. It identifies upstream commit `50c56281566`
-(`Feature: Add single-device fused moe_compute support (#49886)`) as the
-concrete unblock. That commit adds the exact fabric-free `FullLocal` fused
-combine required here, but it is present only on `origin/main`, not in this
-checkout, and backporting its 18 shared-TTNN files is outside the explicit
-model-local stage scope.
-
-Stage-owned commits: `327a8ffac63` and `8ce223940de` (local only, never
-pushed).
+See `work_log.md` for the complete optimize checklist, command patterns,
+review record, and local commit SHAs.

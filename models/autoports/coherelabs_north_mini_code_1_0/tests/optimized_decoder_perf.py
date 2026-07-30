@@ -1,324 +1,142 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Warmed optimized-decoder latency, candidate-sweep, and Tracy harness."""
+"""Warmed optimized-decoder latency and Tracy-signpost harness."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import statistics
-import time
-from dataclasses import asdict, replace
+import subprocess
+import sys
 from pathlib import Path
 
-import torch
 from transformers import AutoConfig
 
 import ttnn
 from models.autoports.coherelabs_north_mini_code_1_0.tests.functional_decoder_perf import _decode, _prefill
 from models.autoports.coherelabs_north_mini_code_1_0.tests.test_functional_decoder import (
     REAL_REVISION,
-    _page_table,
+    _real_layer_one_state,
     _synthetic_state,
-    _to_tt,
 )
-from models.autoports.coherelabs_north_mini_code_1_0.tt.optimized_decoder import (
-    MODEL_ID,
-    OptimizationConfig,
-    OptimizedDecoder,
-)
-
-DTYPES = {
-    "bf16": ttnn.bfloat16,
-    "bfp8": ttnn.bfloat8_b,
-    "bfp4": ttnn.bfloat4_b,
-}
-FIDELITIES = {
-    "lofi": ttnn.MathFidelity.LoFi,
-    "hifi2": ttnn.MathFidelity.HiFi2,
-}
+from models.autoports.coherelabs_north_mini_code_1_0.tests.test_optimized_decoder import _real_dense_layer_zero_state
+from models.autoports.coherelabs_north_mini_code_1_0.tt.functional_decoder import FunctionalDecoder
+from models.autoports.coherelabs_north_mini_code_1_0.tt.optimized_decoder import MODEL_ID, OptimizedDecoder
 
 
-def _policy(args):
-    cfg = OptimizationConfig()
-    overrides = {}
-    if args.attention_dtype is not None:
-        overrides["attention_qkv_weight_dtype"] = DTYPES[args.attention_dtype]
-        overrides["attention_o_weight_dtype"] = DTYPES[args.attention_dtype]
-    for field, value in (
-        ("attention_qkv_weight_dtype", args.attention_qkv_dtype),
-        ("attention_o_weight_dtype", args.attention_o_dtype),
-        ("dense_gate_up_dtype", args.gate_up_dtype),
-        ("dense_down_dtype", args.down_dtype),
-        ("expert_gate_up_dtype", args.expert_gate_up_dtype),
-        ("expert_down_dtype", args.expert_down_dtype),
-        ("dense_expert_gate_up_dtype", args.dense_expert_gate_up_dtype),
-        ("dense_expert_down_dtype", args.dense_expert_down_dtype),
-        ("kv_cache_dtype", args.kv_dtype),
-    ):
-        if value is not None:
-            overrides[field] = DTYPES[value]
-    if args.attention_fidelity is not None:
-        overrides["attention_qkv_fidelity"] = FIDELITIES[args.attention_fidelity]
-        overrides["attention_o_fidelity"] = FIDELITIES[args.attention_fidelity]
-        overrides["attention_non_matmul_fidelity"] = FIDELITIES[args.attention_fidelity]
-    for field, value in (
-        ("attention_qkv_fidelity", args.attention_qkv_fidelity),
-        ("attention_o_fidelity", args.attention_o_fidelity),
-        ("dense_gate_up_fidelity", args.gate_up_fidelity),
-        ("dense_down_fidelity", args.down_fidelity),
-        ("expert_gate_up_fidelity", args.expert_gate_up_fidelity),
-        ("expert_down_fidelity", args.expert_down_fidelity),
-    ):
-        if value is not None:
-            overrides[field] = FIDELITIES[value]
-    for field in (
-        "decode_qkv_cores",
-        "decode_o_cores",
-        "decode_dense_gate_up_cores",
-        "decode_dense_down_cores",
-        "decode_qkv_in0_block_w",
-        "decode_o_in0_block_w",
-        "decode_dense_gate_up_in0_block_w",
-        "decode_dense_down_in0_block_w",
-        "sparse_gate_in0_block_w",
-        "sparse_up_in0_block_w",
-        "sparse_down_in0_block_w",
-        "sparse_gate_out_block_w",
-        "sparse_gate_out_subblock_w",
-        "sparse_up_out_block_w",
-        "sparse_up_out_subblock_w",
-        "sparse_down_out_block_w",
-        "sparse_down_out_subblock_w",
-        "prefill_sparse_gate_in0_block_w",
-        "prefill_sparse_up_in0_block_w",
-        "prefill_sparse_down_in0_block_w",
-        "prefill_sparse_gate_out_block_w",
-        "prefill_sparse_gate_out_subblock_w",
-        "prefill_sparse_up_out_block_w",
-        "prefill_sparse_up_out_subblock_w",
-        "prefill_sparse_down_out_block_w",
-        "prefill_sparse_down_out_subblock_w",
-        "moe_chunk_size",
-        "prefill_moe_chunk_size",
-        "serving_decode_qkv_cores",
-        "serving_decode_o_cores",
-        "serving_decode_dense_gate_up_cores",
-        "serving_decode_dense_down_cores",
-        "serving_decode_qkv_in0_block_w",
-        "serving_decode_o_in0_block_w",
-        "serving_decode_dense_gate_up_in0_block_w",
-        "serving_decode_dense_down_in0_block_w",
-        "decode_residual_cores",
-        "serving_decode_residual_cores",
-        "dense_expert_chunk_size",
-        "dense_expert_cores",
-        "dense_expert_gate_up_in0_block_w",
-        "dense_expert_gate_up_per_core_m",
-        "dense_expert_gate_up_per_core_n",
-        "dense_expert_gate_up_subblock_h",
-        "dense_expert_gate_up_subblock_w",
-        "dense_expert_down_in0_block_w",
-        "dense_expert_down_per_core_m",
-        "dense_expert_down_per_core_n",
-        "dense_expert_down_subblock_h",
-        "dense_expert_down_subblock_w",
-        "dense_expert_prefill_gate_up_in0_block_w",
-        "dense_expert_prefill_gate_up_per_core_m",
-        "dense_expert_prefill_gate_up_per_core_n",
-        "dense_expert_prefill_gate_up_out_block_h",
-        "dense_expert_prefill_gate_up_out_block_w",
-        "dense_expert_prefill_gate_up_subblock_h",
-        "dense_expert_prefill_gate_up_subblock_w",
-        "dense_expert_prefill_down_in0_block_w",
-        "dense_expert_prefill_down_per_core_m",
-        "dense_expert_prefill_down_per_core_n",
-        "dense_expert_prefill_down_out_block_h",
-        "dense_expert_prefill_down_out_block_w",
-        "dense_expert_prefill_down_subblock_h",
-        "dense_expert_prefill_down_subblock_w",
-    ):
-        value = getattr(args, field)
-        if value is not None:
-            overrides[field] = value
-    if args.split_dense_gate_up:
-        overrides["packed_dense_gate_up"] = False
-    if args.packed_dense_gate_up:
-        overrides["packed_dense_gate_up"] = True
-    if args.separate_kv_update:
-        overrides["fused_kv_update"] = False
-    if args.sparse_intermediate_dram:
-        overrides["sparse_intermediate_dram"] = True
-    if args.prefill_sparse_intermediate_dram:
-        overrides["prefill_sparse_intermediate_dram"] = True
-    if args.legacy_token_prefill_sparse:
-        overrides["prefill_grouped_sparse"] = False
-    if args.batch1_prefill_dense_experts:
-        overrides["batch1_prefill_active_experts"] = False
-    if args.serving_fused_kv_update:
-        overrides["serving_fused_kv_update"] = True
-    if args.default_sdpa:
-        overrides["explicit_sdpa_program"] = False
-    if args.direct_o_input:
-        overrides["direct_o_input"] = True
-    if args.direct_down_input:
-        overrides["direct_down_input"] = True
-    if args.packed_dense_experts:
-        overrides["packed_dense_experts"] = True
-    if args.prefill_packed_dense_experts is not None:
-        overrides["prefill_packed_dense_experts"] = args.prefill_packed_dense_experts
-    if (args.dense_expert_prefill_gate_grid_x is None) != (args.dense_expert_prefill_gate_grid_y is None):
-        raise ValueError("dense-expert prefill gate grid requires both --*-grid-x and --*-grid-y")
-    if args.dense_expert_prefill_gate_grid_x is not None:
-        overrides["dense_expert_prefill_gate_up_grid"] = (
-            args.dense_expert_prefill_gate_grid_x,
-            args.dense_expert_prefill_gate_grid_y,
+def _git(repo_root, *args):
+    return subprocess.run(
+        ("git", *args),
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _source_provenance(implementation):
+    repo_root = Path(__file__).resolve().parents[4]
+    source_paths = [
+        Path("models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py"),
+        Path("models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py"),
+    ]
+    if implementation == "functional":
+        source_paths.append(Path("models/autoports/coherelabs_north_mini_code_1_0/tt/functional_decoder.py"))
+    sources = {}
+    for relative_path in source_paths:
+        absolute_path = repo_root / relative_path
+        computed_blob_oid = _git(repo_root, "hash-object", str(relative_path))
+        object_available = (
+            subprocess.run(
+                ("git", "cat-file", "-e", computed_blob_oid),
+                cwd=repo_root,
+                capture_output=True,
+            ).returncode
+            == 0
         )
-    if (args.dense_expert_prefill_down_grid_x is None) != (args.dense_expert_prefill_down_grid_y is None):
-        raise ValueError("dense-expert prefill down grid requires both --*-grid-x and --*-grid-y")
-    if args.dense_expert_prefill_down_grid_x is not None:
-        overrides["dense_expert_prefill_down_grid"] = (
-            args.dense_expert_prefill_down_grid_x,
-            args.dense_expert_prefill_down_grid_y,
+        head_lookup = subprocess.run(
+            ("git", "rev-parse", f"HEAD:{relative_path}"),
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
         )
-    if args.dense_expert_prefill_gate_transpose_mcast:
-        overrides["dense_expert_prefill_gate_up_transpose_mcast"] = True
-    if args.dense_expert_prefill_down_transpose_mcast:
-        overrides["dense_expert_prefill_down_transpose_mcast"] = True
-    if args.sparse_gate_grid_x is not None or args.sparse_gate_grid_y is not None:
-        overrides["sparse_gate_grid"] = (
-            args.sparse_gate_grid_x or cfg.sparse_gate_grid[0],
-            args.sparse_gate_grid_y or cfg.sparse_gate_grid[1],
-        )
-    if args.sparse_up_grid_x is not None or args.sparse_up_grid_y is not None:
-        overrides["sparse_up_grid"] = (
-            args.sparse_up_grid_x or cfg.sparse_up_grid[0],
-            args.sparse_up_grid_y or cfg.sparse_up_grid[1],
-        )
-    if args.sparse_down_grid_x is not None or args.sparse_down_grid_y is not None:
-        overrides["sparse_down_grid"] = (
-            args.sparse_down_grid_x or cfg.sparse_down_grid[0],
-            args.sparse_down_grid_y or cfg.sparse_down_grid[1],
-        )
-    for role in ("gate", "up", "down"):
-        grid_x = getattr(args, f"prefill_sparse_{role}_grid_x")
-        grid_y = getattr(args, f"prefill_sparse_{role}_grid_y")
-        if grid_x is not None or grid_y is not None:
-            default_grid = getattr(cfg, f"prefill_sparse_{role}_grid")
-            overrides[f"prefill_sparse_{role}_grid"] = (
-                grid_x or default_grid[0],
-                grid_y or default_grid[1],
-            )
-    return replace(cfg, **overrides)
-
-
-def _render_policy(policy):
-    result = {}
-    for key, value in asdict(policy).items():
-        if value in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
-            result[key] = str(value)
-        elif value in (ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2):
-            result[key] = str(value)
-        else:
-            result[key] = value
-    return result
-
-
-def _interleaved_prefill_s2(decoder, mesh_device, config, *, sequence, warmups, iterations):
-    """Compare retained-S2 and final-default prefill in one alternating device session."""
-    if decoder.batch != 1:
-        raise ValueError("interleaved S2 comparison is defined for the primary batch-1 prefill path")
-    final_policy = decoder.optimization_config
-    retained_s2 = replace(
-        final_policy,
-        sparse_gate_grid=(6, 2),
-        sparse_up_grid=(6, 2),
-        sparse_down_grid=(8, 4),
-        sparse_gate_out_block_w=2,
-        sparse_gate_out_subblock_w=2,
-        sparse_up_out_block_w=2,
-        sparse_up_out_subblock_w=2,
-        sparse_down_out_block_w=2,
-        sparse_down_out_subblock_w=2,
-    )
-    prefill_fields = (
-        "prefill_sparse_gate_grid",
-        "prefill_sparse_up_grid",
-        "prefill_sparse_down_grid",
-        "prefill_sparse_gate_in0_block_w",
-        "prefill_sparse_up_in0_block_w",
-        "prefill_sparse_down_in0_block_w",
-        "prefill_sparse_gate_out_block_w",
-        "prefill_sparse_gate_out_subblock_w",
-        "prefill_sparse_up_out_block_w",
-        "prefill_sparse_up_out_subblock_w",
-        "prefill_sparse_down_out_block_w",
-        "prefill_sparse_down_out_subblock_w",
-    )
-    assert all(getattr(retained_s2, field) == getattr(final_policy, field) for field in prefill_fields)
-
-    generator = torch.Generator().manual_seed(17001 + sequence)
-    hidden = (torch.randn(1, 1, sequence, config.hidden_size, generator=generator) * 0.02).to(torch.bfloat16)
-    hidden = _to_tt(hidden, mesh_device)
-    key_cache, value_cache = decoder.create_paged_kv_cache()
-    blocks = (sequence + decoder.page_size - 1) // decoder.page_size
-    page_table = _to_tt(
-        _page_table(1, blocks),
-        mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-    cos, sin = decoder.build_rope_rows(torch.arange(sequence), hf_config=config)
-    kwargs = {
-        "key_cache": key_cache,
-        "value_cache": value_cache,
-        "page_table": page_table,
-        "position_cos": _to_tt(cos, mesh_device),
-        "position_sin": _to_tt(sin, mesh_device),
+        sources[str(relative_path)] = {
+            "sha256": hashlib.sha256(absolute_path.read_bytes()).hexdigest(),
+            # hash-object computes an object ID but does not store an untracked
+            # source.  Keep that distinction explicit so provenance never
+            # implies an unavailable historical source can be recovered.
+            "computed_git_blob_oid": computed_blob_oid,
+            "git_object_available": object_available,
+            "head_git_blob_oid": head_lookup.stdout.strip() if head_lookup.returncode == 0 else None,
+            "git_status": _git(repo_root, "status", "--short", "--", str(relative_path)),
+        }
+    return {
+        "git_head": _git(repo_root, "rev-parse", "HEAD"),
+        "git_branch": _git(repo_root, "branch", "--show-current"),
+        "sources": sources,
     }
 
-    def invoke(policy):
-        decoder.optimization_config = policy
-        start = time.perf_counter()
-        decoder.prefill_forward(hidden, **kwargs)
-        ttnn.synchronize_device(mesh_device)
-        return 1000 * (time.perf_counter() - start)
 
-    for index in range(warmups):
-        pair = (retained_s2, final_policy) if index % 2 == 0 else (final_policy, retained_s2)
-        for policy in pair:
-            invoke(policy)
+def _correctness_binding(args):
+    """Validate and content-bind manually supplied correctness evidence."""
 
-    samples = {"retained_s2": [], "final_default": []}
-    for index in range(iterations):
-        pair = (
-            (("retained_s2", retained_s2), ("final_default", final_policy))
-            if index % 2 == 0
-            else (("final_default", final_policy), ("retained_s2", retained_s2))
+    required = (
+        args.pcc is not None,
+        args.pcc_evidence is not None,
+        args.pcc_scope is not None,
+        args.pcc_status is not None,
+        args.pcc_threshold is not None,
+    )
+    any_metadata = any(required) or args.pcc_note is not None
+    if any_metadata and not all(required):
+        raise ValueError(
+            "--pcc, --pcc-evidence, --pcc-scope, --pcc-status, and --pcc-threshold must be supplied together"
         )
-        for name, policy in pair:
-            samples[name].append(invoke(policy))
-    decoder.optimization_config = final_policy
+    if not any_metadata:
+        return None
+    if not -1.0 <= args.pcc <= 1.0 or not -1.0 <= args.pcc_threshold <= 1.0:
+        raise ValueError("PCC value and threshold must be in [-1, 1]")
+    if args.pcc_status == "pass" and args.pcc < args.pcc_threshold:
+        raise ValueError("PCC status says pass but the value is below the threshold")
+    if args.pcc_status == "fail" and args.pcc >= args.pcc_threshold:
+        raise ValueError("PCC status says fail but the value meets the threshold")
 
-    def summarize(values):
-        return {
-            "mean_ms": statistics.fmean(values),
-            "median_ms": statistics.median(values),
-            "min_ms": min(values),
-            "max_ms": max(values),
-            "samples_ms": values,
-        }
-
-    retained_result = summarize(samples["retained_s2"])
-    final_result = summarize(samples["final_default"])
+    repo_root = Path(__file__).resolve().parents[4]
+    evidence = args.pcc_evidence.expanduser()
+    if not evidence.is_absolute():
+        evidence = (Path.cwd() / evidence).resolve()
+    else:
+        evidence = evidence.resolve()
+    try:
+        evidence_relative = evidence.relative_to(repo_root)
+    except ValueError as error:
+        raise ValueError(f"PCC evidence must be inside the repository: {evidence}") from error
+    if not evidence.is_file():
+        raise ValueError(f"PCC evidence does not exist or is not a file: {evidence_relative}")
     return {
-        "retained_s2": retained_result,
-        "final_default": final_result,
-        "final_vs_retained_mean_percent": 100 * (final_result["mean_ms"] / retained_result["mean_ms"] - 1),
-        "final_vs_retained_median_percent": 100 * (final_result["median_ms"] / retained_result["median_ms"] - 1),
-        "interleaved_order": "alternating_each_pair",
-        "prefill_programs_identical": True,
+        "value": args.pcc,
+        "scope": args.pcc_scope,
+        "status": args.pcc_status,
+        "threshold": args.pcc_threshold,
+        "evidence": {
+            "repo_relative_path": str(evidence_relative),
+            "sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        },
+        "note": args.pcc_note,
+        # For exact_workload this is an explicit assertion that the evidence
+        # exercised these same timing parameters.  Other scopes deliberately
+        # remain labelled controls instead of masquerading as exact PCC.
+        "timing_workload": {
+            "implementation": args.implementation,
+            "candidate": args.candidate if args.implementation == "optimized" else None,
+            "mode": args.mode,
+            "batch": args.batch,
+            "sequence": args.sequence,
+            "layer": args.layer,
+            "real_weights": args.real_weights,
+        },
     }
 
 
@@ -326,167 +144,55 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("prefill", "decode"), required=True)
     parser.add_argument("--batch", type=int, default=1)
-    parser.add_argument("--layer", type=int, default=0, choices=(0, 1, 4))
+    parser.add_argument("--layer", type=int, default=1, choices=(0, 1, 4))
     parser.add_argument("--sequence", type=int, default=128)
-    parser.add_argument("--warmups", type=int, default=3)
-    parser.add_argument("--iterations", type=int, default=20)
-    parser.add_argument("--json-out", type=Path)
     parser.add_argument("--candidate", default="default")
-    parser.add_argument("--interleaved-prefill-s2", action="store_true")
-    for name in (
-        "attention-dtype",
-        "attention-qkv-dtype",
-        "attention-o-dtype",
-        "gate-up-dtype",
-        "down-dtype",
-        "expert-gate-up-dtype",
-        "expert-down-dtype",
-        "dense-expert-gate-up-dtype",
-        "dense-expert-down-dtype",
-        "kv-dtype",
-    ):
-        parser.add_argument(f"--{name}", choices=tuple(DTYPES))
-    for name in (
-        "attention-fidelity",
-        "attention-qkv-fidelity",
-        "attention-o-fidelity",
-        "gate-up-fidelity",
-        "down-fidelity",
-        "expert-gate-up-fidelity",
-        "expert-down-fidelity",
-    ):
-        parser.add_argument(f"--{name}", choices=tuple(FIDELITIES))
-    for name in (
-        "decode-qkv-cores",
-        "decode-o-cores",
-        "decode-dense-gate-up-cores",
-        "decode-dense-down-cores",
-        "decode-qkv-in0-block-w",
-        "decode-o-in0-block-w",
-        "decode-dense-gate-up-in0-block-w",
-        "decode-dense-down-in0-block-w",
-        "sparse-gate-in0-block-w",
-        "sparse-up-in0-block-w",
-        "sparse-down-in0-block-w",
-        "sparse-gate-out-block-w",
-        "sparse-gate-out-subblock-w",
-        "sparse-up-out-block-w",
-        "sparse-up-out-subblock-w",
-        "sparse-down-out-block-w",
-        "sparse-down-out-subblock-w",
-        "prefill-sparse-gate-in0-block-w",
-        "prefill-sparse-up-in0-block-w",
-        "prefill-sparse-down-in0-block-w",
-        "prefill-sparse-gate-out-block-w",
-        "prefill-sparse-gate-out-subblock-w",
-        "prefill-sparse-up-out-block-w",
-        "prefill-sparse-up-out-subblock-w",
-        "prefill-sparse-down-out-block-w",
-        "prefill-sparse-down-out-subblock-w",
-        "moe-chunk-size",
-        "prefill-moe-chunk-size",
-        "serving-decode-qkv-cores",
-        "serving-decode-o-cores",
-        "serving-decode-dense-gate-up-cores",
-        "serving-decode-dense-down-cores",
-        "serving-decode-qkv-in0-block-w",
-        "serving-decode-o-in0-block-w",
-        "serving-decode-dense-gate-up-in0-block-w",
-        "serving-decode-dense-down-in0-block-w",
-        "decode-residual-cores",
-        "serving-decode-residual-cores",
-        "dense-expert-chunk-size",
-        "dense-expert-cores",
-        "dense-expert-gate-up-in0-block-w",
-        "dense-expert-gate-up-per-core-m",
-        "dense-expert-gate-up-per-core-n",
-        "dense-expert-gate-up-subblock-h",
-        "dense-expert-gate-up-subblock-w",
-        "dense-expert-down-in0-block-w",
-        "dense-expert-down-per-core-m",
-        "dense-expert-down-per-core-n",
-        "dense-expert-down-subblock-h",
-        "dense-expert-down-subblock-w",
-        "dense-expert-prefill-gate-up-in0-block-w",
-        "dense-expert-prefill-gate-up-per-core-m",
-        "dense-expert-prefill-gate-up-per-core-n",
-        "dense-expert-prefill-gate-up-out-block-h",
-        "dense-expert-prefill-gate-up-out-block-w",
-        "dense-expert-prefill-gate-up-subblock-h",
-        "dense-expert-prefill-gate-up-subblock-w",
-        "dense-expert-prefill-down-in0-block-w",
-        "dense-expert-prefill-down-per-core-m",
-        "dense-expert-prefill-down-per-core-n",
-        "dense-expert-prefill-down-out-block-h",
-        "dense-expert-prefill-down-out-block-w",
-        "dense-expert-prefill-down-subblock-h",
-        "dense-expert-prefill-down-subblock-w",
-    ):
-        parser.add_argument(f"--{name}", type=int)
-    parser.add_argument("--split-dense-gate-up", action="store_true")
-    parser.add_argument("--packed-dense-gate-up", action="store_true")
-    parser.add_argument("--separate-kv-update", action="store_true")
-    parser.add_argument("--sparse-intermediate-dram", action="store_true")
-    parser.add_argument("--prefill-sparse-intermediate-dram", action="store_true")
-    parser.add_argument("--legacy-token-prefill-sparse", action="store_true")
-    parser.add_argument("--batch1-prefill-dense-experts", action="store_true")
-    parser.add_argument("--serving-fused-kv-update", action="store_true")
-    parser.add_argument("--default-sdpa", action="store_true")
-    parser.add_argument("--direct-o-input", action="store_true")
-    parser.add_argument("--direct-down-input", action="store_true")
-    parser.add_argument("--packed-dense-experts", action="store_true")
+    parser.add_argument("--implementation", choices=("functional", "optimized"), default="optimized")
+    parser.add_argument("--real-weights", action="store_true")
+    parser.add_argument("--warmups", type=int, default=5)
+    parser.add_argument("--iterations", type=int, default=20)
+    parser.add_argument("--pcc", type=float)
+    parser.add_argument("--pcc-evidence", type=Path)
     parser.add_argument(
-        "--prefill-packed-dense-experts",
-        action=argparse.BooleanOptionalAction,
-        default=None,
+        "--pcc-scope",
+        choices=("exact_workload", "same_candidate_control", "cross_workload_control"),
     )
-    parser.add_argument("--dense-expert-prefill-gate-grid-x", type=int)
-    parser.add_argument("--dense-expert-prefill-gate-grid-y", type=int)
-    parser.add_argument("--dense-expert-prefill-down-grid-x", type=int)
-    parser.add_argument("--dense-expert-prefill-down-grid-y", type=int)
-    parser.add_argument("--dense-expert-prefill-gate-transpose-mcast", action="store_true")
-    parser.add_argument("--dense-expert-prefill-down-transpose-mcast", action="store_true")
-    parser.add_argument("--sparse-gate-grid-x", type=int)
-    parser.add_argument("--sparse-gate-grid-y", type=int)
-    parser.add_argument("--sparse-up-grid-x", type=int)
-    parser.add_argument("--sparse-up-grid-y", type=int)
-    parser.add_argument("--sparse-down-grid-x", type=int)
-    parser.add_argument("--sparse-down-grid-y", type=int)
-    parser.add_argument("--prefill-sparse-gate-grid-x", type=int)
-    parser.add_argument("--prefill-sparse-gate-grid-y", type=int)
-    parser.add_argument("--prefill-sparse-up-grid-x", type=int)
-    parser.add_argument("--prefill-sparse-up-grid-y", type=int)
-    parser.add_argument("--prefill-sparse-down-grid-x", type=int)
-    parser.add_argument("--prefill-sparse-down-grid-y", type=int)
+    parser.add_argument("--pcc-status", choices=("pass", "fail", "informational"))
+    parser.add_argument("--pcc-threshold", type=float)
+    parser.add_argument("--pcc-note")
+    parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()
+    if args.real_weights and args.layer not in (0, 1):
+        raise ValueError(
+            "the repo-local partial checkpoint contains real weights only for representative layers 0 and 1"
+        )
+    correctness_binding = _correctness_binding(args)
+    provenance = _source_provenance(args.implementation)
+    argv = list(sys.argv)
 
-    config = AutoConfig.from_pretrained(MODEL_ID, revision=REAL_REVISION, local_files_only=True)
-    policy = _policy(args)
-    state = _synthetic_state(config, args.layer, sparse_weights=args.layer != 0)
+    config = AutoConfig.from_pretrained(MODEL_ID, revision=REAL_REVISION)
+    if args.real_weights:
+        state = _real_dense_layer_zero_state() if args.layer == 0 else _real_layer_one_state()
+    else:
+        state = _synthetic_state(config, args.layer, sparse_weights=config.mlp_layer_types[args.layer] == "sparse")
     max_cache_len = args.sequence if args.mode == "prefill" else 32
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=128 * 1024 * 1024)
+    effective_configuration = None
     try:
-        decoder = OptimizedDecoder.from_state_dict(
-            state,
+        decoder_cls = FunctionalDecoder if args.implementation == "functional" else OptimizedDecoder
+        decoder_kwargs = dict(
             hf_config=config,
             layer_idx=args.layer,
             mesh_device=mesh_device,
             batch=args.batch,
             max_cache_len=max_cache_len,
-            optimization_config=policy,
         )
-        if args.interleaved_prefill_s2:
-            if args.mode != "prefill":
-                raise ValueError("--interleaved-prefill-s2 requires --mode prefill")
-            result = _interleaved_prefill_s2(
-                decoder,
-                mesh_device,
-                config,
-                sequence=args.sequence,
-                warmups=args.warmups,
-                iterations=args.iterations,
-            )
-        elif args.mode == "prefill":
+        if decoder_cls is OptimizedDecoder:
+            decoder_kwargs["candidate"] = args.candidate
+        decoder = decoder_cls.from_state_dict(state, **decoder_kwargs)
+        if decoder_cls is OptimizedDecoder:
+            effective_configuration = decoder.effective_configuration()
+        if args.mode == "prefill":
             result = _prefill(
                 decoder,
                 mesh_device,
@@ -505,20 +211,27 @@ def main():
             )
     finally:
         ttnn.close_mesh_device(mesh_device)
+
     result.update(
         {
-            "candidate": args.candidate,
+            "decoder": args.implementation,
+            "candidate": args.candidate if args.implementation == "optimized" else None,
+            "real_weights": args.real_weights,
             "mode": args.mode,
             "batch": args.batch,
             "sequence": args.sequence,
             "layer": args.layer,
             "model_revision": REAL_REVISION,
-            "policy": _render_policy(decoder.optimization_config),
-            "weights_source": "deterministic_synthetic_full_shape_recorded_marginals",
-            "activations_source": "deterministic_synthetic",
-            "warmups": args.warmups,
-            "iterations": args.iterations,
-            "decode_is_trace_replay": args.mode == "decode",
+            "effective_configuration": effective_configuration,
+            "provenance": provenance,
+            "argv": argv,
+            "correctness_binding": correctness_binding,
+            # Compatibility fields are derived from the validated binding;
+            # new readers should consume correctness_binding.
+            "pcc": args.pcc,
+            "pcc_evidence": (
+                correctness_binding["evidence"]["repo_relative_path"] if correctness_binding is not None else None
+            ),
         }
     )
     rendered = json.dumps(result, indent=2)

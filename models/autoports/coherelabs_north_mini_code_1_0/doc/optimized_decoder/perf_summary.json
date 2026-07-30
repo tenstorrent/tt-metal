@@ -1,0 +1,127 @@
+{
+  "model": "CohereLabs/North-Mini-Code-1.0",
+  "revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "workload": "representative real-weight sliding-RoPE sparse-MoE decoder layer",
+  "baseline_ms": {
+    "prefill_batch_1_seq_128": 14.848085548146628,
+    "prefill_batch_32_seq_128": 147.84146694728406,
+    "traced_decode_batch_1": 9.570112319779582,
+    "traced_decode_batch_32": 11.154914942453615
+  },
+  "optimized_ms": {
+    "prefill_batch_1_seq_128": 13.22779555193847,
+    "prefill_batch_32_seq_128": 135.0641024953802,
+    "traced_decode_batch_1": 0.6037268764339387,
+    "traced_decode_batch_32": 3.8464947405736893
+  },
+  "speedup_percent": {
+    "prefill_batch_1_seq_128": 10.91,
+    "prefill_batch_32_seq_128": 8.64,
+    "traced_decode_batch_1": 93.69,
+    "traced_decode_batch_32": 65.52
+  },
+  "primary_target": "traced_decode_batch_1",
+  "correctness": {
+    "functional_pcc_floor": 0.995,
+    "populated_history_decode_pcc": 0.9991298457,
+    "selected_batch_1_decode_pcc": 0.9982682247495351,
+    "serving_batch_decode_pcc": 0.9974305620358678,
+    "exact_batch_32_seq_128_optimized_vs_functional_pcc": 0.9998711167724174,
+    "exact_batch_32_seq_128_optimized_vs_hf_pcc": 0.9890819238691768,
+    "exact_batch_32_seq_128_functional_vs_hf_pcc": 0.988945112059054,
+    "exact_batch_32_seq_128_route_set_agreement": 0.8717948794364929,
+    "dense_selected_bfp4_lofi": {
+      "prefill_seq_65_pcc": 0.9952752860555704,
+      "traced_decode_batch_1_pcc": 0.9988485904958156,
+      "traced_decode_batch_32_pcc": 0.9989809204589809
+    },
+    "bfp4_attention_exact_real_batch_1_pcc": 0.9819342128075105,
+    "bfp4_attention_exact_real_batch_32_pcc": 0.9805127653480685
+  },
+  "decode_profile": {
+    "device_operations_ms": 0.575504,
+    "op_to_op_gap_ms": 0.065656,
+    "profiled_window_ms": 0.64116,
+    "unprofiled_wall_ms": 0.6037268764339387,
+    "matmul_ms": 0.232316,
+    "matmul_percent_of_window": 36.23,
+    "layout_conversion_ms": 0.009738,
+    "modeled_dram_roofline_percent": 19.4,
+    "modeled_dram_bandwidth_gb_per_s": 99,
+    "artifact": "tracy/final_decode_b1_rows.txt"
+  },
+  "prefill_batch_32_profile": {
+    "device_operations_ms": 129.725865,
+    "op_to_op_gap_ms": 1.22,
+    "profiled_window_ms": 130.945865,
+    "unprofiled_wall_ms": 135.0641024953802,
+    "dense_expert_matmul_ms": 81.41295,
+    "dense_expert_matmul_percent_of_window": 62.17,
+    "modeled_dram_roofline_percent": 20.9,
+    "modeled_dram_bandwidth_gb_per_s": 107,
+    "artifact": "tracy/final_prefill_b32_rows.txt"
+  },
+  "dense_layer_0": {
+    "selected_precision": "BFP4/LoFi gate-up and BFP8/LoFi down",
+    "selected_topology": {
+      "batch_1": "two independently tuned 48-core 8x6 gate/up projections; interleaved 32-core down",
+      "batch_32": "packed 64-core 1x3 gate/up projection; DRAM-width-sharded down"
+    },
+    "pcc": {
+      "prefill_seq_65": 0.9952752860555704,
+      "traced_decode_batch_1": 0.9988485904958156,
+      "traced_decode_batch_32": 0.9989809204589809
+    },
+    "functional_ms": {
+      "prefill_batch_1_seq_128": 0.6323884997982532,
+      "prefill_batch_32_seq_128": 13.686610452714376,
+      "traced_decode_batch_1": 0.35600750319038826,
+      "traced_decode_batch_32": 6.640965802944265
+    },
+    "optimized_ms": {
+      "prefill_batch_1_seq_128": 0.5815436001284979,
+      "prefill_batch_32_seq_128": 12.277911696583033,
+      "traced_decode_batch_1": 0.19663566587648043,
+      "traced_decode_batch_32": 0.7665026282969242
+    },
+    "higher_precision_control_ms": {
+      "precision": "BFP8/HiFi2 gate-up and down",
+      "prefill_batch_1_seq_128": 0.5811650538817048,
+      "prefill_batch_32_seq_128": 12.311289504577871,
+      "traced_decode_batch_1": 0.2065176018125688,
+      "traced_decode_batch_32": 0.8432568012115856
+    },
+    "profile": {
+      "device_operations_ms": 0.172571,
+      "op_to_op_gap_ms": 0.02934,
+      "profiled_window_ms": 0.201911,
+      "matmul_ms": 0.106574,
+      "matmul_percent_of_window": 52.78,
+      "required_mlp_sharded_to_interleaved_ms": 0.001464,
+      "modeled_dram_roofline_percent": 36.4,
+      "modeled_dram_bandwidth_gb_per_s": 186,
+      "artifact": "tracy/final_dense_decode_b1_rows.txt"
+    },
+    "serving_profile": {
+      "device_operations_ms": 0.748219,
+      "op_to_op_gap_ms": 0.017734,
+      "profiled_window_ms": 0.765953,
+      "matmul_ms": 0.427454,
+      "matmul_percent_of_window": 55.81,
+      "modeled_dram_roofline_percent": 11.0,
+      "modeled_dram_bandwidth_gb_per_s": 56,
+      "artifact": "tracy/final_dense_decode_b32_rows.txt"
+    }
+  },
+  "final_source_sha256": "21d222646cffcb8c09c0fba1b60b0c1f30f117e6dc6a53b49b3f1af340602ecd",
+  "notes": [
+    "Sparse decode keeps batch-specific expert geometry and a 32-core width-sharded residual/RMSNorm chain at both batches.",
+    "Batch 1 uses legal DRAM-width-sharded QKV/O weights; serving batch 32 retains interleaved attention after its DRAM-sharded candidate failed PCC.",
+    "Final sparse decode uses packed BFP8/HiFi2 routed experts, exact nnz=8 at batch 1, dynamic nnz at batch 32, BFP8/LoFi attention, and a BFP8 KV cache.",
+    "Dense BFP4/LoFi is selected because it passes the 0.995 functional floor and is faster than the BFP8/HiFi2 control at all four workloads.",
+    "Dense batch-1 decode selects two separately tuned projections over the best correct packed control; serving batch 32 selects packed gate/up.",
+    "The batch-1 MLP sharded-to-interleaved conversion is necessary for the winning family and costs 1.464 us.",
+    "All four headline latencies are source-bound JSON artifacts under artifacts/.",
+    "Watcher and profiler collection were performed separately."
+  ]
+}

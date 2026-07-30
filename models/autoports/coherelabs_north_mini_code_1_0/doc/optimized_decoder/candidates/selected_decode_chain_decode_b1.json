@@ -1,0 +1,280 @@
+{
+  "mean_ms": 0.6783249822910875,
+  "min_ms": 0.6769789906684309,
+  "samples_ms": [
+    0.6830499914940447,
+    0.6811060011386871,
+    0.6783110147807747,
+    0.6787919846829027,
+    0.6778000097256154,
+    0.6777799862902611,
+    0.6777810049243271,
+    0.6780900002922863,
+    0.6787620077375323,
+    0.6783209973946214,
+    0.6786819722037762,
+    0.6783810094930232,
+    0.6786909943912178,
+    0.6778909882996231,
+    0.6774289940949529,
+    0.6787420134060085,
+    0.6777900271117687,
+    0.6773690111003816,
+    0.6783120043110102,
+    0.677700008964166,
+    0.6796240049879998,
+    0.6784409924875945,
+    0.6787519960198551,
+    0.6772189808543772,
+    0.6780710245948285,
+    0.6788420141674578,
+    0.6786119774915278,
+    0.6791119812987745,
+    0.6790629995521158,
+    0.6769789906684309,
+    0.6791430059820414,
+    0.6783810094930232,
+    0.6776300142519176,
+    0.6789019971620291,
+    0.6780510011594743,
+    0.677659991197288,
+    0.6781910196878016,
+    0.67867201869376,
+    0.6785519944969565,
+    0.6784310098737478,
+    0.6772190099582076,
+    0.6777200032956898,
+    0.678220996633172,
+    0.6771490152459592,
+    0.6781709962524474,
+    0.6779010000173002,
+    0.6781910196878016,
+    0.6777100206818432,
+    0.6770190084353089,
+    0.6778399983886629
+  ],
+  "decoder": "optimized",
+  "candidate": "selected_decode_chain",
+  "real_weights": true,
+  "mode": "decode",
+  "batch": 1,
+  "sequence": 128,
+  "layer": 1,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "effective_configuration": {
+    "candidate": "selected_decode_chain",
+    "policy": {
+      "attention_weight_dtype": "BFLOAT8_B",
+      "dense_gate_up_dtype": "BFLOAT4_B",
+      "dense_down_dtype": "BFLOAT8_B",
+      "cache_dtype": "BFLOAT8_B",
+      "attention_fidelity": "LoFi",
+      "dense_gate_up_fidelity": "LoFi",
+      "dense_down_fidelity": "LoFi",
+      "decode_expert_gate_up_dtype": "BFLOAT8_B",
+      "decode_expert_down_dtype": "BFLOAT8_B",
+      "prefill_expert_gate_up_dtype": "BFLOAT8_B",
+      "prefill_expert_down_dtype": "BFLOAT8_B",
+      "decode_expert_gate_up_fidelity": "HiFi2",
+      "decode_expert_down_fidelity": "HiFi2",
+      "prefill_expert_gate_up_fidelity": "HiFi2",
+      "prefill_expert_down_fidelity": "HiFi2",
+      "sparse_experts": true,
+      "gate_up_grid": [
+        8,
+        2
+      ],
+      "gate_up_in0_block_w": 16,
+      "gate_up_out_block_w": 3,
+      "gate_up_subblock_w": 3,
+      "down_grid": [
+        8,
+        2
+      ],
+      "down_in0_block_w": 24,
+      "down_out_block_w": 4,
+      "down_subblock_w": 4,
+      "prefill_chunk_size": 32,
+      "packed_expert_gate_up": true,
+      "dense_large_prefill_gate_up_grid": [
+        8,
+        8
+      ],
+      "dense_large_prefill_down_grid": [
+        8,
+        8
+      ],
+      "dense_large_prefill_gate_up_in0_block_w": 8,
+      "dense_large_prefill_down_in0_block_w": 8,
+      "dense_large_prefill_gate_up_subblock_w": 3,
+      "dense_large_prefill_down_subblock_w": 4,
+      "packed_dense_large_prefill": false,
+      "decode_sharded_residual": true,
+      "attention_dram_sharded": true,
+      "attention_dram_sharded_serving": false,
+      "decode_router_grid": null,
+      "decode_router_in0_block_w": 8,
+      "decode_router_out_block_w": 2,
+      "decode_router_subblock_w": 2
+    },
+    "sparse_matmul_output_dtype": "BFLOAT8_B",
+    "execution_topology": {
+      "decode_experts": "routed_sparse_packed_gate_up",
+      "small_prefill_experts": "routed_sparse_separate_gate_up",
+      "large_prefill_experts": "dense_all_expert_composite",
+      "large_prefill_gate_up": "separate_same_input_matmuls",
+      "large_prefill_threshold_tokens": 1024,
+      "large_prefill_chunk_tokens": 1024,
+      "large_prefill_weights": "bf16_phase_specific",
+      "decode_prefill_down_storage": "shared",
+      "cache_initialization": "zero_filled"
+    },
+    "decode_sdpa_program": {
+      "compute_with_storage_grid_size": [
+        11,
+        10
+      ],
+      "exp_approx_mode": false,
+      "q_chunk_size": 0,
+      "k_chunk_size": 0
+    },
+    "decode_residual_norm": {
+      "sharded": true,
+      "layout": "L1_WIDTH_SHARDED",
+      "grid": [
+        8,
+        4
+      ],
+      "shard_shape": [
+        32,
+        64
+      ],
+      "program_class": "LayerNormShardedMultiCoreProgramConfig"
+    },
+    "decode_attention_projection": {
+      "dram_sharded_weights": true,
+      "weight_memory": "DRAM_WIDTH_SHARDED",
+      "qkv_program_class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+      "qkv_in0_block_w": 2,
+      "qkv_per_core_M": 1,
+      "qkv_per_core_N": 5,
+      "o_program_class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+      "o_in0_block_w": 4,
+      "o_per_core_M": 1,
+      "o_per_core_N": 2
+    },
+    "decode_router_program": {
+      "enabled": false,
+      "grid": null,
+      "in0_block_w": 8,
+      "out_block_w": 2,
+      "out_subblock_w": 2
+    },
+    "expert_program": {
+      "decode_gate_up_cores": [
+        8,
+        2
+      ],
+      "decode_down_cores": [
+        8,
+        2
+      ],
+      "prefill_gate_up_cores": [
+        8,
+        4
+      ],
+      "prefill_down_cores": [
+        8,
+        4
+      ],
+      "decode_gate_up_in0_block_w": 16,
+      "decode_down_in0_block_w": 24,
+      "prefill_gate_up_in0_block_w": 8,
+      "prefill_down_in0_block_w": 12,
+      "decode_gate_up_out_block_w": 3,
+      "decode_down_out_block_w": 4,
+      "prefill_gate_up_out_block_w": 1,
+      "prefill_down_out_block_w": 1,
+      "decode_gate_up_subblock_w": 3,
+      "decode_down_subblock_w": 4,
+      "prefill_gate_up_subblock_w": 1,
+      "prefill_down_subblock_w": 1,
+      "sequence_chunk_size": 32,
+      "base_down_split_size": 32
+    },
+    "dense_large_prefill_program": {
+      "enabled": true,
+      "program_class": "MatmulMultiCoreReuseMultiCastProgramConfig",
+      "gate_up_grid": [
+        8,
+        8
+      ],
+      "down_grid": [
+        8,
+        8
+      ],
+      "gate_up_in0_block_w": 8,
+      "down_in0_block_w": 8,
+      "gate_up_subblock": [
+        1,
+        3
+      ],
+      "down_subblock": [
+        1,
+        4
+      ],
+      "input_memory": "DRAM_INTERLEAVED",
+      "weight_memory": "DRAM_INTERLEAVED",
+      "output_memory": "DRAM_INTERLEAVED",
+      "gate_up_compute_fidelity": "HiFi4",
+      "down_compute_fidelity": "HiFi4",
+      "fp32_dest_acc_en": true,
+      "output_dtype": "BFLOAT16",
+      "fuse_batch": false,
+      "packed_gate_up": false
+    }
+  },
+  "provenance": {
+    "git_head": "a2719cfecabce0124a96835b26eb31fb41928e2d",
+    "git_branch": "skillexp-work-northmini-fresh",
+    "sources": {
+      "models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py": {
+        "sha256": "6677c39a61cd13eb4ca6ebc0de3e77abf12339ac714b25d17c1df7e5454b314b",
+        "computed_git_blob_oid": "a1a9c87c5ec4f6b0cddc43e7a3ec3deceac9ca61",
+        "git_object_available": false,
+        "head_git_blob_oid": null,
+        "git_status": "?? models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py"
+      },
+      "models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py": {
+        "sha256": "31ed6c4442baa5b30683931108347ff1f3a6b127f9650eb982362823653aba2c",
+        "computed_git_blob_oid": "a8d4ddecdfc451ce38935867903f15040c10d047",
+        "git_object_available": false,
+        "head_git_blob_oid": null,
+        "git_status": "?? models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py"
+      }
+    }
+  },
+  "argv": [
+    "/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py",
+    "--mode",
+    "decode",
+    "--batch",
+    "1",
+    "--layer",
+    "1",
+    "--sequence",
+    "128",
+    "--candidate",
+    "selected_decode_chain",
+    "--real-weights",
+    "--warmups",
+    "10",
+    "--iterations",
+    "50",
+    "--json-out",
+    "models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/candidates/selected_decode_chain_decode_b1.json"
+  ],
+  "correctness_binding": null,
+  "pcc": null,
+  "pcc_evidence": null
+}
