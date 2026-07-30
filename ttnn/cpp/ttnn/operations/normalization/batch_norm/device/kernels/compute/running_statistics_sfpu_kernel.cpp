@@ -305,6 +305,16 @@ void kernel_main() {
             dfb_tmp2_obj.pop_front(onetile);
         }
 
+        // Drain batch_var when the var block compiled out.
+        // Writer pushes batch_var every tile unconditionally; when
+        // old_running_var_has_value is false the only consumer (the var
+        // computation block above) is absent, so pop here to prevent the
+        // CB from filling and stalling the writer.
+        if constexpr (!old_running_var_has_value) {
+            dfb_batch_var_obj.wait_front(onetile);
+            dfb_batch_var_obj.pop_front(onetile);
+        }
+
         dfb_out0_obj.push_back(1);
     }
     dfb_momentum_obj.pop_front(1);

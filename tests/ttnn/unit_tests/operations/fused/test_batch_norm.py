@@ -1124,3 +1124,84 @@ def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mea
             frobenius_threshold=0.25,
             check_pcc=False,
         )
+
+
+@pytest.mark.parametrize(
+    "check_mean, check_var",
+    [
+        (True, False),  # mean-only: batch_var must still be drained
+        (False, True),  # var-only: batch_mean must still be drained (FPU)
+        (False, False),  # both-absent: batch_var must still be drained
+    ],
+)
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_acc_en, device):
+    """Regression for CB drain hangs when a running stat is absent.
+
+    Reader pushes batch_mean and writer pushes batch_var every tile with no
+    presence guard. When the corresponding compute block compiles out, those
+    CBs fill after b_num_tiles_per_cb (=2) tiles and the producer stalls.
+    Shape (1, 192, 14, 14) is past the hang threshold used in review repros
+    (C=129 mean-only / C=192 both-absent); C=5/8 in the existing FPU test
+    complete without exercising the stall.
+    """
+    input_shapes = torch.Size([1, 192, 14, 14])
+    in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+    mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if check_mean else (None, None)
+    var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device) if check_var else (None, None)
+    weight_data, weight_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
+    bias_data, bias_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi
+        if not fp32_dest_acc_en
+        else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4),
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+    )
+
+    tt_mean = ttnn.clone(mean_tensor) if check_mean else None
+    tt_var = ttnn.clone(var_tensor) if check_var else None
+
+    # Completing without hang is the primary assertion; numeric check is secondary.
+    tt_output_tensor = ttnn.batch_norm(
+        input_tensor,
+        running_mean=tt_mean,
+        running_var=tt_var,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        training=True,
+        momentum=0.1,
+        compute_kernel_config=compute_config,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor)
+
+    channels = input_shapes[1]
+    torch_mean_ref = mean_data.clone() if mean_data is not None else None
+    torch_var_ref = var_data.clone() if var_data is not None else None
+    ref_mean = (
+        torch_mean_ref
+        if torch_mean_ref is not None
+        else (torch.zeros(channels, dtype=in_data.dtype) if torch_var_ref is not None else None)
+    )
+    ref_var = (
+        torch_var_ref
+        if torch_var_ref is not None
+        else (torch.ones(channels, dtype=in_data.dtype) if torch_mean_ref is not None else None)
+    )
+
+    torch_result = torch.nn.functional.batch_norm(
+        input=in_data,
+        running_mean=ref_mean,
+        running_var=ref_var,
+        weight=weight_data,
+        bias=bias_data,
+        training=True,
+        momentum=0.1,
+    )
+    frobenius_threshold = 0.25 if not fp32_dest_acc_en else 0.15
+    assert_numeric_metrics(
+        torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=frobenius_threshold
+    )
