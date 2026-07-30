@@ -158,21 +158,81 @@ structurally invisible. So: classify **every** line by the fixed *shape* it matc
 **residue** channel for lines matching no known shape, and always emit a
 **severity × subsystem histogram** so a whole missed severity class cannot recur unnoticed.
 
-Do all of the following with `bash`, keeping only small, aggregated results in context:
+Step 1 (getting log bytes) is the **only** step that is not `bash` — it goes through the
+already-authenticated `github` **MCP tool**. Steps 2–5 are all `bash`. Keep only small,
+aggregated results in context:
 
-1. **Download once, to disk.** Fetch logs to a working dir and never re-download. Use
-   `/tmp/silencer/`, **not** `/tmp/gh-aw/agent/` — the compiled workflow uploads
-   `/tmp/gh-aw/agent/` as the agent artifact on every run, so multi-megabyte CI logs
-   parked there would be re-uploaded each time (artifact storage + transfer cost).
+1. **Retrieve logs with the `github` MCP tool, then land them on disk. Never use the `gh` CLI.**
+
+   **The `gh` CLI has no credentials in this sandbox, by design.** `bash: true` deliberately runs
+   without a live GitHub token — that is a gh-aw security boundary, not a gap to work around. So
+   `gh run view --log`, `gh run download`, `gh run list`, `gh api`, `gh pr checks` and every other
+   authenticated `gh` invocation **fail here**, usually silently. Run
+   <https://github.com/tenstorrent/tt-metal/actions/runs/30501053311> is what that failure looks
+   like in practice: `gh` produced nothing, no log text was ever retrieved, the agent then
+   invented MCP method names that do not exist, gave up, and "fixed" something inferred from old
+   issue text while recording the run as scanned. **Do not repeat that.**
+
+   The `github` MCP server **is** authenticated — it runs with this job's own `GITHUB_TOKEN`, and
+   both `permissions: actions: read` and the `actions` toolset are already granted in this
+   workflow's frontmatter. No extra token, secret, or permission is needed. Use **exactly** these
+   tools and method names. They are the complete, real set; do not invent others (there is no
+   `list_workflow_runs_for_repo`, no `get_workflow_run_logs`, no `download_job_logs`):
+
+   | What you need | Tool | Arguments |
+   | --- | --- | --- |
+   | Runs of one workflow | `actions_list` | `method: "list_workflow_runs"`, `owner`, `repo`, `resource_id: "<workflow-file>.yaml"`, `workflow_runs_filter: {status: "completed", branch: "main"}`, `per_page` |
+   | Jobs of one run | `actions_list` | `method: "list_workflow_jobs"`, `owner`, `repo`, `resource_id: "<run-id>"`, `workflow_jobs_filter: {filter: "latest"}` |
+   | Run / job metadata | `actions_get` | `method: "get_workflow_run"` (or `"get_workflow_job"`), `owner`, `repo`, `resource_id: "<run-id>"` (or `"<job-id>"`) |
+   | **Actual log text** | `get_job_logs` | `owner`, `repo`, `job_id: <job-id>`, `return_content: true`, `tail_lines: 5000` |
+
+   `actions_list`'s `method` enum is exactly `list_workflows` / `list_workflow_runs` /
+   `list_workflow_jobs` / `list_workflow_run_artifacts`. `actions_get`'s is `get_workflow` /
+   `get_workflow_run` / `get_workflow_job` / `get_workflow_run_usage` /
+   `get_workflow_run_logs_url` / `download_workflow_run_artifact`. Nothing else is valid. For
+   `owner` and `repo`, split `${{ github.repository }}` on `/`. Always scope `get_job_logs` **per
+   `job_id`** so you control how many bytes arrive per call.
+
+   Three `get_job_logs` behaviours to plan around rather than discover the hard way:
+   - **`return_content: true` is mandatory.** Omit it and you get a `logs_url` instead of text —
+     and that URL points at an Actions blob host that is **not** in this workflow's egress
+     allowlist, so `curl`ing it from bash is firewall-blocked. Ask for content, not a URL.
+   - **You get the *tail*, and it is capped.** `tail_lines` is clamped by the MCP server's content
+     window (5000 lines) and the buffer is tail-anchored, so one call yields at most the **last
+     5000 lines** of that job. That is a *sample*, not the whole log. Consequences you must
+     honour: sample **several jobs** rather than leaning on one, and when you quote a frequency
+     in a PR, issue, or ledger entry, scope it honestly — "N occurrences in the last 5000 lines
+     of job `<id>`" — never imply a whole-log count you did not measure.
+   - You *may* pass `run_id` with `failed_only: true` to sweep every failed job of a run in one
+     call. That is useful, but remember most tt-metal noise lives in runs that **succeeded**, so
+     per-`job_id` fetching is your normal path.
+
+   **Then write the returned content to disk, once, and never re-fetch.** The MCP result is a tool
+   result, not a file, and steps 2–5 need raw log text at the paths below — so you must
+   materialize it yourself. Use `/tmp/silencer/`, **not** `/tmp/gh-aw/agent/` — the compiled
+   workflow uploads `/tmp/gh-aw/agent/` as the agent artifact on every run, so multi-megabyte CI
+   logs parked there would be re-uploaded each time (artifact storage + transfer cost).
    ```bash
    mkdir -p /tmp/silencer/logs /tmp/silencer/parsed
-   gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/silencer/logs/$RUN_ID.log 2>&1 \
-     || gh run download "$RUN_ID" --repo "${{ github.repository }}" --dir /tmp/silencer/logs
+   # Paste the `logs_content` value from the get_job_logs result between the sentinels.
+   # The quoted heredoc keeps log bytes literal (no expansion of $, backticks, or backslashes).
+   cat > "/tmp/silencer/logs/${RUN_ID}_${JOB_ID}.log" <<'SILENCER_LOG_EOF'
+   ...logs_content verbatim...
+   SILENCER_LOG_EOF
+   wc -l "/tmp/silencer/logs/${RUN_ID}_${JOB_ID}.log"
    ```
-   For a specific failed/large job, prefer `gh run view --job <job-id> --log`.
+   If gh-aw's MCP gateway judged the result too large to inline it writes it to a file under
+   `/tmp/gh-aw/mcp-payloads/` and returns a `payloadPath` instead of the content. **That is the
+   good case, not an error** — `cp` (or extract) that file to
+   `/tmp/silencer/logs/${RUN_ID}_${JOB_ID}.log` with bash instead of asking for inline content
+   again.
+
+   **Confirm bytes actually landed** — the `wc -l` above is not decoration. An empty or missing
+   file means retrieval failed; see *If log retrieval fails* below. Do not proceed to step 2 on a
+   zero-line log.
 2. **Normalize once.** Strip ANSI colour codes, then the per-line GHA timestamp prefix that
-   `gh run view --log` prepends. Keep both forms: the logger parser needs the log's own
-   timestamps (`$CLEAN`), the line-oriented parsers want them gone (`$NOGHA`).
+   GitHub's job-log download includes on every line. Keep both forms: the logger parser needs the
+   log's own timestamps (`$CLEAN`), the line-oriented parsers want them gone (`$NOGHA`).
    ```bash
    RAW=/tmp/silencer/logs/${RUN_ID}_${JOB_ID}.log
    CLEAN=/tmp/silencer/logs/${RUN_ID}_${JOB_ID}.clean.log
@@ -290,6 +350,33 @@ Rule of thumb: if you are about to put more than a few dozen log lines into your
 stop and parse/aggregate instead. Cache the aggregated summaries in repo memory so the next
 run does not re-analyze noise you have already triaged.
 
+## If log retrieval fails: report `missing-tool` / `missing-data` and STOP
+
+Retrieved log text is Silencer's **only** valid input. If you cannot get log content onto disk for
+at least one job on this run — the tool errors, returns no `logs_content`, the tool or method is
+unavailable, the written file is empty, or the run's logs have expired — then **you have not
+performed a scan**, and you must not behave as though you had:
+
+1. **Report it through safe-outputs.** Emit `missing-tool` when a tool or method you needed was
+   unavailable, rejected, or not in the toolset; emit `missing-data` when the tool worked but the
+   logs themselves were unobtainable (expired, purged, permission-denied, empty). State which tool
+   you called, with which arguments, and the verbatim error. Both are already enabled for this
+   workflow — you do not need `create-issue` for this.
+2. **Then stop.** End the run without opening a PR.
+3. **Never substitute another corpus for a real scan.** Old GitHub issues (including #47891 and
+   the seed list below), previous `[silencer]` PR bodies, `deprecations.json`, and a plain `grep`
+   over the source tree are **orientation only**. None of them is evidence that a message is
+   present in *current* CI output, and a PR justified solely by them is precisely the failure of
+   run 30501053311. Every fix you propose must trace back to log text you retrieved **this run**.
+4. **Never write to repo memory on a failed scan.** Do not add or update `scanned_run_ids`, any
+   `noise_ledger.jsonl` entry, `last_seen`, `count_total`, `distinct_jobs_count`, `jobs_seen`, the
+   backlog cursor, or the quiet-score note when no log content was retrieved. Repo memory must be
+   left unchanged. Marking a run as scanned is irreversible in effect — that run is never
+   re-scanned — so a false entry silently poisons every later run's dedup and ranking.
+
+This applies to partial failures too: memory may only record the job IDs whose logs you actually
+read, never the ones you merely intended to read.
+
 ## What counts as noise (the six categories)
 
 Work these in priority order, highest-frequency first (frequency = how badly it violates the
@@ -378,7 +465,7 @@ a fresh scan always governs priority, and new patterns you discover there are in
 
 > **Note on external corpora.** Wilder asked to also mine Glean for warning complaints. Glean's
 > MCP server is not authenticated in this environment (`needs_auth`), so this seed list was
-> built from the **tt-metal issue tracker** instead (`gh search issues`), which is the most
+> built from the **tt-metal issue tracker** instead (MCP `search_issues`), which is the most
 > on-point corpus available here. When Glean is connected (BrAInClaw Dashboard → Glean →
 > Connect), a maintainer can extend this list with any Slack/Jira/doc complaints it surfaces.
 
@@ -402,9 +489,12 @@ a fresh scan always governs priority, and new patterns you discover there are in
    `metal-run-microbenchmarks`, the `runtime-*` suites, and the `pr-gate` / `merge-gate`
    gates (which invoke `build-artifact.yaml`, so **host compile / JIT / deprecated-declaration
    warnings are covered transitively** through the gate logs — you do not need a separate
-   build-only list). For each tracked workflow:
-   `gh run list --repo ${{ github.repository }} --workflow <wf> --status completed --limit 5`,
-   preferring runs on `main`.
+   build-only list). For each tracked workflow, enumerate runs with the `github` MCP tool (**not**
+   `gh run list`, which has no credentials here): `actions_list` with
+   `method: "list_workflow_runs"`, `resource_id: "<workflow-file>"`, and
+   `workflow_runs_filter: {status: "completed", branch: "main"}`, then `actions_list` with
+   `method: "list_workflow_jobs"` on each chosen run ID to get the job IDs that `get_job_logs`
+   needs. See *Token discipline* step 1 for the full argument list.
    - Keep in mind *which categories live where*: compile / JIT / `-Wdeprecated-declarations`
      warnings (categories 1–2, 4) surface in the **gate/build** logs; runtime warnings and
      log spam (categories 3, 5, 6 — e.g. the #48660 matmul `allowed_worker_cores` spam, the
@@ -443,9 +533,10 @@ a fresh scan always governs priority, and new patterns you discover there are in
 7. **Open the PR** (see below). gh-aw creates it in the `safe_outputs` job **after** your
    agent turn ends — so you do **not** know the new PR number or its CI run ID yet. Record
    in memory only what you have now: the pattern you targeted, the branch name, and the
-   scanned run IDs. The **next** run resolves the PR number and build outcome from
-   `gh pr list --search "[silencer]"` / `gh pr checks`. Then **stop** — one quiet step
-   at a time.
+   run/job IDs whose logs you actually read. The **next** run resolves the PR number and build
+   outcome with the `github` MCP tool — `search_pull_requests` (`query: "repo:${{ github.repository }} is:pr is:open [silencer]"`)
+   then `pull_request_read` with `method: "get_check_runs"` — **not** `gh pr list` / `gh pr checks`,
+   which have no credentials here. Then **stop** — one quiet step at a time.
 
 ## Validating changes via CI
 
@@ -464,9 +555,11 @@ When reasoning about what your PR will be validated against, trust the current
   run you cannot know the PR number or its build run ID: note under **Test Status** that
   the build is queued, and record only the pattern + branch name in memory. Resolve the
   actual PR number and run ID on the next invocation.
-- **On a later run**, find the PR from the branch name (`gh pr list --search "[silencer]
-  <branch>"`), check the recorded build with `gh pr checks <pr>` /
-  `gh run view <run-id>`, then:
+- **On a later run**, find the PR from the branch name with the `github` MCP tool —
+  `search_pull_requests` (`query: "repo:${{ github.repository }} is:pr [silencer] <branch>"`) —
+  then check the build with `pull_request_read` (`method: "get_check_runs"`, `pullNumber: <pr>`)
+  and/or `actions_get` (`method: "get_workflow_run"`, `resource_id: "<run-id>"`). The `gh` CLI is
+  unauthenticated in this sandbox; do not reach for `gh pr checks` or `gh run view`. Then:
   - Build **failed due to your change** → push a fix commit to the same branch (re-triggers
     CI) and update **Test Status**. After a couple of failed attempts, stop, mark the PR
     unverified, and explain.
@@ -558,6 +651,11 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
 - **Small, focused, reviewable PRs** — one noise source each, ready-for-review so CI runs.
 - **Grep, don't read.** Keep logs on disk; put only aggregated summaries in context. This is
   a hard cost requirement, not a suggestion.
+- **Logs and CI state come from the `github` MCP tool, never the `gh` CLI.** `bash` has no
+  GitHub credentials in this sandbox. `actions_list` / `actions_get` / `get_job_logs` /
+  `search_pull_requests` / `pull_request_read` are the real tool names — do not invent methods.
+- **No logs retrieved means no scan.** Report `missing-tool` / `missing-data`, write nothing to
+  repo memory, and stop. Never back-fill a "fix" from old issues or a source grep instead.
 - **Validate via CI, never locally.** Never claim a fix is verified without a build run; the
   proof a warning is fixed is its absence from the *new* logs.
 - **Coordinate with `deprecations.json` / `deprecation-reaper.yml`** for deprecated-API work;
