@@ -264,6 +264,11 @@ for r in rows:
         bad.append(f"{op}: verdict {v} with no measured_ms. A PROSE REJECTION IS NOT A RESULT -- "
                    "qwen's arm rejected the advised RMSNorm sharding in one sentence with no number, "
                    "and that advice was worth 152 us per layer.")
+    # Op-level evidence for anything KEPT: an end-to-end latency delta cannot show WHERE the time moved,
+    # so a kept change without a profile is a number with no mechanism behind it.
+    if v == "kept" and not r.get("perf_report"):
+        bad.append(f"{op}: kept with no perf_report -- every kept candidate needs its own op-level "
+                   "tt-perf-report CSV referenced here, not just a latency number")
     if not r.get("oracle") and v == "kept":
         bad.append(f"{op}: kept with no oracle recorded -- a faster decoder that fails its correctness "
                    "oracle is a regression with a good number")
@@ -303,12 +308,48 @@ if f.get("oracle_passed") is not True:
 if f.get("changed") is None and f.get("shipped_change") is None:
     bad.append("neither `changed` nor `shipped_change` recorded: a NO-CHANGE outcome is a valid, "
                "publishable result but it has to be stated explicitly")
+# ---- COMBINATION: screening alone does not find the best decoder -----------------------------------
+# Chains interact. Two changes that each beat the incumbent alone can lose together, and a cumulative set
+# can lose to a single change. So the shipped config must be the best MEASURED set, and it must not be
+# worse than the best single change already measured -- otherwise the stage screened well and shipped badly.
+comb = f.get("combination") or {}
+sets = comb.get("measured_sets")
+bs = f.get("best_single_ms")
+kept_any = bool(f.get("changed"))
+if kept_any:
+    if not isinstance(sets, list) or not sets:
+        bad.append("combination.measured_sets is empty while a change was shipped. Measure the cumulative "
+                   "winner set (and pairwise combinations of the top chains) and record each with its ms.")
+    else:
+        for n, s in enumerate(sets):
+            if not isinstance(s.get("measured_ms"), (int, float)):
+                bad.append(f"combination.measured_sets[{n}]: no measured_ms -- best_set must be the best "
+                           "MEASURED set, never an inferred one")
+            if s.get("oracle_passed") is None:
+                bad.append(f"combination.measured_sets[{n}]: no oracle_passed")
+        best = min((s.get("measured_ms") for s in sets
+                    if isinstance(s.get("measured_ms"), (int, float))), default=None)
+        if best is not None and isinstance(fm, (int, float)) and fm > best + floor:
+            bad.append(f"final_ms {fm} is worse than the best measured set {best} (+floor {floor}) -- "
+                       "ship the best set you measured")
+    if not isinstance(bs, (int, float)):
+        bad.append("best_single_ms missing: without it, a combination that is worse than one of its own "
+                   "members cannot be detected")
+    elif isinstance(fm, (int, float)) and fm > bs + floor:
+        bad.append(f"INVARIANT VIOLATED: final_ms {fm} > best_single_ms {bs} (+floor {floor}). A "
+                   "combination worse than a single change already measured must not ship.")
+
 it = f.get("iterations")
 if isinstance(it, list) and it:
     for n, e in enumerate(it):
         if not e.get("trigger"):
             bad.append(f"iterations[{n}]: no trigger recorded. Re-capture only after a topology rewrite "
                        "that changes an op's shape; a dtype change is not a rewrite.")
+        # every iteration after the first must re-rank from a FRESH profile: ranking once against the
+        # original incumbent profile means later rounds chase a distribution that no longer exists.
+        if n > 0 and not e.get("reranked_from"):
+            bad.append(f"iterations[{n}]: no reranked_from. After applying winners, re-profile and re-run "
+                       "reconcile.py on the NEW CSV; the original ranking is stale once the graph changes.")
     if len(it) > 3:
         bad.append(f"{len(it)} iterations exceeds the cap of 3 -- extra captures are not free: one "
                    "wedged PCIe access needing a tt-smi reset, and qwen's second capture returned "

@@ -130,10 +130,43 @@ number.
   them). **A faster decoder that fails its oracle is not a result — it is a regression with a good
   number.**
 
-### Step 6 — Iterate, bounded
+Every **kept** candidate also needs its own op-level `tt-perf-report` CSV, referenced as `perf_report` in
+its row. An end-to-end latency delta tells you a change helped; it cannot tell you *where* the time moved,
+and a kept change with no profile is a number with no mechanism behind it. It is also how you notice a
+change that wins overall while making its own target op slower.
 
-You may iterate: apply what won, then re-capture and go again. Two rules keep iteration from becoming
-the search:
+### Step 5b — Combine: screening alone does not find the best decoder
+
+Steps 4–5 screen each chain **independently** against the frozen incumbent. That is necessary but not
+sufficient, because **chains interact**: they share L1, they share the conversion boundaries at their
+edges, and two changes that each beat the incumbent alone can lose together — or a cumulative set can lose
+to one of its own members.
+
+So after screening:
+
+1. measure the **cumulative set** of screened winners;
+2. measure **pairwise combinations** of the top material chains;
+3. record **every** measured set in `final.json.combination.measured_sets` with its `measured_ms` and
+   `oracle_passed`, and record `best_single_ms`;
+4. ship `best_set` — the best **measured** set, never an inferred one.
+
+The invariant tightens accordingly: `final_ms <= incumbent_ms` **and** `final_ms <= best_single_ms`, both
+within the noise floor. Shipping a combination that is worse than a single change you already measured is a
+defect the gate refuses, not a judgement call.
+
+Do not enumerate the full power set. Cumulative plus pairwise-on-the-top-chains is enough to catch
+interaction on this corpus, and the cost is bounded by the number of chains that survived screening — which
+is small precisely when the advisor had little to say.
+
+### Step 6 — Iterate, bounded, and re-rank from a FRESH profile
+
+You may iterate: apply what won, then go again. **Re-profile first.** The chain ranking in step 4 was
+computed from the incumbent's op-level CSV; once you have changed the graph, that distribution no longer
+exists, and continuing to rank against it means chasing a profile you have already invalidated. So every
+iteration after the first re-runs the profiler and re-runs `reconcile.py` on the **new** CSV, and records
+that CSV as `reranked_from`. The gate refuses a later iteration without it.
+
+Two further rules keep iteration from becoming the search:
 
 - **Re-capture only after a topology rewrite that changes an op's shape.** A dtype change is not a
   rewrite, and under this ordering dtype is already final.
