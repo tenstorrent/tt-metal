@@ -232,6 +232,7 @@ class Flux2Pipeline:
             subfolder="transformer",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._mesh_device.shape),
+            mesh_device=self._mesh_device,
             is_fsdp=self.is_fsdp,
         )
         ttnn.synchronize_device(self._mesh_device)
@@ -248,6 +249,7 @@ class Flux2Pipeline:
             subfolder="vae",
             parallel_config=self._vae_parallel,
             mesh_shape=tuple(self._mesh_device.shape),
+            mesh_device=self._mesh_device,
         )
         ttnn.synchronize_device(self._mesh_device)
 

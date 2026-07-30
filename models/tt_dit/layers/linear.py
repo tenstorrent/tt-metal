@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ..utils.matmul import get_1d_matmul_config, get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
@@ -130,30 +130,17 @@ class Linear(Module):
     ) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
-
-        if use_1d_fallback and M <= 64:  # TEMPORARY for FLUX2: Branch B: 1D mcast_in0 matmul for small-M shapes
-            program_config = get_1d_matmul_config(M, K, N, core_grid)
-            output = ttnn.linear(
-                x,
-                self.weight.data,
-                bias=self.bias.data if self.bias is not None else None,
-                program_config=program_config,
-                activation=self.fused_activation_fn,
-                compute_kernel_config=compute_kernel_config or self.compute_config,
-                dtype=dtype,
-            )
-        else:
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-            output = ttnn.experimental.minimal_matmul(
-                input_tensor=x,
-                weight_tensor=self.weight.data,
-                bias_tensor=self.bias.data if self.bias is not None else None,
-                config=matmul_config,
-                fused_activation=self.fused_activation_fn,
-                compute_kernel_config=compute_kernel_config or self.compute_config,
-                dtype=dtype,
-                fuse_swiglu=self.fuse_swiglu,
-            )
+        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+        output = ttnn.experimental.minimal_matmul(
+            input_tensor=x,
+            weight_tensor=self.weight.data,
+            bias_tensor=self.bias.data if self.bias is not None else None,
+            config=matmul_config,
+            fused_activation=self.fused_activation_fn,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
+            dtype=dtype,
+            fuse_swiglu=self.fuse_swiglu,
+        )
 
         return _apply_activation_fn(output, self.activation_fn)
 
@@ -373,29 +360,17 @@ class ColParallelLinear(Module):
                     fuse_swiglu=self.fuse_swiglu,
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
-
-            if use_1d_fallback and M <= 128:  # TEMPORARY for FLUX2: Branch B: 1D mcast_in0 matmul for small-M shapes
-                program_config = get_1d_matmul_config(M, K, N, core_grid)
-                output = ttnn.linear(
-                    x,
-                    weight,
-                    bias=self.bias.data if self.bias is not None else None,
-                    program_config=program_config,
-                    activation=self.fused_activation_fn,
-                    compute_kernel_config=compute_kernel_config or self.compute_config,
-                )
-            else:
-                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-                output = ttnn.experimental.minimal_matmul(
-                    input_tensor=x,
-                    weight_tensor=weight,
-                    bias_tensor=self.bias.data if self.bias is not None else None,
-                    config=matmul_config,
-                    fused_activation=self.fused_activation_fn,
-                    compute_kernel_config=compute_kernel_config or self.compute_config,
-                    dtype=dtype,
-                    fuse_swiglu=self.fuse_swiglu,
-                )
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            output = ttnn.experimental.minimal_matmul(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                fused_activation=self.fused_activation_fn,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+                fuse_swiglu=self.fuse_swiglu,
+            )
 
         return _apply_activation_fn(output, self.activation_fn)
 
