@@ -314,27 +314,17 @@ then replays it per frame. It gives **≈11–12 tok/s** steady-state decode vs 
 
 ### Environment variables
 
-Every entry is an A/B switch: the default is the validated path, and flipping it falls back to the
-older behaviour (or opts into an unvalidated one). Values are `1`/`0` unless stated.
+The validated decode path — split-capture, CFG batch-2, fused frame output, device-side noise, and
+device-side voice-clone encode audio/latents — is unconditional and has no switch. What remains
+below either selects a path still under evaluation or configures a test. Values are `1`/`0` unless
+stated.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `VIBEVOICE_MODEL_PATH` | unset | Checkpoint directory override (skips auto-download) |
 | `VV_TRACE_SEGMENT` | `0` in the generator; `1` in the ISL-sweep test | Whole-segment fused decode trace. The demo always sets it explicitly from `--trace` (default on) / `--no-trace`, so the generator's `0` default only applies to callers that set neither |
-| `VV_CFG_BATCH2` | `1` (on) | Run the CFG negative and positive LM rows as one batch-2 decode (weights read once). Requires `VV_CAP_SPLIT=1` |
-| `VV_CAP_SPLIT` | `1` (on) | Capture the frame as separate diffusion / LM graphs instead of one graph |
-| `VV_FUSE_FRAME_OUT` | `1` (on) | Append the constrained-argmax token to the frame's audio so one D2H returns both. `0` reads them separately. Requires `VV_CFG_BATCH2=1` (and so `VV_CAP_SPLIT=1`) — it is silently inactive otherwise |
-| `VV_DEV_NOISE` | `1` (on) | Gather the frame's diffusion init noise on device from a pre-uploaded table. `0` restores the per-frame host write |
-| `VV_DEV_ENC_AUDIO` | `1` (on) | Upload each voice row once and let the encode replay gather its own chunk on device. `0` uploads per chunk |
-| `VV_DEV_ENC_LAT` | `0` (off) | Accumulate voice-clone encode latents in-capture on device, so the host reads one row instead of one per chunk (663 → 4 transfers). Verified bit-identical; off by default because the win (~199 ms of a ~17.6 s voice-clone prefill) is inside run-to-run noise |
-| `VV_FUSED_ROPE` | `0` (off) | Fused bf16 `rotary_embedding_llama` decode RoPE + on-device cos/sin tables. Off by default: a 100-min acceptance run showed the speaking rate accelerating (median 208 wpm vs 153) even though every energy/spectral gate passed |
-| `VV_FP32_ROPE` | `1` (on) | Keep the traced decode on fp32 RoPE rows written per position |
+| `VV_FUSED_ROPE` | `0` (off) | Fused bf16 `rotary_embedding_llama` decode RoPE + on-device cos/sin tables, replacing the default per-position fp32 RoPE rows. Off by default: a 100-min acceptance run showed the speaking rate accelerating (median 208 wpm vs 153) even though every energy/spectral gate passed |
 | `VV_TTNN_RANDN` | `0` (off) | Draw diffusion init noise and the acoustic fix-std jitter with `ttnn.randn` on device instead of torch. Off by default: it is a different generator, so renders stop matching the torch reference and PCC comparison against it is no longer meaningful |
-| `VV_STREAM_AUDIO` | unset (off) | Path for a raw fp32 stream of each frame's audio. Bounds host RAM on long renders (a 100-min render otherwise peaks ~1.15 GB holding the chunks plus the concatenated copy) and preserves partial audio if the process dies |
-| `VV_LOG_TRAJ` | unset (off) | Path for a per-frame CSV of hidden/audio RMS, peak, and CFG cosine. Long-form diagnostics |
-| `VV_DEBUG` | `0` (off) | Verbose per-stage logs. `--debug` sets this together with `VV_PROFILE` |
-| `VV_PROFILE` | `0` (off) | Device-synced timing breakdown per stage |
-| `VV_PROFILE_PREFILL`, `VV_PROFILE_SPEECH_FRAME`, `VV_PROFILE_DIFFUSION` | `0` (off) | Wrap the n-th prefill chunk / speech frame / diffusion in Tracy signposts. Each has a matching `*_EXIT=1` to stop right after the profiled unit |
 | `VV_PREFILL_ISL_SWEEP` | full sweep | Comma list to shorten `test_prefill.py`'s ISL sweep |
 | `VV_ISL_SWEEP`, `VV_ISL_SWEEP_MAX_ISL`, `VV_ISL_WARMUP_TOKENS` | see perf section | ISL-sweep perf overrides |
 | `VV_WER_MAX_NEW_TOKENS`, `VV_WER_THRESHOLD` | 512 / 0.05 | WER test cap and gate |
@@ -617,7 +607,7 @@ single transfer.
 
 | Op | Type | Used for |
 |----|------|----------|
-| fused audio+token readback | D2H ×1 | one `to_torch` returns `[audio …, token_idx]` (`VV_FUSE_FRAME_OUT=1`); the token half is what the AR loop blocks on, since a trace cannot branch |
+| fused audio+token readback | D2H ×1 | one `to_torch` returns `[audio …, token_idx]`; the token half is what the AR loop blocks on, since a trace cannot branch |
 | `_emit_audio` (append, or disk write) | hostCPU | accumulate frame audio into the waveform, or stream it out under `VV_STREAM_AUDIO` |
 | `_gen_tokens.append` / `valid_ids[idx]` | hostCPU | token record; map the constrained-argmax **local** index to the global id (kept local so it survives the bf16 cast into the fused tensor) |
 | host pos/neg mirror `+=1`, RoPE write ×4 | hostCPU + H2D ×4 | **only when `VV_FUSED_ROPE=0`** (the default): the mirrors exist solely to index the fp32 cos/sin tables. On the fused path the rows are gathered on device and none of this runs |
@@ -635,8 +625,8 @@ single transfer.
 
 | Op | Type | Used for |
 |----|------|----------|
-| voice-clone encode: audio up | H2D ×1 per speaker | one upload of the whole voice row; the traced chunk graph gathers its own chunk on device (`VV_DEV_ENC_AUDIO=1`). `0` restores one H2D per chunk |
-| voice-clone encode: latents down | D2H per chunk, or ×1 per speaker | the chunk graph is ttnn-traced (`_ensure_encode_trace`) and replayed per chunk; the latent row comes back per chunk by default, or once per speaker under `VV_DEV_ENC_LAT=1` (663 → 4 transfers for the 4-speaker climate prompt). The trace is released before the LM prefill |
+| voice-clone encode: audio up | H2D ×1 per speaker | one upload of the whole voice row; the traced chunk graph gathers its own chunk on device |
+| voice-clone encode: latents down | D2H ×1 per speaker | the chunk graph is ttnn-traced (`_ensure_encode_trace`) and replayed per chunk, scattering each latent row into a device accumulator; the host reads the accumulator once per speaker (663 → 4 transfers for the 4-speaker climate prompt). The trace is released before the LM prefill |
 | scale/bias + `feats=(lat+bias)*scale` | hostCPU | normalize latents before the acoustic connector. `scale`/`bias` come from the checkpoint, so no reduction is needed |
 | `reset_*_cache` | H2D | reset conv streaming caches for a fresh generation |
 | `torch.randn(max_steps,…)` | hostCPU | pre-draw all diffusion init noise, then upload once as a gather table (RNG-aligned; `ttnn.randn` on device under `VV_TTNN_RANDN=1`) |
@@ -718,8 +708,6 @@ repeated here — see [Model description](#model-description) and [Upstream refe
   rate accelerating (median 208 wpm vs 153) despite every energy/spectral gate passing.
 - `VV_TTNN_RANDN=1` — on-device noise generation is a *different* RNG, so renders stop matching the
   torch reference and PCC comparison against it becomes meaningless.
-- `VV_DEV_ENC_LAT=1` — verified bit-identical, but the win (~199 ms of a ~17.6 s voice-clone prefill)
-  is inside run-to-run noise.
 
 ## CI
 
