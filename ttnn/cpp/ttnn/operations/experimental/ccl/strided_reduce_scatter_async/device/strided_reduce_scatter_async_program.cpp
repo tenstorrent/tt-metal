@@ -394,7 +394,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         CreateCircularBuffer(program, sender_worker_core_range_set, cb_addcmul_b_config);
     }
 
-    bool input_is_sharded = input_tensor.is_sharded();
+    [[maybe_unused]] bool input_is_sharded = input_tensor.is_sharded();  // input always via TensorAccessorArgs
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
 
@@ -402,9 +402,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::map<std::string, std::string> writer_compute_defines;
     std::map<std::string, std::string> reduce_compute_defines;
 
-    if (input_is_sharded) {
-        reader_compute_defines["INPUT_IS_SHARDED"] = "1";
-    }
+    // The input (MM output) is always fed through TensorAccessorArgs (below), even when L1-sharded
+    // for the fused-MM handoff, so the reader's TensorAccessor path handles it. The reader's manual
+    // INPUT_IS_SHARDED read path is unimplemented, so do NOT define INPUT_IS_SHARDED.
     if (intermediate_is_sharded) {
         reader_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
         writer_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
@@ -489,11 +489,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         slice_Ht,                           // [23] slice_Ht (total height in tiles across all MM cores)
     };
 
-    if (input_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
-    }
+    // Input (MM output): always TensorAccessorArgs (handles interleaved AND L1-sharded) so the
+    // reader's TensorAccessor path works for the fused-MM L1 handoff.
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
     } else {
@@ -661,9 +659,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                     worker_id,                                // worker_id
                     num_workers,                              // num_workers
                 };
-                if (input_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
-                }
+                // Input uses TensorAccessorArgs (see above) — no shard-map RT args, just the address.
                 if (intermediate_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(intermediate_tensor, reader_rt_args);
                 }
