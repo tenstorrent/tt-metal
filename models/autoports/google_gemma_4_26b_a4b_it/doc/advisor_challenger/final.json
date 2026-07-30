@@ -1,0 +1,62 @@
+{
+  "changed": false,
+  "shipped_change": false,
+  "outcome": "no-change",
+  "incumbent_ms": 1.275091270065826,
+  "final_ms": 1.275091270065826,
+  "noise_floor_ms": 0.0010944457481736336,
+  "delta_ms": 0.0,
+  "delta_pct": 0.0,
+  "metric": "46-layer weighted decode latency: (39 * sliding_attention + 7 * full_attention) / 46",
+  "best_single_ms": 1.275091270065826,
+  "winning_config": "frozen incumbent",
+  "oracle": "incumbent real-weight test_optimized_real_weights_prefill_decode, PCC >= 0.995 for sliding and both full-attention cache views",
+  "oracle_passed": true,
+  "combination": {
+    "best_set": [
+      "incumbent"
+    ],
+    "measured_sets": [
+      {
+        "set": [
+          "incumbent"
+        ],
+        "measured_ms": 1.275091270065826,
+        "oracle_passed": true
+      },
+      {
+        "set": [
+          "attention_projections"
+        ],
+        "measured_ms": 1.3292236051157764,
+        "oracle_passed": false,
+        "note": "performance-rejected before oracle promotion"
+      },
+      {
+        "set": [
+          "norm_residual_r11"
+        ],
+        "measured_ms": 1.1771252662267373,
+        "oracle_passed": false,
+        "note": "sliding decode PCC 0.9947948362 < 0.995"
+      }
+    ],
+    "best_measured_oracle_passing_set": [
+      "incumbent"
+    ],
+    "cumulative_screened_winners": [],
+    "pairwise_measurements_required": false,
+    "pairwise_reason": "No challenger survived both latency and oracle screening."
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial post-incumbent capture and reconciliation",
+      "capture_counts": {
+        "sliding_attention": 1,
+        "full_attention": 1
+      },
+      "result": "no oracle-passing screened winner; stop without re-profile or re-capture"
+    }
+  ]
+}

@@ -1,0 +1,140 @@
+{
+  "generated_by": ".agents/skills/advisor-challenger/scripts/reconcile.py plus manual schema reconciliation for current tt-perf-report and final_ir.mlir column syntax",
+  "incumbent_perf_reports": [
+    "tracy/incumbent_sliding_ops.csv",
+    "tracy/incumbent_full_ops.csv"
+  ],
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, NOT per-op",
+  "metric": "46-layer weighted decode latency: (39 * sliding_attention + 7 * full_attention) / 46",
+  "chains": [
+    {
+      "chain": "norm_residual",
+      "ops": [
+        "sliding_attention:rms_norm_residual_chain",
+        "full_attention:rms_norm_residual_chain"
+      ],
+      "op_count": 2,
+      "summed_window_share_pct": 29.666,
+      "measured_ms": 1.1771252662267373,
+      "layer_kind_ms": {
+        "sliding_attention": 1.1427048593759537,
+        "full_attention": 1.3688961043953896
+      },
+      "verdict": "rejected",
+      "reason": "Fast in the weighted metric but failed the incumbent real-weight PCC bar on sliding decode: 0.9947948362 < 0.995.",
+      "oracle": "test_optimized_real_weights_prefill_decode at PCC >= 0.995",
+      "oracle_passed": false
+    },
+    {
+      "chain": "attention_projections",
+      "ops": [
+        "sliding_attention:qkv_plus_o_dram_sharded",
+        "full_attention:qkv_dram_sharded"
+      ],
+      "op_count": 2,
+      "summed_window_share_pct": 16.481,
+      "measured_ms": 1.3292236051157764,
+      "layer_kind_ms": {
+        "sliding_attention": 1.332155428826809,
+        "full_attention": 1.3128891587257385
+      },
+      "verdict": "rejected",
+      "reason": "4.244% slower than the frozen incumbent weighted latency; correctness was not promoted after the performance gate failed.",
+      "oracle": "not run after performance rejection",
+      "oracle_passed": false
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "sliding_attention:rms_norm_residual_chain",
+      "chain": "norm_residual",
+      "layer_kind": "sliding_attention",
+      "window_share_pct": 29.575,
+      "advised": {
+        "memory": "l1",
+        "layout": "width_sharded",
+        "geometry_treated_as_recall_only": true
+      },
+      "shipped": {
+        "cores": 1,
+        "dram_sharded": false,
+        "device_us": 357.078
+      },
+      "measured_ms": 1.1771252662267373,
+      "verdict": "rejected",
+      "reason": "R11 coherent chain failed sliding decode PCC at 0.9947948362 versus the 0.995 incumbent bar."
+    },
+    {
+      "op": "full_attention:rms_norm_residual_chain",
+      "chain": "norm_residual",
+      "layer_kind": "full_attention",
+      "window_share_pct": 30.176,
+      "advised": {
+        "memory": "l1",
+        "layout": "width_sharded",
+        "geometry_treated_as_recall_only": true
+      },
+      "shipped": {
+        "cores": 1,
+        "dram_sharded": false,
+        "device_us": 366.801
+      },
+      "measured_ms": 1.1771252662267373,
+      "verdict": "rejected",
+      "reason": "The chain is judged across both shipped layer kinds; its sliding member failed the shared PCC gate."
+    },
+    {
+      "op": "sliding_attention:qkv_plus_o_dram_sharded",
+      "chain": "attention_projections",
+      "layer_kind": "sliding_attention",
+      "window_share_pct": 17.348,
+      "advised": {
+        "memory": "dram_sharded_weight",
+        "geometry_treated_as_recall_only": true
+      },
+      "shipped": {
+        "qkv_dram_sharded": false,
+        "o_dram_sharded": false,
+        "device_us": 209.458
+      },
+      "measured_ms": 1.3292236051157764,
+      "verdict": "rejected",
+      "reason": "The complete attention-projection chain regressed weighted decode by 0.0541323350 ms."
+    },
+    {
+      "op": "full_attention:qkv_dram_sharded",
+      "chain": "attention_projections",
+      "layer_kind": "full_attention",
+      "window_share_pct": 7.357,
+      "advised": {
+        "memory": "dram_sharded_weight",
+        "geometry_treated_as_recall_only": true
+      },
+      "shipped": {
+        "qkv_dram_sharded": false,
+        "o_dram_sharded": true,
+        "device_us": 89.426
+      },
+      "measured_ms": 1.3292236051157764,
+      "verdict": "rejected",
+      "reason": "The complete attention-projection chain regressed weighted decode by 0.0541323350 ms."
+    }
+  ],
+  "matches_not_disagreements": [
+    "packed MLP gate/up already ships DRAM-sharded at BFP8/LoFi block 11",
+    "MLP down already ships DRAM-sharded at BFP8/LoFi block 11",
+    "full-attention O projection already ships DRAM-sharded at BFP8/LoFi"
+  ],
+  "uncapturable": [
+    {
+      "op": "ttnn.sparse_matmul",
+      "layer_kinds": [
+        "sliding_attention",
+        "full_attention"
+      ],
+      "layer_share": 1.0,
+      "reason": "terminal in the advisor tracer; routed expert gate/up/down remain outside advisor reach"
+    }
+  ]
+}
