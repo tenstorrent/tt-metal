@@ -246,7 +246,6 @@ ttsl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
         .enable_activation_reuse = args.enable_activation_reuse,
         .config_tensors_in_dram = args.config_tensors_in_dram,
         .force_split_reader = args.force_split_reader,
-        .disable_fully_buffered_weights = args.disable_fully_buffered_weights,
     };
     return ttsl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
 }
@@ -330,8 +329,7 @@ Tensor conv2d(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader,
-    bool disable_fully_buffered_weights) {
+    std::optional<bool> force_split_reader) {
     using OperationType = Conv2dDeviceOperation;
 
     TT_FATAL(b.layout() == Layout::TILE, "Weights should be in TILE layout.");
@@ -355,7 +353,6 @@ Tensor conv2d(
         .enable_activation_reuse = enable_activation_reuse,
         .config_tensors_in_dram = config_tensors_in_dram,
         .force_split_reader = force_split_reader,
-        .disable_fully_buffered_weights = disable_fully_buffered_weights,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .a = a,

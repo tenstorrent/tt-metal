@@ -259,8 +259,7 @@ void bind_conv2d(nb::module_& mod) {
             bool,
             std::optional<bool>,
             bool,
-            ttnn::operations::sliding_window::PaddingMode,
-            bool>(),
+            ttnn::operations::sliding_window::PaddingMode>(),
         nb::kw_only(),
         nb::arg("weights_dtype") = nb::none(),
         nb::arg("activation") = nb::none(),
@@ -282,8 +281,7 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("enable_activation_reuse") = false,
         nb::arg("force_split_reader") = nb::none(),
         nb::arg("override_output_sharding_config") = false,
-        nb::arg("padding_mode") = nb::cast(ttnn::operations::sliding_window::PaddingMode::Zeros),
-        nb::arg("disable_fully_buffered_weights") = false);
+        nb::arg("padding_mode") = nb::cast(ttnn::operations::sliding_window::PaddingMode::Zeros));
 
     py_conv_config.def_rw("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
@@ -392,14 +390,6 @@ void bind_conv2d(nb::module_& mod) {
             By default inner dim of activation matrix will be sliced by kernel_h.
             If L1 constraints allowed it we can use full inner dim.
             This will increase perf, but it will take more L1 space.
-        )doc");
-
-    py_conv_config.def_rw("disable_fully_buffered_weights", &Conv2dConfig::disable_fully_buffered_weights, R"doc(
-            Applies only to height sharded layout with more than one activation height block.
-            By default the weights Circular Buffer is inflated (e.g. 3x for a 3x3 kernel) so the writer
-            reads all kernel-row weight blocks from DRAM once and keeps them resident across height blocks.
-            Setting this True suppresses that optimization, shrinking the weights CB at the cost of
-            re-reading weights from DRAM per height block. Numerics are unchanged.
         )doc");
 
     py_conv_config.def_rw("enable_kernel_stride_folding", &Conv2dConfig::enable_kernel_stride_folding, R"doc(

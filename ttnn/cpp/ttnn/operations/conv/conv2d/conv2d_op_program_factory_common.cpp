@@ -188,8 +188,7 @@ std::vector<CBInfo> get_cb_info(
         if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
             // If activation reuse is enabled, we already have full inner dim
             if (!conv_config.enable_activation_reuse) {
-                const bool enable_fully_buffered_weights =
-                    (num_blocks_act_h > 1) && !conv_config.disable_fully_buffered_weights;
+                const bool enable_fully_buffered_weights = num_blocks_act_h > 1;
                 if (enable_fully_buffered_weights) {
                     // 1D depthwise (non-coalesced) streams num_blocks_act_w one-tap weight blocks per
                     // height block. Buffer all of them so they stay resident and are reused across

@@ -930,8 +930,7 @@ Result conv2d_L1(
             conv_config.full_inner_dim,
             conv_config.enable_activation_reuse,
             conv_config.config_tensors_in_dram,
-            conv_config.force_split_reader,
-            conv_config.disable_fully_buffered_weights);
+            conv_config.force_split_reader);
 
         // OPTION B — PROGRAM B (two-program split). Under TT_METAL_QSR_CONV_SPLIT_PROGRAM the conv op above ran
         // TILIZE-ONLY (Program A: reader gather + UnpackToDestEn tilize) and `conv_output` is the tilized

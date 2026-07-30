@@ -223,7 +223,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const auto enable_weights_double_buffer = operation_attributes.enable_weights_double_buffer;
     const auto full_inner_dim = operation_attributes.full_inner_dim;
     const auto enable_activation_reuse = operation_attributes.enable_activation_reuse;
-    const auto disable_fully_buffered_weights = operation_attributes.disable_fully_buffered_weights;
     const auto config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
     const auto& force_split_reader = operation_attributes.force_split_reader;
 
@@ -653,8 +652,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         .enable_act_double_buffer = enable_act_double_buffer,
         .enable_weights_double_buffer = enable_weights_double_buffer,
         .enable_activation_reuse = enable_activation_reuse,
-        .force_split_reader = force_split_reader,
-        .disable_fully_buffered_weights = disable_fully_buffered_weights};
+        .force_split_reader = force_split_reader};
     // The conv_reader_indices tensor itself is allocated once in
     // create_workload_descriptor and parked on workload_descriptor.buffers; we
     // receive the raw Buffer* and read its page size for the CB sizing below.

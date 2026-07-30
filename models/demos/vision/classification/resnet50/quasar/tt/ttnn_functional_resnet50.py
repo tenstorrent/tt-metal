@@ -607,12 +607,11 @@ class resnet50Bottleneck:
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
-                # [#48552] Suppress the height-sharded 3x "fully buffered weights" inflation: num_blocks_act_h>1
-                # (28 here, forced by act_block_h_override=32) makes the shared factory do
-                # weight_block_num_tiles *= kernel_size[0]=3, tripling the WEIGHTS CB (~72KB) so it overruns L1
-                # for this 3x3 conv2 on WH. That is a DRAM-bandwidth perf opt (weights re-read per height block);
-                # throughput is not a concern here, and disabling it is numerically identical.
-                disable_fully_buffered_weights=True,
+                # [#48552] NOTE: the height-sharded 3x "fully buffered weights" inflation (num_blocks_act_h>1,
+                # 28 here from act_block_h_override=32, tripling the WEIGHTS CB ~72KB and overrunning L1 for this
+                # 3x3 conv2) is now suppressed INSIDE the experimental/quasar conv2d factory itself, so no
+                # ttnn.Conv2dConfig flag is needed (and the shared conv2d is left unmodified). It is a
+                # DRAM-bandwidth perf opt only; disabling it is numerically identical.
                 # bfloat16 doubles every tensor; mirror the large variant's minimal
                 # conv2 config (no double buffering / activation reuse / full inner
                 # dim) so the CBs fit in L1.

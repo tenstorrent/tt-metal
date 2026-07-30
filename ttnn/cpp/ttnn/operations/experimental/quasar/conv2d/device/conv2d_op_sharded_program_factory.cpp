@@ -62,6 +62,7 @@ using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::is_1d_depthwise_conv;
 using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
 using ttnn::operations::conv::SkipMcast;
+using ttnn::prim::access_cb_info_by_name;
 using ttnn::prim::CBInfo;
 using ttnn::prim::Conv2dCb;
 using ttnn::prim::get_cb_info;
@@ -871,8 +872,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         // is_split_reader_viable() when force_split_reader is nullopt, and would then size ACT for the
         // split layout (half-blocks + a separate ACT_SECOND_READER CB) — inconsistent with the reader,
         // which deadlocks the act producer/consumer. Force it off here so the CB sizing matches.
-        .force_split_reader = false,
-        .disable_fully_buffered_weights = operation_attributes.disable_fully_buffered_weights};
+        .force_split_reader = false};
 
     // ---- Determine split_reader_cb_shared up front so we can reject it (resolution #3) ----
     // get_cb_info needs the indices page size first; compute the shared-overlap flag after CB info.
@@ -927,6 +927,31 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         skip_activation_mcast,
         input_channels_padded,
         reader_indices_actual_page_size);
+
+    // [#48552] QSR: disable the height-sharded "fully buffered weights" optimization, self-contained here.
+    // The shared get_cb_info() inflates the WEIGHTS CB by kernel_size[0] (e.g. 3x for a 3x3 kernel) so the
+    // writer reads every kernel-row weight block from DRAM once and keeps them resident across activation
+    // height blocks. That inflation overruns L1 on the bf16 layer conv2 on Quasar. So rather than add a flag
+    // to the shared Conv2dConfig, we undo the inflation on the WEIGHTS CBInfo right here, reproducing exactly
+    // the sizing the (removed) disable_fully_buffered_weights=true path produced:
+    //   base_tiles * (enable_weights_double_buffer ? 2 : 1).
+    //
+    // NO-SPILL ONLY (num_blocks_act_w == 1). This is the crucial scope: it must match exactly the ONE conv the
+    // model disabled at the known-good baseline (conv2, the 3x3 layer conv on the no-spill path), and it must
+    // NOT touch the folded 4x4 stem. The stem runs on the SLICED path (num_blocks_act_w == filter_h == 4):
+    // there the kernel-row weight blocks are consumed across the K-slices and MUST stay resident, so shrinking
+    // its WEIGHTS CB corrupts the stem (op002 stem_conv1 drops to ~0.80 and poisons everything downstream).
+    // On the no-spill path K is a single block, so the inflation is pure height-block DRAM-reuse headroom and
+    // is safe to drop (weights are simply re-read per height block; numerics unchanged). Only the WEIGHTS DFB
+    // size changes -- the factory computes the weight-reader CTA (weight_block_num_tiles, below) independently.
+    // Non-depthwise only (the get_cb_info depthwise divisor is num_blocks_act_w computed internally; depthwise
+    // weights are tiny and off the resnet path).
+    if (height_sharded && !enable_activation_reuse && !is_conv_1d_depthwise_conv && num_blocks_act_h > 1 &&
+        filter_h > 1 && num_blocks_act_w == 1) {
+        CBInfo& weights_cb = access_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS);
+        const uint32_t base_num_tiles = weights_cb.num_pages / filter_h;
+        weights_cb.num_pages = base_num_tiles * (enable_weights_double_buffer ? 2u : 1u);
+    }
 
     // split_reader_cb_shared (block-sharded split-reader overlapped ACT CB, CB_TAXONOMY_ANALYSIS.md §2) is
     // subsumed by the split-reader deferral above (enable_split_reader is forced false), so it can never
