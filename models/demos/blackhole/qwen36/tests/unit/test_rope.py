@@ -21,11 +21,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import compute_pcc
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup, compute_rope_freqs
 
-pytestmark = run_for_blackhole()
+pytestmark = run_for_wormhole_b0_or_blackhole()
 
 # Qwen3.5-9B partial-rotary constants (see tt/rope.py and tt/model_config.py).
 # A small max_seq_len keeps the precomputed table cheap — the code path that
@@ -51,6 +51,11 @@ def rope_setup(device):
         rope_head_dim=ROPE_HEAD_DIM,
         max_seq_len=MAX_SEQ_LEN,
         rope_theta=ROPE_THETA,
+        mrope_section=[11, 11, 10],
+        rope_attention_scaling=1.0,
+        spatial_merge_size=2,
+        image_token_id=None,
+        video_token_id=None,
     )
     return Qwen36RoPESetup(device, args), args
 
