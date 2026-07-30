@@ -271,9 +271,9 @@ inline void run_single_dfb_program_2_0(
     if (p.producer_type == M2PorCType::DM) {
         const char* producer_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp";
         if (blocked_to_strided) {
-            producer_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_strided_producer_2_0.cpp";
+            producer_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_strided_producer.cpp";
         } else if (producer_blocked) {
-            producer_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer_2_0.cpp";
+            producer_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer.cpp";
         }
         producer = make_dm_kernel(PRODUCER, producer_src, p.num_producers);
         producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
@@ -287,7 +287,7 @@ inline void run_single_dfb_program_2_0(
             // BLOCKED->STRIDED: a Tensix producer only posts credits over the host-flat-prefilled ring,
             // and a STRIDED consumer needs per-tile credits, so reuse the plain per-tile Tensix producer.
             (producer_blocked && !blocked_to_strided)
-                ? "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_blocked_producer_2_0.cpp"
+                ? "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_blocked_producer.cpp"
                 : "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer_2_0.cpp",
             static_cast<uint8_t>(p.num_producers));
     }
@@ -314,7 +314,7 @@ inline void run_single_dfb_program_2_0(
     if (p.consumer_type == M2PorCType::DM) {
         consumer = make_dm_kernel(
             CONSUMER,
-            consumer_blocked ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_consumer_2_0.cpp"
+            consumer_blocked ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_consumer.cpp"
                              : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp",
             p.num_consumers);
         consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
@@ -813,8 +813,8 @@ inline void run_a1_blocked_pipeline(
     // Front half: P DM BLOCKED producers → DFB_IN (consumer is the Tensix below, pattern cap_in).
     const char* producer_src =
         (cap_in == m2::DFBAccessPattern::STRIDED)
-            ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_strided_producer_2_0.cpp"
-            : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer_2_0.cpp";
+            ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_strided_producer.cpp"
+            : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer.cpp";
     auto producer = make_dm_kernel(PRODUCER, producer_src, static_cast<uint8_t>(P));
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB_IN,
@@ -1001,7 +1001,7 @@ inline void run_a1_fanout_blocked_pipeline(
         .data_format_metadata = tt::DataFormat::Float16_b};
 
     auto producer = make_dm_kernel(
-        PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer_2_0.cpp", /*num_threads=*/1);
+        PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer.cpp", /*num_threads=*/1);
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB_IN,
          .accessor_name = "out",

@@ -94,7 +94,7 @@ struct dfb_txn_id_descriptor_t {
     uint8_t num_entries_per_txn_id_per_tc;
 } __attribute__((packed));
 
-struct dfb_initializer_t {  // 38 bytes (main's num_entries + BLOCKED's producer/consumer_block_size)
+struct dfb_initializer_t {  // 38 bytes
     uint32_t logical_id;
     uint32_t entry_size;
     uint32_t stride_in_entries;

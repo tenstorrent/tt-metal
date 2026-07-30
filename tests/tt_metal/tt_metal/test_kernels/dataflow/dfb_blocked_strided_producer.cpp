@@ -4,7 +4,7 @@
 //
 // Metal 2.0 (declarative API) BLOCKED-producer -> STRIDED-consumer DFB producer.
 //
-// Unlike dfb_blocked_producer_2_0.cpp (which bursts a whole block to one contiguous
+// Unlike dfb_blocked_producer.cpp (which bursts a whole block to one contiguous
 // sub-ring), a STRIDED consumer reads INTERLEAVED ring slots {c, c+N, c+2N, ...}, so the
 // producer must hand its tiles to the consumers ONE AT A TIME: the DFB's STRIDED round-robin
 // then posts each tile's credit to the next consumer's tile-counter and advances that

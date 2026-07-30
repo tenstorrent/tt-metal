@@ -114,7 +114,6 @@ struct LocalDFBInterface {
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
-// DM variant = base 121 + main's num_entries (uint16_t, +2) + BLOCKED's block_size (uint8_t, +1) = 124.
 static_assert(sizeof(LocalDFBInterface) == 124, "LocalDFBInterface size is incorrect");
 
 #endif
