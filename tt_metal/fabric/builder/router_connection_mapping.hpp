@@ -195,6 +195,28 @@ public:
     static uint32_t express_mesh_vc1_sender_count();
 
     /**
+     * @brief Per-VC sender arity of one 2D mesh-like router, by family
+     *
+     * A router's sender channels are its local worker (VC0 only) plus the producers wired into it
+     * on that VC: the receivers on this chip whose outbound forwards into its senders. These two
+     * functions are the ONLY place that question is answered for the mesh-router family, and they
+     * live next to the wiring rules that produce the answer. builder_config primitives (the
+     * legacy downstream widths) are inputs to these rules, never answers at call sites. The
+     * Z-facing intermesh boundary family is separate and has its own derived accessors in
+     * builder_config (num_sender_channels_intermesh_z_boundary_*).
+     *
+     * VC0: 1 (worker) + wired producers.
+     * VC1: wired producers (no worker).
+     *
+     * @param has_intermesh_z_edge This chip terminates an intermesh Z boundary whose VC1 fanout
+     *        adds a from-Z producer slot (its VC0 receiver forwards nowhere, so VC0 is unaffected).
+     * @param express_routing_enabled This mesh has express chords; counts come from the express
+     *        family max derivation above.
+     */
+    static uint32_t mesh_router_vc0_sender_count(bool has_intermesh_z_edge, bool express_routing_enabled);
+    static uint32_t mesh_router_vc1_sender_count(bool has_intermesh_z_edge, bool express_routing_enabled);
+
+    /**
      * @brief The Z-facing intermesh boundary template
      *
      * The VC1 from-boundary fanout to every mesh direction, constructed without inputs: the

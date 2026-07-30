@@ -170,6 +170,30 @@ uint32_t RouterConnectionMapping::express_mesh_vc1_sender_count() {
     return express_mesh_vc0_sender_count() - 1;
 }
 
+uint32_t RouterConnectionMapping::mesh_router_vc0_sender_count(
+    bool /*has_intermesh_z_edge*/, bool express_routing_enabled) {
+    if (express_routing_enabled) {
+        return express_mesh_vc0_sender_count();  // family max over facing of the express rule
+    }
+    // Legacy rule: the worker plus every non-self cardinal producer. An intermesh Z edge adds
+    // nothing on VC0: the boundary's VC0 receiver forwards nowhere, so no from-Z producer exists
+    // on VC0 regardless of has_intermesh_z_edge.
+    return 1 + builder_config::num_downstream_edms_2d_vc0;
+}
+
+uint32_t RouterConnectionMapping::mesh_router_vc1_sender_count(
+    bool has_intermesh_z_edge, bool express_routing_enabled) {
+    if (has_intermesh_z_edge) {
+        // Legacy non-self downstreams plus the from-Z slot for the boundary's VC1 fanout.
+        return builder_config::num_downstream_edms_2d_vc1 + 1;
+    }
+    if (express_routing_enabled) {
+        return express_mesh_vc1_sender_count();  // family max over facing of the express rule
+    }
+    // Legacy rule: every non-self cardinal receiver forwards into this router on VC1.
+    return builder_config::num_downstream_edms_2d_vc1;
+}
+
 RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
     Topology topology,
     RoutingDirection direction,

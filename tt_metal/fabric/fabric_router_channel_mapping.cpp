@@ -123,19 +123,11 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
         // Standard mesh router VC1: create if intermesh VC is required
         // Both inter-mesh and intra-mesh routers have VC1
         if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc1) {
-            // VC1 senders are the non-self directions a VC1 receiver can forward into, plus a
-            // from-Z slot when this chip holds a Z edge traffic can arrive on: the intermesh Z
-            // router's fanout, or the express chord (a landed carrier can decode a Z action and
-            // there is no VC1->VC0 crossover). Both arities come from the wiring rules.
-            uint32_t mesh_vc1_sender_count = 0;
-            if (has_intermesh_z_edge_) {
-                // 3 non-self directions + 1 from-Z slot, decomposed as such.
-                mesh_vc1_sender_count = builder_config::num_downstream_edms_2d_vc1 + 1;
-            } else if (express_routing_enabled_) {
-                mesh_vc1_sender_count = RouterConnectionMapping::express_mesh_vc1_sender_count();
-            } else {
-                mesh_vc1_sender_count = builder_config::num_downstream_edms_2d_vc1;  // 3 non-self
-            }
+            // VC1 sender arity comes from the one derivation next to the wiring rules: non-self
+            // directions plus a from-Z slot when this chip holds a Z edge traffic can arrive on
+            // (the intermesh Z boundary's fanout, or the express chord).
+            const uint32_t mesh_vc1_sender_count =
+                RouterConnectionMapping::mesh_router_vc1_sender_count(has_intermesh_z_edge_, express_routing_enabled_);
 
             // VC1 senders occupy the flat index space immediately after VC0's. Derive the base from the
             // actual VC0 count rather than the 2D mesh constant: the two agree today, but a wider VC0
@@ -252,14 +244,15 @@ uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc)
                 // Boundary wiring rule: every non-self producer wires into the boundary egress
                 // (MESH_TO_Z), plus the local worker at channel 0 = 5.
                 return builder_config::num_sender_channels_intermesh_z_boundary_vc0;
-            } else if (express_routing_enabled_ && is_2D_topology(topology_)) {
-                // Express mesh family max over facing of wired-producer arity: E/W-facing routers
-                // wire five (every Y producer turns onto X); dimension order leaves N/S/Z-facing
-                // routers at three. One flat index space per family, wiring fills a subset.
-                return RouterConnectionMapping::express_mesh_vc0_sender_count();
+            } else if (is_2D_topology(topology_)) {
+                // All 2D mesh-router families get their VC0 arity from the one derivation next to
+                // the wiring rules (legacy: worker + non-self producers; express: the family max
+                // over facing).
+                return RouterConnectionMapping::mesh_router_vc0_sender_count(
+                    has_intermesh_z_edge_, express_routing_enabled_);
             } else {
-                // All mesh routers (MESH and MESH_AND_Z_ROUTER) have 4 VC0 channels
-                return builder_config::get_num_used_sender_channel_count(get_topology());  // 4 channels
+                // 1D topologies keep their own paths
+                return builder_config::get_num_used_sender_channel_count(get_topology());
             }
         case 1:  // VC1
             if (is_intermesh_z_boundary()) {
