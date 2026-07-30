@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "/home/mvasiljevic/tt-metal/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tests/traced_synthetic_pcc.py",
+    "--kind",
+    "full",
+    "--batch",
+    "32",
+    "--optimized",
+    "--candidate",
+    "final_cum_up_w4",
+    "--steps",
+    "3"
+  ],
+  "batch": 32,
+  "candidate": "final_cum_up_w4",
+  "exit_status": 0,
+  "kind": "full",
+  "result": "pass",
+  "retained_output": [
+    "OPTIMIZED_POLICY candidate=final_cum_up_w4 layer_kind=full_attention attention_dtype=DataType.BFLOAT16 cache_dtype=DataType.BFLOAT8_B sdpa_fidelity=MathFidelity.HiFi4 qkv_fidelity=MathFidelity.HiFi2 o_fidelity=MathFidelity.HiFi2 qkv_w=2 o_w=3 gate_w=5 up_w=4 down_w=17 linear_packed=False linear_outer=False linear_recurrent=auto linear_recurrent_fidelity=MathFidelity.HiFi2 linear_recurrent_state_dtype=DataType.FLOAT32 storage_cores=8",
+    "FULL_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9995602638581764",
+    "FULL_TRACED_SYNTHETIC_PCC batch=32 step=2 0.999849711171751",
+    "FULL_TRACED_SYNTHETIC_LATENCY path=optimized candidate=final_cum_up_w4 batch=32 median_ms=1.455912 min_ms=1.455912"
+  ],
+  "steps": 3
+}

@@ -1,0 +1,41 @@
+{
+  "batch": 1,
+  "candidate": "default",
+  "command_result": "pass",
+  "kind": "linear",
+  "median_ms": 1.9299639463424683,
+  "min_ms": 1.9235619984101504,
+  "path": "optimized",
+  "pcc": [
+    "0.9999867287846206",
+    "0.9999882983499663",
+    "0.9999976502147946",
+    "0.9999963057597331",
+    "0.9999978754679765",
+    "0.999997026128648",
+    "0.9999971818694027",
+    "0.9999973024651041",
+    "0.9999974216666566"
+  ],
+  "policy": {
+    "attention_weight_dtype": "DataType.BFLOAT4_B",
+    "cache_dtype": "DataType.BFLOAT8_B",
+    "down_in0_block_w": 17,
+    "gate_in0_block_w": 2,
+    "linear_outer_product": true,
+    "linear_packed_decode": true,
+    "linear_recurrent_fidelity": "MathFidelity.HiFi2",
+    "linear_recurrent_program": "grid4_w4",
+    "linear_recurrent_state_dtype": "DataType.BFLOAT8_B",
+    "mlp_down_dtype": "DataType.BFLOAT4_B",
+    "mlp_gate_up_dtype": "DataType.BFLOAT4_B",
+    "o_fidelity": "MathFidelity.LoFi",
+    "o_in0_block_w": 3,
+    "qkv_fidelity": "MathFidelity.LoFi",
+    "qkv_in0_block_w": 2,
+    "sdpa_fidelity": "MathFidelity.LoFi",
+    "up_in0_block_w": 2
+  },
+  "steps": 10,
+  "watcher_enabled": false
+}

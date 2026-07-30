@@ -87,30 +87,43 @@
     "status": "functional_decoder_complete_clean_pass"
   },
   "optimized_decoder": {
+    "supported_context": 262144,
     "decode_supported_context": 262144,
     "single_pass_prefill_supported_context": 192511,
-    "supported_context": 262144,
-    "cache_dtype": {
-      "full_attention_key_value": "BFLOAT8_B",
-      "linear_attention_convolution": "BFLOAT16",
-      "linear_attention_recurrent": "FLOAT32"
-    },
-    "decode_batches_tested": [
-      1,
-      32
+    "capability_reduction": false,
+    "full_attention_kv_dtype": "bfloat8_b",
+    "functional_full_attention_kv_dtype": "bfloat16",
+    "serving_batch_32_advertised_context_cache_bytes": 17179869184,
+    "cache_capacity_note": "BFP8 KV halves the functional decoder's cache bytes; advertised capability is preserved and not reduced.",
+    "long_prefill_note": "For sequence >32768, optimized full attention uses page-aligned K/V fill and bounded Q/gate/O plus MLP chunks; capacity-only S=192511 completed with nonzero output and populated cache.",
+    "linear_recurrent_state_dtype": "bfloat8_b",
+    "functional_linear_recurrent_state_dtype": "float32",
+    "linear_prefill_capacity_note": "The selected packed-decode default uses a persistent BFP8 recurrent state and passed optimized capacity-only S=192511 with 985656229 nonzero output elements and 129830 nonzero recurrent-state elements.",
+    "non_aligned_prefill_sequences_tested": [
+      5,
+      33,
+      65
     ],
     "prefill_batches_tested": [
       1,
       32
     ],
-    "non_aligned_prefill_sequences_tested": {
-      "full_attention": 33,
-      "linear_attention": 5
+    "traced_decode_batches_tested": [
+      1,
+      32
+    ],
+    "representative_layers": {
+      "linear_attention": 0,
+      "full_attention": 3
     },
-    "serving_batch_32_advertised_context_cache_bytes": 17179869184,
-    "capacity_note": "BFP8 paged KV halves full-attention cache bytes versus the functional BF16 cache. The advertised context and evidence-backed single-pass prefill limit are unchanged.",
-    "watcher_interval_seconds": 10,
-    "status": "optimized_decoder_complete_clean_pass"
+    "default_full_attention_policy": "BF16 HiFi2 QKV/O, HiFi4 SDPA, BFP4 LoFi MLP, BFP8 paged KV",
+    "default_linear_attention_policy": "BFP4 LoFi packed DRAM-sharded input width 5 and output width 12, broadcast recurrent outer update, explicit 4-core width-4 HiFi2 recurrent matmuls, persistent BFP8 recurrent state, BFP4 LoFi MLP",
+    "official_weight_decode_pcc": {
+      "full_attention_batch_1": 0.9976120123684317,
+      "full_attention_batch_32": 0.9980950192619897,
+      "linear_attention_batch_1": 0.9987165695638567
+    },
+    "status": "optimized_decoder_ready_for_stage_review"
   },
   "layer_kinds": {
     "linear_attention": {

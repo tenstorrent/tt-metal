@@ -1,0 +1,60 @@
+{
+  "batch": 32,
+  "candidate": "linear_recurrent_explicit_w2",
+  "kind": "linear",
+  "perf_argv": [
+    "/home/mvasiljevic/tt-metal/python_env/bin/tt-perf-report",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/linear_recurrent_explicit_w2_b32/reports/2026_07_30_11_50_29/ops_perf_results_2026_07_30_11_50_29.csv",
+    "--start-signpost",
+    "PERF_DECODE",
+    "--end-signpost",
+    "PERF_DECODE_END",
+    "--no-color",
+    "--csv",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/linear_recurrent_explicit_w2_b32/perf.csv",
+    "--summary-file",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/linear_recurrent_explicit_w2_b32/summary"
+  ],
+  "perf_exit_status": 0,
+  "perf_output": [
+    "Detected CSV format: v2.1 (with device arch and worker core count)",
+    "Using architecture from CSV: blackhole",
+    "Architecture: blackhole, Worker cores: 110",
+    "Sorting CSV by 'HOST START TS' column...",
+    "Using operations after 'PERF_DECODE'.",
+    "Using operations until 'PERF_DECODE_END'.",
+    "Detected data from 1 devices. Merging device data...",
+    "Writing CSV output to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/linear_recurrent_explicit_w2_b32/perf.csv",
+    "Overall DRAM roofline (modeled ops): 5.7% (29 GB/s)",
+    "Writing CSV stacked report to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/linear_recurrent_explicit_w2_b32/summary.csv",
+    "Plotting PNG stacked report to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/linear_recurrent_explicit_w2_b32/summary.png"
+  ],
+  "profile_argv": [
+    "/home/mvasiljevic/tt-metal/python_env/bin/python",
+    "-m",
+    "tracy",
+    "-r",
+    "-p",
+    "-o",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/linear_recurrent_explicit_w2_b32",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tests/traced_synthetic_pcc.py",
+    "--kind",
+    "linear",
+    "--batch",
+    "32",
+    "--optimized",
+    "--candidate",
+    "linear_recurrent_explicit_w2",
+    "--steps",
+    "3"
+  ],
+  "profile_exit_status": 0,
+  "profile_output": [
+    "OPTIMIZED_POLICY candidate=linear_recurrent_explicit_w2 layer_kind=linear_attention attention_dtype=DataType.BFLOAT4_B cache_dtype=DataType.BFLOAT8_B sdpa_fidelity=MathFidelity.LoFi qkv_fidelity=MathFidelity.LoFi o_fidelity=MathFidelity.LoFi qkv_w=2 o_w=3 gate_w=2 up_w=2 down_w=17 linear_packed=True linear_outer=True linear_recurrent=grid4_w2 linear_recurrent_fidelity=MathFidelity.HiFi2 linear_recurrent_state_dtype=DataType.BFLOAT8_B storage_cores=8",
+    "LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=1 0.9999685570739436",
+    "LINEAR_TRACED_SYNTHETIC_PCC batch=32 step=2 0.9999918196352667",
+    "LINEAR_TRACED_SYNTHETIC_LATENCY path=optimized candidate=linear_recurrent_explicit_w2 batch=32 median_ms=17.757778 min_ms=17.757778",
+    "2026-07-30 11:50:29.664 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/linear_recurrent_explicit_w2_b32/reports/2026_07_30_11_50_29/ops_perf_results_2026_07_30_11_50_29.csv"
+  ],
+  "raw_report": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/linear_recurrent_explicit_w2_b32/reports/2026_07_30_11_50_29/ops_perf_results_2026_07_30_11_50_29.csv"
+}

@@ -3,6 +3,8 @@
 
 """Official-weight HF-vs-TTNN decode check for Qwen3.6 layer 0."""
 
+import argparse
+import json
 from pathlib import Path
 
 import torch
@@ -17,6 +19,7 @@ from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import (
     FunctionalDecoder,
     _to_device,
 )
+from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import POLICIES, OptimizedDecoder
 from models.common.utility_functions import comp_pcc
 
 LAYER = 0
@@ -51,7 +54,8 @@ def _hf_layer(config, state):
 
 
 @torch.no_grad()
-def run():
+def run(optimized=False, candidate="default"):
+    ttnn.CONFIG.throw_exception_on_fallback = True
     torch.manual_seed(20260729)
     config = AutoConfig.from_pretrained(MODEL_ID, revision=MODEL_REVISION).text_config
     state = _real_state()
@@ -66,7 +70,8 @@ def run():
 
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     try:
-        decoder = FunctionalDecoder.from_state_dict(
+        decoder_cls = OptimizedDecoder if optimized else FunctionalDecoder
+        decoder = decoder_cls.from_state_dict(
             state,
             hf_config=config,
             layer_idx=LAYER,
@@ -74,6 +79,7 @@ def run():
             batch=1,
             max_context=64,
             page_size=64,
+            **({"candidate": candidate} if optimized else {}),
         )
         hidden_tt = _to_device(hidden.unsqueeze(0), mesh_device=mesh)
         page_table = _to_device(
@@ -96,11 +102,33 @@ def run():
         ttnn.synchronize_device(mesh)
         actual = ttnn.to_torch(ttnn.get_device_tensors(output)[0]).squeeze(0)
         passed, message = comp_pcc(reference.float(), actual.float(), 0.995)
-        print("LINEAR_ATTENTION_REAL_WEIGHT_DECODE_PCC", message)
+        print(
+            "LINEAR_ATTENTION_REAL_WEIGHT_DECODE_PCC",
+            f"path={'optimized' if optimized else 'functional'}",
+            f"candidate={candidate if optimized else 'functional'}",
+            message,
+        )
         assert passed, message
+        return {
+            "kind": "linear_attention",
+            "path": "optimized" if optimized else "functional",
+            "candidate": candidate if optimized else "functional",
+            "batch": 1,
+            "reference": "hf",
+            "passed": bool(passed),
+            "pcc": float(message),
+        }
     finally:
         ttnn.close_mesh_device(mesh)
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--optimized", action="store_true")
+    parser.add_argument("--candidate", choices=sorted(POLICIES), default="default")
+    parser.add_argument("--result-json", type=Path)
+    args = parser.parse_args()
+    result = run(args.optimized, args.candidate)
+    if args.result_json is not None:
+        args.result_json.parent.mkdir(parents=True, exist_ok=True)
+        args.result_json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

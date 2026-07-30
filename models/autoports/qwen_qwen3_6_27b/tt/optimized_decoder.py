@@ -3,37 +3,29 @@
 
 """Optimized single-device Qwen3.6-27B decoder layer.
 
-Public tensor contracts
------------------------
-``prefill_forward`` accepts a device tensor shaped ``[1, batch, sequence,
-5120]`` and returns the same logical shape. ``decode_forward`` accepts
-``[1, 1, batch, 5120]`` and returns the same shape. Both accept device-resident
-``page_table`` and ``current_positions`` tensors. Full-attention layers use a
-paged KV cache. Linear-attention layers use persistent convolution and
-gated-delta recurrent states.
-
-All host work (canonical-key lookup, shape validation, transposition, RoPE
-table construction, cache allocation, dtype conversion, and transfer) belongs
-to :meth:`from_state_dict`. Runtime methods contain TTNN operations only.
-
-Qwen3.6 resolves to the Transformers Qwen3.5-text implementation. Its RMSNorm
-parameters are offsets and therefore become ``1 + weight`` during setup.
+The functional decoder remains the correctness oracle.  This class reuses its
+proven cache/state and shape helpers, but owns weight materialization and both
+public runtime entry points.  In particular, the measured decode path uses
+packed projections, phase-specific weights, explicit program/compute configs,
+DRAM-sharded decode matmuls, and an L1 width-sharded residual/MLP contract.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import ttnn
-from models.common.lightweightmodule import LightweightModule
-
-MODEL_ID = "Qwen/Qwen3.6-27B"
-MODEL_REVISION = "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9"
-ADVERTISED_CONTEXT = 262_144
-REPRESENTATIVE_LAYERS = {"linear_attention": 0, "full_attention": 3}
-LINEAR_PREFILL_CHUNK_SIZE = 64
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import (
+    ADVERTISED_CONTEXT,
+    LINEAR_PREFILL_CHUNK_SIZE,
+    MODEL_ID,
+    MODEL_REVISION,
+    REPRESENTATIVE_LAYERS,
+    FunctionalDecoder,
+    _require_tensor,
+    _to_device,
+)
 
 
 @dataclass(frozen=True)
@@ -44,36 +36,44 @@ class OptimizationPolicy:
     cache_dtype: object
     attention_fidelity: object
     mlp_fidelity: object
+    qkv_fidelity: object | None = None
+    o_fidelity: object | None = None
     packed_qkv: bool = True
     packed_gate_up: bool = True
-    advisor_seed: bool = False
-    gate_up_ds_in0_block_w: int | None = None
-    qkv_in0_block_w: int = 4
-    qkv_per_core_n: int = 5
-    o_in0_block_w: int = 12
-    o_per_core_n: int = 2
-    down_in0_block_w: int = 4
-    down_per_core_n: int = 2
+    decode_in0_block_w: int = 20
+    qkv_decode_in0_block_w: int | None = None
+    o_decode_in0_block_w: int = 3
+    mlp_gate_decode_in0_block_w: int | None = None
+    mlp_up_decode_in0_block_w: int | None = None
+    mlp_down_in0_block_w: int = 17
+    prefill_in0_block_w: int = 4
+    prefill_grid_y: int = 10
+    linear_packed_decode: bool = False
+    linear_outer_product: bool = False
+    linear_packed_in0_block_w: int = 2
+    linear_out_in0_block_w: int = 3
+    linear_input_weight_dtype: object = ttnn.bfloat16
+    linear_output_weight_dtype: object = ttnn.bfloat16
+    linear_input_fidelity: object = ttnn.MathFidelity.HiFi2
+    linear_output_fidelity: object = ttnn.MathFidelity.HiFi2
+    linear_recurrent_program: str = "auto"
+    linear_recurrent_fidelity: object = ttnn.MathFidelity.HiFi2
+    linear_recurrent_state_dtype: object = ttnn.float32
+    decode_storage_cores: int = 8
 
 
 POLICIES = {
-    "bf16_attention": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat16,
-        mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
-        cache_dtype=ttnn.bfloat8_b,
-        attention_fidelity=ttnn.MathFidelity.HiFi2,
-        mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=False,
-    ),
+    # The default is the strongest expected batch-1 decode policy.  It is not
+    # accepted until real-weight PCC and final default timing reproduce it.
     "default": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
+        attention_weight_dtype=ttnn.bfloat4_b,
         mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
+        mlp_down_dtype=ttnn.bfloat4_b,
         cache_dtype=ttnn.bfloat8_b,
         attention_fidelity=ttnn.MathFidelity.LoFi,
         mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=True,
+        packed_gate_up=False,
+        decode_in0_block_w=2,
     ),
     "bfp8_hifi2": OptimizationPolicy(
         attention_weight_dtype=ttnn.bfloat8_b,
@@ -82,375 +82,449 @@ POLICIES = {
         cache_dtype=ttnn.bfloat8_b,
         attention_fidelity=ttnn.MathFidelity.HiFi2,
         mlp_fidelity=ttnn.MathFidelity.HiFi2,
-        advisor_seed=True,
+        decode_in0_block_w=1,
     ),
-    "default_hifi2": OptimizationPolicy(
+    "bfp8_lofi": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat8_b,
+        mlp_gate_up_dtype=ttnn.bfloat8_b,
+        mlp_down_dtype=ttnn.bfloat8_b,
+        cache_dtype=ttnn.bfloat8_b,
+        attention_fidelity=ttnn.MathFidelity.LoFi,
+        mlp_fidelity=ttnn.MathFidelity.LoFi,
+        decode_in0_block_w=1,
+    ),
+    "bfp4_mlp": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat8_b,
+        mlp_gate_up_dtype=ttnn.bfloat4_b,
+        mlp_down_dtype=ttnn.bfloat4_b,
+        cache_dtype=ttnn.bfloat8_b,
+        attention_fidelity=ttnn.MathFidelity.HiFi2,
+        mlp_fidelity=ttnn.MathFidelity.LoFi,
+        decode_in0_block_w=1,
+    ),
+    "bfp4_gate_up": OptimizationPolicy(
         attention_weight_dtype=ttnn.bfloat8_b,
         mlp_gate_up_dtype=ttnn.bfloat4_b,
         mlp_down_dtype=ttnn.bfloat8_b,
         cache_dtype=ttnn.bfloat8_b,
         attention_fidelity=ttnn.MathFidelity.HiFi2,
-        mlp_fidelity=ttnn.MathFidelity.HiFi2,
-        advisor_seed=True,
-    ),
-    "split_default": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
-        mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
-        cache_dtype=ttnn.bfloat8_b,
-        attention_fidelity=ttnn.MathFidelity.LoFi,
         mlp_fidelity=ttnn.MathFidelity.LoFi,
-        packed_qkv=False,
-        packed_gate_up=False,
+        decode_in0_block_w=1,
     ),
-    "packed_interleaved": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
-        mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
-        cache_dtype=ttnn.bfloat8_b,
-        attention_fidelity=ttnn.MathFidelity.LoFi,
-        mlp_fidelity=ttnn.MathFidelity.LoFi,
-    ),
-    "bf16_cache": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
-        mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
-        cache_dtype=ttnn.bfloat16,
-        attention_fidelity=ttnn.MathFidelity.LoFi,
-        mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=True,
-    ),
-    "bfp4_attention": OptimizationPolicy(
+    "split_gate_up": OptimizationPolicy(
         attention_weight_dtype=ttnn.bfloat4_b,
-        mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
-        cache_dtype=ttnn.bfloat8_b,
-        attention_fidelity=ttnn.MathFidelity.LoFi,
-        mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=True,
-    ),
-    "bfp4_down": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
         mlp_gate_up_dtype=ttnn.bfloat4_b,
         mlp_down_dtype=ttnn.bfloat4_b,
         cache_dtype=ttnn.bfloat8_b,
         attention_fidelity=ttnn.MathFidelity.LoFi,
         mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=True,
-    ),
-    "split_bfp8_hifi2": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
-        mlp_gate_up_dtype=ttnn.bfloat8_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
-        cache_dtype=ttnn.bfloat8_b,
-        attention_fidelity=ttnn.MathFidelity.HiFi2,
-        mlp_fidelity=ttnn.MathFidelity.HiFi2,
-        packed_qkv=False,
         packed_gate_up=False,
+        decode_in0_block_w=2,
     ),
-    "advisor_seed": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
+    "bf16_cache": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat4_b,
         mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
+        mlp_down_dtype=ttnn.bfloat4_b,
+        cache_dtype=ttnn.bfloat16,
+        attention_fidelity=ttnn.MathFidelity.LoFi,
+        mlp_fidelity=ttnn.MathFidelity.LoFi,
+        decode_in0_block_w=2,
+    ),
+    "bf16_hifi4": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat16,
+        mlp_gate_up_dtype=ttnn.bfloat16,
+        mlp_down_dtype=ttnn.bfloat16,
+        cache_dtype=ttnn.bfloat16,
+        attention_fidelity=ttnn.MathFidelity.HiFi4,
+        mlp_fidelity=ttnn.MathFidelity.HiFi4,
+        packed_gate_up=False,
+        decode_in0_block_w=1,
+        mlp_down_in0_block_w=1,
+        prefill_in0_block_w=2,
+    ),
+    "bf16_attention_bfp4_mlp": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat16,
+        mlp_gate_up_dtype=ttnn.bfloat4_b,
+        mlp_down_dtype=ttnn.bfloat4_b,
+        cache_dtype=ttnn.bfloat16,
+        attention_fidelity=ttnn.MathFidelity.HiFi4,
+        mlp_fidelity=ttnn.MathFidelity.LoFi,
+        packed_gate_up=False,
+        decode_in0_block_w=1,
+        prefill_in0_block_w=2,
+    ),
+    "bf16_attention_bfp4_mlp_bfp8_cache": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat16,
+        mlp_gate_up_dtype=ttnn.bfloat4_b,
+        mlp_down_dtype=ttnn.bfloat4_b,
+        cache_dtype=ttnn.bfloat8_b,
+        attention_fidelity=ttnn.MathFidelity.HiFi4,
+        mlp_fidelity=ttnn.MathFidelity.LoFi,
+        packed_gate_up=False,
+        decode_in0_block_w=1,
+        prefill_in0_block_w=2,
+    ),
+    "geometry_w10": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat4_b,
+        mlp_gate_up_dtype=ttnn.bfloat4_b,
+        mlp_down_dtype=ttnn.bfloat4_b,
         cache_dtype=ttnn.bfloat8_b,
         attention_fidelity=ttnn.MathFidelity.LoFi,
         mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=True,
+        decode_in0_block_w=10,
     ),
-    "ds_gateup_iw10": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
+    "geometry_w5": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat4_b,
         mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
+        mlp_down_dtype=ttnn.bfloat4_b,
         cache_dtype=ttnn.bfloat8_b,
         attention_fidelity=ttnn.MathFidelity.LoFi,
         mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=True,
-        gate_up_ds_in0_block_w=10,
+        decode_in0_block_w=5,
     ),
-    "ds_gateup_iw5": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
+    "geometry_w4": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat4_b,
         mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
+        mlp_down_dtype=ttnn.bfloat4_b,
         cache_dtype=ttnn.bfloat8_b,
         attention_fidelity=ttnn.MathFidelity.LoFi,
         mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=True,
-        gate_up_ds_in0_block_w=5,
+        decode_in0_block_w=4,
     ),
-    "ds_gateup_iw2": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
+    "geometry_w2": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat4_b,
         mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
+        mlp_down_dtype=ttnn.bfloat4_b,
         cache_dtype=ttnn.bfloat8_b,
         attention_fidelity=ttnn.MathFidelity.LoFi,
         mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=True,
-        gate_up_ds_in0_block_w=2,
+        decode_in0_block_w=2,
     ),
-    "geometry_qkv_iw10_n7": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
+    "prefill_w2": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat4_b,
         mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
+        mlp_down_dtype=ttnn.bfloat4_b,
         cache_dtype=ttnn.bfloat8_b,
         attention_fidelity=ttnn.MathFidelity.LoFi,
         mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=True,
-        qkv_in0_block_w=10,
-        qkv_per_core_n=7,
+        packed_gate_up=False,
+        decode_in0_block_w=2,
+        prefill_in0_block_w=2,
     ),
-    "geometry_o_iw24_n2": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
+    "prefill_grid8": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat4_b,
         mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
+        mlp_down_dtype=ttnn.bfloat4_b,
         cache_dtype=ttnn.bfloat8_b,
         attention_fidelity=ttnn.MathFidelity.LoFi,
         mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=True,
-        o_in0_block_w=24,
-        o_per_core_n=2,
-    ),
-    "geometry_down_iw17_n2": OptimizationPolicy(
-        attention_weight_dtype=ttnn.bfloat8_b,
-        mlp_gate_up_dtype=ttnn.bfloat4_b,
-        mlp_down_dtype=ttnn.bfloat8_b,
-        cache_dtype=ttnn.bfloat8_b,
-        attention_fidelity=ttnn.MathFidelity.LoFi,
-        mlp_fidelity=ttnn.MathFidelity.LoFi,
-        advisor_seed=True,
-        down_in0_block_w=17,
-        down_per_core_n=2,
+        packed_gate_up=False,
+        decode_in0_block_w=2,
+        prefill_grid_y=8,
     ),
 }
 
+# Precision-locked, per-role candidates for the selected full-attention
+# BF16-attention/BFP4-MLP/BFP8-cache family.  Keeping these as independent
+# policies makes whole-layer B1/B32 A/B runs cumulative and reproducible.
+_FINAL_FULL = POLICIES["bf16_attention_bfp4_mlp_bfp8_cache"]
+_FINAL_CUMULATIVE = replace(
+    _FINAL_FULL,
+    qkv_fidelity=ttnn.MathFidelity.HiFi2,
+    o_fidelity=ttnn.MathFidelity.HiFi2,
+    qkv_decode_in0_block_w=2,
+    mlp_gate_decode_in0_block_w=5,
+    mlp_up_decode_in0_block_w=5,
+)
+_LINEAR_FP32_FINAL = replace(
+    POLICIES["default"],
+    linear_packed_decode=True,
+    linear_outer_product=True,
+    linear_recurrent_program="grid4_w4",
+)
+_LINEAR_PROJECTION_BASELINE = replace(
+    _LINEAR_FP32_FINAL,
+    linear_recurrent_state_dtype=ttnn.bfloat8_b,
+)
+_LINEAR_PRECISION_FINAL = replace(
+    _LINEAR_PROJECTION_BASELINE,
+    linear_input_weight_dtype=ttnn.bfloat4_b,
+    linear_input_fidelity=ttnn.MathFidelity.LoFi,
+    linear_output_weight_dtype=ttnn.bfloat4_b,
+    linear_output_fidelity=ttnn.MathFidelity.LoFi,
+)
+_LINEAR_FINAL = replace(
+    _LINEAR_PRECISION_FINAL,
+    linear_packed_in0_block_w=5,
+    linear_out_in0_block_w=12,
+)
+POLICIES.update(
+    {
+        "final_qkv_w2": replace(_FINAL_FULL, qkv_decode_in0_block_w=2),
+        "final_qkv_w4": replace(_FINAL_FULL, qkv_decode_in0_block_w=4),
+        "final_o_w6": replace(_FINAL_FULL, o_decode_in0_block_w=6),
+        "final_o_w4": replace(_FINAL_FULL, o_decode_in0_block_w=4),
+        "final_o_w8": replace(_FINAL_FULL, o_decode_in0_block_w=8),
+        "final_o_w12": replace(_FINAL_FULL, o_decode_in0_block_w=12),
+        "final_gate_up_w2": replace(
+            _FINAL_FULL,
+            mlp_gate_decode_in0_block_w=2,
+            mlp_up_decode_in0_block_w=2,
+        ),
+        "final_gate_up_w4": replace(
+            _FINAL_FULL,
+            mlp_gate_decode_in0_block_w=4,
+            mlp_up_decode_in0_block_w=4,
+        ),
+        "final_gate_up_w5": replace(
+            _FINAL_FULL,
+            mlp_gate_decode_in0_block_w=5,
+            mlp_up_decode_in0_block_w=5,
+        ),
+        "final_gate_w5": replace(_FINAL_FULL, mlp_gate_decode_in0_block_w=5),
+        "final_up_w5": replace(_FINAL_FULL, mlp_up_decode_in0_block_w=5),
+        "final_gate_w2": replace(_FINAL_FULL, mlp_gate_decode_in0_block_w=2),
+        "final_gate_w4": replace(_FINAL_FULL, mlp_gate_decode_in0_block_w=4),
+        "final_gate_w10": replace(_FINAL_FULL, mlp_gate_decode_in0_block_w=10),
+        "final_up_w2": replace(_FINAL_FULL, mlp_up_decode_in0_block_w=2),
+        "final_up_w4": replace(_FINAL_FULL, mlp_up_decode_in0_block_w=4),
+        "final_up_w10": replace(_FINAL_FULL, mlp_up_decode_in0_block_w=10),
+        "final_mlp_hifi2": replace(_FINAL_FULL, mlp_fidelity=ttnn.MathFidelity.HiFi2),
+        "final_down_w4": replace(_FINAL_FULL, mlp_down_in0_block_w=4),
+        "final_down_w34": replace(_FINAL_FULL, mlp_down_in0_block_w=34),
+        "final_down_w68": replace(_FINAL_FULL, mlp_down_in0_block_w=68),
+        "final_attention_hifi2": replace(_FINAL_FULL, attention_fidelity=ttnn.MathFidelity.HiFi2),
+        "final_qkv_hifi2": replace(_FINAL_FULL, qkv_fidelity=ttnn.MathFidelity.HiFi2),
+        "final_o_hifi2": replace(_FINAL_FULL, o_fidelity=ttnn.MathFidelity.HiFi2),
+        "final_cumulative": _FINAL_CUMULATIVE,
+        "final_cumulative_o4": replace(
+            _FINAL_CUMULATIVE,
+            o_decode_in0_block_w=4,
+        ),
+        "final_cum_qkv_w4": replace(_FINAL_CUMULATIVE, qkv_decode_in0_block_w=4),
+        "final_cum_o_w4": replace(_FINAL_CUMULATIVE, o_decode_in0_block_w=4),
+        "final_cum_o_w6": replace(_FINAL_CUMULATIVE, o_decode_in0_block_w=6),
+        "final_cum_o_w8": replace(_FINAL_CUMULATIVE, o_decode_in0_block_w=8),
+        "final_cum_o_w12": replace(_FINAL_CUMULATIVE, o_decode_in0_block_w=12),
+        "final_cum_gate_w2": replace(_FINAL_CUMULATIVE, mlp_gate_decode_in0_block_w=2),
+        "final_cum_gate_w4": replace(_FINAL_CUMULATIVE, mlp_gate_decode_in0_block_w=4),
+        "final_cum_gate_w10": replace(_FINAL_CUMULATIVE, mlp_gate_decode_in0_block_w=10),
+        "final_cum_gate_w20": replace(_FINAL_CUMULATIVE, mlp_gate_decode_in0_block_w=20),
+        "final_cum_up_w2": replace(_FINAL_CUMULATIVE, mlp_up_decode_in0_block_w=2),
+        "final_cum_up_w4": replace(_FINAL_CUMULATIVE, mlp_up_decode_in0_block_w=4),
+        "final_cum_up_w10": replace(_FINAL_CUMULATIVE, mlp_up_decode_in0_block_w=10),
+        "final_cum_up_w20": replace(_FINAL_CUMULATIVE, mlp_up_decode_in0_block_w=20),
+        "final_cum_down_w4": replace(_FINAL_CUMULATIVE, mlp_down_in0_block_w=4),
+        "final_cum_down_w34": replace(_FINAL_CUMULATIVE, mlp_down_in0_block_w=34),
+        "final_cum_down_w68": replace(_FINAL_CUMULATIVE, mlp_down_in0_block_w=68),
+        "final_cum_mlp_hifi2": replace(_FINAL_CUMULATIVE, mlp_fidelity=ttnn.MathFidelity.HiFi2),
+        "final_cum_grid4": replace(_FINAL_CUMULATIVE, decode_storage_cores=4),
+        # Gated-delta decode has four projections of the same normalized
+        # hidden state. Materialize them as one DRAM-sharded projection and
+        # keep its output projection DRAM-sharded as well. Independent dtype
+        # and fidelity controls retain the measured BF16 baseline and BFP4
+        # winner.
+        "linear_packed_dram": replace(
+            POLICIES["default"],
+            linear_packed_decode=True,
+        ),
+        "linear_outer_product": replace(
+            POLICIES["default"],
+            linear_outer_product=True,
+        ),
+        "linear_final": _LINEAR_FINAL,
+        "linear_state_fp32": replace(
+            _LINEAR_PROJECTION_BASELINE,
+            linear_recurrent_state_dtype=ttnn.float32,
+        ),
+        "linear_packed_w4": replace(
+            POLICIES["default"],
+            linear_packed_decode=True,
+            linear_packed_in0_block_w=4,
+        ),
+        "linear_out_w4": replace(
+            POLICIES["default"],
+            linear_packed_decode=True,
+            linear_out_in0_block_w=4,
+        ),
+        # Precision-locked geometry controls for the selected BFP4/LoFi
+        # projections and BFP8 recurrent state. These must remain derived
+        # from _LINEAR_PRECISION_FINAL so block-width results are not
+        # confounded with the earlier BF16/FP32 policy.
+        "linear_final_input_w1": replace(_LINEAR_PRECISION_FINAL, linear_packed_in0_block_w=1),
+        "linear_final_input_w4": replace(_LINEAR_PRECISION_FINAL, linear_packed_in0_block_w=4),
+        "linear_final_input_w5": replace(_LINEAR_PRECISION_FINAL, linear_packed_in0_block_w=5),
+        "linear_final_input_w10": replace(_LINEAR_PRECISION_FINAL, linear_packed_in0_block_w=10),
+        "linear_final_input_w20": replace(_LINEAR_PRECISION_FINAL, linear_packed_in0_block_w=20),
+        "linear_final_output_w1": replace(_LINEAR_PRECISION_FINAL, linear_out_in0_block_w=1),
+        "linear_final_output_w2": replace(_LINEAR_PRECISION_FINAL, linear_out_in0_block_w=2),
+        "linear_final_output_w4": replace(_LINEAR_PRECISION_FINAL, linear_out_in0_block_w=4),
+        "linear_final_output_w6": replace(_LINEAR_PRECISION_FINAL, linear_out_in0_block_w=6),
+        "linear_final_output_w8": replace(_LINEAR_PRECISION_FINAL, linear_out_in0_block_w=8),
+        "linear_final_output_w12": replace(_LINEAR_PRECISION_FINAL, linear_out_in0_block_w=12),
+        "linear_final_output_w24": replace(_LINEAR_PRECISION_FINAL, linear_out_in0_block_w=24),
+        "linear_final_input_w5_output_w8": replace(
+            _LINEAR_PRECISION_FINAL,
+            linear_packed_in0_block_w=5,
+            linear_out_in0_block_w=8,
+        ),
+        "linear_final_input_w5_output_w12": replace(
+            _LINEAR_PRECISION_FINAL,
+            linear_packed_in0_block_w=5,
+            linear_out_in0_block_w=12,
+        ),
+        "linear_final_input_w5_output_w24": replace(
+            _LINEAR_PRECISION_FINAL,
+            linear_packed_in0_block_w=5,
+            linear_out_in0_block_w=24,
+        ),
+        "linear_final_grid4": replace(_LINEAR_PRECISION_FINAL, decode_storage_cores=4),
+        "linear_recurrent_explicit_w1": replace(_LINEAR_PROJECTION_BASELINE, linear_recurrent_program="grid4_w1"),
+        "linear_recurrent_explicit_w2": replace(_LINEAR_PROJECTION_BASELINE, linear_recurrent_program="grid4_w2"),
+        "linear_recurrent_explicit_w4": replace(_LINEAR_PROJECTION_BASELINE, linear_recurrent_program="grid4_w4"),
+        "linear_recurrent_subblock2": replace(_LINEAR_PROJECTION_BASELINE, linear_recurrent_program="grid2_n2"),
+        "linear_recurrent_hifi4": replace(
+            _LINEAR_PROJECTION_BASELINE,
+            linear_recurrent_fidelity=ttnn.MathFidelity.HiFi4,
+        ),
+        # The functional cache is FP32 even though its affine prefill scan
+        # consumes and produces BF16 states.  Keep the selected linear
+        # topology fixed while independently sweeping the persistent state
+        # boundary. These retained controls keep the BF16 projection baseline
+        # while the final policy independently selects BFP8 state storage.
+        "linear_state_bf16": replace(
+            _LINEAR_PROJECTION_BASELINE,
+            linear_recurrent_state_dtype=ttnn.bfloat16,
+        ),
+        "linear_state_bfp8": replace(
+            _LINEAR_PROJECTION_BASELINE,
+            linear_recurrent_state_dtype=ttnn.bfloat8_b,
+        ),
+        "linear_state_bfp4": replace(
+            _LINEAR_PROJECTION_BASELINE,
+            linear_recurrent_state_dtype=ttnn.bfloat4_b,
+        ),
+        "linear_proj_bf16_hifi2": _LINEAR_PROJECTION_BASELINE,
+        "linear_input_bf16_lofi": replace(_LINEAR_PROJECTION_BASELINE, linear_input_fidelity=ttnn.MathFidelity.LoFi),
+        "linear_output_bf16_lofi": replace(_LINEAR_PROJECTION_BASELINE, linear_output_fidelity=ttnn.MathFidelity.LoFi),
+        "linear_both_bf16_lofi": replace(
+            _LINEAR_PROJECTION_BASELINE,
+            linear_input_fidelity=ttnn.MathFidelity.LoFi,
+            linear_output_fidelity=ttnn.MathFidelity.LoFi,
+        ),
+        "linear_input_bfp8_hifi2": replace(_LINEAR_PROJECTION_BASELINE, linear_input_weight_dtype=ttnn.bfloat8_b),
+        "linear_input_bfp8_lofi": replace(
+            _LINEAR_PROJECTION_BASELINE,
+            linear_input_weight_dtype=ttnn.bfloat8_b,
+            linear_input_fidelity=ttnn.MathFidelity.LoFi,
+        ),
+        "linear_output_bfp8_hifi2": replace(_LINEAR_PROJECTION_BASELINE, linear_output_weight_dtype=ttnn.bfloat8_b),
+        "linear_output_bfp8_lofi": replace(
+            _LINEAR_PROJECTION_BASELINE,
+            linear_output_weight_dtype=ttnn.bfloat8_b,
+            linear_output_fidelity=ttnn.MathFidelity.LoFi,
+        ),
+        "linear_input_bfp4_lofi": replace(
+            _LINEAR_PROJECTION_BASELINE,
+            linear_input_weight_dtype=ttnn.bfloat4_b,
+            linear_input_fidelity=ttnn.MathFidelity.LoFi,
+        ),
+        "linear_output_bfp4_lofi": replace(
+            _LINEAR_PROJECTION_BASELINE,
+            linear_output_weight_dtype=ttnn.bfloat4_b,
+            linear_output_fidelity=ttnn.MathFidelity.LoFi,
+        ),
+        "linear_both_bfp4_lofi": replace(
+            _LINEAR_PROJECTION_BASELINE,
+            linear_input_weight_dtype=ttnn.bfloat4_b,
+            linear_input_fidelity=ttnn.MathFidelity.LoFi,
+            linear_output_weight_dtype=ttnn.bfloat4_b,
+            linear_output_fidelity=ttnn.MathFidelity.LoFi,
+        ),
+    }
+)
 
-def _candidate_keys(layer_idx: int, suffix: str) -> tuple[str, ...]:
-    return (
-        f"model.language_model.layers.{layer_idx}.{suffix}",
-        f"language_model.layers.{layer_idx}.{suffix}",
-        f"model.layers.{layer_idx}.{suffix}",
-        f"layers.{layer_idx}.{suffix}",
-        suffix,
+
+def resolve_policy(candidate: str, layer_kind: str) -> OptimizationPolicy:
+    """Resolve the evidence-selected policy for a representative layer kind."""
+    if candidate == "default" and layer_kind == "full_attention":
+        return POLICIES["final_cumulative"]
+    if candidate == "default" and layer_kind == "linear_attention":
+        return POLICIES["linear_final"]
+    return POLICIES[candidate]
+
+
+def _dram_grid(mesh_device):
+    size = mesh_device.dram_grid_size()
+    return ttnn.CoreRangeSet(
+        # The decode matmul streams one shard per DRAM-bank column.  Extending
+        # this range through ``size.y`` makes the program infer 80 logical
+        # workers on p300c and over-allocates each circular-buffer family.
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(size.x - 1, 0))}
     )
 
 
-def _require_tensor(state_dict: Mapping[str, object], layer_idx: int, suffix: str):
-    for key in _candidate_keys(layer_idx, suffix):
-        if key in state_dict:
-            return state_dict[key]
-    raise KeyError(f"Missing Qwen3.6 tensor {suffix!r}; tried {', '.join(_candidate_keys(layer_idx, suffix))}")
+def _dram_weight_memory_config(mesh_device, *, k: int, n: int):
+    cores = mesh_device.dram_grid_size().x
+    padded_n = math.ceil(n / (ttnn.TILE_SIZE * cores)) * ttnn.TILE_SIZE * cores
+    shard = ttnn.ShardSpec(
+        _dram_grid(mesh_device),
+        (k, padded_n // cores),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard)
 
 
-def _to_device(tensor, *, mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
-    return ttnn.from_torch(
-        tensor.contiguous(),
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        layout=layout,
-        dtype=dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+def _l1_width_memory_config(*, rows: int, width: int, cores: int = 8):
+    return ttnn.create_sharded_memory_config(
+        shape=(rows, math.ceil(width / cores / ttnn.TILE_SIZE) * ttnn.TILE_SIZE),
+        core_grid=ttnn.CoreGrid(x=cores, y=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
     )
 
 
-def _to_device_with_memory_config(
-    tensor,
-    *,
-    mesh_device,
-    dtype,
-    memory_config,
-):
-    return ttnn.from_torch(
-        tensor.contiguous(),
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        layout=ttnn.TILE_LAYOUT,
-        dtype=dtype,
-        memory_config=memory_config,
+def _decode_program(*, k: int, n: int, in0_block_w: int, cores: int = 8, fused_activation=None):
+    k_tiles_per_core = k // ttnn.TILE_SIZE // cores
+    if k_tiles_per_core % in0_block_w:
+        raise ValueError(f"in0_block_w={in0_block_w} must divide {k_tiles_per_core} K tiles/core for K={k}")
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=in0_block_w,
+        per_core_M=1,
+        per_core_N=math.ceil(n / ttnn.TILE_SIZE / cores),
+        fused_activation=fused_activation,
     )
 
 
-class _BalancedSequenceConcat:
-    """Incrementally concatenate sequence chunks with logarithmic retention.
-
-    A simple ``outputs.append(...)`` followed by one final concat retains one
-    device tensor per token. At Qwen3.6's 262K context that host-side graph is
-    itself a capability limit. This binary-counter reducer keeps at most one
-    completed chunk at each level; the final model output is necessarily still
-    proportional to sequence length, but transient Python/device references are
-    bounded by ``chunk_size + log2(num_chunks)``.
-    """
-
-    def __init__(self, *, dim: int, memory_config):
-        self.dim = dim
-        self.memory_config = memory_config
-        self.levels = []
-
-    def append(self, tensor):
-        level = 0
-        while level < len(self.levels) and self.levels[level] is not None:
-            tensor = ttnn.concat(
-                [self.levels[level], tensor],
-                dim=self.dim,
-                memory_config=self.memory_config,
-            )
-            self.levels[level] = None
-            level += 1
-        if level == len(self.levels):
-            self.levels.append(tensor)
-        else:
-            self.levels[level] = tensor
-
-    def finish(self):
-        # High levels contain earlier chunks than low levels.
-        chunks = [tensor for tensor in reversed(self.levels) if tensor is not None]
-        if not chunks:
-            raise ValueError("cannot concatenate an empty linear-attention prefill")
-        while len(chunks) > 1:
-            chunks = [
-                ttnn.concat(
-                    chunks[index : index + 2],
-                    dim=self.dim,
-                    memory_config=self.memory_config,
-                )
-                for index in range(0, len(chunks), 2)
-            ]
-        return chunks[0]
+def _prefill_program(*, rows: int, k: int, n: int, in0_block_w_limit: int, grid_y: int, fused_activation=None):
+    grid_x = 8
+    per_core_n = math.ceil(n / ttnn.TILE_SIZE / grid_x)
+    out_subblock_w = 4
+    while out_subblock_w > 1 and per_core_n % out_subblock_w:
+        out_subblock_w -= 1
+    k_tiles = k // ttnn.TILE_SIZE
+    # Eight K tiles overcommits L1 for the packed 2x-intermediate MLP
+    # projection (1.676 MB on Blackhole).  Four tiles keeps the same 2-D
+    # output decomposition while fitting the 1.5 MiB worker-L1 contract.
+    in0_block_w = min(in0_block_w_limit, k_tiles)
+    while k_tiles % in0_block_w:
+        in0_block_w -= 1
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=max(1, math.ceil(rows / ttnn.TILE_SIZE / grid_y)),
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=True,
+    )
 
 
-class OptimizedDecoder(LightweightModule):
-    """One Qwen3.6 text decoder layer on a single 1x1 TTNN mesh.
-
-    The class supports both configured layer kinds rather than silently
-    treating the hybrid model as ordinary dense attention.
-    """
-
-    def __init__(
-        self,
-        *,
-        hf_config,
-        layer_idx: int,
-        mesh_device,
-        batch: int,
-        max_context: int,
-        page_size: int,
-        weights: dict[str, ttnn.Tensor],
-        caches: dict[str, ttnn.Tensor],
-        rope: dict[str, ttnn.Tensor],
-        policy: OptimizationPolicy,
-        candidate: str,
-        decode_attention_memory_config=None,
-    ):
-        self.hf_config = hf_config
-        self.layer_idx = layer_idx
-        self.layer_kind = hf_config.layer_types[layer_idx]
-        self.mesh_device = mesh_device
-        self.batch = batch
-        self.max_context = max_context
-        self.page_size = page_size
-        self.weights = weights
-        self.caches = caches
-        self.rope = rope
-        self.policy = policy
-        self.candidate = candidate
-        self.decode_attention_memory_config = decode_attention_memory_config
-
-        self.hidden_size = int(hf_config.hidden_size)
-        self.intermediate_size = int(hf_config.intermediate_size)
-        self.num_heads = int(hf_config.num_attention_heads)
-        self.num_kv_heads = int(hf_config.num_key_value_heads)
-        self.head_dim = int(hf_config.head_dim)
-        self.eps = float(hf_config.rms_norm_eps)
-        self.attention_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=policy.attention_fidelity,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
-        self.mlp_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=policy.mlp_fidelity,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
-        device_grid = mesh_device.compute_with_storage_grid_size()
-        self.decode_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(device_grid.x, device_grid.y),
-            exp_approx_mode=False,
-            q_chunk_size=0,
-            k_chunk_size=0,
-        )
-        self.qkv_decode_program_config = None
-        self.o_decode_program_config = None
-        self.gate_up_decode_program_config = None
-        self.down_decode_program_config = None
-        self.advisor_input_memcfg = {}
-        self.advisor_output_memcfg = {}
-        if policy.advisor_seed:
-            input_grid = ttnn.CoreGrid(y=1, x=8)
-            for width in (self.hidden_size, self.num_heads * self.head_dim, self.intermediate_size):
-                self.advisor_input_memcfg[width] = ttnn.create_sharded_memory_config(
-                    shape=(32, width // 8),
-                    core_grid=input_grid,
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-            qkv_width = 2 * self.num_heads * self.head_dim + 2 * self.num_kv_heads * self.head_dim
-            for width, cores in (
-                (qkv_width, math.ceil((qkv_width // 32) / policy.qkv_per_core_n)),
-                (
-                    self.hidden_size,
-                    math.ceil((self.hidden_size // 32) / min(policy.o_per_core_n, policy.down_per_core_n)),
-                ),
-                (2 * self.intermediate_size, 109),
-            ):
-                core_ranges = ttnn.num_cores_to_corerangeset(
-                    cores,
-                    ttnn.CoreCoord(11, 10),
-                    row_wise=True,
-                )
-                shard_width = math.ceil(width / (32 * cores)) * 32
-                self.advisor_output_memcfg[width] = ttnn.create_sharded_memory_config(
-                    shape=(32, shard_width),
-                    core_grid=core_ranges,
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-            self.qkv_decode_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                in0_block_w=policy.qkv_in0_block_w,
-                per_core_M=1,
-                per_core_N=policy.qkv_per_core_n,
-            )
-            self.o_decode_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                in0_block_w=policy.o_in0_block_w,
-                per_core_M=1,
-                per_core_N=policy.o_per_core_n,
-            )
-            if policy.gate_up_ds_in0_block_w is None:
-                self.gate_up_decode_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=2,
-                    out_subblock_h=1,
-                    out_subblock_w=5,
-                    per_core_M=1,
-                    per_core_N=10,
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
-            else:
-                self.gate_up_decode_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                    in0_block_w=policy.gate_up_ds_in0_block_w,
-                    per_core_M=1,
-                    per_core_N=10,
-                )
-            self.down_decode_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                in0_block_w=policy.down_in0_block_w,
-                per_core_M=1,
-                per_core_N=policy.down_per_core_n,
-            )
+class OptimizedDecoder(FunctionalDecoder):
+    """Qwen3.6 decoder with an independently selectable optimized runtime."""
 
     @classmethod
     def from_state_dict(
@@ -464,606 +538,639 @@ class OptimizedDecoder(LightweightModule):
         max_context=ADVERTISED_CONTEXT,
         page_size=64,
         candidate="default",
-        **_kwargs,
+        **kwargs,
     ):
-        """Validate and transfer one canonical HF layer.
-
-        ``hf_config`` must be the text config (``AutoConfig(...).text_config``),
-        not the outer multimodal config.
-        """
-        import math
-
-        import torch
-        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
-
-        if not isinstance(mesh_device, ttnn.MeshDevice):
-            raise TypeError("OptimizedDecoder requires a ttnn.MeshDevice")
-        if tuple(mesh_device.shape) != (1, 1):
-            raise ValueError(f"OptimizedDecoder requires a 1x1 mesh, got {tuple(mesh_device.shape)}")
-        if not 0 <= layer_idx < int(hf_config.num_hidden_layers):
-            raise ValueError(f"layer_idx={layer_idx} is outside the configured layer range")
-        if batch < 1 or batch > 32:
-            raise ValueError(f"batch must be in [1, 32], got {batch}")
-        if max_context < 1 or max_context > int(hf_config.max_position_embeddings):
-            raise ValueError(f"max_context must be in [1, {hf_config.max_position_embeddings}], got {max_context}")
-        if page_size < 32 or page_size % 32:
-            raise ValueError(f"page_size must be a positive tile multiple, got {page_size}")
-
-        hidden = int(hf_config.hidden_size)
-        intermediate = int(hf_config.intermediate_size)
-        head_dim = int(hf_config.head_dim)
-        q_heads = int(hf_config.num_attention_heads)
-        kv_heads = int(hf_config.num_key_value_heads)
-        kind = hf_config.layer_types[layer_idx]
-        expected = {
-            "hidden_size": 5120,
-            "intermediate_size": 17408,
-            "head_dim": 256,
-            "num_attention_heads": 24,
-            "num_key_value_heads": 4,
-        }
-        actual = {
-            "hidden_size": hidden,
-            "intermediate_size": intermediate,
-            "head_dim": head_dim,
-            "num_attention_heads": q_heads,
-            "num_key_value_heads": kv_heads,
-        }
-        if actual != expected:
-            raise ValueError(f"Qwen3.6-27B shape contract mismatch: expected {expected}, got {actual}")
-        if kind not in REPRESENTATIVE_LAYERS:
-            raise ValueError(f"Unsupported Qwen3.6 layer kind {kind!r}")
-
         if candidate not in POLICIES:
-            raise ValueError(f"Unknown optimized decoder candidate {candidate!r}; choose from {tuple(POLICIES)}")
-        policy = POLICIES[candidate]
-        dram_grid_size = mesh_device.dram_grid_size()
-        dram_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
-                )
-            }
-        )
-
-        def dram_weight_memory_config(k: int, n: int):
-            padded_n = math.ceil(n / (32 * dram_grid_size.x)) * (32 * dram_grid_size.x)
-            shard_spec = ttnn.ShardSpec(
-                dram_grid,
-                (k, padded_n // dram_grid_size.x),
-                ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            return ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.DRAM,
-                shard_spec,
-            )
-
-        def host_weight(suffix: str, expected_shape: tuple[int, ...], *, transpose=False, add_one=False):
-            value = _require_tensor(state_dict, layer_idx, suffix)
-            if tuple(value.shape) != expected_shape:
-                raise ValueError(f"{suffix} has shape {tuple(value.shape)}, expected {expected_shape}")
-            value = value.to(torch.bfloat16)
-            if transpose:
-                value = value.transpose(-2, -1)
-            if add_one:
-                value = value + 1
-            return value.contiguous()
-
-        def weight(
-            suffix: str,
-            expected_shape: tuple[int, ...],
-            *,
-            transpose=False,
-            add_one=False,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ):
-            return _to_device_with_memory_config(
-                host_weight(suffix, expected_shape, transpose=transpose, add_one=add_one),
-                mesh_device=mesh_device,
-                dtype=dtype,
-                memory_config=memory_config,
-            )
-
-        weights = {
-            "input_norm": weight("input_layernorm.weight", (hidden,), add_one=True),
-            "post_attention_norm": weight("post_attention_layernorm.weight", (hidden,), add_one=True),
-            "mlp_down": weight(
-                "mlp.down_proj.weight",
-                (hidden, intermediate),
-                transpose=True,
-                dtype=policy.mlp_down_dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
-        }
-        if policy.advisor_seed:
-            weights["mlp_down_decode"] = weight(
-                "mlp.down_proj.weight",
-                (hidden, intermediate),
-                transpose=True,
-                dtype=policy.mlp_down_dtype,
-                memory_config=dram_weight_memory_config(intermediate, hidden),
-            )
-        mlp_gate_host = host_weight("mlp.gate_proj.weight", (intermediate, hidden), transpose=True)
-        mlp_up_host = host_weight("mlp.up_proj.weight", (intermediate, hidden), transpose=True)
-        if policy.packed_gate_up:
-            packed_gate_up_host = torch.cat([mlp_gate_host, mlp_up_host], dim=-1)
-            weights["mlp_gate_up"] = _to_device_with_memory_config(
-                packed_gate_up_host,
-                mesh_device=mesh_device,
-                dtype=policy.mlp_gate_up_dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            if policy.gate_up_ds_in0_block_w is not None:
-                weights["mlp_gate_up_decode"] = _to_device_with_memory_config(
-                    packed_gate_up_host,
-                    mesh_device=mesh_device,
-                    dtype=policy.mlp_gate_up_dtype,
-                    memory_config=dram_weight_memory_config(hidden, 2 * intermediate),
-                )
-        else:
-            weights["mlp_gate"] = _to_device(mlp_gate_host, mesh_device=mesh_device, dtype=policy.mlp_gate_up_dtype)
-            weights["mlp_up"] = _to_device(mlp_up_host, mesh_device=mesh_device, dtype=policy.mlp_gate_up_dtype)
-        caches: dict[str, ttnn.Tensor] = {}
-        rope: dict[str, ttnn.Tensor] = {}
-
-        if kind == "full_attention":
-            q_width = q_heads * head_dim
-            kv_width = kv_heads * head_dim
-            q_host = host_weight("self_attn.q_proj.weight", (2 * q_width, hidden), transpose=True)
-            k_host = host_weight("self_attn.k_proj.weight", (kv_width, hidden), transpose=True)
-            v_host = host_weight("self_attn.v_proj.weight", (kv_width, hidden), transpose=True)
-            weights.update(
-                {
-                    "o_proj": weight(
-                        "self_attn.o_proj.weight",
-                        (hidden, q_width),
-                        transpose=True,
-                        dtype=policy.attention_weight_dtype,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    ),
-                    "q_norm": weight("self_attn.q_norm.weight", (head_dim,), add_one=True),
-                    "k_norm": weight("self_attn.k_norm.weight", (head_dim,), add_one=True),
-                }
-            )
-            if policy.advisor_seed:
-                weights["o_proj_decode"] = weight(
-                    "self_attn.o_proj.weight",
-                    (hidden, q_width),
-                    transpose=True,
-                    dtype=policy.attention_weight_dtype,
-                    memory_config=dram_weight_memory_config(q_width, hidden),
-                )
-            if policy.packed_qkv:
-                packed_qkv_host = torch.cat([q_host, k_host, v_host], dim=-1)
-                weights["qkv_proj"] = _to_device_with_memory_config(
-                    packed_qkv_host,
-                    mesh_device=mesh_device,
-                    dtype=policy.attention_weight_dtype,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                if policy.advisor_seed:
-                    weights["qkv_proj_decode"] = _to_device_with_memory_config(
-                        packed_qkv_host,
-                        mesh_device=mesh_device,
-                        dtype=policy.attention_weight_dtype,
-                        memory_config=dram_weight_memory_config(hidden, 2 * q_width + 2 * kv_width),
-                    )
-            else:
-                weights["q_proj"] = _to_device(q_host, mesh_device=mesh_device, dtype=policy.attention_weight_dtype)
-                weights["k_proj"] = _to_device(k_host, mesh_device=mesh_device, dtype=policy.attention_weight_dtype)
-                weights["v_proj"] = _to_device(v_host, mesh_device=mesh_device, dtype=policy.attention_weight_dtype)
-            # Each batch row owns an integral set of pages.  Rounding only
-            # after multiplying aliases/underallocates the tail page whenever
-            # max_context is not page-aligned (for example B32,C65 needs 64
-            # blocks, not ceil(32*65/64)=33).
-            num_blocks = batch * math.ceil(max_context / page_size)
-            cache_shape = (num_blocks, kv_heads, page_size, head_dim)
-            zeros = torch.zeros(cache_shape, dtype=torch.bfloat16)
-            caches["key"] = _to_device(zeros, mesh_device=mesh_device, dtype=policy.cache_dtype)
-            caches["value"] = _to_device(zeros, mesh_device=mesh_device, dtype=policy.cache_dtype)
-            caches["batch_indices"] = _to_device(
-                torch.arange(batch, dtype=torch.int32),
-                mesh_device=mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.int32,
-            )
-
-            rotary = Qwen3_5TextRotaryEmbedding(hf_config)
-            positions = torch.arange(max_context, dtype=torch.long).reshape(1, -1)
-            # Rotary only reads dtype/device from x; its output length comes
-            # from position_ids. Avoid a needless max_context x hidden host
-            # allocation (2.5+ GiB at the advertised context).
-            dummy = torch.empty(1, 1, hidden, dtype=torch.bfloat16)
-            cos, sin = rotary(dummy, positions)
-            # Decode performs a trace-safe embedding lookup with device
-            # current_positions, so keep these as 2D embedding tables.
-            rope["cos"] = _to_device(cos.squeeze(0), mesh_device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
-            rope["sin"] = _to_device(sin.squeeze(0), mesh_device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
-        else:
-            key_width = int(hf_config.linear_num_key_heads) * int(hf_config.linear_key_head_dim)
-            value_width = int(hf_config.linear_num_value_heads) * int(hf_config.linear_value_head_dim)
-            conv_width = 2 * key_width + value_width
-            value_heads = int(hf_config.linear_num_value_heads)
-            value_dim = int(hf_config.linear_value_head_dim)
-            kernel = int(hf_config.linear_conv_kernel_dim)
-            weights.update(
-                {
-                    "in_qkv": weight("linear_attn.in_proj_qkv.weight", (conv_width, hidden), transpose=True),
-                    "in_z": weight("linear_attn.in_proj_z.weight", (value_width, hidden), transpose=True),
-                    "in_b": weight("linear_attn.in_proj_b.weight", (value_heads, hidden), transpose=True),
-                    "in_a": weight("linear_attn.in_proj_a.weight", (value_heads, hidden), transpose=True),
-                    "conv": _to_device(
-                        _require_tensor(state_dict, layer_idx, "linear_attn.conv1d.weight")
-                        .to(torch.bfloat16)
-                        .reshape(1, 1, conv_width, kernel),
-                        mesh_device=mesh_device,
-                    ),
-                    "dt_bias": _to_device(
-                        _require_tensor(state_dict, layer_idx, "linear_attn.dt_bias")
-                        .to(torch.float32)
-                        .reshape(1, 1, 1, value_heads),
-                        mesh_device=mesh_device,
-                        dtype=ttnn.float32,
-                    ),
-                    "a": _to_device(
-                        -_require_tensor(state_dict, layer_idx, "linear_attn.A_log")
-                        .float()
-                        .exp()
-                        .reshape(1, 1, 1, value_heads),
-                        mesh_device=mesh_device,
-                        dtype=ttnn.float32,
-                    ),
-                    "gated_norm": weight("linear_attn.norm.weight", (value_dim,)),
-                    "out_proj": weight("linear_attn.out_proj.weight", (hidden, value_width), transpose=True),
-                    # The chunked affine scan composes 128x128 recurrent
-                    # transforms.  Materialize its neutral element during
-                    # setup so runtime remains device-only.
-                    "linear_identity": _to_device(
-                        torch.eye(value_dim, dtype=torch.bfloat16).reshape(1, 1, value_dim, value_dim),
-                        mesh_device=mesh_device,
-                    ),
-                }
-            )
-            caches["conv"] = _to_device(
-                torch.zeros((1, batch, conv_width, kernel), dtype=torch.bfloat16),
-                mesh_device=mesh_device,
-            )
-            caches["recurrent"] = _to_device(
-                torch.zeros((batch, value_heads, value_dim, value_dim), dtype=torch.float32),
-                mesh_device=mesh_device,
-                dtype=ttnn.float32,
-            )
-
-        decode_attention_memory_config = None
-        if kind == "full_attention":
-            # Cache update, decode SDPA, and decode head-concat require an
-            # L1-height-sharded tensor. This is the minimal workload-derived
-            # layout: one shard per batch row, not a tuned program grid.
-            device_grid = mesh_device.compute_with_storage_grid_size()
-            grid_x = min(batch, device_grid.x)
-            while batch % grid_x or batch // grid_x > device_grid.y:
-                grid_x -= 1
-            batch_grid = ttnn.CoreGrid(y=batch // grid_x, x=grid_x)
-            decode_attention_memory_config = ttnn.create_sharded_memory_config(
-                shape=(32, head_dim),
-                core_grid=batch_grid,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-        return cls(
+            raise ValueError(f"unknown candidate {candidate!r}; expected one of {sorted(POLICIES)}")
+        # Invoke the proven loader with cls=OptimizedDecoder.  The returned
+        # runtime object is never a FunctionalDecoder fallback.
+        decoder = FunctionalDecoder.from_state_dict.__func__(
+            cls,
+            state_dict,
             hf_config=hf_config,
             layer_idx=layer_idx,
             mesh_device=mesh_device,
             batch=batch,
             max_context=max_context,
             page_size=page_size,
-            weights=weights,
-            caches=caches,
-            rope=rope,
-            policy=policy,
-            candidate=candidate,
-            decode_attention_memory_config=decode_attention_memory_config,
+            **kwargs,
+        )
+        decoder.policy = resolve_policy(candidate, decoder.layer_kind)
+        decoder.candidate = candidate
+        decoder._configure_optimized_runtime(state_dict)
+        policy = decoder.policy
+        print(
+            "OPTIMIZED_POLICY",
+            f"candidate={candidate}",
+            f"layer_kind={decoder.layer_kind}",
+            f"attention_dtype={policy.attention_weight_dtype}",
+            f"cache_dtype={policy.cache_dtype}",
+            f"sdpa_fidelity={policy.attention_fidelity}",
+            f"qkv_fidelity={policy.qkv_fidelity or policy.attention_fidelity}",
+            f"o_fidelity={policy.o_fidelity or policy.attention_fidelity}",
+            f"qkv_w={policy.qkv_decode_in0_block_w or policy.decode_in0_block_w}",
+            f"o_w={policy.o_decode_in0_block_w}",
+            f"gate_w={policy.mlp_gate_decode_in0_block_w or policy.decode_in0_block_w}",
+            f"up_w={policy.mlp_up_decode_in0_block_w or policy.decode_in0_block_w}",
+            f"down_w={policy.mlp_down_in0_block_w}",
+            f"linear_packed={policy.linear_packed_decode}",
+            f"linear_outer={policy.linear_outer_product}",
+            f"linear_recurrent={policy.linear_recurrent_program}",
+            f"linear_recurrent_fidelity={policy.linear_recurrent_fidelity}",
+            f"linear_recurrent_state_dtype={policy.linear_recurrent_state_dtype}",
+            f"linear_input_dtype={policy.linear_input_weight_dtype}",
+            f"linear_input_fidelity={policy.linear_input_fidelity}",
+            f"linear_input_w={policy.linear_packed_in0_block_w}",
+            f"linear_output_dtype={policy.linear_output_weight_dtype}",
+            f"linear_output_fidelity={policy.linear_output_fidelity}",
+            f"linear_output_w={policy.linear_out_in0_block_w}",
+            f"storage_cores={policy.decode_storage_cores}",
+        )
+        return decoder
+
+    def _configure_optimized_runtime(self, state_dict):
+        import torch
+
+        policy = self.policy
+        hidden = self.hidden_size
+        intermediate = self.intermediate_size
+        rows = ttnn.TILE_SIZE
+
+        if self.layer_kind == "linear_attention" and policy.linear_recurrent_state_dtype != ttnn.float32:
+            # FunctionalDecoder constructs an FP32 zero state.  Convert it
+            # once during setup so the persistent physical allocation—not
+            # merely a transient decode operand—uses the candidate dtype.
+            functional_state = self.caches["recurrent"]
+            self.caches["recurrent"] = ttnn.typecast(
+                functional_state,
+                policy.linear_recurrent_state_dtype,
+            )
+            ttnn.deallocate(functional_state)
+
+        self.attention_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=policy.attention_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.qkv_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=policy.qkv_fidelity or policy.attention_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.o_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=policy.o_fidelity or policy.attention_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.mlp_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=policy.mlp_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        # Input packing and output projection are separate numerical and
+        # performance boundaries. Keep their compute policies independent so
+        # each retained sweep candidate is attributable.
+        self.linear_input_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=policy.linear_input_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.linear_output_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=policy.linear_output_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.linear_recurrent_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=policy.linear_recurrent_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.norm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        storage_cores = policy.decode_storage_cores
+        self.decode_residual_memory_config = _l1_width_memory_config(rows=rows, width=hidden, cores=storage_cores)
+        self.decode_norm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(storage_cores, 1),
+            subblock_w=4,
+            block_h=1,
+            block_w=hidden // ttnn.TILE_SIZE // storage_cores,
+            inplace=False,
+        )
+        self.decode_sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
         )
 
-    def _rms_norm(self, hidden_states, name):
+        def host(suffix, *, transpose=False, add_one=False):
+            value = _require_tensor(state_dict, self.layer_idx, suffix).to(torch.bfloat16)
+            if transpose:
+                value = value.transpose(-2, -1)
+            if add_one:
+                value = value + 1
+            return value.contiguous()
+
+        def upload(value, *, dtype, memory_config):
+            # Direct BF16 host->DRAM-sharded tilize builds a 2.34 MiB CB on a
+            # single worker for the 17k-wide projections.  Stage through
+            # interleaved DRAM so the subsequent device reshard is distributed.
+            target_memory_config = memory_config
+            initial_memory_config = (
+                ttnn.DRAM_MEMORY_CONFIG if dtype == ttnn.bfloat16 and memory_config.is_sharded() else memory_config
+            )
+            result = ttnn.from_torch(
+                value,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=initial_memory_config,
+            )
+            if initial_memory_config != target_memory_config:
+                sharded = ttnn.to_memory_config(result, target_memory_config)
+                ttnn.deallocate(result)
+                return sharded
+            return result
+
+        def replace(name, value):
+            old = self.weights.get(name)
+            self.weights[name] = value
+            if old is not None:
+                ttnn.deallocate(old, force=True)
+
+        # Sharded norm weights use the common 1D RMSNorm row-major contract.
+        norm_shape = (1, 1, hidden // ttnn.TILE_SIZE, ttnn.TILE_SIZE)
+        for name, suffix in (
+            ("input_norm", "input_layernorm.weight"),
+            ("post_attention_norm", "post_attention_layernorm.weight"),
+        ):
+            replace(
+                name,
+                _to_device(
+                    host(suffix, add_one=True).reshape(norm_shape),
+                    mesh_device=self.mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                ),
+            )
+
+        gate = host("mlp.gate_proj.weight", transpose=True)
+        up = host("mlp.up_proj.weight", transpose=True)
+        down = host("mlp.down_proj.weight", transpose=True)
+        if policy.packed_gate_up:
+            gate_up = torch.cat([gate, up], dim=-1)
+            replace(
+                "mlp_gate_up_decode",
+                upload(
+                    gate_up,
+                    dtype=policy.mlp_gate_up_dtype,
+                    memory_config=_dram_weight_memory_config(self.mesh_device, k=hidden, n=2 * intermediate),
+                ),
+            )
+            replace(
+                "mlp_gate_up_prefill",
+                upload(
+                    gate_up,
+                    dtype=policy.mlp_gate_up_dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+            )
+        else:
+            for name, value in (("mlp_gate", gate), ("mlp_up", up)):
+                replace(
+                    f"{name}_decode",
+                    upload(
+                        value,
+                        dtype=policy.mlp_gate_up_dtype,
+                        memory_config=_dram_weight_memory_config(self.mesh_device, k=hidden, n=intermediate),
+                    ),
+                )
+                replace(
+                    f"{name}_prefill",
+                    upload(value, dtype=policy.mlp_gate_up_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                )
+        replace(
+            "mlp_down_decode",
+            upload(
+                down,
+                dtype=policy.mlp_down_dtype,
+                memory_config=_dram_weight_memory_config(self.mesh_device, k=intermediate, n=hidden),
+            ),
+        )
+        replace(
+            "mlp_down_prefill",
+            upload(down, dtype=policy.mlp_down_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        )
+
+        for stale in ("mlp_gate", "mlp_up", "mlp_down"):
+            old = self.weights.pop(stale, None)
+            if old is not None:
+                ttnn.deallocate(old, force=True)
+
+        if self.layer_kind == "full_attention":
+            q_width = self.num_heads * self.head_dim
+            kv_width = self.num_kv_heads * self.head_dim
+            q_and_gate = host("self_attn.q_proj.weight", transpose=True)
+            # HF emits [q_head_0, gate_head_0, q_head_1, gate_head_1, ...].
+            # Repack that per-head order into the projection family's
+            # [all-q, k, v, all-gate] contract.
+            q_and_gate = q_and_gate.reshape(hidden, self.num_heads, 2 * self.head_dim)
+            q = q_and_gate[..., : self.head_dim].reshape(hidden, q_width)
+            gate = q_and_gate[..., self.head_dim :].reshape(hidden, q_width)
+            k = host("self_attn.k_proj.weight", transpose=True)
+            v = host("self_attn.v_proj.weight", transpose=True)
+            # Q/K/V are contiguous for create-heads; gate is the tail.
+            packed = torch.cat([q, k, v, gate], dim=-1)
+            packed_width = 2 * q_width + 2 * kv_width
+            for phase, memcfg in (
+                (
+                    "decode",
+                    _dram_weight_memory_config(self.mesh_device, k=hidden, n=packed_width),
+                ),
+                ("prefill", ttnn.DRAM_MEMORY_CONFIG),
+            ):
+                replace(
+                    f"qkv_gate_{phase}",
+                    upload(packed, dtype=policy.attention_weight_dtype, memory_config=memcfg),
+                )
+            # Long-context prefill projects one component at a time so packed
+            # Q/K/V/gate activations do not consume most of device DRAM.
+            for name, value in (("q", q), ("k", k), ("v", v), ("gate", gate)):
+                replace(
+                    f"{name}_prefill_long",
+                    upload(
+                        value,
+                        dtype=policy.attention_weight_dtype,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    ),
+                )
+            o = host("self_attn.o_proj.weight", transpose=True)
+            replace(
+                "o_proj_decode",
+                upload(
+                    o,
+                    dtype=policy.attention_weight_dtype,
+                    memory_config=_dram_weight_memory_config(self.mesh_device, k=q_width, n=hidden),
+                ),
+            )
+            replace(
+                "o_proj_prefill",
+                upload(o, dtype=policy.attention_weight_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            )
+            for stale in ("q_proj", "k_proj", "v_proj", "o_proj"):
+                old = self.weights.pop(stale, None)
+                if old is not None:
+                    ttnn.deallocate(old, force=True)
+
+            if policy.cache_dtype != ttnn.bfloat16:
+                cache_shape = tuple(self.caches["key"].shape)
+                for name in ("key", "value"):
+                    old = self.caches[name]
+                    self.caches[name] = ttnn.zeros(
+                        cache_shape,
+                        dtype=policy.cache_dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.mesh_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    ttnn.deallocate(old, force=True)
+        elif policy.linear_packed_decode:
+            key_width = int(self.hf_config.linear_num_key_heads) * int(self.hf_config.linear_key_head_dim)
+            value_width = int(self.hf_config.linear_num_value_heads) * int(self.hf_config.linear_value_head_dim)
+            value_heads = int(self.hf_config.linear_num_value_heads)
+            conv_width = 2 * key_width + value_width
+            packed = torch.cat(
+                [
+                    host("linear_attn.in_proj_qkv.weight", transpose=True),
+                    host("linear_attn.in_proj_z.weight", transpose=True),
+                    host("linear_attn.in_proj_b.weight", transpose=True),
+                    host("linear_attn.in_proj_a.weight", transpose=True),
+                ],
+                dim=-1,
+            )
+            packed_width = conv_width + value_width + 2 * value_heads
+            replace(
+                "linear_packed_decode",
+                upload(
+                    packed,
+                    dtype=policy.linear_input_weight_dtype,
+                    memory_config=_dram_weight_memory_config(self.mesh_device, k=hidden, n=packed_width),
+                ),
+            )
+            replace(
+                "linear_out_decode",
+                upload(
+                    host("linear_attn.out_proj.weight", transpose=True),
+                    dtype=policy.linear_output_weight_dtype,
+                    memory_config=_dram_weight_memory_config(self.mesh_device, k=value_width, n=hidden),
+                ),
+            )
+
+    def _decode_linear(
+        self,
+        hidden_states,
+        weight_name,
+        *,
+        k,
+        n,
+        in0_block_w,
+        fused_activation=None,
+        compute_kernel_config=None,
+    ):
+        storage_cores = self.policy.decode_storage_cores
+        input_memcfg = _l1_width_memory_config(rows=ttnn.TILE_SIZE, width=k, cores=storage_cores)
+        if hidden_states.memory_config() != input_memcfg:
+            hidden_states = ttnn.to_memory_config(hidden_states, input_memcfg)
+        output_memcfg = _l1_width_memory_config(rows=ttnn.TILE_SIZE, width=n, cores=storage_cores)
+        return ttnn.linear(
+            hidden_states,
+            self.weights[weight_name],
+            memory_config=output_memcfg,
+            program_config=_decode_program(
+                k=k,
+                n=n,
+                in0_block_w=in0_block_w,
+                cores=storage_cores,
+                fused_activation=fused_activation,
+            ),
+            compute_kernel_config=compute_kernel_config
+            or (
+                self.qkv_compute_kernel_config
+                if weight_name.startswith("qkv")
+                else (
+                    self.o_compute_kernel_config if weight_name.startswith("o_proj") else self.mlp_compute_kernel_config
+                )
+            ),
+            dtype=ttnn.bfloat16,
+        )
+
+    def _prefill_linear(self, hidden_states, weight_name, *, k, n, fused_activation=None):
+        # Program M is based on physical tiles.  For non-aligned sequences,
+        # especially serving batch 32, using logical rows underprovisions the
+        # grid because every batch row has its own sequence padding.
+        rows = math.prod(tuple(hidden_states.padded_shape)[:-1])
+        kwargs = dict(
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=(
+                self.attention_compute_kernel_config
+                if weight_name.startswith(("qkv", "o_proj"))
+                else self.mlp_compute_kernel_config
+            ),
+            dtype=ttnn.bfloat16,
+        )
+        # The serving-size 2-D config's per-core M grows with the full prompt
+        # and eventually makes its circular buffers exceed worker L1.  TTNN's
+        # general program selection tiles large M without that static-CB
+        # growth.  Retain the measured explicit path through B32/S65.
+        if rows <= 2048:
+            kwargs["program_config"] = _prefill_program(
+                rows=rows,
+                k=k,
+                n=n,
+                in0_block_w_limit=self.policy.prefill_in0_block_w,
+                grid_y=self.policy.prefill_grid_y,
+                fused_activation=fused_activation,
+            )
+        output = ttnn.linear(hidden_states, self.weights[weight_name], **kwargs)
+        if rows > 2048 and fused_activation == ttnn.UnaryOpType.SILU:
+            output = ttnn.silu(output)
+        return output
+
+    def _rms_norm_decode(self, hidden_states, name):
+        if hidden_states.memory_config() != self.decode_residual_memory_config:
+            hidden_states = ttnn.to_memory_config(hidden_states, self.decode_residual_memory_config)
         return ttnn.rms_norm(
             hidden_states,
             epsilon=self.eps,
             weight=self.weights[name],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.decode_residual_memory_config,
+            program_config=self.decode_norm_program_config,
+            compute_kernel_config=self.norm_compute_kernel_config,
         )
 
-    def _mlp(self, hidden_states):
-        is_decode = hidden_states.shape[1] == 1 and hidden_states.shape[2] == self.batch
-        if is_decode and self.policy.advisor_seed:
-            hidden_states = ttnn.to_memory_config(
-                hidden_states,
-                self.advisor_input_memcfg[self.hidden_size]
-                if self.policy.gate_up_ds_in0_block_w is not None
-                else ttnn.L1_MEMORY_CONFIG,
-            )
+    def _partial_rope_prefill(self, tensor, current_positions):
+        """Apply partial RoPE while retaining per-row sequence padding.
+
+        Embedding produces a tiled ``[batch, sequence, rotary]`` tensor.  At
+        serving batch 32 the physical sequence dimension is padded separately
+        for every row, so a logical-only reshape loses volume.  Supplying the
+        physical shape keeps non-aligned public sequence lengths valid.
+        """
+        rotary_dim = int(self.head_dim * float(self.hf_config.partial_rotary_factor))
+        rotary = tensor[..., :rotary_dim]
+        passthrough = tensor[..., rotary_dim:]
+        cos = ttnn.embedding(current_positions, self.rope["cos"], layout=ttnn.TILE_LAYOUT)
+        sin = ttnn.embedding(current_positions, self.rope["sin"], layout=ttnn.TILE_LAYOUT)
+        logical_shape = (self.batch, 1, tensor.shape[2], rotary_dim)
+        padded_sequence = cos.padded_shape[-2]
+        padded_shape = (self.batch, 1, padded_sequence, rotary_dim)
+        cos = ttnn.reshape(cos, logical_shape, padded_shape)
+        sin = ttnn.reshape(sin, logical_shape, padded_shape)
+        heads = tensor.shape[1]
+        cos = ttnn.repeat(cos, ttnn.Shape([1, heads, 1, 1]))
+        sin = ttnn.repeat(sin, ttnn.Shape([1, heads, 1, 1]))
+        rotary = ttnn.add(
+            ttnn.multiply(rotary, cos),
+            ttnn.multiply(self._rotate_half(rotary), sin),
+        )
+        return ttnn.concat([rotary, passthrough], dim=-1)
+
+    def _mlp_decode(self, hidden_states):
         if self.policy.packed_gate_up:
-            gate_up = ttnn.linear(
+            packed = self._decode_linear(
                 hidden_states,
-                self.weights[
-                    "mlp_gate_up_decode"
-                    if is_decode and self.policy.gate_up_ds_in0_block_w is not None
-                    else "mlp_gate_up"
-                ],
-                memory_config=(
-                    self.advisor_output_memcfg[2 * self.intermediate_size]
-                    if is_decode and self.policy.advisor_seed
-                    else ttnn.DRAM_MEMORY_CONFIG
-                ),
-                compute_kernel_config=self.mlp_compute_kernel_config,
-                program_config=self.gate_up_decode_program_config if is_decode else None,
+                "mlp_gate_up_decode",
+                k=self.hidden_size,
+                n=2 * self.intermediate_size,
+                in0_block_w=self.policy.decode_in0_block_w,
             )
-            if is_decode and self.policy.advisor_seed:
-                gate_up = ttnn.to_memory_config(gate_up, ttnn.L1_MEMORY_CONFIG)
-            gate = gate_up[..., : self.intermediate_size]
-            up = gate_up[..., self.intermediate_size :]
+            gate, up = ttnn.split(packed, (self.intermediate_size, self.intermediate_size), dim=-1)
+            ttnn.deallocate(packed)
+            gate = ttnn.silu(gate)
         else:
-            gate = ttnn.linear(
+            gate = self._decode_linear(
                 hidden_states,
-                self.weights["mlp_gate"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.mlp_compute_kernel_config,
+                "mlp_gate_decode",
+                k=self.hidden_size,
+                n=self.intermediate_size,
+                in0_block_w=(self.policy.mlp_gate_decode_in0_block_w or self.policy.decode_in0_block_w),
+                fused_activation=ttnn.UnaryOpType.SILU,
             )
-            up = ttnn.linear(
+            up = self._decode_linear(
                 hidden_states,
-                self.weights["mlp_up"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.mlp_compute_kernel_config,
+                "mlp_up_decode",
+                k=self.hidden_size,
+                n=self.intermediate_size,
+                in0_block_w=(self.policy.mlp_up_decode_in0_block_w or self.policy.decode_in0_block_w),
             )
-        gate = ttnn.silu(gate)
-        hidden_states = ttnn.multiply(gate, up)
-        if is_decode and self.policy.advisor_seed:
-            hidden_states = ttnn.to_memory_config(
-                hidden_states,
-                self.advisor_input_memcfg[self.intermediate_size],
-            )
-        output = ttnn.linear(
-            hidden_states,
-            self.weights["mlp_down_decode" if is_decode and self.policy.advisor_seed else "mlp_down"],
-            memory_config=(
-                self.advisor_output_memcfg[self.hidden_size]
-                if is_decode and self.policy.advisor_seed
-                else ttnn.DRAM_MEMORY_CONFIG
+        product = ttnn.multiply(
+            gate,
+            up,
+            memory_config=_l1_width_memory_config(
+                rows=ttnn.TILE_SIZE,
+                width=self.intermediate_size,
+                cores=self.policy.decode_storage_cores,
             ),
-            compute_kernel_config=self.mlp_compute_kernel_config,
-            program_config=self.down_decode_program_config if is_decode else None,
         )
-        if is_decode and self.policy.advisor_seed:
-            output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
-        return output
-
-    def _full_attention_projections(self, hidden_states):
-        is_decode = hidden_states.shape[1] == 1 and hidden_states.shape[2] == self.batch
-        q_width = self.num_heads * self.head_dim
-        kv_width = self.num_kv_heads * self.head_dim
-        if self.policy.packed_qkv:
-            if is_decode and self.policy.advisor_seed:
-                hidden_states = ttnn.to_memory_config(
-                    hidden_states,
-                    self.advisor_input_memcfg[self.hidden_size],
-                )
-            qkv = ttnn.linear(
-                hidden_states,
-                self.weights["qkv_proj_decode" if is_decode and self.policy.advisor_seed else "qkv_proj"],
-                memory_config=(
-                    self.advisor_output_memcfg[2 * q_width + 2 * kv_width]
-                    if is_decode and self.policy.advisor_seed
-                    else ttnn.DRAM_MEMORY_CONFIG
-                ),
-                compute_kernel_config=self.attention_compute_kernel_config,
-                program_config=self.qkv_decode_program_config if is_decode else None,
-            )
-            if is_decode and self.policy.advisor_seed:
-                qkv = ttnn.to_memory_config(qkv, ttnn.L1_MEMORY_CONFIG)
-            q_and_gate = qkv[..., : 2 * q_width]
-            k = qkv[..., 2 * q_width : 2 * q_width + kv_width]
-            v = qkv[..., 2 * q_width + kv_width :]
-        else:
-            q_and_gate = ttnn.linear(
-                hidden_states,
-                self.weights["q_proj"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.attention_compute_kernel_config,
-            )
-            k = ttnn.linear(
-                hidden_states,
-                self.weights["k_proj"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.attention_compute_kernel_config,
-            )
-            v = ttnn.linear(
-                hidden_states,
-                self.weights["v_proj"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.attention_compute_kernel_config,
-            )
-        # HF views q_proj as [..., num_heads, 2 * head_dim] and chunks the
-        # innermost dimension.  Q and gate are therefore interleaved per head,
-        # not two contiguous q_width halves.
-        q_gate_shape = (
-            q_and_gate.shape[0],
-            q_and_gate.shape[1],
-            q_and_gate.shape[2],
-            self.num_heads,
-            2 * self.head_dim,
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+        return self._decode_linear(
+            product,
+            "mlp_down_decode",
+            k=self.intermediate_size,
+            n=self.hidden_size,
+            in0_block_w=self.policy.mlp_down_in0_block_w,
         )
-        q_and_gate = ttnn.reshape(q_and_gate, q_gate_shape)
-        q = q_and_gate[..., : self.head_dim]
-        gate = q_and_gate[..., self.head_dim :]
-        output_shape = (q.shape[0], q.shape[1], q.shape[2], q_width)
-        return ttnn.reshape(q, output_shape), ttnn.reshape(gate, output_shape), k, v
 
-    def _token_mixer_prefill(self, hidden_states, page_table, current_positions):
-        if self.layer_kind == "linear_attention":
-            return self._linear_attention_prefill(hidden_states)
-        return self._full_attention_prefill(hidden_states, page_table, current_positions)
-
-    def _token_mixer_decode(self, hidden_states, page_table, current_positions):
-        if self.layer_kind == "linear_attention":
-            return self._linear_attention_decode(hidden_states)
-        return self._full_attention_decode(hidden_states, page_table, current_positions)
-
-    def _linear_attention_prefill(self, hidden_states):
-        output = _BalancedSequenceConcat(dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    def _mlp_prefill(self, hidden_states):
         sequence = hidden_states.shape[2]
-        for start in range(0, sequence, LINEAR_PREFILL_CHUNK_SIZE):
-            stop = min(start + LINEAR_PREFILL_CHUNK_SIZE, sequence)
-            chunk = hidden_states[:, :, start:stop, :]
-            chunk = self._linear_attention_prefill_chunk(chunk)
-            output.append(chunk)
-        return output.finish()
+        rows = math.prod(tuple(hidden_states.padded_shape)[:-1])
+        if rows > 2048:
+            # Bound the otherwise multi-gigabyte gate/up/product live set.
+            chunk_sequence = max(
+                ttnn.TILE_SIZE,
+                (2048 // self.batch // ttnn.TILE_SIZE) * ttnn.TILE_SIZE,
+            )
+            chunks = []
+            start = 0
+            while start < sequence:
+                end = min(sequence, start + chunk_sequence)
+                chunk = ttnn.slice(
+                    hidden_states,
+                    (0, 0, start, 0),
+                    (1, self.batch, end, self.hidden_size),
+                )
+                chunks.append(self._mlp_prefill(chunk))
+                start = end
+            return chunks[0] if len(chunks) == 1 else ttnn.concat(chunks, dim=2)
+        if self.policy.packed_gate_up:
+            packed = self._prefill_linear(
+                hidden_states,
+                "mlp_gate_up_prefill",
+                k=self.hidden_size,
+                n=2 * self.intermediate_size,
+            )
+            gate, up = ttnn.split(packed, (self.intermediate_size, self.intermediate_size), dim=-1)
+            gate = ttnn.silu(gate)
+        else:
+            gate = self._prefill_linear(
+                hidden_states,
+                "mlp_gate_prefill",
+                k=self.hidden_size,
+                n=self.intermediate_size,
+                fused_activation=ttnn.UnaryOpType.SILU,
+            )
+            up = self._prefill_linear(
+                hidden_states,
+                "mlp_up_prefill",
+                k=self.hidden_size,
+                n=self.intermediate_size,
+            )
+        return self._prefill_linear(
+            ttnn.multiply(gate, up),
+            "mlp_down_prefill",
+            k=self.intermediate_size,
+            n=self.hidden_size,
+        )
 
     def _linear_attention_prefill_chunk(self, hidden_states):
-        """Run one 64-token gated-delta chunk with a logarithmic affine scan.
+        """Preserve the inherited affine scan across a compressed state boundary.
 
-        For each token the recurrent update is ``R' = A R + B``, where
-        ``A = d (I - beta k.T k)`` and ``B = beta k.T v``.  Affine transforms
-        compose associatively, so a Hillis-Steele scan produces every token
-        state in log2(chunk) batched matmuls instead of submitting one decode
-        graph per token.
+        The correctness-first prefill implementation explicitly expects an
+        FP32 destination for its final-state copy.  Reduced-precision
+        candidates therefore expand the persistent state before each chunk,
+        run the proven implementation unchanged, then compress the completed
+        state back into a physical candidate-dtype allocation.  This also
+        handles non-aligned prefills spanning multiple 64-token chunks.
         """
-        key_heads = int(self.hf_config.linear_num_key_heads)
-        value_heads = int(self.hf_config.linear_num_value_heads)
-        key_dim = int(self.hf_config.linear_key_head_dim)
-        value_dim = int(self.hf_config.linear_value_head_dim)
-        key_width = key_heads * key_dim
-        value_width = value_heads * value_dim
-        sequence = hidden_states.shape[2]
-        groups = self.batch * value_heads
+        state_dtype = self.policy.linear_recurrent_state_dtype
+        if state_dtype == ttnn.float32:
+            return FunctionalDecoder._linear_attention_prefill_chunk(self, hidden_states)
 
-        mixed = ttnn.linear(hidden_states, self.weights["in_qkv"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        z = ttnn.linear(hidden_states, self.weights["in_z"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        beta = ttnn.linear(hidden_states, self.weights["in_b"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        decay = ttnn.linear(hidden_states, self.weights["in_a"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Stateful depthwise causal convolution, vectorized across the chunk.
-        mixed = ttnn.permute(mixed, (0, 1, 3, 2))
-        conv_input = ttnn.concat([self.caches["conv"], mixed], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        next_conv_state = conv_input[..., -self.caches["conv"].shape[-1] :]
-        # ``conv_state`` stores the last ``kernel`` inputs, while the HF
-        # update concatenates it with this chunk and retains the last L
-        # *valid* convolution windows.  Their starts are 1..L, not 0..L-1.
-        convolved = ttnn.multiply(conv_input[..., 1 : sequence + 1], self.weights["conv"][..., 0:1])
-        for kernel_index in range(1, self.caches["conv"].shape[-1]):
-            convolved = ttnn.add(
-                convolved,
-                ttnn.multiply(
-                    conv_input[..., kernel_index + 1 : kernel_index + sequence + 1],
-                    self.weights["conv"][..., kernel_index : kernel_index + 1],
-                ),
-            )
-        ttnn.copy(next_conv_state, self.caches["conv"])
-        mixed = ttnn.silu(ttnn.permute(convolved, (0, 1, 3, 2)))
-
-        query = mixed[..., :key_width]
-        key = mixed[..., key_width : 2 * key_width]
-        value = mixed[..., 2 * key_width :]
-        query = ttnn.reshape(query, (self.batch, sequence, key_heads, key_dim))
-        key = ttnn.reshape(key, (self.batch, sequence, key_heads, key_dim))
-        value = ttnn.reshape(value, (self.batch, sequence, value_heads, value_dim))
-        query = ttnn.repeat_interleave(ttnn.permute(query, (0, 2, 1, 3)), value_heads // key_heads, dim=1)
-        key = ttnn.repeat_interleave(ttnn.permute(key, (0, 2, 1, 3)), value_heads // key_heads, dim=1)
-        value = ttnn.permute(value, (0, 2, 1, 3))
-        query = self._l2_norm(query)
-        key = self._l2_norm(key)
-        query = ttnn.multiply(query, key_dim**-0.5)
-
-        beta = ttnn.sigmoid(beta)
-        decay = ttnn.multiply(
-            self.weights["a"],
-            ttnn.softplus(ttnn.add(decay, self.weights["dt_bias"])),
-        )
-        beta = ttnn.permute(
-            ttnn.reshape(beta, (self.batch, sequence, value_heads, 1)),
-            (0, 2, 1, 3),
-        )
-        decay = ttnn.exp(
-            ttnn.permute(
-                ttnn.reshape(decay, (self.batch, sequence, value_heads, 1)),
-                (0, 2, 1, 3),
-            )
-        )
-        query = ttnn.reshape(query, (groups, sequence, 1, key_dim))
-        key = ttnn.reshape(key, (groups, sequence, 1, key_dim))
-        value = ttnn.reshape(value, (groups, sequence, 1, value_dim))
-        beta = ttnn.reshape(beta, (groups, sequence, 1, 1))
-        decay = ttnn.reshape(decay, (groups, sequence, 1, 1))
-        # Projection/bias math above intentionally follows decode's FP32
-        # decay policy.  The verified affine scan is BF16, so cast its scalar
-        # coefficients explicitly instead of relying on mixed-dtype promotion.
-        beta = ttnn.typecast(beta, ttnn.bfloat16)
-        decay = ttnn.typecast(decay, ttnn.bfloat16)
-
-        identity = ttnn.repeat(self.weights["linear_identity"], ttnn.Shape([groups, sequence, 1, 1]))
-        zero = ttnn.multiply(identity, 0.0)
-        key_t = ttnn.transpose(key, -2, -1)
-        transform = ttnn.multiply(
-            decay,
-            ttnn.subtract(
-                identity,
-                ttnn.multiply(beta, ttnn.matmul(key_t, key)),
-            ),
-        )
-        bias = ttnn.multiply(beta, ttnn.matmul(key_t, value))
-
-        distance = 1
-        while distance < sequence:
-            previous_transform = ttnn.concat([identity[:, :distance], transform[:, :-distance]], dim=1)
-            previous_bias = ttnn.concat([zero[:, :distance], bias[:, :-distance]], dim=1)
-            old_transform = transform
-            transform = ttnn.matmul(old_transform, previous_transform)
-            bias = ttnn.add(ttnn.matmul(old_transform, previous_bias), bias)
-            distance *= 2
-
-        initial = ttnn.typecast(self.caches["recurrent"], ttnn.bfloat16)
-        initial = ttnn.reshape(initial, (groups, 1, value_dim, value_dim))
-        initial = ttnn.repeat(initial, ttnn.Shape([1, sequence, 1, 1]))
-        states = ttnn.add(ttnn.matmul(transform, initial), bias)
-        final_state = ttnn.reshape(
-            states[:, -1:],
-            (self.batch, value_heads, value_dim, value_dim),
-        )
-        ttnn.copy(ttnn.typecast(final_state, ttnn.float32), self.caches["recurrent"])
-
-        output = ttnn.matmul(query, states)
-        output = ttnn.reshape(output, (self.batch, value_heads, sequence, value_dim))
-        output = ttnn.rms_norm(
-            output,
-            epsilon=self.eps,
-            weight=self.weights["gated_norm"],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        z = ttnn.permute(
-            ttnn.reshape(z, (self.batch, sequence, value_heads, value_dim)),
-            (0, 2, 1, 3),
-        )
-        output = ttnn.multiply(output, ttnn.silu(z))
-        output = ttnn.permute(output, (0, 2, 1, 3))
-        output = ttnn.reshape(output, (1, self.batch, sequence, value_width))
-        return ttnn.linear(output, self.weights["out_proj"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        persistent_state = self.caches["recurrent"]
+        working_state = ttnn.typecast(persistent_state, ttnn.float32)
+        self.caches["recurrent"] = working_state
+        ttnn.deallocate(persistent_state)
+        output = FunctionalDecoder._linear_attention_prefill_chunk(self, hidden_states)
+        completed_state = self.caches["recurrent"]
+        self.caches["recurrent"] = ttnn.typecast(completed_state, state_dtype)
+        ttnn.deallocate(completed_state)
+        return output
 
     def _linear_attention_decode(self, hidden_states):
+        """Decode gated-delta attention with one same-input projection family."""
+        if not (self.policy.linear_packed_decode or self.policy.linear_outer_product):
+            return FunctionalDecoder._linear_attention_decode(self, hidden_states)
+
         key_heads = int(self.hf_config.linear_num_key_heads)
         value_heads = int(self.hf_config.linear_num_value_heads)
         key_dim = int(self.hf_config.linear_key_head_dim)
         value_dim = int(self.hf_config.linear_value_head_dim)
         key_width = key_heads * key_dim
         value_width = value_heads * value_dim
+        conv_width = 2 * key_width + value_width
+        packed_width = conv_width + value_width + 2 * value_heads
 
-        mixed = ttnn.linear(hidden_states, self.weights["in_qkv"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        z = ttnn.linear(hidden_states, self.weights["in_z"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        beta = ttnn.linear(hidden_states, self.weights["in_b"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        decay = ttnn.linear(hidden_states, self.weights["in_a"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.policy.linear_packed_decode:
+            packed = self._decode_linear(
+                hidden_states,
+                "linear_packed_decode",
+                k=self.hidden_size,
+                n=packed_width,
+                in0_block_w=self.policy.linear_packed_in0_block_w,
+                compute_kernel_config=self.linear_input_compute_kernel_config,
+            )
+            # Conv, reshape, and recurrent composite kernels currently require
+            # interleaved tensors; cross that boundary once after the packed
+            # projection instead of four times before four independent matmuls.
+            packed = ttnn.to_memory_config(packed, ttnn.DRAM_MEMORY_CONFIG)
+            mixed, z, beta, decay = ttnn.split(
+                packed,
+                (conv_width, value_width, value_heads, value_heads),
+                dim=-1,
+            )
+            ttnn.deallocate(packed)
+        else:
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            mixed = ttnn.linear(
+                hidden_states,
+                self.weights["in_qkv"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            z = ttnn.linear(
+                hidden_states,
+                self.weights["in_z"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            beta = ttnn.linear(
+                hidden_states,
+                self.weights["in_b"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            decay = ttnn.linear(
+                hidden_states,
+                self.weights["in_a"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         mixed = ttnn.permute(mixed, (0, 2, 3, 1))
         next_conv_state = ttnn.concat(
@@ -1105,13 +1212,36 @@ class OptimizedDecoder(LightweightModule):
         decay = ttnn.reshape(decay, (self.batch, value_heads, 1, 1))
         decay = ttnn.exp(decay)
 
-        recurrent = ttnn.multiply(self.caches["recurrent"], decay)
-        memory_value = ttnn.matmul(key, recurrent)
+        state_dtype = self.policy.linear_recurrent_state_dtype
+        recurrent_state = self.caches["recurrent"]
+        if state_dtype != ttnn.float32:
+            # The recurrent matmuls are BF16.  Make the reduced-precision
+            # storage boundary explicit and avoid relying on mixed FP32/BFP
+            # elementwise promotion rules.
+            recurrent_state = ttnn.typecast(recurrent_state, ttnn.bfloat16)
+            decay = ttnn.typecast(decay, ttnn.bfloat16)
+            beta = ttnn.typecast(beta, ttnn.bfloat16)
+        recurrent = ttnn.multiply(recurrent_state, decay)
+        memory_value = self._linear_recurrent_matmul(key, recurrent)
         delta = ttnn.multiply(ttnn.subtract(value, memory_value), beta)
-        update = ttnn.matmul(ttnn.transpose(key, -2, -1), delta)
+        key_transposed = ttnn.transpose(key, -2, -1)
+        if self.policy.linear_outer_product:
+            # This is a K=1 outer product.  Elementwise broadcast avoids the
+            # matmul's tile-padded reduction and is mathematically identical.
+            update = ttnn.multiply(
+                key_transposed,
+                delta,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            update = ttnn.matmul(key_transposed, delta)
         recurrent = ttnn.add(recurrent, update)
-        output = ttnn.matmul(query, recurrent)
-        ttnn.copy(recurrent, self.caches["recurrent"])
+        output = self._linear_recurrent_matmul(query, recurrent)
+        if state_dtype == ttnn.float32:
+            ttnn.copy(recurrent, self.caches["recurrent"])
+        else:
+            stored_recurrent = ttnn.typecast(recurrent, state_dtype)
+            ttnn.copy(stored_recurrent, self.caches["recurrent"])
 
         output = ttnn.rms_norm(
             output,
@@ -1123,159 +1253,89 @@ class OptimizedDecoder(LightweightModule):
         output = ttnn.multiply(output, ttnn.silu(z))
         output = ttnn.permute(output, (2, 0, 1, 3))
         output = ttnn.reshape(output, (1, 1, self.batch, value_width))
-        return ttnn.linear(output, self.weights["out_proj"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-    @staticmethod
-    def _l2_norm(tensor):
-        norm = ttnn.sum(ttnn.multiply(tensor, tensor), dim=-1, keepdim=True)
-        return ttnn.multiply(tensor, ttnn.rsqrt(ttnn.add(norm, 1e-6)))
-
-    def _full_attention_prefill(self, hidden_states, page_table, current_positions):
-        q, gate, k, v = self._full_attention_projections(hidden_states)
-
-        sequence = hidden_states.shape[2]
-        q = ttnn.reshape(q, (self.batch, sequence, self.num_heads, self.head_dim))
-        k = ttnn.reshape(k, (self.batch, sequence, self.num_kv_heads, self.head_dim))
-        v = ttnn.reshape(v, (self.batch, sequence, self.num_kv_heads, self.head_dim))
-        q = ttnn.permute(q, (0, 2, 1, 3))
-        k = ttnn.permute(k, (0, 2, 1, 3))
-        v = ttnn.permute(v, (0, 2, 1, 3))
-        q = self._per_head_norm_prefill(q, "q_norm")
-        k = self._per_head_norm_prefill(k, "k_norm")
-        q = self._partial_rope_prefill(q, current_positions)
-        k = self._partial_rope_prefill(k, current_positions)
-
-        ttnn.experimental.paged_fill_cache(
-            self.caches["key"],
-            ttnn.typecast(k, self.policy.cache_dtype),
-            page_table,
-            batch_idx_tensor=self.caches["batch_indices"],
-        )
-        ttnn.experimental.paged_fill_cache(
-            self.caches["value"],
-            ttnn.typecast(v, self.policy.cache_dtype),
-            page_table,
-            batch_idx_tensor=self.caches["batch_indices"],
-        )
-        if sequence <= 32768:
-            attention = ttnn.transformer.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                is_causal=True,
-                scale=self.head_dim**-0.5,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        if self.policy.linear_packed_decode:
+            return self._decode_linear(
+                output,
+                "linear_out_decode",
+                k=value_width,
+                n=self.hidden_size,
+                in0_block_w=self.policy.linear_out_in0_block_w,
+                compute_kernel_config=self.linear_output_compute_kernel_config,
             )
-        else:
-            # The ordinary SDPA path is square in sequence and has a 32K
-            # correctness/footprint ceiling.  Long prompts read K/V from the
-            # already-filled paged cache in bounded query chunks.  Deliberately
-            # leave program and compute-kernel configs at framework defaults.
-            chunks = []
-            start = 0
-            while start < sequence:
-                logical_chunk = min(32768, sequence - start)
-                q_chunk = ttnn.slice(
-                    q,
-                    (0, 0, start, 0),
-                    (self.batch, self.num_heads, start + logical_chunk, self.head_dim),
-                )
-                padding = (-logical_chunk) % 32
-                if padding:
-                    q_chunk = ttnn.pad(
-                        q_chunk,
-                        ((0, 0), (0, 0), (0, padding), (0, 0)),
-                        value=0.0,
-                    )
-                chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
-                    q_chunk,
-                    self.caches["key"],
-                    self.caches["value"],
-                    page_table,
-                    chunk_start_idx=start,
-                    scale=self.head_dim**-0.5,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                if padding:
-                    chunk = ttnn.slice(
-                        chunk,
-                        (0, 0, 0, 0),
-                        (self.batch, self.num_heads, logical_chunk, self.head_dim),
-                    )
-                chunks.append(chunk)
-                start += logical_chunk
-            attention = chunks[0] if len(chunks) == 1 else ttnn.concat(chunks, dim=2)
-        attention = ttnn.experimental.nlp_concat_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attention = ttnn.permute(attention, (1, 0, 2, 3))
-        attention = ttnn.multiply(attention, ttnn.sigmoid(gate))
         return ttnn.linear(
-            attention,
-            self.weights["o_proj"],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.attention_compute_kernel_config,
-        )
-
-    def _per_head_norm_prefill(self, tensor, weight_name):
-        shape = tensor.shape
-        flat = ttnn.reshape(
-            tensor,
-            (1, 1, shape[0] * shape[1] * shape[2], shape[3]),
-        )
-        flat = ttnn.rms_norm(
-            flat,
-            epsilon=self.eps,
-            weight=self.weights[weight_name],
+            output,
+            self.weights["out_proj"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return ttnn.reshape(flat, shape)
 
-    def _partial_rope_prefill(self, tensor, current_positions):
-        rotary_dim = int(self.head_dim * float(self.hf_config.partial_rotary_factor))
-        rotary = tensor[..., :rotary_dim]
-        passthrough = tensor[..., rotary_dim:]
-        cos = ttnn.embedding(current_positions, self.rope["cos"], layout=ttnn.TILE_LAYOUT)
-        sin = ttnn.embedding(current_positions, self.rope["sin"], layout=ttnn.TILE_LAYOUT)
-        cos = ttnn.transpose(ttnn.unsqueeze_to_4D(cos), 0, 1)
-        sin = ttnn.transpose(ttnn.unsqueeze_to_4D(sin), 0, 1)
-        heads = tensor.shape[1]
-        cos = ttnn.repeat(cos, ttnn.Shape([1, heads, 1, 1]))
-        sin = ttnn.repeat(sin, ttnn.Shape([1, heads, 1, 1]))
-        rotary = ttnn.add(
-            ttnn.multiply(rotary, cos),
-            ttnn.multiply(self._rotate_half(rotary), sin),
-        )
-        return ttnn.concat([rotary, passthrough], dim=-1)
+    def _linear_recurrent_matmul(self, left, right):
+        mode = self.policy.linear_recurrent_program
+        kwargs = {
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "compute_kernel_config": self.linear_recurrent_compute_kernel_config,
+            "dtype": ttnn.bfloat16,
+        }
+        if mode != "auto":
+            if mode == "grid2_n2":
+                grid = (2, 1)
+                block_w = 2
+                per_core_n = 2
+                subblock_w = 2
+            else:
+                grid = (4, 1)
+                block_w = int(mode.rsplit("w", 1)[1])
+                per_core_n = 1
+                subblock_w = 1
+            kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=grid,
+                in0_block_w=block_w,
+                out_subblock_h=1,
+                out_subblock_w=subblock_w,
+                per_core_M=1,
+                per_core_N=per_core_n,
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+        return ttnn.matmul(left, right, **kwargs)
 
     def _full_attention_decode(self, hidden_states, page_table, current_positions):
         cache_positions = ttnn.typecast(current_positions, ttnn.int32)
-        q, gate, k, v = self._full_attention_projections(hidden_states)
-
-        fused_qkv = ttnn.concat([q, k, v], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        q_width = self.num_heads * self.head_dim
+        kv_width = self.num_kv_heads * self.head_dim
+        packed = self._decode_linear(
+            hidden_states,
+            "qkv_gate_decode",
+            k=self.hidden_size,
+            n=2 * q_width + 2 * kv_width,
+            in0_block_w=(self.policy.qkv_decode_in0_block_w or self.policy.decode_in0_block_w),
+        )
+        qkv, gate = ttnn.split(packed, (q_width + 2 * kv_width, q_width), dim=-1)
+        ttnn.deallocate(packed)
+        # nlp_create_qkv_heads_decode interprets its packed Q/K/V axis as an
+        # interleaved row.  Passing the DRAM-matmul's width-sharded output is
+        # accepted by the API but silently assigns the wrong values to heads
+        # for dense real weights (the diagonal synthetic fixture masked it).
+        qkv = ttnn.to_memory_config(qkv, ttnn.L1_MEMORY_CONFIG)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
-            fused_qkv,
+            qkv,
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
             memory_config=self.decode_attention_memory_config,
         )
-
+        ttnn.deallocate(qkv)
         q = self._per_head_norm(q, "q_norm")
         k = self._per_head_norm(k, "k_norm")
         q = self._partial_rope_decode(q, current_positions)
         k = self._partial_rope_decode(k, current_positions)
-
         ttnn.experimental.paged_update_cache(
-            self.caches["key"],
-            k,
-            update_idxs_tensor=cache_positions,
-            page_table=page_table,
+            self.caches["key"], k, update_idxs_tensor=cache_positions, page_table=page_table
         )
         ttnn.experimental.paged_update_cache(
-            self.caches["value"],
-            v,
-            update_idxs_tensor=cache_positions,
-            page_table=page_table,
+            self.caches["value"], v, update_idxs_tensor=cache_positions, page_table=page_table
         )
-
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
         attention = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             self.caches["key"],
@@ -1283,110 +1343,263 @@ class OptimizedDecoder(LightweightModule):
             cur_pos_tensor=cache_positions,
             page_table_tensor=page_table,
             scale=self.head_dim**-0.5,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.decode_sdpa_program_config,
             compute_kernel_config=self.attention_compute_kernel_config,
+            # GQA decode currently rejects a sharded SDPA output.  Keep the
+            # explicit program config, then cross this narrow helper boundary.
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(q)
         attention = ttnn.to_memory_config(attention, self.decode_attention_memory_config)
         attention = ttnn.experimental.nlp_concat_heads_decode(attention, num_heads=self.num_heads)
-        attention = ttnn.to_memory_config(attention, ttnn.DRAM_MEMORY_CONFIG)
         attention = ttnn.multiply(attention, ttnn.sigmoid(gate))
-        if self.policy.advisor_seed:
-            attention = ttnn.to_memory_config(
-                attention,
-                self.advisor_input_memcfg[self.num_heads * self.head_dim],
-            )
-        attention = ttnn.linear(
+        ttnn.deallocate(gate)
+        attention = self._decode_linear(
             attention,
-            self.weights["o_proj_decode" if self.policy.advisor_seed else "o_proj"],
-            memory_config=(
-                self.advisor_output_memcfg[self.hidden_size] if self.policy.advisor_seed else ttnn.DRAM_MEMORY_CONFIG
-            ),
-            compute_kernel_config=self.attention_compute_kernel_config,
-            program_config=self.o_decode_program_config,
+            "o_proj_decode",
+            k=q_width,
+            n=self.hidden_size,
+            in0_block_w=self.policy.o_decode_in0_block_w,
         )
-        if self.policy.advisor_seed:
-            attention = ttnn.to_memory_config(attention, ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.reshape(
             attention,
             (1, 1, self.batch, self.hidden_size),
-            (1, 1, 32, self.hidden_size),
+            (1, 1, ttnn.TILE_SIZE, self.hidden_size),
         )
 
-    def _per_head_norm(self, tensor, weight_name):
-        tensor = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
-        shape = tensor.shape
-        flat = ttnn.reshape(tensor, (1, 1, shape[1] * shape[2], shape[3]))
-        flat = ttnn.rms_norm(
-            flat,
-            epsilon=self.eps,
-            weight=self.weights[weight_name],
+    def _full_attention_prefill(self, hidden_states, page_table, current_positions):
+        sequence = hidden_states.shape[2]
+        if sequence > 32768:
+            return self._full_attention_prefill_long(hidden_states, page_table, current_positions)
+        q_width = self.num_heads * self.head_dim
+        kv_width = self.num_kv_heads * self.head_dim
+        packed = self._prefill_linear(
+            hidden_states,
+            "qkv_gate_prefill",
+            k=self.hidden_size,
+            n=2 * q_width + 2 * kv_width,
+        )
+        qkv, gate = ttnn.split(packed, (q_width + 2 * kv_width, q_width), dim=-1)
+        q, k, v = ttnn.split(qkv, (q_width, kv_width, kv_width), dim=-1)
+        q = ttnn.permute(ttnn.reshape(q, (self.batch, sequence, self.num_heads, self.head_dim)), (0, 2, 1, 3))
+        k = ttnn.permute(ttnn.reshape(k, (self.batch, sequence, self.num_kv_heads, self.head_dim)), (0, 2, 1, 3))
+        v = ttnn.permute(ttnn.reshape(v, (self.batch, sequence, self.num_kv_heads, self.head_dim)), (0, 2, 1, 3))
+        q = self._partial_rope_prefill(self._per_head_norm_prefill(q, "q_norm"), current_positions)
+        k = self._partial_rope_prefill(self._per_head_norm_prefill(k, "k_norm"), current_positions)
+        cache_k = ttnn.typecast(k, self.policy.cache_dtype)
+        cache_v = ttnn.typecast(v, self.policy.cache_dtype)
+        ttnn.experimental.paged_fill_cache(
+            self.caches["key"], cache_k, page_table, batch_idx_tensor=self.caches["batch_indices"]
+        )
+        ttnn.experimental.paged_fill_cache(
+            self.caches["value"], cache_v, page_table, batch_idx_tensor=self.caches["batch_indices"]
+        )
+        attention = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=True,
+            scale=self.head_dim**-0.5,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
+                q_chunk_size=64,
+                k_chunk_size=64,
+            ),
+            compute_kernel_config=self.attention_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return ttnn.reshape(flat, shape)
-
-    @staticmethod
-    def _rotate_half(tensor):
-        half = tensor.shape[-1] // 2
-        return ttnn.concat([ttnn.neg(tensor[..., half:]), tensor[..., :half]], dim=-1)
-
-    def _partial_rope_decode(self, tensor, current_positions):
-        rotary_dim = int(self.head_dim * float(self.hf_config.partial_rotary_factor))
-        rotary = tensor[..., :rotary_dim]
-        passthrough = tensor[..., rotary_dim:]
-        cos = ttnn.embedding(current_positions, self.rope["cos"], layout=ttnn.TILE_LAYOUT)
-        sin = ttnn.embedding(current_positions, self.rope["sin"], layout=ttnn.TILE_LAYOUT)
-        cos = ttnn.unsqueeze_to_4D(cos)
-        sin = ttnn.unsqueeze_to_4D(sin)
-        cos = ttnn.transpose(cos, 1, 2)
-        sin = ttnn.transpose(sin, 1, 2)
-        cos = cos[:, : self.batch, :, :]
-        sin = sin[:, : self.batch, :, :]
-        heads = tensor.shape[2]
-        cos = ttnn.repeat(cos, ttnn.Shape([1, 1, heads, 1]))
-        sin = ttnn.repeat(sin, ttnn.Shape([1, 1, heads, 1]))
-        rotary = ttnn.add(
-            ttnn.multiply(rotary, cos),
-            ttnn.multiply(self._rotate_half(rotary), sin),
+        attention = ttnn.experimental.nlp_concat_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attention = ttnn.permute(attention, (1, 0, 2, 3))
+        attention = ttnn.multiply(attention, ttnn.sigmoid(gate))
+        return self._prefill_linear(
+            attention,
+            "o_proj_prefill",
+            k=q_width,
+            n=self.hidden_size,
         )
-        return ttnn.to_memory_config(
-            ttnn.concat([rotary, passthrough], dim=-1),
-            self.decode_attention_memory_config,
-        )
+
+    def _full_attention_prefill_long(self, hidden_states, page_table, current_positions):
+        """Memory-bounded paged attention for prompts above ordinary SDPA's limit."""
+        sequence = hidden_states.shape[2]
+        q_width = self.num_heads * self.head_dim
+        kv_width = self.num_kv_heads * self.head_dim
+        chunk_size = 32768
+        page_size = self.caches["key"].shape[2]
+
+        # Populate paged K/V first. Chunk boundaries are page-aligned, so a
+        # sliced page table maps each local fill directly to its global blocks.
+        start = 0
+        while start < sequence:
+            end = min(sequence, start + chunk_size)
+            logical_chunk = end - start
+            hidden_chunk = ttnn.slice(
+                hidden_states,
+                (0, 0, start, 0),
+                (1, self.batch, end, self.hidden_size),
+            )
+            position_chunk = ttnn.slice(
+                current_positions,
+                (0, start),
+                (self.batch, end),
+            )
+            page_chunk = ttnn.slice(
+                page_table,
+                (0, start // page_size),
+                (self.batch, math.ceil(end / page_size)),
+            )
+            k = self._prefill_linear(
+                hidden_chunk,
+                "k_prefill_long",
+                k=self.hidden_size,
+                n=kv_width,
+            )
+            k = ttnn.permute(
+                ttnn.reshape(
+                    k,
+                    (self.batch, logical_chunk, self.num_kv_heads, self.head_dim),
+                ),
+                (0, 2, 1, 3),
+            )
+            k = self._partial_rope_prefill(self._per_head_norm_prefill(k, "k_norm"), position_chunk)
+            k = ttnn.typecast(k, self.policy.cache_dtype)
+            v = self._prefill_linear(
+                hidden_chunk,
+                "v_prefill_long",
+                k=self.hidden_size,
+                n=kv_width,
+            )
+            v = ttnn.permute(
+                ttnn.reshape(
+                    v,
+                    (self.batch, logical_chunk, self.num_kv_heads, self.head_dim),
+                ),
+                (0, 2, 1, 3),
+            )
+            v = ttnn.typecast(v, self.policy.cache_dtype)
+            ttnn.experimental.paged_fill_cache(
+                self.caches["key"],
+                k,
+                page_chunk,
+                batch_idx_tensor=self.caches["batch_indices"],
+            )
+            ttnn.experimental.paged_fill_cache(
+                self.caches["value"],
+                v,
+                page_chunk,
+                batch_idx_tensor=self.caches["batch_indices"],
+            )
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            start = end
+
+        outputs = []
+        start = 0
+        while start < sequence:
+            end = min(sequence, start + chunk_size)
+            logical_chunk = end - start
+            hidden_chunk = ttnn.slice(
+                hidden_states,
+                (0, 0, start, 0),
+                (1, self.batch, end, self.hidden_size),
+            )
+            position_chunk = ttnn.slice(
+                current_positions,
+                (0, start),
+                (self.batch, end),
+            )
+            q = self._prefill_linear(
+                hidden_chunk,
+                "q_prefill_long",
+                k=self.hidden_size,
+                n=q_width,
+            )
+            q = ttnn.permute(
+                ttnn.reshape(
+                    q,
+                    (self.batch, logical_chunk, self.num_heads, self.head_dim),
+                ),
+                (0, 2, 1, 3),
+            )
+            q = self._partial_rope_prefill(self._per_head_norm_prefill(q, "q_norm"), position_chunk)
+            padding = (-logical_chunk) % ttnn.TILE_SIZE
+            if padding:
+                q = ttnn.pad(
+                    q,
+                    ((0, 0), (0, 0), (0, padding), (0, 0)),
+                    value=0.0,
+                )
+            attention = ttnn.transformer.chunked_scaled_dot_product_attention(
+                q,
+                self.caches["key"],
+                self.caches["value"],
+                page_table,
+                chunk_start_idx=start,
+                scale=self.head_dim**-0.5,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q)
+            if padding:
+                attention = ttnn.slice(
+                    attention,
+                    (0, 0, 0, 0),
+                    (self.batch, self.num_heads, logical_chunk, self.head_dim),
+                )
+            attention = ttnn.experimental.nlp_concat_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attention = ttnn.permute(attention, (1, 0, 2, 3))
+            gate = self._prefill_linear(
+                hidden_chunk,
+                "gate_prefill_long",
+                k=self.hidden_size,
+                n=q_width,
+            )
+            attention = ttnn.multiply(attention, ttnn.sigmoid(gate))
+            outputs.append(
+                self._prefill_linear(
+                    attention,
+                    "o_proj_prefill",
+                    k=q_width,
+                    n=self.hidden_size,
+                )
+            )
+            start = end
+        return outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2)
 
     def prefill_forward(self, *, hidden_states, page_table, current_positions):
-        """Run paged/stateful prefill for either configured decoder kind."""
         residual = hidden_states
         hidden_states = self._rms_norm(hidden_states, "input_norm")
         hidden_states = self._token_mixer_prefill(hidden_states, page_table, current_positions)
         hidden_states = ttnn.add(residual, hidden_states)
         residual = hidden_states
         hidden_states = self._rms_norm(hidden_states, "post_attention_norm")
-        hidden_states = self._mlp(hidden_states)
+        hidden_states = self._mlp_prefill(hidden_states)
         return ttnn.add(residual, hidden_states)
 
     def decode_forward(self, *, hidden_states, page_table, current_positions):
-        """Run one trace-safe decode step using device-resident mutable cache state."""
-        residual = hidden_states
-        hidden_states = self._rms_norm(hidden_states, "input_norm")
+        residual = ttnn.to_memory_config(hidden_states, self.decode_residual_memory_config)
+        hidden_states = self._rms_norm_decode(residual, "input_norm")
+        if self.layer_kind == "linear_attention" and not self.policy.linear_packed_decode:
+            # Gated-delta's stateful composite currently requires interleaved
+            # tensors at its conv/recurrent boundary.  The conversion is
+            # measured as part of the coherent candidate.
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = self._token_mixer_decode(hidden_states, page_table, current_positions)
-        hidden_states = ttnn.add(residual, hidden_states)
+        hidden_states = ttnn.to_memory_config(hidden_states, self.decode_residual_memory_config)
+        hidden_states = ttnn.add(residual, hidden_states, memory_config=self.decode_residual_memory_config)
         residual = hidden_states
-        hidden_states = self._rms_norm(hidden_states, "post_attention_norm")
-        hidden_states = self._mlp(hidden_states)
-        return ttnn.add(residual, hidden_states)
+        hidden_states = self._rms_norm_decode(hidden_states, "post_attention_norm")
+        hidden_states = self._mlp_decode(hidden_states)
+        return ttnn.add(residual, hidden_states, memory_config=self.decode_residual_memory_config)
 
-    def forward(self, *, hidden_states, page_table, current_positions, mode):
-        if mode == "prefill":
-            return self.prefill_forward(
-                hidden_states=hidden_states,
-                page_table=page_table,
-                current_positions=current_positions,
-            )
-        if mode == "decode":
-            return self.decode_forward(
-                hidden_states=hidden_states,
-                page_table=page_table,
-                current_positions=current_positions,
-            )
-        raise ValueError(f"mode must be 'prefill' or 'decode', got {mode!r}")
+
+__all__ = [
+    "ADVERTISED_CONTEXT",
+    "LINEAR_PREFILL_CHUNK_SIZE",
+    "MODEL_ID",
+    "MODEL_REVISION",
+    "OptimizationPolicy",
+    "OptimizedDecoder",
+    "POLICIES",
+    "REPRESENTATIVE_LAYERS",
+    "resolve_policy",
+]
