@@ -1,0 +1,62 @@
+# Pipeline-sweep MGD generator config (see gen_pipeline_sweep_mgds.py).
+#
+# Fully data-driven: add a shape by adding an entry under `shapes:` -- no code change needed.
+# Each shape defines the per-stage mesh geometry, the inter-stage ("loopback") ring link, the
+# stage counts to emit, and optional ASIC pinnings. The generator emits one MGD per stage count:
+#   sweep_<shape>_pipeline_<N>stage_mesh_graph_descriptor.textproto
+#
+# Fields per shape:
+#   device_topology.dims / dim_types  -- per-stage mesh geometry (ASICs/stage = product of dims).
+#   host_topology.dims                 -- how the stage's mesh is split across hosts.
+#   mesh_channels.count / policy       -- intra-mesh channel spec.
+#   loopback.channels / policy         -- inter-stage ring link width ("loopback size"). The ring
+#                                         closes (last stage -> stage 0). assign_z toggles
+#                                         assign_z_direction on each ring edge.
+#   stages                             -- list of stage counts to generate.
+#   pinnings.groups                    -- optional many-to-all ASIC pinning groups keyed by
+#                                         mesh_id_regex; any listed chip may map to any listed
+#                                         tray/asic position and the solver enforces a bijection.
+#
+# SC36 mock reference (36 hosts x 32 ASICs = 1152 ASICs). The largest ring per shape fills it:
+# 144 x 8 = 72 x 16 = 1152.
+
+shapes:
+  2x4:
+    device_topology:
+      dims: [4, 2]
+      dim_types: [RING, LINE]
+    host_topology:
+      dims: [1, 1]
+    mesh_channels: { count: 2, policy: RELAXED }
+    loopback: { channels: 8, policy: RELAXED, assign_z: false }
+    stages: [16, 32, 64, 80, 96, 112, 128, 144]
+
+  4x4:
+    device_topology:
+      dims: [4, 4]
+      dim_types: [RING, RING]
+    host_topology:
+      dims: [2, 1]
+    mesh_channels: { count: 2, policy: STRICT }
+    loopback: { channels: 8, policy: RELAXED, assign_z: false }
+    stages: [8, 16, 32, 40, 48, 56, 64, 72]
+    pinnings:
+      groups:
+        - name: even
+          mesh_id_regex: "[0-9]*[02468]"
+          chip_ids: [0, 1, 3, 12, 15]
+          positions:
+            - { tray_id: 1, asic_location: 3 }
+            - { tray_id: 1, asic_location: 7 }
+            - { tray_id: 2, asic_location: 3 }
+            - { tray_id: 3, asic_location: 3 }
+            - { tray_id: 4, asic_location: 3 }
+        - name: odd
+          mesh_id_regex: "[0-9]*[13579]"
+          chip_ids: [0, 1, 3, 12, 15]
+          positions:
+            - { tray_id: 1, asic_location: 2 }
+            - { tray_id: 1, asic_location: 6 }
+            - { tray_id: 2, asic_location: 2 }
+            - { tray_id: 3, asic_location: 2 }
+            - { tray_id: 4, asic_location: 2 }
