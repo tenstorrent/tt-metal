@@ -155,6 +155,21 @@ Numbered, dated, never renumbered. Each names what it rejected.
   dot-product noise floor, plus an fp64 arm proving the fold does not *degrade* accuracy
   — which is the claim D5 actually makes. Rejected alternative: keep the copy for the
   comfort of one bit-exact number in the log.
+- **D12 — 2026-07-30 — hand-roll the candidate softmax; do not call
+  `ttnn.softmax(dim=1)`.** `ttnn.softmax` reaches its attention-optimized kernel only
+  when reducing the last dim; the dim-1 fallback loses **~4 % of the softmax mass even
+  in fp32** (rel err 1.4e-2, row sums to 0.962), and neither `numeric_stable` nor
+  `fp32_dest_acc_en` moves it. The `max`/`exp`/`sum`/`div` chain measures 15–27× closer
+  and is needed anyway by `inter_block`, which must expose `m` and `Z`. One code path,
+  better numerics. Rejected alternative — the fused op for its lower launch count —
+  trades a measured 4 % magnitude error for 3 op launches on a bandwidth-bound op.
+- **D13 — 2026-07-30 — every device gate carries a magnitude check, never PCC alone.**
+  PCC is scale-invariant: weights summing to 0.96 scale the output by 0.96 and PCC stays
+  above 0.9999. D12's defect is exactly that shape, and the first cut of the rung-4 gate
+  passed all 8 configs while carrying it. Each device test now asserts a relative error
+  alongside PCC, and `Σα = 1` is promoted to a primary gate rather than a nicety.
+  Rejected alternative — inherit the analog's PCC-only gate unmodified — which is what
+  let the defect through.
 
 ---
 
@@ -197,6 +212,17 @@ blocks: **804·d batched vs 2004·d naive → 2.49×**.
 
 The batched form's dominant term is the `24d` write + `24d` read of partials (48 of
 96), so the group size is a perf-loop knob, not a fixed choice.
+
+**Phase 5 revises the 2.49× down for the composed form.** That figure assumes the
+weighted sum `Σ_s e[r,n,s]·v[n,s,:]` is computed once for all 24 read sites. It cannot
+be: the contraction is over the candidate axis *per token*, which is not a broadcast —
+it is an `N`-batched matmul `[N,R,S] × [N,S,d]`, and at `R=24, S≤8` both operands
+tile-pad to 32 for a **~19 % tile efficiency**. What *does* amortize with plain
+broadcasts is the reciprocal-RMS pass, one of the two passes over the sealed set. So the
+composed split buys roughly **1.3×**, not 2.49×; the remaining 1.9× is gated on whether
+that batched matmul beats 24 broadcast passes, which is a Phase-9 measurement. This
+strengthens the Phase-10 case: a fused kernel can hold `e` in L1 and contract over `s`
+without ever paying tile padding.
 
 A sealed snapshot's RMS never changes after sealing, so fold `rms_inv` for sealed
 candidates at **seal time**: the per-block pass then needs only dot products, and the
@@ -268,8 +294,11 @@ tests use `assert_with_pcc(expected, actual, pcc=0.9999)`
 | `test_fold_does_not_degrade_accuracy` | `d = 7168` | `err(folded) ≤ max(4·err(reference), 1e-5)` vs fp64 |
 | `test_block_split_matches_direct_form` | same, `R ∈ {1, 24}` | rel err ≤ 1e-5 vs the direct form |
 | `test_lifecycle_seal_schedule` | 93-layer walk, `Bk=12` | seals exactly at `{0,12,…,84}`; `S` ramps 0→8; 185 reads + output |
-| `test_attn_res_op` | `S ∈ {1,4,8}`, `d ∈ {256, 7168}` | PCC ≥ 0.9999 |
-| `test_attn_res_batched_vs_naive` | same | PCC ≥ 0.9999 against the naive TT form |
+| `test_forward_matches_torch_reference` | `S ∈ {0,1,4,8}`, `d ∈ {256, 7168}` | PCC ≥ 0.9999 **and** rel err ≤ 2e-2 (D13) |
+| `test_split_matches_forward_on_device` | same, `R ∈ {1, 24}` | PCC ≥ 0.9999 against the direct TT form |
+| `test_split_statistics_match_torch` | `S ∈ {1,8}` | rel err ≤ 2e-2 on `partial`, `shift`, `mass` |
+| `test_mixture_weights_are_row_stochastic` | `C ∈ {1,5,9}` | `\|Σα − 1\| ≤ 1e-2` |
+| `test_hand_rolled_softmax_beats_fused` | `C = 9`, fp32 | rel err no worse than `ttnn.softmax(dim=1)` (D12) |
 | `test_depth_fidelity` | 93 layers, random module outputs | **relative** gate, below |
 | `test_attn_res_dist_tp` | `(2,4)`, `S ∈ {4,8}` | PCC ≥ 0.9999 |
 | `test_attn_res_perf` | `T ∈ {640, 5120}`, `(8,1)` and `(2,4)` | no assertion; numbers transcribed here |
@@ -353,6 +382,49 @@ is exactly 1.0.
 more precise than the thing being gated. Both failed that check here, and both failure
 modes impersonated a real op bug — one dimension-dependent, one dtype-dependent.*
 
+### Phase 5 — a fused op that is worse than its parts, and a gate that could not see it
+
+**`ttnn.softmax(dim=1)` loses ~4 % of the softmax mass.** Measured on `[1,9,64,1]`
+against an fp64 reference:
+
+| path | dtype | rel err | row sums |
+|---|---|---|---|
+| `ttnn.softmax(dim=1)` | fp32 | 1.4e-2 | 0.962 … 1.0003 |
+| `ttnn.softmax(dim=1)` | bf16 | 1.9e-2 | 0.958 … 0.9999 |
+| `max`/`exp`/`sum`/`div` | fp32 | 5.2e-4 | 1.0002 … 1.0011 |
+| `max`/`exp`/`sum`/`div` | bf16 | 3.1e-3 | 0.9966 … 1.0034 |
+
+Unchanged by `numeric_stable=False` and by `fp32_dest_acc_en=True`. `ttnn.exp` alone is
+accurate to **6e-8** in fp32, so the deficit is the fallback reduction, not the
+exponential — the docstring's "attention-optimized kernels require … reducing on the
+last dimension" is the tell. Hence D12.
+
+**PCC could not see it.** The first cut of `forward` used the fused op and passed
+`PCC ≥ 0.9999` on all 8 `S × d` configs while carrying a 4 % magnitude error, because
+PCC is scale-invariant and lost softmax mass is *exactly* a scale error. What caught it
+was a side test comparing the two softmax paths to each other — not the gate. Hence D13:
+magnitude alongside PCC everywhere, and `Σα = 1` promoted to a primary gate.
+
+**PCC also cannot gate a constant reference.** At `S = 1` the `inter_block` mass is
+exactly 1.0 for every token, and `corrcoef` of a constant vector is `nan`. The
+`inter_block` statistics are gated on relative error instead. Measured, bf16, `d = 256`:
+`partial` 2.0e-3 … 6.9e-3, `shift` 5.4e-3 … 6.3e-3, `mass` 0 … 5.0e-3 — all consistent
+with bf16 storage at `2⁻⁸ = 3.9e-3` after a `d`-length reduction, against a 2e-2 gate.
+
+**The merge algebra is self-correcting about `Z`.** A biased mass appears in both the
+numerator and the denominator of `merge`, so it largely cancels — which is why the split
+form clears PCC 0.9999 even where `mass` carries 5e-3. Good for robustness, bad for
+diagnosis: gate the `inter_block` intermediates directly or a wrong `m` will hide inside
+a compensating rescale.
+
+**This box is Blackhole, not Wormhole** — pytest ids come back `blackhole-*`. Nothing in
+the op depends on it yet, but `WormholeComputeKernelConfig` is the wrong name to reach
+for reflexively, and the roofline constants in Phase 8 must be Blackhole's.
+
+*Lesson: a fused op is not automatically the more accurate one, and "fewer launches" is
+not a numerics argument. Measure the fused op against its own decomposition before
+preferring it — and never gate a normalized quantity with a scale-invariant metric.*
+
 ---
 
 ## Backlog
@@ -361,7 +433,9 @@ modes impersonated a real op bug — one dimension-dependent, one dtype-dependen
 - [ ] Phase 2 — delta analysis; `Missing/blocked ops` list.
 - [x] Phase 3 — `API_SPEC.md`.
 - [x] Phase 4 — `torch_functional/`, numeric ladder (D9, amended by D11).
-- [ ] Phase 5 — `tt/` composite, single device.
+- [x] Phase 5 — `tt/` composite, single device.
+- [ ] Measure the `N`-batched matmul `[N,R,S] × [N,S,d]` against 24 broadcast passes;
+      decides whether the split form's remaining ~1.9× is reachable in composed ops.
 - [ ] Phase 6 — device correctness + 93-layer depth harness.
 - [ ] Phase 7 — remove host fallbacks; `T=5120`.
 - [ ] Phase 8 — `DISTRIBUTION.md`, TP on `(2,4)`, `ROOFLINE.md`.
@@ -408,3 +482,42 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
 
   **NOT VALIDATED:** Anything on device — no `tt/` code exists yet. Depth compounding
   over 93 layers. Distribution. Real K3 weights. Decode.
+- **2026-07-30** — Phase 5 op-surface probe **PASS**: all 14 ttnn ops the D10 dim-1 form
+  needs exist with the right shapes and broadcast semantics on device 0, including all
+  three `ttnn.mul` broadcast patterns (`[1,C,N,d]` against `[1,1,1,d]`, `[1,C,N,1]`,
+  `[1,1,N,1]`) and `sum`/`max` on both dim 1 and dim 3 with `keepdim`. The flat dim-1
+  chain reproduced the torch reference at PCC 0.9999903, `max|Δ|` 7.8e-3, all-bf16.
+- **2026-07-30** — Phase 5 divergences from the frozen `API_SPEC.md` §5, all recorded
+  rather than edited into the spec:
+  1. **`block_residual = None` replaces `[1, 0, N, d]`.** ttnn has no zero-extent
+     dimension, so `S = 0` cannot be a real tensor the way it is in torch. `forward`
+     short-circuits to a clone — a fresh tensor, not the input, so the caller's
+     deallocation is uniform across both paths.
+  2. **`inter_block` / `merge` take and return Python lists**, one entry per read site,
+     not the stacked `[R, N, d]` of the torch signature. Stacking read sites on a tensor
+     axis buys nothing while the weighted sum is still a per-read broadcast pass.
+  3. **`input_memcfg`, `stats_memcfg`, `weight_cache_path`, `cache_name_prefix` are not
+     accepted yet.** They are Phase 8/9 knobs with nothing to configure while everything
+     is DRAM-interleaved and the only weights are 187 `[d]` vectors. `cluster_axis`,
+     `num_links` and `topology` *are* accepted and stored, so the distribution shape is
+     visible in the signature from the start.
+- **2026-07-30** — Phase 5 **PASS**: `tt/attn_res.py` — `forward` (direct form) and
+  `inter_block` / `merge` (the block-batched split). **28/28** in
+  `tests/test_tt_attn_res.py`, single device.
+  **Command:** `PYTHONPATH=$TT_METAL_HOME python_env/bin/python -m pytest
+  models/experimental/kimi_k3_attn_res/tests/test_tt_attn_res.py -q -p no:randomly`
+
+  **VALIDATED:** `forward` matches `torch_functional.attn_res` across
+  `S ∈ {0,1,4,8}` × `d ∈ {256,7168}` at PCC ≥ 0.9999 **and** rel err ≤ 2e-2.
+  `inter_block` + `merge` reproduces `forward` for every read site at
+  `R ∈ {1,24}` × `S ∈ {1,4,8}` × `d ∈ {256,7168}` — 24 reads is the real per-block count.
+  The `inter_block` statistics `partial`/`shift`/`mass` are gated individually so a wrong
+  `m` cannot hide in a compensating rescale. Mixture weights sum to 1 within 1e-2 at
+  `C ∈ {1,5,9}`. Values confirmed un-normalized on device by the scale-invariance probe.
+  A sharded stream is rejected rather than silently reduced per-shard.
+
+  **NOT VALIDATED:** Depth compounding over 93 layers — the `AttnResStream` lifecycle has
+  no device counterpart yet, so nothing has run more than one read deep. Production `T`;
+  every test here is `N = 64`. Any performance claim — no perf run, and the split form is
+  written for correctness, not traffic (see §The inter/intra-block split, Phase 5
+  revision). Distribution, real K3 weights, decode.
