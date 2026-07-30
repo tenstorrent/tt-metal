@@ -75,13 +75,16 @@ def summarize_generate_perf(
 def format_perf_line(metrics: dict[str, Any], *, prefix: str = "") -> str:
     """One-line human-readable summary of ``summarize_generate_perf`` output."""
     p = f"{prefix}" if prefix else ""
+    mode = metrics.get("decode_mode", "")
+    steady = metrics.get("steady_decode_frames", 0)
+    mode_s = f"  mode={mode} steady_fr={steady}" if mode else ""
     return (
         f"{p}prefill={metrics['prefill_s']:.3f}s ({metrics['prefill_tok_s']:.1f} tok/s)  "
         f"TTFT={metrics['ttft_s']:.3f}s  "
         f"decode={metrics['decode_tok_s']:.2f} tok/s ({metrics['ms_per_tok_steady']:.2f} ms/tok)  "
         f"e2e={metrics['e2e_s']:.3f}s  "
         f"ar_tokens={metrics['ar_tokens_generated']}  "
-        f"isl={metrics['prefill_tokens']}"
+        f"isl={metrics['prefill_tokens']}{mode_s}"
     )
 
 
