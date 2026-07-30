@@ -370,7 +370,7 @@ def run_sampling_generator(
     outputs = []
 
     try:
-        sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+        sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
         formatted = format_sampling_params(sampling_params, BATCH_SIZE)
         sg.reset_sampling_params(formatted)
 
