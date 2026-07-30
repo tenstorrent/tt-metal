@@ -83,8 +83,22 @@ void report_result(const string& target_name, string_view op, const string& cmd,
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
+    if (!ec) {
+        return;
+    }
+    // The link may already exist and already resolve to target -- e.g. a sibling
+    // process that inherited our FileRenamer::unique_id_ across fork() created it
+    // first. copy_file() reports file_exists when from and to are the same inode,
+    // so an equivalent existing link is success, not a failure.
+    std::error_code equivalent_ec;
+    if (std::filesystem::equivalent(target, link, equivalent_ec) && !equivalent_ec) {
+        return;
+    }
+    // Use the non-throwing overload: the throwing one turns a recoverable
+    // filesystem condition into a fatal "Failed to generate binaries" build error.
+    std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing, ec);
     if (ec) {
-        std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing);
+        TT_THROW("Failed to hard link or copy {} to {}: {}", target.string(), link.string(), ec.message());
     }
 }
 
