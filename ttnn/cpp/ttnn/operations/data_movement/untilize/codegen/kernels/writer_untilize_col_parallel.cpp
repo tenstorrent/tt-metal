@@ -15,6 +15,9 @@
 // CT args: [cb_out, full_stick_size, TensorAccessor...]
 // RT args: [dst_addr, num_sticks, offset_bytes, chunk_size_bytes, tiles_per_core, start_stick]
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -35,28 +38,34 @@ void kernel_main() {
     const uint32_t destination_page_size = dst_args.get_aligned_page_size();
     const auto d = TensorAccessor(dst_args, dst_addr, destination_page_size);
 
-    cb_wait_front(cb_out, tiles_per_core);
-    uint32_t l1_read_addr = get_read_ptr(cb_out);
+    Noc noc;
+    CircularBuffer out_cb(cb_out);
+
+    out_cb.wait_front(tiles_per_core);
+    uint32_t l1_read_offset = 0;
     uint32_t writes_pending = 0;
 
     for (uint32_t row = 0; row < num_sticks; ++row) {
-        uint64_t dst_noc_addr = get_noc_addr(start_stick + row, d);
-        dst_noc_addr += offset_bytes;
-        noc_async_write(l1_read_addr, dst_noc_addr, chunk_size);
-        l1_read_addr += chunk_size;
+        noc.async_write(
+            out_cb,
+            d,
+            chunk_size,
+            {.offset_bytes = l1_read_offset},
+            {.page_id = start_stick + row, .offset_bytes = offset_bytes});
+        l1_read_offset += chunk_size;
         writes_pending++;
 
         if (writes_pending == WRITE_BATCH) {
-            noc_async_writes_flushed();
+            noc.async_writes_flushed();
             writes_pending = 0;
         }
     }
 
-    // ``noc_async_writes_flushed`` only drains the command queue; it does not
+    // ``noc.async_writes_flushed`` only drains the command queue; it does not
     // prove the NOC has finished reading this CB page.  Always fence before the
     // pop, including the exact-multiple-of-WRITE_BATCH case where
     // writes_pending is zero.
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 
-    cb_pop_front(cb_out, tiles_per_core);
+    out_cb.pop_front(tiles_per_core);
 }
