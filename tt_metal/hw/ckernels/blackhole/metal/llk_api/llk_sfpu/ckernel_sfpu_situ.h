@@ -14,9 +14,9 @@
 namespace ckernel::sfpu {
 
 // SiTU, the two halves of Moonshot's SituAndMul activation:
-//   soft_clamp(x) = beta * tanh(x / beta)                 -- the up half
+//   softcap(x) = beta * tanh(x / beta)                 -- the up half
 //   situ_gate(x)  = beta * tanh(x / beta) * sigmoid(x)    -- the gate half
-// The full activation is situ_gate(gate) * soft_clamp(up), the product being an
+// The full activation is situ_gate(gate) * softcap(up), the product being an
 // ordinary elementwise multiply outside these ops. Kimi K3 uses beta 4 for the
 // gate half and 25 for the up half, but nothing here is specific to those.
 //
@@ -80,19 +80,19 @@ sfpi_inline sfpi::vFloat _situ_sigmoid_(sfpi::vFloat x) {
 // to the polynomial costs ~2.3e-3 relative, below both a bf16 pack and the ~4e-3
 // the alternative (a cheaper sigmoid exp) would have cost. Callers needing
 // fp32-grade tanh should use tanh_tile.
-sfpi_inline sfpi::vFloat _situ_soft_clamp_(sfpi::vFloat x, sfpi::vFloat beta, sfpi::vFloat inv_beta) {
+sfpi_inline sfpi::vFloat _situ_softcap_(sfpi::vFloat x, sfpi::vFloat beta, sfpi::vFloat inv_beta) {
     return _sfpu_tanh_polynomial_(x * inv_beta) * beta;
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_soft_clamp(std::uint32_t param0, std::uint32_t param1) {
+inline void calculate_softcap(std::uint32_t param0, std::uint32_t param1) {
     sfpi::vFloat beta = Converter::as_float(param0);
     sfpi::vFloat inv_beta = Converter::as_float(param1);
 
     for (int d = 0; d < ITERATIONS; d++) {
         // Round once, after the beta rescale -- rounding tanh first would discard
         // bits that the multiply by beta then amplifies.
-        sfpi::vFloat result = _situ_soft_clamp_(sfpi::dst_reg[0], beta, inv_beta);
+        sfpi::vFloat result = _situ_softcap_(sfpi::dst_reg[0], beta, inv_beta);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
@@ -102,7 +102,7 @@ inline void calculate_soft_clamp(std::uint32_t param0, std::uint32_t param1) {
     }
 }
 
-// The gate half. sigmoid takes the RAW x, not the soft-clamped value.
+// The gate half. sigmoid takes the RAW x, not the capped value.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_situ_gate(std::uint32_t param0, std::uint32_t param1) {
     sfpi::vFloat beta = Converter::as_float(param0);
@@ -111,7 +111,7 @@ inline void calculate_situ_gate(std::uint32_t param0, std::uint32_t param1) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        sfpi::vFloat result = _situ_soft_clamp_(x, beta, inv_beta) * _situ_sigmoid_<is_fp32_dest_acc_en>(x);
+        sfpi::vFloat result = _situ_softcap_(x, beta, inv_beta) * _situ_sigmoid_<is_fp32_dest_acc_en>(x);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }

@@ -60,14 +60,14 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     for (const auto& op : args.op_chain) {
-        if (op.type() == operations::unary::UnaryOpType::SOFT_CLAMP ||
+        if (op.type() == operations::unary::UnaryOpType::SOFTCAP ||
             op.type() == operations::unary::UnaryOpType::SITU_GATE) {
             // ckernel_sfpu_situ.h and the SfpuType registration it needs exist only
             // under hw/ckernels/blackhole. Without this the kernel reaches JIT and
             // dies on a missing header, which points nowhere useful.
             TT_FATAL(
                 input_tensor.device()->arch() == tt::ARCH::BLACKHOLE,
-                "Unary: SOFT_CLAMP and SITU_GATE are implemented for Blackhole only, got arch {}",
+                "Unary: SOFTCAP and SITU_GATE are implemented for Blackhole only, got arch {}",
                 input_tensor.device()->arch());
             break;
         }

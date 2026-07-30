@@ -135,7 +135,7 @@ enum class UnaryOpType {
     LGAMMA,
     DIGAMMA,
     POLYGAMMA,
-    SOFT_CLAMP,
+    SOFTCAP,
     SITU_GATE,
 };
 

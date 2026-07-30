@@ -102,7 +102,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
-        case UnaryOpType::SOFT_CLAMP:
+        case UnaryOpType::SOFTCAP:
         case UnaryOpType::SITU_GATE: return "SFPU_OP_SITU_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
@@ -618,11 +618,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(1.0f / param0))};
         // Both SiTU halves take beta with 1/beta precomputed here, so the kernel
         // never divides.
-        case UnaryOpType::SOFT_CLAMP:
+        case UnaryOpType::SOFTCAP:
             return {
-                "soft_clamp_tile_init();",
+                "softcap_tile_init();",
                 fmt::format(
-                    "soft_clamp_tile({}, {:#x}u, {:#x}u);",
+                    "softcap_tile({}, {:#x}u, {:#x}u);",
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0))};
