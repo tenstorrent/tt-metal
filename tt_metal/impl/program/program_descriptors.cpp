@@ -12,8 +12,8 @@
 #include "tt_stl/overloaded.hpp"
 #include <tt_stl/reflection.hpp>
 
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
 namespace tt::tt_metal {
 

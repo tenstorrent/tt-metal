@@ -17,8 +17,8 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 
 #include <tt-metalium/constants.hpp>

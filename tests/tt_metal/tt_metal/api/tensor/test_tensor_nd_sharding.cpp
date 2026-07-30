@@ -30,11 +30,11 @@
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/tile.hpp>
 
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -42,9 +42,9 @@
 #include <numeric>
 #include <tuple>
 
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 
