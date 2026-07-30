@@ -95,7 +95,7 @@ KernelHandle CreateKernelFromString(
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, uint16_t>;
 // Metal 2.0: semaphore accessor handle -> {semaphore id, host-baked physical scope}.
 // The scope is resolved by the host (ResolveSemaphoreScope) and baked into the kernel via the
-// emitted SemAccessor<id, scope> token so the kernel's Semaphore picks the mechanism via CTAD.
+// emitted SemaphoreBindingToken<id, scope> token so the kernel's Semaphore picks the mechanism via CTAD.
 struct SemaphoreBindingHandle {
     uint16_t id = 0;
     SemScope scope = SemScope::LOCAL_NONATOMIC;
