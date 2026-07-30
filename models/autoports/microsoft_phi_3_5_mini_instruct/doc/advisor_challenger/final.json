@@ -1,0 +1,85 @@
+{
+  "changed": true,
+  "incumbent_ms": 0.786969,
+  "final_ms": 0.746062,
+  "noise_floor_ms": 0.001121,
+  "delta_ms": -0.040907,
+  "delta_pct": -5.198,
+  "decode_batch": 32,
+  "best_single_ms": 0.746191,
+  "best_set": [
+    "rope_l1_chain",
+    "down_in0_block_w_32"
+  ],
+  "winning_config": {
+    "advisor_rope_l1_chain": true,
+    "down_in0_block_w": 32,
+    "attention_weight_dtype": "BFLOAT4_B",
+    "gate_up_weight_dtype": "BFLOAT4_B",
+    "down_weight_dtype": "BFLOAT4_B",
+    "attention_math_fidelity": "LoFi",
+    "mlp_math_fidelity": "LoFi"
+  },
+  "oracle": "real Phi-3.5 layer-0 weights with recorded target activations and nonzero reference-filled cache, PCC threshold 0.995",
+  "oracle_passed": true,
+  "oracle_pcc": 0.998920273522604,
+  "combination": {
+    "measured_sets": [
+      {
+        "set": [
+          "incumbent"
+        ],
+        "measured_ms": 0.786969,
+        "oracle_passed": true
+      },
+      {
+        "set": [
+          "rope_l1_chain"
+        ],
+        "measured_ms": 0.746191,
+        "oracle_passed": true
+      },
+      {
+        "set": [
+          "down_in0_block_w_32"
+        ],
+        "measured_ms": 0.78699,
+        "oracle_passed": true
+      },
+      {
+        "set": [
+          "rope_l1_chain",
+          "down_in0_block_w_32"
+        ],
+        "measured_ms": 0.746062,
+        "oracle_passed": true
+      }
+    ],
+    "best_set": [
+      "rope_l1_chain",
+      "down_in0_block_w_32"
+    ],
+    "note": "The pairwise set is 0.000129 ms faster than RoPE alone, inside the incumbent noise floor, but it is the lowest measured set. Ties to the frozen incumbent still go to the incumbent."
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial post-incumbent batch-32 dense-layer capture",
+      "capture_count_by_layer_kind": {
+        "dense": 1
+      },
+      "ranked_from": "tracy/incumbent_ops.csv",
+      "result": "RoPE L1 chain won; down-width 32 tied the incumbent as a single chain."
+    },
+    {
+      "iteration": 2,
+      "trigger": "apply the best measured pairwise set and re-profile before stopping",
+      "capture_count_by_layer_kind": {
+        "dense": 1
+      },
+      "recaptured": false,
+      "reranked_from": "tracy/final_ops.csv",
+      "result": "Fresh profile confirms the shipped graph; no remaining material uncaptured advice."
+    }
+  ]
+}

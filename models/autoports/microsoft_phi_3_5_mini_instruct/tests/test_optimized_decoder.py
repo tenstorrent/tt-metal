@@ -51,9 +51,11 @@ def test_optimized_path_and_policy_contract():
     assert policy.attention_math_fidelity == ttnn.MathFidelity.LoFi
     assert policy.mlp_math_fidelity == ttnn.MathFidelity.LoFi
     assert policy.decode_core_grid == (8, 1)
+    assert policy.down_in0_block_w == 32
     assert policy.fused_paged_cache_update
     assert not policy.explicit_decode_sdpa
     assert not policy.fused_rope
+    assert policy.advisor_rope_l1_chain
     assert not policy.fused_prefill_rope
     assert policy.prefill_qkv_in0_block_w == 2
     assert policy.prefill_gate_up_in0_block_w == 2

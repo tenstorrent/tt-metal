@@ -1,0 +1,13 @@
+{
+  "layer_kind": "dense",
+  "layers_of_kind": 32,
+  "total_layers": 32,
+  "measured_window_us": 0.0,
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, NOT per-op",
+  "dram_sharded_considered": 4,
+  "dram_sharded_advised": 4,
+  "note": "Measure each material CHAIN as one unit and record its measured_ms; the gate refuses any chain left pending, and refuses a set of same-chain rows dropped while their sum clears the threshold. Advisor GEOMETRY is not evidence -- derive your own, or sweep its value in both directions.",
+  "chains": [],
+  "disagreements": []
+}

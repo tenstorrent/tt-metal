@@ -128,6 +128,12 @@ def _policy():
         "sharded_packed_split": replace(base, gate_up_split_interleaved=False),
         "default_sdpa": replace(base, explicit_decode_sdpa=False),
         "manual_rope": replace(base, fused_rope=False),
+        "advisor_rope_l1_chain": replace(base, advisor_rope_l1_chain=True),
+        "advisor_rope_l1_down32": replace(
+            base,
+            advisor_rope_l1_chain=True,
+            down_in0_block_w=32,
+        ),
         "phase_split_prefill_rope": replace(base, fused_prefill_rope=True),
         "prefill_b2_default": replace(
             base,

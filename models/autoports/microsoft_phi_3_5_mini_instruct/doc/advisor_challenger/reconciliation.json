@@ -1,0 +1,84 @@
+{
+  "layer_kind": "dense",
+  "layers_of_kind": 32,
+  "total_layers": 32,
+  "measured_window_us": 699.814,
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, NOT per-op",
+  "source_perf_report": "tracy/incumbent_ops.csv",
+  "reconcile_command_ran": true,
+  "reconcile_parser_compatibility": {
+    "stock_output": "reconciliation_iteration_2.json",
+    "issue": "The stock script does not parse the current #ttnn_layout MLIR form or tt-perf-report's Device Time column.",
+    "correction": "Chains and shares below were reconciled from the same final_ir.mlir and incumbent_ops.csv."
+  },
+  "dram_sharded_considered": 4,
+  "dram_sharded_advised": 4,
+  "chains": [
+    {
+      "chain": "rope",
+      "ops": [
+        "embedding/transpose/manual rotate-half Q chain",
+        "embedding/transpose/manual rotate-half K chain"
+      ],
+      "summed_window_share_pct": 26.226,
+      "verdict": "kept",
+      "measured_ms": 0.746191,
+      "oracle": "real layer-0 weights, recorded target activations and nonzero reference-filled cache; PCC >= 0.995",
+      "oracle_passed": true,
+      "oracle_pcc": 0.9989930042363637,
+      "perf_report": "tracy/rope_l1_ops.csv",
+      "reason": "Keeping the manual RoPE chain in L1 with legal interleaved half-slice boundaries beats the frozen incumbent by 0.040778 ms."
+    },
+    {
+      "chain": "mlp_down_program_config",
+      "ops": [
+        "down projection in0_block_w 16 -> 32"
+      ],
+      "summed_window_share_pct": 6.777,
+      "verdict": "rejected",
+      "measured_ms": 0.78699,
+      "oracle": "real layer-0 weights, recorded target activations and nonzero reference-filled cache; PCC >= 0.995",
+      "oracle_passed": true,
+      "oracle_pcc": 0.998920273522604,
+      "reason": "0.000021 ms slower than the incumbent and inside the 0.001121 ms noise floor; the incumbent wins this single-chain tie."
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "manual_rope_qk_chain",
+      "chain": "rope",
+      "advised": {
+        "memory": "l1",
+        "layout": "height_sharded",
+        "note": "advisor geometry used only as a legal family; runtime geometry was derived and measured"
+      },
+      "shipped": {
+        "memory": "dram",
+        "layout": "interleaved"
+      },
+      "device_us": 183.533,
+      "window_share_pct": 26.226,
+      "verdict": "kept",
+      "measured_ms": 0.746191,
+      "perf_report": "tracy/rope_l1_ops.csv",
+      "oracle": "real layer-0 recorded-cache PCC 0.998993 >= 0.995"
+    },
+    {
+      "op": "down_projection_in0_block_w",
+      "chain": "mlp_down_program_config",
+      "advised": {
+        "in0_block_w": 32
+      },
+      "shipped": {
+        "in0_block_w": 16,
+        "dram_sharded": true
+      },
+      "device_us": 47.428,
+      "window_share_pct": 6.777,
+      "verdict": "rejected",
+      "measured_ms": 0.78699,
+      "oracle": "real layer-0 recorded-cache PCC 0.998920 >= 0.995"
+    }
+  ]
+}

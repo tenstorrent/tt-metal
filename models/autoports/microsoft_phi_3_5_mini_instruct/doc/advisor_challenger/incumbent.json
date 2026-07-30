@@ -1,0 +1,45 @@
+{
+  "cell_tag": "challenger-nofuse-noadvise/microsoft_phi_3_5_mini_instruct",
+  "commit": "198bba7eb5a",
+  "harness": "models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0]",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "repeats_ms": [
+    0.78809,
+    0.787479,
+    0.786969
+  ],
+  "incumbent_ms": 0.786969,
+  "noise_floor_ms": 0.001121,
+  "measured_at": "2026-07-30T18:56:26Z",
+  "oracle": "real Phi-3.5 layer-0 weights and recorded target activations/cache prefixes; PCC >= 0.995",
+  "oracle_pcc": 0.9989930042363637,
+  "shipped_policy_source": "doc/optimized_decoder/tracy_final/decode_b32_perf_report.csv and doc/optimized_decoder/README.md selected cumulative path",
+  "shipped_policy": {
+    "attention_weight_dtype": "BFLOAT4_B",
+    "gate_up_weight_dtype": "BFLOAT4_B",
+    "down_weight_dtype": "BFLOAT4_B",
+    "kv_cache_dtype": "BFLOAT8_B",
+    "attention_math_fidelity": "LoFi",
+    "mlp_math_fidelity": "LoFi",
+    "decode_core_grid": [
+      8,
+      1
+    ],
+    "qkv_in0_block_w": 12,
+    "o_proj_in0_block_w": 12,
+    "gate_up_in0_block_w": 6,
+    "down_in0_block_w": 16,
+    "gate_up_split_interleaved": true,
+    "separate_gate_up_projections": false,
+    "fused_paged_cache_update": true,
+    "explicit_decode_sdpa": false,
+    "fused_rope": false
+  },
+  "shipped_weight_dtypes": {
+    "qkv": "BFLOAT4_B",
+    "o_proj": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B"
+  }
+}
