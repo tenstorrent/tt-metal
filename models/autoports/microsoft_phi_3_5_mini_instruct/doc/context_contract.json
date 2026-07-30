@@ -1,0 +1,84 @@
+{
+  "model": "microsoft/Phi-3.5-mini-instruct",
+  "hf_advertised_context": 131072,
+  "current_supported_context": 131072,
+  "functional_decoder": {
+    "prefill_contract_max_context": 131072,
+    "prefill_tested_contexts": [
+      31,
+      32,
+      33,
+      63,
+      64,
+      65,
+      32769,
+      131071,
+      131072
+    ],
+    "decode_contract_max_context": 131072,
+    "decode_tested_contexts": [
+      34,
+      131072
+    ],
+    "decode_trace_batches": [
+      1,
+      32
+    ],
+    "decode_trace_correctness_positions": [
+      33,
+      4096
+    ],
+    "decode_performance_context": 128,
+    "page_size": 32,
+    "capability_reduction": null
+  },
+  "optimized_decoder": {
+    "prefill_contract_max_context": 131072,
+    "prefill_tested_contexts": [
+      31,
+      32,
+      33,
+      63,
+      64,
+      65,
+      32769,
+      131071,
+      131072
+    ],
+    "decode_contract_max_context": 131072,
+    "decode_tested_contexts": [
+      34,
+      131072
+    ],
+    "decode_trace_batches": [
+      1,
+      32
+    ],
+    "decode_trace_correctness_positions": [
+      33,
+      127,
+      131071
+    ],
+    "decode_performance_context": 128,
+    "page_size": 32,
+    "kv_cache_dtype": "BFLOAT8_B",
+    "kv_cache_layout": "DRAM interleaved paged",
+    "rope_table_dtype": "BFLOAT16",
+    "rope_table_storage_bytes": 100663296,
+    "decode_rope_duplicate_storage_bytes": 0,
+    "capability_reduction": null
+  },
+  "notes": [
+    "Both the longest non-aligned prefill length and the exact advertised limit are tested.",
+    "Decode at current position 131071 validates a logical context of 131072.",
+    "Batch 32 trace validation uses context 128; a batch-32 full-context KV cache would require 48 GiB for one BF16 layer and is not part of this single-device functional contract.",
+    "current_supported_context added post-stage: the checker reads a top-level key and the stage recorded the value only under functional_decoder.{prefill,decode}_contract_max_context. Value is min(prefill,decode) contract max = 131072, equal to the HF advertised context, with capability_reduction None -- no capability claim was changed.",
+    "The optimized decoder preserves the 131072-token contract. Its BFP8 paged KV cache uses less storage than the functional BF16 cache, so optimization does not reduce advertised capacity.",
+    "Optimized prefill accepts non-aligned logical lengths and internally pads/chunks only device work. The 131071-token test proves the public API has no seq_len modulo chunk restriction.",
+    "Optimized multi-user prefill is tested at batch 2 and logical length 33, where the physical M grid must account for independent per-user tile padding.",
+    "Optimized batch-32 decode is tested with varied positions and a nonzero paged cache, proving cache consumption rather than only zero-state shape validity.",
+    "The final manual-RoPE path shares four row-major BF16 short/long cosine/sine tables between prefill and decode (100663296 bytes total). The rejected fused candidates' duplicate decode tables and phase-specific QKV weights are not allocated, so the optimized context capability remains 131072.",
+    "A phase-specific fused-prefill/manual-decode candidate was tested with canonical-cache restoration. It preserved prefill and cache-consuming decode PCC at batches 1 and 32 but regressed warmed prefill, so it remains opt-in and does not change the default allocation or context contract.",
+    "At max context the opt-in phase-specific candidate adds 116590592 persistent bytes per decoder instance: 100663296 bytes of pair-basis BF16 tables, a 15925248-byte BFP4 QKV copy, and a 2048-byte transform. Its total table storage is 201326592 bytes; none of this candidate-only allocation is present in the selected default."
+  ]
+}
