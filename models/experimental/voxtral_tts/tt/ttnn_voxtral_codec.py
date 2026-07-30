@@ -69,7 +69,7 @@ LayerScale (~0.01) and there are only 8 attention ops, so it does not transfer.
 
 === PERFORMANCE (warm, N150, defaults) ===
 43.8 ms for 5.1 s of audio (RTF 0.0086, 117x real-time), 155 ms for 37.5 s (242x), 539 ms for
-120 s (223x). Upstream report RTF 0.103 for their WHOLE pipeline on an H200, so this block is
+120 s (222x). Upstream report RTF 0.103 for their WHOLE pipeline on an H200, so this block is
 ~4-8% of the end-to-end budget. It is NOT where the end-to-end answer gets decided -- Block 1 is
 (87% of the parameters, 12.5 sequential steps per second of audio).
 
@@ -78,9 +78,10 @@ LayerScale (~0.01) and there are only 8 attention ops, so it does not transfer.
   2. Chunked windowed attention (_attention), slab 512: O(S^2) -> O(S*slab). At S=12000, warm
      892 -> 497 ms, cold 10580 -> 1178 ms, mask 2304 MB -> 4.2 MB. EXACT, not approximate.
   3. Uniform slab-sized chunks: one cached bias per window, and one attention shape for the
-     process lifetime. Bias cache 23 tensors/53 MB -> 5/21 MB, stable across lengths.
+     process lifetime. Bias cache 23 tensors/53 MB -> 6/18.1 MB, and it stops growing with
+     utterance length (measured keys: (128,2) (256,4) (512,2) (512,4) (512,8) (512,16)).
   4. Conv length bucketing (BUCKET): on a stream of 12 distinct lengths, 120.9 s -> 1.66 s (73x).
-  5. Hoisted conv weight preparation (_prepared): 2.4x at short lengths (112.8 -> 43.7 ms at
+  5. Hoisted conv weight preparation (_prepared): 2.6x at short lengths (112.8 -> 43.7 ms at
      T=128); host share of wall time 88% -> 24%.
   6. Content-deduplicated prepared weights (_prepared): 730 MB -> 98 MB, bit-identical.
 
@@ -111,7 +112,7 @@ LayerScale (~0.01) and there are only 8 attention ops, so it does not transfer.
 Prepared conv weights are cached and deduplicated by content: 8 distinct layouts across all 5
 convs and all 12 buckets, so 98 MB rather than the 730 MB that keying by length alone produced
 (0.8% of an N150's DRAM instead of 6.5%). Plus 60.8 MB of host copies, kept so a new length can
-still be prepared, and 21 MB of attention bias.
+still be prepared, and 18.1 MB of attention bias (6 tensors).
 
 Validate against the reference (per-stage PCC bisect + the default bucketed path):
     TT_METAL_HOME=<repo> PYTHONPATH=<repo> python models/experimental/voxtral_tts/tt/ttnn_voxtral_codec.py
@@ -205,7 +206,7 @@ class TtVoxtralCodecDecoder:
         dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         vec = lambda t: dev(t.reshape(1, 1, -1))  # [C] -> [1,1,C] so it broadcasts over length
         lin = lambda t: dev(t.t())  # torch Linear [out,in] -> ttnn.linear wants [in,out]
-        host = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype)  # conv weights, see below
+        host = lambda t: ttnn.from_torch(t.contiguous(), dtype=weight_dtype)  # conv weights stay on host
 
         self.semantic_host = w["semantic_embedding"].float()  # host gather; see _quantizer_host
 
@@ -213,8 +214,8 @@ class TtVoxtralCodecDecoder:
         # Weights stay on HOST here and are prepared on first use by `_prepared`, which also
         # deduplicates them -- see that method for the layout table and the memory numbers.
         # WHY at all: ttnn.conv1d transforms and re-uploads its weights INSIDE the op, so without
-        # this it redid that work for all 5 convs on EVERY call. Hoisting it out was worth 2.6x at
-        # T=128 (112.8 -> 43.7 ms) and cut the host share of wall time from 88% to 24%.
+        # this it redid that work for all 5 convs on EVERY call -- see OPTIMIZATIONS #5 for what
+        # hoisting it was worth. 60.8 MB of host copies, kept so a new length can still be prepared.
         self.conv_host = {
             "in": host(w["decoder_blocks.0.conv.weight"].unsqueeze(2)),      # [1024,292,1,3]
             "out": host(w["output_proj.conv.weight"].unsqueeze(2)),          # [240,1024,1,7]
