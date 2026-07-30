@@ -13,6 +13,11 @@ from ttml.modules import RunMode
 
 
 class GroupedQueryAttentionCompositeKV(GroupedQueryAttention):
+    """Extends GroupQueryAttention. Swaps stock SDPA for scaled_dot_product_attention_composite
+    in both forward_no_kv and forward_kv. Needed because the completer emits non-broadcast masks
+    ((B, 1, S, S)) that only the composite kernel accepts, and to make the decode path
+    (KV-cache slice -> attention) actually work."""
+
     def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         q = self.q_linear(input)
         kv = self.kv_linear(input)
@@ -93,6 +98,13 @@ class LlamaBlockCompositeKV(LlamaBlock):
 
 
 class LlamaCompositeKV(Llama):
+    """Extends Llama for 2 reasons:
+    1. Patches each block's .attention in place with the composite variant (so the full model
+       uses composite SDPA end-to-end).
+    2. Adds weights_ref_hf_dict() -- an HF-keyed export of live ttml ttnn.Tensor handles, shaped
+       for tt-transformers' Transformer.update_weights(...). This is the ttml->ttt bridge format
+       the remote-rollout weight sync depends on, and it doesn't exist upstream."""
+
     def __init__(self, config):
         super().__init__(config)
         self.create_name("Llama")
