@@ -485,6 +485,15 @@ def is_invalid_quasar_sfpu_format_combination(
     ):
         return True
 
+    # Quasar SFPU no use of input of 16bit to have 32bit dest (dest_acc=Yes) when output is 16bit
+    if (
+        not in_fmt.is_32_bit()
+        and not out_fmt.is_32_bit()
+        and dest_acc == DestAccumulation.Yes
+        and unpack_to_dest == True
+    ):
+        return True
+
     # Sub-32-bit integer input cannot use a 32-bit dest through the FPU datacopy: the packer input
     # format must stay at the narrow width (UInt16 collapses to Int16). Mirrors the
     # data_format_inference guard, which only rejects this on the non-unpack-to-Dest path — so a
