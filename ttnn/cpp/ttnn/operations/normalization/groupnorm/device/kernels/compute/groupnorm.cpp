@@ -302,7 +302,7 @@ void kernel_main() {
     constexpr uint32_t out_block_h_last = extra_out_block ? residual % out_block_h_normal : out_block_h_normal;
     constexpr uint32_t out_block_hw_last = out_block_h_last * block_w;
     constexpr uint32_t cb_ex_external_bytes_required =
-        num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes;
+        num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes;
     constexpr uint32_t cb_ex_external_tiles_required =
         (cb_ex_external_bytes_required + single_tile_size_bytes - 1) / single_tile_size_bytes;
 
