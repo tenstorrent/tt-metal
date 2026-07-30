@@ -29,7 +29,6 @@ add_subdirectory(matmul)
 add_subdirectory(matmul_decode)
 add_subdirectory(quasar)
 add_subdirectory(reduction)
-add_subdirectory(matmul_decode)
 
 # metalium-developers-sdpa
 add_subdirectory(indexer_score)
