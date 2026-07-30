@@ -1,0 +1,24 @@
+{
+  "config": {
+    "prompt_len": 128,
+    "output_len": 128,
+    "num_requests": 32,
+    "concurrency": 8
+  },
+  "elapsed_s": 174.76796949701384,
+  "completed_requests": 32,
+  "total_output_tokens": 3809,
+  "ttft_ms": {
+    "p50": 38355.402018874884,
+    "p99": 38548.83932089433,
+    "mean": 33618.18805501389
+  },
+  "itl_ms": {
+    "p50": 41.92082630470395,
+    "p99": 125.89488131925464,
+    "mean": 44.82281880984849
+  },
+  "output_throughput_tok_per_s": 21.79461151240921,
+  "request_throughput_per_s": 0.18309991294226696,
+  "mean_per_request_decode_tps": 22.283567206153897
+}
