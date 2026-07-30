@@ -48,8 +48,8 @@ requested architecture, read `arch_scope` from the analysis artifact:
 
 - Set `arch_results.<arch>.verdict=SKIPPED` for `out_of_scope`.
 - Keep `in_scope` architectures pending.
-- If all requested architectures are out of scope, finalize with combined
-  status `skipped` without spawning another agent.
+- If all requested architectures are out of scope, run
+  `execute_step_finalize_out_of_scope` and stop without spawning another agent.
 
 Run one `arch-lookup.md` only when the shared analysis requests architecture
 research. It must answer the recorded questions for every architecture named
@@ -161,6 +161,8 @@ exhausted. `PERF_NOT_IMPROVED` preserves the functional result for an
 optimization issue.
 
 ## Finalize
+
+This section is only for runs with at least one in-scope architecture.
 
 Use the multi-architecture finalizer instead of the single-architecture verdict
 mapping:

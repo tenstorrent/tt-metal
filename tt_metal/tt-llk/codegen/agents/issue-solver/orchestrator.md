@@ -113,8 +113,14 @@ source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_refine_perf_goal
 ```
 
-Read `in_scope` from the analysis artifact. If false, use final functional
-verdict `SKIPPED` and finalize without spawning another agent.
+Read `in_scope` from the analysis artifact. If false, run:
+
+```bash
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_finalize_out_of_scope
+```
+
+Then stop. Do not spawn another agent or enter any later pipeline stage.
 
 If `needs_arch_research: true`, run `execute_step_advance_arch_lookup`, then
 spawn `arch-lookup.md` once. Otherwise leave `PREVIOUS_AGENT=analyzer`.
@@ -283,11 +289,14 @@ When the performance budget is exhausted:
 
 ## 7. Finalize
 
+This section is only for in-scope runs. Out-of-scope runs already returned
+through `execute_step_finalize_out_of_scope`.
+
 Choose the final functional verdict from the latest valid functional evidence:
-`SKIPPED` for an out-of-scope issue, `SUCCESS` for real passing verification,
-or `COMPILED_ONLY` / `UNVERIFIABLE_IN_LLK_SUITE` only when runtime verification
-was explicitly not applicable. Missing required coverage is a failure. A
-previously marked failure remains failed.
+`SUCCESS` for real passing verification, or `COMPILED_ONLY` /
+`UNVERIFIABLE_IN_LLK_SUITE` only when runtime verification was explicitly not
+applicable. Missing required coverage is a failure. A previously marked failure
+remains failed.
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh

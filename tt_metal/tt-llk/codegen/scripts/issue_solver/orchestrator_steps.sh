@@ -543,6 +543,10 @@ execute_step_advance_arch_lookup() {
 execute_step_advance_writer() {
     local _L; _L="$(_LOG)"
     local num mode prev; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"; prev="$(sg PREVIOUS_AGENT)"
+    if [ "$(sg STATUS)" = "skipped" ]; then
+        echo "cannot advance a skipped run to writer" >&2
+        return 1
+    fi
     local msg="Planning and applying a fix for issue #${num}"
     [ "$mode" = multi ] && msg="Planning and applying one shared fix for issue #${num}"
     rj advance --new-step "writer" --new-message "$msg" \
@@ -867,6 +871,64 @@ execute_step_mark_status() {
     ss FINAL_RESULT "$fr"
     case "$status" in success|compiled) ss SOLVER_STATE working ;; *) ss SOLVER_STATE not_working ;; esac
     echo "STATUS=$status FINAL_RESULT=$fr"
+}
+
+# ===========================================================================
+# Analyzer terminal path — finalize immediately when the whole issue is out of
+# LLK scope. No writer, verification, review, performance, or fix packaging.
+# ===========================================================================
+execute_step_finalize_out_of_scope() {
+    local _L; _L="$(_LOG)"
+    local mode num analysis msg arches patch
+    mode="$(sg RUN_MODE)"; num="$(sg ISSUE_NUMBER)"
+    analysis="codegen/artifacts/issue_${num}_analysis.md"
+
+    if [ ! -f "$analysis" ] || ! grep -Eq \
+        '^[[:space:]]*in_scope:[[:space:]]*false([[:space:]]|$)' "$analysis"; then
+        echo "cannot skip: analyzer did not mark the whole issue out of scope" >&2
+        return 1
+    fi
+
+    ss OBSTACLE ""
+    ss BASE_COMMIT "$(sg GIT_COMMIT)"
+    ss FIX_COMMIT ""
+    ss CHANGED_FILES ""
+    ss CHANGED_FILES_JSON '[]' --json
+    rm -f "$_L/generated.patch"
+
+    if [ "$mode" = "multi" ]; then
+        arches="$(sg TARGET_ARCHES_JSON)"
+        patch="$(python - "$arches" <<'PY'
+import json
+import sys
+
+arches = json.loads(sys.argv[1])
+print(json.dumps({
+    "combined_status": "skipped",
+    "arch_results": {
+        arch: {
+            "status": "done",
+            "verdict": "SKIPPED",
+            "tests_total": 0,
+            "tests_passed": 0,
+            "obstacle": None,
+        }
+        for arch in arches
+    },
+}))
+PY
+)"
+        rj metric --patch-json "$patch" || return $?
+        ss COMBINED_STATUS skipped
+        msg="multi-arch issue #${num}: skipped — outside LLK scope"
+    else
+        msg="$(sg TARGET_ARCH) issue #${num}: skipped — outside LLK scope"
+    fi
+
+    execute_step_mark_status skipped
+    ss FINAL_MESSAGE "$msg"
+    execute_step_finalize_run || return $?
+    execute_step_copy_artifacts
 }
 
 # ===========================================================================
