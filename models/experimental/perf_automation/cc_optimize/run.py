@@ -781,11 +781,25 @@ def _knob_cache_put(model_root, env) -> None:
         pass
 
 
+def _set_depth(env, depth, key=None):
+    """Module-level shim for layer_depth.set_depth (imported lazily; the package pulls in device
+    deps that must not load at import time)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from agent.layer_depth import set_depth
+
+    return set_depth(env, depth, key=key)
+
+
 def _knob_at(env, cov):
+    # Route through set_depth so the depth variable and PERF_MCP_FORCE_ALL_LAYERS move together. A
+    # bare `env[numkey] = str(cov)` left a stale FORCE_ALL armed, and the depth guard then stripped
+    # the cap that had just been written -- so a "2-layer" rung profiled the whole model, which is
+    # the "every rung profiled the SAME full model" symptom. It also wrote a non-positive cov as
+    # the literal "0", a truthy string that builders read as "build zero layers".
     env = dict(env)
     numkey = next((k for k, v in env.items() if str(v).isdigit()), None)
     if numkey:
-        env[numkey] = str(cov)
+        _set_depth(env, cov, key=numkey)
     return env
 
 
@@ -979,7 +993,7 @@ def _bridge_depth_env(
         return {}
     _numkey = next((k for k, v in env.items() if str(v).isdigit()), None)
     if _numkey:
-        env[_numkey] = str(cov)
+        _set_depth(env, cov, key=_numkey)  # see _knob_at: never write the cap without clearing FORCE_ALL
     probe_env = dict(mcp_env)
     probe_env.update(env)
     _, _, seq2 = _run_op_sigs(repo_root, probe_env, devices, node, case, cov)
@@ -1045,7 +1059,7 @@ def _measure_cov(repo_root: Path, mcp_env: dict, devices: str, node, case, full_
     for d in ladder:
         env = dict(base)
         if numkey:
-            env[numkey] = str(d)
+            _set_depth(env, d, key=numkey)  # see _knob_at: cap and FORCE_ALL must move together
         penv = dict(mcp_env)
         penv.update(env)
         sigs_d, _, _ = _run_op_sigs(repo_root, penv, devices, node, case, d)

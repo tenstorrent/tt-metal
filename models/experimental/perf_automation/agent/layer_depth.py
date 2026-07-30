@@ -114,8 +114,13 @@ def full_depth_from_config(model_id: str = "", model_dir=None) -> int | None:
 FORCE_ALL = "PERF_MCP_FORCE_ALL_LAYERS"
 
 
-def set_depth(env, depth) -> dict:
+def set_depth(env, depth, key: str | None = None) -> dict:
     """Express `depth` to a model builder through the mapping `env`.
+
+    `key` names the variable to write, defaulting to this tool's own ENV. A model that exposes its
+    OWN depth variable still needs the same two-part convention, and hardcoding ENV here was why
+    three call sites wrote their discovered knob raw instead (leaving FORCE_ALL in whatever state
+    it happened to be in).
 
     A positive int caps the build to that many blocks. ANY non-positive or unparseable depth --
     including None and 0 -- means ALL LAYERS and is expressed by DELETING the variable, never by
@@ -128,15 +133,16 @@ def set_depth(env, depth) -> dict:
     the guard itself only acts if the invocation also loads agent/depth_guard_plugin via `-p`.
     Requesting a positive cap clears the flag, so the tracy slice is never stripped.
     """
+    var = key or ENV
     try:
         d = int(depth)
     except (TypeError, ValueError):
         d = 0
     if d > 0:
-        env[ENV] = str(d)
+        env[var] = str(d)
         env.pop(FORCE_ALL, None)
     else:
-        env.pop(ENV, None)
+        env.pop(var, None)
         env[FORCE_ALL] = "1"
     return env
 
