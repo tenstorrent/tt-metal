@@ -6553,7 +6553,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     // [#48552 DEBUG -- remove before merge] Dump the in0/out CB geometry so we can see which CB the RBFAIL
     // (dfb=0 need=224 cap=28) actually is: in0_CB_tiles (this CB) vs per_core_M*per_core_N (the out/interm
     // shard, = 28). need=224 = in0_block_w*in0_block_h; if in0_CB_tiles != 28 then dfb=0 is NOT cb_in0.
-    log_warning(
+    log_debug(
         tt::LogOp,
         "[QSR-MM-IN1CB #48552] per_core_M={} per_core_N={} K={} in0_block_w={} num_blocks={} in0_block_h={} "
         "in0_block_tiles={} in0_CB_tiles={} in0_is_sharded={} in0_B={} in1_B={} outblk(MxN)={}",
@@ -6574,7 +6574,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     // padded shape vs shard shape of `a` to see if the tensor is allocated [M,N]-sharded or resharded en route.
     if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value()) {
         const auto& ss = a.memory_config().shard_spec().value().shape;
-        log_warning(
+        log_debug(
             tt::LogOp,
             "[QSR-MM-IN1CB2 #48552] in0 `a`: padded=[{}x{}] shard=[{}x{}] (tiles=[{}x{}]) mem_layout={} "
             "shard_tiles={}",
@@ -7324,7 +7324,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     // forces a single 14-M-tile in0 block (out_block_h==per_core_M to dodge the multi-M-block output-
     // transpose bug; num_blocks==1 to dodge the K-spill accumulate) -> trailing-unpacker-pop / large
     // single-block Quasar trap. Remove once the sliced stem conv is healthy.
-    log_warning(
+    log_debug(
         tt::LogOp,
         "[QSR-MM-IN1 #48552] mcast_in1 in0-reader geom: arch={} in0_is_sharded={} extract_shard_sub_blocks={} | "
         "tiles M={} N={} K={} | per_core_M={} per_core_N={} | in0_block_w={} in0_block_h={} "

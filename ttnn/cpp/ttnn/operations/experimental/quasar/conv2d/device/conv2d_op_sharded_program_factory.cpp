@@ -760,7 +760,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // chained Program B matmul then under-reserves its in0 CB (the RBFAIL dfb=0 need=M*full_K cap=M*N). Dump
     // each gate so we can see WHICH condition is false and align conv2d.cpp's split decision with it.
     if ((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) || split_program_unpack_tilize) {
-        log_warning(
+        log_debug(
             tt::LogOp,
             "[QSR-SPLIT #48552] split_program_tilize_only={} | height_sharded={} not_depthwise={} "
             "not_split_reader={} not_act_reuse={} in0_num_blocks_w={}(want 1) num_blocks_weight_w_per_core={}(want "

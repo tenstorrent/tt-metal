@@ -101,28 +101,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.cpp
     cpp/ttnn/operations/experimental/experimental_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/quasar_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/pad/pad_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/tilize/tilize_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/move/move_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/untilize_with_unpadding_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/slice/slice_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/transpose/transpose_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/reshard/reshard_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/pool_generic/generic_pools_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/conv2d/conv2d_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/padded_slice/padded_slice_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/slice_write/slice_write_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/matmul/matmul_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/binary/binary_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/fold/fold_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/reshape_view/reshape_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/untilize/untilize_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/tilize_with_val_padding/tilize_with_val_padding_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/to_layout/to_layout_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/reallocate/reallocate_nanobind.cpp
-    cpp/ttnn/operations/experimental/quasar/to_device/to_device_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/generic/generic_op_nanobind.cpp
     # ttnn-nanobind core files (appended in original CMakeLists.txt)

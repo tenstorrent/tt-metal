@@ -78,7 +78,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     // does NOT print during the failing run, a cached program is being reused (stale scaler baked in).
     // If it prints use_post_mul=0 / scaler=1/49, attributes lost the split. If use_post_mul=1 &
     // scaler=1.0 but output is still x1.15, the H compute kernel isn't applying REDUCE_POST_MUL.
-    log_warning(
+    log_debug(
         tt::LogOp,
         "QSR_REDUCE_H_FACTORY math_op={} scaler={} post_mul_scaler={} use_post_mul={} scaler_bits=0x{:08x} "
         "post_mul_bits=0x{:08x}",

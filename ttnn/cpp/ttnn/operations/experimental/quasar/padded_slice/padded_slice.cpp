@@ -9,6 +9,8 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -58,8 +60,9 @@ ttnn::Tensor padded_slice(
 
     auto ret_adjustment([&](const ttnn::Tensor& ret_input_tensor) {
         if (ret_input_tensor.storage_type() == StorageType::DEVICE) {
-            auto tensor = ttnn::to_memory_config(ret_input_tensor, memory_config, std::nullopt);
-            tensor = ttnn::to_layout(tensor, input_layout);
+            auto tensor =
+                ttnn::operations::experimental::quasar::to_memory_config(ret_input_tensor, memory_config, std::nullopt);
+            tensor = ttnn::operations::experimental::quasar::to_layout(tensor, input_layout);
             return tensor;
         }
         return ret_input_tensor;

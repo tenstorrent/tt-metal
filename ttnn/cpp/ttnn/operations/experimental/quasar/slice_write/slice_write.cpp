@@ -10,6 +10,7 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -26,13 +27,24 @@ ttnn::Tensor slice_write(
     const auto& padded_input_shape = input_tensor.padded_shape();
     const auto& padded_output_shape = output_tensor.padded_shape();
 
+    // Validate the slice vectors before they index the loop below (ends[i] drives the loop while
+    // begins[i]/step[i] are read unchecked, and step[i] divides at dim_size = (ends[i]+offset)/step[i]).
+    // Without this, malformed Python-facing input causes out-of-bounds host access or division by zero
+    // instead of a controlled TT_FATAL. (Quasar-only hardening; the original op lacks these checks.)
+    TT_FATAL(
+        begins.size() == ends.size() && begins.size() == step.size(), "begins, ends, and step must have the same size");
+    TT_FATAL(
+        begins.size() == logical_input_shape.rank() && begins.size() == output_tensor.logical_shape().rank(),
+        "Slice rank must match both input and output tensor ranks");
+    TT_FATAL(std::none_of(step.begin(), step.end(), [](uint32_t s) { return s == 0; }), "Step values must be nonzero");
+
     bool no_step = std::all_of(step.begin(), step.end(), [](uint32_t s) { return s == 1; });
 
     bool rm_only_not_sharded = (input_tensor.layout() == Layout::TILE || output_tensor.layout() == Layout::TILE) &&
                                !(input_tensor.is_sharded() || (output_tensor.is_sharded() && !no_step));
     ttnn::Tensor input = input_tensor;
     if (rm_only_not_sharded) {
-        input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
+        input = ttnn::operations::experimental::quasar::to_layout(input_tensor, Layout::ROW_MAJOR);
     }
 
     TT_FATAL(!output_tensor.is_sharded(), "Slice Write currently doesn't support sharded output tensors.");
@@ -116,12 +128,12 @@ ttnn::Tensor slice_write(
         // If the operation has stride and output is tiled, convert output to RM
         auto original_output_layout = output_tensor.layout();
         if (rm_only_not_sharded) {
-            output_tensor = ttnn::to_layout(output_tensor, Layout::ROW_MAJOR);
+            output_tensor = ttnn::operations::experimental::quasar::to_layout(output_tensor, Layout::ROW_MAJOR);
         }
         (void)ttnn::prim::qsr::slice_write(
             input, output_tensor, ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step));
         if (rm_only_not_sharded) {
-            output_tensor = ttnn::to_layout(output_tensor, original_output_layout);
+            output_tensor = ttnn::operations::experimental::quasar::to_layout(output_tensor, original_output_layout);
         }
         return output_tensor;
     }

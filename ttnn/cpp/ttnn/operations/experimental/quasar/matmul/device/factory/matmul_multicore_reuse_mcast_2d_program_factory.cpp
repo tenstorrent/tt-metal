@@ -3612,7 +3612,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         for (auto v : in0_mcast_noc_y) {
             noc_y_str += std::to_string(v) + ",";
         }
-        log_warning(
+        log_debug(
             tt::LogOp,
             "[QSR-MCAST2D-DBG] transpose_mcast={} in0_sender_num_cores_along_width={} num_x_bs={} "
             "num_y_bs={} num_blocks_x(=in0_mcast_num_dests)={} num_blocks_y={} num_cores_c={} num_cores_r={} "

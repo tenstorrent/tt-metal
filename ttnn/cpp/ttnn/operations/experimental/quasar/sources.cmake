@@ -229,6 +229,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     reshard/reshard_nanobind.cpp
     pool_generic/generic_pools_nanobind.cpp
     conv2d/conv2d_nanobind.cpp
+    padded_slice/padded_slice_nanobind.cpp
+    slice_write/slice_write_nanobind.cpp
     matmul/matmul_nanobind.cpp
     binary/binary_nanobind.cpp
     fold/fold_nanobind.cpp

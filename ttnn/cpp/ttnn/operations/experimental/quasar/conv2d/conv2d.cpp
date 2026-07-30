@@ -550,7 +550,7 @@ Result conv2d_L1(
     const bool force_conv_no_spill = (!arch_is_quasar || split_env_requested) && height_sharded_conv && !mm_conv &&
                                      !conv_is_1d_depthwise && (kernel_size[0] > 1) && !stem_nospill_optout &&
                                      (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
-    log_warning(
+    log_debug(
         tt::LogOp,
         "[QSR-SPLIT2 #48552] force_no_spill={} height_sh={} block_sh={} act_block_w(pre)={} full_K={} shard={} "
         "split_env={} k0={} mm_conv={}",
