@@ -1,0 +1,58 @@
+{
+  "cell_tag": "fuse-noadvise/qwen_qwen3_6_27b",
+  "commit": "79f92235a70928e0d538f0854e96630b2055cac6",
+  "harness": "models/autoports/qwen_qwen3_6_27b/tests/traced_synthetic_pcc.py",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "perf_iterations_per_repeat": 30,
+  "metric": "sum of representative per-layer trace medians weighted by 16 full-attention and 48 linear-attention layers",
+  "layer_repeats_ms": {
+    "full_attention": [
+      1.20758,
+      1.207569,
+      1.207921
+    ],
+    "linear_attention": [
+      19.135052,
+      19.130751,
+      19.125362
+    ]
+  },
+  "layer_counts": {
+    "full_attention": 16,
+    "linear_attention": 48
+  },
+  "repeats_ms": [
+    937.803776,
+    937.597152,
+    937.344112
+  ],
+  "incumbent_ms": 937.344112,
+  "noise_floor_ms": 0.459664,
+  "measured_at": "2026-07-30T19:29:50Z",
+  "shipped_policy": {
+    "optimization_policy": "bfp4_all_dram_w8",
+    "math_fidelity": "LoFi",
+    "dram_sharded": true,
+    "max_in0_block_w": 8,
+    "large_prefill_config": true
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B"
+  },
+  "shipped_policy_source": "doc/advisor_challenger/tracy/incumbent_full_b32.csv and doc/advisor_challenger/tracy/incumbent_linear_b32.csv",
+  "perf_reports": {
+    "full_attention": "doc/advisor_challenger/tracy/incumbent_full_b32.csv",
+    "linear_attention": "doc/advisor_challenger/tracy/incumbent_linear_b32.csv"
+  },
+  "oracle": {
+    "name": "traced_synthetic_pcc.py",
+    "pcc_threshold": 0.995,
+    "full_attention_min_pcc": 0.9995625185249859,
+    "linear_attention_min_pcc": 0.9999532166883408,
+    "exact_determinism": true,
+    "fallbacks_are_fatal": true
+  }
+}

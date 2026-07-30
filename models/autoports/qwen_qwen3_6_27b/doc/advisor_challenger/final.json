@@ -1,0 +1,110 @@
+{
+  "schema_version": 2,
+  "changed": false,
+  "shipped_change": false,
+  "incumbent_ms": 937.344112,
+  "final_ms": 937.344112,
+  "noise_floor_ms": 0.459664,
+  "delta_ms": 0.0,
+  "delta_pct": 0.0,
+  "best_single_ms": 937.360064,
+  "winning_config": {
+    "optimization_policy": "bfp4_all_dram_w8",
+    "source": "incumbent",
+    "optimized_decoder_sha256": "fe5ae5dc9505130bb22511803f48b091df075e40d8601a003af7e0aff8ae4169",
+    "reason": "Every material advisor recall chain and the top-chain pair were measured. All were slower; values inside the frozen model-weighted noise floor are ties and ties go to the incumbent."
+  },
+  "oracle": "models/autoports/qwen_qwen3_6_27b/tests/traced_synthetic_pcc.py at PCC >= 0.995, batch 32, both layer kinds, exact determinism",
+  "oracle_passed": true,
+  "combination": {
+    "metric": "sum of representative per-layer trace medians weighted by 16 full-attention and 48 linear-attention layers; unchanged linear-attention repeats are paired by repeat index",
+    "screened_winners": [],
+    "measured_sets": [
+      {
+        "set": [],
+        "name": "incumbent",
+        "repeats_ms": [
+          937.803776,
+          937.597152,
+          937.344112
+        ],
+        "measured_ms": 937.344112,
+        "oracle_passed": true
+      },
+      {
+        "set": [
+          "attention_head_norms"
+        ],
+        "name": "head_norms_64q_32k",
+        "repeats_ms": [
+          937.824544,
+          937.634288,
+          937.360064
+        ],
+        "measured_ms": 937.360064,
+        "oracle_passed": true
+      },
+      {
+        "set": [
+          "attention_head_norms"
+        ],
+        "name": "head_norms_32q_16k_lower_geometry",
+        "repeats_ms": [
+          937.863824,
+          937.657056,
+          937.392288
+        ],
+        "measured_ms": 937.392288,
+        "oracle_passed": true
+      },
+      {
+        "set": [
+          "rope"
+        ],
+        "name": "rope_sharded_chain",
+        "repeats_ms": [
+          938.22992,
+          938.0288,
+          937.769472
+        ],
+        "measured_ms": 937.769472,
+        "oracle_passed": true
+      },
+      {
+        "set": [
+          "rope",
+          "attention_head_norms"
+        ],
+        "name": "top_chain_pair",
+        "repeats_ms": [
+          938.210864,
+          937.99368,
+          937.745264
+        ],
+        "measured_ms": 937.745264,
+        "oracle_passed": true
+      }
+    ],
+    "best_set": [],
+    "best_set_name": "incumbent",
+    "best_set_source": "best measured set; no inferred combination"
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial valid captures after the batch-32 incumbent was frozen",
+      "captures": {
+        "full_attention": 1,
+        "linear_attention": 1
+      },
+      "profiled_from": [
+        "doc/advisor_challenger/tracy/incumbent_full_b32.csv",
+        "doc/advisor_challenger/tracy/incumbent_linear_b32.csv"
+      ],
+      "material_chains": 2,
+      "screened_winners": 0,
+      "pairwise_sets_measured": 1,
+      "outcome": "stop: all material chains and their top pair lost to or tied the incumbent"
+    }
+  ]
+}

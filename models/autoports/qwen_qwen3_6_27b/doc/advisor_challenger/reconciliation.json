@@ -1,0 +1,163 @@
+{
+  "schema_version": 2,
+  "source": {
+    "command": "python .agents/skills/advisor-challenger/scripts/reconcile.py (run once per captured layer kind against its incumbent CSV)",
+    "script_outputs": [
+      "doc/advisor_challenger/reconciliation_full_attention.json",
+      "doc/advisor_challenger/reconciliation_linear_attention.json"
+    ],
+    "incumbent_perf_reports": [
+      "doc/advisor_challenger/tracy/incumbent_full_b32.csv",
+      "doc/advisor_challenger/tracy/incumbent_linear_b32.csv"
+    ],
+    "parser_note": "The supplied parser does not recognize this branch's shape-qualified OP Code and Device Time columns or its aliased #ttnn_layout IR spelling. It therefore emitted zero-window intermediate JSONs. The chain calculation below uses the same incumbent CSV rows and final_ir.mlir directly; row indices and summed device times are recorded so the result is reproducible."
+  },
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed advised-op share of the representative layer-kind decode window",
+  "chains": [
+    {
+      "chain": "rope",
+      "ops": [
+        "ttnn.transpose",
+        "ttnn.repeat",
+        "ttnn.neg",
+        "ttnn.multiply",
+        "ttnn.add"
+      ],
+      "op_count": 5,
+      "summed_window_share_pct": 3.675,
+      "full_rope_envelope_window_share_pct": 9.377,
+      "measured_metric": "full_attention batch-32 trace median, ms",
+      "repeats_ms": [
+        1.234214,
+        1.234547,
+        1.234506
+      ],
+      "measured_ms": 1.234214,
+      "incumbent_layer_ms": 1.207569,
+      "delta_ms": 0.026645,
+      "verdict": "rejected",
+      "reason": "Keeping transpose, repeat, rotate-half, multiply, and add in sharded L1 regressed the best full-layer median by 26.645 us. The shipped LoFi/BFP4 compute policy was retained; final_ir.mlir compute_config was not treated as advice."
+    },
+    {
+      "chain": "attention_head_norms",
+      "ops": [
+        "q_per_head_rms_norm",
+        "k_per_head_rms_norm"
+      ],
+      "op_count": 2,
+      "summed_window_share_pct": 1.315,
+      "measured_metric": "full_attention batch-32 trace median, ms",
+      "repeats_ms": [
+        1.208878,
+        1.20989,
+        1.208918
+      ],
+      "measured_ms": 1.208878,
+      "incumbent_layer_ms": 1.207569,
+      "delta_ms": 0.001309,
+      "verdict": "rejected",
+      "reason": "The legal 64-core Q / 32-core K block-sharded chain regressed the best full-layer median by 1.309 us. A lower 32/16-core bracket was slower again at 1.210932 ms best. A 32-core height-sharded attempt was rejected by TTNN's hard LayerNorm constraint before measurement. The advisor point is the maximum integral-tile block geometry, so no legal above point exists."
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "ttnn.transpose",
+      "chain": "rope",
+      "layer_kind": "full_attention",
+      "advised": "L1 width-sharded",
+      "shipped": "DRAM interleaved",
+      "incumbent_csv_rows_zero_based": [
+        26,
+        27,
+        47,
+        48,
+        107,
+        108,
+        128,
+        129
+      ],
+      "device_us": 31.713,
+      "window_share_pct": 1.537,
+      "measured_ms": 1.234214,
+      "verdict": "rejected",
+      "reason": "Measured as part of the complete rope chain.",
+      "oracle": "traced_synthetic_pcc.py PCC >= 0.995 and exact determinism"
+    },
+    {
+      "op": "ttnn.repeat",
+      "chain": "rope",
+      "layer_kind": "full_attention",
+      "advised": "L1 height-sharded",
+      "shipped": "DRAM interleaved",
+      "device_us": 12.823,
+      "window_share_pct": 0.621,
+      "measured_ms": 1.234214,
+      "verdict": "rejected",
+      "reason": "Measured as part of the complete rope chain.",
+      "oracle": "traced_synthetic_pcc.py PCC >= 0.995 and exact determinism"
+    },
+    {
+      "op": "ttnn.neg",
+      "chain": "rope",
+      "layer_kind": "full_attention",
+      "advised": "L1 height-sharded",
+      "shipped": "DRAM interleaved",
+      "device_us": 5.051,
+      "window_share_pct": 0.245,
+      "measured_ms": 1.234214,
+      "verdict": "rejected",
+      "reason": "Measured as part of the complete rope chain.",
+      "oracle": "traced_synthetic_pcc.py PCC >= 0.995 and exact determinism"
+    },
+    {
+      "op": "ttnn.multiply/add (rope arithmetic)",
+      "chain": "rope",
+      "layer_kind": "full_attention",
+      "advised": "L1 height-sharded",
+      "shipped": "DRAM interleaved",
+      "device_us": 26.248,
+      "window_share_pct": 1.272,
+      "measured_ms": 1.234214,
+      "verdict": "rejected",
+      "reason": "Measured as part of the complete rope chain.",
+      "oracle": "traced_synthetic_pcc.py PCC >= 0.995 and exact determinism"
+    },
+    {
+      "op": "q/k per-head ttnn.rms_norm",
+      "chain": "attention_head_norms",
+      "layer_kind": "full_attention",
+      "advised": "L1 block-sharded",
+      "shipped": "DRAM interleaved",
+      "incumbent_csv_rows_zero_based": [
+        16,
+        20,
+        97,
+        101
+      ],
+      "device_us": 27.123,
+      "window_share_pct": 1.315,
+      "measured_ms": 1.208878,
+      "verdict": "rejected",
+      "reason": "Measured as one Q+K norm chain; no single norm was screened in isolation.",
+      "oracle": "traced_synthetic_pcc.py PCC >= 0.995 and exact determinism"
+    }
+  ],
+  "projection_reconciliation": {
+    "full_attention": {
+      "captured_matmuls": 5,
+      "dram_sharded_considered": 5,
+      "dram_sharded_advised": 5,
+      "shipped_dram_sharded": 5,
+      "set_difference": 0
+    },
+    "linear_attention": {
+      "captured_matmuls": 5,
+      "dram_sharded_considered": 5,
+      "dram_sharded_advised": 5,
+      "shipped_dram_sharded": 5,
+      "set_difference": 0,
+      "uncapturable_layer_share": 0.75
+    }
+  }
+}
