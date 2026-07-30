@@ -1,0 +1,121 @@
+{
+  "layer_kind": "dense",
+  "layers_of_kind": 32,
+  "total_layers": 32,
+  "measured_window_us": 626.744,
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, NOT per-op",
+  "source_perf_report": "tracy/incumbent/incumbent_ops.csv",
+  "reconcile_command_ran": true,
+  "reconcile_parser_compatibility": {
+    "stock_output": "reconciliation_iteration_2.json",
+    "issue": "The stock parser does not resolve the current final_ir.mlir #ttnn_layout aliases and therefore emitted zero rows.",
+    "correction": "The chains below were reconciled from the same authoritative final_ir.mlir and incumbent tt-perf-report window."
+  },
+  "dram_sharded_considered": 5,
+  "dram_sharded_advised": 5,
+  "chains": [
+    {
+      "chain": "rope",
+      "ops": [
+        "embedding/manual rotate-half Q chain",
+        "embedding/manual rotate-half K chain"
+      ],
+      "summed_window_share_pct": 28.536,
+      "verdict": "kept",
+      "measured_ms": 0.616772,
+      "oracle": "real layer-0 weights, batch-32 traced decode; PCC >= 0.995",
+      "oracle_passed": true,
+      "oracle_pcc": 0.9999926010875422,
+      "perf_report": "tracy/final/final_perf_report.csv",
+      "reason": "Keeping the rotate-half chain in L1 beats the frozen incumbent by 0.039419 ms."
+    },
+    {
+      "chain": "mlp",
+      "ops": [
+        "gate/up advisor 8-core family with in0_block_w 12",
+        "down advisor 8-core family with in0_block_w 32"
+      ],
+      "summed_window_share_pct": 23.42,
+      "verdict": "rejected",
+      "measured_ms": 0.664378,
+      "oracle": "not run because the chain was slower than the frozen incumbent",
+      "oracle_passed": false,
+      "reason": "The advisor widths are illegal on the shipped 16-core partition; the legal 8-core chain is 0.008187 ms slower."
+    },
+    {
+      "chain": "attention_projections",
+      "ops": [
+        "QKV advisor 8-core family with in0_block_w 12",
+        "O projection advisor 8-core family with in0_block_w 12"
+      ],
+      "summed_window_share_pct": 12.391,
+      "verdict": "rejected",
+      "measured_ms": 0.663052,
+      "oracle": "not run because the chain was slower than the frozen incumbent",
+      "oracle_passed": false,
+      "reason": "The advisor widths are illegal on the shipped 16-core partition; the legal 8-core chain is 0.006861 ms slower."
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "manual_rope_qk_chain",
+      "chain": "rope",
+      "advised": {
+        "memory": "l1",
+        "layout": "height_sharded",
+        "note": "advisor used as recall; runtime geometry was derived and measured"
+      },
+      "shipped": {
+        "memory": "dram",
+        "layout": "interleaved"
+      },
+      "device_us": 178.84,
+      "window_share_pct": 28.536,
+      "verdict": "kept",
+      "measured_ms": 0.616772,
+      "perf_report": "tracy/final/final_perf_report.csv",
+      "oracle": "real layer-0 batch-32 trace PCC 0.9999926010875422 >= 0.995"
+    },
+    {
+      "op": "gate_up_down_program_family",
+      "chain": "mlp",
+      "advised": {
+        "decode_core_count": 8,
+        "gate_up_in0_block_w": 12,
+        "down_in0_block_w": 32
+      },
+      "shipped": {
+        "decode_core_count": 16,
+        "gate_up_in0_block_w": 6,
+        "down_in0_block_w": 16,
+        "dram_sharded": true
+      },
+      "device_us": 146.778,
+      "window_share_pct": 23.42,
+      "verdict": "rejected",
+      "measured_ms": 0.664378,
+      "oracle": "not run; slower than incumbent"
+    },
+    {
+      "op": "qkv_o_program_family",
+      "chain": "attention_projections",
+      "advised": {
+        "decode_core_count": 8,
+        "qkv_in0_block_w": 12,
+        "o_in0_block_w": 12
+      },
+      "shipped": {
+        "decode_core_count": 16,
+        "qkv_in0_block_w": 6,
+        "o_in0_block_w": 6,
+        "dram_sharded": true
+      },
+      "device_us": 77.663,
+      "window_share_pct": 12.391,
+      "verdict": "rejected",
+      "measured_ms": 0.663052,
+      "oracle": "not run; slower than incumbent"
+    }
+  ]
+}

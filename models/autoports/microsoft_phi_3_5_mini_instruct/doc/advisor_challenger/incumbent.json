@@ -1,0 +1,40 @@
+{
+  "cell_tag": "microsoft_phi_3_5_mini_instruct-advisor-challenger-20260730",
+  "commit": "84330852bf2e713673dc3e77d5b38011b8edffa9",
+  "harness": "models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0]",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "measured_at": "2026-07-30T19:11:40Z",
+  "repeats_ms": [
+    0.656836,
+    0.656873,
+    0.656191
+  ],
+  "incumbent_ms": 0.656191,
+  "noise_floor_ms": 0.000682,
+  "shipped_policy_source": "doc/optimized_decoder/candidate_results.csv selected optimized_final_split_gate_up rows, corroborated by doc/optimized_decoder/tracy/final/ops_perf_results.csv.gz",
+  "shipped_policy": {
+    "attention_weight_dtype": "BFLOAT4_B",
+    "gate_up_weight_dtype": "BFLOAT4_B",
+    "down_weight_dtype": "BFLOAT4_B",
+    "kv_cache_dtype": "BFLOAT8_B",
+    "attention_math_fidelity": "LoFi",
+    "gate_up_math_fidelity": "LoFi",
+    "down_math_fidelity": "LoFi",
+    "decode_core_count": 16,
+    "in0_block_w_qkv": 6,
+    "in0_block_w_o": 6,
+    "in0_block_w_gate_up": 6,
+    "in0_block_w_down": 16,
+    "use_explicit_decode_sdpa": true,
+    "split_decode_qkv": false,
+    "split_decode_gate_up": true
+  },
+  "shipped_weight_dtypes": {
+    "qkv": "BFLOAT4_B",
+    "o_proj": "BFLOAT4_B",
+    "gate_proj": "BFLOAT4_B",
+    "up_proj": "BFLOAT4_B",
+    "down_proj": "BFLOAT4_B"
+  }
+}

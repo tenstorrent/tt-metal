@@ -54,6 +54,7 @@ class OptimizationPolicy:
     use_explicit_decode_sdpa: bool = True
     split_decode_qkv: bool = False
     split_decode_gate_up: bool = True
+    advisor_rope_l1_chain: bool = True
 
 
 DEFAULT_OPTIMIZATION_POLICY = OptimizationPolicy()
@@ -435,6 +436,45 @@ class OptimizedDecoder(FunctionalDecoder):
         )
         down = self._decode_linear(activated, "down", self.decode_residual_memory_config)
         return ttnn.add(hidden_states, down, memory_config=self.decode_residual_memory_config)
+
+    def _decode_rope(self, query, key, current_positions, *, use_long_rope):
+        if not self.optimization_policy.advisor_rope_l1_chain:
+            return super()._decode_rope(query, key, current_positions, use_long_rope=use_long_rope)
+        cos_table = self.long_cos if use_long_rope else self.short_cos
+        sin_table = self.long_sin if use_long_rope else self.short_sin
+        rope_positions = ttnn.typecast(current_positions, ttnn.uint32)
+        cos = ttnn.embedding(rope_positions, cos_table, layout=ttnn.TILE_LAYOUT)
+        sin = ttnn.embedding(rope_positions, sin_table, layout=ttnn.TILE_LAYOUT)
+        cos = ttnn.reshape(cos, [1, 1, self.batch, self.head_dim])
+        sin = ttnn.reshape(sin, [1, 1, self.batch, self.head_dim])
+        query_memory_config = query.memory_config()
+        key_memory_config = key.memory_config()
+        cos = ttnn.to_memory_config(cos, query_memory_config)
+        sin = ttnn.to_memory_config(sin, query_memory_config)
+
+        def apply_l1_rope(value):
+            leading = list(tuple(value.shape)[:-1])
+            first = ttnn.slice(
+                value,
+                [0] * len(leading) + [0],
+                leading + [self.head_dim // 2],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            second = ttnn.slice(
+                value,
+                [0] * len(leading) + [self.head_dim // 2],
+                leading + [self.head_dim],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            rotated = ttnn.concat((ttnn.neg(second), first), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            rotated = ttnn.to_memory_config(rotated, query_memory_config)
+            return ttnn.add(
+                ttnn.multiply(value, cos, memory_config=query_memory_config),
+                ttnn.multiply(rotated, sin, memory_config=query_memory_config),
+                memory_config=query_memory_config,
+            )
+
+        return apply_l1_rope(query), apply_l1_rope(key)
 
     def _prefill_linear(self, hidden_states, role, *, seq_len, k, n, compute_role):
         program_config = (

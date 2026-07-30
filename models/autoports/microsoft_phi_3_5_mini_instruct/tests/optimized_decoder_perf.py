@@ -60,6 +60,7 @@ def _policy():
         use_explicit_decode_sdpa=os.environ.get("PHI_EXPLICIT_SDPA", "1") == "1",
         split_decode_qkv=os.environ.get("PHI_SPLIT_QKV", "0") == "1",
         split_decode_gate_up=os.environ.get("PHI_SPLIT_GATE_UP", "1") == "1",
+        advisor_rope_l1_chain=os.environ.get("PHI_ADVISOR_ROPE_L1", "1") == "1",
     )
 
 

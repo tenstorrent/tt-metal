@@ -1,0 +1,134 @@
+{
+  "changed": true,
+  "incumbent_ms": 0.656191,
+  "final_ms": 0.616772,
+  "noise_floor_ms": 0.000682,
+  "delta_ms": -0.039419,
+  "delta_pct": -6.007,
+  "decode_batch": 32,
+  "best_single_ms": 0.616772,
+  "best_set": [
+    "rope_l1_chain"
+  ],
+  "winning_config": {
+    "advisor_rope_l1_chain": true,
+    "decode_core_count": 16,
+    "qkv_o_gate_up_down_in0_block_w": "6/6/6/16",
+    "attention_weight_dtype": "BFLOAT4_B",
+    "gate_up_weight_dtype": "BFLOAT4_B",
+    "down_weight_dtype": "BFLOAT4_B",
+    "attention_math_fidelity": "LoFi",
+    "gate_up_math_fidelity": "LoFi",
+    "down_math_fidelity": "LoFi"
+  },
+  "oracle": "real Phi-3.5 layer-0 weights, batch-32 traced decode and LongRoPE trace, PCC threshold 0.995",
+  "oracle_passed": true,
+  "oracle_pcc": 0.9999926010875422,
+  "long_rope_oracle_pcc": 0.9999964813378325,
+  "combination": {
+    "measured_sets": [
+      {
+        "set": ["incumbent"],
+        "measured_ms": 0.656191,
+        "oracle_passed": true
+      },
+      {
+        "set": ["rope_l1_chain"],
+        "measured_ms": 0.616772,
+        "oracle_passed": true
+      },
+      {
+        "set": ["advisor_8_core_control"],
+        "measured_ms": 0.666636,
+        "oracle_passed": false,
+        "oracle_status": "not_run_rejected_on_performance"
+      },
+      {
+        "set": ["advisor_8_core_qkv_block_w_12"],
+        "measured_ms": 0.666096,
+        "oracle_passed": false,
+        "oracle_status": "not_run_rejected_on_performance"
+      },
+      {
+        "set": ["advisor_8_core_o_block_w_12"],
+        "measured_ms": 0.664928,
+        "oracle_passed": false,
+        "oracle_status": "not_run_rejected_on_performance"
+      },
+      {
+        "set": ["advisor_8_core_gate_up_block_w_12"],
+        "measured_ms": 0.664795,
+        "oracle_passed": false,
+        "oracle_status": "not_run_rejected_on_performance"
+      },
+      {
+        "set": ["advisor_8_core_down_block_w_32"],
+        "measured_ms": 0.665835,
+        "oracle_passed": false,
+        "oracle_status": "not_run_rejected_on_performance"
+      },
+      {
+        "set": ["attention_projection_chain"],
+        "measured_ms": 0.663052,
+        "oracle_passed": false,
+        "oracle_status": "not_run_rejected_on_performance"
+      },
+      {
+        "set": ["mlp_chain"],
+        "measured_ms": 0.664378,
+        "oracle_passed": false,
+        "oracle_status": "not_run_rejected_on_performance"
+      },
+      {
+        "set": ["attention_projection_chain", "mlp_chain"],
+        "measured_ms": 0.660539,
+        "oracle_passed": false,
+        "oracle_status": "not_run_rejected_on_performance"
+      },
+      {
+        "set": ["rope_l1_chain", "attention_projection_chain"],
+        "measured_ms": 0.623875,
+        "oracle_passed": false,
+        "oracle_status": "not_run_rejected_on_performance"
+      },
+      {
+        "set": ["rope_l1_chain", "mlp_chain"],
+        "measured_ms": 0.623654,
+        "oracle_passed": false,
+        "oracle_status": "not_run_rejected_on_performance"
+      },
+      {
+        "set": ["rope_l1_chain", "attention_projection_chain", "mlp_chain"],
+        "measured_ms": 0.621091,
+        "oracle_passed": false,
+        "oracle_status": "not_run_rejected_on_performance"
+      }
+    ],
+    "best_set": [
+      "rope_l1_chain"
+    ],
+    "note": "The cumulative screened-winner set is RoPE alone. Every pair among the three material chains and the all-chain cumulative set was measured; each geometry interaction regressed the RoPE winner."
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial post-incumbent batch-32 dense-layer capture",
+      "capture_count_by_layer_kind": {
+        "dense": 1
+      },
+      "ranked_from": "tracy/incumbent/incumbent_ops.csv",
+      "result": "RoPE L1 won; attention and MLP advisor geometry families lost."
+    },
+    {
+      "iteration": 2,
+      "trigger": "apply the measured RoPE winner, re-profile, and re-rank remaining advice",
+      "capture_count_by_layer_kind": {
+        "dense": 1
+      },
+      "recaptured": false,
+      "reranked_from": "tracy/final/final_ops.csv",
+      "reconciliation": "reconciliation_iteration_2.json",
+      "result": "Fresh winner profile collected; no topology shape changed and no recapture was warranted."
+    }
+  ]
+}
