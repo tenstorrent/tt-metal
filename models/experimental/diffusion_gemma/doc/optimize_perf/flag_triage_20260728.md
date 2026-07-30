@@ -1,19 +1,14 @@
 # Dormant-flag triage and deletion — 2026-07-28
 
-Every default-OFF `DG_*` flag in the module was examined and forced into one of three outcomes:
-**ENABLE** (it works and is better), **KEEP** (it earns its place, with the concrete situation that
-justifies it named), or **DELETE**. 43 flags were triaged; **24 were deleted** across five commits,
-`99c154f0df8..13bd1b34efc`, removing about **4,400 lines**. The python-only `DG_*` name count in the
-module went **106 → 91**.
+Status: current (2 lines over the 100-line cap — the 22-row deleted-flag table is the fact this file exists to carry, and the GPQA denominator traps are never cut for length).
+Owns: **the only list of dead `DG_*` flag names in the tree**, why each died, and the flag-registry convention.
+See also: [refuted list](../REFUTED.md) · [stage hub](README.md) · [campaign ledger](perf_progress.md)
 
-The bias was toward DELETE, for a specific reason: this module had already shipped three *silently
-inert* switches — a `C == DEFAULT_CAPACITY` MoE gate that disabled the flagship lever for 12 days, an
-unconditional `tt-smi` requirement, and `DG_TERMINAL_SHARDED`, whose producer had zero callers. The
-triage found three more (`DG_CHUNKED_PREFILL`, `DG_COMMIT_WRITE_BATCH`, and a
-`segment_rows == DEFAULT_CAPACITY` conjunct), bringing the count to six. Every dormant flag is a
-place that can happen again.
+Every default-OFF `DG_*` flag in the module was forced into one of three outcomes: ENABLE, KEEP (with the concrete situation that justifies it named), or DELETE. **43 flags triaged, 24 deleted** across `99c154f0df8..13bd1b34efc`, removing about **4,400 lines**; the python-only `DG_*` name count went **106 → 91**.
 
-## Deleted
+**The failure mode this was correcting.** The module had shipped **six silently inert switches**: a `C == DEFAULT_CAPACITY` MoE gate that disabled the flagship lever for 12 days, an unconditional `tt-smi` requirement, `DG_TERMINAL_SHARDED`, `DG_CHUNKED_PREFILL`, `DG_COMMIT_WRITE_BATCH`, and a `segment_rows == DEFAULT_CAPACITY` conjunct. Every dormant flag is a place that can happen again.
+
+## Deleted, with reason
 
 | flag | why |
 |---|---|
@@ -25,10 +20,10 @@ place that can happen again.
 | `DG_MOE_L1` | its own doc: bit-identical, −0.6% @48 / a wash @12; mode `chain` a no-op by construction; mode `all` never measured |
 | `DG_MOE_DISPATCH_FUSED` (v1) | measured perf-neutral by its own landing commit, superseded by FUSED2 27 minutes later |
 | `DG_MOE_DISPATCH_ABLATE` | answered its one question (12.7%); its driver bench was already deleted, so it was un-runnable |
-| `DG_DENOISE_CANVAS_TAIL` | its own doc: **+1.2% and +1.6% slower** over two runs, sha-identical, ~106 MB scratch, "leave it off" |
+| `DG_DENOISE_CANVAS_TAIL` | its own doc: **+1.2% and +1.6% slower** over two runs, sha-identical, ~106 MB scratch |
 | `DG_ROPE_FUSED` | refuted the day it landed: −0.1% inside a 1.5% spread **and** the committed sha changes |
 | `DG_ROPE_FULLCANVAS`, `DG_SDPA_FULLCANVAS` | default-ON flags whose OFF paths were kept alive only by host-only fake-ttnn tests that set the env themselves |
-| `DG_TERMINAL_SHARDED` | silent no-op: `prepare_sharded_terminal` had zero callers in all of committed history, so the context was always `None`. 560 lines of apparatus that never executed |
+| `DG_TERMINAL_SHARDED` | silent no-op: `prepare_sharded_terminal` had zero callers in all of committed history — 560 lines of apparatus that never executed |
 | `DG_DEDUP_ARGMAX` | structurally unreachable under the shipped `DG_UPFRONT_CAPTURE=1`; not bit-identical by its own docstring; +0.5% measured |
 | `DG_DENOISE_DEVICE_LOOP` | unreachable on the shipped traced path; strictly less capable (no trajectory records, no early halt); zero tests |
 | `DG_DENOISE_COMPACT_RAGGED` + `DG_COMPACT_{COMBINE,PRIMARY_TUNED,SEGMENT_ROWS}` | its bit-compatibility claim is against a committed sha that `6b370bf1320` tables as the *replaced* path; pinned to TP=4 by a hard raise; ~800 Python lines + 3 kernels |
@@ -39,95 +34,69 @@ place that can happen again.
 | `DG_VLLM_MAX_DENOISE_STEPS` | rejected by the up-front validator for every value but 48; the export in six runbooks was pure ritual |
 | `DG_DEGENERACY_MAX_RUN` | the one member of its group with no writer anywhere in the repo |
 
-Also removed: `return_sharded` from `models/demos/gemma4/tt/model.py`. That param does not exist on
-`origin/main`; a DiffusionGemma commit added it. The shared-edits gate flags any touch of that tree,
-so it flags this one — but the direction is inward: the DG delta in that file goes 107 → 94 changed
-lines and `return_sharded` 3 → 0 occurrences.
+Also removed: `return_sharded` from `models/demos/gemma4/tt/model.py`. That param does not exist on `origin/main`; a DiffusionGemma commit added it. The shared-edits gate flags any touch of that tree, so it flags this one — but the direction is inward: the DG delta in that file goes 107 → 94 changed lines and `return_sharded` 3 → 0 occurrences.
+
+### Later deletions, after this triage
+
+`DG_MOE_CONCAT`, `DG_SPARSE_MOE`, `DG_ALLOW_DENSE_MOE`, `DG_SPARSE_MOE_TUNED`, `DG_MOE_DISPATCH_FUSED2` and `DG_MOE_FUSED_GATHER` were deleted with the token-gather path in `7417bd7d69d` (2026-07-29); `DG_NORM_FULLCANVAS` was deleted with the full-canvas norm choice on 2026-07-30. Setting any of them now does nothing.
+
+Legacy trace knobs that still appear in dated artifacts and select nothing: `DG_VLLM_TRACE`, `DG_DENOISE_TRACED`, `DG_DENOISE_TRACED_MULTISTEP`, `DG_DENOISE_MULTISTEP_GROUP`, `DG_DENOISE_EARLY_HALT`, `DG_DENOISE_EARLY_HALT_WINDOW`, `DG_DENOISE_FROZEN_PREFIX`, `DG_DENOISE_REVEAL_MASK`, `DG_DENOISE_LAZY_CAPTURE`.
 
 ## Two recommendations overruled
 
-* **`DG_DENOISE_SLIDING_WINDOW_OVERRIDE` — kept.** The plan proposed deleting it together with the
-  plumbing in `verify_denoise_sliding_window.sh`, on the grounds that the real-window arm still runs.
-  But that harness exists to prove the #51080 retention plumbing is live, and its own comment
-  explains why the real 1024 window cannot: at P=1056 it masks 2.5% of the attended span, too little
-  to reliably flip an argmax. Deleting the override deletes the only arm that can fail.
-* **`check_committed_block` — kept.** Zero production callers (generate.py inlines the same policy),
-  but ten policy assertions in `test_degeneracy.py` exercise it. Deleting it would move tested pure
-  logic onto an untested integration path. The duplication is real; the fix is to unify, and that is
-  now stated in the docstring.
+- **`DG_DENOISE_SLIDING_WINDOW_OVERRIDE` — kept.** It is the only arm of `verify_denoise_sliding_window.sh` that can FAIL: at P=1056 the real 1024 window masks only 2.5% of the attended span, too little to reliably flip an argmax.
+- **`check_committed_block` — kept.** Zero production callers, but ten policy assertions in `test_degeneracy.py` exercise it; deleting it would move tested pure logic onto an untested integration path.
 
 ## Not done
 
-`DG_MOE_FUSED_GATHER`'s scaffold spans the shared `ttnn/cpp` tree and needs a `_ttnncpp.so` rebuild.
-It is out of scope under the no-shared-edits rule; the DG-side `raise NotImplementedError` remains as
-the loud signal it already is.
+`DG_MOE_FUSED_GATHER`'s scaffold spans the shared `ttnn/cpp` tree and needs a `_ttnncpp.so` rebuild, so it is out of scope under the no-shared-edits rule; the DG-side `raise NotImplementedError` stays as the loud signal.
 
-## What the verification caught, and what only one kind of check could catch
+## What only one kind of check could catch
 
-Six symbols were swallowed by span cuts. Where they were caught matters more than that they happened.
+Six symbols were swallowed by span cuts. Three were caught by the host suite (`_temperature_at_step`, the six sliding-window / pad helpers, and the numba `_pack_ragged_assignments` block the plan located at 1577-1644 when it is actually at 1368-1435). **Two were caught by a DEVICE run only, and they are the important ones:** `_FUSED2_KERNEL` / `_FUSED2_PLAN_CACHE` and `build_capacity_dispatch` itself — both needed by the then-default-ON sparse dispatch. Host tests mock the dispatch and every device check up to that point ran the concat arm, which bypassed it entirely, **so the default serving path was broken from `e04d4490973` until `13bd1b34efc` and nothing said so.** What found it was adding a plain `default:` arm alongside the concat arm in the device sweep.
 
-**Caught by the host test suite (3):** `_temperature_at_step` (used by the self-conditioning feedback
-on every traced step); the six sliding-window / pad helpers including the #51080 retention gate; and
-the numba `_pack_ragged_assignments` — the plan located that block at 1577-1644, it is actually at
-1368-1435, inside the cut.
-
-**Caught by a DEVICE run only (2, and they are the important ones):** `_FUSED2_KERNEL` /
-`_FUSED2_PLAN_CACHE`, and `build_capacity_dispatch` itself. Both are needed by the **default-ON**
-sparse dispatch. The host tests mock the dispatch, and every device check up to that point used
-`DG_MOE_CONCAT=1`, which bypasses it entirely — so **the default serving path was broken from
-`e04d4490973` until `13bd1b34efc` and nothing said so.** What found it was adding a plain `default:`
-arm alongside the `concat:` arm in the device sweep.
-
-Two consequences, both adopted:
+Two rules adopted:
 
 1. **Every device verification carries a `default:` arm.** Verifying only the configuration you are
-   optimizing verifies only the configuration you are optimizing.
-2. **A module-wide undefined-name AST scan** over all fifteen touched files, which now reports clean.
-   A cut between two markers is fast and it does not know what lives in between.
+   optimizing verifies only the configuration you are optimizing. (The specific `concat:` / `default:`
+   arms of 2026-07-28 no longer exist — concat is now the only denoise MoE — but the rule stands.)
+2. **A module-wide undefined-name AST scan** over every touched file. A cut between two markers is
+   fast and it does not know what lives in between.
 
-## Final state
+## Verification evidence
 
-* 742 host tests pass, 124 skipped, 0 failures.
-* On device, **both** denoise arms are bit-identical to their pre-deletion baselines:
-  `concat` (`DG_MOE_CONCAT=1 DG_NORM_FULLCANVAS=1`) `7b29837d637ec26b` at 9.449 s/block, and
-  `default` `1c1934f6f781bb75` at 21.030 s/block.
-* **The vLLM serving path is byte-identical too.** The sweep does not exercise `generator_vllm`, the
-  `serving.py` prefill after the prefix-cache removal, the degeneracy guard, or the batched commit,
-  so the same 2-question `run_upfront_gpqa.sh smoke` was run at the pre-deletion tree
-  (`25057cda4c4`) and at `afea6ce090e`, and the generated text matches exactly:
+- 742 host tests pass, 124 skipped, 0 failures.
+- On device both denoise arms were bit-identical to their pre-deletion baselines: concat
+  `7b29837d637ec26b` at **9.449 s/block** and default `1c1934f6f781bb75` at **21.030 s/block**.
+- The vLLM serving path was proven byte-identical by running the same 2-question
+  `run_upfront_gpqa.sh smoke` at the pre-deletion tree (`25057cda4c4`) and at `afea6ce090e`:
+  q0 3884 chars `6c35a0607c7acde1`, q1 6268 chars `429e93c2ad708381` on both.
 
-  | q | pre-deletion | post-deletion |
-  |---|---|---|
-  | q0 | 3884 chars, `6c35a0607c7acde1` | 3884 chars, `6c35a0607c7acde1` |
-  | q1 | 6268 chars, `429e93c2ad708381` | 6268 chars, `429e93c2ad708381` |
+## GPQA measurement traps from the post-deletion run
 
-* A full 198-sample GPQA ran end to end on the post-deletion tree (3 h 42 m, no crash, no import
-  error, no device fault) and scored `exact_match,none` = **6.57%** (stderr 1.76%). **That score is
-  not evidence about this work in either direction** and must not be quoted as such: there is no
-  same-metric pre-deletion baseline on this box (the 07-23 attempt aborted at 1/15), and the number
-  is dominated by output format rather than reasoning — only **4 of 198** responses contain a
-  `\boxed{}` at all, which is what the strict `none` filter extracts. The reference numbers this
-  document quotes (70.71% / 70.20%) are `gpqa_diamond_cot_zeroshot` with `flexible-extract`, a
-  different task and a different filter.
-
-  What the run *is* evidence of: the integration holds after 4,400 lines were removed. And it
-  reconfirms the #48291 state — generations open correctly and then collapse (one sample sets up the
-  Heisenberg uncertainty relation correctly, then emits
-  `$t = 2$HM and U = luyê,S = eV/Hif and c =...`), with 146 guard fires clustered at blocks 0-3 and
-  26 at block 0 exactly. `DG_DENOISE_HIDE_PREFILL_PADS` — a correctness fix measured at 7 of 7 on
-  precisely those block-0 collapses — is still **default OFF**. Flipping it should precede any perf
-  flip.
+- The post-deletion 198-sample run scored `exact_match,none` = **6.57%** (stderr 1.76%) and **that is
+  not evidence in either direction**: only **4 of 198** responses contain a `\boxed{}` at all, which
+  is what the strict `none` filter extracts, and there is no same-metric pre-deletion baseline on this
+  box (the 07-23 attempt aborted at 1/15).
+- **Matched task and filter, or nothing.** The 70.71% / 70.20% reference numbers are
+  `gpqa_diamond_cot_zeroshot` with `flexible-extract` — a different task AND a different filter from
+  the strict `none` score above. See [decision fidelity](../decision_fidelity/README.md) for the
+  three-denominator rule.
+- What the run *is* evidence of: the integration holds after 4,400 lines were removed. It also
+  reconfirms the open #48291 state — generations open correctly then collapse (one sample sets up the
+  Heisenberg uncertainty relation correctly, then emits garbage), with **146 degeneracy-guard fires
+  clustered at blocks 0-3 and 26 at block 0 exactly**. `DG_DENOISE_HIDE_PREFILL_PADS`, the correctness
+  fix measured at 7 of 7 on precisely those block-0 collapses, is **now default `1`**
+  (`tt/denoise_forward.py:277`, shipped via `205e87956cc`) — this file previously said it was still OFF.
 
 ## The convention that would stop the next one
 
 Route every `DG_*` flag through one registry — `dg_flag(name, default, *, values=…, expires=…)` — and
-make the registry the only way to read one. It (a) validates the value and fails loud outside
-`values`, which kills `DG_SKIP=moe1`-style silent mis-measurement; (b) records every resolved
-non-default value in the run-metadata JSON the sweep harness already emits, which kills the
-silent-model-swap class; (c) requires an expiry naming the dated artifact that will decide it. One CI
-test asserting that the set of `DG_*` literals in the tree equals the registry's keys, and that no
-flag is past its expiry, would have failed on `DG_TERMINAL_SHARDED` the day its producer landed
-without a caller.
+make the registry the only way to read one. It validates the value and fails loud outside `values`;
+records every resolved non-default value in the run-metadata JSON the sweep harness already emits; and
+requires an expiry naming the dated artifact that will decide it. One CI test asserting that the set of
+`DG_*` literals in the tree equals the registry's keys, and that no flag is past its expiry, would have
+failed on `DG_TERMINAL_SHARDED` the day its producer landed without a caller.
 
-A flag whose doc has reported a result gets exactly one more commit: the one that flips the default
-or deletes the flag.
+**Policy:** a flag whose doc has reported a result gets exactly one more commit — the one that flips
+the default or deletes the flag.

@@ -1,110 +1,65 @@
-# Up-front denoise: host-Gumbel overlap + on-device Gumbel (2026-07-24)
+# Up-front denoise: the Gumbel shape trap and the device-Gumbel win (2026-07-24)
 
-> **SUPERSEDED 2026-07-25 — the `device` default recommended below was REVERTED.**
-> The n=2 quality risk this doc accepted materialised: on a matched 4-seed A/B with one variable
-> (`--gumbel-mode`), `host` answered correctly 4/4 while `device` corrupted 2/4, producing garbled
-> LaTeX and, in the served GPQA trace, a canvas of one repeated token. Root cause is `ttnn.rand`:
-> the permuted-vocab draw puts the 256 canvas positions on the rand width axis, where only 24 of
-> every 32 row streams are distinct. The throughput numbers below still stand; the default does
-> not. See `doc/decision_fidelity/gumbel_position_correlation.md`.
->
-> **SUPERSEDED AGAIN 2026-07-28 — the `host` mode this doc reverts to was DELETED.** The revert
-> above was undone on 2026-07-25 (the `ttnn.rand` kernel was fixed), and `host` has now been
-> removed outright after being measured NOT to be the language-drift cause: it drifts on exactly
-> the same prompts as `device`, repairs 0, and costs 1.40x per request, and the real cause was the
-> canvas attending prefill pad keys, fixed in `d0936d4da4f`.
-> The Opt-B host-Gumbel-prefetch mechanism and `DG_HOST_GUMBEL_PREFETCH` are gone with it. The
-> throughput and A/B numbers below still stand as the record; the "revert to `host`" fallback
-> plan and the owed host-vs-device re-gate no longer have a second arm to run.
+Status: provenance-only for the host arm — `DG_VLLM_GUMBEL_MODE=host`, `DG_HOST_GUMBEL_PREFETCH`
+and the whole host-Gumbel-prefetch mechanism were deleted 2026-07-28 — and for the op table, taken
+on the token-gather MoE deleted 2026-07-29. The shape trap and its fix are current.
+Owns: the 8 GiB TILE_LAYOUT padding OOM in the permuted-vocab full-vocabulary Gumbel draw and its
+2-D reshape fix; the post-change per-step op distribution.
+See also: [refuted list](../REFUTED.md), [optimize-perf hub](README.md),
+[device Gumbel restored](../decision_fidelity/device_gumbel_restored.md).
 
+## REUSABLE SHAPE TRAP — the 8 GiB TILE_LAYOUT padding OOM
 
-Two optimizations to the up-front traced denoise path (`tt/traced_denoise.py`
-`UpfrontTracedDenoiseController`), motivated by the finding that the path is **host-bound,
-not device-bound**: in the served `DG_VLLM_GUMBEL_MODE=host` contract every replay step
-regenerates a full-vocab `torch.rand((1,256,262144))` Gumbel (256 MiB, ~313 ms host CPU) and
-replicates it to all 4 devices (~1 GiB H2D DMA) — with the device idle for the host RNG and a
-redundant per-step `synchronize_device` foreclosing any overlap. Wan (the reference diffusion
-model) keeps its whole denoise loop on-device with no per-step host RNG and no per-step readback;
-these changes move DiffusionGemma toward that shape.
+The permuted path built `ttnn.rand([vocab, 1, canvas, 1])`. `TILE_LAYOUT` pads the trailing size-1
+axis to a full 32-tile, inflating the `[1,1,256,262144]` buffer **256 MiB → 8 GiB**:
 
-## Opt B — host-Gumbel prefetch + drop the per-step sync (DEFAULT ON, byte-identical)
+```
+TT_FATAL bank_manager.cpp:462 — allocate 8589934592 B
+```
 
-- `tt/generate.py` `make_seeded_host_gumbel_noise_fn`: the next step's host Gumbel `torch.rand`
-  is computed on a 1-thread worker while the current step's device trace runs; only the
-  `from_torch` upload stays on the main thread (no concurrent device access). Gated by
-  `DG_HOST_GUMBEL_PREFETCH` (default 1; `0` = exact serial baseline). Byte-identical because the
-  Gumbel is per-`(block,step)` privately seeded — only *when* it is generated changes, never the
-  value. The shared-generator renoise-token stream is deliberately **not** touched.
-- `tt/traced_denoise.py`: removed the per-step `ttnn.synchronize_device` (the following
-  `read_halt_scalars` to_torch is CQ0-ordered + blocking, so ordering is preserved).
+**Fix:** draw a 2-D `[vocab, inner]` rand with all non-vocab dims collapsed into one tile-aligned
+inner axis (vocab stays outermost, so still not the correlated innermost axis), then permute
+vocab→innermost and reshape. Buffer back to 256 MiB; the vocab-outermost distribution property is
+preserved, exact values change. Pinned by
+`test_permuted_vocab_gumbel_noise_deallocates_pre_permute_tensor`. The `ttnn.rand` PRNG defect that
+made the permuted draw necessary is owned by
+[device Gumbel restored](../decision_fidelity/device_gumbel_restored.md).
 
-Evidence (QB2 `bh-qbge-06`, P150x4, mesh (1,4) TP=4):
+## What was measured
 
-- Device-free: prefetch ON vs OFF Gumbel sequences byte-identical + match a standalone
-  deterministic draw.
-- Reduced-layer device test `test_device_upfront_matches_eager_tokens_realized_k_and_halt`
-  (2 layers): upfront-traced committed tokens `torch.equal` to eager, realized-K + halt match.
-- Full 30L A/B (p_max=1024, prompt "Explain why the sky is blue", 2 repeats): per-block halt
-  step counts **identical** prefetch on/off (22/17/10) — decisions unchanged.
-- Throughput: decode-block mean **9.98 s (PF1) vs 11.48 s (PF0)** → **1.15x**; denoise-only
-  per-step ~658 ms vs ~771 ms (~1.17x).
-- GPQA host smoke @3072 (samples 0,1): doc-0 correct `\boxed{C}` (exact_match=1), coherent.
+**DIAGNOSIS that motivated the work:** the up-front path was **host-bound, not device-bound** under
+the host-Gumbel contract — every replay step regenerated `torch.rand((1,256,262144))` (256 MiB,
+~313 ms host CPU) and replicated ~1 GiB H2D per step, with a redundant per-step
+`synchronize_device` foreclosing any overlap.
 
-Byte-identical → no decision re-gate required. This is the shipped default behavior change.
+Removing that per-step `ttnn.synchronize_device` in `tt/traced_denoise.py` is safe because the
+following `read_halt_scalars` `to_torch` is CQ0-ordered and blocking, so ordering is preserved.
 
-## Opt A — on-device Gumbel (`DG_VLLM_GUMBEL_MODE=device`, NON-default, needs re-gate)
+**Throughput record:** host-serial ~771 ms/step → host+prefetch ~658 ms/step (decode block 9.98 vs
+11.48 s = 1.15×) → device ~428 ms/step (~1.8× vs host-serial, ~1.54× on top of prefetch). Gumbel-max
+terminal sampling costs +16 ms over argmax (29 → 45 ms). The full device-mode step summed to ~496 ms
+eager-synchronized against a ~450 ms traced step, i.e. **traced ≈ eager on this path**.
 
-- `tt/generator_vllm.py`: up-front validator now accepts `gumbel_mode in {host, device}`
-  (chunked/argmax still rejected loudly — not materialized full tensors).
-- Server maps `device` → `make_seeded_gumbel_noise_fn` → `sample_gumbel_noise_with_permuted_vocab`
-  (already controller-compatible; RNG runs outside the trace ⇒ trace-safe). Launcher default
-  stays `host`.
+**BYTE-IDENTICAL CRITERION:** because the Gumbel is per-`(block, step)` privately seeded, a prefetch
+change alters only *when* it is generated and never the value, so no decision re-gate is required.
+The shared-generator renoise-token stream was deliberately left untouched.
 
-### Bug fixed en route: 8 GiB OOM in `sample_gumbel_noise_with_permuted_vocab`
+**Device-mode quality re-gate — NOT a clean pass at n=2.** GPQA @3072, samples 0/1, same-samples
+A/B: doc 0 (target C) host `em=1 \boxed{C}` vs device `em=0` — correct reasoning reaching C but the
+`\boxed{}` wrapper dropped; doc 1 (target A) both `em=0` with `\boxed{C}`. Accuracy host **0.5** vs
+device **0.0**. The owed sub-40 host-vs-device re-gate is now permanently unrunnable (the host arm
+was deleted), so the device default still rests on this n=2 result, which the original doc itself
+called "inconclusive-to-negative" — see [refuted list](../REFUTED.md). The current
+`DG_VLLM_GUMBEL_MODE` default and the full host/device history are owned by the
+[optimize-perf hub](README.md).
 
-The permuted path built `ttnn.rand([vocab, 1, canvas, 1])`; `TILE_LAYOUT` pads the trailing
-size-1 axis to a full 32-tile, inflating the `[1,1,256,262144]` buffer **256 MiB → 8 GiB**
-(`TT_FATAL bank_manager.cpp:462`, `allocate 8589934592 B`). Fixed by generating a 2-D
-`[vocab, inner]` rand (vocab outermost so still not the correlated innermost axis; all non-vocab
-dims collapsed into one tile-aligned inner axis), then permute vocab→innermost + reshape. Buffer
-back to 256 MiB. Distribution property (vocab-outermost draw) preserved; exact values change.
-Unit test `test_permuted_vocab_gumbel_noise_deallocates_pre_permute_tensor` updated (11/11 pass).
+The up-front validator still rejects `chunked` and `argmax` loudly because they are not materialized
+full-tensor Gumbel sources (confirmed live in `tt/generator_vllm.py`).
 
-### Results
+## Per-step 30-layer op distribution — provenance only
 
-- Device path runs through the full vLLM server (capture + 7-block serve, all early-halting) and
-  is **deterministic** (committed-token sha256 stable across repeats).
-- Throughput (p_max=1024, same prompt): denoise-only per-step **~428 ms** vs host-serial ~771 ms
-  = **~1.8x**, and ~1.54x on top of Opt B. It removes the ~1 GiB/step H2D DMA that Opt B cannot
-  hide — this is the larger lever.
-- **Quality re-gate — NOT a clean pass at n=2.** GPQA @3072, samples 0/1, same-samples A/B:
-
-  | doc | target | host@3072 | device@3072 |
-  |----|--------|-----------|-------------|
-  | 0  | C      | em=1, `\boxed{C}` | em=0, correct reasoning → "Answer: (C)" but **no `\boxed{}`** |
-  | 1  | A      | em=0, `\boxed{C}` (hard miss) | em=0, `\boxed{C}` (same miss) |
-  | **acc** |    | **0.5**   | **0.0**     |
-
-  Device-mode Gumbel perturbed doc-0 generation enough to drop the `\boxed{}` wrapper (reasoning
-  still reaches the correct C), costing the one point host earned. Reasoning quality is preserved;
-  exact_match regressed on the single sample host got right.
-
-### Verdict / decision (2026-07-24)
-
-Opt A is a real ~1.8x denoise win and is deterministic. The n=2 re-gate was inconclusive-to-
-negative (a format-sensitive doc-0 miss: correct reasoning, no `\boxed{}`). **On owner decision the
-served default is flipped to `device`** (launcher `DG_VLLM_GUMBEL_MODE:-device`), accepting the n=2
-caveat because the two changes ship as **separate commits** so device mode can be reverted
-independently (revert the Opt A commit → back to `host` + prefetch) if a problem surfaces. Opt B
-(byte-identical) ships as the always-on default. **A sub-40 GPQA host-vs-device @3072 re-gate
-remains the recommended follow-up** to confirm answer-parity at scale.
-
-## Post-Opt-A/B per-step op distribution (synchronized-component, Tracy OFF)
-
-Reduced-layer synchronized per-component device-time (approved substitute; `hardware-profiler-limited`),
-2-point fit L=2/L=6 (`prof_step_breakdown` + added Gumbel-RNG / gumbel-max-terminal components),
-`DG_SPARSE_MOE_TUNED=1`. per_layer = (84.14−28.38)/4 = 13.94 ms; 30L backbone = 418.7 ms; full
-device-mode step (eager sync-sum) ≈ 496 ms (≈ the ~450 ms traced step; traced≈eager).
+Reduced-layer synchronized per-component device time (approved substitute, Tracy OFF), 2-point fit
+L=2/L=6, measured on the deleted token-gather MoE:
 
 | component | 30L ms | % step |
 |---|--:|--:|
@@ -113,18 +68,28 @@ device-mode step (eager sync-sum) ≈ 496 ms (≈ the ~450 ms traced step; trace
 | — attention + norms + RoPE | 135.6 | 27.3 |
 | terminal (gumbel-max sampling + sort/cumsum/scatter accept) | 45.0 | 9.1 |
 | soft-embedding (262k self-cond input) | 16.0 | 3.2 |
-| Gumbel RNG (Opt-A device permuted-vocab) | 10.9 | 2.2 |
+| Gumbel RNG (device permuted-vocab) | 10.9 | 2.2 |
 | LM head | 4.3 | 0.9 |
 | self-cond gated MLP | 1.6 | 0.3 |
-| commit (per block, separate) | ~960 | 16–54 of block |
+| commit (per block, separate) | ~960 | — |
 
-Findings: (1) device Gumbel RNG is only ~2.2% (~11 ms) after the OOM shape-fix — the 2-CQ-RNG-overlap
-lever is NOT worth it. (2) MoE is ~57% of the step (supersedes the pre-fusion SESSION-10 "89%"), still
-#1; attention/norms are now a real ~27% #2. (3) terminal gumbel-max sampling is ~9% (+16 ms over argmax:
-29→45 ms). Refined next levers: MoE 6-D gather-Permute fusion > attention/canvas-recompute > commit
-trace/overlap (dominates short early-halt blocks) > sort/cumsum/scatter accept-chain tuning. Artifacts:
-`prof_step_breakdown.py` (+ scratch gumbel-augmented variant).
+**REFUTED LEVER:** at ~2.2% (~10.9 ms) of the step, the 2-command-queue RNG-overlap lever is not
+worth doing. The table's "MoE 6-D gather-Permute fusion" next-lever ranking describes a path that no
+longer exists.
 
-Commands: `run_upfront_gpqa.sh smoke` with `DG_VLLM_GUMBEL_MODE={host,device}` and
-`MAX_GEN_TOKS=3072`; throughput via `bench_gumbel_mode.py` / host A/B via `bench_upfront_prefetch.py`.
-All runs: 4× Blackhole p300c, no Tracy/watcher.
+> **OPEN CONTRADICTION (unexplained):** the denoise per-step cost is stated as ~428 ms traced /
+> ~496 ms eager-sync here (MoE 56.9%), ~465–540 ms in
+> [context speed sweep](context_speed_sweep_20260722.md), ~0.9 s with MoE ~89% in
+> [official sampler](official_sampler_earlyhalt_20260722.md), and 4–5.6 s in the deleted
+> `ttft_ts_sweep.md`. Each was measured on a different, now-superseded MoE path and nothing in the
+> tree reconciles them. Not explained.
+
+## Repro
+
+All runs: 4× Blackhole p300c, no Tracy or watcher. Env: see [plan](../../plan.md).
+
+- Quality/serving vehicle: `run_upfront_gpqa.sh smoke` with `DG_VLLM_GUMBEL_MODE` set and
+  `MAX_GEN_TOKS=3072`.
+- Op-breakdown vehicle: `doc/optimize_perf/prof_step_breakdown.py`.
+- The throughput A/B used `bench_gumbel_mode.py` and `bench_upfront_prefetch.py`, **neither of which
+  is present in the repo**, so those numbers cannot be re-measured as recorded.

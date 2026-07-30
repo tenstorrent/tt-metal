@@ -1,218 +1,164 @@
-# DiffusionGemma — data-dependent early-halt in the traced denoise loop (dg-08 lever 8, #47465)
+# Early halt in the traced denoise loop (#47465)
 
-**Goal.** Recover the eager path's data-dependent early-halt (stop denoising once a block's
-canvas has converged) **while keeping the traced path's dispatch savings**, so a converged
-block runs fewer than the fixed ≤48 steps. The traced loop is otherwise **fixed-48**
-(early-halt was lost when the loop was traced — a static Metal trace fixes the step count);
-model-faithful throughput at 48 steps ≈ **17.9–18.2 t/s** (`perf_campaign_worklog.md`; this stage's
-own fixed-48 run measured 18.20 t/s — the ~2% spread across runs is timing variance, same committed
-tokens `a9f0d18709b07d1e`, and the overhead/break-even below uses a single internally-consistent run).
+Status: current — window-1 early halt is intrinsic and unconditional in
+`tt/traced_denoise.py::UpfrontTracedDenoiseController` (it reports `halt_window: 1`). The two
+early-halt env flags and the grouped-window / frozen-prefix controller variants were deleted; the
+module docstring says those variants "do not live in this module" (dead flag names: see
+[flag triage](flag_triage_20260728.md)).
+Owns: the halt criterion and its device/host split, the halt firing-status contradiction, the
+`block(K)` dispatch cost model, the inverted argmax-vs-Gumbel claim, and the recon verdicts absorbed
+from the deleted `multistep_trace_batching.md` and `denoise_replay_recovery_plan.md`.
+See also: [refuted list](../REFUTED.md), [optimize_perf hub](README.md).
 
-**Bottom line (honest).** The mechanism is built, correct (bit-identical to the fixed-48
-traced path when it does not fire; bit-identical to the eager StableAndConfident reference at
-the same halt step when it does), and landed behind a DG-local flag defaulting to the current
-fixed-48 behaviour. **But under #48291 it is a no-op on real output**: the confidence
-(entropy) gate never clears the 0.005 threshold, so blocks run the full 48 steps — measured,
-not assumed (below). Early-halt therefore does **not** beat fixed-48 today; the value here is a
-correct, ready mechanism plus a measured break-even for when #48291 is resolved (or a schedule
-cut lowers the step budget). This matches `path_to_100tps.md` (d): "100 t/s only exists in the
-≤16–20-step early-halt regime — and early-halt cannot fire because of #48291."
+Over the 100-line cap: two open contradictions, four refutations and two cost models with no other
+home.
 
----
+## The criterion
 
-## The mechanism constraint (why not just trace the loop)
+A static Metal trace bakes a fixed op graph, so the variable-length denoise loop **cannot** be traced
+whole and still stop early — any halt scheme must not trace the whole loop.
 
-A static Metal trace bakes a fixed op graph, so the whole variable-length denoise loop cannot
-be traced and still stop early. The scheme must **not** trace the whole loop. Two evaluated:
+Each traced step reduces the halt condition to two `[1,1,1,1]` device scalars in
+`tt/denoise_loop.py`: `mean_entropy` = `sum(entropy)/canvas_len` over the 256 canvas positions
+(entropy upcast to fp32 first), and `mismatch` = count of clean-argmax positions changed vs the
+previous step (`ne` then `sum`). The **host** reads those two 4-byte scalars and applies the exact
+eager rule (`eval_halt`): halt when `mismatch == 0` AND `mean_entropy < entropy_stop_threshold`
+(0.005), with a prior step required. No fp threshold decision is baked into the device.
+`mismatch == 0` is exactly `torch.equal(argmax, prev)` at `stable_steps_to_halt == 1`, the released
+config value; the step cap is K=48.
 
-- **(A) per-step** — trace ONE denoise step; replay it in a host loop; after each replay read
-  a single on-device convergence scalar and branch continue/stop on host.
-- **(B) chunked-halt** — trace a fixed K-step window; replay the window; check the halt scalar
-  once per window; stop at the first window boundary at-or-after convergence. K trades halt
-  granularity against per-window host-orchestration overhead.
+The device reduction is trustworthy because token ids ≤ 262144 are below 2^24 and therefore exact in
+fp32, so `ne`+`sum` reproduces `torch.equal`+count bit-for-bit — measured max mismatch error **0
+(exact)**, max mean-entropy error **5e-7** at 6 layers/12 steps and **1.2e-5** at 30 layers/48 steps.
 
-Both are implemented in one controller (`tt/traced_denoise.py::EarlyHaltTracedDenoiseController`,
-extending the multi-step traced controller): a K-step window capture with `K==1` ⇒ scheme A and
-`K>1` ⇒ scheme B. The **only difference between A and B is how often the host syncs+reads+branches**
-(every step vs every window); the in-trace per-step compute is identical.
+The halt scalars are a **read-only side computation** over the same per-step argmax/entropy the fixed
+path already produces; they never touch the canvas thread or the committed argmax, so enabling
+halting cannot perturb a commit. `prev_argmax`, `mean_entropy` and `mismatch` are persistent buffers
+allocated BEFORE `begin_trace_capture` with their in-trace `ttnn.copy` writes warmed once eagerly —
+an instance of the trace-lifetime rule ([hub](README.md)), and what made the traced loop bit-exact.
 
-## The on-device halt scalar (no 5-tensor readback)
+## Firing status
 
-The retired eager loop read back **5 full `[B,L]` tensors/step** (argmax, entropy, sampled,
-accept, canvas) — `bench_loop_readback.py` measured that at **27.76 ms/step**, and killing it
-is why the loop was traced. Reintroducing it would defeat the purpose. Instead, every traced
-step reduces the halt condition to **one tiny scalar pair on device** (`tt/denoise_loop.py`):
+> **OPEN CONTRADICTION (unexplained):** this file's own 30L eager oracle measured every block running
+> the full 48 steps with mean entropy floored at **0.155 / 0.138 / 0.506 nats** (~30–100x above the
+> 0.005 threshold), `halted = False` on all three — "early halt never fires under #48291". The
+> deleted `denoise_replay_recovery_plan.md` measured halts at steps **[9,17,2] of 48** on the same
+> canonical prompt, bit-exact vs the full path, and explicitly withdrew the "never clears 0.005"
+> note, attributing the change to the tanh-GELU fix;
+> [realized K on 8 GPQA-Diamond prompts](upfront_earlyhalt_gpqa_20260722.md) records **K = 10–43**
+> (up-front traced, 8/8 released) and the concat MoE records 8–27 steps. The arms were never re-run
+> against each other under one MoE/GELU configuration, so which factor moved the entropy gate is
+> **not explained**. The old arm is additionally void as an absolute result: it ran the fast-approx
+> GELU and the token-gather denoise MoE that was later deleted.
 
-- `mean_entropy` `[1,1,1,1]` — `sum(entropy)/canvas_len` over the 256 canvas positions, matching
-  the eager `entropy.mean()` (entropy upcast to fp32 first, as the host path does).
-- `mismatch` `[1,1,1,1]` — count of positions whose clean argmax changed vs the previous step
-  (`ne` then `sum`); `0` ⟺ `torch.equal(argmax, prev)` — the eager stability gate at the
-  released `stable_steps_to_halt == 1`.
+Diagnostic split that survives the supersession, and why `halted=False` alone tells you nothing: the
+**stability** gate does fire (blocks with 14–18 argmax-stable steps) while the **confidence**
+(entropy) gate is the one that blocks. A higher-precision *terminal* argmax/entropy re-measures the
+same logit distribution and cannot make it more confident — precision is not a lever on the entropy
+gate. The telemetry that separates a converged canvas from a collapsed one is in
+[device_gumbel_restored.md](../decision_fidelity/device_gumbel_restored.md).
 
-The HOST reads these two 4-byte scalars after each step/window and applies the **exact eager
-rule** (`eval_halt`): halt when `mismatch == 0` (stable) AND `mean_entropy < entropy_stop_threshold`
-(confident), with a prior step required. No fp threshold decision is baked into the device.
-The per-step in-trace halt ops are ~sub-ms 256-wide reductions — negligible vs the ~233 ms/step
-device compute — so A and B run the same per-step device work as the fixed budget.
+## Noise regime — the claim is inverted
 
-Trace-safety: `prev_argmax`, `mean_entropy`, `mismatch` are persistent buffers allocated BEFORE
-`begin_trace_capture` and their in-trace `ttnn.copy` writes warmed once eagerly (the session-8
-rule that made the traced loop bit-exact). The halt scalars are a **read-only side computation**
-over the same per-step `argmax`/`entropy` the fixed-48 path already produces — they never touch
-the canvas thread or the committed argmax.
+Every pre-2026-07 doc in this tree states that the traced denoise path "supports only argmax
+(`gumbel_noise=None`) and raises on a real tensor/descriptor". **That is inverted.** The shipped
+up-front traced controller REQUIRES a per-step **materialized Gumbel tensor** and raises
+`argmax and chunked/descriptor noise are unsupported`. Any doc still asserting the argmax
+prerequisite is provenance, not a constraint.
 
----
+## Overhead, break-even and cost models
 
-## Correctness guards (all green)
+Orchestration overhead is the host sync + 8-byte read + branch a fixed-budget traced path does not
+pay: **5.87 ms/step** per-step (48 syncs/block, ~2.3% of the 260 ms device step); **28.1 ms/window**
+at K=4 (12 syncs) and **34.7 ms/window** at K=8 (6 syncs). It is tiny because denoise steps are
+ALREADY device-serialized (each step's forward depends on the previous step's canvas), so a per-step
+sync adds a short host round-trip, not a pipeline stall. Break-even halt step, below which halting
+beats the fixed budget: **46.9** per-step, **46.7** at K=4, **47.2** at K=8 — i.e. **any** block that
+stops at ≤46 of 48 steps is a net win.
 
-Measured on device (`probe_early_halt.py --mode correctness`, 6 layers, N=12, tuned MoE,
-`DG_SPARSE_MOE_TUNED=1`). Reduced layers exercise the mechanism (which is layer-count-independent);
-the 30L per-step decision faithfulness is separately confirmed against the eager halt-gap below.
+Fixed-48 traced steady block **14.069 s = 18.20 t/s** and fixed-12 traced **4.693 s = 54.55 t/s** at
+full 30L, both committing `a9f0d18709b07d1e`. Those two points reconcile as
+`block = commit + steps·step_dev` ⇒ **step_dev = 0.260 s/step, commit = 1.57 s**
+(`14.069 = 1.57 + 48·0.260`; `4.693 = 1.57 + 12·0.260`).
 
-| guard | check | result |
-|---|---|---|
-| **G1 — no-halt ≡ fixed-48** | scheme-A with an impossible threshold (never halts) commits the byte-identical argmax of the fixed-48 traced path | `committed_sha` match **✅** (`3d744378ec43a7e3` both) |
-| **G2 — forced-halt ≡ eager (scheme A)** | elevated-threshold scheme-A vs eager `tt_denoise_block` (same rule on host): commit + realized steps + halted flag | `sha` **✅** · `steps` **✅** · `halted` **✅** |
-| **G2 — forced-halt ≡ eager (scheme B, K=4)** | same, chunked window | `sha` match **✅** |
-| **per-step scalar faithfulness** | device `(mean_entropy, mismatch)` vs eager per-step `(entropy.mean(), argmax_changes)`, all 12 steps | max entropy err **5e-7** · max mismatch err **0 (exact)** |
+The dispatch cost model that motivated all trace-shape work: **`block(K) ≈ 0.275·K + 1.09 s`** at
+full 30L (58.29 t/s at 12 steps, 33.28 at 24). 100 t/s requires `block ≤ 256/100 = 2.56 s`, which
+with single-step replays holds only at `K ≤ ~5` — below any quality-safe step budget. The ~1.09 s
+fixed term is the per-replay dispatch of the single-step trace paid K times per block, plus the two
+per-block `synchronize_device` barriers and the per-block refresh. The landed single-step traced
+serving loop removed a ~137 ms/step host-dispatch tax and cleared 30 t/s bit-exactly.
 
-The exact mismatch agreement (0) is expected: token ids ≤262144 (< 2^24) are exact in fp32, so
-the device `ne`+`sum` reproduces `torch.equal`+count bit-for-bit. The 5e-7 entropy agreement is
-the device-fp32-mean vs host-fp32-mean summation-order difference — far below any threshold
-boundary risk. An actual early-*return* (halt firing mid-block) is demonstrated at 30L below
-(the 6-layer reduced model never stabilizes, so it cannot fire even at threshold 100).
+> **OPEN CONTRADICTION (unexplained):** the denoise per-step cost is **0.260 s/step** by the
+> reconciliation above (fixed-48 traced, 14.069 s block, old GELU / token-gather MoE) and **0.42
+> s/step** replay-only in the frozen-prefix measurement below (21.5 s fixed-48 block, tanh-GELU, no
+> fused MoE-dispatch kernel). The sources attribute the gap to the heavier correct tanh-GELU plus the
+> omitted fused kernel — "headroom, not a regression" — but the two were never measured in one
+> configuration, so the per-step figure is **not explained**.
 
----
+## Absorbed recon verdicts
 
-## The realized halt-step distribution (honest, #48291)
+**The recapture regression.** Per-block Metal-trace RECAPTURE dropped steady serving from ~18 to ~3.6
+tok/s, while the growing-prefix correctness committed by `ec5b64b4891` (tokens committed in earlier
+blocks must be visible to later blocks' cross-attention) had to be kept. The sole remaining recapture
+cause was the growing concatenated prefix K/V (dim-2 grows by `canvas_len` per block via
+`read_prompt_kv_cache_slice`); canvas RoPE was already trace-fixed by the constant-shape
+`canvas_rope_provider`.
 
-`probe_halt_gap.py` (eager, 30L, tuned MoE, 3 blocks, prompt "Explain what a diffusion language
-model is in one sentence.") — the eager `StableAndConfident` oracle:
+**No drop-in paged prefix read exists** — three reasons in [refuted list](../REFUTED.md). What IS
+reusable: `ttnn.transformer.chunked_scaled_dot_product_attention` is a real paged prefill SDPA with a
+fixed-shape `page_table_tensor` and a trace-safe device-tensor offset (`chunk_start_idx_tensor`,
+"update on device, no recompile"), and DiffusionGemma's commit path already writes/reads paged
+(`tt/commit_decode.py`). The missing online-softmax merge is exactly what motivated the
+[return_lse kernel work](return_lse_kernel_plan.md) and `tt/attention_merge.py`. Design successor:
+[paged prefix denoise design](paged_prefix_denoise_design.md).
 
-| block | num_steps | halted | entropy_mean min | steps entropy<0.005 | steps argmax-stable | would_early_halt |
-|---|---|---|---|---|---|---|
-| 0 | 48 | False | 0.155 | **0** | 0 | False |
-| 1 | 48 | False | 0.138 | **0** | 18 | False |
-| 2 | 48 | False | 0.506 | **0** | 14 | False |
+**Frozen-prefix device measurement** (full 30L, canonical prompt, 3 blocks): fixed-48 gives **11.92
+t/s / 21.5 s per block**; frozen + early-halt gives **47.84 t/s / 5.35 s per block** with steps
+[9,17,2] halted — ~3.9x and ~16x against the regressed 3.03 t/s. Capture-once confirmed by counters:
+2 capture events, 8 frozen-prefix reuses, 0 recapture, per-step cost 1.746 s (capture+replay) → 0.42
+s (replay-only). The approach is refuted as an answer (later blocks do not attend earlier blocks'
+committed KV); the numbers stand as provenance.
 
-**Every block runs the full 48 steps. The stability gate DOES fire** (blocks 1–2 have 14–18
-steps with zero argmax changes) — it is purely the **confidence (entropy) gate that #48291
-blocks**: the bf16/MoE/TP=4 backbone produces broad logit distributions whose mean per-position
-entropy floors at **~0.14–0.51 nats, ~30–100× above the 0.005 threshold**. So `confident` is
-never true and early-halt never fires. This is a property of the backbone logit *distribution*
-(a #48291 fidelity consequence), not of the halt mechanism. A higher-precision *terminal*
-argmax/entropy re-measures the same distribution and cannot make it more confident.
+**Correctness watch-item for any prefix scheme:** the reveal / last-page boundary must NEVER expose
+uncommitted tokens to the cross-attention.
 
-Scheme-A with the real 0.005 threshold reproduces this: `denoise_steps_per_block` = full budget,
-`halted = False` (see the perf run below) — the mechanism is correct and simply does not trigger.
+## Determinism invariants any trace-shape change must preserve
 
----
+* per-step temperature baked via `temperature_at_step(i, max_denoise_steps, t_start, t_end)`;
+* per-step noise from persistent `noise_bufs[i]`, refreshed in the same `noise_tokens_fn(step)` order
+  and count so the seeded generator stream is untouched;
+* self-conditioning carried in the adapter's persistent in-place `signal_buf`, re-zeroed per block by
+  `reset_signal_buffer` so step 0 reads zeros == the eager `condition(None)` == `post_norm(embed)`;
+* canvas RoPE refreshed per block OUTSIDE the trace into constant-shape per-layer-type buffers (RoPE
+  depends only on absolute position).
 
-## Overhead + break-even (perf run)
+## Open items
 
-`probe_early_halt.py --mode perf` (full 30L, N=48, tuned MoE, `DG_TRACE_REGION_SIZE=10 GB`,
-3 blocks/config, steady = mean(block[1:]); traced Metal capture/replay + synchronized block
-timing, ENABLE_TRACY=OFF). All configs commit under `stop_token_ids=[]` (RUN-first).
+* ~~The grouped-window (G>1) trace was never gated on device.~~ **It WAS — and it was rejected.**
+  On 2026-07-08 (`sweep_at48.py`, 30L / 48 steps / 3 blocks) the bounded G=12 window was bit-exact
+  (`committed_sha a9f0d18709b07d1e`) and worth **+0.3%, i.e. noise**, while the whole-block window
+  crashed with a `TT_FATAL` buffer-region overflow. At 48 steps the block is compute-bound, so
+  batching only removes per-replay host dispatch. See
+  [REFUTED.md](../REFUTED.md#trace-commit-and-self-conditioning). This is NOT an open item; the
+  trace-region argument below is a first-principles hypothesis that the hardware already answered,
+  and the whole-block crash is evidence AGAINST it: the heavy per-step intermediates
+  (`[1,1,C,262144]` logits ≈ 134 MB bf16 at C=256, plus the 30-layer forward activations) are
+  deallocated between steps inside a capture, so a window's peak *should* be one step's — but the
+  whole-block window overflowed anyway. Its harness was deleted with the controller.
+* **Trace-region sizing:** 48 single-step traces at 30 layers need roughly **8 GB** of
+  `DG_TRACE_REGION_SIZE`; a K-step window scheme needs `ceil(48/K)` window traces.
+* **Measurement-design note for any multi-arm denoise benchmark:** measure DENOISE ONLY. Two serving
+  loops with commit enabled on one model build double-commit into the same KV cache; commit is an
+  additive per-block constant to fold back into a projection.
 
-| config | steps run / block | halted | steady block (s) | t/s | commit sha |
-|---|---|---|---|---|---|
-| **fixed-48 traced** (baseline) | [48,48,48] | [F,F,F] | 14.069 | **18.20** | `a9f0d18709b07d1e` |
-| fixed-12 traced (fit point) | [12,12,12] | [F,F,F] | 4.693 | 54.55 | — |
-| **scheme A** no-halt (thr −1e9) | [48,48,48] | [F,F,F] | 14.351 | 17.84 | `a9f0d18709b07d1e` ✅ |
-| **scheme A** real (thr 0.005) | [48,48,48] | [F,F,F] | 14.349 | 17.84 | `a9f0d18709b07d1e` ✅ |
-| **scheme B K=4** no-halt | [48,48,48] | [F,F,F] | 14.406 | 17.77 | — |
-| **scheme B K=8** no-halt | [48,48,48] | [F,F,F] | 14.277 | 17.93 | — |
+## Reproduction
 
-- **Guard 1 at 30L confirmed byte-identical**: scheme-A no-halt AND scheme-A real-threshold both
-  commit the SAME `a9f0d18709b07d1e` as the fixed-48 traced baseline (this is also the established
-  `traced_tuned_s48` sha in `perf_campaign_worklog.md`). The halt machinery does not perturb the commit.
-- **`ms_per_block` reconciliation**: from the two fixed-budget points,
-  `block = commit + steps·step_dev` ⇒ **step_dev = 0.260 s/step, commit = 1.57 s**
-  (`14.069 = 1.57 + 48·0.260` ✓; `4.693 = 1.57 + 12·0.260` ✓).
-- **Orchestration overhead** (the host sync + 8-byte read + branch the fixed traced path does not pay):
-  - scheme A: **5.87 ms/step** (48 syncs/block) — ~2.3% of the 260 ms device step.
-  - scheme B: **28.1 ms/window** (K=4, 12 syncs) / **34.7 ms/window** (K=8, 6 syncs).
-  The overhead is tiny because the denoise steps are ALREADY device-serialized (each step's forward
-  depends on the previous step's canvas), so a per-step sync adds only a short host round-trip, not a
-  pipeline stall. Total per-block overhead (~208–337 ms) sits within block-timing noise across A/B/K,
-  so the per-sync-count differences are not resolvable here — the takeaway is simply "all ≈ 2%".
-- **Break-even halt-step** (below which the scheme beats fixed-48): **A = 46.9, B(K=4) = 46.7,
-  B(K=8) = 47.2**. Because the overhead is ~2%, break-even is ≈47 steps — i.e. **any** early halt (any
-  block that stops at ≤46 steps) makes the scheme faster than fixed-48. Scheme B(K=8) has the highest
-  break-even (fewest syncs), the marginal winner, but the margin is within noise.
+env: see [plan](../../plan.md).
 
-**So: when early-halt fires, the win is real and cheap (break-even ≈47/48); the whole cost is the
-~2% no-halt overhead you pay on blocks that run to the budget.** Under #48291 every block runs the
-budget (below), so today the flag is a ~2% net loss — hence default OFF.
+```bash
+python models/experimental/diffusion_gemma/doc/optimize_perf/probe_halt_gap.py
+```
 
----
-
-## Forced-halt demonstration at 30L (early-return path)
-
-The 6-layer correctness run validated the halt-scalar computation, the host branch, and Guard 1/2
-agreement, but the reduced model never stabilizes (argmax changes every step), so the early-*return*
-`break` was never taken there. To exercise the actual early-return on real stable-argmax blocks, this
-runs `probe_early_halt.py --mode correctness` at **full 30L, N=48**, with an elevated threshold
-(`--forced-threshold 100`) so the confidence gate no longer blocks — the halt then fires wherever the
-argmax is stable.
-
-Under that threshold the eager oracle (measured, `EAGER_DIAG`) behaves exactly as the halt-gap:
-**block 0's argmax never stabilizes** (changes 37,20,16,… — never 0) so it runs the full 48. Block 1
-stabilizes early (`argmax_1 == argmax_0` per the halt-gap), so the elevated threshold fires the halt on
-block 1. Guard 2 requires scheme A to halt at the SAME step and commit the SAME argmax as eager, and
-scheme B(K=4) to halt at the first window boundary at-or-after that step committing the SAME tokens (the
-argmax is stable across the early steps, so the window-end commit equals the eager halt-step commit).
-
-Measured (`probe_early_halt.py --mode correctness --num-layers full --forced-threshold 100`, 30L,
-N=48, 2 blocks) — the halt FIRES on block 1:
-
-| path | block 0 (unstable) | block 1 (stable) | halted | commit sha vs eager |
-|---|---|---|---|---|
-| eager `tt_denoise_block` | 48 steps | **2 steps** | [F, **T**] | — |
-| scheme A (K=1) | 48 steps | **2 steps** | [F, **T**] | **byte-identical** (Guard 2 sha ✅) |
-| scheme B (K=4) | 48 steps | **4 steps** | [F, **T**] | **byte-identical** (Guard 2 sha ✅) |
-
-Guard verdicts (`RESULT_EARLY_HALT`): `guard2_A_eq_eager` = sha ✅ · steps ✅ (`[48,2]==[48,2]`) · halted ✅
-(`[F,T]==[F,T]`); `guard2_Bk4_vs_eager` = sha ✅ (scheme B halts at the step-4 window boundary vs eager's
-step 2, committing the SAME tokens because the argmax is stable across steps 1–4); `guard1` no-halt ≡
-fixed = sha ✅ (`8f015a49e4e31a63`); per-step scalar agreement over all 48 steps = max entropy err
-**1.2e-5**, max mismatch err **0 (exact)**.
-
-This exercises the mechanism's early-return end-to-end: a converged block stops before the 48-step cap
-and commits the eager reference's tokens, while an unconverged block still runs the full budget and stays
-byte-identical to fixed-48. It only requires the confidence gate to be satisfiable — which is exactly what
-#48291 blocks on real output.
-
----
-
-## Chosen scheme + flag
-
-- **Scheme A (per-step, `DG_DENOISE_EARLY_HALT=1`, `DG_DENOISE_EARLY_HALT_WINDOW=1`, default)** is
-  the correctness-clean choice: it halts at the EXACT eager step and commits the bit-identical
-  argmax (Guard 2). Use it when correctness parity with the eager reference matters.
-- **Scheme B (chunked, `DG_DENOISE_EARLY_HALT_WINDOW=K`, K>1)** amortizes the host sync over K
-  steps (higher break-even = beats fixed-48 at more steps), at the cost of coarser halt
-  granularity: it halts at the first window boundary at-or-after the eager step and commits the
-  window-end argmax, which equals the eager commit under argmax-convergence-stability (the same
-  property the fixed-48 traced path relies on to match eager).
-
-**Default = OFF** (fixed-48 traced unchanged). Rationale: under #48291 early-halt is a no-op and
-the per-step/window host sync only adds orchestration overhead, so enabling it today is a net
-loss. The flag is ready to flip once #48291 is resolved (entropy clears 0.005) or a schedule cut
-lowers the step budget into the regime where the measured break-even makes A/B win.
-
-Prerequisites (same as the traced paths): argmax (`gumbel_noise=None`) regime, contiguous cache,
-warmed program cache, and a large `DG_TRACE_REGION_SIZE` (48 single-step traces @30L ≈ 8 GB;
-scheme B K needs `ceil(48/K)` window traces).
-
-## Files
-
-- `tt/denoise_loop.py` — `HaltBuffers`, `compute_halt_scalars`, `write_halt_scalars`,
-  `denoise_step_next_canvas_and_halt`, `read_halt_scalars`, `eval_halt` (the on-device halt
-  scalar + the eager rule on host).
-- `tt/traced_denoise.py` — `EarlyHaltTracedDenoiseController` (schemes A/B), `traced_early_halt_block`,
-  `traced_early_halt_enabled`, `early_halt_window`.
-- `tt/generate.py` — `_resolve_default_denoise_block_fn` wires `DG_DENOISE_EARLY_HALT` (precedence
-  over the fixed-budget traced flags).
-- `doc/optimize_perf/probe_early_halt.py` — correctness + overhead + break-even harness.
-- `doc/optimize_perf/probe_halt_gap.py` — the eager halt-step oracle (pre-existing).
+The eager halt-step oracle (30L, 3 blocks, prompt "Explain what a diffusion language model is in one
+sentence."). The harness behind the correctness / overhead / break-even numbers above was deleted
+with the flags; those numbers are provenance, not re-runnable as written.

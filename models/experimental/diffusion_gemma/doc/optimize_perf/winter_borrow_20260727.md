@@ -1,490 +1,271 @@
-# Borrowing from the independent `winter/` DiffusionGemma implementation — 2026-07-27
+# Winter diff: what was borrowed, what was refused, and why the token-gather MoE died (2026-07-27)
 
-An independent TTNN implementation of this same model (`models/experimental/diffusion_gemma/winter/`,
-dated 2026-06-15, ~3.3k lines, validated on a 4×P150 1×4 mesh) was diffed line-by-line against this
-branch. This document records what the diff found, what was **measured on QB2**, and what was
-changed. Winter's own headline (a ~0.15 s warm traced denoise step) has **no committed measurement
-artifact** in that tree — it is a README assertion plus a code path capable of producing it — so
-nothing here rests on it. Every number below is ours.
+Status: current for the concat MoE, the reference bars and the traps; provenance-only for every
+§§1–12 absolute ms/step (host Gumbel, deleted 2026-07-28 — convert with the 1.94x ratio below).
+Owns: why the token-gather denoise MoE was deleted, the concat-MoE mechanism and cost, and the
+fused-MoE-kernel infeasibility verdict plus the two landed `sparse_matmul` gates (absorbed from the
+deleted `fused_moe_kernel.md`).
+See also: [refuted list](../REFUTED.md), [optimize_perf hub](README.md).
+Well over the 100-line cap on purpose: ~12 measurement traps, 3 repro pins, 2 open contradictions and
+the arithmetic that killed a whole MoE path. None of those is cut for length.
 
-> **2026-07-28 — the `host` Gumbel mode used/recommended below was DELETED.** It was measured NOT
-> to be the TT language-drift cause: it drifts on exactly the same prompts as `device`, repairs 0,
-> and costs 1.40x per request. The real cause was the canvas attending prefill pad keys, fixed in
-> `d0936d4da4f`. **Every measurement below stands exactly as recorded**; only the recommendation to
-> use, keep, or fall back to `host` is void. `device` is the only materialized Gumbel source and
-> therefore the only mode valid under up-front capture (`argmax`/`chunked` are not materialized).
-> Practical effect on this document: the §§1–12 `host`-Gumbel sweep is no longer re-runnable as
-> written (`sweep_denoise_arms.sh` now defaults to `device`). The numbers stand; convert them
-> with the 1.94x host→device ratio measured in §13.4.
+An independent TTNN implementation of this model (`winter/`, 2026-06-15, ~3.3k lines, 4xP150 1x4 mesh)
+was diffed line-by-line against this branch. Every number below is ours.
 
----
+## Why the token-gather denoise MoE was deleted
 
-## Where we ended up, normalized against winter's operating point
+At the shipped `C = S = 256` (`E=128, H=2816, I_dev=192`), per layer per device:
 
-Everything in §§1–12 was measured with `host` Gumbel at `reveal_pmax = 4096`. Two follow-up sweeps
-(§13) re-measured on the **shipped `device` Gumbel** and swept the prefix span, which is what makes
-a like-for-like comparison to winter possible at all.
-
-| configuration (30L, canvas 256, device Gumbel) | ms/step |
-|---|---|
-| production path this morning (derived, see §13.3) | ~371 |
-| + SDPA grid + concat MoE | 238.3 |
-| + `DG_NORM_FULLCANVAS` | 195.7 |
-| + prefix span at winter's geometry (`reveal_pmax` 384–576) | **~181** |
-
-Throughput on winter's own accounting — 256 tokens per canvas, prefix processing **excluded**:
-
-| denoise steps | winter (its README's 0.15 s/step) | **us, today** |
-|---|---|---|
-| 8 | 213 tok/s | **177** |
-| 10 (winter's demo) | 171 | 141 |
-| 16 | 107 | **110** |
-
-So after this work we are at **0.83× winter's documented step time at 8 steps and slightly ahead of
-it at 16** — and we get there at bf16, where winter runs bf4 experts and bf8 attention. The earlier
-impression of a 4–10× gap was an artefact of comparing our *served* number (which includes a 2.02 s
-commit per block) against winter's *denoise-only* arithmetic.
-
-Two things this does **not** say. The "200–350 tok/s" figure in circulation is not supported by
-winter's own README: 0.15 s/step gives 107–213 tok/s at 8–16 steps, and 350 tok/s at 8 steps would
-need 91 ms/step. And none of this touches the **2.02 s/block commit**, which is 26–38% of a served
-block and where no lever has been applied yet — winter avoids it only by re-encoding the whole
-prefix every canvas, which is O(P²) and worse for us.
-
----
-
-## Summary of what changed
-
-| # | change | status | evidence |
-|---|---|---|---|
-| 1 | denoise SDPA no longer pinned to an 8-core grid | **default flipped**, bit-exact | −8.8% traced block, `arm_sweep_30L` |
-| 2 | OPT-004 tuned MoE geometry made L1-legal at any capacity; the stale `C == 32` gate removed | **default-on** (was silently inert since 2026-07-15) | −0.8% traced block; decision-changing |
-| 3 | encoder `layer_scalar` divergence guard | added, fail-loud | checkpoint measured tied (max\|Δ\| = 0.0 over 30 layers) |
-| 4 | `DG_ROPE_FUSED` — fused `ttnn.experimental.rotary_embedding` on the denoise path | added, then **DELETED 2026-07-28** | −0.2% (noise) and decision-changing ⇒ zero benefit; see `flag_triage_20260728.md` |
-| 5 | `DG_SDPA_EXP_APPROX` — ttnn's own SDPA softmax default, which we had hard-coded off | added, **default off** | decision-changing; unswept before today |
-| 6 | `DG_MOE_CONCAT` — concat-experts MoE | added, **default off** pending the quality gate | **−29.9%** traced block at 30L; see §5 |
-| 6b | `DG_TRACE_REGION_SIZE` 12 GiB → 6 GiB in the harness/gate scripts | done | 48 traces measure 3.04 GiB, not the 1.44 GiB our own doc claimed; see §8 |
-| 7 | `DG_SKIP` — in-graph component zeroing | added, measurement-only | see §6 |
-| 8 | `ttnn.topk` width-cliff coverage | test added | see §7 |
-| 9 | `--entropy-stop-threshold` on `serving_smoke` | added | required for any per-step A/B; see §2 |
-| 10 | corrected three docs that advertised measurements as current when they were not | done | §3, §4 |
-
-## 1. Method — and one thing that invalidated the first attempt
-
-`doc/optimize_perf/sweep_denoise_arms.sh`: interleaved arms over `demo/serving_smoke.py --upfront`,
-30 layers, canvas 256, `reveal_pmax = 4096`, `max_seq_len = 4096`, `--gumbel-mode host --seed 0`,
-3 blocks × 48 denoise steps, 3 repetitions. Steady state = `mean(per_block_latency_s[1:])`; block 0
-carries the 48-trace capture (~85 s) and is discarded.
-
-**The first run of this sweep was invalid and the reason generalizes.** With the shipped
-`entropy_stop_threshold = 0.005`, the stable-and-confident early halt fired at
-`denoise_steps_per_block = [9, 2, 2]` — so the "48-step" steady blocks ran **two** denoise steps
-each, and what was being timed was mostly the fixed commit cost. Worse, a lever that changes the
-numerics also moves where the halt fires, so the arms would not have been running the same amount
-of work. `serving_smoke` grew `--entropy-stop-threshold`; a negative value disables the halt. Every
-number below is with the halt off and `denoise_steps_per_block = [48, 48, 48]` verified per arm.
-
-The sweep script now prints the per-arm step counts next to the latency for exactly this reason.
-
-**Two things worth recording from the invalid run, because they are about the shipped path.** With
-the halt at its shipped 0.005, this prompt ran `[9, 2, 2]` denoise steps and blocks 1 and 2 produced
-the *identical* `per_block_sha256` — the model emitting the same degenerate block twice, the #48291
-signature. And in that regime the block is roughly 55% denoise / 45% commit (2.38 s/block at ~660
-ms/step plus a ~1.0 s commit), so a denoise-step lever has materially less end-to-end leverage than
-a 48-step budget implies: the −8.8% below becomes roughly −6% on a block that halts at 2 steps. The
-per-step number is still the right thing to optimize — it is what a non-degenerate model would
-spend its time in — but the two should not be quoted interchangeably.
-
-## 2. Results
-
-All arms emitted 3 blocks × 48 steps. `committed_sha256` is perfectly reproducible per arm across
-repetitions, so a sha difference is a real decision change and not run-to-run noise.
-
-| arm | env | n | steady s/block | per-rep | vs `auto` | ms/step | committed_sha256 |
-|---|---|---|---|---|---|---|---|
-| `auto` | `DG_SPARSE_MOE_TUNED=0` — today's production path | 3 | 34.642 | 34.762 / 34.718 / 34.447 | — | 722 | `304e8023…` |
-| `tuned` | `DG_SPARSE_MOE_TUNED=1` | 3 | 34.369 | 34.498 / 34.293 / 34.315 | −0.8% | 716 | `2ac3efcc…` |
-| `tunedgrid` | `+ DG_SDPA_GRID=device` | 3 | 31.586 | 31.423 / 31.892 / 31.444 | **−8.8%** | 658 | `2ac3efcc…` |
-| `tunedgridrope` | `+ DG_ROPE_FUSED=1` | 3 | 31.565 | 31.586 / 31.235 / 31.873 | −8.9% | 658 | `1615f91d…` |
-
-Within-arm spread is ≤1.5%, and `auto` > `tuned` > `tunedgrid` holds in every repetition, so the
-−0.8% and −8.8% are both resolved; the −0.1% between `tunedgrid` and `tunedgridrope` is not.
-
-Reading:
-
-* **The SDPA grid is the win, and it is free.** `tunedgrid` and `tuned` produce the *same* committed
-  tokens, so reassigning the Q axis across cores is bit-exact — as expected, since it does not touch
-  the flash K-reduction (`k_chunk_size` is unchanged). This is the same argument the 2026-07-24
-  q-chunk sweep validated over 6 runs; here it is confirmed again at a 4× larger prefix span.
-* **The tuned MoE geometry is worth ~1%, not the 3.47× the docs implied.** That figure was a C=32
-  measurement (§3). It is a consistent win — `tuned` beat `auto` in every repetition — but small,
-  and it changes the committed tokens.
-* **Fused RoPE is noise here.** −0.2% over `tunedgrid`, well inside the spread, while changing the
-  committed tokens. The op-count argument (8 ops → 1, ×2 ×30 = 420 fewer ops/step) is real but those
-  ops are evidently overlap-hidden under trace. Kept as a flag, default off.
-* **ms/step is not comparable to the ~428 ms in earlier docs.** Those were taken at
-  `reveal_pmax = 1024`; this sweep runs 4096, i.e. 4352 key rows per layer instead of 1280. The
-  span-proportional attention term is exactly what makes the grid lever matter, so the larger span
-  is the right vehicle for it — but the absolute number is span-specific.
-* **These are `host`-Gumbel numbers and they overstate the shipped step cost.** `--upfront` needs a
-  materialized Gumbel source, and `host` was chosen for reproducibility across arms. The shipped
-  serving default is `device`. The same concat build measured through the real vLLM path with
-  device Gumbel reports `denoise_latency_s / denoise_steps` = 3.337/15 and 5.768/26 — **222
-  ms/step**, against the 463 ms/step this sweep reports for the same configuration. Every
-  *relative* comparison here holds (all arms share the mode); every *absolute* ms/step is a
-  host-Gumbel figure and roughly 2× the served one. The same log also puts commit at 2.02 s/block,
-  i.e. 26–38% of a served block — larger than the ~1 s previously assumed.
-
-## 3. The tuned MoE configs had been inert on the production path for 12 days
-
-`746cfe53cb6` (2026-07-15) moved the capacity default from 32 to the canvas length, because 32 was
-"silently discarding 41-84% of active routes per layer". In the same commit the tuned program
-configs gained a `C == DEFAULT_CAPACITY` condition (`DEFAULT_CAPACITY = 32`). Production passes 256.
-So from that day every MoE matmul — gate, up, down, gather, combine — ran `program_config=None`,
-while `sparse_moe.py`'s own docstring and `doc/optimize_perf/README.md` both continued to advertise
-the tuned geometry as the default and warn that "a run that forgets the flag would silently take
-the slow path".
-
-The condition existed for a real reason: at C=256 the down matmul's per-core output block is
-`per_core_M × per_core_N = 8 × 88` tiles = **2.9 MB** against ~1.4 MB of usable L1, so the tuned
-config was illegal, not merely suboptimal. Our `_pick_in0_block_w` modelled only the in1 block
-against a flat 176-tile budget — no in0 CB, no output CB, no partials.
-
-Fix (`tt/sparse_moe.py`), taking the shape of winter's `_compat.make_block_sharded_matmul_config`:
-
-* `_cb_tiles` / `_cb_fits_l1` model **all** the per-core CBs — double-buffered in0 and in1, plus
-  output and partials.
-* `_pick_in0_block_w` walks the K-block down through divisors of Kt until the whole set fits.
-* `_pick_per_core_m` (new) walks the M-block down through divisors of Mt. The reuse factory forces
-  `per_core_N == Nt`, so M is the only way to shrink the output block; handing `split_work_to_cores`
-  `(Mt / per_core_M) × E` smaller blocks is legal.
-* `_pick_out_block` (new) does the same for the 2D mcast gather/combine, which size their output CB
-  from `out_block_*` rather than `per_core_*`.
-* A matmul that still does not fit is **omitted** (auto-config for that matmul, warning logged)
-  rather than emitted as a config the device would reject.
-
-The resulting geometry, verified by construction:
-
-| | C=32 (unchanged) | C=256 (newly legal) |
-|---|---|---|
-| gate/up | pcM 1, pcN 6, kw 22 — 0.66 MB | pcM 8, pcN 6, kw 11 — 0.83 MB |
-| down | pcM 1, pcN 88, kw 2 — 1.09 MB | pcM 2, pcN 88, kw 1 — 1.09 MB |
-| gather | pcM 13, pcN 8, out (13,8), kw 8 — 1.11 MB | pcM 103, pcN 8, out (103,2), kw 1 — 1.30 MB |
-| combine | pcM 1, pcN 8, out (1,8), kw 16 — 0.62 MB | same |
-
-**The C=32 configs come out byte-for-byte identical**, so the validated OPT-004 geometry is
-preserved; only capacities that previously fell off the path are affected.
-
-## 4. The sparse-MoE win was measured against the wrong baseline
-
-`doc/optimize_perf/README.md` claimed the token-gather path is "~5× faster/step than dense-128" and
-`path_to_100tps.md` "10.54 ms/layer (13.0× vs dense 137.6)". Winter's README claims the opposite —
-that a token-gather sparse MoE benchmarked **2–12× slower** than its concat-experts dense matmul.
-
-Both can be true, because they are about different capacities. At the shipped `C = S = 256`
-(`E=128, H=2816, I_dev=192`):
-
-| per layer per device | our gather path | concat-experts |
+| | token-gather path | concat-experts |
 |---|---:|---:|
 | expert gate+up+down MACs | 5.31e10 | 5.31e10 (**identical**) |
 | routing / dispatch MACs | **4.72e10** (gather + combine) | 8.05e8 (one expand matmul) |
 | **total** | **1.00e11 (+89%)** | 5.39e10 |
-| activation DRAM | ~900 MiB (two ~184 MiB intermediates written *and* read) | ~40 MiB |
+| activation DRAM | ~900 MiB (two ~184 MiB intermediates written **and** read) | ~40 MiB |
 
-At C = S the gather cannot save any expert work — the gathered `[1,E,C,H]` is ~94% zero rows — so
-the dispatch is pure overhead. The "13×" denominator was `gemma4`'s `PREFILL_CHUNK_SIZE=32` serial
-per-expert `sparse_matmul` path, not a well-configured dense matmul; and the numerator was measured
-at the capacity that dropped most of the routing. Both docs now carry a correction.
+At `C = S` the gather cannot save any expert work — the gathered `[1,E,C,H]` is **~94% zero rows**, so
+the dispatch is pure overhead. Deleted 2026-07-29 (`7417bd7d69d`).
 
-We have **not** established that concat-experts is faster on our stack — only that the argument for
-the gather path does not hold at the capacity we ship. §5 is the experiment.
+**TRAP — the win was measured against the wrong baseline.** "~5x faster/step than dense-128" and
+"10.54 ms/layer (13.0x vs dense 137.6)" used gemma4's `PREFILL_CHUNK_SIZE=32` serial per-expert
+`sparse_matmul` path as the denominator, not a well-configured dense matmul, and the numerator was
+measured at the capacity that dropped most of the routing.
 
-## 5. Concat-experts MoE (`DG_MOE_CONCAT`, default off)
+**THE INERT-CONFIG BUG.** `746cfe53cb6` (2026-07-15) moved the MoE capacity default from 32 to the
+canvas length because 32 was silently discarding 41–84% of active routes per layer; the same commit gave
+the tuned program configs a `C == DEFAULT_CAPACITY` (=32) condition. Production passes 256, so for **12
+days** every MoE matmul ran `program_config=None` while the docstring and README advertised the tuned
+geometry as the default. The condition existed for a real reason: at C=256 the down matmul's per-core
+output block is `per_core_M x per_core_N = 8 x 88` tiles = **2.9 MB** against ~1.4 MB usable L1, so the
+tuned config was **ILLEGAL**, not merely suboptimal — the old `_pick_in0_block_w` modelled only the in1
+block against a flat 176-tile budget, with no in0 CB, no output CB and no partials. (`DG_SPARSE_MOE`,
+`DG_SPARSE_MOE_TUNED`, `DG_MOE_CONCAT` and `DG_ROPE_FUSED` were deleted with that path; dead flag names
+are listed once, in [flag triage](flag_triage_20260728.md).)
 
-`tt/concat_moe.py` implements winter's shape: relayout gate/up to `[1,1,H,E*I]` and down to
-`[1,1,E*I,H]` once, then
+## The concat MoE — now the only denoise MoE
+
+Relayout gate/up to `[1,1,H,E*I]` and down to `[1,1,E*I,H]` once, then
 
     g    = geglu(x @ gate_cat, x @ up_cat)
-    rexp = routing @ expand            # expand = repeat_interleave(I(E), I), a static [1,1,E,E*I]
+    rexp = routing @ expand      # expand = repeat_interleave(I(E), I), a static [1,1,E,E*I]
     out  = (g * rexp) @ down_cat
 
-The down fold is exact by linearity: `sum_e W_down_e @ (r_e * g_e) == (r ⊙ g) @ down_cat`. It also
-never materializes the `[1,E,S,H]` per-expert output. `apply_geglu` is **ours** (tanh GeLU) — winter
-uses `fast_and_approximate` GeLU in the shared MLP and erf-GeLU in the self-conditioning gate, both
-of which disagree with this checkpoint, so that part is deliberately not copied.
+The down fold is exact by linearity — `sum_e W_down_e @ (r_e * g_e) == (r ⊙ g) @ down_cat` — and never
+materializes the `[1,E,S,H]` per-expert output. `apply_geglu` is **ours** (tanh GeLU), deliberately not
+copied from winter, which uses `fast_and_approximate` GeLU in the shared MLP and erf-GeLU in the
+self-conditioning gate; both disagree with this checkpoint.
 
-Cost: `gate_cat` and `up_cat` are a second copy of those weights, 132 MiB **each** = 264 MiB per
-layer per device at bf16 = **~7.7 GiB over 30 layers** (measured 7.773). The originals cannot be
-freed — prefill still runs the ragged top-8 path over them. `down_cat` is free (same byte order at
-bf16 TILE) — it is a **view**, which is what makes the total 7.7 and not 11.6 GiB;
+**Memory.** `gate_cat` and `up_cat` are a second copy of those weights at 132 MiB each = 264 MiB per
+layer per device at bf16 = **~7.7 GiB over 30 layers** (measured 7.773); the originals cannot be freed
+because prefill still runs the ragged top-8 path over them. `down_cat` is **free** (same byte order at
+bf16 TILE) — a view, which is what makes the total 7.7 and not 11.6 GiB, and
 `verify_down_concat_is_free` checks that on device instead of assuming it.
 
-**This is not denoise-only.** The batched commit runs the same layer body through the same
-`_denoise_moe_forward` seam (`tt/commit_batched.py:703`) and is the shipped default, so the flag
-folds the commit MoE too — and commit hidden states build the committed-prefix KV, so it compounds
-across blocks. Deliberate, but it means the quality gate on this flag covers two components.
+**SCOPE WARNING: not denoise-only.** The batched commit runs the same layer body through the same
+`_denoise_moe_forward` seam (`tt/commit_batched.py:703`) and is the shipped default; commit hidden
+states build the committed-prefix KV, so it compounds across blocks.
 
-7.7 GiB does not fit beside a 12 GiB trace reservation, which is why §8 came first.
+**Measured** (30L, `reveal_pmax` 4096, 48 forced steps, 4 GiB trace region, 2 reps): token-gather
+**31.737 s/block (661 ms/step)** vs concat **22.234 s/block (463 ms/step) = −29.9%**; against the
+morning production path (34.642 s/block) that is **−35.8%, a 1.56x speedup, 722 → 463 ms/step**. Free
+DRAM went 27.87 → 14.41 (model) → **4.93 GiB** (concat), confirming the 7.8 GiB relayout on device.
+**It serves:** `run_upfront_gpqa.sh smoke` with device Gumbel in thinking mode gave 2/2 exact match,
+block latency 5.38 s / 7.79 s, denoise 15 and 26 steps, commit 2.02 s — no statistical weight, but it
+proves the path is wired, not just the microbenchmark.
 
-### Measured — this is the largest lever found
+## Measurement traps (the reusable part of this file)
 
-Same harness, 30L, `reveal_pmax = 4096`, 48 forced steps, `DG_TRACE_REGION_SIZE = 4 GiB`, 2 reps:
+1. **A halt that fires invalidates a step sweep.** At the shipped `entropy_stop_threshold = 0.005` the
+   halt fired at `denoise_steps_per_block = [9, 2, 2]`, so a nominal 48-step sweep timed mostly the fixed
+   commit cost — and a lever that changes numerics moves where the halt fires, so arms do unequal work.
+   `serving_smoke` gained `--entropy-stop-threshold` (negative disables it); every arm must verify
+   `[48, 48, 48]`, and the sweep script prints per-arm step counts next to the latency.
+   > **OPEN CONTRADICTION (unexplained):** early halt is described as "a no-op under #48291, so steps are
+   > not reduced" ([op profile](whole_gen_opprofile/README.md)) yet was measured here firing at
+   > `[9, 2, 2]`; other readings are `[9,17,2]/48` and `K=10–43` ([refuted list](../REFUTED.md)). Not explained.
+2. **Never quote per-step and per-block interchangeably.** At the shipped halt a block is roughly 55%
+   denoise / 45% commit (2.38 s/block at ~660 ms/step plus ~1.0 s commit), so −8.8%/step becomes roughly
+   −6% on a block that halts at 2 steps.
+3. **Every absolute ms/step in §§1–12 is host-Gumbel, ~2x the served one.** The directly measured
+   host→device ratio is **1.94x** (the same concat configuration is 22.234 s/block host, 11.436 device).
+   Host Gumbel was deleted 2026-07-28 and `sweep_denoise_arms.sh` now defaults to device, so those arms
+   are no longer re-runnable as written.
+4. **ms/step is span-specific.** The ~428 ms in earlier docs was taken at `reveal_pmax=1024` (1280 key
+   rows/layer); this sweep runs 4096 (4352 key rows).
+5. **A 2L/6L extrapolation would have missed the concat win entirely** — the delta reads −5.5% at 2
+   layers and −5.4% at 6, implying ~−3% at 30; the real answer is −30%. At small layer counts the fixed
+   terminal and self-conditioning cost dominates and DRAM/L1 pressure differs. **Measure a lever at the
+   depth it ships at.**
+6. **A flag advertised in a docstring is not evidence it does anything** — three silent no-op flags were
+   found in one day: the `C == DEFAULT_CAPACITY` MoE gate, the unconditional `tt-smi` requirement, and
+   `DG_TERMINAL_SHARDED`.
+7. **`DG_SKIP` output is garbage by construction** (it replaces a component with a shape-preserving
+   `ttnn.mul(x, 0.0)` at its seam so the rest of the graph is untouched), so a `DG_SKIP` run must never
+   feed a `committed_sha256` comparison. Live, measurement-only.
+8. **A synchronizing profiler over-predicts.** Winter's tier-2 `_pmark` calls `ttnn.synchronize_device`
+   at every stage boundary, draining dispatch — which is why winter's ~570 ms serial profile
+   over-predicts its ~150 ms traced step by 3.8x. `prof_step_breakdown.py` is async-pipelined with one
+   final sync and lands within ~8% of traced.
+9. **Winter's ~0.15 s warm traced step has NO committed measurement artifact** in that tree — it is a
+   README assertion, and the "200–350 tok/s" figure in circulation is not supported by it (0.15 s/step
+   gives 107–213 tok/s at 8–16 steps; 350 tok/s at 8 steps needs 91 ms/step). The earlier impression of a
+   4–10x gap came from comparing our **served** number (which includes a 2.02 s commit per block) against
+   winter's **denoise-only** arithmetic.
+10. **A commit citation in this file's own header is wrong and the tree disagrees with itself.**
 
-| arm | n | steady s/block | per-rep | ms/step | vs sparse |
-|---|---|---|---|---|---|
-| `sparse` (shipped token-gather) | 2 | 31.737 | 31.442 / 32.033 | 661 | — |
-| `concat` (`DG_MOE_CONCAT=1`) | 2 | **22.234** | 22.317 / 22.150 | **463** | **−29.9%** |
+> **OPEN CONTRADICTION (unexplained):** this file's 2026-07-28 header credits the language-drift fix to
+> `d0936d4da4f`, which was reverted the same day on a void 44-prompt comparison; the shipped default-ON
+> `DG_DENOISE_HIDE_PREFILL_PADS` came from `205e87956cc`. Both SHAs exist in history and the tree states
+> both. Not explained.
 
-Stacked on the SDPA grid fix, against the path production ran this morning (`auto`, 8×1 grid,
-34.642 s/block): **22.234 s/block = −35.8%, a 1.56× speedup, 722 → 463 ms/step.**
+## Where the step goes (`DG_SKIP`; 30L, device Gumbel, concat, 48 forced steps, 4 GiB, 2 reps)
 
-All 30 layers built their concat weights; free DRAM went 27.87 GiB → 14.41 (model) → 4.93 (concat),
-i.e. the relayout cost **7.8 GiB**, matching the estimate. At the new 6 GiB trace default that
-leaves only ~2.9 GiB, so **concat currently wants the 4 GiB reservation, not 6 GiB** — the two
-levers are coupled and must be set together.
-
-The output is coherent, which matters as much as the latency: `sparse` opens "A diffusion language
-model is a generative model that creates text by starting with a sequence of random noise and
-iteratively refining it into coherent…", `concat` "Diffusion language model is a generative model
-that creates text by starting with a sequence of noise and iteratively refining it into a coherent
-sen…". Different trajectory, same content — this is a fast path, not a broken one.
-
-**A 2L/6L extrapolation would have missed this and nearly did.** At 2 layers the delta reads −5.5%
-and at 6 layers −5.4%, and the implied per-layer slope difference is ~0.6 ms — which would have
-projected ~−3% at 30 layers. The real answer is −30%. At small layer counts the fixed terminal and
-self-conditioning cost dominates and the DRAM/L1 pressure is different, so the MoE is simply not
-the bottleneck being measured. Measure the lever at the depth it ships at.
-
-**It serves.** The concat build runs end-to-end through the real vLLM path
-(`run_upfront_gpqa.sh smoke`, device Gumbel, thinking mode): 2/2 exact match, block latency
-5.38 s / 7.79 s, denoise 15 and 26 steps, commit 2.02 s. Two samples carry no statistical weight,
-but they do prove the path is wired, not just the microbenchmark.
-
-**Still default off.** −30% is worth having, but this changes the committed tokens by more than any
-other lever here, and the model is already in a decision-fidelity hole (#48291). It needs the
-absolute GPQA arm against the CUDA bar in §11 before the default flips. Both arms — current
-defaults with `DG_MOE_CONCAT=0`, and `DG_MOE_CONCAT=1` — are running as
-`/home/zni/dg_runs/gpqa_{base,concat}_20260728` at `TRACE_REGION_SIZE=4 GiB`, `RESET_BEFORE=0`.
-
-## 6. `DG_SKIP` — pricing a component's traced cost
-
-A serial per-op profile does not price a traced step; under trace, host dispatch overlaps, so an
-op's standalone time can be almost entirely hidden. `DG_SKIP="attn,shared,moe"` replaces a component
-with a shape-preserving `ttnn.mul(x, 0.0)` at its seam so the rest of the graph is untouched. Output
-is garbage by construction — never feed a `DG_SKIP` run into a `committed_sha256` comparison.
-
-Winter's own tier-2 profiler was deliberately **not** copied: its `_pmark` calls
-`ttnn.synchronize_device` at every stage boundary, which drains dispatch and inflates the sum. That
-is why winter's serial profile (~570 ms) over-predicts its traced step (~150 ms) by 3.8× — an
-artifact of the instrument, not a hardware property. `prof_step_breakdown.py` is async-pipelined
-with a single final sync and lands within ~8% of the traced step.
-
-## 7. `ttnn.topk` width cliff
-
-Winter measured `ttnn.topk` returning a garbage index **and** value at a 32768-wide reduction
-(32/256 rows matching a torch control, `inf` values), correct at ≥ 49152, and worked around it by
-padding to 49152 with `-inf` for the index while taking the value from `ttnn.max`.
-
-We do not hit that width today: the terminal uses `ttnn.argmax` on a ROW_MAJOR input, and the only
-`ttnn.topk` on the denoise path is the router's over the 128-expert axis. But V=262144 over **tp=8**
-is exactly 32768 — a Galaxy 4×8 bring-up lands on it, and a wrong argmax index is committed with no
-temperature cushion.
-
-**Measured on QB2, and it reproduces exactly** (`tests/test_device_topk_width_cliff.py`, 7 passed):
-
-| shard width | `ttnn.topk(k=1)` index agreement vs torch | |
-|---|---|---|
-| 16384 | 0.129 | |
-| 32768 | 0.129 | ← V/tp at tp=8 |
-| 49152 | 1.000 | |
-| 65536 | 1.000 | ← V/tp at tp=4, what we serve |
-
-`ttnn.max` stayed finite and correct at every width, which is why winter's workaround (pad to 49152
-with `-inf` for the *index*, take the *value* from `max`) is the right shape if a tp=8 mesh ever
-needs it. `argmax_last_dim` — the op our terminal actually uses — is exact at 65536.
-
-One note on the test itself: the router arm initially failed at 0.9961 set overlap on a plain random
-input. That was tie-breaking, not an op error — the 8th and 9th routing values land within a bf16
-ulp on a few rows. The test now separates the winners by a wide margin so it measures the op instead
-of the tie rule, and passes at 1.0000.
-
-## 8. Trace region — 8 GiB/chip of reserved-but-unusable DRAM (measured; the 1.44 GiB figure is wrong too)
-
-Every serving script and gate reserved `DG_TRACE_REGION_SIZE = 12 GiB`, sized from an estimate that
-`doc/vllm_integration/traced_serving.md` later refuted by measuring the 48 resident traces at
-~1.41–1.44 GiB/chip. **That correction is also wrong at the span we serve.**
-`doc/optimize_perf/bisect_trace_region.sh`, 30L, `reveal_pmax = 4096`:
-
-| reservation | result | free DRAM after build |
-|---|---|---|
-| 12 GiB | OK | 4.702 GiB |
-| 8 GiB | OK | 8.702 GiB |
-| 6 GiB | OK | 10.702 GiB |
-| 4 GiB | OK | 12.702 GiB |
-| 3 GiB | **FAIL** — `TT_FATAL: Creating trace buffers of size 3259146240B … but only 3221225472B is allocated` | — |
-
-So the 48 traces need **3.04 GiB** at this span, not 1.44 GiB, and the reservation was ~8 GiB of
-DRAM that nothing could allocate — the free pool tracks the reservation one-for-one. The harness and
-gate scripts now default to **6 GiB** (≈2× the measured requirement); 4 GiB is the verified floor.
-
-The number is not a constant: the trace buffer scales with the captured op set and with
-`reveal_pmax`, which is exactly how the 1.44 GiB figure came to disagree with this one. Re-run the
-bisect when either changes rather than carrying a fixed value forward — that is the mistake this
-whole item is.
-
-This is also the DRAM the concat-experts MoE (§5) needs: 4.70 GiB free cannot hold its +7.7 GiB,
-10.70 GiB can.
-
-## 9. Encoder `layer_scalar` — checked, and it is tied
-
-Winter loads a **separate** encoder `layer_scalar` (`winter/tt_model.py:260-266`), swaps it in for
-the encode pass and back for denoise, and its vendored HF reference agrees. We classify the whole
-`model.encoder.` prefix as ignorable. If the two copies differed, we would be applying the wrong
-scalar on every prefill and commit — and because `layer_scalar` multiplies the entire layer output,
-the error would compound per layer into the prompt KV, which is a shape a precision sweep cannot
-move and would have been a candidate root cause for the ~0.85 backbone-PCC floor.
-
-Measured on `diffusiongemma-26B-A4B-it`: **max |encoder − decoder| = 0.0 across all 30 layers.**
-The prefix holds nothing else on the text path — its other 356 keys are vision tower / embed_vision.
-So the loader is correct for this checkpoint, and the docstring reason ("NOT on the text-first
-causal path") was wrong even though the conclusion was right.
-
-`checkpoint.validate_encoder_layer_scalar_tie` now runs on every load and raises if a future
-checkpoint diverges, so this cannot become a silent correctness bug.
-
-## 10. What was NOT borrowed, and why
-
-* **argmax-for-accepted / dropping the stochastic draw.** Winter uses no on-device RNG at all,
-  justified by accepted positions carrying ≤ 0.1 nats total. Our own matched-seed A/B — changing
-  *only* the Gumbel source, both statistically valid — flips GPQA answers, and `sampled` reaches
-  the canvas only through accepted positions, so the draw demonstrably propagates at our scale. The
-  prize is ~27 ms of a ~496 ms step. `--argmax-sampling` already exists as the deterministic A/B arm.
-* **bf4 / bfp8 expert weights.** Winter runs bf4 experts. That is the configuration we measured and
-  rejected: committed-argmax 0.227, entropy PCC 0.631, accept IoU 0.501 (`doc/datatype_sweep/`), for
-  +6–9% end-to-end. Winter's PCC bands were measured at that precision.
-* **Winter's activations.** `fast_and_approximate` GeLU in the shared MLP and erf-GeLU in the
-  self-conditioning gate; this checkpoint needs tanh. Ours is right in both places.
-* **Per-bucket trace release + recapture.** We shipped that design, measured 18 → 3.6 tok/s, and
-  replaced it with the opposite one (constant `p_max`, capture-once/replay-many, 1.68×, zero
-  recapture). It also collides with three later correctness fixes that all key off a fixed-shape
-  reveal mask. Winter can afford bucket churn only because it re-encodes the whole prefix every
-  canvas — an O(P²) cost it was paying anyway, and one we removed with the batched commit.
-* **Winter's `_sc_buf`.** It persists the previous step's raw `[1,1,S,V]` logits (67–268 MB, copied
-  every replay). Ours persists the already-reduced `[1,1,C,hidden]` signal, 1.4 MB, computed inside
-  the same trace.
-* **A vLLM-free OpenAI shim.** We serve through the real fork and run the 198-sample GPQA through
-  it. Winter's shim serializes on one lock, so it adds no capability and would miss the
-  degeneracy-guard terminal contract.
-
-## 11. Where this leaves us against CUDA
-
-Measured the same day on `ssh a100` (one NVIDIA A100 80GB PCIe, bf16, upstream vLLM, single stream,
-same prompt, 768 tokens, default sampler — the reference server idle):
-
-| | s per 256-token block | tok/s |
-|---|---|---|
-| A100 80GB, 1 GPU | **0.54 – 0.62** | 410 – 473 |
-| QB2, 4× Blackhole, shipped early-halt path | ~2.3 | ~108 |
-
-So today TT is **~4× slower per block than a single A100**, on 4 chips — ~17× per chip. The levers
-in this document move the forced-48-step block by 1.56×, which is real and does not close that gap.
-
-Two caveats that cut in opposite directions and should be stated together: the TT blocks in that
-comparison halt after 2–9 denoise steps and blocks 1–2 emit *identical* committed tokens, so TT is
-partly "fast" for the wrong reason (#48291); and the A100 number is single-stream on an 80 GB part
-that holds the whole model, so it is a latency comparison, not a cost or throughput one.
-
-GPQA-Diamond on the same reference server, 198 samples, flexible-extract: **70.71%** and **70.20%**
-across two repetitions (thinking, 262k) — a 0.5 pp spread, which is the resolution any TT quality
-arm has to beat before a difference means anything.
-
-## 12. Open
-
-* The GPQA arm for the two decision-changing defaults (tuned MoE geometry) — the CUDA reference bar
-  is GPQA-Diamond flexible-extract **70.7%** (thinking, 262k), with the reference's own run-to-run
-  spread measured at ~1.1 pp over three repetitions, so the gate cannot resolve differences below
-  ~1–2 pp.
-* Concat-experts MoE measurement (§5), after the trace region is right-sized (§8).
-* ~~`DG_SDPA_EXP_APPROX` has never been swept.~~ Swept 2026-07-28: **+6.8%** and the committed sha
-  changes. Hard-coding it off was right.
-
----
-
-## 13. Follow-up on the shipped Gumbel mode: component breakdown, two more levers, and the span axis
-
-All of §13 is 30L, canvas 256, 48 forced steps, **`--gumbel-mode device`** (the shipped mode),
-`DG_MOE_CONCAT=1`, `TRACE_REGION_SIZE=4 GiB`, 2 interleaved reps.
-
-### 13.1 Where the step actually goes (`DG_SKIP`)
-
-Reproducibility here was unusually tight — the `nomoe` arm produced 7.805 s on both reps.
-
-| arm | steady s/block | ms/step | component cost | share |
+| arm | steady s/block | ms/step | component | share |
 |---|---|---|---|---|
 | `full` | 11.429 | 238.1 | — | — |
 | `DG_SKIP=moe` | 7.805 | 162.6 | **75.5 ms** | 31.7% |
 | `DG_SKIP=attn` | 10.006 | 208.5 | 29.6 ms | 12.4% |
 | `DG_SKIP=shared` | 10.993 | 229.0 | 9.1 ms | 3.8% |
-| *(residual — not in any seam)* | | | **124.0 ms** | **52.1%** |
+| *(residual — in no seam at all)* | | | **124.0 ms** | **52.1%** |
 
-**More than half the step is outside the three seams.** That residual is the per-layer norms and
-residual adds (the seams remove only the attention / shared-MLP / MoE *compute*), plus embed,
-self-conditioning, lm_head, the terminal sampler and CCL. This is the single most useful number in
-the document: it says layer-level matmul work is no longer where the time is.
+**HEADLINE: 52.1% of the step is in no seam at all** — per-layer norms and residual adds, embed,
+self-conditioning, lm_head, the terminal sampler and CCL. Layer-level matmul work is no longer where the
+time is. The full-canvas norm measured **238.3 → 195.7 ms/step (−17.9%)** in this harness, a different
+configuration from its other two readings — [l1 residency](l1_residency.md).
 
-### 13.2 Two levers aimed at that residual
-
-**`DG_NORM_FULLCANVAS=1` — 238.3 → 195.7 ms/step, −17.9%.** The second-largest lever found, and it
-was already implemented and already measured (+15.8% in `l1_residency.md`); it is off because the
-bit-identity flip gate rejected it. The denoise step runs 7 `rms_norm` calls per layer × 30 layers,
-each chunked into 32-row pieces for a 256-row canvas — on the order of 1,700 norm ops per step.
-Decision-changing, so it needs the same absolute quality gate as concat.
-
-**`DG_TERMINAL_SHARDED=1` — −0.3%, i.e. nothing, and the reason matters. (Deleted 2026-07-28.)** This is winter's
-reduce-sharding (compute the terminal on the pre-all-gather `[256, V/tp]` shard) and V-sharded
-self-conditioning, which is exactly the right shape for the 124 ms residual. It does nothing here
-because **`prepare_sharded_terminal` has zero callers**: the consumers
-(`sharded_terminal_context()` in `traced_denoise.py:530`, `denoise_loop.py:543,686`) are wired, but
-nothing ever builds `_vocab_offsets`, so the context is always `None` and `self.sharded_terminal`
-is never set to `True`. The flag is a **silent no-op** — the third one found today, after the
-`C == DEFAULT_CAPACITY` MoE gate and the unconditional `tt-smi` requirement. Wiring the producer is
-the obvious next lever and is not done here.
-
-### 13.3 The prefix-span axis is worth 8%, not a factor
-
-`NUM_BLOCKS=2`, `DG_NORM_FULLCANVAS=1`, sweeping `DG_DENOISE_REVEAL_PMAX`. All four arms produced
-**identical committed tokens**, which is the expected sanity check: the span only extends the
+**PREFIX-SPAN SWEEP** (`NUM_BLOCKS=2`, full-canvas norm on, sweeping `DG_DENOISE_REVEAL_PMAX`): 576 →
+8.724 s/block (181.8 ms/step); 1024 → 8.819 (183.7, +1.1%); 2048 → 9.043 (188.4, +3.7%); 4096 → 9.446
+(196.8, +8.3%). All four arms produced **identical committed tokens** — the span only extends the
 masked-out region.
 
-| `reveal_pmax` | steady s/block | ms/step | vs 576 |
-|---|---|---|---|
-| 576 | 8.724 | 181.8 | — |
-| 1024 | 8.819 | 183.7 | +1.1% |
-| 2048 | 9.043 | 188.4 | +3.7% |
-| 4096 | 9.446 | 196.8 | +8.3% |
+## Landed defaults from this diff
 
-Winter's demo sits at a 128 bucket (384 key rows) against our 4096 (4352 rows) — an 11× difference
-in key rows that turns out to be worth **8.3% of the step**, not a factor. Attention is only 12.4%
-of the step (§13.1) and only part of it scales with span, so this is the expected magnitude; the
-report's speculation that the span explained a large share of the gap is refuted.
+- **Unpinning the denoise SDPA from an 8-core grid is −8.8% traced block with the SAME committed
+  tokens** — reassigning the Q axis across cores does not touch the flash K-reduction (`k_chunk_size`
+  unchanged); corroborated by the 2026-07-24 q-chunk sweep over 6 runs and again here at a 4x larger
+  prefix span. Arms (3 reps, within-arm spread ≤1.5%, ordering held in every rep): `auto` 34.642 s/block
+  (722 ms/step, sha `304e8023…`), `tuned` 34.369 (−0.8%, 716, `2ac3efcc…`), `+ device SDPA grid` 31.586
+  (**−8.8%**, 658, `2ac3efcc…`).
+- **Encoder `layer_scalar` guard.** Winter loads a separate encoder copy
+  (`winter/tt_model.py:260-266`), but measured on `diffusiongemma-26B-A4B-it` **max |encoder − decoder|
+  = 0.0 across all 30 layers**, and the `model.encoder.` prefix holds nothing else on the text path (its
+  other 356 keys are vision tower / embed_vision). `checkpoint.validate_encoder_layer_scalar_tie` now
+  runs on every load and raises if a future checkpoint diverges, so a wrong per-layer scalar compounding
+  into the prompt KV cannot become a silent correctness bug.
 
-Extrapolating the curve to winter's 384 gives ~181 ms/step, which is the number used in the
-normalized table at the top of this document.
+## Trace region — the 12 GiB reservation was ~8 GiB of unusable DRAM
 
-Also note the `host`→`device` Gumbel ratio measured directly here: the same concat configuration is
-22.234 s/block on host and 11.436 s/block on device, **1.94×**. That ratio is what converts the
-§§1–12 numbers into shipped ones, and it is how the ~371 ms/step "production this morning" figure in
-the top table was derived (34.642 s/block host ÷ 1.94).
+`bisect_trace_region.sh` (30L, `reveal_pmax` 4096): 12 GiB OK with 4.702 GiB free, 8 GiB OK with 8.702,
+6 GiB OK with 10.702, 4 GiB OK with 12.702, and **3 GiB FAILS** with `TT_FATAL: Creating trace buffers of
+size 3259146240B ... but only 3221225472B is allocated`. So the 48 up-front traces need **3.04 GiB**, not
+the 1.41–1.44 GiB `doc/vllm_integration/traced_serving.md` claimed, and the free pool tracks the
+reservation one-for-one. As of `d0551c78bda` (2026-07-29) every sweep/verify script and all five gate
+arms default to **4 GiB**; only `run_upfront_gpqa.sh` still carries a 6 GiB default.
 
-### 13.4 What is left
+**The "re-run the bisect whenever `reveal_pmax` changes" advice is MEASURED FALSE** and was removed from
+the scripts: all 48 up-front traces were captured inside a 4 GiB region at `reveal_pmax=16384`
+(MeshTraceId 0..47, run `local100_trace4g`, 2026-07-29), where proportional growth from 3.04 GiB at 4096
+would have demanded roughly 12 GiB.
 
-1. ~~**Wire `prepare_sharded_terminal`**~~ — **DONE, negatively, 2026-07-28.** The apparatus was
-   deleted instead. Two reasons the "obvious next lever" framing above was wrong: the one live
-   measurement of the idea puts the win at ~0 (the terminal all-gather and reductions are already
-   overlap-hidden under trace), and `gumbel_max_sharded` needed a `noise_shard` producer that does
-   not exist. Wiring the producer would have been 560 lines of work to reach a measured nothing.
-   The residual it targeted was also mis-sized here: with `DG_NORM_FULLCANVAS` on, the step is
-   195.7 ms and the non-layer share is ~81 ms, not 124.
-2. **The 2.02 s/block commit** — 26–38% of a served block, untouched.
-3. **Quality gate for the two decision-changing defaults** (`DG_MOE_CONCAT`, `DG_NORM_FULLCANVAS`,
-   together ~1.9×) against the CUDA bar of 70.71% / 70.20% GPQA-Diamond.
+## `ttnn.topk` width cliff
+
+Measured on QB2 and reproducing exactly (`tests/test_device_topk_width_cliff.py`, 7 passed): index
+agreement versus torch is **0.129 at shard width 16384, 0.129 at 32768, 1.000 at 49152, 1.000 at 65536**.
+V=262144 over tp=8 is exactly 32768, so a Galaxy 4x8 bring-up lands on the cliff; at tp=4 (what we serve)
+the width is 65536 and `argmax_last_dim` is exact. `ttnn.max` stayed finite and correct at every width,
+which is why winter's workaround (pad to 49152 with `-inf` for the *index*, take the *value* from `max`)
+is the right shape if tp=8 is ever needed. **TEST-DESIGN TRAP:** the router arm initially failed at
+0.9961 set overlap on plain random input — that was **tie-breaking, not an op error** (the 8th and 9th
+routing values land within a bf16 ulp on some rows); the test now separates the winners by a wide margin
+and passes at 1.0000.
+
+## Reference bars
+
+**CUDA**, measured the same day on `ssh a100` (one NVIDIA A100 80GB PCIe, bf16, upstream vLLM, single
+stream, same prompt, 768 tokens, default sampler, reference server idle): **0.54–0.62 s per 256-token
+block = 410–473 tok/s**, against QB2's ~2.3 s / ~108 tok/s on the shipped early-halt path — TT is ~4x
+slower per block on 4 chips, ~17x per chip. **Both caveats must be stated together:** those TT blocks
+halt after 2–9 denoise steps and blocks 1–2 emit IDENTICAL committed tokens, so TT is partly fast for the
+wrong reason (#48291); and the A100 number is single-stream on an 80 GB part that holds the whole model,
+so it is a latency comparison, not a cost or throughput one.
+
+**GPQA**, same reference server, 198 samples, flexible-extract, thinking at 262k: **70.71%** and
+**70.20%** across two repetitions.
+
+> **OPEN CONTRADICTION (unexplained):** this document states the reference run-to-run spread as **0.5 pp
+> across those two repetitions** (§11) and as **~1.1 pp over three repetitions** (§12), giving a
+> resolvable-difference floor of ~1–2 pp. Both readings kept; not explained.
+
+**Normalized against winter's operating point** (30L, canvas 256, device Gumbel): production that morning
+~371 ms/step (derived, 34.642 s/block host ÷ 1.94), + SDPA grid + concat MoE 238.3, + full-canvas norm
+195.7, + prefix span at winter's geometry (`reveal_pmax` 384–576) ~181. On winter's own accounting (256
+tokens per canvas, prefix excluded) we are at **177 tok/s vs winter's 213 at 8 steps, 141 vs 171 at 10,
+110 vs 107 at 16** — 0.83x winter's documented step time at 8 steps and slightly ahead at 16, at bf16
+where winter runs bf4 experts and bf8 attention.
+
+**OPEN:** the **2.02 s/block commit** is 26–38% of a served block and no lever here touches it; winter
+avoids it only by re-encoding the whole prefix every canvas, which is O(P²) and worse for us.
+
+## Fused per-layer MoE kernel — infeasibility verdict, and what is still in the tree
+
+The design targeted a deleted subject (the token-gather MoE), but three parts outlive it.
+
+**REFUTED — an in-reader per-row gather from a TILE-layout hidden cannot be landed as a working, faster
+gather.** `hidden` is forced TILE (`sparse_matmul_device_operation.cpp:87`); logical row `t` lives at
+intra-tile row `t%32` of tile-row `t/32` and spans two horizontal 16x16 faces = two discontiguous 32-byte
+runs 256 elements apart. One dest tile-column of one expert therefore costs `32 rows x 2 face-runs = 64`
+sub-tile reads versus **1** tile read today, and over `H/32=88` tile-cols that is **~5632 reads/expert vs
+88** — a ~64x NoC blow-up on a movement/op-count-bound step. The only variant that reduces movement is a
+**ROW-MAJOR hidden plus on-the-fly tilize** (row `t` becomes one contiguous `H*BPE` read, 32
+reads/expert), but the matmul reader has no tilize stage — `ttnn.embedding(..., layout=TILE)` already
+does exactly this in the ragged prefill path, and folding it into the matmul reader is the multi-week
+body. Precedents for why op-count is the enemy: a RoPE-unchunk removing ~128 tiny ops gave **+34%**, a
+single-op `transpose_a` tweak gave **0**, and a compact embedding gather measured **~0 or slower**.
+
+**GATHER ADDRESS MATH, preserved for any future attempt** (`BPE=2` for bf16):
+`page_id = (t/32)*(H/32) + tile_col`; `face_row = (t%32)/16`, `r16 = (t%32)%16`;
+`run0 = (face_row*2 + 0)*256*BPE + r16*16*BPE`, `run1 = (face_row*2 + 1)*256*BPE + r16*16*BPE`.
+
+**THE CROSS-CORE SCATTER-ACCUMULATE HAZARD (a hardware fact that outlives the deleted MoE):** the NoC has
+**no read-modify-add primitive**, so a token receiving up to `top_k=8` contributions placed on different
+cores cannot be accumulated by concurrent `+=` — accumulation must be *structured*. Three structures,
+cheapest first: (1) keep combine as a reduction over the compact route-weighted output using `embedding`
++ `fast_reduce_nc`; (2) home-core reduction with a per-(token, k-slot) scratch page nobody else owns;
+(3) serialize by semaphore — **REJECTED**, it serializes the hot path.
+
+**LANDED AND STILL IN THE TREE — two ttnn env gates (not DG flags).**
+`TTNN_SPARSE_MATMUL_WRITER_SCALE` emits a `WRITER_SCALE` define into the shared sparse writer kernel
+`reader_bmm_tile_layout_in1_sender_writer_padding.cpp`, scaling every output tile of an active batch by
+the bf16 value already in the `cb_sparsity` L1 page; this is legal **with no new host tensor** because the
+op uses only `== 0` of that value as an active/skip gate — confirmed by `test_sparse_matmul_with_nnz`,
+which puts `torch.rand` values in `sparsity` and compares against a plain `torch.matmul` with no scale.
+`TTNN_SPARSE_MATMUL_IN0_GATHER` emits `SPARSE_MATMUL_IN0_GATHER` from the sparse mcast-1d factory (main
+and quasar mirrors) into `mm_kernel_in0_sender_writer_defines`, with a reader hook in
+`reader_bmm_tile_layout_in0_sender_padding.cpp` whose `#else` path is textually identical to the
+pre-scaffold read — so the flag is a no-op on or off.
+
+**PROGRAM-CACHE TRAP:** both env gates are read inside the factory and are **not part of the program
+hash**, so a run must not reuse a cached program built with the flag in the opposite state for the same
+shapes; the test uses a distinct shape and sets the env var before the first op.
+**TESTS:** `tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py::test_sparse_matmul_writer_scale`
+and `::test_sparse_matmul_in0_gather_scaffold` are device-runnable;
+`::test_sparse_matmul_in0_gather_reference` self-skips until the `gather_index` op input exists. The
+writer kernel is JIT-compiled on device, so these tests are host-buildable but **REQUIRE a Tenstorrent
+device to run** — a `.so` build/link proves nothing about them.
+
+**DO-NOT-REINVENT** if anyone revives this: the `cb_sparsity` per-batch skip page;
+`SPARSE_OUTPUT`/`compact_output`, which packs only the nnz active batch pairs so the output is
+`[nnz_rows,H]` not `[EC,H]`; `SparseMatmulMultiCoreReuseMcast1DProgramFactory`; and
+`matmul_reduce_scatter_async` as the template for folding the TP all-reduce into the op. **Effort:**
+increment 1 was ~2 days and is ~5% of the work; ~6 weeks of ttnn C++/Python remain, the on-kernel gather
+and single-op fuse being the bulk. **Owner scope:** `tt/sparse_moe.py`,
+`ttnn/cpp/ttnn/operations/matmul/device/sparse/**` plus its quasar mirror, the sparse-matmul unit test,
+and this doc — never gemma4 or the denoise/loop/sampling/self-cond/model files.
+
+## Reproduction and artifacts
+
+`sweep_denoise_arms.sh` runs interleaved arms over `demo/serving_smoke.py --upfront` at 30 layers, canvas
+256, `reveal_pmax` 4096, `max_seq_len` 4096, seed 0, 3 blocks x 48 denoise steps, 3 repetitions; steady
+state = `mean(per_block_latency_s[1:])` because block 0 carries the ~85 s 48-trace capture. Trace-region
+bisect: `bisect_trace_region.sh`. Env: see [plan](../../plan.md). The two GPQA arms ran as
+`/home/zni/dg_runs/gpqa_{base,concat}_20260728` at `TRACE_REGION_SIZE=4 GiB`, `RESET_BEFORE=0`.

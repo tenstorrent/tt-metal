@@ -1,355 +1,142 @@
-# Degenerate output: cause, fix, and the safety net (#48291)
+# The degeneracy guard: what it measures, and the terminal-padding fix
 
-> **2026-07-28 — the `host` Gumbel mode used/recommended below was DELETED.** It was measured NOT
-> to be the TT language-drift cause: it drifts on exactly the same prompts as `device`, repairs 0,
-> and costs 1.40x per request. The real cause was the canvas attending prefill pad keys, fixed in
-> `d0936d4da4f`. **Every measurement below stands exactly as recorded**; only the recommendation to
-> use, keep, or fall back to `host` is void. `device` is the only materialized Gumbel source and
-> therefore the only mode valid under up-front capture (`argmax`/`chunked` are not materialized).
+Status: current. The RNG root cause it was built against is fixed elsewhere
+([device Gumbel restored](device_gumbel_restored.md)); the guard remains as defence in depth.
+Owns: `tt/degeneracy.py` — what `top_frac`/`max_run` measure, why both are needed, the
+healthy-vs-collapsed calibration, the termination-is-not-degeneration exemption (fixed 2026-07-28),
+and the policy env var.
+See also: [refuted list](../REFUTED.md) · [decision fidelity](README.md) · [plan](../../plan.md)
 
-**Status 2026-07-25: root cause identified and fixed. The served Gumbel default is back to `host`.**
-Matched 4-seed A/B on device, one variable: `host` answered correctly **4/4**, `device` corrupted
-**2/4**. A degenerate-canvas detector is added as defense in depth, calibrated on real blocks.
+Over the 110-line target: the calibration numbers, the 07-28 defect measurement and the replay are
+the reason this guard is trustworthy, and none of them is cut for length.
 
-## 1. What the failure actually looks like
+The `host` Gumbel mode this document originally recommended was **deleted 2026-07-28** — it drifts on
+exactly the same prompts as `device`, repairs 0, and costs 1.40× per request. Every measurement below
+stands as recorded; only the recommendation to use or fall back to `host` is void. `device` is the
+only materialized Gumbel source and therefore the only mode valid under up-front capture. The commit
+that landed the real fix (hiding the prefill pad keys) is credited two different ways in this tree —
+see the [open contradictions](../REFUTED.md#open-contradictions-unexplained).
 
-GPQA-Diamond doc_id=0 (`gpqa_thinking3072_sub40_20260723.samples.jsonl.gz`) produced 3256
-characters and no reasoning at all. It opens
+## What a collapse looks like
 
-```
-níníníenianíeniaenianíníní… ní1ní1_1111111… the the the1 \1111 the the the \ \ \ the
- \ \ \ \ \ \ \ \ \ \ … 1111111111111111111111111111111111111111111…
-```
+GPQA-Diamond doc_id=0 produced 3256 characters and no reasoning: a wall of `ní`, then `▁\` (id 621),
+then `1` (id 236770). Ids 621 and 236770 are **the two most frequent tokens of the HEALTHY blocks of
+that same LaTeX-heavy physics prompt**. So a collapsed canvas is not emitting noise — it is collapsing
+onto the prompt's own most probable token, which is the signature of positions losing independence.
 
-Three tokens do all the damage, and their ids matter:
+**Reproduction prerequisite:** those traces were produced in **thinking mode**, and `serving_smoke`
+renders through `tokenize_prompt`, which could not emit the `<|think|>` turn until `--enable-thinking`
+was wired in. With it, doc_id=0 replays at `prompt_len=157` — the exact length the server logged.
 
-| id | token | where it shows up |
-| --- | --- | --- |
-| 621 | `▁\` | the `\ \ \ \` run |
-| 236770 | `1` | the 2000-character wall of `1` |
-| 1 | `<eos>` | (termination, *not* part of the failure) |
+## The measure, and its calibration
 
-Ids 621 and 236770 are **the two most frequent tokens of the HEALTHY blocks of this same prompt**
-— it is a LaTeX-heavy physics question. So the canvas is not emitting noise; it is collapsing onto
-the prompt's own most probable token. That is the signature of positions losing their independence,
-not of a model that has forgotten the task.
+`tt/degeneracy.py` reports **`top_frac`** (share taken by the most frequent id) and **`max_run`**
+(longest consecutive repeat). **Both are needed:** the `\ \ \ \` 2-cycle has `max_run == 1`.
 
-## 2. Reproducing it required fixing the prompt contract first
+| on real traced blocks (12 blocks forced past the natural end) | distinct ids / 256 | top_frac | max_run |
+|---|---|---|---|
+| healthy | 54–106 | 0.06–0.08 | 1–2 |
+| collapsed | 1–16 | 0.94–1.00 | 240–256 |
 
-The failing traces were produced in **thinking mode**, and `serving_smoke` renders through
-`tokenize_prompt`, which could not emit the `<|think|>` turn at all until `--enable-thinking` was
-wired in. Before that, the offline harness could not reproduce the regime it exists to diagnose.
-With it, doc_id=0 replays at `prompt_len=157` — the exact length the server logged — so the offline
-path is a valid stand-in.
-
-## 3. The A/B that identifies the cause
-
-`serving_smoke --upfront --enable-thinking`, 12 blocks, `--max-seq-len 4096`, reveal span 4096,
-48-step cap, identical prompt and seed per pair. **One variable: `--gumbel-mode`.**
-
-| seed | `host` (IID) | `device` (the shipped default) |
-| --- | --- | --- |
-| 0 | `… is $10^{-4}$ eV.  Answer: \boxed{C}` | `$\Gamma_1 \approx 6.558times 10^{-^{-}} \text{}$  $\_22 \  ..5 \times  100^{-88` |
-| 1 | `… clearly resolved is $10^{-4}$ eV.  Answer: \boxed{C}` | `Answer: \boxed{C}10^{- } \^{-text}} \} \text{ ( \: $1.054 \times 10^{-25}…` |
-| 2 | `… Answer: \boxed{C}` | `… Answer: \boxed{C}` (identical text) |
-| 3 | `… Answer: \boxed{C}` | `… Answer: \boxed{C}` |
-
-**host 0/4 corrupted, device 2/4 corrupted.**
-
-The corruption is not random noise, it is token-level duplication and dropout:
-`6.558times` (the `\` between them lost), `10^{-^{-}}` (the superscript group repeated),
-`100^{-88` (digits doubled). Neighbouring canvas positions are producing the same or overlapping
-tokens — exactly what correlated per-position noise does.
-
-## 4. Why `device` does this
-
-`sample_gumbel_noise_with_permuted_vocab` keeps the vocab axis off `ttnn.rand`'s innermost axis by
-collapsing every other axis into one trailing axis. For the production noise shape
-`(1, 1, 256, vocab)` that trailing axis **is the 256 canvas positions**, so the draw becomes
-`ttnn.rand((vocab, 256))` with positions on the width axis — and `ttnn.rand`'s width axis is not
-independent:
-
-* only 24 of every 32 column streams are distinct (columns `c` and `c-24` are byte-identical for
-  `c % 32 >= 24`), so 64 of 256 positions carry a **copy** of another position's noise;
-* the remaining columns stay correlated in value, so even the non-duplicate positions agree far
-  more often than IID allows: 119/256 distinct flat-logit winners, against 255/256 for host.
-
-Full measurement, root cause, and the two workarounds that do *not* fix it:
-`gumbel_position_correlation.md`. Upstream regression:
-`tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py` (xfail(strict)).
-
-## 5. The fix
-
-`DEFAULT_VLLM_GUMBEL_MODE` and the launcher default go back to **`host`**. `device` remains
-selectable via `DG_VLLM_GUMBEL_MODE=device` for throughput work where the generated text is not
-the product — it does buy the ~313 ms/step host RNG and the ~256 MiB/step replicated PCIe copy
-(~1.8x denoise/step) recorded in `upfront_gumbel_overlap_devicemode_20260724.md`, which is now
-banner-marked as superseded on the default question only. The throughput numbers there stand.
-
-## 5b. The ttnn.rand fix, and the device default restored (2026-07-25, later)
-
-`host` met the correctness bar but not the throughput bar (~36.3 vs ~53.6 tokens/block/s), so the
-kernel defect itself was fixed rather than routed around.
-
-**What the defect actually was.** Mapping one 32x32 `ttnn.rand` tile element by element: 94 distinct
-values in 1024 slots, the PRNG per-lane (32/32 distinct inside one 32-lane SFPU vector) but only 20
-of a tile's 32 vector draws distinct, with the exact relation
-
-    (face f, vector 2k)  ==  (face f+1, vector 2k+1)
-
-which in tile coordinates is "column c is byte-identical to column c-24 for c % 32 >= 24". So
-element `(read t, lane i)` carries `stream[t + i]`: **one sliding window that advances about one
-element per read while all 32 lanes read overlapping positions.**
-
-**The fix.** `ckernel_sfpu_rand.h` (Blackhole) now consumes several PRNG values per stored element,
-so the window moves past its own width instead of being re-read. Measured:
-
-| | tile distinct | distinct vector draws | byte-identical rows | max abs r | max argmax mult |
-| --- | --- | --- | --- | --- | --- |
-| before | 94/1024 | 20/32 | 64/256 | 1.00000 | 11 |
-| after | 214/1024 | 32/32 | **0/256** | 0.618 | 5 |
-| host IID | — | — | 0/256 | 0.035 | 2 |
-
-The uniform [0,1) distribution is untouched: mean 0.4994, std 0.2887, top decile 0.0996 over 524288
-samples (ideal 0.5 / 0.28868 / 0.1).
-
-**Rejected alternatives, all measured, so nobody repeats them.** NOP spacing after the PRNG read
-(0 through 32 NOPs: byte-identical output — it is not a pipeline hazard, and the Wormhole kernel's
-extra NOPs are irrelevant here); xorshift32 mixing of two draws (no gain — any combination of reads
-is still a function of `t + i`); `SFPTRANSP` across four draws with an XOR fold (modest, and it
-re-introduced duplicate rows). One trap worth recording: holding `scale`/`from` in lreg4/lreg5
-across a transpose silently broke the output range to mean 0.35 / std 0.64, which for a while looked
-like a decorrelation success.
-
-**What the fix does not do.** It dilutes the lane/stream degeneracy rather than removing it —
-cross-position max |r| is 0.618 against 0.035 for host IID. A full fix needs a counter-based RNG
-keyed on each element's own position, which this instruction sequence has no lane index to build
-from. `test_rand_independence.py` keeps that half as `xfail(strict)`; the duplicate-column half now
-passes and its marker is gone.
-
-**Gate.** Same 4-seed A/B, shipped serving configuration (EOS stop on, degeneracy guard at its
-default), GPQA doc0 in thinking mode:
-
-| seed | device answer | device tok/blk/s | host answer | host tok/blk/s |
-| --- | --- | --- | --- | --- |
-| 0 | C | 23.8 (6 blocks) | C | 37.5 |
-| 1 | C | 52.3 | C | 27.2 |
-| 2 | C | 53.8 | C | 34.5 |
-| 3 | C | 54.5 | C | 37.0 |
-
-8/8 correct, guard never fired on any run, and the served default is back to `device`.
-
-## 6. Defense in depth: the degenerate-canvas detector
-
-Block diffusion commits a whole 256-token canvas at once, so degeneration is directly measurable
-on the committed tensor before it reaches the KV cache — no entropy proxy needed. `tt/degeneracy.py`
-reports `top_frac` (share taken by the most frequent id) and `max_run` (longest consecutive repeat);
-both are needed, because the `\ \ \ \` 2-cycle has `max_run == 1`.
-
-Calibration on real traced blocks (host Gumbel, seed 0, 12 blocks forced past the natural end):
-
-| | distinct ids / 256 | top_frac | max_run |
-| --- | --- | --- | --- |
-| healthy blocks | 54–106 | 0.06–0.08 | 1–2 |
-| collapsed blocks | 1–16 | 0.94–1.00 | 240–256 |
-
-The defaults (`top_frac >= 0.5`, `max_run >= 32`) sit in that gap by an order of magnitude.
+Over 192 committed canvases (the 10 worst GPQA docs replayed plus both 4-seed sweeps): healthy and
+not stop-dominated n=136, max `top_frac` **0.1836**, max `max_run` **18**; degenerate n=1,
+`top_frac` 0.8516, `max_run` 86. The defaults sit in that gap by an order of magnitude, and on that
+replay nine of ten docs committed no degenerate canvas at all — doc0, the trace that emitted the
+2000-character wall of `1` in serving, answers **C**, correctly.
 
 **Termination is not degeneration.** Once the answer is complete the model fills the canvas with
-`<eos>`, scoring `top_frac 1.0 / max_run 256` — the same numbers, the opposite meaning. So the
-verdict takes the caller's stop-token set and never flags a canvas whose dominant id is a stop
-token. This exclusion is inert unless the caller passes its stop ids, which the on-device
-validation caught: `serving.decode_block` was calling the commit path without them, and the first
-terminating canvas raised. Both `generate_blocks` and the serving session now thread them.
+`<eos>`, scoring `top_frac 1.0 / max_run 256` — the same numbers, the opposite meaning. The verdict
+therefore takes the caller's stop-token set and never flags a canvas whose dominant id is a stop token.
 
-The check runs **after denoise and before `commit_fn`** — placement is the point. A degenerate
-canvas that reaches the KV cache conditions every later block, which is what makes the state
-near-absorbing (P(nonhalt | prev nonhalt) = 85.7% against an 8.2% base rate).
+**Placement is the point:** the check runs **after denoise and before `commit_fn`**. A degenerate
+canvas that reaches the KV cache conditions every later block, making the state near-absorbing —
+`P(nonhalt | prev nonhalt) = 85.7%` against an 8.2% base rate.
 
-`DG_DEGENERACY_POLICY` is `off` by default (no measurement, no behaviour change), `warn` logs
-per-block statistics, `stop` raises `DegenerateBlockError` so generation ends with everything that
-was healthy and the collapsed canvas is never committed or emitted.
+**Wiring defects only device runs exposed:** `serving.decode_block` was calling the commit path
+**without** `stop_token_ids`, so the termination exclusion was inert on the path that matters and the
+first `<eos>` canvas raised; and `stop_token_ids` can be a bare int from `eos_token_id`, so `set()`
+on it raised `TypeError`.
 
-## 6b. Policy default: `warn`, validated; `stop` opt-in, also validated
+**Design rule:** a refused block must not fail the whole request. The first attempt raised an
+exception and lost the good text — "no degenerate output" must not mean "no output". The session is
+marked finished and a zero-token terminal emission hands the caller every healthy block it already
+received.
 
-`DG_DEGENERACY_POLICY` defaults to **`warn`**: it measures every committed canvas (one bincount
-over 256 ids) and never changes behaviour, so a future collapse appears in the log as it happens
-instead of being reconstructed from sample dumps afterwards.
+## 2026-07-28: the guard was rejecting normal completions
 
-`stop` is validated on device and does not interfere. Four seeds, EOS stop enabled (the real
-serving configuration), `DG_DEGENERACY_POLICY=stop`:
+**Status: fixed — the verdict is now taken on the canvas's CONTENT region.** Three correct-looking
+decisions composed into a wrong one: `is_degenerate()` exempts a stop-token-dominated canvas *only if
+the caller passes `stop_token_ids`*; `tt/serving.py` passed the session's **stop policy** into that
+argument; and `tt/generator_vllm.py:_make_session()` deliberately sets `stop_token_ids=[]` because
+vLLM owns the stop decision. So on the vLLM path the exemption was **dead code** and the whole-canvas
+rule ran unrestricted — and a block that ends at position 149 pads 107 positions with `<eos>`, i.e.
+`top_frac 0.58` **and** `max_run 107`. **The terminal block of every answer shorter than the canvas is
+structurally degenerate under that rule.**
 
-| seed | exit | stopped early | blocks | tokens | text chars |
-| --- | --- | --- | --- | --- | --- |
-| 0 | 0 | no | 7 | 1792 | 3798 |
-| 1 | 0 | no | 8 | 2048 | 5028 |
-| 2 | 0 | no | 5 | 1280 | 3294 |
-| 3 | 0 | no | 7 | 1792 | 4167 |
+Measured on tt-shield run 30285823000 (2026-07-27, 198 GPQA-Diamond requests): **130 of 198** requests
+ended by the guard; **110 (85%)** had a stop token as dominant id, of which **108 were answer +
+`<eos>` padding** (median 55 distinct ids in the discarded block); real tokens thrown away median
+**107/block, 11135 total**; only 20 trips were on a content id (14 of them a full 256-wide wall); 9
+requests returned an empty string. Score effect: **65.15 → 48.99** on `gpqa_diamond_cot_zeroshot`,
+with responses reaching a final-answer statement down 122/198 → 37/198 and `\boxed` presence 119 → 43.
 
-Zero false positives; every run still terminated naturally on EOS with full text.
+- **TRAP:** that 48.99 came mostly from the harness's fallback extractor picking the last `(X)` out of
+  a truncated response — 66 of 97 correct answers, at 43% against a 25% random baseline. See the
+  [three-denominator rule](README.md#gpqa-measurement-traps).
 
-It is still **not** the default. `max_run >= 32` has a plausible false-positive surface in ordinary
-content -- a markdown horizontal rule, a table separator row, padding inside a code block, ASCII
-art -- and four physics answers do not clear that. Promoting it needs a false-positive study over
-that kind of text. The degeneration itself is fixed at the root (§5), so `stop` is defence in
-depth rather than the fix.
+**The fix.** `block_degeneracy(tokens, stop_token_ids=...)` also reports the four statistics for the
+**content region** (the canvas with its terminal stop-token run removed), and `is_degenerate()`
+prefers those: answer + `<eos>` padding commits; an all-stop canvas is benign termination; a wall of
+a content id still rejects; with no stop ids declared the whole-canvas behaviour is unchanged and the
+serving layer logs why. The stop ids no longer come from the stop *policy* —
+`serving._resolve_degeneracy_stop_ids()` takes an explicit set, else the session's policy if
+non-empty, else **every special id the tokenizer knows** (a tail of `<eos>`/`<end_of_turn>`/`<pad>` is
+padding under any tokenizer).
 
-Getting here took two wiring defects that only running it on device exposed: `serving.decode_block`
-was calling the commit path without `stop_token_ids` (so the termination exclusion was inert on the
-path that matters, and the first `<eos>` canvas raised), and `stop_token_ids` can be a bare int
-from `eos_token_id`, so `set()` on it raised TypeError.
+**Replay against the fix** — `gate/replay_degeneracy_verdicts.py <evals.log>` re-decides every canvas
+from the `DG_DEGENERACY` telemetry. On the 07-27 run: 1842 canvases, **0 reconstruction mismatches**,
+130 guard trips → **110 now allowed to commit, 20 still rejected, 0 newly rejected** among the 1712
+healthy blocks. The 20 survivors are the shape the guard exists for: top ids 239054 (11×), 63405,
+107, 167, 1340, 236743, 237808, 238408 at `top_frac` 0.55–1.00 over a full 256-token content region.
 
-## 6c. What the fix does and does not cover (measured, 10 GPQA docs)
+- **What the replay does NOT claim:** it proves the verdicts flip as intended on the real
+  distribution; it does not predict the score. The 07-27 outputs differ from 07-24 from the first
+  ~120 characters (retention default, Gumbel layout and a MoE HiFi2 revert all landed in that window),
+  so only a re-run separates the guard's contribution from the model's.
 
-The 10 worst-behaving docs from the served run were replayed under the shipped defaults (host
-Gumbel, thinking mode, EOS stop enabled, 12-block cap). Across **192 committed canvases** measured
-here and in both 4-seed sweeps:
+## Not covered
 
-| | n | max top_frac | max max_run |
-| --- | --- | --- | --- |
-| healthy, not stop-dominated | 136 | 0.1836 | 18 |
-| degenerate | 1 | 0.8516 | 86 |
+Progressive degradation. The block immediately before a refused one was already repetitive
+(`the the the ... ,,,1,1111`) at `top_frac` under 0.5. Catching that precursor needs a bound near
+0.2–0.3 against a measured healthy maximum of 0.1836 — too thin a margin, so it is left uncaught
+rather than traded for false positives on ordinary text. The residual case (doc7) sits in the
+**over-generation** regime: it ran out of context before it ran out of reasoning, which is the
+context-length bottleneck of
+[gpqa_thinking3072](../optimize_perf/gpqa_thinking3072_sub40_20260723.md), a separate piece of work.
 
-**doc0 — the trace that emitted a 2000-character wall of `1` in serving — now answers `C`,
-correctly.** Nine of ten docs committed no degenerate canvas at all.
+Halt telemetry cannot substitute for this guard — refuted, see the
+[refuted list](../REFUTED.md#sampling-rng-and-decision-fidelity).
 
-**COVERED.** A canvas that collapses onto one content token. `top_frac 0.5` sits 2.7x above the
-healthy maximum and 1.7x below the degenerate one; `max_run 64` is 3.5x above the healthy maximum.
-On the serving path the request now ends gracefully — the collapsed canvas is refused, the session
-is marked finished, and a zero-token terminal emission hands the caller every healthy block it
-already received. (First attempt failed the whole request with an exception, which loses the good
-text; "no degenerate output" must not mean "no output".)
-
-**NOT COVERED.** `host` Gumbel does not eliminate degeneration, it only makes it rare: doc7 still
-collapsed, at the very end of a 12-block run that never finished its answer. And degradation is
-*progressive* — the block immediately before the refused one was already repetitive
-(`the the the ... ,,,1,1111`) at `top_frac` under 0.5, so it was emitted. Catching that precursor
-would need a bound near 0.2–0.3, against a measured healthy maximum of 0.1836; that margin is too
-thin to spend, so it is left uncaught rather than traded for false positives on ordinary text.
-
-The residual sits in the over-generation regime — doc7 was one of the traces that was TRUNCATED in
-the served run too, i.e. it ran out of context before it ran out of reasoning. That is the
-context-length bottleneck `gpqa_thinking3072_sub40_20260723.md` already identified
-("Bottleneck is context length (4096), not the sampler"), and it is a separate piece of work.
-
-## 7. What the halt telemetry says, and why it is not the detector
-
-`traced_denoise` now emits the per-step `(entropy, mismatch)` trace it always computed, with a
-`halt_blocking_gate` verdict. On a healthy 10-block run every block halted (non-halt 0%), and
-`halt_entropy_first` fell from ~4.9 nats to ~1e-4 once the answer was complete — with clean prose
-committed either way. So entropy reports "converged", which a finished answer and a collapsed
-canvas share. It is the right instrument for *why 48 steps were burned*; it cannot substitute for
-measuring the committed tokens.
-
-## 8. Reproduce
+## Reproduce
 
 ```bash
-# The A/B reported above was `host` vs `device` (one variable). The `host` arm was DELETED on
-# 2026-07-28 -- see the banner at the top of this file -- so only the `device` arm is runnable:
+# env: see plan.md — serving smoke that replays the doc-0 collapse regime
 DG_TRACE_REGION_SIZE=12884901888 MESH_DEVICE=P150x4 \
 python -m models.experimental.diffusion_gemma.demo.serving_smoke \
   --max-seq-len 4096 --num-blocks 12 --gumbel-mode device --upfront --reveal-pmax 4096 \
   --enable-thinking --disable-eos-stop --seed 0 --prompt "<gpqa doc 0>"
 
-# per-block degeneracy statistics on any run
 DG_DEGENERACY_POLICY=warn  ...   # logs DG_DEGENERACY start_pos=... top_frac=... max_run=...
 DG_DEGENERACY_POLICY=stop  ...   # ends generation instead of committing a collapsed canvas
 ```
 
----
+Current code state (`tt/degeneracy.py`): `POLICIES = ("off", "warn", "stop", "retry")`,
+`DEFAULT_POLICY = "stop"`, `DEFAULT_TOP_FRAC = 0.5`, `DEFAULT_MAX_RUN = 64`, `DEFAULT_RETRIES = 2`.
+Earlier revisions of this file claimed the default was `off` and separately `warn`, and quoted
+`max_run >= 32` — all three are wrong; trust the code.
 
-## 9. 2026-07-28: the guard was rejecting normal completions (the terminal-padding shape)
-
-**Status: fixed. The verdict is now taken on the canvas's CONTENT region, not the whole canvas.**
-
-Section 6 promised the gate sits far from healthy text, and the numbers there are right — but they
-were measured on canvases *not dominated by a stop token*, i.e. content-only. The served path never
-gave the guard the information it needed to make that same restriction, so it applied
-content-calibrated bounds to canvases that are half padding.
-
-### What went wrong
-
-Three correct-looking decisions composed into a wrong one:
-
-1. `is_degenerate()` exempts a canvas whose dominant id is a stop token — but only if the caller
-   passes `stop_token_ids`.
-2. `tt/serving.py` passed the session's **stop policy** into that argument.
-3. `tt/generator_vllm.py:_make_session()` deliberately sets `stop_token_ids=[]`, because vLLM owns
-   the stop decision (EOS / stop strings / `max_tokens` / `ignore_eos`) on the serving path.
-
-So on the vLLM path the exemption was dead code: `benign` was empty, `if benign and ...`
-short-circuited, and the whole-canvas rule ran unrestricted. And the whole-canvas rule cannot pass a
-finished answer: a block that ends at position 149 pads the remaining 107 positions with `<eos>`,
-which is `top_frac 0.58` **and** `max_run 107` — both past the gate. The terminal block of every
-answer shorter than the canvas is structurally degenerate under that rule.
-
-Because `stop` refuses to commit, the block holding `\boxed{...}` was discarded and the request
-ended at the previous 256-token boundary, mid-word.
-
-### The measurement (tt-shield run 30285823000, 2026-07-27, 198 GPQA-Diamond requests)
-
-| | |
-| --- | --- |
-| requests ended by the guard | **130** (66% of 198) |
-| ...whose dominant id is a stop token (1 / 106 / 50) | **110** (85% of trips) |
-| ...that were a *pure* `<eos>` canvas | 2 |
-| ...that were **answer + `<eos>` padding** | **108** — median 55 distinct ids in the discarded block |
-| real tokens thrown away | median **107** per block, **11135** total |
-| trips on a content id (true positives) | 20, of which 14 are a full 256-wide wall |
-| requests returning an empty string | 9 (guard tripped in the first block) |
-
-Score effect on that run: 65.15 → 48.99 on `gpqa_diamond_cot_zeroshot`. Responses that reach a
-final-answer statement fell 122/198 → 37/198, and `\boxed` presence 119 → 43, so the reported score
-came mostly from the harness's fallback extractor picking the last `(X)` out of a truncated
-response (66 of 97 correct answers, at 43% against a 25% random baseline).
-
-### The fix
-
-`block_degeneracy(tokens, stop_token_ids=...)` now also reports the same four statistics for the
-**content region** — the canvas with its terminal stop-token run removed — and `is_degenerate()`
-prefers those. Consequences:
-
-* answer + `<eos>` padding → content region is ordinary prose → committed;
-* all-stop canvas → no content region → benign termination;
-* wall of a content id → stripping removes nothing → still rejected;
-* short prefix then a content wall then padding → content region still collapsed → still rejected;
-* no stop ids declared → unchanged whole-canvas behaviour, and the serving layer logs why.
-
-The stop ids no longer come from the stop *policy*. `serving._resolve_degeneracy_stop_ids()` takes
-an explicit set, else the session's policy if non-empty, else **every special id the tokenizer
-knows** — a tail of `<eos>`/`<end_of_turn>`/`<pad>` is padding under any tokenizer, and this avoids
-hand-transcribing one checkpoint's `eos_token_id` list into the source.
-
-### Replaying the run against the fix
-
-`gate/replay_degeneracy_verdicts.py` re-decides every canvas the run measured, reconstructed from
-the `DG_DEGENERACY` telemetry (same length, dominant id, `top_frac`, `max_run`; `distinct` is not
-recoverable and the rule does not read it):
-
-```
-$ python replay_degeneracy_verdicts.py vllm_2026-07-27_..._evals.log
-canvases measured in the run:        1842
-  reconstruction mismatches:         0
-requests the run ended (guard trip): 130
-  now allowed to commit:             110  <- normal completions restored
-  still rejected:                    20  <- real content collapse
-newly rejected (regression check):   0
-  real tokens per restored block:    median 106, max 191, total 11136
-healthy blocks in the run:           1712
-  newly rejected among them:         0
-```
-
-The 20 survivors are the shape the guard exists for: `top_id` 239054 (11x), 63405, 107, 167, 1340,
-236743, 237808, 238408 — content ids at `top_frac` 0.55–1.00 over a full 256-token content region.
-
-**What this does not claim.** The replay proves the verdicts flip as intended on the real
-distribution; it does not predict the score. 110 requests keeping their terminal block is necessary
-for an answer to be extractable, not sufficient for it to be right — and the 07-27 outputs differ
-from 07-24 from the first ~120 characters (retention default, Gumbel layout, MoE HiFi2 revert all
-landed in the same window), so a re-run is the only way to separate the guard's contribution from
-the model's. That re-run is the gate for this fix.
-
-Unit coverage: `tests/test_degeneracy.py` pins the terminal-padding shapes measured above (the five
-real `(content_len, top_frac)` tuples), the mixed-stop-id tail, both still-degenerate collapses and
-the no-stop-ids fallback; `tests/test_serving_block_contract.py` pins that an empty stop policy
-still leaves the guard a stop set — the exact composition that caused this.
+Unit coverage: `tests/test_degeneracy.py` pins the five real terminal-padding `(content_len,
+top_frac)` tuples, the mixed-stop-id tail, both still-degenerate collapses and the no-stop-ids
+fallback; `tests/test_serving_block_contract.py` pins that an empty stop policy still leaves the
+guard a stop set — the exact composition that caused the 07-28 defect;
+`tests/test_degeneracy_retry.py` covers the retry policy.

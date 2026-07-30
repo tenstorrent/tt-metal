@@ -1,321 +1,163 @@
-# DiffusionGemma — L1-residency pass on the denoise hot path (dg-08, #47465)
+# L1 residency on the denoise hot path (dg-08, #47465)
 
-> **Historical candidate study, not a selected-current result.**
-> `DG_NORM_FULLCANVAS` was believed to change diffusion decisions and failed its flip gate, so
-> its 20.68 t/s number is ineligible for the precision-preserving default.
-> `DG_MOE_L1` was a wash. Current selected-default evidence is
-> `selfcond_logits_l1_e2e.json`.
+Status: current for the full-canvas RMSNorm (the only shipped norm path); provenance-only for the
+activation-L1 levers and the HF-fidelity replay, both measured on the deleted token-gather MoE.
+Owns: full-canvas RMSNorm — mechanism, win, ULP delta, fp32-accumulation fix, and the 2026-07-30
+overturn of its flip gate (absorbed from the deleted `norm_fullcanvas_flip_gate.md`).
+See also: [refuted list](../REFUTED.md), [optimize_perf hub](README.md).
+Over the 100-line cap: two open contradictions, four traps and two repro pins are not cut for length.
 
-**Objective:** raise output tok/s by keeping the denoise-step activation/residual/norm/attention
-intermediates **L1-resident** across op boundaries instead of round-tripping DRAM, spilling to DRAM
-only when a tensor cannot fit. DiffusionGemma-local only; zero `models/demos/gemma4/` edits.
+## Shipped: the full-canvas RMSNorm
 
-**This is the FIRST on-device measurement of these levers.** The prior campaign
-(`path_to_100tps.md`, `perf_campaign_worklog.md`) ran device-free ("the QB2 box is owned by another
-agent") and named "layout/glue in `sparse_moe.py` (28%)" as the top *unexecuted* in-repo lever, then
-declared the precision-neutral in-repo ceiling at ~17.8–18.2 t/s @48. This pass had a live 4-chip
-Blackhole box (P150x4, mesh `(1,4)`, TP=4, `ENABLE_TRACY=OFF`) and settles the layout/glue levers
-with measured before/after — including the ranking metric the deliverable requires (**traced**
-steady-state tok/s), not just isolated-op timing.
+Nothing selects it — it is the only path. `DG_NORM_FULLCANVAS` was **deleted 2026-07-30**
+(`613d8dfd21b`); `tests/test_denoise_forward.py` asserts the gate cannot come back.
 
-## TL;DR verdict
+**Mechanism.** DiffusionGemma chunked the 256-row canvas into 8x 32-row slices
+(`_chunked_norm_forward` / `_rms_norm_dram`) **only** to hit gemma4 RMSNorm's width-sharded fast path
+(`rms_norm.py::_forward_sharded`, `block_h=1`, 32-row-only); `norm.forward` on 256 rows falls to the
+slow plain-interleaved path. That cost 7 extra slices + 1 DRAM concat + 7 extra sharded-norm launches +
+8 I2S/S2I round-trips **per norm call**, at ~6–8 norm calls/layer x 30 layers. The shipped path runs ONE
+256-row width-sharded `rms_norm` (`block_h=8`) reusing `norm.tt_weight`, handing the L1 output straight
+back; RMSNorm is per-row independent of `block_h`. The reclaimable glue it removes is the chunked-norm
+`Slice` (2.5 ms/6L) + `Concat` (1.26 ms/6L) + the redundant `LayerNorm` launches.
 
-| lever | flag | isolated micro | **traced e2e @48** | landed |
-|---|---|---|---|---|
-| **HIGH-4 full-canvas RMSNorm** | `DG_NORM_FULLCANVAS` | **9.8× / norm**, ~~PCC 0.999998~~ **see below — the real per-element delta is up to 2.24e-2 (5.73 bf16 ULP), measured 2026-07-30** | **17.86 → 20.68 t/s (+15.8%)** | **flip gate FAILED; ineligible for decision-preserving default** (see `norm_fullcanvas_flip_gate.md`) |
-| HIGH-1 gather + HIGH-2 down L1 | `DG_MOE_L1` | MoE fwd −3.2% (gather −57%), bit-identical | 18.13→18.02 (−0.6%), 53.2→53.4 @12 (wash) | opt-in, default off |
-| MED-5 gate/up L1 | `DG_MOE_L1=chain` | `batched_experts` flat | no-op by construction | no |
-| HIGH-3 residual-stream L1 | — | coupled (every consumer takes DRAM) | not measured standalone | no |
-| MED-6 attention L1 | — | DRAM-force is a guarded passthrough no-op | not pursued (flash-SDPA CB clash) | no |
-| MED-7 mask L1 | — | ~2 MB masks, sub-ms | not pursued | no |
+**The win — three separate measurements, none superseding the others arithmetically:**
 
-**Headline finding:** the objective's premise (DRAM round-trips are reclaimable headroom) is
-**correct — but the reclaimable round-trips are the chunked-RMSNorm slice/concat glue, NOT the MoE
-matmul activation round-trips.** Collapsing the 8×(32-row slice → norm → DRAM-concat) RMSNorm to one
-256-row width-sharded norm lifted that historical @48 candidate from **17.86 → 20.68 t/s (+15.8%)** and
-@12 from **49.8 → 61.5 t/s (+23.3%)**. The MoE gather/down L1 levers, by contrast, are a measured
-**wash** because their DRAM writes already overlap adjacent compute under trace. Both were only
-distinguishable **on device**.
+| harness / configuration | reading |
+|---|---|
+| traced 30L, seed 0 (this pass) | **@48 17.855 → 20.676 t/s (+15.8%)**; @12 49.841 → 61.476 t/s (+23.3%) |
+| `sweep_denoise_arms.sh`, device Gumbel, concat MoE ([winter borrow](winter_borrow_20260727.md)) | 238.3 → 195.7 ms/step (−17.9%) |
+| the shipped commit | −20.4%/block |
 
-## Method / measurement (ENABLE_TRACY=OFF substitute)
+The @48 block delta (−1.956 s/block, 14.3376 → 12.3815 s) is ~13x the ~1.5% run-to-run block noise. The
+isolated per-norm micro (8.6–9.8x weighted, 4.8x on the weightless `moe.router.norm` branch) came from
+the deleted `bench_norm_fullcanvas.py`, whose PCC column is discredited below; the timings stand.
 
-`ENABLE_TRACY=OFF`, so no `tt-perf-report` op-CSV. Per the playbook the substitute is the
-**traced Metal capture/replay path** (the ranking metric IS traced, only op-attribution CSV is
-unavailable) plus **synchronized per-op/per-component device-time tables**
-(`time.perf_counter` + `ttnn.synchronize_device`). Evidence class: `hardware-profiler-limited`;
-trace capture/replay works. Harnesses (all under `doc/optimize_perf/`):
-- `bench_moe_l1_residency.py` — isolated tuned-MoE per-component + full-fwd timing + PCC (2L).
-- `bench_norm_fullcanvas.py` — per-norm chunked-vs-full-canvas timing + PCC (2L).
-- `bench_moe_l1_e2e.py`, `bench_lever_e2e.py` — traced 30L steady-state tok/s per lever, with
-  `committed_sha` (bit-for-bit output identity check) and coherence text head.
+## The numerical delta, and the fp32-accumulation fix
 
-## Historical baselines reproduced (traced RUN-first argmax, 3-block steady, seed 0)
+Measured on QB2 at the shipped shape `[1,1,256,2816]` bf16 by `tests/test_device_norm_fullcanvas.py`:
 
-Baselines reproduce the campaign's established `committed_sha`, confirming the harness measures the
-same traced RUN-first argmax path (run-to-run block latency varies ~1.5%; the norm win is far above that):
+| arm | rows differing | elements | rel p99 | rel max | bf16 ULP max |
+|---|---|---|---|---|---|
+| weighted, `block_h=8` vs 8x `block_h=1` (same 88-core grid) | 61/256 | 19.43% | 1.14e-2 | **2.24e-2** | **5.73** |
+| scaleless, 8-core/`block_w=11` vs 88-core/`block_w=1` | 79/256 | 24.80% | 1.06e-2 | 1.56e-2 | 4.00 |
 
-| budget | t/s | steady block s | committed_sha | matches |
-|---|---:|---:|---|---|
-| @48 | 17.86–18.13 | 14.12–14.34 | `a9f0d18709b07d1e` | worklog `traced_tuned_s48` |
-| @12 | 49.8–53.2 | 4.81–5.14 | `24393ba7aad6077c` | worklog `traced_tuned_s12` |
+> **OPEN CONTRADICTION (unexplained):** the per-norm delta is stated as **~2e-6 / PCC 0.999998**
+> (`bench_norm_fullcanvas.py`, deleted 2026-07-30 — it computed PCC as an fp32 dot product over ~720K
+> elements and reported values ABOVE 1.0 in its own table, 1.000015 and 1.000050, so its resolution
+> floor is ~5e-5) and as **5.73 bf16 ULP / rel max 2.24e-2** (`tests/test_device_norm_fullcanvas.py`).
+> Four orders of magnitude apart; not explained.
 
-## HIGH-4 — full-canvas RMSNorm (`tt/denoise_forward.py`, `DG_NORM_FULLCANVAS`) — the win
+**ROOT CAUSE + FIX.** `ttnn.rms_norm` accepts a `compute_kernel_config` and nothing in DiffusionGemma or
+gemma4 ever passed one, so every norm ran ttnn's default `fp32_acc = false`. Switching only the
+accumulator (same grid, block_w, fidelity, approx mode) moves the two row counts from **13.0% of
+elements disagreeing to 0 of 69,206,016 over 96 device slices** (rate < 1.4e-8), is **2.8x more accurate**
+against an fp64 reference over the same bf16 inputs (rmse 5.43e-3 → 1.94e-3), and costs 0.088 → **0.086
+ms** per 256-row norm (−2.3%, free).
 
-> **CORRECTION 2026-07-30 — the "PCC 0.999998 / ~2e-6 reduction-order" figure in this section is
-> wrong by about four orders of magnitude, and it never had a measurement behind it.**
-> `bench_norm_fullcanvas.py` (DELETED 2026-07-30 -- it drove its A/B by setting the flag, so with the
-> flag gone both arms are identical and it would silently report PCC 1.0 and zero speedup; its
-> replacement is `tests/test_device_norm_fullcanvas.py`) computed PCC as an fp32 dot product over
-> ~720K elements and reported values ABOVE 1.0
-> elsewhere in its own table (1.000015, 1.000050) — impossible for a Pearson correlation, so its
-> resolution floor is ~5e-5, 25x coarser than the number it was cited for. Measured directly on QB2
-> at the shipped shape ([1,1,256,2816] bf16) by
-> `tests/test_device_norm_fullcanvas.py`:
->
-> | arm | rows differing | elements | rel p99 | rel max | bf16 ULP max |
-> |---|---|---|---|---|---|
-> | weighted, `block_h=8` vs 8x `block_h=1` (same 88-core grid) | 61/256 | 19.43% | 1.14e-2 | **2.24e-2** | **5.73** |
-> | scaleless, 8-core/`block_w=11` vs 88-core/`block_w=1` | 79/256 | 24.80% | 1.06e-2 | 1.56e-2 | 4.00 |
->
-> The `block_h` mechanism named here IS real (a static reading of the kernel predicts bit-identity
-> and is wrong), and a few-ULP perturbation in every weighted norm compounding over 30 layers x
-> 16-48 steps is a sufficient mechanism for the ~85% committed-token divergence in
-> `norm_fullcanvas_flip_gate.md`. That gate's CONCLUSION (keep opt-in) is better supported by this
-> measurement than by the number it quoted — but note the gate itself ran on the token-gather MoE
-> that was deleted in `7417bd7d69d`, so its 0.145 committed-match must be re-measured before it is
-> cited again either way.
->
-> **FOLLOW-UP 2026-07-30 — the delta is FIXABLE, and cheaply, but it does not close the flag.**
-> `ttnn.rms_norm` accepts a `compute_kernel_config` and nothing in DiffusionGemma or gemma4 has ever
-> passed one, so every norm ran ttnn's default `fp32_acc = false`. Switching the accumulator (nothing
-> else — same grid, same block_w, same fidelity, same approx mode) was measured on QB2:
->
-> | | bf16 accumulate (today) | fp32 accumulate |
-> |---|---|---|
-> | disagreement between the two row counts, (1,4) mesh, 96 device slices | **13.0%** of elements | **0 of 69,206,016** (rate < 1.4e-8) |
-> | accuracy vs an fp64 reference over the same bf16 inputs | rmse 5.43e-3 | **rmse 1.94e-3** (2.8x better) |
-> | per 256-row norm | 0.088 ms | **0.086 ms (-2.3%, i.e. free)** |
->
-> It is free *here* because these configs land on `block_w=1` / `subblock_w=1`, so halving DST capacity
-> has nothing to take away; "fp32 is slow" is right for wide output blocks and wrong for this shape.
->
-> **UNRESOLVED, and the reason nothing was flipped on:** with fp32 accumulation wired into both row
-> counts, a 10-question device pair still diverged completely (0/10 byte-identical, 91 vs 109 blocks),
-> even though the norm is bit-identical to <1.4e-8, the shape census shows the model only ever calls
-> it at 256x2816 with no fallback, and `DG_NORM_FULLCANVAS` has exactly one reader. Those three facts
-> cannot all hold, so a scope gap remains in the measurement — benign gaussian inputs were used, and
-> real activations are heavy-tailed where a sum of squares is outlier-dominated. Do not treat fp32 as
-> a route to flipping the flag until that contradiction is explained. The production patch is parked at
-> `/home/zni/dg_runs/fp32_norm_production.patch`; the measurements are in
+> **TRAP:** fp32 accumulation is free *here* only because these configs land on `block_w=1` /
+> `subblock_w=1`, where halving DST capacity has nothing to take away. "fp32 is slow" is right for wide
+> output blocks and wrong for this shape.
+
+> **OPEN CONTRADICTION (unexplained):** with fp32 accumulation wired into BOTH row counts a 10-question
+> device pair still diverged completely (0/10 byte-identical, 91 vs 109 blocks), even though the norm is
+> bit-identical to <1.4e-8, the shape census shows the model only ever calls it at 256x2816 with no
+> fallback, and the flag had exactly one reader. Those three facts cannot all hold; not explained. The
+> most likely scope gap is the input distribution — every rate measurement used benign gaussian inputs
+> and real activations are heavy-tailed, where a sum of squares is outlier-dominated. The production
+> patch is parked at `/home/zni/dg_runs/fp32_norm_production.patch`; measurements in
 > `tests/test_device_norm_fullcanvas.py`.
->
-> Separately fixed 2026-07-30: `_chunked_norm_forward` tested `with_scale is False` AFTER attempting
-> the full-canvas path, so with the flag on the MoE router's weightless norm was re-sharded from
-> 8 cores/`block_w=11` to 88 cores/`block_w=1`. That was never intended, but as the table shows it is
-> the SMALLER of the two deltas — correcting it does not make the flag bit-identical.
 
+**BUG FIXED 2026-07-30.** `_chunked_norm_forward` tested `with_scale is False` AFTER attempting the
+full-canvas path, so the MoE router's weightless norm was silently re-sharded from 8 cores/`block_w=11`
+to 88 cores/`block_w=1`. Correcting it does NOT make the two row counts bit-identical — the weighted
+delta is the larger of the two.
 
-**Mechanism.** DiffusionGemma chunks the 256-row canvas into 8× 32-row slices
-(`_chunked_norm_forward`/`_rms_norm_dram`) **specifically so each slice hits gemma4 RMSNorm's
-width-sharded fast path** (`rms_norm.py::_forward_sharded`, `block_h=1`, 32-row-only); calling
-`norm.forward` on the full 256 rows falls to the slow plain-interleaved path. That costs **7 extra
-slices + 1 DRAM concat + 7 extra sharded-norm launches + 8 I2S/S2I round-trips per norm call**, and
-there are ~6–8 norm calls/layer × 30 layers. `DG_NORM_FULLCANVAS=1` runs **one 256-row width-sharded
-`rms_norm` (`block_h=8`)** reusing `norm.tt_weight` (reading the weight is data-use, not a gemma4
-edit) and hands the L1 output straight back. RMSNorm is per-row independent of `block_h`, so the math
-is per-row equivalent.
+## How the flip gate was overturned (2026-07-27 gate → shipped 2026-07-30)
 
-**Isolated micro** (`bench_norm_fullcanvas.py`, 2L, 40 iters). Covers BOTH `_chunked_norm_forward`
-branches — the weighted gemma4 fast-path AND the `with_scale=False`/`tt_weight=None` branch
-(`_rms_norm_dram` vs `_fullcanvas_norm(weight=None)`), exercised by a `_NoWeightNorm` stub. A model
-scan (`RESULT_NORM_KIND`) confirms exactly one denoise-path norm takes the no-weight branch at >32
-rows — **`moe.router.norm`** (`with_scale=False`); every layer norm (input/post-attn/pre-ff/post-ff,
-moe post-ff) is weighted:
+**VOID-PREMISE RULE.** The gate ran with `DG_SPARSE_MOE=1 DG_SPARSE_MOE_TUNED=1`, i.e. on the
+token-gather denoise MoE deleted in `7417bd7d69d` for not converging, so `committed_match = 0.145` was
+measured between two arms on a broken baseline and cannot be cited either way. The tell is that it
+describes BOTH trajectories as "coherent-then-degenerate". **Generalizes: every decision-fidelity number
+measured on the deleted token-gather path is void — the same mistake voided the pad-fix revert.**
 
-| norm | chunked ms | full-canvas ms | speedup | PCC |
-|---|---:|---:|---:|---:|
-| input_layernorm (weighted) | 1.31 | 0.15 | **8.6×** | 0.999994 |
-| post_feedforward_layernorm (weighted) | 1.32 | 0.14 | **9.2×** | 1.000015 |
-| **no-weight stub** (= `moe.router.norm` branch) | 0.68 | 0.14 | **4.8×** | 1.000050 |
+Gate numbers as historical record only: committed clean-argmax match 0.145 against a >= 0.95 bar
+(rejected-bfp8 reference 0.227), mean per-step Gumbel argmax agreement 0.544 (min 0.144), mean
+accept/renoise IoU 0.504 (min 0.0) vs bfp8 0.501, mean per-step entropy PCC 0.659 (min 0.259) vs bfp8
+0.631, mean sampled-canvas agreement 0.889 (min 0.770).
 
-(PCC values ≈1.0 both branches — per-row equivalent; the ~2e-6 delta is the bf16 reduction-order noted
-below. Run-to-run the weighted speedup measured 8.6–9.8×.)
+**Overturning evidence:** the 198-question run with the norm on scored **71.21%** against **66.67%** for
+the previous full run on the same questions, at 0 empty replies and 0 responses over the 2% non-Latin
+threshold. The "27% shorter answers" objection was a 10-question artifact — −10% at 71, gone at 198. The
+71-question GPQA prefix (2026-07-29) moved score 76.06% → 78.87%, guard kills 2 → 1, degenerate 2 → 1,
+drift-any 3 → 4 (1 fixed / 2 new), and on the >2% non-English gating metric 0/71 → 1/71.
 
-**Traced e2e** (`bench_lever_e2e.py`, 30L, `baseline` vs `norm`, seed 0):
+**REPRODUCTION** (the only recorded invocation; env: see [plan](../../plan.md)):
+`doc/datatype_sweep/decision_agreement.py run --num-layers 30 --max-denoising-steps 16 --seed 0 --output
+<path> --label <chunked|fullcanvas>`, then `... compare --ref <chunked> --cand <fullcanvas>`. The
+original also pinned `DG_SPARSE_MOE`, `DG_SPARSE_MOE_TUNED` and `DG_NORM_FULLCANVAS`, all deleted, so as
+written the two arms are now the same run. `norm_fullcanvas_flip_agreement.json` is committed in this
+directory; the `traj_{chunked,fullcanvas}.pt` trajectories stay in the run scratchpad. The ~85%
+committed-token divergence is the #48291 bf16 chaos-amplification class, not a full-canvas bug —
+[decision fidelity](../decision_fidelity/README.md).
 
-| budget | baseline t/s | **norm t/s** | Δ t/s | baseline block s | norm block s | committed_sha |
-|---|---:|---:|---:|---:|---:|---|
-| @48 | 17.855 | **20.676** | **+15.8%** | 14.3376 | 12.3815 | a9f0d18709b07d1e → **ead6eaa16dee8a57** |
-| @12 | 49.841 | **61.476** | **+23.3%** | 5.1364 | 4.1642 | 24393ba7aad6077c → **dbb6d6f142940846** |
+## Rejected activation-L1 levers (provenance: token-gather MoE; full entries in the [refuted list](../REFUTED.md))
 
-Derived per-step (subtracting the ~1.57 s commit measured in `early_halt.md`): baseline ≈ 0.266 →
-**norm ≈ 0.225 s/step — ~41 ms/step saved (~15%)**. Output stays coherent ("a diffusion language model
-is a generative model that produces text by iteratively refining a sequence of random noise into
-coherent language…"). The block-latency delta (−1.956 s/block @48) is ~13× the ~1.5% run-to-run
-baseline noise (block 14.12–14.34 s across runs), so the win is well above the noise floor.
+| lever | verdict |
+|---|---|
+| HIGH-1/2 gather + down output L1 (`DG_MOE_L1`, no reader today) | **WASH** — isolated MoE fwd −3.2% (gather_matmul 0.101 → 0.043 ms) but traced e2e −0.6% @48 / +0.4% @12 at bit-identical `committed_sha`; those DRAM writes already overlap adjacent compute under trace |
+| MED-5 gate/up L1 | **no-op by construction** — `batched_experts` (weight-bound at M=1 tile, 62% of the MoE) does not move, so the MoE is weight-traffic-bound |
+| HIGH-3 residual-stream L1 | **coupled** — every consumer of the 256x2816 residual takes a DRAM-interleaved input, so pinning it alone only inserts a reshard per boundary; pays only as a whole-layer L1 stack (OPT-003 residual-contract rule) |
+| MED-6 attention L1 | the `to_memory_config(..., DRAM)` force at `diffusion_attention.py:400-411` is a **guarded passthrough no-op**; a real L1-sharded SDPA is blocked by the flash-SDPA CB clash |
+| MED-7 mask L1 | disp/comb/disp_t masks are ~2 MB and the ops sub-ms — no material headroom |
+| layout conversion generally | ALL `InterleavedToSharded` + `ShardedToInterleaved` device-FW is **~1.34 ms over 6 layers** (~4 ms/step at 30L, <3% of the step) |
 
-**Caveat — NOT bit-identical.** `committed_sha` differs (per-norm PCC 0.999998, not 1.0): `block_h=8`
-vs 8×`block_h=1` uses a different **bf16 reduction/accumulation order** in the sharded LayerNorm
-kernel; under #48291 (the model commits the clean argmax with no cushion) that ~2e-6 per-norm delta
-compounds over 30L × 48 steps and flips some argmax decisions. This is the **same bf16
-chaos-amplification** the campaign documented for batched commit (`commit_batching.md`: "no two
-non-bit-identical bf16 kernels meet 0.997 at 30L") — a per-row-equivalent, precision-neutral
-(same dtype/fidelity) numerical path, not a precision reduction.
+## Method, baselines, residual risk
 
-**Landing decision.** The objective's correctness gate D requires **bit-identical** argmax/accept
-before/after; HIGH-4 did not meet it AT THE TIME, so it landed **opt-in, `DG_NORM_FULLCANVAS` default OFF** — the
-default path is byte-unchanged. It is the largest in-repo denoise lever found since the true-sparse
-MoE, and directly refutes the campaign's "norm de-chunking is not fresh headroom" note (that was
-framed against the 137 ms/layer dense state; at tuned MoE the chunked-norm slice/concat glue is a real
-~15% of the step and is NOT overlap-hidden). **Recommended follow-up to flip the default ON:** a dg-05
-decision-fidelity check that `DG_NORM_FULLCANVAS` agrees with the torch/HF reference as well as the
-baseline does (both ~0.84 under #48291) — i.e. that the flip changes *which* equally-valid bf16 output,
-not *whether* it is faithful.
+**MEASUREMENT SUBSTITUTE.** With `ENABLE_TRACY=OFF` there is no `tt-perf-report` op CSV, so the approved
+ranking metric is the traced Metal capture/replay path plus synchronized per-op device-time tables
+(`time.perf_counter` + `ttnn.synchronize_device`); evidence class `hardware-profiler-limited`. The four
+benches this pass named (`bench_moe_l1_residency.py`, `bench_norm_fullcanvas.py`, `bench_moe_l1_e2e.py`,
+`bench_lever_e2e.py`) are all absent from `doc/optimize_perf/`; `bench_norm_fullcanvas.py` was deleted
+2026-07-30 and replaced by `tests/test_device_norm_fullcanvas.py`. Committed mirror:
+`l1_residency_summary.json`.
 
-## HIGH-1 / HIGH-2 / MED-5 — MoE token-gather activation L1 (`tt/sparse_moe.py`, `DG_MOE_L1`) — wash
+**Historical traced baselines** for reproducing the harness: @48 17.86–18.13 t/s / 14.12–14.34 s block /
+`a9f0d18709b07d1e`; @12 49.8–53.2 t/s / 4.81–5.14 s block / `24393ba7aad6077c`; block latency varies
+~1.5% run to run.
 
-**Mechanism.** The token-gather MoE writes two large activation tensors to DRAM and re-reads them:
-the gather matmul output `dispatched` `[1,1,EC=4096,H=2816]` = **23.1 MB** (re-read 46 MB by gate+up),
-and the down matmul output `down` `[1,E,C,H]` = **23.1 MB** (re-read 23 MB by combine).
-`DG_MOE_L1 ∈ {off,gather,down,both,chain,all}` pins those outputs `L1_MEMORY_CONFIG` instead of DRAM.
-Pure output-placement change; default `off` = bit-identical DRAM path.
+**WATCHER SCOPE.** Verified only on a short smoke (4 steps / 1 block, `TT_METAL_WATCHER_DISABLE_ETH=1`,
+zero violation strings in `generated/watcher/watcher.log`); a full @48 multi-block soak was never run.
 
-**Isolated micro** (`bench_moe_l1_residency.py`, tuned, 2L, 30 iters):
+**GATE TRAP.** `git diff-tree fbabe620f21 -- models/demos/gemma4/` is EMPTY; the literal `git diff main
+-- models/demos/gemma4/` reads non-empty only because local `main` is ~842 commits stale — the automated
+no-shared-edits gate false-positives on a stale `main`.
 
-| component ms/layer | off (DRAM) | gather | down | both |
-|---|---:|---:|---:|---:|
-| gather_matmul | 0.101 | **0.043** | 0.098 | 0.043 |
-| combine_matmul | 0.092 | 0.092 | **0.077** | 0.077 |
-| batched_experts | 1.776 | 1.771 | 1.762 | 1.756 |
-| **full MoE fwd** | **2.878** | 2.818 | 2.851 | **2.786 (−3.2%)** |
-| PCC vs off / vs dense | — / 0.99955 | 1.000025 / 0.99955 | 1.000025 / 0.99955 | 1.000025 / 0.99955 |
-
-L1 nearly halves the gather matmul (removes its 23 MB DRAM write); `batched_experts` (weight-bound at
-M=1 tile, 62% of the MoE) does not move → **MED-5 (gate/up L1) is a no-op** and the MoE is
-weight-traffic-bound, not activation-round-trip-bound.
-
-**Traced e2e** (`bench_moe_l1_e2e.py`, `off` vs `both`):
-
-| budget | off t/s | both t/s | Δ | committed_sha (off == both) |
-|---|---:|---:|---:|---|
-| @48 | 18.128 | 18.016 | **−0.6%** | `a9f0d18709b07d1e` (bit-identical) |
-| @12 | 53.213 | 53.421 | **+0.4%** | `24393ba7aad6077c` (bit-identical) |
-
-**Verdict: WASH, REJECTED as default, kept opt-in.** Straddles zero (±0.5% noise), bit-identical
-output. The isolated ~2.8 ms/step MoE saving is **overlap-hidden** under trace (the profile's
-~1.5–1.74× FW overlap — the matmul DRAM writes already overlap adjacent compute). A block-sharded L1
-variant (the objective's expert-major re-lay) would add a *reshard* on top of a win that is already
-overlap-hidden, so it cannot recover the gap. Flag retained (bit-identical, trace-safe) for reuse if a
-fused gather-experts kernel ever removes the overlap that hides the win.
-
-## HIGH-3 / MED-6 / MED-7 — not pursued (reasoned closure)
-
-- **HIGH-3 residual-stream L1** is **coupled**: every consumer of the 256×2816 residual (input/post-
-  attn/pre-ff norms, attention entry, MoE entry) currently takes a DRAM-interleaved input, so pinning
-  the residual L1 alone just inserts a reshard at each boundary — net-zero unless the norms
-  (HIGH-4), MoE entry (MED-5), and attention (MED-6) all consume L1 too. That is a full coherent-layer
-  L1 rewrite; MED-5 is a measured no-op and MED-6 is blocked (below), so the residual-only lever has no
-  standalone win. (This is the OPT-003 residual-contract rule: it pays off only as a stack.)
-- **MED-6 attention L1**: the `to_memory_config(..., DRAM)` force at `diffusion_attention.py:400-411`
-  is **guarded** (`if tt_q_dram is not tt_q`) — RoPE/concat already output DRAM-interleaved, so it is a
-  passthrough no-op, not "anti-L1 overhead." A real L1-sharded SDPA is blocked by the flash-SDPA CB
-  clash (documented), and attention is only ~1 ms/6L of the denoise step, so it is not worth the risk.
-- **MED-7 mask L1**: the disp/comb/disp_t masks are ~2 MB and the ops are sub-ms; the disp_t transpose
-  is inside the (already small) dispatch-build glue. No material headroom.
-
-## Why the conversion round-trips are not the (MoE) lever (measured)
-
-The whole-denoise `InterleavedToSharded` + `ShardedToInterleaved` device-FW is **~1.34 ms over 6
-layers (≈4 ms/step over 30L, <3% of the step)** — and that is ALL conversions (attention + norm +
-MoE), not just the MoE (`whole_gen_opprofile/phase_op_agg_6L.csv`). The MoE activation round-trips do
-not appear as explicit conversion ops — the matmuls write/read DRAM-interleaved directly, folded into
-matmul device time — and under trace that time overlaps adjacent compute, which is why HIGH-1/2 are a
-wash. The reclaimable glue was the chunked-norm **`Slice` (2.5 ms/6L) + `Concat` (1.26 ms/6L) +
-redundant `LayerNorm` launches**, which HIGH-4 removes.
-
-## Roofline reconciliation (unchanged by this pass)
-
-Per denoise step the model re-reads the full resident weight bank (13.27 GiB/chip, ~88.6% MoE
-experts) over the 256 canvas — weight traffic, not incremental KV, sets the floor (all-128 experts
-active at S=256; top-8 buys compute/data-movement, never weight bytes). The all-128 bf16 weight floor
-is ~12.3 ms/step @1024 GB/s peak; the measured ~0.23–0.27 s/step is op-efficiency-bound above that,
-dominated by the weight-bound expert matmul (~92% of the 256 GB/s roofline, immovable in-repo) and the
-terminal argmax/entropy over the 262144 vocab (blocked in-repo by the 18-bit-index fp32-reduction
-wall). HIGH-4 attacks neither of those; it removes the norm/slice/concat glue layered on top, which is
-why it is a real +15.8% while the MoE-activation levers are a wash.
-
-## Stage-review follow-ups / residual risk
-
-- **gemma4 gate — this commit is clean; the branch-level `git diff main` is not (pre-existing, not
-  dg-08).** `git diff-tree fbabe620f21 -- models/demos/gemma4/` is **empty** — the dg-08 commit touches
-  only DiffusionGemma-local files. The literal `git diff main -- models/demos/gemma4/` reads non-empty
-  only because local `main` is ~842 commits stale (bulk = merged upstream Gemma4 PRs) plus the
-  separately-owned DiffusionGemma footprint edits (#47464 commit-decode, the 1-line experts dealloc =
-  optimize-playbook ceiling #4 / plan.md R0.4/R-new). Both are cross-stage and out of dg-08 scope; the
-  meaningful commit-scoped invariant (dg-08 adds nothing to gemma4) holds. Fast-forwarding local `main`
-  would make the automated `git diff main` gate checkable again.
-- **Default-flip gate for `DG_NORM_FULLCANVAS` — RUN, FAILED, then OVERTURNED 2026-07-30 → SHIPPED, flag deleted** (full detail:
-  `norm_fullcanvas_flip_gate.md`). The dg-05 `decision_agreement.py` harness (chunked default vs
-  full-canvas, 30L / 16-step, injected noise, clean argmax, everything pinned except the flag) measured
-  **committed clean-argmax match = 0.145** (bar ≥0.95) — ~85% of committed tokens differ from the
-  current default, *worse* than the already-rejected bfp8 experts lever (0.227), with entropy PCC 0.659
-  and accept IoU 0.504 statistically indistinguishable from bfp8 (0.631 / 0.501). Cause = #48291
-  chaos-amplification: the 2e-6/norm bf16 reduction-order difference has no argmax cushion and cascades
-  over 30L×16 steps through the accept/renoise loop. Both outputs are coherent-then-degenerate (neither
-  validated more faithful — "different", not proven "worse"), but per the flip rule ("hold vs the
-  current chunked default within the #48291 bar") 0.145 ≪ 0.95 fails decisively. A future flip would
-  need an *absolute* HF-vs-TT check (full-canvas-vs-HF ≈ chunked-vs-HF) and ideally #48291 resolved
-  (which removes the chaos-amplification and makes the flip safe anyway). The no-weight branch
-  (`moe.router.norm`) is isolated-PCC-verified per-row-equivalent (1.00005) — so the failure is the
-  compounding argmax non-bit-identity, exactly as the gate settles.
-- **Watcher scope.** `DG_NORM_FULLCANVAS=1` was watcher-verified on a short smoke (4 steps / 1 block,
-  `TT_METAL_WATCHER_DISABLE_ETH=1`): the full-canvas `rms_norm` + I2S/S2I kernels all execute, watcher
-  attaches/detaches clean, zero violation strings in `generated/watcher/watcher.log`. A full @48 /
-  multi-block watcher soak is deferred (acceptable for an opt-in lever; do it as part of the default-flip
-  gate). Raw logs backing every number here live in the run scratchpad (not committed, per the
-  artifact policy); the committed docs/JSON mirror them to the digit.
-
-## Follow-up — absolute decision fidelity vs the shared HF reference
-
-The relative flip gate above only established that chunked and full-canvas diverge from each other.
-This follow-up measures both bf16 TT paths against **one shared torch/HF trajectory** to distinguish
-knife-edge divergence between equally approximate paths from a real HF-fidelity regression.
-
-**Method.** Same gate configuration: prompt `"Explain what a diffusion language model is in one
-sentence."`, seed 0, one 256-token canvas, 30 layers, 16 denoise steps, early halt disabled, checkpoint
-revision `0f28bc42f588fbd8f71e08102b1c3960298a1358`, production sparse MoE, and everything pinned except
-`DG_NORM_FULLCANVAS`. The CPU-only HF trajectory uses `DiffusionGemmaForBlockDiffusion` through
-`demo/replay_hf_tt.py`; the fixed canvas and random-renoise stream use
-`reference/generate.py::{make_replay_canvas_init_fn,make_replay_noise_fn}`. One apples-to-apples detail
-is important: the landed flip gate is the **clean-argmax** regime (its per-step Gumbel hook returns
-`None`), so torch replays the equivalent injected all-zero Gumbel tensor (`sampled == argmax`) plus
-the gate's random-renoise stream (`seed + 1000`). The full 30L/16-step HF run was practical
-(49.9 s trajectory / 54.5 s process wall time; 41.7 GiB peak RSS), so no reduced fallback was used.
-
-The original TT `.pt` scratch artifacts were invalidated by the intervening host reboot. They were
-regenerated only after confirming the shared device was idle. The fresh chunked-vs-full-canvas row
-reproduced the committed gate artifact **exactly for every scalar and per-step array** (including
-`committed_match = 0.14453125`), validating that the absolute comparisons use the same trajectory
-configuration and noise. Raw `.pt` trajectories and the three comparison JSON files remain in the run
-scratchpad rather than the repository.
-
-Values below are final committed agreement, then per-step **mean (minimum)**:
+## Absolute HF-fidelity replay (provenance — ran on the deleted token-gather MoE)
 
 | comparison | committed clean-argmax | per-step argmax | accept IoU | entropy PCC | canvas agreement |
 |---|---:|---:|---:|---:|---:|
-| **chunked vs HF** | **0.168** (43/256) | 0.541 (0.168) | 0.100 (0.000) | 0.027 (-0.316) | 0.146 (0.000) |
-| **full-canvas vs HF** | **0.160** (41/256) | 0.555 (0.098) | 0.109 (0.000) | 0.042 (-0.198) | 0.148 (0.000) |
-| **chunked vs full-canvas** | **0.145** (37/256) | 0.544 (0.145) | 0.504 (0.000) | 0.659 (0.259) | 0.889 (0.770) |
+| chunked vs HF | 0.168 (43/256) | 0.541 | 0.100 | 0.027 | 0.146 |
+| full-canvas vs HF | 0.160 (41/256) | 0.555 | 0.109 | 0.042 | 0.148 |
+| chunked vs full-canvas | 0.145 (37/256) | 0.544 | 0.504 | 0.659 | 0.889 |
 
-**Verdict: case (a), HF-fidelity neutral on this exact gate.** Full-canvas is not meaningfully below
-chunked vs HF: final committed agreement differs by only `-0.0078` (2/256 positions), while
-full-canvas is slightly *higher* on mean per-step argmax (`+0.0139`), accept IoU (`+0.0097`), entropy
-PCC (`+0.0150`), and canvas agreement (`+0.0020`); minima are mixed. Both paths sit at the same
-#48291 trajectory floor (mean per-step argmax ≈54–55%, with feedback reducing final committed
-agreement to ≈16–17%). Therefore the relative `0.145` is knife-edge argmax divergence between two
-equally #48291-degraded bf16 paths, **not evidence that full-canvas regresses fidelity vs HF**.
+**REPRODUCTION PIN** (env: see [plan](../../plan.md)): prompt `"Explain what a diffusion language model
+is in one sentence."`, seed 0, one 256-token canvas, 30 layers, 16 denoise steps, early halt disabled,
+checkpoint revision `0f28bc42f588fbd8f71e08102b1c3960298a1358`, CPU-only HF via `demo/replay_hf_tt.py`
+with `reference/generate.py::{make_replay_canvas_init_fn,make_replay_noise_fn}`. In the clean-argmax
+regime the torch replay must inject an all-zero Gumbel tensor (`sampled == argmax`) plus the gate's
+random-renoise stream at `seed + 1000`, or the trajectories are not comparable. The full 30L/16-step HF
+reference run cost 49.9 s trajectory / 54.5 s process wall at 41.7 GiB peak RSS — no reduced fallback
+needed.
 
-For the +15.8% @48 lever this means full-canvas is a fair, decision-neutral performance win *relative
-to HF fidelity*. This is a single-prompt/seed characterization, not a population equivalence proof,
-and it did not override the landed output-identity gate at the time: `DG_NORM_FULLCANVAS` remained opt-in and
-default-OFF because enabling it changes the default output.
+## Roofline context (owned elsewhere)
+
+- Weight bytes, not incremental KV, set the denoise floor; all 128 experts are active at S=256 and the
+  step re-reads 13.27 GiB/chip (~88.6% MoE experts) — [work log](work_log.md) (measured here: the
+  all-128 bf16 weight floor is ~12.3 ms/step at 1024 GB/s peak against a measured ~0.23–0.27 s/step, so
+  the step is op-efficiency-bound well above the bandwidth floor).
+- ~235 GB/s practical per-chip denominator and the terminal argmax/entropy 18-bit-index bf16 wall:
+  [non-MoE roofline](nonmoe_roofline/README.md). Why the token-gather MoE was deleted:
+  [winter borrow](winter_borrow_20260727.md). The sum-of-device-FW overlap trap:
+  [op profile](whole_gen_opprofile/README.md). Current denoise per-step cost:
+  [optimize_perf hub](README.md).

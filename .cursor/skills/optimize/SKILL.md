@@ -18,7 +18,7 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
   The July-10 **18.844 t/s @48** row is historical warmed same-shape argmax trace replay with a
   prompt-only prefix; it is not current first-request vLLM TTFT or correct growing-prefix
   multi-block throughput. Current serving benchmarks must record explicit flags and use the
-  `plan.md` Part-0 execution contract. Start with `README.md`, `perf_campaign_worklog.md`,
+  `plan.md` Part-0 execution contract. Start with `README.md`, `perf_progress.md`,
   `traced_serving.md`, and the newest dated evidence rather than selecting a headline by value.
   The older full-canvas L1 study is historical/ineligible default evidence:
   the full-canvas RMSNorm reached **20.68 t/s (+15.8%)** and **SHIPPED as the only path 2026-07-30; `DG_NORM_FULLCANVAS` DELETED.** Both reasons it was held back were measurement errors: the "not bit-identical / ~2e-6" figure came from a bench that reports PCC > 1.0 elsewhere (real delta 5.73 bf16 ULP, caused by ttnn's rmsnorm defaulting to bf16 partial accumulation -- with fp32 accumulation the shapes are bit-identical, 0 of 69,206,016 elements), and its failed flip gate ran on the token-gather MoE that was later deleted for not converging. Full 198-question run: **71.21% vs 66.67%** for the previous full run, -20.4%/block. (was: OFF because not
@@ -170,7 +170,7 @@ When optimizing a complete model or serving path, also write `doc/<stage>/perf_s
 }
 ```
 
-The template above is the per-token `single_user_decode` shape. **DiffusionGemma does NOT use it.** The optimization unit is the denoise step over the 256-token canvas, so the summary uses `profile: "block_diffusion_denoise_step"` with per-step / per-block fields. Map every per-token field (ms/token, t/s/u, per-token roofline) onto per-step / per-block; report tokens-per-block and blocks-per-second, never `1000/mean_tpot_ms`. The diffusion FIELD shape below is illustrative and deliberately leaves changing measurements null. Populate them from the newest `doc/optimize_perf/perf_campaign_worklog.md` entries plus `l1_residency.md`, `l1_residency_summary.json`, `norm_fullcanvas_flip_gate.md`, and `early_halt.md`. Use `path_to_100tps.md` only for roadmap arithmetic and lever provenance, never as the current-performance authority; do not use the dense `perf_summary.json` numbers.
+The template above is the per-token `single_user_decode` shape. **DiffusionGemma does NOT use it.** The optimization unit is the denoise step over the 256-token canvas, so the summary uses `profile: "block_diffusion_denoise_step"` with per-step / per-block fields. Map every per-token field (ms/token, t/s/u, per-token roofline) onto per-step / per-block; report tokens-per-block and blocks-per-second, never `1000/mean_tpot_ms`. The diffusion FIELD shape below is illustrative and deliberately leaves changing measurements null. Populate them from the newest `doc/optimize_perf/perf_progress.md` entries plus `l1_residency.md`, `l1_residency_summary.json`, and `early_halt.md`. Use `path_to_100tps.md` only for roadmap arithmetic and lever provenance, never as the current-performance authority; do not use the dense `perf_summary.json` numbers.
 
 ```json
 {
@@ -233,7 +233,7 @@ Preserve the multichip decoder's data-layout contract across the stack. If the d
 
 Load `diffusion-gemma` first, then read this before touching a knob. It grounds where the denoise-step headroom is (and is not), so you neither re-grind exhausted levers nor reach for the shared gemma4 backbone.
 
-**Read the live perf docs first — the numbers here churn.** Use the tail of `models/experimental/diffusion_gemma/doc/optimize_perf/perf_campaign_worklog.md` plus `l1_residency.md`, `early_halt.md`, `norm_fullcanvas_flip_gate.md`, and `l1_residency_summary.json` as the current record. Use `path_to_100tps.md` only for roadmap arithmetic and lever provenance: its “current landed state” predates OPT-004, batched commit, traced denoise, and the L1 pass. The older `perf_summary.json` + `work_log.md` are the **dense-MoE snapshot** and must not supply current performance numbers.
+**Read the live perf docs first — the numbers here churn.** Use `models/experimental/diffusion_gemma/doc/optimize_perf/perf_progress.md` (the campaign ledger) plus `README.md`, `l1_residency.md`, `early_halt.md`, and `l1_residency_summary.json` as the current record, and `doc/REFUTED.md` before re-attempting any lever. `perf_campaign_worklog.md` and `norm_fullcanvas_flip_gate.md` were deleted 2026-07-30 and absorbed into those. Use `path_to_100tps.md` only for roadmap arithmetic and lever provenance: its “current landed state” predates OPT-004, batched commit, traced denoise, and the L1 pass. The older `perf_summary.json` + `work_log.md` are the **dense-MoE snapshot** and must not supply current performance numbers.
 
 ### The current landed state (not the dense snapshot)
 
@@ -299,13 +299,13 @@ The shared `build_Release` has `ENABLE_TRACY=OFF` (`build_Release/CMakeCache.txt
 Read before acting; reproduce before trusting. All under `models/experimental/diffusion_gemma/doc/optimize_perf/`. **Read the current-state docs first; the dense-stage ones are superseded:**
 
 Current authoritative record:
-- `perf_campaign_worklog.md` — read newest entries first; it records the dense→sparse→tuned evolution, early-halt, and the L1 pass.
+- `perf_progress.md` — the campaign ledger (absorbed `perf_campaign_worklog.md`, deleted 2026-07-30): the dense→sparse→tuned evolution, early-halt, and the L1 pass.
 - `l1_residency.md` / `l1_residency_summary.json` — old default ~18 t/s, full-canvas norm 20.68 t/s @48 (now the only path), and the `DG_MOE_L1` wash (that flag was deleted and has no reader). Read its 2026-07-30 correction block before quoting the ~2e-6 figure.
-- `norm_fullcanvas_flip_gate.md` — why the norm win remains opt-in despite one-prompt absolute HF neutrality.
+- `l1_residency.md` — the full-canvas norm story end to end (absorbed `norm_fullcanvas_flip_gate.md`, deleted 2026-07-30). The win SHIPPED as the only path on 2026-07-30; the flip gate that held it back was measured on the token-gather MoE that was later deleted.
 - `early_halt.md` — landed controller, ~2% no-halt overhead, and 0/5 halts under #48291.
 - `path_to_100tps.md` — roadmap arithmetic and historical lever inventory only; its starting-line state is stale.
 - `perf_progress.md` — earlier sparse-MoE evolution and supporting measurements.
-- `path_to_30tps.md`, `multistep_trace_batching.md`, `landed_levers_47465_comment.md` — the stacked-lever roofline, the multi-step no-op finding, and the landed-lever summary.
+- `REFUTED.md` (at `doc/REFUTED.md`) — the consolidated dead-end list. `path_to_30tps.md`, `multistep_trace_batching.md` and `landed_levers_47465_comment.md` were deleted 2026-07-30 and their conclusions live there and in `perf_progress.md`. Read it before re-attempting any lever. The stacked-lever roofline, the multi-step no-op finding, and the landed-lever summary.
 
 Earlier dg-08 **dense-MoE snapshot (SUPERSEDED — do not quote as current):**
 - `perf_summary.json` / `work_log.md` — the dense ≈4176 ms/step, 137.55 ms/layer state before true-sparse MoE. Useful only for the diffusion-shaped `perf_summary.json` FIELD shape (`profile: block_diffusion_denoise_step`), not for its numbers.
