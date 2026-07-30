@@ -1,4 +1,4 @@
-GOAL 02b — advisor challenger: make the finished optimized decoder faster, or prove it cannot be.
+/goal Use $advisor-challenger to make the finished MODEL_DIR optimized decoder faster than it already is, using $shard-advise as a challenger it must beat on measurement, or to prove with numbers that it cannot be beaten. The runner requires this file to open with a /goal command.
 
 You are given a FINISHED, TAGGED `optimized_decoder.py` for MODEL_DIR, produced by an
 optimize stage that never ran the shard advisor. Your job is to produce a NEW optimized decoder that is
