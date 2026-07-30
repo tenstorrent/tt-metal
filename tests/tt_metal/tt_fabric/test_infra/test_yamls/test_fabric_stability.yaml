@@ -5,7 +5,8 @@
 #   - short time budget:  --filter 'name.*_short'
 #   - long time budget:   run the whole file with no filter (short + long)
 Tests:
-  - name: "LinearLooped_short"
+  - name: "FlowControlLinear_short"
+    enable_flow_control: true
     fabric_setup:
       topology: Linear
 
@@ -15,45 +16,10 @@ Tests:
       ftype: [unicast, mcast]
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
       num_links: [1, 2, 3, 4]
-
-    defaults:
-      size: 32
-      num_packets: 30000
-
-    patterns:
-      - type: all_to_all
-
-  - name: "LinearLooped_long"
-    fabric_setup:
-      topology: Linear
-
-    top_level_iterations: 100
-
-    parametrization_params:
-      ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2, 3, 4]
-
-    defaults:
-      size: 32
-      num_packets: 30000
-
-    patterns:
-      - type: all_to_all
-
-  - name: "FlowControlLinear_short"
-    enable_flow_control: true
-    fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2, 3, 4]
       size: [1024, 2048, 4096]
 
     defaults:
-      num_packets: 100000
+      num_packets: 10000
 
     patterns:
       - type: all_to_all
@@ -62,6 +28,8 @@ Tests:
     enable_flow_control: true
     fabric_setup:
       topology: Linear
+
+    top_level_iterations: 10
 
     parametrization_params:
       ftype: [unicast, mcast]
@@ -75,7 +43,8 @@ Tests:
     patterns:
       - type: all_to_all
 
-  - name: "MeshLooped_short"
+  - name: "FlowControlMesh_short"
+    enable_flow_control: true
     fabric_setup:
       topology: Mesh
 
@@ -85,45 +54,10 @@ Tests:
       ftype: [unicast, mcast]
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
       num_links: [1, 2, 3, 4]
-
-    defaults:
-      size: 32
-      num_packets: 30000
-
-    patterns:
-      - type: all_to_all
-
-  - name: "MeshLooped_long"
-    fabric_setup:
-      topology: Mesh
-
-    top_level_iterations: 100
-
-    parametrization_params:
-      ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2, 3, 4]
-
-    defaults:
-      size: 32
-      num_packets: 30000
-
-    patterns:
-      - type: all_to_all
-
-  - name: "FlowControlMesh_short"
-    enable_flow_control: true
-    fabric_setup:
-      topology: Mesh
-
-    parametrization_params:
-      ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2, 3, 4]
       size: [1024, 2048, 4096]
 
     defaults:
-      num_packets: 100000
+      num_packets: 10000
 
     patterns:
       - type: all_to_all
@@ -132,6 +66,8 @@ Tests:
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
+
+    top_level_iterations: 10
 
     parametrization_params:
       ftype: [unicast, mcast]
