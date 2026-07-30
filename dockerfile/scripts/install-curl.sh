@@ -107,10 +107,21 @@ mkdir -p "${INSTALL_PREFIX}"
 # --with-openssl points at the static build from Step 1 (not the system
 # copy); nghttp2 (HTTP/2) is the one true optional extra, picked up
 # automatically if the builder stage installed its dev package.
+#
+# --with-ca-bundle/--with-ca-path are hardcoded to the Ubuntu/Debian
+# location rather than left to autodetection: configure autodetects (and
+# bakes in) whatever CA bundle path exists on the BUILD machine, which is
+# manylinux/AlmaLinux 9's /etc/pki/tls/certs/ca-bundle.crt - a path that
+# doesn't exist on either Ubuntu destination image, so every HTTPS request
+# failed with "curl: (77) error adding trust anchors from file". Ubuntu's
+# actual path (verified present on both 22.04 and 24.04) is
+# /etc/ssl/certs/ca-certificates.crt.
 cd "${CURL_TMPDIR}"
 ./configure \
     --prefix="${INSTALL_PREFIX}" \
-    --with-openssl="${OPENSSL_STATIC_PREFIX}"
+    --with-openssl="${OPENSSL_STATIC_PREFIX}" \
+    --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
+    --with-ca-path=/etc/ssl/certs
 make -j"$(nproc)"
 make install
 cd /
