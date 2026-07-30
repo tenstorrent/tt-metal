@@ -170,6 +170,7 @@ class TtXtts(LightweightModule):
             top_k=top_k,
             top_p=top_p,
             repetition_penalty=repetition_penalty,
+            min_new_tokens=min_new_tokens,
         )
 
         # VOCODER trace on the generated (fixed-length) latents + the speaker embedding g.
