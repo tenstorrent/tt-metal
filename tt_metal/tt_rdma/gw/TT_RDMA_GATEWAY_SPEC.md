@@ -208,6 +208,12 @@ parallelism (N EUs / deep HW-TX ring) provide bandwidth.
 - **P-GW5 — UC/UD HW cut-through probe (engine E)**: DOCA Flow feasibility of RoCE-strip + TT-encap + PSN→seq
   p1→p0 — the absolute-lowest-latency line-rate path for any UC/UD-tolerant class.
 - **P-GW6 — READ / multi-QP / cross-chip**: gateway RDMA READ (B4), multi-QP (B5), TT-fabric bridge (4F).
+- **P-GW7 — Path B (non-raw / ttpacket) candidate track** *(see §13.5–§13.6)*: DPA emits BH-native non-raw
+  packet-mode frames → BH **HW zero-copy landing + HW-half Go-back-N**, both directions; DPA runs the SW peer-half.
+  More robust + more accelerated than Path A **if** DPA timing holds vs the BH's HW ack timeouts. Scale-out to a
+  switched multi-endpoint RoCE fabric via a two-layer stack (link ARQ + inner routing/endpoint header). **Gated on
+  Spike A (BF↔BH AN/LT link up) + a Path-B DPA-timing feasibility spike.** Path A (raw + pool) remains the
+  validated, timing-insensitive baseline.
 
 > P-GW1 supersedes the earlier PF-ETH-SQ two-thread DPA build: PF egress is native line-rate but forces the
 > SF↔PF cross-ctx split (§7) that adds a coupling hop and breaks the single event-driven agent. With the
@@ -264,10 +270,13 @@ gathers) and/or N-EU fan-out; (e) BH-pool byte-exact landing (bring up the drain
 Two planning agents produced `gw/BW_PLAN.md` (bandwidth→line-rate) and `gw/E2E_TEST_PLAN.md` (correctness/validation).
 Reconciled, with one important **correction to §5/§8**:
 
-### ★ Engine correction: the literal "A+B hybrid" is likely NOT available
-On this DOCA 3.4 there is **no DPA-side `doca_eth_txq` datapath** (no `doca_eth_txq_dpa_data_path.h`; DPA eth
-egress is only via DPA-Verbs ETH-SQ or FlexIO). So "a DPA EU writes a compact `doca_eth_txq` descriptor" (§5
-engine A / the A+B hybrid) is probably not buildable as written — **verify this first as a gate.** The realistic
+### ★ Engine correction: the literal "A+B hybrid" is NOT available — VERIFIED (DOCA 3.4.0, on-DPU)
+Gate closed on the bench: DOCA **3.4.0** (`bf-bundle-3.4.0-92`). The only `doca_eth_txq` datapath headers are
+`doca_eth_txq_cpu_data_path.h` and `doca_eth_txq_gpu_data_path.h`; `enum doca_eth_txq_data_path_type` has only
+`CPU`/`GPU` (no DPA member); there is **no** `doca_eth_txq_dpa_data_path.h` and **no** `doca_dpa_dev_eth.h`. So
+"a DPA EU writes a compact `doca_eth_txq` descriptor" (§5 engine A / the A+B hybrid) is **not buildable**. DPA
+on-chip eth egress is **DPA-Verbs ETH-SQ** (`doca_dpa_dev_verbs.h`: `doca_dpa_dev_verbs_eth_sq_t`; sample
+`doca_verbs/verbs_send_ethernet_frames_on_dpa/`) **or FlexIO** — nothing else. The realistic
 on-chip line-rate path is **N-EU DPA-Verbs ETH-SQ fan-out** (§5 engine B scaled): N re-head EUs, each on its own
 ETH SQ, fed by **multi-QP or SRQ** (one RC QP = one recv stream, so recv load must be spread across EUs).
 Arm-driven HW-TX (`doca_eth_txq`, ~198 G) remains an option but is Arm-in-the-loop and only wins for a mandated
@@ -361,3 +370,172 @@ The single residual worth **formally publishing** is a small **AN/LT + mode-enab
 *(Structure/IP-surface read, not legal advice — the actual release decision rests with the org. Confirm the
 Tier-2 open send-sequence copy is treated as authoritative vs the closed `eth_ss.cpp` golden, and that the
 AN/LT + mode-enable interop sequence is cleared for publication.)*
+
+---
+
+## 13. BF-3 → TT-link path — FW scoping (read of `bh-erisc-fpga`, read-only)
+
+Track: instead of BF-3 → raw `0x1AF6` → **software pool**, have the BF-3 feed **TT-link/routed** frames the BH
+eth controller **HW-lands** to a DEST_ADDR and (via EDM) routes mesh-wide. Below is what the closed FW actually
+does, so Spike A (link interop) and Spike B (BH HW-forward) are scoped precisely.
+
+### 13.1 "TT-link mode" = the eth controller's **packet mode** (an existing HW feature)
+
+Confirmed in `bh-erisc-fpga/src/common/api/{eth_init,eth_ss}.cpp`:
+
+- **RX:** `eth_rxq_init(q, buf, size, wrap, packet_mode)` sets `ETH_RXQ_CTRL.packet_mode`.
+  `0` = **raw mode** (frame lands in the RX buffer → *the current pool path*); `1` = **packet mode** (HW lands the
+  payload to the frame's **DEST_ADDR** in local L1 — true HW RDMA landing).
+- **Enable:** `eth_enable_packet_mode(q, max_pkt, min_pkt, remote_seq_timeout, local_seq_update_timeout)` inits the
+  RXQ in packet mode, sets `TXQ_CTRL.packet_resend_mode_active = 1` (**HW Go-Back-N resend**), `seq_num_update`,
+  the seq timeouts, and dest-addr→RXQ routing (bcast→RXQ0, mcast→RXQ1, other→RXQ2).
+- **TX routed send:** `eth_send_packet(q, src_word, dest_word_addr, words)` → `transfer_start_data` + the
+  `ETH_TXQ_DEST_ADDR` reg. (Compliance/raw send = `eth_send_raw` → `transfer_start_raw` + MAC DA.)
+- **Seq + Go-Back-N ARQ + resend are entirely in HW** (`packet_resend_mode_active`, `RESEND_CNT_REG`,
+  `REMOTE_SEQ_TIMEOUT`, `LOCAL_SEQ_UPDATE_TIMEOUT`). The FW only flips the enable + sets timeouts; it **never
+  constructs the wire bytes or the seq handshake.** This is the same primitive TT-TT uses (see
+  [[tt-tt-is-hw-rdma-vs-tt-rdma-gap]]).
+
+### 13.2 Spike B (BH side) is nearly free — but proves only TT↔TT
+
+Putting the external-facing link in TT-link mode is **calling an existing function** (`eth_enable_packet_mode`)
+on that link's RXQ instead of leaving it raw — no new FW logic. **But** it only validates HW landing between two
+**TT eth controllers**. It does *not* prove a foreign NIC can drive it.
+
+### 13.3 The wall — *partially superseded by §13.5* (fixed-function NIC can't; a programmable DPA can)
+
+> **CORRECTION (see §13.5):** reading the golden **EthernetSsDesignSpec-2 §2.8.2–2.8.3 + Table 11**, the non-raw
+> packet-mode wire format is **fully documented** (16-B header: dest L1 addr, TX/RX seq, drop flag; Go-back-N in
+> §2.8.3). So the "not reproducible / reverse-engineer" claim below is **wrong for a programmable peer**. A
+> ConnectX *fixed-function pipeline* still can't emit it — but the **DPA can** (it's just a documented header
+> build + a SW peer-half of the seq protocol). This opens **Path B** (§13.5). The paragraphs below remain true
+> only for the *fixed-function* NIC datapath.
+
+The packet-mode **wire format + HW Go-Back-N seq/ARQ handshake** is a **TT-eth-controller HW protocol**, not FW
+source (the FW builds none of it). Therefore:
+
+- It is **not reproducible from the closed FW** — opening `bh-erisc-fpga` would *not* hand you the wire format;
+  that lives in the eth-controller IP. (The TT-Fabric arch doc's "16-B TT-link header" is the abstraction, not a
+  byte-exact, ARQ-complete wire spec.)
+- A **ConnectX has no packet-mode engine** — it can emit raw bytes but cannot participate in the HW seq handshake
+  / retransmit-on-gap that the BH RX drives via `REMOTE_SEQ_TIMEOUT`. The BH HW effectively expects a TT peer.
+
+So "expose the FW" is the wrong lever for BF-3 interop: the FW enable is trivial and already exists; the missing
+piece is a **HW wire/ARQ spec** that the FW doesn't contain and a foreign NIC can't natively honor.
+
+### 13.4 Realistic architecture for mesh reach — the EDM bridge, not BF-3-speaks-TT-link
+
+Keep the BF-3 on **raw frames** (the validated `0x1AF6` gateway path), land into the **BH pool**, then hand off
+to an **EDM/TT-fabric client on the BH side** — a *TT peer that speaks packet mode natively* — to route
+mesh-wide. This is the [[ext-rdma-ttfabric-bridge]] (Phase 4F) and it needs **no** BF-3 packet-mode emulation and
+**no** FW exposure:
+
+```
+RoCEv2 → BF-3 re-head → raw 0x1AF6 → BH eth (raw mode) → pool → EDM client (TT peer, packet mode) → any mesh BH
+```
+
+**Recommendation:** do Spike B cheaply to confirm TT↔TT packet-mode landing on the external link (useful data),
+but pursue **mesh reach via the EDM bridge (4F)**, not via making the BF-3 emit TT-link. Spike A (BF-3↔BH AN/LT
+link interop) remains the independent make-or-break for *any* direct BF-3↔BH wire, packet mode or raw.
+
+### 13.5 Correction from the golden spec — non-raw packet mode is DPA-reachable → two paths (bidirectional)
+
+Grounded in **EthernetSsDesignSpec-2 §2.8.2–2.8.3 + Table 11**, there are exactly two traffic types:
+
+- **Raw** (`eth_txq.CMD.0`): payload only, **no dest addr**, "flow control and retransmission **must be handled by
+  software**" (§2.8.2). **RoCE/RoCEv2 is raw-only** (§1.2.10.7). → the current gateway+pool path.
+- **Non-raw / "packet"** (`eth_txq.CMD.1`): HW inserts/removes a **16-B packet header** and runs **HW Go-back-N**.
+  Table 11: bytes 3:0 = **dest L1 addr** (RX HW lands payload there), byte 9 = **TX seq**, byte 8 = **RX-seq ack**,
+  byte 11 = **control (drop flag / seq-update)**. §2.8.3: every packet carries TX seq + a piggybacked RX-seq ack;
+  idle nodes send **seq-update packets**; a gap → receiver drops + sets drop flag → transmitter resends its
+  window; TX also resends on ack timeout.
+
+**Because the non-raw format is documented, it is NOT TT-silicon-locked.** A fixed-function ConnectX pipeline
+can't emit it, but the **programmable DPA can** — build the 16-B header per frame + run the peer half of the seq
+protocol in software. This yields **Path B**:
+
+| | **Path A — raw + pool** (validated) | **Path B — non-raw / packet mode** (DPA speaks the protocol) |
+|---|---|---|
+| BF↔BH landing (inbound) | **SW** (Tensix pool copy) | **HW zero-copy** to hdr dest L1 addr |
+| BF↔BH reliability (inbound) | SW ARQ (both halves SW) | **HW** (BH half) + **SW** (DPA half) |
+| BF↔BH reliability (return) | SW ARQ — **must build BH-initiator** | **HW** (BH TX half) + SW (DPA half) |
+| Reliability structure | two separately-built SW ARQs | **one bidirectional, piggybacked** link ARQ (§2.8.3) |
+| Status | 198 G on silicon, timing-insensitive | needs Spike A + timing feasibility |
+
+**Bidirectional Path B (the flows):**
+
+```
+Inbound  (BF→BH): host -RoCE RC(HW)-> ConnectX -> DPA re-head to NON-RAW
+  [16B hdr: dest L1 | TXseq | RXseq-ack | ctrl][payload 16B-aligned] -> ETH-SQ -> p0 ->
+  BH packet_mode=1: HW LANDS to hdr dest (zero-copy) + HW Go-back-N (seq check/drop/ack)
+Return   (BH→BF): BH eth_send_packet (non-raw, HW TX seq + Go-back-N resend) -> wire ->
+  BF DPA peer-half (SW): parse hdr, ack via RX seq / seq-update pkts, honor drop flag -> re-head to RoCE
+```
+
+Invariants both paths: **host↔BF stays HW RoCE**; the **BF-side re-head is always a DPA copy** (the RoCE↔TT
+translation — the one copy neither path removes). **Path B's costs/gates:** DPA timing vs the BH's configurable
+`REMOTE_SEQ_TIMEOUT`/`LOCAL_SEQ_UPDATE_TIMEOUT` (jitter → spurious resends), **16-B alignment** (§2.8.2), dest is
+a **19-bit L1 addr** (final MR may need an overlay/NOC forward), and it is gated on **Spike A** (AN/LT link up).
+Path B is the more robust *and* more accelerated option **if** the DPA can hold the packet-protocol timing;
+Path A is the validated, timing-insensitive fallback. (Cross-ref memory [[tt-link-packet-mode-fw-scoping]].)
+
+### 13.6 Path-B scale-out — switched multi-endpoint RoCE ⇄ TT-Mesh
+
+Scenario: a **RoCEv2 switch** on the BF-3's RoCE link, behind which **many endpoints/nodes/devices** appear, and a
+**TT-Mesh** of many BH chips on the other side, through one BF-3 gateway. Both directions.
+
+**Key enabler:** the ttpacket **Go-back-N ARQ is *per-link*, not per-flow** (one 128-frame window between two
+adjacent eth blocks — §2.2.4). So the BF↔first-BH link is a **flow-agnostic reliable pipe**, and multi-endpoint +
+mesh routing ride **above** it in an inner header — a two-layer stack, exactly like EDM uses internally:
+
+```
+Layer 1 (link):    ttpacket 16B hdr  -> HW Go-back-N, HW land to L1, ONE seq space / link
+Layer 2 (routing): inner gateway hdr (inside payload) -> {mesh dest chip+addr, endpoint/flow-id, rkey}
+```
+
+The RoCE switch is transparent to RC (endpoint-to-endpoint IB transport); the BF simply sees **N remote GIDs/QPs**.
+The gateway becomes a **funnel + bidirectional mapper** with two tables:
+- **Inbound map:** RoCE `{GID, QP, rkey, addr}` → mesh `{chip, addr, flow-id}` (B2 MR-federation + endpoint id).
+- **Outbound map:** mesh egress descriptor `{endpoint-id}` → RoCE `{RC QP handle}`.
+
+**Inbound (RoCE switch → mesh), many endpoints:**
+```
+endpoints X,Y,Z --switch--> ConnectX: N RC QPs terminate (HW, independent per QP)
+  -> DPA re-head: [ttpacket hdr -> first-BH L1 stage][inner hdr: mesh dest + flow-id from QP/rkey map][data]
+  -> ETH-SQ -> p0 -> ttpacket link (HW Go-back-N) ->
+  first BH HW-lands (zero-copy) = [inner hdr][data] -> BH EDM client reads inner hdr
+  -> fabric-routes mesh-wide (packet mode, HW reliable BH↔BH) -> target BH HW-lands at final MR
+```
+
+**Return (mesh → RoCE switch), many endpoints:**
+```
+source BH: [inner egress desc: endpoint-id X, QP, addr][data] -> EDM -> gateway BH (packet mode) ->
+  gateway BH eth_send_packet (ttpacket, HW TX seq + Go-back-N) -> wire ->
+  BF DPA peer-half (SW): parse+ack; outbound map endpoint-id X -> RC QP -> post RC WRITE/READ-resp
+  -> ConnectX --switch--> endpoint X (HW reliable RoCE)
+```
+
+**Refactor required (small, layered):**
+1. Define an **inner gateway header** (mesh dest {chip,addr} + endpoint/flow-id + rkey) riding inside the ttpacket
+   payload (~8–16 B).
+2. **Two mapping tables** (inbound RoCE→mesh, outbound endpoint→QP) — B2 federation + a QP/endpoint table.
+3. **DPA:** inbound re-head builds ttpacket+inner header; return runs the packet-mode peer-half **and** the
+   inner→QP demux+post.
+4. **Gateway BH:** an EDM client that reads the inner header and fabric-routes (inbound) / stamps the egress
+   descriptor (return).
+
+**Three caveats that MUST be designed for:**
+1. **Shared-fate Go-back-N (head-of-line blocking):** one link = one 128-frame window for *all* multiplexed flows;
+   a single drop resends the whole window → penalizes every endpoint at once. Mitigate with **lossless/PFC** (so
+   Go-back-N rarely fires), **spread flows across p0+p1** (two windows), and the eth controller's **3 TX/RX
+   channels** (limited per-channel separation). RoCE QPs are independently reliable but share fate on the funnel.
+2. **End-to-end congestion coupling:** N endpoints can overrun the link/mesh; the gateway must bridge mesh
+   backpressure ↔ RoCE CC (RNR / pause posting / **PFC/DCQCN on the RoCE side**), or endpoints overflow the funnel.
+3. **QP scaling:** N endpoints = N RC QPs on the ConnectX; for large N use **DCT** or **XRC** to cut QP count (UD
+   cuts further but loses RC reliability → then rely wholly on the ttpacket link + inner layer).
+
+**Verdict:** ttpacket is not just suitable — its **per-link, flow-agnostic ARQ is the right primitive** for a
+switched multi-endpoint fabric: it makes the BF↔BH edge a reliable pipe, lets **EDM own mesh routing** and a
+**gateway table own endpoint demux**, above the link. The engineering is not the ttpacket format — it's the
+**shared-fate HoL** (lossless + multi-link/channel) and the **RoCE↔mesh congestion coupling**. Both solvable, both
+must be explicit. Gated, as always, on **Spike A** (AN/LT link up) and Path-B DPA timing feasibility (§13.5).
