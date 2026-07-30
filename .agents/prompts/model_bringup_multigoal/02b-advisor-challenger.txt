@@ -1,7 +1,7 @@
 /goal Use $advisor-challenger to make the finished MODEL_DIR optimized decoder faster than it already is, using $shard-advise as a challenger that must win on measurement — or prove with numbers that it cannot be beaten.
 
 You are given a FINISHED optimized_decoder.py from an optimize stage that never ran the advisor. Read
-.agents/skills/advisor-challenger/SKILL.md FIRST and follow its procedure — it has the detail and traps. Use $shard-advise for SETUP and capture mechanics only; this
+.agents/skills/advisor-challenger/SKILL.md FIRST and follow it — it has the detail and traps. Use $shard-advise for SETUP and capture mechanics only; this
 stage replaces its "how to incorporate" part.
 
 Ship a NEW optimized decoder measured to be the best of the incumbent and everything the advisor
@@ -15,7 +15,7 @@ HARD REQUIREMENTS — the gate 02b-advisor-challenger.check.sh enforces every on
    DECODE_BATCH. Advice judged at another batch can flip sign (+12.3% at b1 vs -8.8% at b32, same advice).
 
 1. FREEZE THE INCUMBENT FIRST, before running the advisor. Its own perf harness at DECODE_BATCH, >=3
-   repeats, into MODEL_DIR/doc/advisor_challenger/incumbent.json. incumbent_ms = the BEST repeat;
+   repeats, into doc/advisor_challenger/incumbent.json. incumbent_ms = the BEST repeat;
    noise_floor_ms = the spread. Record shipped_policy, shipped_weight_dtypes and shipped_policy_source
    naming the artifact they came from (final tt-perf-report CSV or selected candidate JSON). NEVER
    resolved_policy.constructor_defaults — those are class defaults, not what executed.
@@ -26,7 +26,7 @@ HARD REQUIREMENTS — the gate 02b-advisor-challenger.check.sh enforces every on
    dram_sharded_zero_cause to wrong_precision_capture or bf16_eligibility_default. Note any uncapturable
    layer kind (sparse_matmul and SSM/gated-delta ops are terminal in the tracer) and its share of layers.
 
-3. RECONCILE THEN MEASURE, IN CHAINS. Run skills/advisor-challenger/scripts/reconcile.py. It groups
+3. RECONCILE THEN MEASURE, IN CHAINS. Run scripts/reconcile.py. It groups
    advised ops into chains and thresholds on the chain's SUMMED window share. MEASURE EACH MATERIAL CHAIN
    AS ONE UNIT first; split per-op only after the chain has a number. An op resharded alone pays its edge
    conversions; only the whole L1-resident chain pays off (OPT-003). A per-op bar previously shredded one
@@ -45,7 +45,7 @@ USE THE ADVICE AS RECALL, NOT GEOMETRY: "what did I leave interleaved or on <=2 
 shardable?" Its geometry has no demonstrated value. compute_config/math_fidelity in final_ir.mlir is
 TRACED STATE, NOT ADVICE; overriding it is mandatory.
 
-DELIVERABLES: MODEL_DIR/tt/optimized_decoder.py plus MODEL_DIR/doc/advisor_challenger/{incumbent.json,
+DELIVERABLES, under the model dir: tt/optimized_decoder.py plus doc/advisor_challenger/{incumbent.json,
 shard_advise/<layer_kind>/{report.json,final_ir.mlir}, reconciliation.json, final.json, README.md,
 tracy/ (tt-perf-report outputs only, no raw Tracy captures)}.
 
