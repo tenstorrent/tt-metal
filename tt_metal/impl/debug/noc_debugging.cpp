@@ -117,21 +117,45 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
         state.issue[processor_id].set_issue(issue_type);
     }
 
-    // Check if the write hit a locked buffer in the destination core
-    tt_cxy_pair dst_core{core.chip, static_cast<size_t>(event.dst_x), static_cast<size_t>(event.dst_y)};
-    if (has_state(dst_core)) {
-        CoreDebugState& dst_state = get_state(dst_core);
-        if (const auto* locked_buf = dst_state.get_noc_write_to_lock_buffer(event); locked_buf != nullptr) {
-            NOCDebugIssueType issue_type;
-            issue_type.base_type = detail::locked_buffer_issue_base_type(locked_buf->lock_type);
-            issue_type.issue_address = event.dst_addr;
-            issue_type.issue_size = event.num_bytes;
-            issue_type.src_x = event.src_x;
-            issue_type.src_y = event.src_y;
-            issue_type.dst_x = event.dst_x;
-            issue_type.dst_y = event.dst_y;
-            state.issue[processor_id].set_issue(issue_type);
+    // For each core the write lands on, flag a write to locked buffer, or a WRITE_TO_UNLOCKED_DFB on the writer's own
+    // core.
+    const auto flag_write_into_core = [&](tt_cxy_pair dst_core) {
+        if (!has_state(dst_core)) {
+            return;
         }
+        const bool same_core = (core == dst_core);
+        CoreDebugState& dst_state = get_state(dst_core);
+        NOCDebugIssueType issue_type;
+        if (const auto* locked_buf = dst_state.get_noc_write_to_lock_buffer(event, processor_id, same_core)) {
+            issue_type.base_type = detail::locked_buffer_issue_base_type(locked_buf->lock_type);
+        } else if (same_core && dst_state.write_into_unlocked_dfb(event, processor_id)) {
+            issue_type.base_type = NOCDebugIssueBaseType::WRITE_TO_UNLOCKED_DFB;
+        } else {
+            return;
+        }
+        issue_type.issue_address = event.dst_addr;
+        issue_type.issue_size = event.num_bytes;
+        issue_type.src_x = event.src_x;
+        issue_type.src_y = event.src_y;
+        issue_type.dst_x = static_cast<uint8_t>(dst_core.x);
+        issue_type.dst_y = static_cast<uint8_t>(dst_core.y);
+        issue_type.is_mcast = event.is_mcast;
+        state.issue[processor_id].set_issue(issue_type);
+    };
+
+    if (event.is_mcast) {
+        const int x0 = std::min<int>(event.dst_x, event.mcast_end_dst_x);
+        const int x1 = std::max<int>(event.dst_x, event.mcast_end_dst_x);
+        const int y0 = std::min<int>(event.dst_y, event.mcast_end_dst_y);
+        const int y1 = std::max<int>(event.dst_y, event.mcast_end_dst_y);
+        for (int x = x0; x <= x1; ++x) {
+            for (int y = y0; y <= y1; ++y) {
+                flag_write_into_core(tt_cxy_pair{core.chip, static_cast<size_t>(x), static_cast<size_t>(y)});
+            }
+        }
+    } else {
+        flag_write_into_core(
+            tt_cxy_pair{core.chip, static_cast<size_t>(event.dst_x), static_cast<size_t>(event.dst_y)});
     }
 
     if (event.posted) {
@@ -216,6 +240,20 @@ void NOCDebugState::handle_scoped_lock_event(
     tt_cxy_pair core, int processor_id, uint64_t timestamp, ScopedLockEvent event) {
     CoreDebugState& state = get_state(core);
 
+    // Reference counting the DFB regions so write to unlocked DFBs can be flagged
+    using EventType = NocDebuggingEventMetadata::NocDebugEventType;
+    if (event.event_type == EventType::DFB_REGION_START || event.event_type == EventType::DFB_REGION_END) {
+        const L1Extent region{event.locked_address_base, event.num_bytes};
+        if (event.event_type == EventType::DFB_REGION_START) {
+            ++state.dfb_region_refcount[region];
+        } else if (auto it = state.dfb_region_refcount.find(region);
+                   it != state.dfb_region_refcount.end() && --it->second == 0) {
+            state.dfb_region_refcount.erase(it);
+        }
+        update_latest_risc_timestamp(core, processor_id, timestamp);
+        return;
+    }
+
     // Merge intervals is not required.
     // for unlocking, the start and end address of the request will be the same as from the lock request.
     // if multiple locks and unlocks are requested for the same buffer, then only one will be removed as eventually
@@ -223,9 +261,9 @@ void NOCDebugState::handle_scoped_lock_event(
     auto& bufs = state.locked_buffers[processor_id];
     auto lock_type = detail::get_lock_type(event.event_type);
     if (event.is_lock()) {
-        bufs.insert({event.locked_address_base, event.num_bytes, lock_type});
+        bufs.insert({{event.locked_address_base, event.num_bytes}, lock_type});
     } else {
-        bufs.erase({event.locked_address_base, event.num_bytes, lock_type});
+        bufs.erase({{event.locked_address_base, event.num_bytes}, lock_type});
     }
 
     update_latest_risc_timestamp(core, processor_id, timestamp);
@@ -275,6 +313,17 @@ std::string NOCDebugState::get_issue_description(const NOCDebugIssueType& issue_
         return "read";
     }
 
+    if (issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_UNLOCKED_DFB) {
+        return fmt::format(
+            "from ({},{}) to ({},{}) addr 0x{:08X} size {} unlocked dataflow buffer",
+            static_cast<int>(issue_type.src_x),
+            static_cast<int>(issue_type.src_y),
+            static_cast<int>(issue_type.dst_x),
+            static_cast<int>(issue_type.dst_y),
+            issue_type.issue_address,
+            issue_type.issue_size);
+    }
+
     if (const char* locked_type = detail::locked_buffer_type_name(issue_type.base_type)) {
         return fmt::format(
             "from ({},{}) to ({},{}) addr 0x{:08X} size {} locked {}",
@@ -309,6 +358,7 @@ void NOCDebugState::print_aggregated_errors() const {
         std::vector<std::string> write_barrier_issues;
         std::vector<std::string> unflushed_write_issues;  // at end of kernel
         std::vector<std::string> locked_buffer_issues;
+        std::vector<std::string> unlocked_dfb_issues;
         bool has_read_barrier = false;
     };
     std::map<std::string, CoreIssues> issues_by_core;
@@ -331,6 +381,8 @@ void NOCDebugState::print_aggregated_errors() const {
                     core_issues.has_read_barrier = true;
                 } else if (issue_type.base_type == NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END) {
                     core_issues.unflushed_write_issues.push_back(get_issue_description(issue_type));
+                } else if (issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_UNLOCKED_DFB) {
+                    core_issues.unlocked_dfb_issues.push_back(get_issue_description(issue_type));
                 } else if (detail::locked_buffer_type_name(issue_type.base_type) != nullptr) {
                     core_issues.locked_buffer_issues.push_back(get_issue_description(issue_type));
                 }
@@ -403,6 +455,18 @@ void NOCDebugState::print_aggregated_errors() const {
         }
     }
 
+    for (const auto& [core_key, core_issues] : issues_by_core) {
+        if (!core_issues.unlocked_dfb_issues.empty()) {
+            log_error(tt::LogMetal, "Write to unlocked DFB (wrote a DFB region without holding its lock):");
+            break;
+        }
+    }
+    for (const auto& [core_key, core_issues] : issues_by_core) {
+        if (!core_issues.unlocked_dfb_issues.empty()) {
+            log_error(tt::LogMetal, "  {} [{}]", core_key, fmt::join(core_issues.unlocked_dfb_issues, ", "));
+        }
+    }
+
     log_error(tt::LogMetal, "========================================");
     log_error(tt::LogMetal, "");
 }
@@ -459,19 +523,57 @@ void NOCDebugState::process_accumulated_events_all_chips() {
 }
 
 const NOCDebugState::LockedBufferInfo* NOCDebugState::CoreDebugState::get_noc_write_to_lock_buffer(
-    const NocWriteEvent& event) const {
+    const NocWriteEvent& event, int writer_processor_id, bool same_core) const {
     const uint32_t write_start = event.dst_addr;
     const uint32_t write_end = event.dst_addr + event.num_bytes;
     const auto& bufs = this->locked_buffers;
     for (auto proc_id = 0; proc_id < CoreDebugState::MAX_PROCESSORS; ++proc_id) {
+        // Self-writing while holding a lock is allowed.
+        if (same_core && proc_id == writer_processor_id) {
+            continue;
+        }
         for (const auto& buf : bufs[proc_id]) {
-            const uint32_t buf_end = buf.address + buf.size;
-            if (write_end > buf.address && buf_end > write_start) {
+            const uint32_t buf_end = buf.extent.address + buf.extent.size;
+            if (write_end > buf.extent.address && buf_end > write_start) {
                 return &buf;
             }
         }
     }
     return nullptr;
+}
+
+bool NOCDebugState::CoreDebugState::write_into_unlocked_dfb(const NocWriteEvent& event, int writer_processor_id) const {
+    const uint32_t write_start = event.dst_addr;
+    const uint32_t write_end = event.dst_addr + event.num_bytes;
+
+    bool write_into_dfb = false;
+    for (const auto& [region, count] : dfb_region_refcount) {
+        if (count > 0 && write_end > region.address && (region.address + region.size) > write_start) {
+            write_into_dfb = true;
+            break;
+        }
+    }
+    if (!write_into_dfb) {
+        return false;
+    }
+
+    // The write must be fully covered by the union of the writer's own locks.
+    // locked_buffers[proc] is an ordered set.
+    uint32_t covered_to = write_start;
+    for (const auto& buf : locked_buffers[writer_processor_id]) {
+        if (buf.extent.address > covered_to) {
+            break;  // gap before this lock -> not fully covered
+        }
+        const uint32_t buf_end = buf.extent.address + buf.extent.size;
+        if (buf_end > covered_to) {
+            covered_to = buf_end;
+        }
+        if (covered_to >= write_end) {
+            break;
+        }
+    }
+    // Flag iff the writer's own locks do not cover the whole write.
+    return covered_to < write_end;
 }
 
 }  // namespace tt::tt_metal

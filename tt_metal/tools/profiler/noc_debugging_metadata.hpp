@@ -14,6 +14,8 @@ struct alignas(uint64_t) NocDebuggingEventMetadata {
         MEM_UNLOCK = 3,
         DFB_LOCK = 4,
         DFB_UNLOCK = 5,
+        DFB_REGION_START = 6,
+        DFB_REGION_END = 7,
     };
 
     union {

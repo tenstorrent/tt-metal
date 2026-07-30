@@ -30,6 +30,32 @@
 #define DFB_DESCRIPTORS_DEFINED
 #endif
 
+// Emits paired DFB_REGION_START/END NOC-debug events for a DFB's ring extent, so a NOC write into an
+// unlocked DFB can be flagged. A member sub-object so DataflowBuffer's copy/move/dtor can stay default.
+struct DfbRegionTracker {
+    uint32_t base = 0;
+    uint32_t size = 0;
+
+    DfbRegionTracker() = default;
+    DfbRegionTracker(uint32_t base, uint32_t size) : base(base), size(size) { emit_start(); }
+    DfbRegionTracker(const DfbRegionTracker& other) : base(other.base), size(other.size) { emit_start(); }
+    DfbRegionTracker(DfbRegionTracker&& other) noexcept : base(other.base), size(other.size) { emit_start(); }
+    DfbRegionTracker& operator=(const DfbRegionTracker&) = delete;
+    DfbRegionTracker& operator=(DfbRegionTracker&&) = delete;
+    ~DfbRegionTracker() {
+#ifndef COMPILE_FOR_TRISC
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_REGION_END, base, size);
+#endif
+    }
+
+private:
+    void emit_start() const {
+#ifndef COMPILE_FOR_TRISC
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_REGION_START, base, size);
+#endif
+    }
+};
+
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
 //
@@ -371,6 +397,8 @@ private:
 #if !(defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH))
     DFBInterface& local_dfb_interface_;
 #endif
+
+    DfbRegionTracker region_tracker_;
 
 #ifdef ARCH_QUASAR
     // Metadata for implicit sync
