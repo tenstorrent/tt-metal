@@ -223,15 +223,14 @@ DfbKernelSources select_dfb_kernel_sources(SubtileBroadcastType subtile_broadcas
             // MIXED subtile broadcast: the mixed reader software-fills the COL operand and delivers the ROW
             // operand as a raw partial tile; the mixed compute expands the ROW operand via unary_bcast<ROW>
             // (through llk_post, freq=Wt reuse loop) and reads the reader-filled COL operand directly, then
-            // runs the binary op -- FPU (add/subtract) or SFPU (multiply/divide/maximum). The COL operand
-            // uses reader software-fill (NOT a compute unary_bcast<COL>) as a deliberate reader/compute
+            // runs the binary op -- FPU (add/subtract) or SFPU (multiply/divide/maximum/minimum). The COL
+            // operand uses reader software-fill (NOT a compute unary_bcast<COL>) as a deliberate reader/compute
             // load-balance keeping compute at 2 LLK passes. On Quasar the reader fill uses a COHERENT store
             // (non-cacheable L1 alias) because the DM core's write-back L1 D$ is incoherent with the TL1 SRAM
             // the compute consumer reads -- a plain cacheable fill is invisible to the consumer and corrupts
             // the neighbor llk_post DFB (see reader_row_col_mixed_bcast_dfb.cpp). matches_metal_v2_slice
-            // restricts this to bf16, and currently ONLY ROW_B_COL_A reaches here (llk_post is srcB, c_6 --
-            // stable); ROW_A_COL_B (llk_post is srcA, c_5) is gated to the descriptor pending a craq-sim/LLK
-            // fix of a residual intermittent llk_post-as-srcA race (see the gate + task-9-report.md).
+            // restricts this to bf16; both orientations reach here (llk_post is the binary srcA for
+            // ROW_A_COL_B, srcB for ROW_B_COL_A).
             return DfbKernelSources{
                 .reader = kReaderRowColMixedBcastDfb,
                 .writer = kWriterDfb,
