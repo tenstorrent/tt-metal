@@ -21,7 +21,7 @@ v2 unit are now fully current at API v9:
 | `conv2d-weights-single-sender-rect` | 1 | fully end-to-end migrated @ v9 | 2 | `CONV-HEIGHT`: 49 passed, 16 expected skips; shared DRAM: 14 passed |
 | `conv2d-weights-fixed-line` | 1 | fully end-to-end migrated @ v9 | 2 | `CONV-BLOCK`: 49 passed, 16 expected skips; shared DRAM: 14 passed |
 | `matmul-in1-mcast-padding-host` | 4 | fully end-to-end migrated @ v9 | 2 | `MM-IN1-ALL`: 302 passed, 188 expected skips; exact 1D and both 2D topologies |
-| `groupnorm-sharded-v2-mcast-host` | 4 | fully end-to-end migrated @ v9 | 4 | legacy: 108 passed, 2 expected skips; Welford: 108 passed, 2 expected skips; fixed/default: 19 passed, 6 expected skips |
+| `groupnorm-sharded-v2-mcast-host` | 4 | fully end-to-end migrated @ v9 | 4 | legacy: 108 passed, 2 expected skips; Welford: 108 passed, 2 expected skips; fixed/default: 19 passed, 6 expected skips; v2 sender-only bindings lack op-level runtime coverage |
 
 The exact binding/dispatch map is in `test_map.json`; the easier-first atomic
 order and risk gates are in `tiers.md`. Until a unit's required bindings are
