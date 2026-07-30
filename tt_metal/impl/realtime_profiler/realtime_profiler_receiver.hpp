@@ -84,11 +84,6 @@ private:
         std::unique_ptr<Program> realtime_profiler_program;
         RealtimeProfilerCoreL1Addrs core_l1;
         bool fifo_reached_capacity = false;
-        // Seeded when the receiver thread starts; a device that stops producing is the symptom the stall report and
-        // the credit refresh below both key off.
-        std::chrono::steady_clock::time_point last_pages_at{};
-        std::chrono::steady_clock::time_point last_credit_refresh{};
-        std::chrono::steady_clock::time_point last_stall_report{};
         // Held by pointer so DeviceState stays movable: the sync object carries atomics and cannot be.
         std::unique_ptr<RealtimeProfilerClockSync> clock_sync;
 
@@ -128,10 +123,6 @@ private:
         std::chrono::steady_clock::time_point now,
         std::vector<uint32_t>& page_buf,
         std::vector<ProgramRealtimeRecord>& record_buf);
-    // Handles a device that reported no pages: re-sends credits, and reports the device's ring state once the silence
-    // is long enough to be a stall rather than an idle gap.
-    void service_idle_device(
-        DeviceState& dev_state, std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf);
     // Records that cannot form a valid duration are dropped rather than delivered.
     void publish_pages(
         const DeviceState& dev_state,
@@ -156,6 +147,7 @@ private:
     // Diagnostics, read by tests through the accessors above.
     std::atomic<uint32_t> peak_fifo_pages_{0};        // all-time peak D2H FIFO usage
     uint32_t fifo_pages_window_max_ = 0;              // peak since the last Tracy plot sample
+    std::chrono::steady_clock::time_point last_drain_gap_warn_{};
     std::atomic<uint64_t> num_published_records_{0};  // records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // batches published to the ring
     std::atomic<uint64_t> num_malformed_records_{0};  // dropped at decode for having end < start

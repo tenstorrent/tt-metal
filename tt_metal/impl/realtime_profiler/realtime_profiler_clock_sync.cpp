@@ -45,6 +45,15 @@ namespace tt::tt_metal {
 
 namespace {
 
+// How far above the standing anchor a probe may land and still end the burst. Comparing for strict improvement makes
+// the threshold converge on the fastest round trip ever measured, after which no probe can pass it and every resync
+// pays the full depth to shave nanoseconds the published bound does not notice. 1/32 measured against 1/64 and 1/16:
+// it takes 2.6 probes to strict comparison's 6.4, for 10 ns on the median bound and 30 ns on its 99th percentile.
+constexpr int kResyncExitToleranceDivisor = 32;
+constexpr std::chrono::nanoseconds resync_exit_threshold(std::chrono::nanoseconds anchor_rtt) {
+    return anchor_rtt + anchor_rtt / kResyncExitToleranceDivisor;
+}
+
 // Round-trip busy-poll backstop, not an accept threshold. The first kRttProbeHealthyPolls reads skip the deadline
 // check so a healthy handshake never reads the clock inside the round trip it is timing; only a stalled device
 // reaches the check.
@@ -304,12 +313,22 @@ std::optional<std::chrono::nanoseconds> RealtimeProfilerClockSync::measure_rtt(
         }
     }
     const auto rtt = std::chrono::steady_clock::now() - host_before;
+    const uint64_t timed_device_time = read_device_time();
 
     // Off the timed path: the token is ordered behind the timestamp, so it is what makes both words complete.
     while (read_ack() != token) {
         if (++polls > kRttProbeHealthyPolls && std::chrono::steady_clock::now() > deadline) {
+            last_device_time_ = read_device_time();
             return std::nullopt;
         }
+    }
+    // The token identifies this probe's reply, and the device writes it after the timestamp, so by now device_time
+    // holds this probe's value. If it moved since the read that stopped the clock, the change that stopped it came
+    // from an earlier probe whose reply was still in flight, and the interval is shorter than the true round trip.
+    // Such a sample re-anchors ahead of every honest one, since a smaller round trip always wins.
+    if (read_device_time() != timed_device_time) {
+        last_device_time_ = read_device_time();
+        return std::nullopt;
     }
     return rtt;
 }
@@ -482,7 +501,7 @@ bool RealtimeProfilerClockSync::resync() {
             if (sample.has_value() && (!best.has_value() || sample->rtt < best->rtt)) {
                 best = sample;
             }
-            if (best.has_value() && best->rtt <= model_.anchor_rtt()) {
+            if (best.has_value() && best->rtt <= resync_exit_threshold(model_.anchor_rtt())) {
                 break;
             }
         }
