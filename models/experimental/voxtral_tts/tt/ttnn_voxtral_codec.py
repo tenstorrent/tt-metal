@@ -68,9 +68,9 @@ chain with bf16 ACTIVATIONS throughout; here attention output enters the residua
 LayerScale (~0.01) and there are only 8 attention ops, so it does not transfer.
 
 === PERFORMANCE (warm, N150, defaults) ===
-43.8 ms for 5.1 s of audio (RTF 0.0086, 117x real-time), 155 ms for 37.5 s (242x), 539 ms for
-120 s (222x). Upstream report RTF 0.103 for their WHOLE pipeline on an H200, so this block is
-~4-8% of the end-to-end budget. It is NOT where the end-to-end answer gets decided -- Block 1 is
+27.3 ms for 5.1 s of audio (RTF 0.0053, 188x real-time), 97.0 ms for 37.5 s (387x), 345 ms for
+120 s (348x). Upstream report RTF 0.103 for their WHOLE pipeline on an H200, so this block is
+~3-5% of the end-to-end budget. It is NOT where the end-to-end answer gets decided -- Block 1 is
 (87% of the parameters, 12.5 sequential steps per second of audio).
 
 === OPTIMIZATIONS APPLIED, AND WHAT EACH WAS WORTH ===
@@ -84,6 +84,13 @@ LayerScale (~0.01) and there are only 8 attention ops, so it does not transfer.
   5. Hoisted conv weight preparation (_prepared): 2.6x at short lengths (112.8 -> 43.7 ms at
      T=128); host share of wall time 88% -> 24%.
   6. Content-deduplicated prepared weights (_prepared): 730 MB -> 98 MB, bit-identical.
+  7. FUSED head split/merge in _block: 1.6x on the WHOLE block (155 -> 97 ms at T=469). The
+     reshape+permute pair was 41% of Block 3 -- larger than attention -- and pure data movement.
+     nlp_create_qkv_heads 11.57 -> 0.95 ms and concatenate_heads 4.88 -> 0.20 ms at L=4096.
+     Accuracy is unchanged (real speech PCC 0.999984, worst 1.16% of peak, both identical).
+     Found late: the six rejected items below all targeted attention or the convs, and the
+     reshapes were never profiled. On this hardware the wins are in op count and data movement,
+     not arithmetic -- every FLOP-reducing idea here lost, and this one won.
 
 === MEASURED AND REJECTED -- do not retry without new information ===
   * sdpa instead of the hand-rolled attention interior: 1.44-2.27x FASTER but 3.3x worse
@@ -494,9 +501,21 @@ Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention, which was
         # QK-norm over the whole 1024 width, BEFORE splitting heads
         q = ttnn.rms_norm(q, weight=w["qn"], epsilon=CODEC_QK_NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
         k = ttnn.rms_norm(k, weight=w["kn"], epsilon=CODEC_QK_NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
-        heads = lambda t: ttnn.permute(ttnn.reshape(t, [1, L, CODEC_N_HEADS, CODEC_HEAD_DIM]), (0, 2, 1, 3))
-        attn = self._attention(heads(q), heads(k), heads(v), window)
-        attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), [1, L, CODEC_DIM])
+        # Head split/merge via the FUSED ops, not reshape+permute. Measured at L=4096: the split
+        # went 11.57 -> 0.95 ms (12x) and the merge 4.88 -> 0.20 ms (24x). Reshape+permute was the
+        # single largest cost in this block -- larger than attention itself -- and it is pure data
+        # movement. `nlp_create_qkv_heads` wants q separate and k|v fused, and 4D inputs (the
+        # reshape to [1,1,L,C] is metadata only); it takes q/k ALREADY QK-normed, so it does not
+        # conflict with normalising over the full 1024 width before the split.
+        kv = ttnn.concat([k, v], dim=-1)
+        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(q, [1, 1, L, CODEC_DIM]),
+            ttnn.reshape(kv, [1, 1, L, 2 * CODEC_DIM]),
+            num_heads=CODEC_N_HEADS, num_kv_heads=CODEC_N_HEADS,
+            transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attn = self._attention(qh, kh, vh, window)
+        attn = ttnn.transformer.concatenate_heads(attn)  # [1,H,L,d] -> [1,L,H*d]
         r = ttnn.linear(attn, w["wo"], compute_kernel_config=COMPUTE_CONFIG)
         x = ttnn.add(x, ttnn.multiply(r, w["as"]))  # LayerScale
         h = ttnn.rms_norm(x, weight=w["fn"], epsilon=CODEC_NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
