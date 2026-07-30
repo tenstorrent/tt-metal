@@ -11,6 +11,7 @@ expert backends were removed in the prefill cleanup; this mirrors deepseek_v3_d_
 
 import ttnn
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
+from models.demos.minimax_m3.utils.profiler_utils import zone
 from models.demos.minimax_m3.utils.substate import substate
 
 from .dense_mlp import DenseMLP
@@ -168,10 +169,12 @@ class MLP:
         tokens). The MoE returns reduce-scattered emb/tp; we all-gather it back to full emb so it
         matches the layer residual's [1,1,S,H]. The shared expert runs on the same input and is added.
         """
-        shared_out = self.shared_expert(hidden_states) if self.shared_expert is not None else None
+        with zone("shared_expert"):
+            shared_out = self.shared_expert(hidden_states) if self.shared_expert is not None else None
 
         Hfull = hidden_states.shape[-1]
-        idx, wts = self.router(hidden_states, True)  # per-row top-k on [1,1,S,H]
+        with zone("router_topk"):
+            idx, wts = self.router(hidden_states, True)  # per-row top-k on [1,1,S,H]
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device
         out = self.experts(x3d, topk_indices=idx, topk_weights=wts)  # -> [1,S,H/tp] reduce-scattered
         out = ttnn.unsqueeze(out, dim=0)  # -> [1,1,S,H/tp]
@@ -180,13 +183,15 @@ class MLP:
             # (mesh_config.allgather, semaphore/barrier-managed — the path DeepSeek's MoE uses) instead of
             # the raw ttnn.all_gather: the raw op left a stale tile-face on a non-device-0 TP column's
             # slice under the full-model footprint -> ~1e38 garbage -> token-0 (token-0 hunt 2026-06-29).
-            if self.mesh_config is not None and self.ccl is not None:
-                out = self.mesh_config.allgather(out, self.ccl, axis=1, dim=3)
-            else:
-                out = ttnn.all_gather(
-                    out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
-                )
+            with zone("tp_allgather"):
+                if self.mesh_config is not None and self.ccl is not None:
+                    out = self.mesh_config.allgather(out, self.ccl, axis=1, dim=3)
+                else:
+                    out = ttnn.all_gather(
+                        out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
+                    )
         if shared_out is not None:
-            out = ttnn.add(out, shared_out)
+            with zone("add_shared"):
+                out = ttnn.add(out, shared_out)
             shared_out.deallocate(True)
         return out
