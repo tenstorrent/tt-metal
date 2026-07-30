@@ -1446,11 +1446,75 @@ FORCE_INLINE void coordinated_context_switch_finish_as_master(
     }
 }
 
+// [POST-RETRAIN HANDSHAKE] Re-run the init eth handshake after a spontaneous retrain, once config
+// (packet mode + ACCEPT_AHEAD) has been restored by recover_eth_link_if_down. Recovery analogue of the
+// init "both sides ready" gate: reconfirms the freshly-retrained link is bidirectionally alive before the
+// router resumes traffic. Reuses the SAME handshake_addr and is_handshake_sender role as init (that L1 is
+// dead at runtime -- verified -- so reusing it is safe).
+//
+// NOTE: like init, this SPINS until the peer responds (with periodic context switches). If our PCS is up
+// the peer's almost certainly is too (they had to sync to bring the link up), so a never-responding peer
+// is not expected -- but if that proves wrong, bound this with a max-attempt cap so a dead peer can't
+// stall the healthy side. Credit re-sync (receiver re-sends absolute completions) is a SEPARATE ERISC1
+// follow-on, not done here.
+template <typename RoutingTableT>
+FORCE_INLINE void run_post_retrain_handshake(
+    const RoutingTableT* routing_table_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    if constexpr (enable_ethernet_handshake) {
+        // [POST-RETRAIN HANDSHAKE DEBUG] Role-specific markers: ENTER before the spin, DONE only if it
+        // returns. ENTER with no DONE on a core == wedged; the role marker says whether that stuck end was
+        // the sender (master) or receiver (subordinate), so we can classify links straight from the log.
+        if constexpr (is_handshake_sender) {
+            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_SENDER_ENTER);
+            // SKIP_CONTEXT_SWITCH=true: post-retrain runs inside the coordinated context switch, so the spin
+            // must NOT call run_routing() (full switch would desync the router's dedicated-NOC shadow counters).
+            erisc::datamover::handshake::
+                fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE, /*SKIP_CONTEXT_SWITCH=*/true>(
+                    handshake_addr,
+                    routing_table_l1->my_mesh_id,
+                    routing_table_l1->my_device_id,
+                    termination_signal_ptr,
+                    DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_SENDER_DONE);
+        } else {
+            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_RECV_ENTER);
+            // SKIP_CONTEXT_SWITCH=true: see sender-side note above.
+            erisc::datamover::handshake::
+                fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE, /*SKIP_CONTEXT_SWITCH=*/true>(
+                    handshake_addr,
+                    routing_table_l1->my_mesh_id,
+                    routing_table_l1->my_device_id,
+                    termination_signal_ptr,
+                    DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_RECV_DONE);
+        }
+    }
+}
+
 void run_routing_without_noc_sync_coordinated_as_master(
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     if constexpr (IS_RETRAIN_SYNC_MASTER()) {
         coordinated_context_switch_start_as_master(termination_signal_ptr);
+        // [POST-RETRAIN HANDSHAKE] Bracket the recovery pass with a before/after read of the L1 retrain
+        // counter (dev_mem_map MEM_AERISC_RETRAIN_COUNT_BASE). run_routing_without_noc_sync() below runs
+        // recover_eth_link_if_down(), which increments that counter iff a spontaneous retrain just completed
+        // on this core. Comparing before vs after -- rather than tracking a persistent flag -- keeps the
+        // router stateless and is naturally re-entry safe: the handshake's own internal context switches
+        // see the (now-up) link produce no new increment, so they can't recursively trigger another
+        // handshake.
+        // [HANDSHAKE DISABLED] Post-retrain handshake off (it regresses recovery -> more dead/frozen links,
+        // crowding out the credit-desync tail-stalls we want to capture). Config restore via
+        // run_routing_without_noc_sync() still runs; only the handshake is skipped. Restore the retrain-count
+        // bracket + run_post_retrain_handshake() call to re-enable. INIT handshake CT arg untouched.
         run_routing_without_noc_sync();
+        // const uint32_t retrain_count_before = fabric_get_retrain_count();
+        // run_routing_without_noc_sync();
+        // const uint32_t retrain_count_after = fabric_get_retrain_count();
+        // if (retrain_count_after != retrain_count_before) {
+        //     const auto* routing_table_l1 =
+        //         reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        //     run_post_retrain_handshake(routing_table_l1, termination_signal_ptr);
+        // }
         coordinated_context_switch_finish_as_master(termination_signal_ptr);
     }
 }
@@ -2270,6 +2334,15 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             persistent_speedy_receiver_state_vc2);
 #endif
         while (continue_running_main_run_loop<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr, state_manager_l1)) {
+#if defined(ARCH_BLACKHOLE)
+            // [WAS_RETRAINED / FREEZE-PROBE] Gate FIRST, before any checkpoint: after N post-retrain
+            // iterations have run (was_retrained climbs 1..N at the bottom), freeze here so the
+            // resume-phase word / tx_count hold where the loop got to (completed all N, or stuck within them).
+            if (was_retrained > WAS_RETRAINED_FREEZE_AFTER_N_ITERS) {
+                return;
+            }
+            fabric_dbg_set_resume_phase(RESUME_PHASE_LOOP_TOP);
+#endif
             did_something = false;
 
             uint32_t tx_progress = 0;
@@ -2592,6 +2665,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
             }
 
+#if defined(ARCH_BLACKHOLE)
+            fabric_dbg_set_resume_phase(RESUME_PHASE_CTX_SWITCH);  // [FREEZE-PROBE] entering ctx-switch region
+#endif
             if constexpr (enable_context_switch) {
                 // shouldn't do noc counter sync since we are not incrementing them
                 if constexpr (IDLE_CONTEXT_SWITCHING) {
@@ -2623,6 +2699,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 }
             }
+#if defined(ARCH_BLACKHOLE)
+            fabric_dbg_set_resume_phase(RESUME_PHASE_LOOP_BOTTOM);  // [FREEZE-PROBE] iteration completed
+            // [WAS_RETRAINED] Advance the freeze counter only after a retrain has been seen (>= 1), so
+            // this never trips at startup. It climbs 1..N over the N allowed iterations; once it exceeds
+            // N (== N+1) the top-of-loop gate freezes on the next pass. Naturally capped: the gate
+            // returns before this increment once it's past N, so it never runs away.
+            if (was_retrained >= 1) {
+                was_retrained++;
+            }
+#endif
         }
 
         speedy_state_copy_out<super_speedy_mode, 0>(
@@ -2931,12 +3017,18 @@ __attribute__((optimize("Os"))) void teardown(
 }
 
 __attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode() {
+    // [PROBE 1 - PREINIT] Config registers BEFORE the init eth_enable_packet_mode() configures the queues.
+    // [TXRX MODE] probe disabled.
+    // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_PREINIT);
     eth_enable_packet_mode(receiver_txq_id);
     for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
         reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
         reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)[i] = 0;
     }
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+    // [PROBE 2 - INIT] Config after the init eth_enable_packet_mode() -- the golden baseline.
+    // [TXRX MODE] probe disabled.
+    // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_INIT);
 }
 __attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode_sender_side() {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
@@ -3003,6 +3095,11 @@ void kernel_main() {
 
     // Initialize fabric telemetry early to ensure valid values before router starts
     initialize_fabric_telemetry();
+
+    // [POST-RETRAIN HANDSHAKE] Zero the L1 retrain counter at startup so its absolute value is a meaningful
+    // "retrains so far" count (not reliant on TT_METAL_CLEAR_L1). No-op on ERISC1. Done before any traffic,
+    // so the router's first before/after bracket reads a known baseline.
+    fabric_reset_retrain_count();
 
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     asm volatile("nop");
@@ -3530,20 +3627,27 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
+        // [HANDSHAKE DEBUG] Role-specific init/boot markers (distinct codewords from the post-retrain
+        // markers) so a fresh-machine run confirms the handshake path + ring-buffer plumbing work -- for
+        // both sender and receiver roles -- even before any retrain is injected.
         if constexpr (is_handshake_sender) {
+            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_INIT_SENDER_ENTER);
             erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
                 routing_table_l1->my_mesh_id,
                 routing_table_l1->my_device_id,
                 termination_signal_ptr,
                 DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_INIT_SENDER_DONE);
         } else {
+            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_INIT_RECV_ENTER);
             erisc::datamover::handshake::fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
                 routing_table_l1->my_mesh_id,
                 routing_table_l1->my_device_id,
                 termination_signal_ptr,
                 DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_INIT_RECV_DONE);
         }
 
         // After handshake completes, extract neighbor info and populate telemetry

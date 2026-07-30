@@ -240,6 +240,30 @@
 #define MEM_ERISC_APP_SYNC_INFO_BASE (MEM_ERISC_APP_ROUTING_INFO_BASE - MEM_ERISC_SYNC_INFO_SIZE)
 #define MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE (MEM_ERISC_APP_SYNC_INFO_BASE - MEM_ERISC_FABRIC_ROUTER_RESERVED_SIZE)
 
+// ERISC debug slot (32B, 8 uint32 words) for the fabric-router recovery probes. Written by active
+// ERISC; read back live/post-mortem from L1. Carved just below the fabric router reserved region;
+// shrinks the app's usable L1 (MEM_ERISC_MAX_SIZE) by 32B and moves no existing region.
+//   word[0] (+0)  = RESUME PHASE code (eth_fw_api.h RESUME_PHASE_*)                        (ERISC0)
+//   word[1] (+4)  = count of successful packets sent by ERISC0 over the eth link (TX liveness)  (ERISC0)
+//   word[2] (+8)  = count of packets received off the eth link + delivered locally (RX liveness) (ERISC1)
+//   word[3] (+12) = flow-control COMPLETION credits RECEIVED by the sender (to_sender_remote_completion) (ERISC0)
+//   word[4] (+16) = completions SENT by receiver, sender-channel 0 (local_receiver_completion[0])        (ERISC1)
+//   word[5] (+20) = completions SENT by receiver, sender-channel 1 (local_receiver_completion[1])        (ERISC1)
+//   word[6] (+24) = receiver's local completion_counter (completions PROCESSED)                          (ERISC1)
+//   word[7]       = spare
+#define MEM_AERISC_RESUME_PHASE_SIZE 32
+#define MEM_AERISC_RESUME_PHASE_BASE (MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE - MEM_AERISC_RESUME_PHASE_SIZE)
+
+// ERISC retrain counter (PRODUCTION -- not gated on watcher/testing, unlike the debug slot above). One
+// 4-byte word holding the running count of spontaneous eth-link retrains ERISC0 has recovered from on
+// this core. recover_eth_link_if_down() increments it on each retrain up-edge; the fabric router brackets
+// its context-switch recovery with a before/after read of this word and runs the post-retrain handshake
+// when it advances. 4 bytes (not 1) so the reserved region stays word-aligned; the router only compares a
+// single-step delta, so counter wrap is irrelevant to correctness. Carved just below the debug slot;
+// shrinks the app's usable L1 (MEM_ERISC_MAX_SIZE) by a further 4B and moves no existing region.
+#define MEM_AERISC_RETRAIN_COUNT_SIZE 4
+#define MEM_AERISC_RETRAIN_COUNT_BASE (MEM_AERISC_RESUME_PHASE_BASE - MEM_AERISC_RETRAIN_COUNT_SIZE)
+
 #define MEM_AERISC_FABRIC_TELEMETRY_BASE (MEM_ERISC_APP_SYNC_INFO_BASE - MEM_AERISC_FABRIC_TELEMETRY_SIZE)
 
 #define MEM_AERISC_FABRIC_POSTCODES_SIZE 4
@@ -261,7 +285,9 @@
 #define MEM_AERISC_FABRIC_ROUTER_COMMAND_BASE (MEM_AERISC_ROUTING_TABLE_BASE + 16)
 
 // This is now the maximum size available for your application
-#define MEM_ERISC_MAX_SIZE MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE
+// (lowered by MEM_AERISC_RESUME_PHASE_SIZE for the resume-phase debug slot and
+//  MEM_AERISC_RETRAIN_COUNT_SIZE for the production retrain counter)
+#define MEM_ERISC_MAX_SIZE MEM_AERISC_RETRAIN_COUNT_BASE
 
 // Common Misc
 #define MEM_RETRAIN_COUNT_ADDR 0x7CE00
