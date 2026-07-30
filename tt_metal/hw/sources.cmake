@@ -1,4 +1,5 @@
 set(HW_JIT_API_HEADERS
+    inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
     inc/api/remote_circular_buffer.h
@@ -28,6 +29,7 @@ set(HW_JIT_API_HEADERS
     inc/api/tensor/shard_pages_address_iterator.h
     inc/api/tensor/pages_address_iterator.h
     inc/api/tensor/page.h
+    inc/api/scratchpad.h
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h
     inc/api/compute/atan2.h
@@ -123,6 +125,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/sentinel/sentinel_core.h
     inc/api/compute/sentinel/testing_spy.h
     inc/api/compute/softmax.h
+    inc/api/compute/src_order.h
     inc/api/compute/sub_int_sfpu.h
     inc/api/compute/tile_move_copy.h
     inc/api/compute/tilize.h
@@ -139,6 +142,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/circular_buffer.h
     inc/api/dataflow/dataflow_buffer.h
     inc/experimental/kernel_args.h
+    inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h

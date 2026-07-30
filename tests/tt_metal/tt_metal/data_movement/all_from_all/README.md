@@ -63,6 +63,8 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
    - 1x1 From 4x4: 1x1 master grid receiving from 4x4 subordinate grid
    - 2x2 From 2x2: 2x2 master grid receiving from 2x2 subordinate grid
 
+4. **Grid Sweep Packet Sizes**: Sweeps over packet sizes and all combinations of master and subordinate grid configurations (1x1, 2x2, 4x4, full compute grid). Master and subordinate grids are varied independently. Uses combined bandwidth mode to report aggregate bandwidth across all cores. The CSV report includes Master Grid Dimensions, Subordinate Grid Dimensions, and Number of Cores columns.
+
 ## Device 2.0 API Tests
 This test suite now includes tests using the new device 2.0 NOC API. These tests provide the same functionality as the original tests but use an updated API design:
 

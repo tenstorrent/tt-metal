@@ -13,7 +13,7 @@
 
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape.hpp>
 
@@ -22,7 +22,7 @@
 namespace tt::tt_metal::distributed {
 
 struct D2HStreamServiceDescriptor {
-    static constexpr uint32_t kVersion = 1;
+    static constexpr uint32_t kVersion = 2;
 
     tt::tt_metal::Shape global_shape;
     DataType global_dtype = DataType::INVALID;

@@ -211,8 +211,8 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
 )
 @pytest.mark.parametrize(
     "gamma_dtype",
-    (ttnn.bfloat16,),
-    ids=["BFLOAT16"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "in_dtype",
@@ -362,4 +362,87 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
         rtol=0.006,
         atol=0.018,
         frobenius_threshold=0.003,
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# FP32 coverage for the complete (non-distributed) interleaved LayerNorm op
+# Spans the full config matrix: {legacy, welford} x {fp32, bf16} input x {TILE, ROW_MAJOR} input
+# x {bf16, fp32} gamma/beta x {TILE, ROW_MAJOR} gamma/beta. FP32 requires fp32_dest_acc_en=True.
+# Welford requires TILE input (ROW_MAJOR input hangs for every dtype), so welford x rm_in is
+# skipped to record the limitation.
+# The gamma/beta layout axis matters because it selects the reader kernel (use_row_major_kernel):
+# ROW_MAJOR gamma/beta go through reader_unary_interleaved_ln_rm_gb.cpp, which reads them as
+# row-major sticks, while TILE gamma/beta are read whole-tile and are datum-size-agnostic.
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("gamma_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["gb_tile", "gb_rm"])
+@pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile_in", "rm_in"])
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b], ids=["fp32", "bf16", "bf8"])
+def test_layernorm_interleaved_all_config(device, dtype, use_welford, input_layout, gamma_dtype, gamma_layout):
+    if use_welford and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("Welford requires TILE input; ROW_MAJOR input hangs (dtype-independent limitation)")
+    if gamma_layout == ttnn.ROW_MAJOR_LAYOUT and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        # Pre-existing device hang, reproduces on unpatched main and unrelated to the reader fixes
+        # here: the rm_gb reader has no TILIZE_IN path, so it reads a ROW_MAJOR input as tiles and
+        # nothing ever fills cb_in_rm. Hangs for bf16 and fp32 input alike. See #49970.
+        pytest.skip("ROW_MAJOR input + ROW_MAJOR gamma/beta hangs the device (pre-existing, see #49970)")
+    if dtype == ttnn.bfloat8_b and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("BFLOAT8_B is TILE-only (shared exponent per 16-elem sub-block is undefined under ROW_MAJOR)")
+
+    torch.manual_seed(0)
+    M, K = 256, 1024
+    x = torch.rand((1, 1, M, K), dtype=torch.float32)
+    w = torch.rand((K,), dtype=torch.float32)
+    b = torch.rand((K,), dtype=torch.float32)
+    ref = torch.nn.functional.layer_norm(x, (K,), weight=w, bias=b, eps=1e-12)
+
+    xt = ttnn.from_torch(x, dtype=dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # ROW_MAJOR gamma/beta must be shaped [1, 1, K/TILE_WIDTH, TILE_WIDTH]; TILE takes [1, 1, 1, K]
+    tw = ttnn.TILE_SIZE
+    gb_shape = (1, 1, K // tw, tw) if gamma_layout == ttnn.ROW_MAJOR_LAYOUT else (1, 1, 1, K)
+    wt = ttnn.from_torch(w.reshape(gb_shape), dtype=gamma_dtype, layout=gamma_layout, device=device)
+    bt = ttnn.from_torch(b.reshape(gb_shape), dtype=gamma_dtype, layout=gamma_layout, device=device)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for FP32
+        packer_l1_acc=False,
+    )
+    cfg = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+
+    recip = None
+    if use_welford:
+        grid = device.compute_with_storage_grid_size()
+        crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        recip = ttnn.create_layer_norm_reciprocals(device, crs, K)
+
+    out = ttnn.layer_norm(
+        xt,
+        epsilon=1e-12,
+        weight=wt,
+        bias=bt,
+        program_config=cfg,
+        compute_kernel_config=compute_kernel_config,
+        recip_tensor=recip,
+    )
+    ot = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
+
+    if dtype == ttnn.bfloat8_b:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.02, 0.05, 0.012
+    elif dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.006, 0.019, 0.004
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.006, 0.012, 0.003
+
+    assert_numeric_metrics(
+        ref,
+        ot,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
     )

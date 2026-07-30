@@ -9,6 +9,9 @@ on CPU before TT conversion so inference has no LoRA-specific runtime cost.
 See ``experimental/models/Wan2_2_LoRA.md`` for the adapter-key formats
 detected by ``fuse_lora_state_dict`` and the supported namespaces.
 """
+
+from __future__ import annotations
+
 import hashlib
 import re
 from collections.abc import Sequence
@@ -377,6 +380,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
             subfolder=state.checkpoint.subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             is_fsdp=self.is_fsdp,
             get_torch_state_dict=_get_state_dict,
         )

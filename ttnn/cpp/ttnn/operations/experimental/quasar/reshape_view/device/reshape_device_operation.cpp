@@ -12,7 +12,19 @@ namespace ttnn::prim::qsr {
 ReshapeViewDeviceOperation::program_factory_t ReshapeViewDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
+        // Quasar cannot build the legacy DataMovementKernel the RM descriptor path emits
+        // (kernel.hpp:382), so route Quasar to the Metal-2 (ProgramSpec + QuasarDataMovementKernel)
+        // factory. WH/BH keep the legacy descriptor path unchanged.
+        if (tensor_args.input.device()->arch() == tt::ARCH::QUASAR) {
+            return ReshapeViewRMMetalV2ProgramFactory{};
+        }
         return ReshapeViewRMProgramFactory{};
+    }
+    // TILE layout: Quasar cannot build the legacy DataMovementKernel the tiled descriptor path emits
+    // (kernel.hpp:382), so route Quasar to the Metal-2 (ProgramSpec + QuasarDataMovementKernel) factory.
+    // WH/BH keep the legacy WorkloadDescriptor path unchanged.
+    if (tensor_args.input.device()->arch() == tt::ARCH::QUASAR) {
+        return ReshapeViewTiledMetalV2ProgramFactory{};
     }
     return ReshapeViewTiledProgramFactory{};
 }
@@ -30,7 +42,7 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
 
 ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         operation_attributes.logical_output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             tensor_args.input.dtype(),
@@ -40,7 +52,7 @@ ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::comp
             operation_attributes.padded_output_shape));
 }
 
-tt::tt_metal::Tensor ReshapeViewDeviceOperation::create_output_tensors(
+ttnn::Tensor ReshapeViewDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
@@ -62,7 +74,7 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-tt::tt_metal::Tensor reshape_view(
+ttnn::Tensor reshape_view(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,

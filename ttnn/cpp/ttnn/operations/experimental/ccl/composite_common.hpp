@@ -51,7 +51,8 @@ ttnn::Tensor composite_reduce_scatter(
 ttnn::Tensor composite_all_gather(
     ttnn::Tensor input_tensor,
     int32_t dim,
-    uint32_t num_links,
+    std::optional<uint32_t> num_links,
+    std::optional<ttnn::ccl::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
@@ -60,7 +61,8 @@ ttnn::Tensor composite_all_gather(
 std::vector<ttnn::Tensor> composite_all_gather(
     const std::vector<ttnn::Tensor>& input_tensors,
     int32_t dim,
-    uint32_t num_links,
+    std::optional<uint32_t> num_links,
+    std::optional<ttnn::ccl::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,

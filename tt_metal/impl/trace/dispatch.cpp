@@ -85,8 +85,6 @@ void issue_trace_commands(
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     CoreCoord dispatch_core) {
-    TT_FATAL(mesh_device->arch() != tt::ARCH::QUASAR, "Trace commands are currently not supported on Quasar");
-
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, dispatch_md.cmd_sequence_sizeB);
@@ -116,7 +114,8 @@ void issue_trace_commands(
                 dev_msgs::RUN_MSG_REPLAY_TRACE,
                 dispatch_core.x,
                 dispatch_core.y,
-                MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index)),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index) +
+                    MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id)),
             MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
@@ -145,13 +144,15 @@ void issue_trace_commands(
                 0,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
                 expected_num_workers,
+                cq_id,
                 1);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
             MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
-            expected_num_workers);
+            expected_num_workers,
+            cq_id);
     }
 
     uint32_t page_size_log2 = __builtin_ctz(dispatch_md.trace_buffer_page_size);

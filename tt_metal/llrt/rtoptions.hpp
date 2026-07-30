@@ -80,7 +80,7 @@ extern const char* RunTimeDebugClassNames[RunTimeDebugClassCount];
 // TargetSelection stores the targets for a given debug feature. I.e. for which chips, cores, harts
 // to enable the feature.
 struct TargetSelection {
-    std::map<CoreType, std::vector<CoreCoord>> cores;
+    std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores;
     std::map<CoreType, int> all_cores;
     bool enabled{};
     std::vector<int> chip_ids;
@@ -214,6 +214,7 @@ class RunTimeOptions {
     bool profiler_trace_tracking = false;
     bool profiler_cpp_post_process = false;
     bool profiler_sum = false;
+    bool profiler_accumulate = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
@@ -254,6 +255,9 @@ class RunTimeOptions {
 
     tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
 
+    // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
+    bool use_quasar_tensix_dispatch_cores = false;
+
     std::filesystem::path simulator_path = "";
 
     bool fast_dispatch = true;
@@ -292,8 +296,11 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
 
-    // Feature flag to register Blackhole DRAM programmable cores in the HAL on silicon.
-    bool enable_blackhole_dram_programmable_cores = false;
+    // Tri-state override for Blackhole DRAM programmable cores in the HAL:
+    //   nullopt = auto-detect (firmware + topology), the default
+    //   true    = force enable (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1)
+    //   false   = force disable (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=0)
+    std::optional<bool> blackhole_dram_programmable_cores_override;
 
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
@@ -349,6 +356,7 @@ class RunTimeOptions {
     bool force_jit_compile = false;
 
     // Store command queues in device DRAM
+    bool dram_backed_cq_env_var_set = false;
     bool dram_backed_cq = false;
 
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
@@ -468,10 +476,10 @@ public:
     bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
     bool watcher_cb_sanitize_disabled() const { return watcher_feature_disabled(watcher_cb_sanitize_str); }
 
-    // TODO: Remove these Watcher NOC sanitize functions once NOC sanitization is supported on Quasar in fast dispatch
-    // (#45878)
     bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
-    void disable_watcher_noc_sanitize() { watcher_disabled_features.insert(watcher_noc_sanitize_str); }
+
+    void disable_watcher_assert() { watcher_disabled_features.insert(watcher_assert_str); }
+    void enable_watcher_assert() { watcher_disabled_features.erase(watcher_assert_str); }
 
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
@@ -507,10 +515,10 @@ public:
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
     void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) { feature_targets[feature].enabled = enabled; }
     // Note: dprint cores are logical
-    const std::map<CoreType, std::vector<CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
+    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].cores;
     }
-    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
+    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
         feature_targets[feature].cores = std::move(cores);
     }
     // An alternative to setting cores by range, a flag to enable all.
@@ -521,8 +529,8 @@ public:
         return feature_targets[feature].all_cores.at(core_type);
     }
     // Note: core range is inclusive
-    void set_feature_core_range(RunTimeDebugFeatures feature, CoreCoord start, CoreCoord end, CoreType core_type) {
-        feature_targets[feature].cores[core_type] = std::vector<CoreCoord>();
+    void set_feature_core_range(RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
+        feature_targets[feature].cores[core_type] = std::vector<tt::tt_metal::CoreCoord>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {
                 feature_targets[feature].cores[core_type].push_back({x, y});
@@ -625,6 +633,7 @@ public:
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
     bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
     bool get_profiler_sum() const { return profiler_sum; }
+    bool get_profiler_accumulate() const { return profiler_accumulate; }
     std::optional<uint32_t> get_profiler_program_support_count() const { return profiler_program_support_count; }
     void set_profiler_program_support_count(uint32_t profiler_program_support_count) {
         this->profiler_program_support_count = profiler_program_support_count;
@@ -699,6 +708,9 @@ public:
 
     void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
 
+    // If this fallback is removed, should also remove dispatch_cores entry from core descriptor YAML files.
+    bool get_use_quasar_tensix_dispatch_cores() const { return use_quasar_tensix_dispatch_cores; }
+
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
     uint32_t get_arc_debug_buffer_size() const { return arc_debug_buffer_size; }
@@ -717,7 +729,9 @@ public:
 
     void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
 
-    bool get_enable_blackhole_dram_programmable_cores() const { return enable_blackhole_dram_programmable_cores; }
+    std::optional<bool> get_blackhole_dram_programmable_cores_override() const {
+        return blackhole_dram_programmable_cores_override;
+    }
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
@@ -844,6 +858,7 @@ public:
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
+    bool is_dram_backed_cq_specified() const { return dram_backed_cq_env_var_set; }
     bool get_dram_backed_cq() const { return dram_backed_cq; }
     void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
 

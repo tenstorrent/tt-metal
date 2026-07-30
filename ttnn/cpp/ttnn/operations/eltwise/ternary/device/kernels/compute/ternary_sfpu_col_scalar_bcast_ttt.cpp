@@ -9,6 +9,7 @@
 #include "api/compute/eltwise_unary/lerp.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI void process_tile(
     uint32_t predicate_cb_id,
@@ -20,47 +21,47 @@ ALWI void process_tile(
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
 
-    CircularBuffer predicate_cb(predicate_cb_id);
-    CircularBuffer true_cb(true_cb_id);
-    CircularBuffer false_cb(false_cb_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer predicate_dfb(predicate_cb_id);
+    DataflowBuffer true_dfb(true_cb_id);
+    DataflowBuffer false_dfb(false_cb_id);
+    DataflowBuffer dfb_out(cb_out_id);
 
     // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
 #if BCAST_A
-    predicate_cb.wait_front(num_tiles_per_cycle);  // predicate_cb is broadcast
+    predicate_dfb.wait_front(num_tiles_per_cycle);  // predicate_dfb is broadcast
 #endif
 #if BCAST_B
-    true_cb.wait_front(num_tiles_per_cycle);  // true_cb is broadcast
+    true_dfb.wait_front(num_tiles_per_cycle);  // true_dfb is broadcast
 #endif
 #if BCAST_C
-    false_cb.wait_front(num_tiles_per_cycle);  // false_cb is broadcast
+    false_dfb.wait_front(num_tiles_per_cycle);  // false_dfb is broadcast
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // Wait for non-broadcast CBs inside loop
 #if !BCAST_A
-        predicate_cb.wait_front(num_tiles_per_cycle);
+        predicate_dfb.wait_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_B
-        true_cb.wait_front(num_tiles_per_cycle);
+        true_dfb.wait_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_C
-        false_cb.wait_front(num_tiles_per_cycle);
+        false_dfb.wait_front(num_tiles_per_cycle);
 #endif
 
-        cb_out.reserve_back(num_tiles_per_cycle);
+        dfb_out.reserve_back(num_tiles_per_cycle);
 
         tile_regs_acquire();
 
         // Copy all 3 inputs to destination registers
-        copy_tile_init(predicate_cb.get_cb_id());
-        copy_tile(predicate_cb.get_cb_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
+        copy_tile_init(predicate_dfb.get_id());
+        copy_tile(predicate_dfb.get_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
 
-        copy_tile_init(true_cb.get_cb_id());
-        copy_tile(true_cb.get_cb_id(), 0, 1);  // true to reg 1, 4, 7, ...
+        copy_tile_init(true_dfb.get_id());
+        copy_tile(true_dfb.get_id(), 0, 1);  // true to reg 1, 4, 7, ...
 
-        copy_tile_init(false_cb.get_cb_id());
-        copy_tile(false_cb.get_cb_id(), 0, 2);  // false to reg 2, 5, 8, ...
+        copy_tile_init(false_dfb.get_id());
+        copy_tile(false_dfb.get_id(), 0, 2);  // false to reg 2, 5, 8, ...
 
         // Perform the ternary operation
         TERNARY_SFPU_OP_INIT();
@@ -70,32 +71,32 @@ ALWI void process_tile(
 
         tile_regs_wait();
 
-        pack_tile(0, cb_out.get_cb_id());  // result is stored in predicate register
+        pack_tile(0, dfb_out.get_id());  // result is stored in predicate register
         tile_regs_release();
 
-        cb_out.push_back(num_tiles_per_cycle);
+        dfb_out.push_back(num_tiles_per_cycle);
 
         // Pop non-broadcast CBs inside loop
 #if !BCAST_A
-        predicate_cb.pop_front(num_tiles_per_cycle);
+        predicate_dfb.pop_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_B
-        true_cb.pop_front(num_tiles_per_cycle);
+        true_dfb.pop_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_C
-        false_cb.pop_front(num_tiles_per_cycle);
+        false_dfb.pop_front(num_tiles_per_cycle);
 #endif
     }
 
     // Pop broadcast CBs outside loop
 #if BCAST_A
-    predicate_cb.pop_front(num_tiles_per_cycle);
+    predicate_dfb.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_B
-    true_cb.pop_front(num_tiles_per_cycle);
+    true_dfb.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_C
-    false_cb.pop_front(num_tiles_per_cycle);
+    false_dfb.pop_front(num_tiles_per_cycle);
 #endif
 }
 

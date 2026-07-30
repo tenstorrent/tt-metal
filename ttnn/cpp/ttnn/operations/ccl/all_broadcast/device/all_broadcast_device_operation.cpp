@@ -36,15 +36,15 @@ void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.memory_config().memory_layout());
 }
 
-std::vector<TensorSpec> AllBroadcastDeviceOperation::compute_output_specs(
+std::vector<tt::tt_metal::TensorSpec> AllBroadcastDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const Tensor& input) {
     const auto& input_tensor = input;
     const auto& shape = input_tensor.logical_shape();
     const uint32_t ring_size = operation_attributes.ring_size;
-    std::vector<TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(ring_size);
     for (uint32_t i = 0; i < ring_size; ++i) {
-        output_specs.push_back(TensorSpec(
+        output_specs.push_back(tt::tt_metal::TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(),

@@ -10,7 +10,7 @@
 #include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"
 #include "program/dispatch.hpp"
-#include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -27,7 +27,7 @@ namespace tt::tt_metal {
 
 HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC /*noc_index*/) :
     id_(id), manager_(device->sysmem_manager()), device_(device) {
-    ZoneScopedN("CommandQueue_constructor");
+    TTZoneScopedDN(DISPATCH, "CommandQueue_constructor");
 
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
@@ -58,7 +58,7 @@ SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
 void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
     uint32_t num_dispatch_sems,
     const vector_aligned<uint32_t>& noc_mcast_unicast_data,
-    tt::stl::Span<const uint32_t> workers_per_sub_device) {
+    ttsl::Span<const uint32_t> workers_per_sub_device) {
     program_dispatch::set_num_worker_sems_on_dispatch(
         this->manager_, id_, num_dispatch_sems, workers_per_sub_device);
     program_dispatch::set_go_signal_noc_data_on_dispatch(noc_mcast_unicast_data, this->manager_, id_);
@@ -71,7 +71,7 @@ const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
 }
 
 void HWCommandQueue::terminate() {
-    ZoneScopedN("HWCommandQueue_terminate");
+    TTZoneScopedDN(DISPATCH, "HWCommandQueue_terminate");
     TT_FATAL(!this->manager_.get_bypass_mode(), "Terminate cannot be used with tracing");
     log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE

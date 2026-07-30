@@ -74,7 +74,7 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || inputs.enable-tracy || false }}

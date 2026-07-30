@@ -125,7 +125,7 @@ struct Matmul {
             constexpr bool read_transposed = transpose && true;
             constexpr bool fuse_activation = CTArgs::fuse_sigmoid || CTArgs::fuse_silu;
             if constexpr (!skip_reconfig) {
-                reconfig_data_format<false, true>(args.in1, args.in0);
+                reconfig_data_format<SrcOrder::Reverse, true>(args.in0, args.in1);
                 pack_reconfig_data_format<true>(args.out);
             }
             custom_mm_block_init_short<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);

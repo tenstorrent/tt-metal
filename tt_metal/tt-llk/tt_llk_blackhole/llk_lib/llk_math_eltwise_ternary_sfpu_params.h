@@ -24,5 +24,5 @@ inline void _llk_math_eltwise_ternary_sfpu_params_(
     _llk_math_eltwise_sfpu_apply_vector_mode_(
         std::forward<Callable>(sfpu_func), vector_mode, dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<Args>(args)...);
 
-    _llk_math_eltwise_sfpu_done_with_addrmod_reset_(); // Finalize
+    _llk_math_eltwise_sfpu_done_(); // Finalize
 }

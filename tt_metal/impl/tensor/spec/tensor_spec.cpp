@@ -4,7 +4,11 @@
 
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
+
+#include "layout/page_config_impl.hpp"
+#include "layout/tensor_layout_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -20,11 +24,11 @@ std::optional<std::string> get_shape_fits_shard_grid_error(
 
     // Sharding checks use physical shape and physical shard shape
     // TODO: Review and port to use logical shapes
-    const auto physical_shape = tensor_layout.compute_physical_shape(logical_shape);
+    const auto physical_shape = tensor_layout.impl().compute_physical_shape(logical_shape);
     const auto physical_height = physical_shape.height();
     const auto physical_width = physical_shape.width();
 
-    const auto physical_shard_shape = tensor_layout.get_physical_shard_shape();
+    const auto physical_shard_shape = tensor_layout.impl().get_physical_shard_shape();
     const auto physical_shard_height = physical_shard_shape.height();
     const auto physical_shard_width = physical_shard_shape.width();
 
@@ -146,17 +150,35 @@ bool can_shape_fits_shard_grid(const TensorLayout& tensor_layout, const Shape& l
 TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_layout) :
     logical_shape_(std::move(logical_shape)),
     tensor_layout_(std::move(tensor_layout)),
-    cached_padded_shape_(tensor_layout_.compute_padded_shape(logical_shape_)),
-    cached_logical_2d_shape_(tensor_layout_.compute_logical_2d_shape(logical_shape_)),
-    cached_physical_shape_(tensor_layout_.compute_physical_shape(logical_shape_)) {
+    cached_padded_shape_(tensor_layout_.impl().compute_padded_shape(logical_shape_)),
+    cached_logical_2d_shape_(tensor_layout_.impl().compute_logical_2d_shape(logical_shape_)),
+    cached_physical_shape_(tensor_layout_.impl().compute_physical_shape(logical_shape_)) {
     auto shard_grid_fit_error = CMAKE_UNIQUE_NAMESPACE::get_shape_fits_shard_grid_error(tensor_layout_, logical_shape_);
     TT_FATAL(!shard_grid_fit_error.has_value(), "{}", shard_grid_fit_error);
     CMAKE_UNIQUE_NAMESPACE::validate_dtype_and_layout(data_type(), layout());
     populate_sharding_specs();
 }
 
+Strides TensorSpec::compute_strides() const { return tensor_layout_.impl().compute_strides(logical_shape_); }
+
+BufferShardingArgs TensorSpec::compute_buffer_sharding_args() const {
+    return tensor_layout_.impl().compute_buffer_sharding_args(logical_shape_);
+}
+
+size_t TensorSpec::compute_packed_buffer_size_bytes() const {
+    return tensor_layout_.impl().compute_packed_buffer_size_bytes(logical_shape_);
+}
+
+size_t TensorSpec::compute_page_size_bytes() const {
+    return tensor_layout_.impl().compute_page_size_bytes(logical_shape_);
+}
+
+size_t TensorSpec::compute_consumed_memory_bytes_per_bank(size_t page_alignment, size_t num_banks) const {
+    return tensor_layout_.impl().compute_consumed_memory_bytes_per_bank(logical_shape_, page_alignment, num_banks);
+}
+
 TensorSpec TensorSpec::sharded_across_dims(
-    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    ttsl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
     Shape shard_shape = padded_shape();
     for (auto dim : dims) {
         shard_shape[dim] = 1;
@@ -166,7 +188,7 @@ TensorSpec TensorSpec::sharded_across_dims(
 }
 
 TensorSpec TensorSpec::sharded_across_dims_except(
-    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    ttsl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
     const auto& padded_shape = this->padded_shape();
     Shape shard_shape = Shape().to_rank(padded_shape.rank());
     for (auto dim : dims) {
@@ -213,7 +235,7 @@ TensorSpec TensorSpec::block_sharded(CoreRange grid, ShardOrientation orientatio
 TensorSpec TensorSpec::sharded(NdShardSpec nd_shard_spec, ShardShapeAlignment shard_alignment) const {
     if (shard_alignment != ShardShapeAlignment::NONE) {
         auto alignment = shard_alignment == ShardShapeAlignment::REQUIRED
-                             ? page_config().get_required_shard_shape_alignment()
+                             ? get_required_shard_shape_alignment(page_config())
                              : page_config().get_recommended_shard_shape_alignment(data_type());
         auto& shard_shape = nd_shard_spec.shard_shape;
         for (int dim = 1; dim <= alignment.size(); dim++) {
@@ -239,10 +261,18 @@ TensorSpec TensorSpec::sharded(
 void TensorSpec::populate_sharding_specs() {
     if (memory_config().created_with_nd_shard_spec()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
-            tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
+            tensor_layout_ = TensorLayout(
+                tensor_layout_.get_data_type(),
+                tensor_layout_.get_page_config(),
+                *upd_mem_config,
+                tensor_layout_.get_alignment());
         }
     } else if (memory_config().shard_spec()) {
-        tensor_layout_ = tensor_layout_.with_memory_config(populate_nd_shard_spec_from_legacy());
+        tensor_layout_ = TensorLayout(
+            tensor_layout_.get_data_type(),
+            tensor_layout_.get_page_config(),
+            populate_nd_shard_spec_from_legacy(),
+            tensor_layout_.get_alignment());
     }
 }
 

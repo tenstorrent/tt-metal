@@ -155,7 +155,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   # Centralized logic to determine what should run
   determine-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run-sanity: ${{ steps.logic.outputs.run-sanity }}
       run-unit: ${{ steps.logic.outputs.run-unit }}
@@ -245,7 +245,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
-      build-wheel: true
+      build-inplace-wheel: true
       build-umd-tests: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
   galaxy-sanity:

@@ -745,6 +745,37 @@ def create_tt_model(
             True,  # use_prefix_caching
             0.5,  # prefix_cached_ratio
         ),
+        (  # seqlen-sweep - Sweeps all powers-of-two seqlens up to model's max (128k), one prefill+decode per batch
+            [
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_1k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_2k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_128k.json",
+            ],  # input_prompts (list of files, one per sweep step)
+            True,  # instruct mode
+            8,  # repeat_batches (one per seqlen step; adjusted dynamically by sweep logic)
+            128 * 1024,  # max_seq_len (model maximum; filters out files that exceed this)
+            1,  # batch_size
+            32,  # max_generated_tokens (minimal decode to verify prefill succeeds at each length)
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # token_accuracy
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
+        ),
     ],
     ids=[
         "batch-32",  # throughput
@@ -768,6 +799,7 @@ def create_tt_model(
         "pcc-80L",  # pcc check for 80L + teacher forced
         "batch-1-prefix-caching-perf",  # 1 user, prefix caching (performance)
         "batch-1-prefix-caching-pcc",  # 1 user, prefix caching with PCC (correctness)
+        "seqlen-sweep",  # Sweep prefill across all powers-of-two seqlens up to model's max (128k)
     ],
 )
 @pytest.mark.parametrize(
@@ -880,10 +912,13 @@ def test_demo_text(
     if token_accuracy and batch_size != 1:
         raise ValueError("Token accuracy mode only supports batch_size=1")
 
+    test_id = request.node.callspec.id
+    is_seqlen_sweep = "seqlen-sweep" in test_id
+
     enable_trace = True  # Use tracing for better perf
     if token_accuracy:
         enable_trace = False  # Teacher forcing uses fresh host tokens each iteration.
-    prefill_enable_trace = True
+    prefill_enable_trace = not is_seqlen_sweep  # disable only for sweep to avoid 80MB trace budget
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
     input_lengths = (
@@ -925,11 +960,22 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    input_prompts, all_prompts = load_inputs(
-        input_prompts,
-        input_lengths,
-        instruct,
-    )
+    sweep_prompt_files = None
+    if is_seqlen_sweep:
+        # In seqlen-sweep mode, input_prompts is a list of file paths (one per sweep step).
+        # Load the first file now for initial setup; per-step loading happens later.
+        sweep_prompt_files = input_prompts
+        input_prompts, all_prompts = load_inputs(
+            sweep_prompt_files[0],
+            input_lengths,
+            instruct,
+        )
+    else:
+        input_prompts, all_prompts = load_inputs(
+            input_prompts,
+            input_lengths,
+            instruct,
+        )
     profiler.end("loading_inputs")
 
     # Load expected outputs for comparison
@@ -972,10 +1018,30 @@ def test_demo_text(
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        repeat_batch_prompts.append(
-            [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
+    if is_seqlen_sweep:
+        # Seqlen sweep: load each prompt file individually, filtering out lengths that exceed the model's max.
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> stem "input_data_long_16k" -> "16k" -> 16384).
+        filtered_files = []
+        for f in sweep_prompt_files:
+            label = Path(f).stem.split("_")[-1]  # e.g. "16k"
+            if label.endswith("k") and label[:-1].isdigit():
+                min_seqlen = int(label[:-1]) * 1024
+                if min_seqlen <= max_seq_len:
+                    filtered_files.append(f)
+        if not filtered_files:
+            pytest.skip(f"No sweep prompt files fit within model's max context length ({max_seq_len})")
+        repeat_batches = len(filtered_files)
+        logger.info(
+            f"Seqlen sweep: running {repeat_batches} steps with files: {[Path(f).name for f in filtered_files]}"
         )
+        for f in filtered_files:
+            batch_prompts, _ = load_inputs(f, input_lengths, instruct)
+            repeat_batch_prompts.append(batch_prompts[:batch_size])
+    else:
+        for i in range(repeat_batches):
+            repeat_batch_prompts.append(
+                [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
+            )
 
     model_args, model, page_table, tt_kv_cache = create_tt_model(
         mesh_device,

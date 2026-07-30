@@ -21,7 +21,7 @@ ttnn::Tensor point_to_point_wrapper(
     const MeshCoordinate& receiver_coord,
     const std::optional<ttnn::Tensor>& output_tensor,
     const std::optional<ttnn::Tensor>& intermediate_tensor,
-    const ccl::Topology topology) {
+    const ::ttnn::ccl::Topology topology) {
     return ttnn::point_to_point(
         input_tensor, receiver_coord, sender_coord, topology, output_tensor, intermediate_tensor);
 }
@@ -31,7 +31,10 @@ ttnn::Tensor point_to_point_wrapper(
 void bind_point_to_point(nb::module_& mod) {
     const auto* doc =
         R"doc(
-            Point-to-point send and receive operation. Send a tensor from one device to another.
+            Point-to-point send and receive operation. Send a tensor shard from one device to
+            another over the fabric. If sender_coord == receiver_coord (same device), it performs a
+            local on-device copy of the shard into output_tensor (no fabric); if output_tensor
+            aliases input_tensor this is a no-op.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
@@ -46,20 +49,21 @@ void bind_point_to_point(nb::module_& mod) {
            Returns:
                ttnn.Tensor: the output tensor, with transferred shard on receiving device.
 
-            Example:
+            Supported dtypes and layouts:
 
-                >>> input_tensor_torch = torch.zeros((2,1,1,16), dtype=dtype)
-                >>> input_tensor_torch[0, :, :, :] = data # arbitrary data in one shard
+                .. list-table::
+                    :header-rows: 1
 
-                >>> input_tensor = ttnn.from_torch(
-                >>>     input_tensor_torch, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
-                >>> )
-                >>> sender_coord, receiver_coord = ttnn.MeshCoordinate((0,0)), ttnn.MeshCoordinate((0,1))
-                >>> sent_tensor = ttnn.point_to_point(
-                        input_tensor,
-                        sender_coord,
-                        receiver_coord,
-                        topology=ttnn.Topology.Linear)
+                    * - Dtypes
+                      - Layouts
+                    * - BFLOAT16, BFLOAT8_B, FLOAT32
+                      - TILE, ROW_MAJOR
+
+                point_to_point does not restrict the input dtype (BFLOAT16 uses a power-of-two fabric packet size). The output layout must match the input layout, and the page size must be 16-byte aligned. The output has the same tensor spec as the input, with the sender's shard delivered to the receiver device. If ``sender_coord == receiver_coord`` the transfer degenerates to a local on-device copy (no fabric).
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded: not supported
             )doc";
 
     ttnn::bind_function<"point_to_point">(
@@ -72,7 +76,7 @@ void bind_point_to_point(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("output_tensor") = nb::none(),
         nb::arg("intermediate_tensor") = nb::none(),
-        nb::arg("topology").noconvert() = ccl::Topology::Linear);
+        nb::arg("topology").noconvert() = ::ttnn::ccl::Topology::Linear);
     mod.def(
         "p2p_compute_intermediate_tensor_spec",
         operations::point_to_point::p2p_compute_intermediate_tensor_spec,

@@ -24,6 +24,6 @@ using operation_attributes_t = KSplitGramMatmulParams;
 using tensor_args_t = KSplitGramMatmulInputs;
 
 using tensor_return_value_t = ttnn::Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 }  // namespace ttml::metal::ops::k_split_gram_matmul::device

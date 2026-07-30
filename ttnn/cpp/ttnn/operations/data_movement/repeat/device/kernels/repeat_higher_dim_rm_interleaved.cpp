@@ -9,7 +9,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -49,8 +49,8 @@ void kernel_main() {
     const auto d = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    CircularBuffer cb0(cb_id_in0);
-    CircularBuffer cb1(cb_id_in1);
+    DataflowBuffer dfb0(cb_id_in0);
+    DataflowBuffer dfb1(cb_id_in1);
 
     // Alignment pre-calculations.
     constexpr uint64_t r_mask_to_use = src_args.is_dram ? MASK_64 : MASK_16;
@@ -60,12 +60,12 @@ void kernel_main() {
     const uint64_t w_mask_to_use = MASK_16;
     const uint64_t w_offset_to_use = OFFSET_16;
 
-    cb0.reserve_back(1);
-    cb1.reserve_back(1);
-    uint32_t input_buffer = cb0.get_write_ptr();
-    uint32_t alignment_buffer = cb1.get_write_ptr();
-    cb1.push_back(1);
-    cb0.push_back(1);
+    dfb0.reserve_back(1);
+    dfb1.reserve_back(1);
+    uint32_t input_buffer = dfb0.get_write_ptr();
+    uint32_t alignment_buffer = dfb1.get_write_ptr();
+    dfb1.push_back(1);
+    dfb0.push_back(1);
 
     alignment_buffer = align_address<w_alignment_requirement>(alignment_buffer, w_mask_to_use);  // aligned for writes
     input_buffer = align_address<r_alignment_requirement>(input_buffer, r_mask_to_use);          // aligned for reads
