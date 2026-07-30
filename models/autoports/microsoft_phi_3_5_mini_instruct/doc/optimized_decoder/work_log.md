@@ -71,3 +71,5 @@ Date: 2026-07-30 UTC
   47.879/47.992 us and zero host ops; `tracy/prefill_b{1,32}_bfp4_final.csv`
   proves explicit block8 down at 136.433 us (32 cores) / 768.119 us (64 cores)
   and zero host ops.
+- Final clean-pass implementation/evidence checkpoint on branch
+  `skillexp-cell/fuse-noadvise/phi`: `4f659ed8531`. No push was performed.
