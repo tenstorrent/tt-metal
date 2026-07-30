@@ -174,8 +174,8 @@ aggregated results in context:
 
    | What you need | Tool | Arguments |
    | --- | --- | --- |
-   | Runs of one workflow | `actions_list` | `method: "list_workflow_runs"`, `owner`, `repo`, `resource_id: "<workflow-file>.yaml"`, `workflow_runs_filter: {status: "completed", branch: "main"}`, `per_page` |
-   | Jobs of one run | `actions_list` | `method: "list_workflow_jobs"`, `owner`, `repo`, `resource_id: "<run-id>"`, `workflow_jobs_filter: {filter: "latest"}` |
+   | Runs of one workflow | `actions_list` | `method: "list_workflow_runs"`, `owner`, `repo`, `resource_id: "<workflow-file>.yaml"`, `workflow_runs_filter: {status: "completed", branch: "main"}`, `per_page: 5` |
+   | Jobs of one run | `actions_list` | `method: "list_workflow_jobs"`, `owner`, `repo`, `resource_id: "<run-id>"`, `workflow_jobs_filter: {filter: "latest"}`, `per_page: 10` |
    | Run / job metadata | `actions_get` | `method: "get_workflow_run"` (or `"get_workflow_job"`), `owner`, `repo`, `resource_id: "<run-id>"` (or `"<job-id>"`) |
    | **Actual log text** | `get_job_logs` | `owner`, `repo`, `job_id: <job-id>`, `return_content: true`, `tail_lines: 5000` |
 
@@ -185,6 +185,15 @@ aggregated results in context:
    `get_workflow_run_logs_url` / `download_workflow_run_artifact`. Nothing else is valid. For
    `owner` and `repo`, split `${{ github.repository }}` on `/`. Always scope `get_job_logs` **per
    `job_id`** so you control how many bytes arrive per call.
+
+   **Always pass `per_page` explicitly on `actions_list` — do not rely on its default.** A live
+   validation run (<https://github.com/tenstorrent/tt-metal/actions/runs/30584075489>) showed
+   the un-paged response routinely exceeds the MCP gateway's inline size limit, which silently
+   offloads it to a `payloadPath` on disk and forces an extra round trip (a one-off script to
+   read that file back) on every single `list_workflow_runs` / `list_workflow_jobs` call. `5` runs
+   and `10` jobs are both plenty to find a `"completed"` run on `main` or a named job like
+   `asan-build` in practice; if the job you need isn't on the first page, call again with `page: 2`
+   rather than removing `per_page` — a few small extra calls are cheaper than one oversized one.
 
    Three `get_job_logs` behaviours to plan around rather than discover the hard way:
    - **`return_content: true` is mandatory.** Omit it and you get a `logs_url` instead of text —
