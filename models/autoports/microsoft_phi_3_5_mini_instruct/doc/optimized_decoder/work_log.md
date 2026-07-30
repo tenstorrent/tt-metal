@@ -123,6 +123,7 @@
 - `tt-smi` was unavailable. Hardware commands were timeout-bounded and all
   device-close logs completed.
 - Stage implementation/evidence commit:
-  `13eebb362f1c02b5ba9b8a5a45769c04ba4d4d3a`. The follow-up checkpoint adds
-  this SHA log plus the two required large reproducibility artifacts. No push
-  is performed.
+  `13eebb362f1c02b5ba9b8a5a45769c04ba4d4d3a`.
+- Large reproducibility-artifact commit:
+  `d0e6957b466908412c311f185fd8649127312b04`.
+- No push is performed.
