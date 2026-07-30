@@ -16,9 +16,14 @@ The 2D mesh placement was covered by a single program, and Ns>1 by a single conf
 gaps and adds the program-cache DISCRIMINATION cases the main suite lacks (it only ever replays the SAME
 program twice, which cannot catch cross-serving between distinct entries).
 
-Shapes/configs below are the ones the ground-truth sweep showed select each path. Each test asserts the path
-it intends to cover is really taken, so it cannot silently rot into another duplicate chain test.
+Shapes/configs below are the ones the ground-truth sweep showed select each path. Because a shape only covers
+a path as long as the GATES keep choosing it, `test_audit_path_coverage_guard` at the bottom asserts that the
+intended path is still the one actually taken -- otherwise a future gate change could quietly move these shapes
+back onto the chain and this whole file would decay into more duplicate chain tests while still passing.
 """
+import os
+import re
+
 import torch
 
 import pytest
@@ -225,3 +230,62 @@ def test_audit_cache_fused_unfused_chunked_interleaved(device):
         outs = ttnn.experimental.regime_a_matmul_split(a0, a1, 2, -1)
         cat = torch.cat([ttnn.to_torch(ttnn.from_device(o))[0, 0] for o in outs], dim=-1)
         assert_with_pcc(base, cat.float(), PCC)
+
+
+# ---------------------------------------------------------------------------------------------------
+# 5. COVERAGE GUARD. Everything above only covers what it claims while the gates keep selecting those paths
+#    for those shapes. This asserts that directly by reading the factory's OWN log (ground truth -- there is
+#    no Python API for the picked config, and the host-side mirror is not validated against
+#    auto_select_config). The `device` fixture is FUNCTION-scoped, so this test gets a fresh device and hence a
+#    fresh program cache: every case below is a cache miss and therefore logs exactly once. capfd captures the
+#    C++ logger at fd level. If a gate change moves these shapes, this fails loudly and says the audit needs
+#    new shapes, rather than the rest of the file silently decaying into duplicate chain tests.
+# ---------------------------------------------------------------------------------------------------
+_LOG_RE = re.compile(
+    r"regime_a_cfg M=(\d+) K=(\d+) N=(\d+) pick=\(([\d,]+)\) cores=\d+ reduction=(\S+) placement=(\S+)"
+)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
+def test_audit_path_coverage_guard(device, capfd):
+    os.environ["TT_REGIME_A_LOG_CFG"] = "1"  # observability only; read at program-build time
+    try:
+        for _, M, K, N, cfg in _RSCATTER:
+            _mm(device, M, K, N, cfg)
+        for _, M, K, N in _MESH:
+            _mm(device, M, K, N, None)
+        out = capfd.readouterr().out
+    finally:
+        os.environ.pop("TT_REGIME_A_LOG_CFG", None)
+
+    found = {}
+    for m in _LOG_RE.finditer(out):
+        M, K, N, pick, red, place = m.groups()
+        found[(int(M), int(K), int(N), pick)] = (red, place)
+    assert found, "no regime_a_cfg lines captured; TT_REGIME_A_LOG_CFG logging may have been removed"
+
+    for label, M, K, N, cfg in _RSCATTER:
+        pick = ",".join(str(x) for x in cfg)
+        got = found.get((M, K, N, pick))
+        assert got is not None, f"no config log for reduce-scatter case {label} ({M}x{K}x{N} cfg={pick})"
+        assert got[0] == "reduce-scatter", (
+            f"COVERAGE ROT: {label} ({M}x{K}x{N} cfg={pick}) now selects reduction={got[0]}, not "
+            "reduce-scatter, so that path is no longer covered -- choose a new shape/config for it."
+        )
+
+    for label, M, K, N in _MESH:
+        entry = next((v for k, v in found.items() if k[:3] == (M, K, N)), None)
+        assert entry is not None, f"no config log for mesh case {label} ({M}x{K}x{N})"
+        assert entry[1] == "mesh", (
+            f"COVERAGE ROT: {label} ({M}x{K}x{N}) now selects placement={entry[1]}, not mesh, so the mesh "
+            "placement is no longer covered -- choose a new shape for it."
+        )
+
+    reductions = {v[0] for v in found.values()}
+    placements = {v[1] for v in found.values()}
+    assert reductions == {"chain", "reduce-scatter"}, f"audit set no longer spans both reductions: {reductions}"
+    assert placements >= {
+        "mesh",
+        "in1-near",
+        "bank-local",
+    }, f"audit set no longer spans all three placements: {placements}"
