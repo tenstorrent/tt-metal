@@ -1,0 +1,191 @@
+{
+  "layer_kind": "dense",
+  "layers_of_kind": 32,
+  "total_layers": 32,
+  "measured_window_us": 444.7382,
+  "threshold_pct": 1.0,
+  "source_command": "python .agents/skills/advisor-challenger/scripts/reconcile.py --report shard_advise/dense/report.json --ir shard_advise/dense/final_ir.mlir --perf ../optimized_decoder/tracy_final/decode_b1_perf_report.csv --layers-of-kind 32 --total-layers 32 --layer-kind dense --threshold-pct 1.0 --out reconciliation.json",
+  "source_tool_result": "The required script ran, but its legacy IR regex did not parse current quoted ttnn ops and its duration aliases did not recognize the current Device Time CSV column. The disagreement rows below are the manual reconciliation of those same authoritative inputs.",
+  "dram_sharded_considered": 4,
+  "dram_sharded_advised": 4,
+  "compute_config_treatment": "Ignored as traced state. All measurements retained the shipped LoFi attention and MLP compute configs.",
+  "disagreements": [
+    {
+      "op": "ttnn.linear down projection in0_block_w",
+      "layer_kind": "dense",
+      "advised": {
+        "in0_block_w": 32,
+        "source": "shard_advise/dense/final_ir.mlir"
+      },
+      "shipped": {
+        "in0_block_w": 16,
+        "dram_sharded": true,
+        "device_us": 47.5
+      },
+      "window_share_pct": 10.68,
+      "changed_variable": "down_in0_block_w only: 16 -> 32",
+      "repeats_ms": [
+        0.467055,
+        0.46602,
+        0.46748
+      ],
+      "measured_ms": 0.46602,
+      "incumbent_ms": 0.466404,
+      "noise_floor_ms": 0.001685,
+      "verdict": "rejected",
+      "reason": "Best candidate repeat is 0.000384 ms faster, inside the 0.001685 ms noise floor; ties go to the incumbent.",
+      "oracle": "real weights, recorded target activation, matching nonzero prefix cache; PCC 0.9992228953 >= 0.995"
+    },
+    {
+      "op": "ttnn.silu output layout",
+      "layer_kind": "dense",
+      "advised": {
+        "layout": "l1/width_sharded",
+        "source": "shard_advise/dense/report.json op 35"
+      },
+      "shipped": {
+        "layout": "DRAM interleaved",
+        "device_us": 4.9
+      },
+      "window_share_pct": 1.102,
+      "changed_variable": "SiLU output memory_config only: default interleaved -> existing intermediate width shard",
+      "repeats_ms": [
+        0.469572,
+        0.468975,
+        0.470447
+      ],
+      "measured_ms": 0.468975,
+      "incumbent_ms": 0.466404,
+      "noise_floor_ms": 0.001685,
+      "verdict": "rejected",
+      "reason": "Best candidate repeat is 0.002571 ms slower, outside the incumbent noise floor.",
+      "oracle": "real weights, recorded target activation, matching nonzero prefix cache; PCC 0.9992643137 >= 0.995"
+    },
+    {
+      "op": "ttnn.transpose decode RoPE cos/sin",
+      "layer_kind": "dense",
+      "advised": {
+        "layout": "l1/block_sharded"
+      },
+      "shipped": {
+        "layout": "DRAM interleaved",
+        "device_us": 4.295
+      },
+      "window_share_pct": 0.966,
+      "verdict": "below_threshold",
+      "reason": "Both traced transpose instances together are 0.966% of the measured device window."
+    },
+    {
+      "op": "ttnn.embedding decode RoPE cos/sin",
+      "layer_kind": "dense",
+      "advised": {
+        "layout": "l1/interleaved"
+      },
+      "shipped": {
+        "layout": "DRAM interleaved",
+        "device_us": 2.211
+      },
+      "window_share_pct": 0.497,
+      "verdict": "below_threshold",
+      "reason": "Both traced embedding instances together are 0.497% of the measured device window."
+    },
+    {
+      "op": "ttnn.concat decode RoPE query/key",
+      "layer_kind": "dense",
+      "advised": {
+        "layout": "l1/height_sharded"
+      },
+      "shipped": {
+        "layout": "DRAM interleaved",
+        "device_us": 3.653
+      },
+      "window_share_pct": 0.821,
+      "verdict": "below_threshold",
+      "reason": "Both traced concat instances together are 0.821% of the measured device window."
+    },
+    {
+      "op": "ttnn.neg decode RoPE query",
+      "layer_kind": "dense",
+      "advised": {
+        "layout": "l1/block_sharded"
+      },
+      "shipped": {
+        "layout": "DRAM interleaved",
+        "device_us": 2.05
+      },
+      "window_share_pct": 0.461,
+      "verdict": "below_threshold",
+      "reason": "This traced neg instance is 0.461% of the measured device window."
+    },
+    {
+      "op": "ttnn.neg decode RoPE key",
+      "layer_kind": "dense",
+      "advised": {
+        "layout": "l1/block_sharded"
+      },
+      "shipped": {
+        "layout": "DRAM interleaved",
+        "device_us": 2.05
+      },
+      "window_share_pct": 0.461,
+      "verdict": "below_threshold",
+      "reason": "This traced neg instance is 0.461% of the measured device window."
+    },
+    {
+      "op": "ttnn.multiply decode RoPE query value*cos",
+      "layer_kind": "dense",
+      "advised": {
+        "layout": "l1/block_sharded"
+      },
+      "shipped": {
+        "layout": "DRAM interleaved",
+        "device_us": 3.0
+      },
+      "window_share_pct": 0.675,
+      "verdict": "below_threshold",
+      "reason": "This traced multiply instance is 0.675% of the measured device window."
+    },
+    {
+      "op": "ttnn.multiply decode RoPE query rotated*sin",
+      "layer_kind": "dense",
+      "advised": {
+        "layout": "l1/block_sharded"
+      },
+      "shipped": {
+        "layout": "DRAM interleaved",
+        "device_us": 2.9
+      },
+      "window_share_pct": 0.652,
+      "verdict": "below_threshold",
+      "reason": "This traced multiply instance is 0.652% of the measured device window."
+    },
+    {
+      "op": "ttnn.multiply decode RoPE key value*cos",
+      "layer_kind": "dense",
+      "advised": {
+        "layout": "l1/block_sharded"
+      },
+      "shipped": {
+        "layout": "DRAM interleaved",
+        "device_us": 3.0
+      },
+      "window_share_pct": 0.675,
+      "verdict": "below_threshold",
+      "reason": "This traced multiply instance is 0.675% of the measured device window."
+    },
+    {
+      "op": "ttnn.multiply decode RoPE key rotated*sin",
+      "layer_kind": "dense",
+      "advised": {
+        "layout": "l1/block_sharded"
+      },
+      "shipped": {
+        "layout": "DRAM interleaved",
+        "device_us": 2.9
+      },
+      "window_share_pct": 0.652,
+      "verdict": "below_threshold",
+      "reason": "This traced multiply instance is 0.652% of the measured device window."
+    }
+  ]
+}

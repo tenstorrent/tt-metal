@@ -1,0 +1,53 @@
+{
+  "outcome": "no-change",
+  "changed": false,
+  "incumbent_ms": 0.466404,
+  "final_ms": 0.466404,
+  "delta_ms": 0.0,
+  "delta_pct": 0.0,
+  "noise_floor_ms": 0.001685,
+  "winning_config": "frozen incumbent; down_in0_block_w=16 and interleaved SiLU retained",
+  "oracle": "incumbent real-weight recorded-target decode oracle with matching nonzero prefix cache at PCC threshold 0.995",
+  "oracle_result_pcc": 0.9992643136975439,
+  "oracle_passed": true,
+  "oracle_weights": "real checkpoint weights",
+  "challengers": [
+    {
+      "name": "advisor down in0_block_w=32",
+      "one_variable": "down_in0_block_w 16 -> 32",
+      "repeats_ms": [
+        0.467055,
+        0.46602,
+        0.46748
+      ],
+      "best_ms": 0.46602,
+      "oracle_pcc": 0.9992228953141524,
+      "oracle_passed": true,
+      "decision": "tie inside noise floor; incumbent wins"
+    },
+    {
+      "name": "advisor sharded SiLU output",
+      "one_variable": "SiLU output memory_config only",
+      "repeats_ms": [
+        0.469572,
+        0.468975,
+        0.470447
+      ],
+      "best_ms": 0.468975,
+      "oracle_pcc": 0.9992643136975439,
+      "oracle_passed": true,
+      "decision": "rejected as 0.002571 ms slower than incumbent"
+    }
+  ],
+  "iterations": [
+    {
+      "capture": 1,
+      "layer_kind": "dense",
+      "trigger": "initial capture after the incumbent was frozen",
+      "topology_shape_change": false
+    }
+  ],
+  "recaptures": 0,
+  "decoder_source": "models/autoports/microsoft_phi_3_5_mini_instruct/tt/optimized_decoder.py",
+  "decoder_source_changed": false
+}
