@@ -171,6 +171,11 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
             /*output_tile=*/std::nullopt,
             /*global_cb=*/std::nullopt},
         {});
+    if (matmul_struct.program_config.has_value()) {
+        operations::matmul::normalize_program_config(
+            matmul_struct.program_config.value(),
+            input_tensor.device()->compute_with_storage_grid_size());
+    }
 
     // Not using persistent buffers not currently supported by the RSMM API
     bool using_persistent_buffers = true;

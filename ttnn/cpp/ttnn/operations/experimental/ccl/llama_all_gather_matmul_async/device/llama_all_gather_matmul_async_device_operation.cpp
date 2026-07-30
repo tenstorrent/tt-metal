@@ -190,6 +190,11 @@ ttnn::experimental::prim::LlamaAllGatherMatmulAsyncDeviceOperation::tensor_retur
             /*output_tile=*/std::nullopt,
             /*global_cb=*/global_cb},
         {});
+    if (matmul_struct.program_config.has_value()) {
+        operations::matmul::normalize_program_config(
+            matmul_struct.program_config.value(),
+            input0.device()->compute_with_storage_grid_size());
+    }
 
     auto operation_attributes = ttnn::experimental::prim::LlamaAllGatherMatmulAsyncParams(
         matmul_struct,

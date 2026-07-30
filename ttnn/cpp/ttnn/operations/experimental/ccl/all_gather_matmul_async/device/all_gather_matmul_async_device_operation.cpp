@@ -223,6 +223,11 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
             /*output_tile=*/std::nullopt,
             /*global_cb=*/std::nullopt},
         {});
+    if (matmul_struct.program_config.has_value()) {
+        operations::matmul::normalize_program_config(
+            matmul_struct.program_config.value(),
+            input_tensor.device()->compute_with_storage_grid_size());
+    }
 
     auto operation_attributes = OperationType::operation_attributes_t{
         /* All Gather Params */
