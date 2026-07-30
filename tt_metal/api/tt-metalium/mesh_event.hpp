@@ -11,6 +11,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal::distributed {
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace tt::tt_metal::distributed
 
@@ -19,11 +20,13 @@ namespace tt::tt_metal::distributed {
 class MeshEvent {
 public:
     MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range);
+    MeshEvent(uint32_t id, MeshCommandQueue& cq, const MeshCoordinateRange& device_range);
 
     // Returns references to the event data.
     uint32_t id() const;
     MeshDevice* device() const;
     uint32_t mesh_cq_id() const;
+    MeshCommandQueue& mesh_cq() const;
     const MeshCoordinateRange& device_range() const;
 
     friend std::ostream& operator<<(std::ostream& os, const MeshEvent& event);
