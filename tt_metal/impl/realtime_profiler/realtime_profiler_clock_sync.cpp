@@ -45,14 +45,12 @@ namespace tt::tt_metal {
 
 namespace {
 
-// How far above the standing anchor a probe may land and still end the burst. Comparing for strict improvement makes
-// the threshold converge on the fastest round trip ever measured, after which no probe can pass it and every resync
-// pays the full depth to shave nanoseconds the published bound does not notice. 1/32 measured against 1/64 and 1/16:
-// it takes 2.6 probes to strict comparison's 6.4, for 10 ns on the median bound and 30 ns on its 99th percentile.
-constexpr int kResyncExitToleranceDivisor = 32;
-constexpr std::chrono::nanoseconds resync_exit_threshold(std::chrono::nanoseconds anchor_rtt) {
-    return anchor_rtt + anchor_rtt / kResyncExitToleranceDivisor;
-}
+// How far above the fastest round trip the link has ever managed a probe may land and still end the burst. An absolute
+// margin against that floor, not a fraction of the standing anchor: the re-anchor gate's drift allowance admits almost
+// any sample, so comparing against the previous acceptance lets the threshold walk upward one acceptance at a time
+// until it sits at the typical round trip instead of the best one. Against the floor the accepted round trip stays
+// within this margin of the best achievable, so the published bound cannot drift.
+constexpr auto kResyncExitMargin = std::chrono::nanoseconds(50);
 
 // Round-trip busy-poll backstop, not an accept threshold. The first kRttProbeHealthyPolls reads skip the deadline
 // check so a healthy handshake never reads the clock inside the round trip it is timing; only a stalled device
@@ -496,14 +494,24 @@ bool RealtimeProfilerClockSync::resync() {
         // all is the model's call, not this loop's.
         constexpr int kMaxProbes = 10;
         std::optional<ClockSyncSample> best;
+        bool within_margin = false;
         for (int i = 0; i < kMaxProbes; i++) {
             const auto sample = probe(kResyncProbeTimeout);
             if (sample.has_value() && (!best.has_value() || sample->rtt < best->rtt)) {
                 best = sample;
             }
-            if (best.has_value() && best->rtt <= resync_exit_threshold(model_.anchor_rtt())) {
-                break;
+            if (best.has_value()) {
+                rtt_floor_ = std::min(rtt_floor_, best->rtt);
+                if (best->rtt <= rtt_floor_ + kResyncExitMargin) {
+                    within_margin = true;
+                    break;
+                }
             }
+        }
+        // A floor the link can no longer reach would make every pass run to full depth, so a pass that never got
+        // within the margin adopts its own best. Any later probe that beats it lowers the floor again.
+        if (!within_margin && best.has_value()) {
+            rtt_floor_ = best->rtt;
         }
         if (!best.has_value()) {
             return false;

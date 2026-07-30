@@ -92,6 +92,11 @@ constexpr auto kWarnInterval = std::chrono::seconds(30);
 
 constexpr auto kDrainGapReportThreshold = std::chrono::milliseconds(5);
 
+// Consecutive failed resyncs before a device is called stalled. One missed pass leaves the anchor a single interval
+// stale, which at the drift the fleet measures is tens of nanoseconds -- inside the bound already published, so
+// reporting it would be noise. Four passes is where the accrued drift starts to rival the bound itself.
+constexpr uint32_t kResyncFailuresBeforeStalled = 4;
+
 // How often every device is resynced. Cadence is the dominant term in real sync error -- 50ms against 500ms measured
 // ~40x on the residual -- so this is not a knob to relax for cost.
 constexpr auto kClockSyncInterval = std::chrono::milliseconds(50);
@@ -448,21 +453,37 @@ void RealtimeProfilerReceiver::run_sync(std::stop_token stop) {
 }
 
 void RealtimeProfilerReceiver::resync_all_devices(std::chrono::steady_clock::time_point now) {
-    uint64_t unanswered = 0;
+    uint64_t stalled = 0;
+    uint32_t worst_streak = 0;
+    uint32_t worst_chip = 0;
     for (auto& dev_state : devices_) {
-        if (!dev_state.clock_sync->resync()) {
-            ++unanswered;
+        if (dev_state.clock_sync->resync()) {
+            dev_state.consecutive_resync_failures = 0;
+            continue;
+        }
+        ++dev_state.consecutive_resync_failures;
+        if (dev_state.consecutive_resync_failures < kResyncFailuresBeforeStalled) {
+            continue;
+        }
+        ++stalled;
+        if (dev_state.consecutive_resync_failures > worst_streak) {
+            worst_streak = dev_state.consecutive_resync_failures;
+            worst_chip = dev_state.chip_id;
         }
     }
-    if (unanswered != 0) {
+    if (stalled != 0) {
         TT_LOG_WARNING_THROTTLED(
             last_probe_timeout_warn_,
             now,
             kWarnInterval,
-            "[Real-time profiler] {} of {} clock resync probes went unanswered this pass; keeping the previous "
-            "mapping on the affected devices",
-            unanswered,
-            devices_.size());
+            "[Real-time profiler] {} of {} device(s) have not answered a clock resync for {} consecutive passes "
+            "(worst: device {} for {} ms); their published mapping is aging and its error bound no longer covers the "
+            "drift since it was placed",
+            stalled,
+            devices_.size(),
+            kResyncFailuresBeforeStalled,
+            worst_chip,
+            worst_streak * kClockSyncInterval.count());
     }
 }
 

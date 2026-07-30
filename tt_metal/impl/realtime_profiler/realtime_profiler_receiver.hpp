@@ -84,6 +84,7 @@ private:
         std::unique_ptr<Program> realtime_profiler_program;
         RealtimeProfilerCoreL1Addrs core_l1;
         bool fifo_reached_capacity = false;
+        uint32_t consecutive_resync_failures = 0;
         // Held by pointer so DeviceState stays movable: the sync object carries atomics and cannot be.
         std::unique_ptr<RealtimeProfilerClockSync> clock_sync;
 

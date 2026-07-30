@@ -117,6 +117,8 @@ private:
     SyncL1Addrs l1_;
     uint32_t sync_seq_ = 0;          // host->device request flag, never 0 so the device can tell a request is pending
     uint64_t last_device_time_ = 0;  // last timestamp read out of the ACK buffer; a change is the acknowledgement
+    // Fastest round trip this device has managed; what the burst's exit margin is measured against.
+    std::chrono::nanoseconds rtt_floor_ = std::chrono::nanoseconds::max();
     // Sole owner of the pinned-path ACK buffer: PinnedMemory maps only a raw pointer, so dropping this frees it.
     std::shared_ptr<uint32_t[]> ack_host_backing_;
     std::shared_ptr<experimental::PinnedMemory> ack_pinned_;
