@@ -237,8 +237,9 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
-    // DFB sizing varies with slice_start; padded_shape folds into compute_program_hash() so each
-    // unique DFB layout gets its own cache entry (entry_size/num_entries are not patched on cache hit).
+    // DFB sizing varies with slice_start; slice_start and padded_shape are both part of the
+    // program-cache key so each unique DFB layout gets its own cache entry (entry_size/num_entries
+    // are not patched on cache hit).
     const auto [cb_page_size, num_read_per_barrier, misalignment] =
         ttnn::operations::experimental::quasar::compute_cb_size(
             input, output, args.slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);

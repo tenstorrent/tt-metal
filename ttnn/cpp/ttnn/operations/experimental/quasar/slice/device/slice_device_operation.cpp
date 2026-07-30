@@ -295,60 +295,6 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     return SliceTileProgramFactory{};
 }
 
-// Port of tt-metal e517beb3f41 (#47602): the default program hash (boost::hash_combine style) has weak
-// distribution for small-integer shape sequences, causing false cache hits when shapes differ but
-// collide -> TT_FATAL on back-to-back slices with differing shapes. Mix in full input/output specs and
-// slice params so distinct invocations get distinct keys.
-ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto factory = select_program_factory(operation_attributes, tensor_args);
-    auto hash = tt::tt_metal::operation::hash_operation<SliceDeviceOperation>(
-        operation_attributes.slice_start,
-        operation_attributes.slice_end,
-        operation_attributes.step,
-        operation_attributes.use_tensor_args,
-        operation_attributes.slice_dim,
-        operation_attributes.num_devices,
-        operation_attributes.output_mem_config,
-        operation_attributes.sub_core_grids,
-        factory.index(),
-        tensor_args.start_tensor.has_value());
-
-    const auto& input = tensor_args.input;
-    hash = ttsl::hash::hash_objects(
-        hash,
-        input.logical_shape().rank(),
-        input.logical_shape(),
-        input.padded_shape(),
-        input.layout(),
-        input.dtype(),
-        input.memory_config());
-
-    if (tensor_args.start_tensor.has_value()) {
-        const auto& st = tensor_args.start_tensor.value();
-        hash = ttsl::hash::hash_objects(
-            hash,
-            st.logical_shape().rank(),
-            st.logical_shape(),
-            st.padded_shape(),
-            st.layout(),
-            st.dtype(),
-            st.memory_config());
-    }
-
-    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    hash = ttsl::hash::hash_objects(
-        hash,
-        output_spec.logical_shape().rank(),
-        output_spec.logical_shape(),
-        output_spec.padded_shape(),
-        output_spec.layout(),
-        output_spec.data_type(),
-        output_spec.memory_config());
-
-    return hash;
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>
 SliceDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args, const Tensor& output) {
