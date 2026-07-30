@@ -18,39 +18,22 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
-// Block reduce_max_row math kernel (runtime block_ct_dim): accumulate the row-max across a block of
-// `block_ct_dim` operand tiles into two DEST slots, then transpose each slot into a column once. The
-// block tile count is a runtime argument.
-
-// DEST scratch slot for the second input face-row (F2&F3) partial. Row TILE_R_DIM (= 2*FACE_R_DIM =
-// 32) == output face F2, so the transpose reads and writes the same base (mirrors native reduce-row's
-// per-face-row DEST advance).
+// DEST scratch slot for the second input face-row (F2&F3) partial.
 static constexpr std::uint32_t REDUCE_BLOCK_SLOT1_DST = TILE_R_DIM;
 
 /**
- * @brief Program the address modifiers used by the block reduce_max_row pool + transpose.
+ * @brief Program the address modifier used by the block reduce_max_row pool + transpose.
  *
- * ADDR_MOD_0: no counter movement (pool parks DEST; MOVD2B reads DEST at the counter). fidelity clr.
- * ADDR_MOD_1: srcb += ELTWISE_MATH_ROWS, dest += ELTWISE_MATH_ROWS (retained; unused now that the
- *             transpose writeback is MOVB2D + ADDR_MOD_0).
+ * ADDR_MOD_0 is the only one used: no counter movement (the pool parks DEST at a fixed slot; MOVD2B
+ * reads DEST at the counter and MOVB2D writes the transposed column back at the counter).
  */
 inline void reduce_block_max_row_configure_addrmod()
 {
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 0, .clr = 1}}.set(ADDR_MOD_0);
-
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = ELTWISE_MATH_ROWS},
-        .dest = {.incr = ELTWISE_MATH_ROWS},
-    }
-        .set(ADDR_MOD_1);
 }
 
 /**
  * @brief Transpose one pooled 1x16 row partial (at the current DEST counter) into a 16x1 column.
- *
- * Mirrors the inline transpose in Quasar's native _llk_math_reduce_row_mop_config_, but writes the
- * transposed column back with a plain MOVB2D (not ZEROSRC + ELWADDDI).
  */
 inline void reduce_block_max_row_transpose_face_row(const bool wide_face)
 {
