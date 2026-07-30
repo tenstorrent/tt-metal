@@ -13,15 +13,15 @@ senders, producing the current 22-row production candidate set.
 
 The paired `mcast_host` helper and `McastArgs` decoder are materialized and
 their intake tests are green. Phase 1 found ten required bindings. Both Conv2d
-weights units and the four-binding matmul in1 unit are now fully current at
-API v9; four GroupNorm bindings remain pending:
+weights units, the four-binding matmul in1 unit, and the four-binding GroupNorm
+v2 unit are now fully current at API v9:
 
 | Unit | Required bindings | Status | Kernel rows | Validation |
 |---|---:|---|---:|---|
 | `conv2d-weights-single-sender-rect` | 1 | fully end-to-end migrated @ v9 | 2 | `CONV-HEIGHT`: 49 passed, 16 expected skips; shared DRAM: 14 passed |
 | `conv2d-weights-fixed-line` | 1 | fully end-to-end migrated @ v9 | 2 | `CONV-BLOCK`: 49 passed, 16 expected skips; shared DRAM: 14 passed |
 | `matmul-in1-mcast-padding-host` | 4 | fully end-to-end migrated @ v9 | 2 | `MM-IN1-ALL`: 302 passed, 188 expected skips; exact 1D and both 2D topologies |
-| `groupnorm-sharded-v2-mcast-host` | 4 | pending | 4 | legacy + Welford `GN-SHARDED-PARAMETERIZED` |
+| `groupnorm-sharded-v2-mcast-host` | 4 | fully end-to-end migrated @ v9 | 4 | legacy: 108 passed, 2 expected skips; Welford: 108 passed, 2 expected skips; fixed/default: 19 passed, 6 expected skips |
 
 The exact binding/dispatch map is in `test_map.json`; the easier-first atomic
 order and risk gates are in `tiers.md`. Until a unit's required bindings are
@@ -29,7 +29,8 @@ migrated at API v9, its kernel rows are kernel-current but not fully
 end-to-end current. The completed Conv2d units use code commits
 `75b977e1a04ee7a14df5d8039393c7844f33fdae` and
 `261e322ed2284175e3b4b7b80f98e947b569fe10`; matmul in1 uses
-`2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd`.
+`2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd`; GroupNorm v2 uses
+`0a796a025c9dc678387e2a7fa52518c898737dc9`.
 
 ## Current migrations under API v9 (10)
 
@@ -41,10 +42,10 @@ end-to-end current. The completed Conv2d units use code commits
 | Conv | receiver | `reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v9; `CONV-HEIGHT`: 49 passed, 16 expected skips; 14 DRAM regressions; exact JIT path |
 | Conv | sender | `writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v9; `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions; exact PerRow/PerColumn paths |
 | Conv | receiver | `writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v9; `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions; exact PerRow/PerColumn paths |
-| normalization | receiver | `reader_mcast_receiver_unary_sharded_gn_v2.cpp` | legacy inventory: 124 passed, 8 expected skips |
-| normalization | sender | `reader_mcast_sender_unary_sharded_gn_v2.cpp` | legacy inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
-| normalization | receiver | `welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp` | Welford inventory: 116 passed, 8 expected skips |
-| normalization | sender | `welford_reader_mcast_sender_unary_sharded_gn_v2.cpp` | Welford inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
+| normalization | receiver | `reader_mcast_receiver_unary_sharded_gn_v2.cpp` | fully end-to-end @ v9; legacy inventory: 108 passed, 2 expected skips; exact JIT evidence |
+| normalization | sender | `reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v9; legacy inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
+| normalization | receiver | `welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp` | fully end-to-end @ v9; Welford inventory: 108 passed, 2 expected skips; exact JIT evidence |
+| normalization | sender | `welford_reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v9; Welford inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
 
 ## Deferred or rolled back (12)
 
@@ -66,9 +67,9 @@ migrations.
 The copied July census still contains 92 entries:
 
 - 10 current production migrations at API v9;
-- 6 required host bindings current and 4 pending across 4 atomic units;
-- 6 fully end-to-end current kernels across the two Conv2d weights units and
-  the matmul in1 unit;
+- all 10 required host bindings current across 4 atomic units;
+- all 10 current production kernels fully end-to-end across the two Conv2d
+  weights units, the matmul in1 unit, and the GroupNorm v2 unit;
 - 12 production candidates deferred with `v9-port-blocked` and a concrete
   design-gap flag;
 - 70 pre-existing deferred candidates from the July census;

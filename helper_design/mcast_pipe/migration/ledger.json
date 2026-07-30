@@ -173,16 +173,23 @@
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp"
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "0a796a025c9dc678387e2a7fa52518c898737dc9",
       "validation_set": [
-        "GN-SHARDED-PARAMETERIZED legacy"
+        "build_metal.sh: passed",
+        "exact legacy 8x4 --dev node: passed; sender JIT 665208170585676730, receiver JIT 4997071892188578060",
+        "GN-SHARDED-PARAMETERIZED legacy: 108 passed, 2 expected skips",
+        "fixed/default routing: 19 passed, 6 expected skips",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": null,
+      "last_verified": "2026-07-30",
       "flags": [
-        "multi-rectangle-wire"
+        "tier:4",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire"
       ]
     },
     {
@@ -193,16 +200,23 @@
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp"
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "0a796a025c9dc678387e2a7fa52518c898737dc9",
       "validation_set": [
-        "GN-SHARDED-PARAMETERIZED legacy fixed/default routing"
+        "build_metal.sh: passed",
+        "GN-SHARDED-PARAMETERIZED legacy: 108 passed, 2 expected skips",
+        "fixed/default routing: 19 passed, 6 expected skips",
+        "McastHostFixture degenerate cases: passed",
+        "test_mcast_pipe.py including test_f3_degenerate: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": null,
+      "last_verified": "2026-07-30",
       "flags": [
-        "multi-rectangle-wire"
+        "tier:4",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire",
+        "degenerate-sender-only"
       ]
     },
     {
@@ -214,16 +228,23 @@
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp"
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "0a796a025c9dc678387e2a7fa52518c898737dc9",
       "validation_set": [
-        "GN-SHARDED-PARAMETERIZED Welford"
+        "build_metal.sh: passed",
+        "exact Welford 8x4 --dev node: passed; sender JIT 12485185751240554029, receiver JIT 14565098489008052769",
+        "GN-SHARDED-PARAMETERIZED Welford: 108 passed, 2 expected skips",
+        "fixed/default routing: 19 passed, 6 expected skips",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": null,
+      "last_verified": "2026-07-30",
       "flags": [
-        "multi-rectangle-wire"
+        "tier:4",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire"
       ]
     },
     {
@@ -234,16 +255,23 @@
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp"
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "0a796a025c9dc678387e2a7fa52518c898737dc9",
       "validation_set": [
-        "GN-SHARDED-PARAMETERIZED Welford fixed/default routing"
+        "build_metal.sh: passed",
+        "GN-SHARDED-PARAMETERIZED Welford: 108 passed, 2 expected skips",
+        "fixed/default routing: 19 passed, 6 expected skips",
+        "McastHostFixture degenerate cases: passed",
+        "test_mcast_pipe.py including test_f3_degenerate: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": null,
+      "last_verified": "2026-07-30",
       "flags": [
-        "multi-rectangle-wire"
+        "tier:4",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire",
+        "degenerate-sender-only"
       ]
     }
   ],
