@@ -554,7 +554,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
             rc.config.limit[tc] =
                 rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
             // In strided case each consumer maps to a different producer region, so advance base per consumer.
-            // BLOCKED reuses the same per-consumer region layout for DM<->DM.
+            // BLOCKED reuses the same per-consumer region layout.
             if ((this->config.cap == dfb::AccessPattern::STRIDED || this->config.cap == dfb::AccessPattern::BLOCKED) &&
                 tc < rc.config.num_tcs_to_rr) {
                 base += base_step;
@@ -1485,7 +1485,7 @@ void ProgramImpl::finalize_single_dfb_config(
 
             if (config.cap == dfb::AccessPattern::STRIDED || config.cap == dfb::AccessPattern::BLOCKED) {
                 // Determine which consumer(s) this producer TC slot pairs with
-                // (BLOCKED reuses the STRIDED TC pairing for DM<->DM; no remapper.)
+                // (BLOCKED reuses the STRIDED TC pairing; no remapper.)
                 uint8_t consumer_idx = (producer_idx + tc_slot * producer_risc_ids.size()) % consumer_risc_ids.size();
 
                 uint8_t producer_risc_id = producer_risc_ids[producer_idx];
