@@ -304,8 +304,8 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min --tra
 `--trace` / `VV_TRACE_SEGMENT=1` ttnn-captures the whole steady-state speech-diffusion frame
 (neg-LM + diffusion + post-diffusion + pos-LM) as one fully device-driven graph — the "llama shape":
 positions self-advance on device, RoPE is gathered on device, and the pos hidden is loop-carried —
-then replays it per frame. It gives **≈11–12 tok/s** steady-state decode vs ≈2.4 tok/s eager on the
-45-min climate demo, and opens the device with a ~1.4 GB trace region + 2 command queues.
+then replays it per frame. It gives **≈21–22 tok/s** steady-state decode vs ≈2.4 tok/s eager
+(~9× on the AR loop), and opens the device with a ~1.4 GB trace region + 2 command queues.
 
 | Flag | Env var | Scope | Notes |
 |------|---------|-------|-------|
@@ -505,29 +505,29 @@ Speech embeds + KV gated at ≥ 0.99; LM hidden gated on per-position **median**
 
 ### End-to-end ISL sweep (`4p_climate_100min`, Blackhole P150)
 
-Wall-clock `tests/perf/test_e2e_isl_sweep_perf.py`, fused-frame trace enabled
-(`VV_TRACE_SEGMENT=1`). The prompt is cropped to each ISL after tokenization; warmup, then a timed
-`max_new_tokens=None` run (until EOS / `max_length_times × ISL`). AR frames may stop early on EOS
-before the 2× ISL cap.
+`tests/perf/test_e2e_isl_sweep_perf.py` on Blackhole P150 with fused-frame trace
+(`VV_TRACE_SEGMENT=1`, fp32 RoPE / `VV_FUSED_ROPE=0`). Prompt cropped to each ISL after
+tokenization; untimed warmup (`VV_ISL_WARMUP_TOKENS=32`) then timed `max_new_tokens=None`
+(EOS / `max_length_times×ISL`). **Decode tok/s** is steady fused-frame *replay* only
+(`decode_mode=steady_trace`) — capture / first-time compile frames are excluded.
 
-| ISL | Prefill tok/s | Decode tok/s | ms/tok | E2E | AR toks | Audio rendered |
-|----:|-------------:|-------------:|-------:|----:|--------:|---------------:|
-| 32 | 5.3 | 14.03 | 71 | 11 s | 64 | 8.5 s |
-| 64 | 10.5 | 13.78 | 73 | 15 s | 128 | 17 s |
-| 128 | 21.1 | 15.39 | 65 | 23 s | 256 | 34 s |
-| 256 | 42.2 | 9.84 | 102 | 58 s | 512 | 68 s |
-| 512 | 82.2 | 11.71 | 85 | 96 s | 1024 | 2.3 min |
-| 1024 | 160.5 | 18.14 | 55 | 121 s | 2048 | 4.6 min |
-| 2048 | 300.2 | 19.94 | 50 | 200 s | 3802 (EOS before 2×) | 8.4 min |
-| 4096 | 508.8 | 20.14 | 50 | 417 s | 8192 | 18.2 min |
-| 8192 | 809.1 | 19.18 | 52 | 730 s | 13770 (EOS before 2×) | 30.6 min |
-| 16384 | 850.9 | 18.86 | 53 | 1717 s | 31971 | 71 min |
-| 23038 (full) | 730.0 | 17.96 | 56 | 2088 s | 36895 | 82 min |
+| ISL | Prefill tok/s | TTFT (s) | Decode tok/s | ms/tok | E2E | AR toks |
+|----:|-------------:|---------:|-------------:|-------:|----:|--------:|
+| 32 | 5.3 | 6.073 | 21.52 | 46 | 11s | 64 |
+| 64 | 10.5 | 6.088 | 21.50 | 47 | 16s | 128 |
+| 128 | 20.7 | 6.173 | 21.50 | 47 | 24s | 256 |
+| 256 | 41.8 | 6.128 | 21.49 | 47 | 62s | 512 |
+| 512 | 82.0 | 6.247 | 21.52 | 46 | 12s | 66 (EOS early) |
+| 1024 | 158.7 | 6.452 | 21.45 | 47 | 135s | 2048 |
+| 2048 | 292.8 | 6.995 | 21.35 | 47 | 220s | 4096 |
+| 4096 | 506.6 | 8.085 | 21.12 | 47 | 412s | 7795 (EOS before 2×) |
+| 8192 | 780.8 | 10.492 | 20.79 | 48 | 848s | 15122 (EOS before 2×) |
+| 16384 | 813.2 | 20.147 | 20.21 | 49 | 1858s | 32768 |
+| 23038 | 724.5 | 31.799 | 19.83 | 50 | 2617s | 42498 (EOS before 2×) |
 
-Steady-state decode peaks around **~20 tok/s** (≈50 ms/tok, i.e. **~2.7× faster than real time**
-at 7.5 frames/s) for mid/long ISLs. Prefill scales roughly linearly to ~16k tokens (~850 tok/s),
-then drops at the full ~23k prompt. On the 45-min climate demo, trace gives ≈11–12 tok/s steady-state
-decode vs ≈2.4 tok/s eager (`--no-trace`) — roughly **5×** on the AR loop.
+Steady decode is **~21.5 tok/s** (≈46–47 ms/tok) through mid ISLs, easing slightly to
+**~20 tok/s** at full prompt (longer KV). TTFT stays ~6s through ISL≈2k, then rises with
+prefill cost to ~32s at full length. Log: `tests/logs/test_e2e_isl_sweep_perf_full_steady.txt`.
 
 ### Performance tests (Tracy)
 
@@ -587,7 +587,7 @@ pytest models/experimental/vibevoice/tests/perf/test_e2e_isl_sweep_perf.py -q -s
 
 # Cap / override
 VV_ISL_SWEEP_MAX_ISL=1024 pytest models/experimental/vibevoice/tests/perf/test_e2e_isl_sweep_perf.py -q -s
-VV_ISL_SWEEP=32,64,128 VV_ISL_WARMUP_TOKENS=4 \
+VV_ISL_SWEEP=32,64,128 VV_ISL_WARMUP_TOKENS=32 \
   pytest models/experimental/vibevoice/tests/perf/test_e2e_isl_sweep_perf.py -q -s
 VV_TRACE_SEGMENT=0 pytest models/experimental/vibevoice/tests/perf/test_e2e_isl_sweep_perf.py -q -s  # eager
 ```
