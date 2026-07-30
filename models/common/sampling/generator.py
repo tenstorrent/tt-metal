@@ -23,20 +23,19 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
-def _mark_trace_buffers_corruptible(bucket, value):
-    """Acknowledge bucketed trace I/O that another live trace may overwrite."""
-    if bucket is None or value is None:
-        return
-    if isinstance(value, (list, tuple)):
-        for item in value:
-            _mark_trace_buffers_corruptible(bucket, item)
-        return
-    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
-    if mark_corruptible is not None:
-        mark_corruptible(value)
+def should_align_decode_seed_counters(
+    *,
+    explicit_contract: bool,
+    reset_sampling_state: bool,
+    legacy_alignment: bool,
+) -> bool:
+    """Keep legacy seed-position alignment while honoring explicit state flags."""
+    return reset_sampling_state or (
+        not explicit_contract and legacy_alignment
+    )
 
 
-def _hash_request_seed_to_device_seed(seed: int, counter: int, salt: int = 0) -> int:
+def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
     """Derive a stable per-token device seed from a request seed.
 
     The device sampling op accepts bounded positive seeds, while vLLM
@@ -212,45 +211,62 @@ class SamplingGenerator:
         self,
         sampling_params_chunks: list,
         *,
-        reset_batch: bool = False,
+        reload_sampling_params: bool = True,
+        reset_sampling_state: bool = False,
+        reset_batch: bool | None = None,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
-        """Format, merge (if row-sharded), and apply sampling params for one model instance.
+        """Apply the explicitly requested parts of decode sampling state.
 
         Args:
             sampling_params_chunks: List of SamplingParams assigned to this instance.
                 Length-1 for simple cases; >1 for row-sharded (sampling_dp > data_parallel).
-            reset_batch: Also reset prompt tokens and output state (first decode step).
+            reload_sampling_params: Upload temperature/top-k/top-p/etc.
+            reset_sampling_state: Rebuild prompt/output penalty state.
             prompt_tokens: Prompt tokens for penalty tracking.
             output_tokens: Output tokens for penalty tracking.
 
         Does NOT call ``seed_manager.get_new_values()`` — callers manage seed
         advancement separately since generators call it at different points.
         """
-        chunks_per_model = len(sampling_params_chunks)
+        if reset_batch is not None:
+            # Compatibility for demos/executors that predate the split
+            # contract. ``reset_batch`` historically always uploaded params
+            # and optionally rebuilt mutable state.
+            reload_sampling_params = True
+            reset_sampling_state = reset_batch
 
-        max_batch_size = self.tt_sampling.max_batch_size
+        if reload_sampling_params:
+            chunks_per_model = len(sampling_params_chunks)
+            max_batch_size = self.tt_sampling.max_batch_size
 
-        if chunks_per_model == 1:
-            formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
-            self.reset_sampling_params(formatted_params)
-        else:
-            # Row-sharded case: format each chunk to max_batch_size, concatenate.
-            # After (0, None) sharding each row gets its own chunk of max_batch_size entries.
-            # Both TTSampling and TTPenalties use the same concatenated params.
-            formatted_chunks = [format_sampling_params(chunk, max_batch_size) for chunk in sampling_params_chunks]
-            concat_fields = {}
-            for field in SAMPLING_PARAM_FIELDS:
-                lists = [getattr(fc, field) for fc in formatted_chunks]
-                if all(v is None for v in lists):
-                    concat_fields[field] = None
-                else:
-                    concat_fields[field] = sum((v if isinstance(v, list) else [v] for v in lists), [])
-            formatted_params = SamplingParams(**concat_fields)
-            self.reset_sampling_params(formatted_params)
+            if chunks_per_model == 1:
+                formatted_params = format_sampling_params(
+                    sampling_params_chunks[0], max_batch_size
+                )
+                self.reset_sampling_params(formatted_params)
+            else:
+                # Row-sharded case: format each chunk to max_batch_size,
+                # concatenate, then upload one merged parameter set.
+                formatted_chunks = [
+                    format_sampling_params(chunk, max_batch_size)
+                    for chunk in sampling_params_chunks
+                ]
+                concat_fields = {}
+                for field in SAMPLING_PARAM_FIELDS:
+                    lists = [getattr(fc, field) for fc in formatted_chunks]
+                    if all(v is None for v in lists):
+                        concat_fields[field] = None
+                    else:
+                        concat_fields[field] = sum(
+                            (v if isinstance(v, list) else [v] for v in lists),
+                            [],
+                        )
+                formatted_params = SamplingParams(**concat_fields)
+                self.reset_sampling_params(formatted_params)
 
-        if reset_batch:
+        if reset_sampling_state:
             self.reset_prompt_tokens(prompt_tokens)
             self.reset_output_state(output_tokens)
 
@@ -960,6 +976,23 @@ class SeedManager:
                 reset_slots.append(slot)
         if reset_slots:
             self.reset_seed_from_slots(seeds, reset_slots)
+
+    def reset_decode_batch(self, seeds, active_slots) -> None:
+        """Reinitialize RNG ownership for a new decode batch layout.
+
+        Removed slots must not keep an explicit seed that leaves
+        ``_seed_active`` true, and a newly reused identity slot must receive a
+        fresh unseeded RNG even when both the old and new request have
+        ``seed=None``. Continuing explicitly seeded requests are subsequently
+        aligned to absolute positions by the caller.
+        """
+        active_slots = {int(slot) for slot in active_slots}
+        for slot in range(self.max_batch_size):
+            if slot not in active_slots:
+                self.seeds[slot] = None
+                self.seed_counters[slot] = 0
+                self.rngs[slot].seed(self._next_unseeded_rng_seed())
+        self.reset_seed_from_slots(seeds, sorted(active_slots))
 
     def align_seed_counters_to_positions(self, seeds, user_ids, positions, offset: int = 1):
         """Make explicit-seed decode independent of persistent slot lifetime.

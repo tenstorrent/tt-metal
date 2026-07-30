@@ -93,7 +93,29 @@ plus `apply_decode_state(...)`.
 
 **`SamplingGenerator.apply_prefill_state(...)`**: Reset params, seeds, prompt tokens, and output state for a prefill request.
 
-**`SamplingGenerator.apply_decode_state(chunks, ...)`**: Format/merge params and apply for one model instance. Handles both simple (1 chunk) and row-sharded (multiple chunks) cases. Does NOT advance seeds — callers manage `seed_manager.get_new_values()` separately.
+**`SamplingGenerator.apply_decode_state(chunks, ...)`**: Execute the sampling
+half of vLLM's explicit decode update contract. `reload_sampling_params=True`
+formats/merges and uploads parameters; `reset_sampling_state=True` rebuilds
+prompt/output penalty state. The flags are independent. The method does NOT
+advance seeds — callers apply slot remaps first, reset/align seeds when state is
+reset, and call `seed_manager.get_new_values()` exactly once per sampled token.
+The legacy `reset_batch=` keyword remains as a compatibility alias.
+
+## vLLM Decode Update Contract
+
+Generators that set `decode_input_update_contract = 1` accept four boolean
+commands from the vLLM TT plugin:
+
+- `reload_inputs`: copy every forward trace input.
+- `reload_page_table`: copy only page-table inputs while preserving
+  device-produced token/position state.
+- `reload_sampling_params`: upload sampling configuration.
+- `reset_sampling_state`: rebuild mutable penalty/RNG state for the layout.
+
+When all four are present, generators execute them without adding page-table
+comparisons, sampling-mode checks, or model-specific forced reloads. When all
+are absent, the previous generator heuristics remain available to older vLLM
+versions and demos. Supplying only a subset is an error.
 
 ## Pitfalls
 

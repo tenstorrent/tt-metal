@@ -1261,7 +1261,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # Do *not* pad decode page tables to max_batch — keep the plugin's
         # nearest-bucket batch so B=1 uses the B=1 decode trace / SDPA grid.
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
-        if per_submesh is not None:
+        if per_submesh is not None and self._reload_per_layer_page_tables(kwargs):
             for m, pt_for_submesh in zip(self.model, per_submesh):
                 m.update_persistent_per_layer_page_tables(pt_for_submesh)
         # If persistent page-table buffers grew after decode-trace capture,

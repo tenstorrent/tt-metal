@@ -15,7 +15,12 @@ from models.common.llama_models import (
     CompletionPrediction,
     StopReason,
 )
-from models.common.sampling import SamplingParams, broadcast_sampling_params, format_sampling_params
+from models.common.sampling import (
+    SamplingParams,
+    broadcast_sampling_params,
+    format_sampling_params,
+    should_align_decode_seed_counters,
+)
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 from models.tt_transformers.tt.common import (
@@ -184,6 +189,10 @@ def _pad_or_create_page_table(table, target_blocks: int):
 
 
 class Generator(WarmupForwardMixin):
+    # Versioned vLLM decode update contract. See
+    # plugins/vllm-tt-plugin/model_input.py in tenstorrent/vllm.
+    decode_input_update_contract = 1
+
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -1329,74 +1338,80 @@ class Generator(WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         defer_device_sampling: bool = False,
+        reload_inputs: bool | None = None,
+        reload_page_table: bool | None = None,
+        reload_sampling_params: bool | None = None,
+        reset_sampling_state: bool | None = None,
     ):
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False
 
+        contract_flags = (
+            reload_inputs,
+            reload_page_table,
+            reload_sampling_params,
+            reset_sampling_state,
+        )
+        explicit_contract = any(flag is not None for flag in contract_flags)
+        if explicit_contract and not all(flag is not None for flag in contract_flags):
+            raise ValueError(
+                "decode update contract requires reload_inputs, "
+                "reload_page_table, reload_sampling_params, and "
+                "reset_sampling_state together"
+            )
+
         reset_reasons = []
         if sampling_params is None and not defer_device_sampling:
             on_device_logits = False
-            reset_inputs = True  # We didn't sample on device, so we need to load inputs.
-            reset_reasons.append("host_sampling")
+            if not explicit_contract:
+                reset_inputs = True
+                reset_reasons.append("host_sampling")
         else:
             on_device_logits = True
 
-        # Track sampling mode changes to reset inputs when switching
-        # between host sampling and device sampling (different trace has stale inputs)
         on_device_sampling = (sampling_params is not None) or defer_device_sampling
-        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
-        self._prev_on_device_sampling = on_device_sampling
-        if prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling:
-            reset_inputs = True
-            reset_reasons.append("sampling_mode_changed")
-        if self._decode_inputs_need_reset:
-            # Prefill on-device sampling switches the model to decode mode, so the
-            # is_decode_setup check below won't fire; force a reset here so the
-            # first decode after such a prefill reloads host inputs.
-            reset_inputs = True
-            reset_reasons.append("decode_inputs_need_reset")
-            self._decode_inputs_need_reset = False
-        # TEMP FIX (tenstorrent/vllm#449): reload decisions belong in vLLM, which is the
-        # only side that knows when host inputs are valid under async draining. Until then
-        # the model decides here, and the rules below are the model-side half.
-        #
-        # Mixed greedy+random batches use device-resident tokens/positions like all-greedy
-        # batches: the sampled token is fed back on-device and current_pos is advanced
-        # in-trace, so no per-step host input reload is needed here. Per-request sampling
-        # params are fixed for a request's lifetime (uploaded at batch setup / refreshed on
-        # reset_batch).
-        page_table_changed = False
-        if page_table is not None:
-            page_table_changed = self.prev_page_table is None or torch.any(self.prev_page_table != page_table).item()
-            if page_table_changed and not on_device_sampling:
-                # Host sampling: tokens/positions are host-authoritative every step,
-                # so a page-table change (new KV block) needs a full input reload.
+        if explicit_contract:
+            effective_reload_inputs = bool(reload_inputs)
+            page_table_changed = bool(reload_page_table)
+        else:
+            # Legacy vLLM/demos retain the historical model-local heuristics.
+            prev_on_device_sampling = getattr(
+                self, "_prev_on_device_sampling", None
+            )
+            self._prev_on_device_sampling = on_device_sampling
+            if (
+                prev_on_device_sampling is not None
+                and prev_on_device_sampling != on_device_sampling
+            ):
                 reset_inputs = True
-                reset_reasons.append("page_table_changed")
-            elif page_table_changed:
-                # Device-resident decode (on-device sampling): tokens/positions live
-                # on device (fed back + plus_one in-trace) and the host copy is
-                # intentionally stale. A page-table change must NOT force a full
-                # reload -- under async overlap the stale host current_pos would
-                # clobber the device's advanced position and the slot would
-                # re-decode its previous token (the greedy "doubling"). Instead fall
-                # through to the page_table_changed branch in _decode_easy_trace_text,
-                # which refreshes ONLY the page-table trace input and preserves the
-                # device-produced tokens/positions. (Genuine (re)inits -- first
-                # decode, mode switch, reset_batch, slot remap -- still set
-                # reset_inputs via their own reasons and take the full-reload path.)
-                reset_reasons.append("page_table_changed_devres")
+                reset_reasons.append("sampling_mode_changed")
+            if self._decode_inputs_need_reset:
+                reset_inputs = True
+                reset_reasons.append("decode_inputs_need_reset")
+                self._decode_inputs_need_reset = False
+            page_table_changed = False
+            if page_table is not None:
+                page_table_changed = self.prev_page_table is None or torch.any(
+                    self.prev_page_table != page_table
+                ).item()
+                if page_table_changed and not on_device_sampling:
+                    reset_inputs = True
+                    reset_reasons.append("page_table_changed")
+                elif page_table_changed:
+                    reset_reasons.append("page_table_changed_devres")
+            effective_reload_inputs = reset_inputs
 
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
-            reset_inputs = True  # Last step wasn't decode, so we definitely need to load inputs.
-            reset_reasons.append("mode_switch_to_decode")
+            if not explicit_contract:
+                effective_reload_inputs = True
+                reset_reasons.append("mode_switch_to_decode")
 
-        if reset_batch:
+        if reset_batch and not explicit_contract:
             # A new batch layout (real reset or slot remap) leaves the device
             # token/current_pos buffers holding the previous batch's values, so
             # host inputs are authoritative again and must be fully reloaded.
-            reset_inputs = True
+            effective_reload_inputs = True
             reset_reasons.append("reset_batch")
 
         kv_cache = kv_cache[0]
@@ -1419,7 +1434,7 @@ class Generator(WarmupForwardMixin):
         if enable_trace:
             tt_tok, tt_log_probs = self._decode_easy_trace_text(
                 **decode_kwargs,
-                reset_inputs=reset_inputs,
+                reset_inputs=effective_reload_inputs,
                 page_table_changed=page_table_changed,
                 on_device_logits=on_device_logits,
             )
@@ -1436,12 +1451,29 @@ class Generator(WarmupForwardMixin):
                 tt_tok,
                 sampling_params=sampling_params,
                 start_pos=start_pos,
-                reset_inputs=reset_inputs,
+                reset_inputs=effective_reload_inputs,
                 reset_batch=reset_batch,
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
+                reload_sampling_params=(
+                    bool(reload_sampling_params)
+                    if explicit_contract
+                    else effective_reload_inputs
+                ),
+                reset_sampling_state=(
+                    bool(reset_sampling_state)
+                    if explicit_contract
+                    else reset_batch
+                ),
+                align_seed_counters=should_align_decode_seed_counters(
+                    explicit_contract=explicit_contract,
+                    reset_sampling_state=bool(reset_sampling_state),
+                    # Galaxy historically aligned only when forward inputs
+                    # were reset (including host→device trace switches).
+                    legacy_alignment=effective_reload_inputs,
+                ),
             )
 
         if read_from_device:
@@ -1670,7 +1702,17 @@ class Generator(WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         enable_trace=False,
+        reload_sampling_params: bool | None = None,
+        reset_sampling_state: bool | None = None,
+        align_seed_counters: bool | None = None,
     ):
+        if reload_sampling_params is None:
+            reload_sampling_params = reset_inputs
+        if reset_sampling_state is None:
+            reset_sampling_state = reset_batch
+        if align_seed_counters is None:
+            # Direct callers without explicit flags retain legacy behavior.
+            align_seed_counters = reset_inputs
         tt_out_tok = self.trace_inputs_decode[True][0] if enable_trace and self.trace_inputs_decode[True] else None
         sampling_module = self.model.sampling
         seed_manager = sampling_module.seed_manager
@@ -1686,13 +1728,7 @@ class Generator(WarmupForwardMixin):
             sm_bs = seed_manager.max_batch_size
             rank_remap = slot_remap[0:sm_bs]
             seed_manager.apply_slot_remap(rank_remap)
-        # Drop seed state of slots no longer live (a request finishing at
-        # the batch tail is never vacated by condense), so its ghost seed
-        # cannot inflate a later request's salt.
-        if active_seed_slots is not None:
-            seed_manager.deactivate_slots_except(active_seed_slots)
-        if reset_inputs and sampling_params is not None:
-            # If we have new inputs, we need to set up the sampling module again
+        if reload_sampling_params and sampling_params is not None:
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
             if active_seed_slots is not None:
                 seed_values = _as_list(getattr(sampling_params, "seed", None))
@@ -1705,15 +1741,23 @@ class Generator(WarmupForwardMixin):
                     )
             sampling_module.reset_sampling_params(sampling_params)
             self._remember_slot_params(sampling_params)
-            if reset_batch:
-                sampling_module.reset_prompt_tokens(prompt_tokens)
-                sampling_module.reset_output_state(output_tokens)
+        if reset_sampling_state:
+            sampling_module.reset_prompt_tokens(prompt_tokens)
+            sampling_module.reset_output_state(output_tokens)
 
         if sampling_params is not None and (active_seed_slots is None or active_seed_slots):
             seed_values = getattr(sampling_params, "seed", None)
-            seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
-            if reset_inputs:
+            if reset_sampling_state:
+                seed_manager.reset_decode_batch(seed_values, active_seed_slots)
                 seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots, start_pos)
+            elif reload_sampling_params:
+                seed_manager.reset_seed_from_slots_if_needed(
+                    seed_values, active_seed_slots
+                )
+                if align_seed_counters:
+                    seed_manager.align_seed_counters_to_positions(
+                        seed_values, active_seed_slots, start_pos
+                    )
 
         # Advance seeds after parameter copies so seeded sampling observes
         # one ordered params/seed state for this token.

@@ -15,6 +15,7 @@ from .generator import (
     slice_sampling_params,
     chunk_sampling_params,
     SeedManager,
+    should_align_decode_seed_counters,
 )
 from ._utils import split_list
 
@@ -33,5 +34,6 @@ __all__ = [
     "slice_sampling_params",
     "chunk_sampling_params",
     "SeedManager",
+    "should_align_decode_seed_counters",
     "split_list",
 ]
