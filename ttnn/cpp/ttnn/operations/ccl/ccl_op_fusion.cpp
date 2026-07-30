@@ -220,7 +220,9 @@ void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
 void StridedReduceScatterFusedOpSignaler::push_strided_reduce_scatter_fused_op_rt_args(
     std::vector<uint32_t>& out_rt_args) const {
     TT_FATAL(initialized, "StridedReduceScatterFusedOpSignaler not initialized.");
-    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphore));
+    // Per-core signaling: the reader takes the L1 base of the per-MM-core progress counter array
+    // (set by the RS program factory after allocating the backing buffer).
+    out_rt_args.push_back(static_cast<uint32_t>(this->mm_progress_counters_addr));
 }
 
 // Used to propagate semaphore information from matmul to all_gather in all_gather_matmul op
