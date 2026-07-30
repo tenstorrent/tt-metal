@@ -45,7 +45,7 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         sfpi::vFloat c1 = 0x1.99938ap-3f;
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-        sfpi::vFloat c0 = -0x1.555558p-2f;
+        sfpi::vFloat c0 = 0;
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     } else {
         q = -0x1.de8p-5f;
