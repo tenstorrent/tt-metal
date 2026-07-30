@@ -1,0 +1,77 @@
+{
+  "advertised_context": 262144,
+  "batch": 1,
+  "cache_bytes_each": 1073741824,
+  "cache_bytes_total": 2147483648,
+  "cache_shape_each": [
+    4096,
+    8,
+    64,
+    256
+  ],
+  "decode_current_position": 262143,
+  "device_dram_bytes": null,
+  "finite_output": true,
+  "history_initialization": {
+    "baseline_position": 262141,
+    "device_readback_verified": true,
+    "key_baseline": 0.0078125,
+    "observed_sentinel_rows": {
+      "0": {
+        "key_mean": 0.125,
+        "value_mean": 4.0
+      },
+      "131071": {
+        "key_mean": -0.25,
+        "value_mean": -8.0
+      },
+      "262142": {
+        "key_mean": 0.5,
+        "value_mean": 16.0
+      }
+    },
+    "preserved_after_trace": 262142,
+    "sentinel_key_values": [
+      0.125,
+      -0.25,
+      0.5
+    ],
+    "sentinel_positions": [
+      0,
+      131071,
+      262142
+    ],
+    "sentinel_values": [
+      4.0,
+      -8.0,
+      16.0
+    ],
+    "value_baseline": -0.015625
+  },
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "page_table_permutation": "roll_by_7",
+  "page_table_shape": [
+    1,
+    4096
+  ],
+  "provenance": {
+    "checkout_git_sha": "b9e6c242a34011e3daeebab9207fbb5b79750f39",
+    "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_FUNCTIONAL_DECODER_CONTEXT=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_functional_decoder.py::test_advertised_context_traced_decode --disable-warnings --tb=short -rA",
+    "functional_decoder_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
+    "hardware": {
+      "arch": "Arch.BLACKHOLE",
+      "device_ids": [
+        3
+      ],
+      "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+    },
+    "test_sha256": "25c39e79914213ee0d2800b7074fd008c77d230c207784160ccfa33c57326419",
+    "ttnn_extension_path": "/home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so",
+    "ttnn_extension_sha256": "004ca3464fc6aa2925633bd6b50d6b910ecac170a2c7330587760f42bb0593c0"
+  },
+  "repeat_replay_pcc": 1.0,
+  "repeat_replay_threshold": 0.9999,
+  "traced_warmed_host_ms": 15.481497001019306
+}
