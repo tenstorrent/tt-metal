@@ -167,12 +167,13 @@ class Gemma4Attention:
         cache = kv_cache or self.kv_cache
         cos_cache, sin_cache = rope_mats
 
-        # Release any sliding-window prefill tail left over from the last
-        # prefill chunk. These cloned DRAM buffers are only needed between
-        # continuation chunks, not during decode. Placed before both decode
-        # dispatches (packed and ordinary) so neither path retains stale tails.
-        if is_decode and getattr(self, "_sliding_prefill_tail", None) is not None:
-            self._release_sliding_prefill_tail()
+        # Do NOT release the sliding prefill tail on decode. Under vLLM
+        # ``async_scheduling``, another request's decode can interleave between
+        # APC continuation prefills of a different request; wiping the single
+        # per-layer stash here drops ``sliding_tail_in`` for ``chunk_start>0``
+        # (shield QB2: ``chunk_start=384 without sliding_tail_in``). Tails are
+        # released when a new prefill starts at ``chunk_start_idx==0`` (below)
+        # or when the generator explicitly clears them around trace capture.
 
         if is_decode and packed is not None:
             return packed_decode_forward(
