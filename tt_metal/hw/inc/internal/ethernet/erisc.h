@@ -52,7 +52,25 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
 #if defined(COOPERATIVE_ERISC)
     rtos_context_switch_ptr();
 #elif defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    // Drain the eth mailbox so FW-level messages (e.g. the port-down request injected by
+    // run_link_control) are processed even while the fabric router is the one yielding through this
+    // path. The full risc_context_switch() services the mailbox via aerisc_context_switch(), but the
+    // router's steady-state loop uses this without_noc_sync variant, which otherwise never would.
+    //
+    // service_eth_msg() can dispatch FW handlers (port action, MAC/PCS reinit, link recovery) that use
+    // NOC0. The fabric router runs in dedicated-NOC mode, so it keeps PRIVATE software shadow counters:
+    // base-FW NOC0 use here would desync them and hang the router on resume. Bracket the yield exactly
+    // like the full risc_context_switch() does -- flush the router's in-flight NOC0 first, then realign
+    // its shadow counters after. (TEST-ONLY: this makes the "without_noc_sync" path do a full sync.)
     update_boot_results_eth_link_status_check();
+    recover_eth_link_if_down();
+    // [CREDIT TIME-SERIES MODE] Push the flow-control credits (TX/CRED/CSENT) EVERY context switch so every
+    // active link always has its latest credits in the ring buffer (no 5-min-timeout gating, no "peer didn't
+    // dump" gaps). Alternatives: fabric_dbg_credit_stall_check() = one-shot dump on a 5-min TX freeze;
+    // fabric_dbg_ringbuf_push_txrx_counts() = TX/RX time series.
+    fabric_dbg_ringbuf_push_credits();
+    // fabric_dbg_credit_stall_check();
+    // fabric_dbg_ringbuf_push_txrx_counts();
 #endif
 #endif
 }

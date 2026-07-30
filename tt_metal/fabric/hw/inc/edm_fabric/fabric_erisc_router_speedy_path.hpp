@@ -109,6 +109,9 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     LocalTelemetryT& local_fabric_telemetry,
     SpeedySenderState& sender_state) {
     bool progress = false;
+#if defined(ARCH_BLACKHOLE)
+    fabric_dbg_set_resume_phase(RESUME_PHASE_TX_STEP_ENTER);  // [FREEZE-PROBE]
+#endif
 
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     uint32_t free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
@@ -140,6 +143,9 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
                     busy = internal_::eth_txq_is_busy(sender_txq_id);
                 }
             }
+#if defined(ARCH_BLACKHOLE)
+            fabric_dbg_set_resume_phase(RESUME_PHASE_TX_ISSUE);  // [FREEZE-PROBE] about to push payload
+#endif
             internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
             // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload
@@ -154,10 +160,20 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
             record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
+#if defined(ARCH_BLACKHOLE)
+            fabric_dbg_set_resume_phase(RESUME_PHASE_TX_POSTSEND_DRAIN);  // [FREEZE-PROBE] prime spin suspect
+#endif
             while (busy) {
                 busy = internal_::eth_txq_is_busy(sender_txq_id);
             };
             remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+            // [RESUME-DEBUG] A packet just went out over eth. If a retrain just completed, mark the
+            // first post-retrain TX. Conditional advance -> only writes once, then a read+compare no-op.
+#if defined(ARCH_BLACKHOLE)
+            fabric_dbg_advance_resume_phase(RESUME_PHASE_RETRAIN_DONE, RESUME_PHASE_FIRST_TX);
+            fabric_dbg_set_resume_phase(RESUME_PHASE_TX_SEND_DONE);  // [FREEZE-PROBE] payload out + count bumped
+            fabric_dbg_inc_tx_pkt_count();  // [TX-COUNT] one successful eth-link send by ERISC0
+#endif
         }
         sender_state.sender_amort_counter++;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -168,6 +184,11 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
     // We only want to actually bother checking for completions after a certain number of sent packets are outstanding
     // since the instructions to actually process each inbound completion from receiver is somewhat costly
+    //
+    // [TAIL-STALL FIX 2B - TEMPORARILY REVERTED for A/B confirmation] The force-poll-when-out-of-slots
+    // clause below is removed to confirm it was what eliminated the tail-stalls. If tail-stalls reappear
+    // with it gone, the fix is confirmed. Restore by re-adding:
+    //     || !outbound_to_receiver_channel_pointers.has_space_for_packet()
     bool check_completions = sender_state.sender_amort_counter >= SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL;
     if (check_completions) {
         int32_t completions = sender_channel_from_receiver_credits
@@ -179,6 +200,15 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             sender_state.completion_count += completions;
         }
     }
+
+#if defined(ARCH_BLACKHOLE)
+    // [CRED-PROBE] Record the absolute completion count we've RECEIVED from the peer into the debug slot,
+    // EVERY sender step (stall gate removed): the credit-push mode dumps this to the ring buffer on every
+    // context switch, so we want it fresh on ALL cores -- healthy, done, and stalled -- not just stuck ones.
+    // A stalled channel's value naturally freezes (no new completions), so it still persists at the stall
+    // value. Compared in the log against the PEER core's CSENT, the gap == completion credits lost.
+    fabric_dbg_set_recvd_completions(*sender_channel_from_receiver_credits.completions_received_counter_ptr);
+#endif
 
     // Similarly only send back the credit to the worker very infrequently since it's a very
     // expensive operation.
@@ -247,6 +277,9 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
     LocalTelemetryT& local_fabric_telemetry,
     SpeedyReceiverState<VC_ID>& receiver_state) {
     bool progress = false;
+#if defined(ARCH_BLACKHOLE)
+    fabric_dbg_set_resume_phase(RESUME_PHASE_RX_STEP_ENTER);  // [FREEZE-PROBE]
+#endif
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     auto pkts_received = get_ptr_val<to_receiver_pkts_sent_id>();
     bool unwritten_packets = pkts_received != 0;
@@ -262,6 +295,9 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         // instead of two separate uncached L1 reads.
         auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
 
+#if defined(ARCH_BLACKHOLE)
+        fabric_dbg_set_resume_phase(RESUME_PHASE_RX_LOCAL_WRITE);  // [FREEZE-PROBE] about to NoC-write local
+#endif
         execute_chip_unicast_to_local_chip_impl(
             packet_header,
             packed.payload_size_bytes,
@@ -271,6 +307,12 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
 
         did_something = true;
         progress = true;
+        // [RESUME-DEBUG] A packet was received off eth and delivered locally. Once the first
+        // post-retrain TX has happened, mark the first post-retrain RX (traffic resumed both ways).
+#if defined(ARCH_BLACKHOLE)
+        fabric_dbg_advance_resume_phase(RESUME_PHASE_FIRST_TX, RESUME_PHASE_FIRST_RX);
+        fabric_dbg_inc_rx_pkt_count();  // [RX-COUNT] one packet received off eth + delivered locally
+#endif
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(packet_header, local_fabric_telemetry);
         }
@@ -297,6 +339,9 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         receiver_state.has_pending_flush = true;
     }
     if (receiver_state.has_pending_flush) {
+#if defined(ARCH_BLACKHOLE)
+        fabric_dbg_set_resume_phase(RESUME_PHASE_RX_FLUSH_POLL);  // [FREEZE-PROBE] polling per-trid NoC flush
+#endif
         bool flushed = ncrisc_noc_nonposted_write_with_transaction_id_sent(
             tt::tt_fabric::edm_to_local_chip_noc, receiver_state.pending_flush_trid);
 
@@ -310,6 +355,15 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
 
             receiver_state.unacked_sends -= receiver_state.pending_flush_batch_count;
             receiver_state.has_pending_flush = false;
+            // [RECEIVER-SIDE PROBES] Mirror the FULL receiver flow-control state to the debug slots so ERISC0
+            // can push it: BOTH sender-channel completion counters (local_receiver_completion[0]/[1], the L1
+            // block DMA'd to the peer) plus the receiver's local completion_counter. This lets us see exactly
+            // where completions live (which channel, processed-vs-sent) instead of a single ambiguous snapshot.
+            {
+                volatile tt_l1_ptr uint32_t* lrc =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_receiver_completion_counters_base_address);
+                fabric_dbg_set_recv_debug(lrc[0], lrc[1], completion_counter.counter);
+            }
         }
     }
 
