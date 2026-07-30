@@ -19,6 +19,9 @@
 // slice of it, so one per-tile-row barrier is sufficient for correct CB reuse —
 // identical cadence to ttnn's per-block noc_async_write_barrier.
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -45,13 +48,16 @@ void kernel_main() {
     const uint32_t destination_page_size = dst_args.get_aligned_page_size();
     const auto d = TensorAccessor(dst_args, dst_addr, destination_page_size);
 
+    Noc noc;
+    CircularBuffer out_cb(cb_out);
+
     uint32_t stick_id = start_stick_id;
     uint32_t out_stick_id = (H_unpadded > 0) ? out_page_start : start_stick_id;
     bool do_unpad = (H_unpadded > 0);
 
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
-        cb_wait_front(cb_out, num_tiles_per_row);
-        uint32_t l1_read_addr = get_read_ptr(cb_out);
+        out_cb.wait_front(num_tiles_per_row);
+        uint32_t l1_read_offset = 0;
 
         // Issue every valid stick of this tile-row before syncing (no
         // intermediate flush) so up to tile_height writes are in flight.
@@ -60,18 +66,22 @@ void kernel_main() {
             // must be < H_unpadded (the per-batch valid height).
             bool valid = !do_unpad || ((stick_id % padded_batch_h) < H_unpadded);
             if (valid) {
-                uint64_t dst_noc_addr = get_noc_addr(out_stick_id, d);
-                noc_async_write(l1_read_addr, dst_noc_addr, unpadded_row_size_bytes);
+                noc.async_write(
+                    out_cb,
+                    d,
+                    unpadded_row_size_bytes,
+                    {.offset_bytes = l1_read_offset},
+                    {.page_id = out_stick_id, .offset_bytes = 0});
                 out_stick_id++;
             }
-            l1_read_addr += padded_row_size_bytes;
+            l1_read_offset += padded_row_size_bytes;
             stick_id++;
         }
 
         // Single barrier per tile-row (ttnn per-block cadence): drains all
         // writes so the CB slot is safe to reuse. A no-op if 0 sticks issued.
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
-        cb_pop_front(cb_out, num_tiles_per_row);
+        out_cb.pop_front(num_tiles_per_row);
     }
 }

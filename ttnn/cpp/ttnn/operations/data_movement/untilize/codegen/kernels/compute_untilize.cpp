@@ -18,6 +18,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
+#include "api/dataflow/circular_buffer.h"
 
 // Helper: compute optimal num_blocks_per_col for pack_untilize blocking
 constexpr uint32_t compute_num_blocks_per_column(uint32_t per_core_block_tile_cnt, uint32_t max_bct) {
@@ -41,17 +42,20 @@ void kernel_main() {
     constexpr uint32_t block_ct_dim = per_core_block_tile_cnt / num_blocks_per_col;
     constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
 
+    CircularBuffer src_cb(src_cb_id);
+    CircularBuffer out_cb(out_cb_id);
+
     unary_op_init_common(src_cb_id, out_cb_id);
     pack_untilize_init<block_ct_dim, full_ct_dim>(src_cb_id, out_cb_id);
 
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
-        cb_reserve_back(out_cb_id, full_ct_dim);
+        out_cb.reserve_back(full_ct_dim);
         for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
-            cb_wait_front(src_cb_id, block_ct_dim);
+            src_cb.wait_front(block_ct_dim);
             pack_untilize_block<block_ct_dim, full_ct_dim>(src_cb_id, 1, out_cb_id, b);
-            cb_pop_front(src_cb_id, block_ct_dim);
+            src_cb.pop_front(block_ct_dim);
         }
-        cb_push_back(out_cb_id, full_ct_dim);
+        out_cb.push_back(full_ct_dim);
     }
     pack_untilize_uninit(out_cb_id);
 }
