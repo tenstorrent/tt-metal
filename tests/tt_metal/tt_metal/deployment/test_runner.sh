@@ -127,13 +127,21 @@ if [ "$DEPLOYMENT" -eq 1 ]
 then
 	ITERS=1
 	deployment_failures=0
+	cycles_run=0
 	depl_eth_pass=0
 	depl_dram_pass=0
 	depl_pcie_read_pass=0
 	depl_pcie_write_pass=0
 
+	if tt-smi -s 2>/dev/null | grep -q '"board_type": "tt-galaxy-bh"'; then
+		RESET_CMD="tt-smi -glx_reset"
+	else
+		RESET_CMD="tt-smi -r"
+	fi
+	echo "Running: $RESET_CMD"
+
 	echo "Resetting boards before deployment..."
-	tt-smi -glx_reset
+	$RESET_CMD
 
 	for cycle in $(seq 1 "$DEPLOYMENT_CYCLES")
 	do
@@ -146,6 +154,7 @@ then
 			deployment_failures=$((deployment_failures + 1))
 			echo "Cycle $cycle FAILED"
 		fi
+		cycles_run=$((cycles_run + 1))
 		depl_eth_pass=$((depl_eth_pass + last_eth_ok))
 		depl_dram_pass=$((depl_dram_pass + last_dram_ok))
 		depl_pcie_read_pass=$((depl_pcie_read_pass + last_pcie_read_ok))
@@ -153,7 +162,7 @@ then
 		if [ "$cycle" -lt "$DEPLOYMENT_CYCLES" ]
 		then
 			echo "Resetting boards..."
-			tt-smi -glx_reset
+			$RESET_CMD
 			if [ "$CONTINUE_ON_FAILURE" -eq 0 ] && [ "$deployment_failures" -gt 0 ]
 			then
 				echo "Stopping: cycle $cycle failed."
@@ -163,18 +172,18 @@ then
 	done
 
 	echo ""
-	echo "=== Deployment Results Summary ==="
-	printf "%-20s %s\n" "Ethernet tests:"   "$depl_eth_pass/$DEPLOYMENT_CYCLES cycles passed"
-	printf "%-20s %s\n" "DRAM tests:"       "$depl_dram_pass/$DEPLOYMENT_CYCLES cycles passed"
-	printf "%-20s %s\n" "PCIe read test:"   "$depl_pcie_read_pass/$DEPLOYMENT_CYCLES cycles passed"
-	printf "%-20s %s\n" "PCIe write test:"  "$depl_pcie_write_pass/$DEPLOYMENT_CYCLES cycles passed"
+	echo "=== Deployment Results Summary (${cycles_run}/${DEPLOYMENT_CYCLES} cycles ran) ==="
+	printf "%-20s %s\n" "Ethernet tests:"   "$depl_eth_pass/$cycles_run cycles passed"
+	printf "%-20s %s\n" "DRAM tests:"       "$depl_dram_pass/$cycles_run cycles passed"
+	printf "%-20s %s\n" "PCIe read test:"   "$depl_pcie_read_pass/$cycles_run cycles passed"
+	printf "%-20s %s\n" "PCIe write test:"  "$depl_pcie_write_pass/$cycles_run cycles passed"
 	echo ""
 	if [ "$deployment_failures" -gt 0 ]
 	then
-		printf "%-20s %s\n" "Overall:" "$((DEPLOYMENT_CYCLES - deployment_failures))/$DEPLOYMENT_CYCLES cycles passed"
+		printf "%-20s %s\n" "Overall:" "$((cycles_run - deployment_failures))/$cycles_run cycles passed"
 		exit 1
 	fi
-	printf "%-20s %s\n" "Overall:" "All $DEPLOYMENT_CYCLES cycles passed"
+	printf "%-20s %s\n" "Overall:" "All $cycles_run cycles passed"
 	exit 0
 fi
 
