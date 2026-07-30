@@ -69,9 +69,9 @@ bool is_l1_impl(BufferType buffer_type) { return buffer_type == BufferType::L1 o
 // ~ProgramImpl during device teardown). This runs inside ~Buffer (noexcept), so an escaping
 // throw would std::terminate. Treat that case as non-emule: the range registry is being torn
 // down anyway, so skipping the removal is harmless (and hardware already returns false here).
-// Latched true the first time an emule device is seen (always via a valid device). A process is
-// emule xor hardware, so deallocate() can read this instead of dereferencing a device_ that may
-// already be dangling at teardown. See Buffer::deallocate().
+// Latched true the first time an emule device is seen (always via a valid device), so a
+// process-wide emule-vs-hardware answer is available without dereferencing a device_ that
+// may already be dangling at teardown.
 std::atomic<bool> emule_device_seen{false};
 
 inline bool is_emule_device(const IDevice* device) {
@@ -400,15 +400,16 @@ std::shared_ptr<Buffer> Buffer::create(
     buffer->allocation_status_ = AllocationStatus::ALLOCATED;
 
     // Explicit-address (non-owning) buffers skip allocate_impl(), so register their
-    // per-bank extent here (removed in deallocate()).
+    // per-bank extent here. add_unique, not add: these are never de-registered (see
+    // Buffer::deallocate) because the memory outlives any single view of it.
     if (is_emule_device(device) && buffer->size_ != 0) {
         if (buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL) {
-            tt::tt_metal::emule::LiveL1Ranges::add(
+            tt::tt_metal::emule::LiveL1Ranges::add_unique(
                 device->id(),
                 static_cast<uint32_t>(address),
                 static_cast<uint32_t>(address + buffer->aligned_size_per_bank()));
         } else if (buffer_type == BufferType::DRAM) {
-            tt::tt_metal::emule::LiveDramRanges::add(
+            tt::tt_metal::emule::LiveDramRanges::add_unique(
                 device->id(),
                 static_cast<uint32_t>(address),
                 static_cast<uint32_t>(address + buffer->aligned_size_per_bank()));
@@ -510,19 +511,13 @@ void Buffer::allocate_impl() {
 
 void Buffer::deallocate() {
     if (!owns_data_) {
-        // device_ may be dangling here during teardown, so read the latch instead of touching it.
-        if (emule_device_seen.load(std::memory_order_relaxed)) {
-            // Mirror the Buffer::create registration; non-owning buffers skip deallocate_impl().
-            // Guard on status: the explicit-call + destructor double-deallocate must remove once.
-            if (allocation_status_ == AllocationStatus::ALLOCATED && size_ != 0) {
-                if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
-                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), static_cast<uint32_t>(address_));
-                } else if (buffer_type_ == BufferType::DRAM) {
-                    tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), static_cast<uint32_t>(address_));
-                }
-            }
-            allocation_status_ = AllocationStatus::DEALLOCATED;
-        }
+        // Deliberately does NOT de-register the live range recorded by the explicit-address
+        // Buffer::create. A non-owning buffer is one *view* of memory somebody else owns
+        // (e.g. every per-device Buffer a MeshBuffer/GlobalSemaphore hands out), so its
+        // destruction frees nothing. De-registering here dropped still-live global
+        // semaphores out of the allowlist and made §4 fire on legitimate
+        // noc_semaphore_wait addresses. Ranges registered this way therefore persist;
+        // a stale allowlist entry can only cost a detection, never invent one.
         return;
     }
     this->deallocate_impl();

@@ -16,6 +16,9 @@ namespace tt::tt_metal::emule {
 class LiveL1Ranges {
 public:
     static void add(int device_id, uint32_t start, uint32_t end);
+    // For non-owning (explicit-address) buffers, which are never de-registered: dedup so
+    // repeatedly re-created views of one allocation cannot grow the list without bound.
+    static void add_unique(int device_id, uint32_t start, uint32_t end);
     static void remove(int device_id, uint32_t start);
     static std::vector<uint64_t> snapshot(int device_id);
 };
@@ -23,6 +26,7 @@ public:
 class LiveDramRanges {
 public:
     static void add(int device_id, uint32_t start, uint32_t end);
+    static void add_unique(int device_id, uint32_t start, uint32_t end);
     static void remove(int device_id, uint32_t start);
     static std::vector<uint64_t> snapshot(int device_id);
 };

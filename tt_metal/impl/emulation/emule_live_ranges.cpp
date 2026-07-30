@@ -87,6 +87,10 @@ void LiveL1Ranges::add(int device_id, uint32_t start, uint32_t end) {
     add_to(l1_registry(), device_id, start, end);
 }
 
+void LiveL1Ranges::add_unique(int device_id, uint32_t start, uint32_t end) {
+    add_dedup_to(l1_registry(), device_id, start, end);
+}
+
 void LiveL1Ranges::remove(int device_id, uint32_t start) {
     remove_from(l1_registry(), device_id, start);
 }
@@ -97,6 +101,10 @@ std::vector<uint64_t> LiveL1Ranges::snapshot(int device_id) {
 
 void LiveDramRanges::add(int device_id, uint32_t start, uint32_t end) {
     add_to(dram_registry(), device_id, start, end);
+}
+
+void LiveDramRanges::add_unique(int device_id, uint32_t start, uint32_t end) {
+    add_dedup_to(dram_registry(), device_id, start, end);
 }
 
 void LiveDramRanges::remove(int device_id, uint32_t start) {

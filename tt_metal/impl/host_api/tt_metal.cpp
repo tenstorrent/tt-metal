@@ -1016,26 +1016,27 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     is_emulated = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 #endif
 
-    try {
-        program.impl().allocate_circular_buffers(validation_device);
-        program.impl().validate_circular_buffer_core_ranges(validation_device);
-        program.impl().validate_circular_buffer_region(validation_device);
-        program.impl().allocate_dataflow_buffers(validation_device);
-        program.impl().validate_dataflow_buffer_region(validation_device);
+    // These five are canonical metal validations. They must NOT be inside the ASAN
+    // catch below: a throw from any of them is an ordinary program-configuration
+    // TT_FATAL, and labelling it "[ASAN ERROR] Metadata Overflow" attributes a caller
+    // bug to the sanitizer.
+    program.impl().allocate_circular_buffers(validation_device);
+    program.impl().validate_circular_buffer_core_ranges(validation_device);
+    program.impl().validate_circular_buffer_region(validation_device);
+    program.impl().allocate_dataflow_buffers(validation_device);
+    program.impl().validate_dataflow_buffer_region(validation_device);
 
-        // Emule-only static KERNEL_CONFIG-window overflow sanitizer (no-op on
-        // hardware); a throw here is surfaced as an ASAN panic by the catch below.
-        if constexpr (emule::kEmuleAsanBuild) {
+    // Emule-only static KERNEL_CONFIG-window overflow sanitizer (no-op on hardware).
+    // Only this check may raise the ASAN panic, so the catch wraps only this check.
+    if constexpr (emule::kEmuleAsanBuild) {
+        try {
             emule::check_program_metadata_size(program);
-        }
-    } catch (const std::exception& e) {
-        // Surface the overflow as an ASAN panic when emulating; no-op otherwise.
-        // Routed through the facade so this TU carries no __emule_asan_panic
-        // reference in a non-emule build. Always rethrows.
-        if constexpr (emule::kEmuleAsanBuild) {
+        } catch (const std::exception& e) {
+            // Routed through the facade so this TU carries no __emule_asan_panic
+            // reference in a non-emule build. Always rethrows.
             emule::report_metadata_overflow(is_emulated, e.what());
+            throw;
         }
-        throw;
     }
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();

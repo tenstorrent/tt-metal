@@ -11,7 +11,7 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 
 **Common mechanics**
 - All checks are gated by one env var, **`TT_METAL_EMULE_ASAN=1`**, off by
-  default (one exception: *CB Reservation Overflow* is always on — see §8).
+  default (*CB Reservation Overflow* is on in every profile — see §8).
 - Which checks run, per-check overrides, the coverage tally and the Blaze guard band are
   all env-driven too. **Every variable is listed in `[emule] docs/ASAN.md` "Running the
   checks"** — start there rather than grepping for `getenv`.
@@ -223,12 +223,20 @@ adjacent memory, false-positiving unrelated cores' writes.
 Both buffer-creation paths must register the extent: owning buffers in
 `allocate_impl()`/`deallocate_impl()`, and **explicit-address (non-owning)** buffers —
 e.g. the per-physical-device L1 buffers `MeshBuffer::initialize_device_buffers` builds,
-which never run `allocate_impl()` — in the `Buffer::create(address, …)` overload and
-`Buffer::deallocate()`. Without the latter, the runner's physical-`device->id()`
-snapshot is empty for every mesh sharded-L1 buffer and each legitimate access
-false-positives. The non-owning `deallocate()` removes the range under an
-`allocation_status_` guard so the explicit-call + destructor double-deallocate drops it
-exactly once.
+which never run `allocate_impl()` — in the `Buffer::create(address, …)` overload. Without
+the latter, the runner's physical-`device->id()` snapshot is empty for every mesh
+sharded-L1 buffer and each legitimate access false-positives.
+
+**Registration lifetime is asymmetric, deliberately.** A non-owning buffer is one *view* of
+memory something else owns, so `Buffer::deallocate()` does **not** de-register it: the view
+dies while the allocation lives on. A `GlobalSemaphore` on a mesh shows why — every
+per-device view it hands out is created and destroyed before the program runs, so
+de-registering on view death dropped the semaphore from the allowlist and made this check
+fire on every legitimate `noc_semaphore_wait`. Because these ranges are never removed, the
+create path uses `add_unique` so repeated views of one allocation cannot grow the list. The
+cost is that an address which once held a non-owning buffer stays allowlisted for the
+process, so a later stray write there goes unreported — a missed detection, which is always
+the safe direction: a stale allowlist entry can only lose a finding, never invent one.
 
 On each access the kernel first **normalizes the address
 to a buffer-relative offset** via `__emule_addr_to_offset`. Under the L1 offset
@@ -360,14 +368,16 @@ A write *past* the CB's allocated region is caught by the OOB check (§4) instea
 wraparound positive control + a wraparound violation that confirms the modular
 window stays active through a wrap, and a no-active-window control).
 
-### 8. CB Reservation Overflow  *(always on)*
+### 8. CB Reservation Overflow  *(on in every profile)*
 **Lives in:** `__emule_asan_cb_on_reserve` in `[emule] include/jit_hw/asan/asan_cb.h` (called from `cb_reserve_back`).
 **What it catches:** `cb_reserve_back(cb, n)` asking for more pages than the CB
 holds in total.
 **How it works:** before blocking to wait for free space, compare `n` against the
-CB's `num_pages`; if it exceeds capacity, abort. **Always on** (not gated by the
-env var) because gating it would let an over-reserve *deadlock* on the space wait
-instead of reporting a clear error.
+CB's `num_pages`; if it exceeds capacity, abort. On in **both profiles**, and it
+should stay on: an over-reserve it would have reported instead *deadlocks* on the
+space wait. The per-check env override still applies
+(`TT_METAL_EMULE_ASAN_CHECK_CB_RESERVATION_OVERFLOW=0`), for the case where
+observing that hang is the point; expect a hang rather than a clean run.
 *Diagnostic:* `CB Reservation Overflow: CB <id> has <N> total pages, …`.
 *Exercised by:* `test_cb_pages.cpp` (an over-reserve death test, an
 exact-capacity positive control for the `>` boundary, and an always-on death
@@ -654,40 +664,45 @@ a check that fires on everything also passes it).
 **What it catches:** a write into the guard band Blaze's arena leaves between scratch CB
 slots — i.e. a modest overrun off the end of a CB.
 
-**Why §4 cannot do this.** On Blaze the arena packs CBs densely, so an overrun lands in
-the *next CB's data*, which is live memory. §4 asks "is this inside a live extent"; the
-answer is yes, so it accepts. The guard band exists to give the overrun somewhere unowned
-to land — but the band is inside the arena tensor, which is itself an allocated L1 buffer,
-so §4 accepts a write there too. Hence a separate check.
-
-**The rule.** Fires when all three hold:
+**The rule.** Fires when all four hold:
 1. the address is in **no** CB (the chokepoint's `cb_resolve` has already established this);
 2. there is a CB ending at or below it **and** a CB starting above it — the address is
    strictly *between* two CBs, not before the first or past the last;
-3. the distance between those two CBs is **≤ redzone + 64 B**.
+3. the distance between those two CBs is **≤ redzone + 64 B**;
+4. the address is covered by **no** live L1 range and no host-poke range.
 
-Clause 2 is load-bearing. An earlier version required only "just past some CB end" and
-false-positived on loudbox `test_gather`, on a legitimate tensor access 128 B past a CB.
+Clause 2 keeps a legitimate tensor access some distance past a CB from qualifying.
 Clause 3 keeps two unrelated CBs from being read as bracketing a gap that actually holds
 other live buffers; the bound is read from `BLAZE_ASAN_CB_REDZONE`, the same variable
 Blaze sizes the band with, so there is no magic constant and it tightens automatically
 when the band shrinks or is off.
 
-**Ordering.** Runs *before* §4. It must fire even where §4 would accept, and where §4
-would also reject, its message names the CB and the byte distance. Its clauses are tight
-enough that firing first cannot mask a different diagnosis.
+Clause 4 is the one that makes the check sound, and it is why §15 currently detects less
+than the name suggests. Being between two CBs does **not** imply being unowned: Blaze
+places global semaphores and small tensors in exactly that space, each with its own live
+range, and every `noc_semaphore_wait` on one is a legitimate access. The allowlist is
+authoritative, and a check may only ever narrow it.
 
-**Enabling it.** Two variables: `TT_METAL_EMULE_ASAN=1` as always, plus
-`BLAZE_ASAN_CB_REDZONE=<bytes>` (64 is a good start) which makes Blaze's
-`_compute_arena_offsets` leave that many bytes after every scratch slot. The band is
-**off by default** because it grows the arena and L1 is scarce on Blaze. With no band only
-natural alignment slack qualifies, so the check still works with a smaller catch window.
-Full variable reference: `[emule] docs/ASAN.md` "Running the checks".
+**Relationship to §4, and the real limit.** Clause 4 means §15 fires only on addresses §4
+would also reject, so on Blaze it is an *attribution* improvement — a message naming the CB
+and byte distance — rather than additional coverage. The arena guard band it was built for
+is **not** reachable: Blaze allocates the whole arena as a single L1 buffer
+(`blaze/cb_reconfig_builder.py`), so every band byte is inside that buffer's live range and
+clause 4 declines. Catching band writes requires emule to be told which sub-ranges of a
+live buffer are poison — the same host→emule annotation channel the persistent-weight and
+semaphore-reset checks need — not another address heuristic.
 
-**Limitation.** An overrun that clears the whole band and lands inside the next CB is
-still invisible — that address is genuinely live CB memory and no address-based rule can
-distinguish it. This converts *near* overruns, the common case, into detections; it does
-not make CB bounds checking complete.
+**Ordering.** Runs before `check_oob_tensor` so its more specific message wins, but it
+applies the same allowlist first, so the order cannot change *whether* a panic happens.
+
+**Enabling it.** `TT_METAL_EMULE_ASAN=1` as always. `BLAZE_ASAN_CB_REDZONE=<bytes>` makes
+Blaze's `_compute_arena_offsets` leave that many bytes after every scratch slot; it widens
+clause 3's window but, per the note above, does not by itself make band writes detectable.
+It is **off by default** because it grows the arena and L1 is scarce on Blaze. Full variable
+reference: `[emule] docs/ASAN.md` "Running the checks".
+
+**Limitation.** An overrun landing inside the next CB is invisible — that address is
+genuinely live CB memory and no address-based rule can distinguish it.
 
 *Diagnostic:* `Out-of-Bounds Write: offset 0x… is in the guard band between CB N (ends
 0x…) and the next CB at 0x… — M byte(s) past the end of CB N`.
@@ -711,7 +726,7 @@ print the guard-band text instead).
 | Tensor Padding *(test skipped — see §5)* | `[emule] asan/asan_l1_checks.h` | offset ∈ `[logical_end, physical_end)` padding band |
 | Illegal Semaphore | `[emule] asan/asan_l1_checks.h` | offset ∈ reserved semaphore L1 range |
 | CB Boundary | `[emule] asan/asan_l1_checks.h` (counters in `asan/asan_cb.h`) | accessed page outside an **active** reserve/wait window |
-| CB Reservation Overflow | `[emule] asan/asan_cb.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |
+| CB Reservation Overflow | `[emule] asan/asan_cb.h` | `cb_reserve_back(n)` with `n > num_pages` (on in every profile) |
 | NoC pending on pop | `[emule] asan/asan_cb.h` + `dataflow_api.h` | `cb_pop_front` while `__emule_pending_noc_reads > 0` |
 | NOC Transfer Alignment | `[emule] api/dataflow/asan/asan_dataflow.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
 | Dirty CB | `[metal] emule_sanitizers.cpp` (+ `[emule] asan/asan_cb.h`) | trailing-dangling flag: a `reserve_back` with no following `push_back` (or `wait_front` w/o `pop_front`) at kernel exit — decoupled from the cumulative window count so lookahead producers aren't false-flagged; **metal only**; override with `TT_METAL_EMULE_ASAN_CHECK_DIRTY_CB` |
