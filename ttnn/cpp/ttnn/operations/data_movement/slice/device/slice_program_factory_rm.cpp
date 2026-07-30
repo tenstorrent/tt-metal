@@ -41,7 +41,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size,
-    const ChunkingParams& chunking) {
+    const ChunkingParams& chunking,
+    uint32_t max_num_read_per_barrier) {
     auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -139,6 +140,16 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
                     num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
                 num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+                // The reader reserves num_read_per_barrier CB pages per batch, so this must not
+                // exceed what the CB was sized for. This path merges on
+                // unpadded_row_size_bytes_offset while compute_cb_size merges on its own stride,
+                // so the two can disagree; clamp to the sized value and widen the outer loop to
+                // keep total coverage at num_sticks_per_core_pad32.
+                if (max_num_read_per_barrier > 0 && num_read_per_barrier > max_num_read_per_barrier) {
+                    num_read_per_barrier = max_num_read_per_barrier;
+                    num_sticks_per_core_read =
+                        (num_sticks_per_core_pad32 + num_read_per_barrier - 1) / num_read_per_barrier;
+                }
             }
         }
 
@@ -270,6 +281,13 @@ SliceCbSizing compute_cb_size(
             uint32_t num_sticks_per_core_read =
                 tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, stride_for_merge, MAX_READ_SIZE);
             s.num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+            // The CB is allocated as num_read_per_barrier * 2 * cb_page_size. For a large 1D
+            // tensor the row is small, so merge_num_sticks_to_read coalesces aggressively and
+            // num_read_per_barrier grows with the stick count, pushing that product past L1
+            // even though a single double-buffered page fits comfortably (see #38436).
+            // Cap it against the same budget the TT_FATAL above checks.
+            const uint32_t max_num_read_per_barrier = l1_budget / (2u * s.cb_page_size);
+            s.num_read_per_barrier = std::min(s.num_read_per_barrier, max_num_read_per_barrier);
         }
     }
 
@@ -355,7 +373,8 @@ tt::tt_metal::ProgramDescriptor SliceRmProgramFactory::create_descriptor(
         num_sticks_per_core_group_1,
         num_sticks_per_core_group_2,
         ttnn::operations::data_movement::MAX_READ_SIZE,
-        sizing.chunking);
+        sizing.chunking,
+        sizing.num_read_per_barrier);
 
     reader_desc.runtime_args.reserve(all_cores_vec.size());
     writer_desc.runtime_args.reserve(all_cores_vec.size());
