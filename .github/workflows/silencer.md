@@ -133,14 +133,6 @@ tt-metal requires **specialized Tenstorrent runners** and a long, heavy build. Y
 runner **cannot compile the project**. Do **not** run `cmake`, `./build_metal.sh`,
 `pip install .`, or device-kernel JIT compilation locally — they will fail or time out.
 
-Unlike a human PR, opening yours does **not** automatically run CI: `pr-gate.yaml` requires a
-maintainer to approve the workflow run for bot-authored PRs (see *Validating changes via CI*).
-Once approved and green, it only proves the code **compiles** — for the runtime-facing
-categories (3, 5, 6) that is necessary but not sufficient. The proof that a targeted warning
-or spam pattern is actually *gone* is its absence from a fresh run of the tracked workflow it
-came from, which a maintainer needs to re-run (see *Validating changes via CI* for why
-Silencer cannot currently trigger that run itself).
-
 ## Token discipline: grep logs on disk, never stream whole logs
 
 CI logs are enormous — tens of MB, and a single device-code compile job can emit thousands
