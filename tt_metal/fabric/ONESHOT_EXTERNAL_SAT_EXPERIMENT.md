@@ -272,3 +272,63 @@ useful stress case for host minimization; the interesting regime is 2x4 partial 
 Raw data: `oneshot_external_sat_scripts/RESULTS_full_sweep.txt`. Hybrid code (gimsatul_solve / delegated_solve /
 phase_hint_from_last_gimsatul_model, env TT_TOPO_SAT_GIMSATUL[_BIN|_THREADS] / TT_TOPO_SAT_GIM_FIRST) is on branch
 `ridvan/gen-rank-bindings-all-solutions` (depends on the min-host solver, which is not on main).
+
+---
+
+# ENUMERATION (search_n / -n N) experiments — the incremental / multi-solution workload
+
+The single-solve results above are for finding ONE min-host mapping. The real workload also enumerates N distinct
+solutions (`generate_rank_bindings -n N`, implies `--all-solutions`). This path **primes** with a min-host solve
+(`solve_minimize_groups` — where the gimsatul delegation lives), then enumerates `.next` on incremental CaDiCaL with
+blocking clauses. gimsatul CANNOT do the `.next` steps (no incremental API), so it only accelerates the prime.
+
+## Enumeration to 5 solutions (2x4, host cap on, wall seconds)
+| stages | enum_hardcap (CaDiCaL-only) | +fastsat | gim_prime_t32 (hybrid) | warmdescent |
+|---:|--:|--:|--:|--:|
+| 64 | 233 | 220 | 366 (slower) | 374 |
+| 96 | 292 | 281 | TIMEOUT@800s | TIMEOUT@800s |
+
+## Per-solution curve (64, time from enum start) — enumeration is SUPER-LINEAR
+| config | to 3 sols | to 5 sols | tail (sols 4-5) |
+|---:|--:|--:|--:|
+| hardcap | 49s | 233s | +184s |
+| hardcap+fastsat | 55s | 220s | fastsat helps the tail |
+| gim_prime | 280s | 366s | (cold enumerator) |
+
+### Findings (enumeration)
+- **CaDiCaL-only iterative BEATS the gimsatul hybrid for enumeration.** On 64: 233s vs 366s to 5 sols; on 96 the
+  hybrid TIMES OUT while CaDiCaL-only finishes in 292s. Reason: an externally-solved (gimsatul) prime leaves the
+  CaDiCaL enumerator COLD (no learned clauses to reuse for `.next`), so every subsequent solution is slow. A CaDiCaL
+  prime warms the enumerator.
+- **Enumeration cost is super-linear** (64: 3 sols=49s, 5 sols=233s) — later distinct solutions get much more
+  expensive as blocking clauses accumulate and genuinely-new mappings get rarer.
+- **fastsat helps the incremental path ~5%**, concentrated on the expensive tail. It applies across every
+  incremental solve (set pre-encode; persists). It is the ONLY optimization that helped enumeration here.
+- **Our incremental solve already eliminates ~35% of vars** ("35.0% pinned" in logs) — incremental is NOT starved of
+  BVE on this path, so external pre-elimination buys less than the one-shot-vs-incremental gap implied. External BVE
+  did reduce the 128 hardcap CNF by 34.5% (cadical -P20 -c0 -o), but to stay incremental you must FREEZE the assign
+  vars (blocking clauses reference them), limiting BVE to auxiliaries during enumeration.
+
+## Partitioned-parallel (pin stage-0) proof-of-concept — NEGATIVE for single hard solve
+Hypothesis: split a hard solve into disjoint sub-spaces by pinning stage-0's placement (vars 1..144, the first
+exactly-one group), solve buckets in parallel with plain CaDiCaL → rival gimsatul while staying pure-CaDiCaL.
+Result on 128 hardcap (18 of 144 buckets sampled, plain cadical, parallel): **17/18 TIMEOUT >400s, 1 SAT@390s**.
+- **Pinning ONE stage of 128 barely reduces difficulty** — the residual packing problem is ~as hard as the original.
+  So partition-by-pinning-one-variable does NOT make a single hard solve fast. gimsatul remains the single-solve win.
+- (Caveat: the 400s per-bucket cap was below the ~1345s the full in-solver solve needs, so this shows "pinning
+  doesn't rescue it within 400s", not a clean "slower than gimsatul".)
+- Partitioning is a DIFFERENT mechanism for ENUMERATION (splitting the work of finding MANY solutions), which this
+  PoC does not test. Risks there: skew across buckets, and partition-axis vs distinct-host-set dedup mismatch
+  (cross-thread duplicate solutions). Still open.
+
+## gim-first enumeration on the PRODUCTION-DEAD cases (RUNNING)
+Production baseline finds **0 solutions** on 2x4 96/112/128/144 (can't find even 1 in the 15-min search budget).
+gimsatul CAN find the first solution (128 ~73s, 144 ~105s). Test: MIN_MODE=3 + GIMSATUL=1 + `-n 20` — gimsatul
+primes, CaDiCaL enumerates — to see if it unlocks these dead cases. Results pending (see
+oneshot_external_sat_scripts/RESULTS_gimfirst_enum.txt).
+
+## Bottom line (two workloads, two engines)
+- **Single min-host solve:** gimsatul hybrid wins big (128: 18.5×; 144: solvable where CaDiCaL times out).
+- **Enumeration / iterative:** stay on CaDiCaL-only + fastsat; the gimsatul prime leaves the enumerator cold and
+  loses. The gimsatul value for enumeration is narrow: only to get PAST the "can't find solution 1" wall on the
+  hardest cases (96-144) where production currently returns 0 — under test now.

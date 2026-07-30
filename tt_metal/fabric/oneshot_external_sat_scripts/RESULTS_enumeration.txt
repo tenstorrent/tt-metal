@@ -1,0 +1,10 @@
+stages  config                   wall_s   rc     sols_found note
+64      enum_hardcap             239      0      0      done
+64      enum_hardcap_fastsat     226      0      0      done
+64      enum_gim_prime_t32       372      0      0      done
+64      enum_warmdescent         375      0      0      done
+96      enum_hardcap             298      0      0      done
+96      enum_hardcap_fastsat     287      0      0      done
+96      enum_gim_prime_t32       802      124    0      TIMEOUT@800s
+96      enum_warmdescent         802      124    0      TIMEOUT@800s
+[16:13:19] ENUM SWEEP DONE
