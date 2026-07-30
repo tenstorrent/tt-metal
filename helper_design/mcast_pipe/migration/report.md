@@ -1,4 +1,4 @@
-# mcast_pipe rollout report — API v9, reconciled 2026-07-30
+# mcast_pipe rollout report — API v9, host rollout updated 2026-07-30
 
 ## Run header
 
@@ -6,28 +6,77 @@
 - Source migration commit: `acafdfcc6c4`
 - Current branch baseline: `origin/llk_helper_library` at `54d8dfb7bef`
 - Current helper/rollback commit: `307951cc8dc`
+- Host rollout plan commit: `bb66c3a25fc`
+- Conv2D height-sharded host migration commit: `75b977e1a04`
 - Helper contract: `MCAST_PIPE_API_VERSION 9`
+- Entry mode: re-entry
+- Invocation mode: `run-all`
+- Selected unit approved at Gate A: `conv2d-weights-single-sender-rect`
+- Re-entry breakdown: 0 stale kernels, 0 stale host bindings, 10 newly
+  inventoried host integrations across 4 atomic units, 0 net-new kernel units
 - Device validation: single-chip Blackhole p100a
 - Test runner: repository environment plus `scripts/run_safe_pytest.sh`
 
 ## Outcome
 
-The current production ledger was semantically reconsidered rather than
-rebased. Ten are current v9 migrations. Twelve were either rejected before edit
-or reverted after review/device isolation because the current helper cannot
-own their entire multicast protocol.
+The selected Conv2D height-sharded **weights binding** is fully current end to
+end at v9. This status applies to that protocol channel, not to every Conv2D
+multicast path. Height-sharded Conv2D reads activations locally from each input
+shard and has no activation-multicast binding. No selected unit failed or was
+quarantined. The other three host-integration units were outside the
+user-approved scope for this run and remain pending.
 
-| State | Count |
+| Rollout state at v9 | Count |
 |---|---:|
-| current migrated | 10 |
-| deferred on a documented blocker | 12 |
-| partial migrations left in the worktree | 0 |
+| kernel-current | 10 |
+| host-binding-current | 1 |
+| fully end-to-end current | 1 binding / 2 kernels |
+| host-pending | 9 |
+| quarantined | 0 |
+| deferred | 82 kernels / 0 host bindings |
 
 Every deferred production kernel is byte-for-byte equal to the confirmed
 target baseline. Every migrated multicast channel delegates its multicast
 semaphore ownership to `SenderPipe` / `ReceiverPipe`. The raw
 `reserve_done_sem` and `write_done_sem` instances remaining in the 2D Conv
 pair coordinate a separate split-reader circular-buffer protocol.
+
+The migrated Conv2D host binding constructs the full height-sharded rectangle
+with `Mcast2D` while preserving `total_active_num_cores - 1` as the acknowledged
+receiver subset. Its sender and receiver kernels consume the helper-owned
+five-word compile-time and four-word runtime wire through `McastArgs`.
+
+## This run by tier
+
+| Tier | Migrated | Failed/quarantined | Skipped/deferred |
+|---|---:|---:|---:|
+| 1 — Conv2D height-sharded host binding | 1 | 0 | 0 |
+| Selected-scope total | 1 | 0 | 0 |
+
+Nine required host bindings across the Conv2D fixed-line, matmul in1, and
+GroupNorm v2 units remain pending outside this selected scope. They are not
+counted as failures or deferrals. Conv2D activation multicast is used by the
+block- and width-sharded paths; those activation kernels remain deferred at the
+kernel-helper stage and therefore are not part of the host-binding worklist.
+
+## Per-kernel and binding result
+
+| Site | Status | Validation | Production deletions | Perf |
+|---|---|---|---:|---|
+| Conv2D 1D weights sender | migrated, fully end-to-end | exact JIT hit; height and shared regressions passed | 19 | not measured |
+| Conv2D 1D weights receiver | migrated, fully end-to-end | exact JIT hit; height and shared regressions passed | 11 | not measured |
+| Height-sharded factory binding | migrated at v9 | host build, host oracle, and device wire passed | 21 | not measured |
+
+The atomic production change contains 48 insertions and 51 deletions, for a net
+reduction of 3 lines. The factory refactor preserves the full multicast
+rectangle, the smaller active ACK subset, buffer bindings, activation-reuse
+offsets, and the `SKIP_MCAST` path. No in-context performance run was requested,
+so this report makes no performance-delta claim.
+
+## Coverage gaps
+
+None for the selected unit. Both participating kernels were observed in an
+isolated JIT cache, and focused plus regression validation passed.
 
 ## Validation headline
 
@@ -39,9 +88,13 @@ pair coordinate a separate split-reader circular-buffer protocol.
 - GroupNorm legacy: 108 passed, 2 expected skips; fixed/default routing: 19 passed, 6 expected skips.
 - GroupNorm Welford: 108 passed, 2 expected skips; fixed/default routing shares the same 19 passed, 6 expected skips.
 - Matmul in1 inventory: 302 passed, 188 expected skips.
-- Conv height direct inventory: 49 passed, 16 expected skips (including the migrated 1D sender).
+- Conv height direct inventory after the host migration: 49 passed, 16 expected
+  skips. The exact compile-focused case passed under `--dev` and produced both
+  sender and receiver JIT artifacts.
 - Conv block direct inventory: 49 passed, 16 expected skips.
-- Conv shared DRAM regressions: 14 passed.
+- Conv shared DRAM regressions after the host migration: 14 passed.
+- Host helper tests after the host migration: 19 passed.
+- Device helper-wire tests after the host migration: 68 passed.
 - Host rebuild after Conv factory changes: passed.
 
 The rotating width-sharded Conv migration passed its initial smoke but failed
