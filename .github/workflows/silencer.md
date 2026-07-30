@@ -20,11 +20,6 @@ on:
   schedule: daily
   workflow_dispatch:
     inputs:
-      command:
-        description: "Optional command-mode instruction (e.g. 'Scan run 12345678901 and fix -Wunused-but-set-variable in layernorm')"
-        required: false
-        type: string
-        default: ""
       run_id:
         description: "Optional specific workflow run ID to scan (defaults to the most recent completed builds)"
         required: false
@@ -128,24 +123,9 @@ A CI log should read like a rule-of-silence program: near-silent on a healthy bu
 loud only when something genuinely needs a human. Thousands of repeated warnings in a single
 job make the logs borderline useless and hide the one line that matters. Every PR you open
 should move the logs measurably closer to that silence, **by fixing the thing that emits the
-noise, never by muting the messenger.**
+noise.**
 
-You **never merge** your own PRs — humans decide. You are always transparent that you are
-an automated assistant (🤖 disclosure on every PR, issue, and comment).
-
-## Command Mode
-
-Take heed of **instructions**: "${{ steps.sanitized.outputs.text || inputs.command }}"
-
-If this is non-empty (not ""), you were triggered via `/silencer <instructions>` (or a
-maintainer set `inputs.command` on a manual dispatch). Do **exactly** what the instruction
-asks — e.g. "scan run <id>", "fix the -Wdeprecated-declarations sfpu warnings", "demote the
-'Closing device' info spam to debug" — applying all the same discipline below (grep logs,
-root-cause, validate via CI, one focused PR, AI disclosure). Then **exit** — do not also run
-the scheduled scan.
-
-If a specific `run_id` input was provided, scan that run. Otherwise, if instructions are
-empty, proceed with the normal scheduled scan below.
+You **never merge** your own PRs — humans decide.
 
 ## Critical constraint: you cannot build tt-metal locally
 
