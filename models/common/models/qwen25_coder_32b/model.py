@@ -307,8 +307,32 @@ def _post_attn_norm_decode_configs(
     return program_config, mlp.config.decode_input_memcfg
 
 
+# Cast coder's two per-layer prefill norm-reconstruction all-gathers (pre-attn + post-attn) from bf16 to
+# bfloat8_b, mirroring the sibling qwen25_72b H003 (commit 783d2945e2b, model.py:262). Every coder prefill
+# decoder layer runs two full-activation all-gathers at bf16 to reconstruct the dim-fractured RMSNorm output
+# to full ``dim`` before Attention1D / MLP1D (the QKV / W1/W3 matmuls expect width ``dim``). Each moves a
+# 5120-wide activation across 8 devices, x2/layer x64 layers = 128 bf16 all-gathers on the batched b32-ci
+# prefill critical path. Every matmul these gathers feed already quantizes activations to bf8_b (QKV/WO) or
+# bf4_b (W1/W3), so the bf16 gather precision is largely unconsumed; casting the gather input to bf8_b halves
+# each collective's cross-device payload (AllGatherAsync is payload-bound at dim=5120). PREFILL-ONLY: the
+# decode + tail-norm call sites of _all_gather_rmsnorm_tensor pass no dtype -> byte-identical decode/tail.
+# Unlike 72b there is no third fused pre-WO gather to cast: coder's dim=5120 fails the fused all-gather auto-
+# gate ((5120//32//8) % 8 = 4 != 0), so only these two norm gathers apply (the fused hook is a no-op here).
+# NOT bit-exact vs bf16 (mantissa drop) -> gated on token-accuracy + eval-32, NOT the 32-user byte-compare
+# (INVALID on coder's tie-heavy on_device_topk). coder's perf recipe is BFP4-FF/LoFi (less precision-tolerant
+# than 72b's >70B bf4/bf8 recipe), so the accuracy profile is re-gated separately. A/B escape hatch: set
+# DISABLE_PREFILL_AG_BF8=1 to keep the gathers at bf16 (byte-identical to the pre-change HEAD). None disables.
+_PREFILL_AG_CCL_DTYPE: ttnn.DataType | None = (
+    None if os.environ.get("DISABLE_PREFILL_AG_BF8") == "1" else ttnn.bfloat8_b
+)
+
+
 def _all_gather_rmsnorm_tensor(
-    norm: RMSNorm1D, x: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None
+    norm: RMSNorm1D,
+    x: ttnn.Tensor,
+    *,
+    memory_config: ttnn.MemoryConfig | None = None,
+    dtype: ttnn.DataType | None = None,
 ) -> ttnn.Tensor:
     cfg = norm.config
     if cfg.mesh_device.get_num_devices() == 1 or x.shape[-1] == cfg.weight.source.numel():
@@ -316,6 +340,15 @@ def _all_gather_rmsnorm_tensor(
 
     if memory_config is None:
         memory_config = x.memory_config()
+
+    # Prefill-only opt-in (``dtype`` is set only at the two per-layer prefill call sites): cast the gather
+    # input (bf16) to a smaller CCL dtype (bfloat8_b) to halve this collective's cross-device payload. Decode
+    # and tail-norm call sites leave ``dtype=None`` -> byte-identical. An explicit typecast is required
+    # (to_memory_config does not cast an already-DRAM tensor).
+    if dtype is not None and x.dtype != dtype:
+        x_cast = ttnn.typecast(x, dtype)
+        ttnn.deallocate(x)
+        x = x_cast
 
     tt_ccl = cfg.tt_ccl or get_tt_ccl(cfg.mesh_device)
     return ttnn.experimental.all_gather_async(
@@ -644,7 +677,7 @@ class Qwen25Coder32BDecoderLayer(LightweightModule):
         # Match Llama ``TransformerBlock1D``: fractured embed / norm activations must be
         # all-gathered to full ``dim`` before Attention1D / MLP1D (QKV matmul expects width ``dim``).
         r = self.input_layernorm.prefill_forward(x)
-        r = _all_gather_rmsnorm_tensor(self.input_layernorm, r)
+        r = _all_gather_rmsnorm_tensor(self.input_layernorm, r, dtype=_PREFILL_AG_CCL_DTYPE)
         r = self.self_attn.forward(
             r,
             None,
@@ -658,7 +691,7 @@ class Qwen25Coder32BDecoderLayer(LightweightModule):
         )
         h = ttnn.add(x, r, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         r2 = self.post_attention_layernorm.prefill_forward(h)
-        r2 = _all_gather_rmsnorm_tensor(self.post_attention_layernorm, r2)
+        r2 = _all_gather_rmsnorm_tensor(self.post_attention_layernorm, r2, dtype=_PREFILL_AG_CCL_DTYPE)
         r2 = self.mlp.prefill_forward(r2)
         return ttnn.add(h, r2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
