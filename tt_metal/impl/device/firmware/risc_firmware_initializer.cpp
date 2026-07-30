@@ -247,8 +247,10 @@ void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
     // If simulator is enabled, force a teardown of active ethernet cores for WH
     if (rtoptions_.get_simulator_enabled()) {
         if (hal_.get_eth_fw_is_cooperative()) {
-            auto all_devices = cluster_.all_chip_ids();
-            for (tt::ChipId device_id : all_devices) {
+            // A remote simulator chip is reached through its active Ethernet firmware. Asking that
+            // core to stop over its own remote-I/O path prevents the request from being flushed.
+            // Keep remote routing firmware alive until the shared simulator backend shuts down.
+            for (tt::ChipId device_id : cluster_.mmio_chip_ids()) {
                 for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
                     CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
                         device_id, logical_core, CoreType::ETH);
@@ -264,8 +266,6 @@ void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
 void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*init_done*/) {
     auto all_devices = cluster_.all_chip_ids();
 
-    teardown_simulator_ethernet_cores();
-
     if (!cluster_.is_mock_or_emulated()) {
         for (tt::ChipId device_id : all_devices) {
             assert_cores(device_id);
@@ -277,6 +277,9 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
         }
     }
+
+    // Keep simulator routing firmware alive until all cleanup that may access remote chips is done.
+    teardown_simulator_ethernet_cores();
 
     initialized_ = false;
 }
