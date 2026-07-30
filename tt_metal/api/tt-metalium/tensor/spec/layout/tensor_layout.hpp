@@ -7,10 +7,10 @@
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/shape.hpp>
 
-#include <tt-metalium/experimental/tensor/spec/layout/alignment.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/layout/alignment.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
 #include <memory>
 #include <optional>
@@ -70,7 +70,6 @@ public:
 
     bool operator==(const TensorLayout& other) const;
     bool operator!=(const TensorLayout& other) const;
-
 
     static constexpr auto attribute_names = std::forward_as_tuple("dtype", "page_config", "memory_config", "alignment");
     std::tuple<const DataType&, const PageConfig&, const MemoryConfig&, const Alignment&> attribute_values() const;

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 
 namespace tt::tt_metal {
 
