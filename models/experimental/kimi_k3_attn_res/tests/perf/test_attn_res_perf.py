@@ -388,7 +388,7 @@ HIFI = ttnn.WormholeComputeKernelConfig(
 )
 
 
-def _reduce_variants(v, q):
+def _reduce_variants(v, q, weights):
     """The ways to get one scalar per (token, candidate) out of `v`.
 
     Each entry reads `[1, C, N, d/tp]` and returns `[1, C, N, *]`. `mul-sum` is
@@ -422,6 +422,23 @@ def _reduce_variants(v, q):
         # matmul, against the cost of transposing to get there.
         "mix: mul+sum (today)": lambda: _consume(ttnn.mul(v, q), lambda w: ttnn.sum(w, dim=1, keepdim=True)),
         "mix floor: sum(v, dim=1)": lambda: ttnn.sum(v, dim=1, keepdim=True),
+        # The two rows above multiply by `q`, a `[1, 1, 1, d/tp]` broadcast, which
+        # reads the same bytes but is not the broadcast the op performs. These four
+        # use the real `[1, C, N, 1]` weight, so the pair is comparable to `_mix`
+        # itself and not only to each other.
+        #
+        # `fast_reduce_nc` is not the fused op the comment above says does not exist
+        # — it is reduce-only, so the elementwise pass stays. It is a *different
+        # dim-1 reduce kernel*, which is a question the P7 table never asked. Its
+        # numerics land one bf16 ulp from `ttnn.sum` (`scratchpad/probe_fast_reduce_nc.py`).
+        "mix shaped: mul+sum": lambda: _consume(ttnn.mul(v, weights), lambda w: ttnn.sum(w, dim=1, keepdim=True)),
+        "mix shaped: mul+fast_reduce_nc": lambda: _consume(
+            ttnn.mul(v, weights), lambda w: ttnn.experimental.fast_reduce_nc(w, dims=[1])
+        ),
+        "mix floor: fast_reduce_nc(v, dim=1)": lambda: ttnn.experimental.fast_reduce_nc(v, dims=[1]),
+        "mix floor: fast_reduce_nc hifi": lambda: ttnn.experimental.fast_reduce_nc(
+            v, dims=[1], compute_kernel_config=HIFI
+        ),
     }
 
 
@@ -447,6 +464,10 @@ def _consume(intermediate, then):
         "dots: matmul hifi",
         "mix: mul+sum (today)",
         "mix floor: sum(v, dim=1)",
+        "mix shaped: mul+sum",
+        "mix shaped: mul+fast_reduce_nc",
+        "mix floor: fast_reduce_nc(v, dim=1)",
+        "mix floor: fast_reduce_nc hifi",
     ],
     ids=[
         "floor",
@@ -458,6 +479,10 @@ def _consume(intermediate, then):
         "dots-matmul-hifi",
         "mix-today",
         "mix-floor",
+        "mix-shaped-sum",
+        "mix-shaped-frnc",
+        "mix-floor-frnc",
+        "mix-floor-frnc-hifi",
     ],
 )
 def test_perf_d_reduction_by_form(mesh_device, variant):
@@ -480,6 +505,15 @@ def test_perf_d_reduction_by_form(mesh_device, variant):
     the matvec accumulates ~3x looser than `mul` + `sum` at default fidelity
     (`tests/probe_stats_primitive.py`) — so a win here buys a PCC re-gate, not
     a drop-in.
+
+    P9 added the four `mix shaped` / `fast_reduce_nc` rows and they say two
+    things. The reduce is refuted as a lever: `fast_reduce_nc` lands within
+    0.08% of `ttnn.sum` over two runs, inside a 0.35% band, because both already
+    run at the memory floor — which the four floor rows now pin to ~229 µs across
+    two axes, two kernels and two fidelities. And P7's own `mix` row above sits
+    15% high — it reuses `q`, so it measures a `[1, 1, 1, d/tp]` broadcast where
+    the op performs a `[1, C, N, 1]` one. Both rows are kept: the first for
+    continuity with the recorded P7 number, the second because it is the op.
     """
     tokens_per_rank = PRODUCTION_TOKENS // 2
     width_per_rank = HIDDEN_SIZE // 4
@@ -487,8 +521,9 @@ def test_perf_d_reduction_by_form(mesh_device, variant):
     place = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
     v = place(torch.randn(1, NUM_SEALED + 1, tokens_per_rank, width_per_rank))
     q = place(torch.randn(1, 1, 1, width_per_rank))
+    weights = place(torch.randn(1, NUM_SEALED + 1, tokens_per_rank, 1))
 
-    body = _reduce_variants(v, q)[variant]
+    body = _reduce_variants(v, q, weights)[variant]
     ttnn.deallocate(body())
     ttnn.synchronize_device(mesh_device)
 
@@ -503,7 +538,7 @@ def test_perf_d_reduction_by_form(mesh_device, variant):
     _report(f"{variant} [{read_mib:.0f} MiB in] traced", enqueue_us, total_us)
 
     ttnn.release_trace(mesh_device, trace_id)
-    for tensor in (out, v, q):
+    for tensor in (out, v, q, weights):
         ttnn.deallocate(tensor)
 
 

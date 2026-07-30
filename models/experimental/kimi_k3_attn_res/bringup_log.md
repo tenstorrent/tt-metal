@@ -355,9 +355,13 @@ KDA's numbering, so the parallel is legible. Phase 11 is new.
 
 ## Gating discipline
 
-Thresholds are inherited from the analog, not invented. Analog: the `_d_p` rmsnorm
-tests use `assert_with_pcc(expected, actual, pcc=0.9999)`
-(`tests/ttnn/utils_for_testing.py:94`).
+Thresholds are not invented — but they are **not** inherited from the analog either, and
+this section said they were until Phase 1 was back-filled. The `_d_p` rmsnorm tests pass
+`pcc=0.99` explicitly (`models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm.py:137` for the
+distributed form, `:205` for single-chip). `0.9999` is `assert_with_pcc`'s *signature
+default* (`tests/ttnn/utils_for_testing.py:94`). We hold the repo-wide default, which is
+100× stricter than the nearest analog's deliberate loosening; the analog's 0.99 is a floor
+we must not fall below, not the target. See §Learnings Phase 1.
 
 | Test | Config | Gate |
 |---|---|---|
@@ -651,6 +655,12 @@ Traced on `(2, 4)`, one variant per trace, `[1, 9, 2560, 1792]` bf16 = 79 MiB in
 | mix: `mul` + `sum` over the candidate axis | 791.1 | 3.45 | — |
 | **floor**: `sum(v, dim=1)` | 228.2 | 1.00 | control |
 
+**Amended by P9:** the mix row above sits **15% (102 µs) above** the shape the op runs. It
+multiplies by `q`, reusing the matvec's `[1, 1, 1, d/tp]` operand, where `_mix` multiplies
+by a `[1, C, N, 1]` weight. On that shape the mixture is **688.3 µs at 3.01× floor** (mean
+of two runs). Readings 1–3 below are unaffected; they concern the two `d`-reductions, whose
+rows are correct.
+
 1. **Fidelity is part of the candidate, not a knob.** At default (LoFi) fidelity both
    one-pass forms lose an order of magnitude — the statistics kernel goes to 4.78e-2 against
    the 2.44e-3 that `mul` + `sum` achieves, the matvec to 1.28e-2 — because LoFi truncates
@@ -777,6 +787,53 @@ of them new: `[1, S, N, R] * [1, S, N, 1]` on the last dim, measured at one bf16
 *Verdict:* **batched dots kept, batched mixture rejected.** The mixture is now 96% of the
 sealed half's traffic and 24 of its 26 passes, which is the whole of what Phase 10 is for.
 
+### P9 — a second dim-1 reduce kernel, and a 102 µs error in P7's mix row
+
+Not found by profiling. Found by writing Phase 2's delta table, which asks what else in
+the tree could do delta 4 and turned up `ttnn.experimental.fast_reduce_nc` — a reduce over
+dim 0, 1 or [0,1], which is the mixture's axis, exposed in Python and never A/B'd. P7 had
+recorded "no one-op form" for the mix, which is true of *fusion* and says nothing about
+whether `ttnn.sum` is the best available dim-1 reduce.
+
+Same trace methodology, same 79 MiB input, `(2, 4)`. Two runs, because the whole verdict
+turns on a sub-percent difference and one sample cannot tell that from noise:
+
+| form | run 1 | run 2 | mean | ×floor |
+|---|---|---|---|---|
+| **floor**: `sum(v)` — reduce dim 3 | 228.8 | 228.6 | 228.7 | 1.00 |
+| **floor**: `sum(v, dim=1)` | 229.0 | 228.4 | 228.7 | 1.00 |
+| **floor**: `fast_reduce_nc(v, dims=[1])` | 228.4 | 229.2 | 228.8 | 1.00 |
+| **floor**: `fast_reduce_nc` **HiFi4** | 228.5 | 228.5 | 228.5 | 1.00 |
+| mix, `[1,1,1,d]` broadcast (P7's row) | 789.8 | 790.5 | 790.2 | 3.46 |
+| mix, real `[1,C,N,1]` weight: `mul` + `sum` | 688.4 | 688.2 | **688.3** | **3.01** |
+| mix, real weight: `mul` + `fast_reduce_nc` | 687.5 | 688.0 | 687.8 | 3.01 |
+
+1. **Refuted, and the second run is what makes it a refutation.** `fast_reduce_nc` is
+   0.08% faster on the mean (687.8 against 688.3 µs) against a run-to-run band that reaches
+   0.35% on the floor rows — so the difference is not resolvable, let alone useful. The
+   reduce half already runs at the memory floor, so a different kernel over the same bytes
+   has nothing to win. Delta 4 stays composed until Phase 10, now on evidence rather than on
+   the absence of a fused op. Read from run 1 alone this row said 0.13% and would have
+   invited the same conclusion for the wrong reason.
+2. **Four different reductions cost exactly one read of `v`** — 228.4 to 229.0 µs, a 0.26%
+   spread, across two axes, two kernels and two fidelities. The dim-1 output is **8.75 MiB**
+   against the dim-3 output's **1.41 MiB** (`[1, 9, N, 1]` tile-pads to 32 wide, so the
+   padding is 97% of it), a 6× difference in bytes written that does not register at all
+   against a 79 MiB read. HiFi4 is free again, as in P7. Every floor row across P7 and P9
+   lands in 228.2–229.5 µs; the number is the bandwidth, not the kernel.
+3. **P7's mix row overstated the op, and this is the load-bearing finding.** That row
+   multiplied by `q`, a `[1, 1, 1, d/tp]` broadcast, because it reused the matvec's operand.
+   `_mix` multiplies by a `[1, C, N, 1]` weight. Same bytes read, same bytes written, same
+   reduction after — **102 µs apart**, the P7 row sitting 15% above the shape the op runs.
+   Broadcasting a scalar along the last dim is cheaper than broadcasting a row across the
+   outer dims. The op's mixture is **688.3 µs at 3.01× its floor**, not 791.1 at 3.45×.
+4. Phase 10's headline is unaffected — the ~3.8× came from the whole-op 191.2 ms, not from
+   this row — but its component attribution moves, and the ~229 µs floor it has to beat is
+   now confirmed by four independent kernels rather than one.
+
+*Verdict:* **refuted, and a recorded number corrected.** The cost of the refutation was two
+15-second device runs; the cost of not asking was a 102 µs error standing in the log since P7.
+
 ---
 
 ## Learnings
@@ -794,6 +851,80 @@ clothes.
 *Lesson: "op not found" and "module not found" are both, until proven otherwise,
 build-state claims rather than API claims. Confirm `ttnn.__file__` resolves under the
 worktree before believing anything an import probe says.*
+
+### Phase 1 — the infra map, and the analog that is not in this tree
+
+Written after phases 3–9, which is the wrong order and shows: both findings below are
+corrections to claims the earlier phases had already acted on. The map itself is short
+because AttnRes has fewer in-tree analogs than the ladder assumed.
+
+| What we need | In-tree analog | `file:line` | Its own gate |
+|---|---|---|---|
+| Distributed RMS statistics | `TtDistributedRmsNorm.forward` | `models/demos/deepseek_v3_d_p/tt/tt_distributed_rms_norm.py:236` | `pcc=0.99` |
+| — its pre-reduce kernel | `ttnn.rms_norm_pre_all_gather` | `ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp` | — |
+| — its stats collective | `ttnn.all_gather(dim=3, cluster_axis=…)` | `tt_distributed_rms_norm.py:274` | — |
+| PCC gate helper | `assert_with_pcc` | `tests/ttnn/utils_for_testing.py:94` | default `pcc=0.9999` |
+| Distributed norm test | `test_rmsnorm_distributed` | `models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm.py:134` | `pcc=0.99` |
+| Single-chip norm test | `test_rmsnorm_single_chip` | `models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm.py:202` | `pcc=0.99` |
+| CCL semaphore hoisting | `create_global_semaphores` | `models/demos/deepseek_v3_d_p/tt/tt_ccl.py:54` | — |
+| Mesh topology per axis | `per_axis_topology`, `get_num_links` | `tt_ccl.py:308`, `tt_ccl.py:376` | — |
+| Mul-then-reduce over dim 1 | `deepseek_moe_fast_reduce_nc_fused` | `ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused.hpp:30` | — |
+| Reduce over dim 0/1 | `ttnn.experimental.fast_reduce_nc` | `ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp:15` | — |
+
+**Our thresholds are not inherited from the analog — they are stricter, and §Gating
+discipline said otherwise for nine phases.** The `_d_p` rmsnorm tests pass `pcc=0.99`
+explicitly, at both `file:line` above. `0.9999` is `assert_with_pcc`'s *signature
+default*. The earlier text cited line 94 as if it were the analog's choice, which
+conflated the repo-wide default with the nearest analog's deliberate loosening. The gate
+stays at 0.9999 — we measure there and have no reason to give it up — but the provenance
+is the repo default, and the analog's 0.99 is a floor, not a target.
+
+**mHC — the nearest prior art, and the reason this task exists — is not in this tree.**
+`models/demos/deepseek_v3_d_p/tt/mhc/` exists on disk holding nothing but a
+`__pycache__` from another branch's checkout; `git ls-files` matches no path containing
+`mhc` on this branch. So nothing was inheritable from the previous residual bringup, and
+every threshold, layout and test shape here was derived from AttnRes's own algebra. That
+is defensible, but it was an accident rather than a decision, and the ladder's Phase-1
+gate exists precisely to make it a decision.
+
+*Lesson: an analog you cannot cite at `file:line` is a memory, not an analog. Both errors
+here — a threshold attributed to the wrong line and a module assumed present because its
+directory was — survived nine phases because no one made the citation.*
+
+### Phase 2 — six deltas, and the one still open is exactly Phase 10
+
+AttnRes against the distributed-RMSNorm analog, as a countable delta:
+
+| # | Delta | Status |
+|---|---|---|
+| 1 | Statistics over `S+1` candidate planes, not one | composed: `[1, C, N, ·]` throughout |
+| 2 | A `⟨q, v_i⟩` matvec per candidate alongside the norm | one-pass via `ttnn.matmul` (P7), batched over sites (P8) |
+| 3 | Softmax over the **candidate** axis (dim 1) | hand-rolled; `ttnn.softmax(dim=1)` loses 4% of the mass (D12) |
+| 4 | Weighted sum over the candidate axis | `mul` + `sum(dim=1)`, still 3.01× its floor (P9) |
+| 5 | Stats reduced with `all_reduce`, not `all_gather` | every rank needs the same scalar, not the concatenation |
+| 6 | Values enter the mixture **un-normalized** | gated by `test_values_are_not_normalized` |
+
+Deltas 1, 2, 5 and 6 are settled. Delta 3 is settled *against* `ttnn.softmax` — the fused
+op exists and loses, so the hand-rolled chain stays. **Delta 4 is the whole of Phase 10's
+mandate** (P8: 24 of the sealed half's 26 passes, 96% of its traffic).
+
+`Missing/blocked ops`, as the gate demands:
+
+- **Blocked, technique liftable:** `deepseek_moe_fast_reduce_nc_fused` does exactly
+  delta 4's arithmetic in one pass, but its signature requires `expert_indices_tensor`
+  and `expert_mapping_tensor` — the MoE routing convention — and an L1-resident input
+  (verified at `…_fused.hpp:30-33`). Not callable; the kernel technique is.
+- **Missing:** no fused elementwise-then-reduce over a batch dim with a plain
+  `[1, C, N, 1]` weight. This is the op Phase 10 writes.
+- **Present but never tried, found only by writing this table:**
+  `ttnn.experimental.fast_reduce_nc` reduces dim 0, 1 or [0,1] — delta 4's axis — and is
+  exposed in Python. It is *not* the fused op (the elementwise pass stays), so it cannot
+  reach the floor, but it is a different dim-1 reduce kernel than `ttnn.sum`, which P7
+  never A/B'd. Numerics land one bf16 ulp apart. Priced in P9.
+
+*Lesson: the delta analysis is not paperwork. Enumerating what the op needs against what
+the tree has turned up a candidate primitive nine phases of profiling had walked past,
+because profiling asks "where is the time" and the delta asks "what else could do this".*
 
 ### Phase 4 — the oracle is fp32-internal, and so is the metric
 
@@ -1218,12 +1349,56 @@ two are the same buffer, and it will present as a crash far from its cause.
 degenerate case where the piece is the whole. `buffer_address()` answers it in one line, which
 is cheaper than reading a segfault traceback in a foreign frame.*
 
+### Phase 9 — broadcast direction is worth 15% on the same bytes
+
+P7 priced `_mix` by reusing the matvec's `q` as the multiplier: `[1, C, N, d/tp] * [1, 1, 1,
+d/tp]`, a row broadcast across the outer dims. The op multiplies by `[1, C, N, 1]`, a scalar
+broadcast along the last dim. Identical bytes read, identical bytes written, identical
+reduction afterwards — **790.2 against 688.3 µs** over two runs each, and the version the op
+actually runs is the fast one.
+
+The mechanism is **not established** — the two shapes select different broadcast kernels
+(`[1, C, N, 1]` broadcasts along a tile's columns; `[1, 1, 1, W]` broadcasts along its rows
+*and* over both outer dims), and either the kernel or the path that reaches it could hold the
+102 µs. It is not the operand's size: 3.5 KiB is L1-resident either way. Settling it needs a
+tracy pass on the two `ttnn.mul` calls alone, which nothing yet depends on. What is
+established is the direction and the magnitude, and that the shape the op runs is the faster
+one.
+
+*Lesson: a perf row that substitutes one broadcast shape for another is measuring a different
+op, even when the byte counts match. Reusing a neighbouring row's operand is exactly the kind
+of convenience that makes a table internally consistent and externally wrong — and it stood
+for two phases because both numbers looked plausible.*
+
+### Phase 9 — the profiler cannot surface a primitive you did not know existed
+
+Seven perf iterations profiled this op, attributed 76% of its device time to seven big-tensor
+ops, and never once asked whether `ttnn.sum(dim=1)` was the best available dim-1 reduce. The
+question came from Phase 2's delta table — the paperwork phase — which asks a structurally
+different question: not "where is the time" but "what else in the tree could perform this
+contraction". One `grep` of the reduction ops directory turned up
+`ttnn.experimental.fast_reduce_nc`, exposed in Python, reducing exactly the axis the mixture
+reduces.
+
+It lost, by 0.08% on the mean of two runs — unresolvable against a 0.35% band. That is the
+point: the refutation cost two 15-second device runs, and now the mixture's floor is confirmed
+by four independent kernels instead of assumed from one. An unasked question of that price is
+not a saving.
+
+*Lesson: profiling and delta analysis are not substitutes. A profiler ranks what you already
+call; it is silent about the call you never made. Run the delta table before the perf loop —
+and if the order slips, run it anyway rather than declaring it redundant.*
+
 ---
 
 ## Backlog
 
-- [ ] Phase 1 — infra map with `file:line` citations and inherited thresholds.
-- [ ] Phase 2 — delta analysis; `Missing/blocked ops` list.
+- [x] Phase 1 — infra map with `file:line` citations and inherited thresholds. Back-filled
+      after Phase 9, which is the wrong order: it found that our gate is *stricter* than the
+      analog's rather than inherited from it, and that mHC is not in this tree at all.
+- [x] Phase 2 — delta analysis; `Missing/blocked ops` list. Six-row delta, five settled;
+      delta 4 is Phase 10's whole mandate. Surfaced the `fast_reduce_nc` candidate that P9
+      then refuted.
 - [x] Phase 3 — `API_SPEC.md`.
 - [x] Phase 4 — `torch_functional/`, numeric ladder (D9, amended by D11).
 - [x] Phase 5 — `tt/` composite, single device.
@@ -1255,7 +1430,7 @@ is cheaper than reading a segfault traceback in a foreign frame.*
 - [ ] Try fp32 statistics on the **single-device** path — the sharded measurement says
       they buy ~1e-5 of depth PCC for 1.5 MB per read.
 - [x] Phase 9 — perf harness + numbered perf loop. `tests/perf/test_attn_res_perf.py`,
-      seven numbered iterations P1–P7 plus a tracy attribution, five refutations recorded
+      nine numbered iterations P1–P9 plus a tracy attribution, eight refutations recorded
       in §Phase 9 perf loop. Launch term measured first, as §6 demanded — and it refuted
       §6.
 - [x] Fold the statistics into `[1, 1, T/R, 2(S+1)]` — landed as `fold_stats`, default on.
@@ -1278,11 +1453,16 @@ is cheaper than reading a segfault traceback in a foreign frame.*
       behind `one_pass_stats`, 1.37× on the read at the schedule's mean shape (~367 → 267 ms
       per forward). The squares land 1.4% off a one-pass floor; the matvec is still 1.97×
       off it, and *two* reads of `v` is the composed-op floor either way.
-- [ ] `_mix` is the same 3.47× shape with no one-op form — 791.1 µs against a 228.2 µs
-      floor (P7), and it reduces over the candidate axis, so reaching the floor needs a
-      `[1, N, C, d/tp]` layout where the mix is a batched matmul. That is a layout change
-      with knock-on effects on both the collective and the fold, i.e. P8-scale, and P6 says
-      to price the conversions before believing the 563 µs.
+- [ ] `_mix` is the same three-pass shape with no one-op form — **688.3 µs against a
+      228.7 µs floor, 3.01×** (P9 corrected P7's 791.1/3.45×, which had measured the wrong
+      broadcast) — and it reduces over the candidate axis, so reaching the floor needs a
+      `[1, N, C, d/tp]` layout where the mix is a batched matmul. P8 priced that layout and
+      it loses: the two permutes over the sealed set give back all but 1.09×. What is left
+      is Phase 10.
+- [x] A/B `ttnn.experimental.fast_reduce_nc` against `ttnn.sum` on the mixture's dim-1
+      reduce — surfaced by Phase 2's delta table, not by the profiler. **Refuted:** 687.8
+      against 688.3 µs, 0.08% on the mean of two runs, against a band reaching 0.35%. The
+      reduce half runs at the floor, which four kernels now confirm at ~229 µs.
 - [ ] Phase 10 — fused C++ op, only on measured evidence. `ROOFLINE.md` §7 puts the
       ceiling at 10.8× DRAM (215.5 ms → 20 ms per forward) with `v` resident in L1 at
       every shape that matters. Phase 9 sharpens it three times: the fused kernel is
@@ -1586,3 +1766,43 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
   where direct is faster, so a form-selecting caller would see ~189.7. The 1.09× mixture row
   uses a `ttnn.ones` stand-in for the real weights, which is the right traffic and not the
   right numerics. Nothing here is asserted — the perf harness logs.
+
+- **2026-07-30** — Phases **1 and 2** back-filled, nine phases late, and both found errors
+  the earlier phases had already acted on. Phase 1: every analog cited at `file:line` with
+  its own gate. Phase 2: AttnRes as a six-row delta against distributed RMSNorm, plus the
+  `Missing/blocked ops` list.
+
+  **VALIDATED:** the delta is four unsettled ops at the start and one now — delta 4, the
+  weighted sum over candidates, which is exactly Phase 10's mandate. The blocked-op claim
+  about `deepseek_moe_fast_reduce_nc_fused` is confirmed at its header: it requires
+  `expert_indices_tensor` and `expert_mapping_tensor` and an L1-resident input.
+
+  **CORRECTED:** §Gating discipline claimed our thresholds were inherited from the analog.
+  They are not — the `_d_p` rmsnorm tests pass `pcc=0.99` at
+  `tests/pcc/test_rmsnorm.py:137` and `:205`, while `0.9999` is `assert_with_pcc`'s
+  signature default at `tests/ttnn/utils_for_testing.py:94`. Our gate is 100× stricter than
+  the nearest analog's and its provenance is the repo default. Also: **mHC, the prior
+  residual bringup this task is modelled on, is not tracked on this branch at all** — the
+  `tt/mhc/` directory holds another branch's `__pycache__` and nothing else, so nothing was
+  inheritable from it.
+
+- **2026-07-30** — Phase 9 **P9**: A/B'd `ttnn.experimental.fast_reduce_nc` against
+  `ttnn.sum` on the mixture's dim-1 reduce — a candidate Phase 2's delta table surfaced and
+  seven phases of profiling had walked past. **7 passed** twice, 15.23 s and 15.72 s.
+
+  **REFUTED:** 687.8 against 688.3 µs — 0.08% on the mean of two runs, against a band that
+  reaches 0.35%, so unresolvable. The reduce half is at the memory floor, which four kernels
+  now agree on to 0.26% (228.4–229.0 µs across two axes, two kernels, two fidelities). HiFi4
+  is free here as it was in P7.
+
+  **CORRECTED:** P7's mix row sits 15% high. It multiplied by the matvec's `[1, 1, 1, d/tp]`
+  operand; `_mix` multiplies by a `[1, C, N, 1]` weight. Same bytes, **102 µs** apart —
+  broadcasting a scalar along the last dim beats broadcasting a row across the outer dims.
+  The op's mixture is **688.3 µs at 3.01× floor**, not 791.1 at 3.45×. Phase 10's ~3.8×
+  headline is unaffected (it came from the whole-op 191.2 ms), its component attribution is
+  not.
+
+  **NOT VALIDATED:** the two `fast_reduce_nc` rows are timing-only — the kernel's numerics
+  were probed once off-mesh at one bf16 ulp from `ttnn.sum`
+  (`scratchpad/probe_fast_reduce_nc.py`) and never gated, which is enough for a refutation
+  and would not be enough for adoption.

@@ -21,7 +21,13 @@ one op launch costs in the regime the harness runs in. Both changed the conclusi
 > amended last, which is its own lesson about which parts of a roofline to trust. P8 then
 > found the remaining win by counting the same touches over a *block* instead of a read, and
 > §7's claim that the block split "does not compound with fusion" is the one line in this
-> memo that P9 made **more** wrong rather than less.
+> memo that P8 made **more** wrong rather than less.
+>
+> P9 changes no conclusion here, but it hardens the one number Phase 10 has to beat: the
+> **~229 µs single-pass floor** over `v` is now measured by four independent kernels — two
+> reduction axes, `ttnn.sum` and `ttnn.experimental.fast_reduce_nc`, LoFi and HiFi4 — to
+> within 0.26%. It also corrects §7's figure for `_mix` from 791 to **688 µs**, which was a
+> measurement of the wrong broadcast rather than a modelling error.
 
 ---
 
@@ -430,8 +436,9 @@ which a fused kernel that reads `v` once has already collapsed.
 >
 > What is left is now precisely characterized, and it is the part composed ops cannot reach.
 > P7 pays **682 µs to read `v` twice** for two reductions whose one-read floor is 229 µs, and
-> `_mix` reads it a third time (791 µs against a 228 µs floor) with no one-op form available
-> at the current layout. No composed op can produce two different reductions from one pass —
+> `_mix` reads it a third time (688 µs against a 229 µs floor — P9 corrected this from 791,
+> which had priced the wrong broadcast) with no one-op form available at the current layout.
+> No composed op can produce two different reductions from one pass —
 > that gap, ~3V of the remaining 7V, is Phase 10's actual mandate rather than the whole 10.8×.
 
 > **Amended a third time 2026-07-30 (P8 — and the paragraph above about the split form is
