@@ -1,7 +1,16 @@
 {
   "last_scan_date": "2026-07-30",
-  "scanned_run_ids": ["30387358745", "30493606319"],
-  "workflows_sampled": ["pr-gate.yaml", "runtime-unit-tests.yaml"],
+  "scanned_run_ids": [
+    "30387358745",
+    "30493606319",
+    "30582544934",
+    "30515701001"
+  ],
+  "workflows_sampled": [
+    "pr-gate.yaml",
+    "runtime-unit-tests.yaml",
+    "merge-gate.yaml"
+  ],
   "in_flight_prs": [
     {
       "number": 51548,
@@ -14,7 +23,7 @@
     }
   ],
   "backlog_cursor": {
-    "next_category": 2,
-    "note": "Next: scan compile warnings (JIT/device-kernel) - check for SFPU deprecated warnings from LLK level"
+    "next_category": 6,
+    "note": "Opened issue for UMD cluster.cpp lifecycle info-spam (tt-umd submodule, out-of-repo fix). Next: continue scanning for category 1/3/5 patterns in host code (not vendored)."
   }
 }
