@@ -602,3 +602,83 @@ the RoCE side **N RC QPs** (one per endpoint) — it bridges them.
 multi-QP RC initiator** — per-frame QP selection, per-QP SQ management, READ-response correlation, staging-MR, and
 completion coupling back into the mesh. All buildable on DPA-Verbs (post WRITE on a selected QP, Arm-free), but it
 is the piece to scope carefully.
+
+### 13.6.2 Inbound detail (RoCEv2 → TT): single / multiple / multicast + TT-initiator matrix
+
+Unifying principle: **multicast is native on the TT mesh, but emulated by fan-out on the RoCE side** (RC is
+point-to-point-unicast-reliable; the TT fabric is one-to-many-capable). The gateway is the impedance-matcher.
+
+**Proxy-MR model:** a RoCE endpoint does *normal* RoCE to a BF-local **proxy MR** `{rkey, addr}`; the inbound map
+translates `{GID, QP, rkey, addr}` → mesh `{chip, addr, flow-id}`. The endpoint never knows TT exists.
+
+- **Single (one endpoint → one TT MR):** one QP, one map entry; RC WRITE → DPA re-head → ttpacket → EDM → target
+  BH HW-lands. HW-reliable end to end.
+- **Multiple (a): N endpoints → TT** — N independent RC QPs funnel onto the shared ttpacket link (shared-fate
+  Go-back-N, §13.6 caveat 1); demux by QP/rkey.
+- **Multiple (b): one endpoint → many TT MRs** — a single QP's WRITEs to different `{rkey, addr}` map to different
+  `{chip, MR}`; EDM routes each. No multicast — just per-frame routing.
+- **Multicast (one RoCE op → many TT MRs):** RC has **no multicast**. Two realizations:
+  - **Reliable + right:** reliable **RC unicast in → HW mesh multicast out**. DPA emits one ttpacket with a
+    multicast inner descriptor; the mesh/overlay fans out (spec §2.2.3; RX recognizes multicast dest→RXQ1; on-chip
+    NOC multicast). Per-branch acked (overlay clears tiles on remote ack, §2.2.2 mode 3) = lossless. This is
+    `tt-rdma-mesh-egress-multicast`.
+    - **Unreliable:** RoCE **UD multicast** (SEND, unreliable, MTU-limited) — telemetry-class only.
+
+**TT-initiator multi-MR matrix** (can a TT initiator target many MRs?):
+
+| | To **TT** targets | To **RoCE** targets |
+|---|---|---|
+| Multicast (same data → many) | **native HW** (mesh/overlay + NOC multicast, per-branch acked) | **gateway fan-out** → N RC unicast WRITEs (reliable), or 1 UD multicast (unreliable) |
+| Scatter (diff data → many) | N EDM-routed writes (HW) | N RC WRITEs on N QPs (DPA fan-out) |
+| Single | one routed write, HW land | one RC WRITE per QP |
+
+So *anything → multiple TT MRs* is native HW multicast/scatter; *anything → multiple RoCE MRs* is **gateway
+fan-out** — reliable but N unicast ops, expanded on the DPA from one TT-side multicast descriptor.
+
+### 13.6.3 One-to-many: broadcasting a TT tensor to many RoCE endpoints
+
+The controlling decision is **where replication happens** — every link *before* the fan-out carries 1× the tensor,
+every link *after* carries N×. Replicate **as late as possible**:
+
+```
+TT mesh ──1×──> gateway BH ──1×──> BF ──??──> switch ──> N endpoints
+                                       ↑ fan-out point decides who eats N×
+```
+- replicate in the **mesh** → N× on ttpacket ❌ worst
+- replicate at the **BF DPA** → 1× to BF, **N× on BF↔switch uplink** ✅ simple+reliable (default)
+- replicate at the **switch** (multicast) → 1× everywhere ✅ BW-ideal, ❌ RC has no reliable multicast
+- replicate among the **endpoints** (collective tree/ring) → 1× to root, N-way on the endpoint fabric ✅✅ scalable
+
+**Default reliable path — gateway DPA fan-out (small/moderate N):**
+1. Control plane: each endpoint advertises a recv MR; gateway learns the group `[{endpoint-id, addr_i, rkey_i}]`,
+   holds N RC QPs (or DCT).
+2. TT: mesh **gathers shards to the gateway BH** (one tensor's worth, *not* N); inner descriptor carries a **group
+   handle**. **Never multicast inside the mesh** toward one gateway.
+3. Gateway BH → BF: **one** copy over the ttpacket link.
+4. BF DPA: land into **one staging MR**, post **N RDMA WRITEs** each reading the *same* MR (ConnectX DMA reads it N
+   times, no re-copy) to `{addr_i, rkey_i}` on `QP_i`; use **WRITE_IMM** for per-endpoint completion.
+5. ConnectX → switch → endpoints: N reliable RC WRITEs, each HW-lands zero-copy at its endpoint.
+6. Completion: DPA collects **N SQ CQEs**, sends **one** "broadcast complete" back to the TT source.
+   Link loading: mesh 1×, ttpacket 1×, **BF↔switch uplink N×** ← bottleneck (`≈ uplink_BW / N` per endpoint).
+
+**Scaling for many endpoints — offload to a collective:** if endpoints are NCCL/collective ranks, the gateway
+writes **one** copy to the broadcast **root** and the **endpoint fabric replicates** via tree/ring — amortizing the
+N-way across the endpoints' bisection BW, not the single BF uplink. TT→BF→root = 1×; this is the only thing that
+scales for large N.
+
+**BW-ideal but unreliable:** switch/UD multicast (1× on every link) needs an **app-level reliable-multicast/ARQ**
+for a tensor — niche vs the collective tree.
+
+**Caveats:** (1) BF uplink is the fan-out bottleneck for large N → multiple RoCE ports or go collective; (2)
+**incast** — pace the N posts + DCQCN/PFC so a slow endpoint doesn't stall the staging MR / ttpacket link; (3)
+**staging-MR lifetime** — held until all N CQEs → double-buffer for streaming; (4) **partial failure** — broadcast
+completes only when all N do; report per-endpoint status; (5) **WRITE_IMM** for endpoint-side completion.
+
+**TT's role (all cases, one line):** send **exactly one copy** to the gateway (gather shards if needed, never
+replicate in the mesh), tag with the group handle, collect the aggregated completion.
+
+| N | Approach | Fan-out point | Reliable? |
+|---|---|---|---|
+| few (≲8) | gateway DPA fan-out (one staging MR → N RC WRITEs) | BF DPA | ✅ |
+| many, cooperative | collective tree/ring (gateway feeds root) | endpoint fabric | ✅ scalable |
+| many, loss-tolerant | switch / UD multicast + app ARQ | switch | ⚠️ app-level |
