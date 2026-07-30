@@ -8,6 +8,7 @@
 #include <map>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
 #include <vector>
@@ -16,7 +17,6 @@ namespace tt::tt_fabric {
 
 // Forward declaration
 struct IntermeshVCConfig;
-enum class EdgeCapability : uint8_t;
 
 enum class BuilderType : uint8_t {
     ERISC = 0,
@@ -116,13 +116,15 @@ private:
     bool downstream_is_tensix_builder_;
     RoutingDirection direction_;
     EdgeCapability edge_capability_;
-    const IntermeshVCConfig* intermesh_vc_config_ = nullptr;
-    // This chip terminates a Z edge that crosses a mesh boundary: its mesh routers gain a from-Z
-    // VC1 slot for the boundary's fanout.
-    bool has_intermesh_z_edge_ = false;
     // This mesh has express chords, so a mesh router's VC0 gains a fifth sender for the express
     // producer alongside the worker and its cardinal ingresses.
     bool express_routing_enabled_ = false;
+
+    // The per-VC shape, computed once at construction from the same facts the connection map
+    // reads (including the intermesh VC config and the chip's intermesh Z edge, which are
+    // constructor inputs to it, not class state). Everything below is layout driven by it;
+    // nothing here re-derives a count or a base.
+    RouterConnectionMapping::RouterVcShape shape_;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;

@@ -11,11 +11,15 @@
 #include <vector>
 
 #include "tt_metal/fabric/builder/connection_registry.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace tt::tt_fabric {
+
+// Forward declaration
+struct IntermeshVCConfig;
 
 /**
  * @brief Represents a single downstream connection target for a receiver channel
@@ -215,6 +219,45 @@ public:
      */
     static uint32_t mesh_router_vc0_sender_count(bool has_intermesh_z_edge, bool express_routing_enabled);
     static uint32_t mesh_router_vc1_sender_count(bool has_intermesh_z_edge, bool express_routing_enabled);
+
+    /**
+     * The complete per-VC channel shape of one router: how many sender and receiver channels it
+     * has on each VC, where each VC starts in the flat index space, and how many VCs exist.
+     * Computed ONCE from the same facts the connection map reads, so the count and every flat base
+     * are facts upstream of layout -- never recovered by counting map entries, and never
+     * recomputed at a consumption site (which is the class of bug that produced flat-9 aliasing).
+     */
+    struct RouterVcShape {
+        uint32_t num_vcs = 0;
+
+        // Per-VC channel counts and their flat-index prefix sums, emitted by the derivation.
+        // sender_flat_base[vc] = sum of sender_counts over lower VCs; receiver likewise. The VC2
+        // receiver index that used to be "1 + num_vc1_receivers" is receiver_flat_base[2].
+        std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_counts{};
+        std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_flat_base{};
+        std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_counts{};
+        std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_flat_base{};
+    };
+
+    /**
+     * @brief The one per-VC shape derivation for any router
+     *
+     * All families' arity rules live here, next to the wiring rules that produce them. Topology
+     * gates the channel counts (1D has its own counts and never creates VC1/VC2 channels), but
+     * num_vcs is deliberately config-only and topology-independent: a 1D router with requires_vc1
+     * reports 2 VCs while creating zero VC1 channels -- that existing oddity is preserved, not
+     * fixed, and get_all_sender_mappings() already tolerates it.
+     *
+     * The derivation emits prefix sums for every flat base and enforces the num_max_* ceilings,
+     * turning the capacity comments elsewhere into guarantees at the one construction site.
+     */
+    static RouterVcShape router_vc_shape(
+        Topology topology,
+        RoutingDirection facing,
+        EdgeCapability edge_capability,
+        bool has_intermesh_z_edge,
+        bool express_routing_enabled,
+        const IntermeshVCConfig* vc_config);
 
     /**
      * @brief The Z-facing intermesh boundary template

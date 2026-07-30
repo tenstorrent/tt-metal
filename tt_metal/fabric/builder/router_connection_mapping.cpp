@@ -3,6 +3,7 @@
 
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 
 #include <algorithm>
 #include <array>
@@ -192,6 +193,98 @@ uint32_t RouterConnectionMapping::mesh_router_vc1_sender_count(
     }
     // Legacy rule: every non-self cardinal receiver forwards into this router on VC1.
     return builder_config::num_downstream_edms_2d_vc1;
+}
+
+namespace {
+
+// Emit the flat-index prefix sums and enforce the capacity ceilings at the one construction
+// site. The ceiling checks are what turn the "express with VC2 reaches it exactly (5+4+1)"
+// comment into a guarantee: every family's shape passes through here, with zero margin on
+// senders and on the 32 stream registers the flat space maps onto.
+void finalize_vc_shape_bases(RouterConnectionMapping::RouterVcShape& shape) {
+    uint32_t sender_base = 0;
+    uint32_t receiver_base = 0;
+    for (size_t vc = 0; vc < shape.sender_counts.size(); ++vc) {
+        shape.sender_flat_base[vc] = sender_base;
+        sender_base += shape.sender_counts[vc];
+        shape.receiver_flat_base[vc] = receiver_base;
+        receiver_base += shape.receiver_counts[vc];
+    }
+    TT_FATAL(
+        sender_base <= builder_config::num_max_sender_channels,
+        "Router shape needs {} sender channels, over the {}-channel ceiling",
+        sender_base,
+        builder_config::num_max_sender_channels);
+    TT_FATAL(
+        receiver_base <= builder_config::num_max_receiver_channels,
+        "Router shape needs {} receiver channels, over the {}-channel ceiling",
+        receiver_base,
+        builder_config::num_max_receiver_channels);
+}
+
+}  // namespace
+
+RouterConnectionMapping::RouterVcShape RouterConnectionMapping::router_vc_shape(
+    Topology topology,
+    RoutingDirection facing,
+    EdgeCapability edge_capability,
+    bool has_intermesh_z_edge,
+    bool express_routing_enabled,
+    const IntermeshVCConfig* vc_config) {
+    const bool z_boundary = (facing == RoutingDirection::Z && edge_capability == EdgeCapability::INTERMESH);
+    const bool requires_vc1 = vc_config && vc_config->requires_vc1;
+    const bool requires_vc2 = vc_config && vc_config->requires_vc2;
+
+    RouterVcShape shape{};
+
+    // num_vcs is config-only: the identical answer for 1D and 2D, by design. A 1D router can
+    // therefore report more VCs than it has channels for, since VC1/VC2 channels are never
+    // created on 1D. That oddity is preserved, not fixed -- get_all_sender_mappings() already
+    // tolerates counts exceeding created channels. Whether any 1D configuration should ever set
+    // requires_vc1 is a separate question, deliberately out of scope here.
+    shape.num_vcs = requires_vc2 ? 3 : (requires_vc1 ? 2 : 1);
+
+    // The intermesh boundary family is 2D-only by construction. Today the boundary VC0 arm of the
+    // channel mapping precedes the 2D check, so a 1D Z boundary would silently report 5 -- with
+    // topology in hand that becomes an explicit configuration error instead.
+    TT_FATAL(!z_boundary || is_2D_topology(topology), "A Z-facing intermesh boundary router requires a 2D topology");
+
+    if (!is_2D_topology(topology)) {
+        // 1D counts: worker, plus one forwarding peer on Linear/Ring. No VC1 or VC2 channels are
+        // ever created, independent of the num_vcs answer above.
+        shape.sender_counts = {builder_config::get_num_used_sender_channel_count(topology), 0, 0};
+        shape.receiver_counts = {1, 0, 0};
+        finalize_vc_shape_bases(shape);
+        return shape;
+    }
+
+    // A Z-facing boundary cannot exist without VC1: its whole shape is the from-boundary VC1
+    // fanout. This is where the construction error lives now (moved from the channel mapping).
+    TT_FATAL(!z_boundary || requires_vc1, "A Z-facing intermesh boundary router cannot be constructed without VC1");
+
+    // VC0: worker + wired producers.
+    const uint32_t vc0_senders = z_boundary
+                                     ? builder_config::num_sender_channels_intermesh_z_boundary_vc0
+                                     : mesh_router_vc0_sender_count(has_intermesh_z_edge, express_routing_enabled);
+
+    // VC1: wired producers, when the VC exists.
+    const uint32_t vc1_senders = !requires_vc1 ? 0
+                                 : z_boundary
+                                     ? builder_config::num_sender_channels_intermesh_z_boundary_vc1
+                                     : mesh_router_vc1_sender_count(has_intermesh_z_edge, express_routing_enabled);
+
+    // VC2: one sender by VC2's own definition.
+    const uint32_t vc2_senders = requires_vc2 ? 1 : 0;
+
+    // Receivers: one per active carrier VC. The boundary services no VC2 receiver.
+    const uint32_t vc0_receivers = 1;
+    const uint32_t vc1_receivers = requires_vc1 ? 1 : 0;
+    const uint32_t vc2_receivers = (requires_vc2 && !z_boundary) ? 1 : 0;
+
+    shape.sender_counts = {vc0_senders, vc1_senders, vc2_senders};
+    shape.receiver_counts = {vc0_receivers, vc1_receivers, vc2_receivers};
+    finalize_vc_shape_bases(shape);
+    return shape;
 }
 
 RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
