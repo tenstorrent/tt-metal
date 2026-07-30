@@ -1907,9 +1907,6 @@ void MeshDevice::load_sub_device_manager(SubDeviceManagerId sub_device_manager_i
     pimpl_->load_sub_device_manager(sub_device_manager_id);
 }
 void MeshDevice::clear_loaded_sub_device_manager() { pimpl_->clear_loaded_sub_device_manager(); }
-CoreCoord MeshDevice::virtual_program_dispatch_core(const MeshCommandQueue& cq) const {
-    return pimpl_->virtual_program_dispatch_core(static_cast<uint8_t>(cq.id()));
-}
 CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
     return pimpl_->virtual_program_dispatch_core(cq_id);
 }
