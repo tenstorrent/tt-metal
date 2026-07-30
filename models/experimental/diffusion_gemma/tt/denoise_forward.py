@@ -743,8 +743,12 @@ def _denoise_shared_mlp_forward(mlp, hidden_states):
 # ``DG_SKIP="attn,shared,moe"`` — comma-separated, validated (an unknown token raises). Default
 # empty (nothing skipped). See ``_SKIP_TOKENS`` for the authoritative list:
 #   attn / shared / moe   the denoise attention, shared MLP, and router+expert path
-#   sc                    self-conditioning (the [C,V] @ [V,H] soft-embedding + its gated MLP)
-#   cattn / cshared / cmoe  the same three in the COMMIT body (cattn also removes the K/V write)
+#
+# Only the DENOISE layer body is ablatable. There is deliberately no token for self-conditioning or
+# for the commit body: ``sc``/``cattn``/``cshared``/``cmoe`` were once listed here but never had a
+# consumer, so they validated clean and then measured the UNABLATED step -- exactly the failure this
+# tool's validator exists to prevent. They are gone; ``DG_SKIP=cattn`` now raises. If the commit body
+# ever needs pricing, add the token AND the seam in ``commit_batched.py`` in the same change.
 #
 # The output of a skipped run is garbage BY CONSTRUCTION — never feed a DG_SKIP run into a
 # committed_sha256 comparison or a quality gate. Note also that zeroing the MoE feeds an all-zero
@@ -761,10 +765,6 @@ _SKIP_TOKENS = frozenset(
         "attn",  # denoise attention: QKV, RoPE, SDPA, o_proj, all-reduce
         "shared",  # denoise shared MLP
         "moe",  # denoise router + expert path
-        "sc",  # self-conditioning soft-embedding + gated MLP
-        "cattn",  # commit attention, INCLUDING the K/V cache write
-        "cshared",  # commit shared MLP
-        "cmoe",  # commit MoE
     }
 )
 

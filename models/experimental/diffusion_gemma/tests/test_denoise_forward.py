@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import pathlib
 from types import SimpleNamespace
 
 import pytest
@@ -1149,10 +1150,23 @@ def test_dg_skip_rejects_an_unknown_component(monkeypatch, expect_error):
 
 
 def test_dg_skip_accepts_every_documented_component(monkeypatch):
-    monkeypatch.setenv("DG_SKIP", "attn,shared,moe,sc,cattn,cshared,cmoe")
+    monkeypatch.setenv("DG_SKIP", "attn,shared,moe")
     assert DF._skip_components() == DF._SKIP_TOKENS
     monkeypatch.delenv("DG_SKIP")
     assert DF._skip_components() == frozenset()
+
+
+def test_every_dg_skip_token_has_a_consumer():
+    """An advertised-but-unwired token is worse than no token at all.
+
+    ``_SKIP_TOKENS`` used to list ``sc``/``cattn``/``cshared``/``cmoe``; no code ever read them, so
+    ``DG_SKIP=cattn`` validated clean, ran the full commit body, and the harness reported the number
+    as an ablation. The old test only checked the set against itself, which cannot catch that. Pin the
+    seam instead: every accepted token must be branched on somewhere.
+    """
+    source = pathlib.Path(DF.__file__).read_text()
+    unwired = [token for token in sorted(DF._SKIP_TOKENS) if f'"{token}" in skip' not in source]
+    assert not unwired, f"DG_SKIP tokens accepted but never consumed: {unwired}"
 
 
 def test_bounded_window_refuses_a_nonzero_prefix_base(expect_error):
