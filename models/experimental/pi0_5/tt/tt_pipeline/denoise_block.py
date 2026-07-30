@@ -159,12 +159,11 @@ _KV_SDPA_MAX_CHUNK_TILES = 64
 # so at 8 MQA heads it uses 8 of ~120 cores and Sq is a single tile (no Q-parallelism to exploit).
 # Splitting the 32-tile prefix S ways uses 8*S cores. Env-tunable while it is being characterised.
 _KV_SPLITS = int(os.environ.get("PI05_KV_SPLITS", "1"))
-# Pass the REAL expert attention mask to the SDPA call instead of dropping it. The tiny-tile kv_sdpa
-# has no mask support, so the compat shim routes any masked call to the GENERAL SDPA -- correct but
-# slower. Needed for workloads that mask real prefix columns (LIBERO pads camera slot 3, so 256
-# full-magnitude image-token columns must be masked); pipeline_16_decode otherwise raises rather than
-# drop them silently. NOTE: only valid at TILE_HEIGHT=32 -- bf8 q/k/v + a dense mask + a 16-row tile
-# inverts the output sign (test_sdpa_bf8_mask_corrupts), which is why the mask was dropped originally.
+# Pass the REAL expert attention mask instead of dropping it. Needed for workloads that mask real
+# prefix columns (LIBERO pads camera slot 3, so 256 full-magnitude image-token columns must be masked);
+# pipeline_16_decode otherwise raises rather than drop them silently. With PI05_FUSED_KV_MASK=1,
+# kv_sdpa consumes this mask natively at both 16x32 and 32x32 query tiles; opting out uses the slower
+# general-SDPA compatibility path.
 _PASS_EXPERT_MASK = int(os.environ.get("PI05_PASS_EXPERT_MASK", "0")) == 1
 _QKV_N_BLOCKS, _O_N_BLOCKS, _MLP_N_BLOCKS = (16, 16, 16) if TILE_HEIGHT < 32 else (40, 32, 32)
 
@@ -183,8 +182,7 @@ _LOFI = ttnn.WormholeComputeKernelConfig(
 # (a fidelity reduction can accumulate over 18 layers x N steps, and PCC is scale-invariant so it is a
 # weak detector) was the right concern, and it has now been checked on task success rather than PCC.
 # LoFi is production-blessed for accuracy. Re-run that rollout if this constant or the denoise
-# numerics change again. NOTE the validation ran at TILE_HEIGHT=32 with PI05_PASS_EXPERT_MASK=1,
-# because tile-16 cannot run masked workloads at all (see the mask discussion below).
+# numerics change again. That validation ran at TILE_HEIGHT=32 with PI05_PASS_EXPERT_MASK=1.
 # The general-SDPA fallback below deliberately stays on get_sdpa_compute_kernel_config().
 _KV_SDPA_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
@@ -388,10 +386,9 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
 
         # Mixed-tile SDPA. q/k/v leave create-heads at the model tiny (16-row) tile and stay there;
         # the resident prefix-KV (past_k/past_v) is uploaded at the full 32x32 bf8 tile. kv_sdpa's
-        # two-source flash loop processes the tile-32 prefix and the tile-16 suffix in one pass,
-        # sharing the online-softmax state (each K tile yields a [Sq_h x 32] score tile regardless of
-        # its own height), so no retile is needed. The result is brought back down to the tiny tile
-        # for the o-proj / gated residual.
+        # two-source flash loop explicitly reconfigures unpack tile dimensions at the prefix/suffix
+        # boundary, shares one online-softmax state, and produces the tiny-tile result directly for
+        # the o-proj / gated residual.
         suffix_sq = q.shape[-2]
         # q/k/v stay at the model tiny (16-row) tile -- kv_sdpa is tiny-tile aware (QK_NUM_FACES).
         # This decode-expert SDPA is non-causal full attention over prefix+suffix KV, so the

@@ -30,8 +30,8 @@ _apply_production_env_defaults()
 
 import pytest  # noqa: E402
 import torch  # noqa: E402
-from models.experimental.pi0_5.tt.tt_pipeline.denoise_pipeline import perf_suffix_len
-from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT, from_torch_pi05
+from models.experimental.pi0_5.tt.tt_pipeline.denoise_pipeline import perf_suffix_len  # noqa: E402
+from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT, from_torch_pi05  # noqa: E402
 
 ttnn = pytest.importorskip("ttnn")
 
@@ -473,6 +473,10 @@ def test_l1_single_layer_pcc_ragged_mask(mesh_device):
             f"fused-vs-fallback MAE={path_mae:.6g} max={path_max:.6g}"
         )
         assert pcc >= _PCC, f"L1 ragged-mask PCC {pcc:.6f} < {_PCC}"
+        assert path_mae < 5e-4, (
+            f"fused ragged mask diverges materially from the promote-to-32 fallback: "
+            f"MAE={path_mae:.6g}, max={path_max:.6g}"
+        )
     finally:
         if old_fused is None:
             os.environ.pop("PI05_FUSED_KV_MASK", None)

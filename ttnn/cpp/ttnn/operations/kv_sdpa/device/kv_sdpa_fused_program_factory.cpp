@@ -39,6 +39,8 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     const uint32_t v_ts = vtile.get_tile_size(vdf);
     const uint32_t o_ts = otile.get_tile_size(odf);
     const uint32_t bf16_ts = qtile.get_tile_size(bf16);
+    const auto full_tile = tt::tt_metal::Tile({32, 32});
+    const uint32_t full_bf16_ts = full_tile.get_tile_size(bf16);
 
     const auto& qs = ta.q.padded_shape();
     const auto& ks = ta.k.padded_shape();
@@ -169,22 +171,25 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     // Prefix K/V CBs (own tile geometry). When there is no past, prefix_num_chunks==0 so the compute
     // never touches them; declare a minimal placeholder so the CB index is valid.
     const uint32_t pk_cb_tiles = has_past ? prefix_Sk_chunk_t * DHt * 2 : 1;
-    add_cb(C::c_8, pk_cb_tiles, pkdf, pk_ts, pktile);                    // cb_k_prefix
-    add_cb(C::c_9, pk_cb_tiles, pvdf, pv_ts, pvtile);                    // cb_v_prefix
+    add_cb(C::c_8, pk_cb_tiles, pkdf, pk_ts, pktile);  // cb_k_prefix
+    add_cb(C::c_9, pk_cb_tiles, pvdf, pv_ts, pvtile);  // cb_v_prefix
     // cb_mask_in: one chunk's mask column-tiles, double-buffered so the reader can run ahead of the
     // compute like it does for K/V. A 1-tile placeholder when unmasked (the index must stay declared).
     add_cb(C::c_3, use_provided_mask ? max_Sk_chunk_t * 2 : 1, mdf, m_ts, mtile);  // cb_mask_in
-    add_cb(C::c_5, 1, bf16, bf16_ts, qtile);                             // cb_identity_scale_in
-    add_cb(C::c_7, 1, bf16, bf16_ts, qtile);                             // cb_col_identity
+    add_cb(C::c_5, 1, bf16, bf16_ts, qtile);                                       // cb_identity_scale_in
+    // matmul_reduce computes [Sq_h x 32] @ [32 x 32] to collapse all 32 score columns. The identity
+    // operand must remain full-height even when Q/stats use a 16x32 tile; a 16x32 identity sums only
+    // the first face (columns 0..15), underestimates l, and over-normalizes full-height prefix chunks.
+    add_cb(C::c_7, 1, bf16, full_bf16_ts, full_tile);                    // cb_col_identity
     add_cb(C::c_24, Sq_chunk_t * max_Sk_chunk_t, bf16, bf16_ts, qtile);  // cb_qk_im
-    add_cb(C::c_25, out_tiles, bf16, bf16_ts, qtile);                // cb_out_im_A
-    add_cb(C::c_26, out_tiles, bf16, bf16_ts, qtile);                // cb_out_im_B
-    add_cb(C::c_27, Sq_chunk_t, bf16, bf16_ts, qtile);               // cb_max_A
-    add_cb(C::c_28, Sq_chunk_t, bf16, bf16_ts, qtile);               // cb_max_B
-    add_cb(C::c_29, Sq_chunk_t, bf16, bf16_ts, qtile);               // cb_sum_A
-    add_cb(C::c_30, Sq_chunk_t, bf16, bf16_ts, qtile);               // cb_sum_B
-    add_cb(C::c_31, Sq_chunk_t, bf16, bf16_ts, qtile);               // cb_exp_max_diff
-    add_cb(C::c_16, out_tiles, odf, o_ts, otile);                    // cb_out (interleaved output)
+    add_cb(C::c_25, out_tiles, bf16, bf16_ts, qtile);                    // cb_out_im_A
+    add_cb(C::c_26, out_tiles, bf16, bf16_ts, qtile);                    // cb_out_im_B
+    add_cb(C::c_27, Sq_chunk_t, bf16, bf16_ts, qtile);                   // cb_max_A
+    add_cb(C::c_28, Sq_chunk_t, bf16, bf16_ts, qtile);                   // cb_max_B
+    add_cb(C::c_29, Sq_chunk_t, bf16, bf16_ts, qtile);                   // cb_sum_A
+    add_cb(C::c_30, Sq_chunk_t, bf16, bf16_ts, qtile);                   // cb_sum_B
+    add_cb(C::c_31, Sq_chunk_t, bf16, bf16_ts, qtile);                   // cb_exp_max_diff
+    add_cb(C::c_16, out_tiles, odf, o_ts, otile);                        // cb_out (interleaved output)
     // ---- Split-KV reduction CBs (declared on every core; untouched when kv_splits == 1) ----
     // A child's partial state lands in the reducer's cb_intermed as a (l, m, o) block per child slot;
     // the reducer's writer copies each slot into cb_l_in/cb_m_in/cb_out_o for the compute to merge.

@@ -111,19 +111,8 @@ def kv_sdpa(
     # config satisfies both at either tile height. Anything else (e.g. a caller with no past, or a 16-row
     # prefix) still takes the promote-to-32 general-SDPA fallback below rather than silently dropping the
     # mask, which would change numerics wherever it is non-zero (the keep_padded phantom -1e4 band).
-    # ---- STATUS: the fused mask path is NOT correct in-model yet; it is OPT-IN. -------------------
-    # It passes every unit check at TILE_HEIGHT=32 (whole-tile mask == tile skipping 0.999848; a
-    # half-masked tile lands strictly between open and blocked; mask composed with prefix_valid_tiles
-    # 0.999716) and the in-model single-layer PCC gate (0.9999 at both tile heights) -- yet LIBERO fails
-    # 6/6 at BOTH tile heights with it enabled, running clean and producing wrong actions, where the
-    # promote-to-32 fallback below scores 40/40. So something the model does is not covered by any of
-    # those checks. Prime suspect: the in-model chunk geometry. With max_kv_chunk_tiles=64 and DHt=8 the
-    # cap is 8 tiles, and LIBERO's prefix_Kt_eff of 17 (17 valid tiles, prime) forces
-    # prefix_Sk_chunk_t == 1 / prefix_num_chunks == 17 -- a 1-tile-per-chunk regime that also stresses
-    # add_block_inplace's pop/reserve/push cycle on cb_qk_im, which only lands back on the same physical
-    # tiles when the chunk fills the whole (single-buffered) CB.
-    # Note the single-layer PCC gate is near-useless here: with all-real inputs the pi0.5 mask blocks
-    # only the phantom suffix tail, so masked and unmasked agree to six decimals.
+    # The fused path remains opt-in. Its compute kernel explicitly reconfigures unpack tile dimensions
+    # when crossing between the full-height prefix and tiny suffix, so q/k/v remain at the model tile.
     _FUSED_KV_MASK = os.environ.get("PI05_FUSED_KV_MASK", "0") == "1"
 
     def _tile_h(t):

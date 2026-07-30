@@ -10,10 +10,20 @@ only one it exercises. The single-layer PCC gate is barely better -- with all-re
 expert mask only blocks the phantom suffix tail, so masked and unmasked agree to 6 decimal places and a
 dropped mask looks fine. A mask test has to supply a mask that CHANGES THE ANSWER.
 
-Strategy: two differential checks against references that live on the same device, rather than a torch
-oracle. A standalone torch reference for this op has burned us repeatedly (scratchpad/kvs_bench.py
-reports PCC ~0.38 for *stock* kv_sdpa, i.e. its reference does not match the op's contract), so these
-compare device path against device path with byte-identical inputs:
+Assertions are kv_sdpa-vs-kv_sdpa (or invariance under perturbing masked inputs), which keeps them
+independent of absolute scaling. An absolute torch oracle IS also valid for this op -- see the correction
+below -- and is pinned here for each prefix/suffix/mask phase.
+
+CORRECTION (2026-07-30). An earlier version of this file asserted that a standalone torch reference
+"does not match the op's contract", citing scratchpad/kvs_bench.py's PCC ~0.38 for stock kv_sdpa. That was
+WRONG, twice over: first blamed on a bad reference, then on harness sensitivity. 0.38 was a REAL BUG --
+flash_fused.cpp ran the QK matmul with transpose=false, so each K tile's contents were never transposed
+(only the tile grid was). kvs_bench.py had been correctly reporting a genuine defect all along. Tiny-Q
+then exposed two more defects: whole-tile SFPU traversal used the four-face RC mode on a two-face 16x32
+score tile, and the row-sum identity was incorrectly 16x32, summing only columns 0..15 of 32-column prefix
+scores. Mixed 32x32-prefix/16x32-suffix matmul also hits tt-metal's documented tile-descriptor
+reconfiguration gap (#46769); flash_fused now explicitly reprograms unpack dimensions/stride whenever
+it switches K/V sources rather than promoting the model's tiny Q/suffix tensors.
 
   test_tile_aligned_mask_matches_tile_skipping
       A mask that blocks WHOLE prefix tiles must agree with dropping those tiles via
@@ -32,6 +42,7 @@ import torch.nn.functional as F
 import ttnn
 
 from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT
+from models.experimental.pi0_5.tt._ttnn_compat import kv_sdpa as pi05_kv_sdpa
 
 # pi0.5 decode expert-attention shape: MQA, 8 Q heads / 1 KV head, head_dim 256, a 1024-row resident
 # prefix at a 32-row tile and a single suffix K tile at the model tile height.
@@ -93,32 +104,12 @@ def _pcc(a, b):
 
 
 def _unmasked_baseline(q, k, v, pk, pv):
-    """The unmasked kv_sdpa output, used as the 'mask ignored' comparison point.
-
-    IMPORTANT -- WHY THERE IS NO TORCH ORACLE HERE. In a standalone harness, kv_sdpa disagrees with an
-    exact fp32 torch reference at PCC ~0.39 *with no mask involved at all*, while the general
-    ttnn SDPA matches that same reference at 0.9997 (measured 2026-07-30, TILE_HEIGHT=32). The op is
-    nonetheless correct in the model (test_l1_single_layer_pcc: 0.9999). So the distortion belongs to the
-    harness, not the op -- and it means:
-
-      * an ABSOLUTE PCC against torch (or against the general SDPA) is meaningless here and must not be
-        asserted; that is what makes scratchpad/kvs_bench.py's long-standing "~0.38 for stock kv_sdpa"
-        a harness artifact rather than the op bug it was read as,
-      * only RELATIVE kv_sdpa-vs-kv_sdpa comparisons are valid, since both sides carry the same
-        distortion. Every assertion below is of that form.
-      * absolute correctness of the mask is established IN-MODEL instead: test_l1_single_layer_pcc with
-        PI05_PASS_EXPERT_MASK=1, plus the LIBERO rollout (whose mask has a genuinely partial tile).
-
-    At TILE_HEIGHT=16 this harness degrades further -- the unmasked baseline is not even finite
-    (absmax 3.4e38, mean -inf) -- so skip rather than emit a NaN PCC that reads as a mask bug.
-    """
+    """The unmasked kv_sdpa output, used as the 'mask ignored' comparison point."""
     base = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv)).float()
-    if not torch.isfinite(base).all() or base.abs().max() > 1e6:
-        pytest.skip(
-            f"unmasked kv_sdpa baseline is not finite in this harness at TILE_HEIGHT={TILE_HEIGHT} "
-            f"(absmax={base.abs().max():.3g}); tile-16 is covered in-model by test_l1_single_layer_pcc "
-            "and by the LIBERO rollout."
-        )
+    assert torch.isfinite(base).all() and base.abs().max() < 1e6, (
+        f"unmasked mixed-tile kv_sdpa is invalid at TILE_HEIGHT={TILE_HEIGHT}: "
+        f"absmax={base.abs().max():.3g}"
+    )
     return base
 
 
@@ -211,11 +202,7 @@ def test_partial_tile_mask_blocks_the_requested_columns(device):
     mask[:, prompt_end:PREFIX] = _MASK_VAL
     m_tt = _mask_to_tt(mask, device, sq)
     reference = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, attn_mask=m_tt)).float()
-    if not torch.isfinite(reference).all():
-        pytest.skip(
-            f"standalone kv_sdpa baseline is not finite at TILE_HEIGHT={TILE_HEIGHT}; "
-            "tile-16 exact-column coverage runs in-model"
-        )
+    assert torch.isfinite(reference).all(), f"masked mixed-tile kv_sdpa is non-finite at TILE_HEIGHT={TILE_HEIGHT}"
 
     def mutate_masked(pk_t, pv_t):
         pk_t[:, :, prompt_end:PREFIX, :] = torch.randn_like(pk_t[:, :, prompt_end:PREFIX, :]) * 100
@@ -232,9 +219,10 @@ def test_partial_tile_mask_blocks_the_requested_columns(device):
     )
 
 
-@pytest.mark.parametrize("mask_mode", ["unmasked", "prefix-only", "suffix-only"])
-def test_absolute_torch_phase_isolation(device, mask_mode):
+@pytest.mark.parametrize("mask_mode", ["unmasked", "prefix-only", "suffix-only", "partial"])
+def test_absolute_torch_phase_isolation(device, mask_mode, monkeypatch):
     """Pin absolute correctness and identify which folded-KV phase first diverges."""
+    monkeypatch.setenv("PI05_FUSED_KV_MASK", "1")
     q, k, v, pk, pv, sq = _inputs(device)
     kv_total = PREFIX + 32
     mask = torch.zeros(sq, kv_total, dtype=torch.bfloat16)
@@ -243,11 +231,15 @@ def test_absolute_torch_phase_isolation(device, mask_mode):
     elif mask_mode == "suffix-only":
         mask[:, :PREFIX] = _MASK_VAL
         mask[:, PREFIX + sq :] = _MASK_VAL
+    elif mask_mode == "partial":
+        mask[:, 16 * 32 : 24 * 32] = _MASK_VAL
+        mask[:, 24 * 32 + 10 : PREFIX] = _MASK_VAL
+        mask[:, PREFIX + sq :] = _MASK_VAL
 
     kwargs = {}
     if mask_mode != "unmasked":
         kwargs["attn_mask"] = _mask_to_tt(mask, device, sq)
-    actual = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, **kwargs)).float()
+    actual = ttnn.to_torch(pi05_kv_sdpa(q, k, v, past_k=pk, past_v=pv, **kwargs)).float()
 
     q_t = ttnn.to_torch(q).float()
     k_t = torch.cat([ttnn.to_torch(pk).float(), ttnn.to_torch(k).float()], dim=2)
@@ -262,7 +254,164 @@ def test_absolute_torch_phase_isolation(device, mask_mode):
         f"\n[absolute {mask_mode}] tile={sq} finite={finite} PCC={pcc:.6f} MAE={mae:.6g} "
         f"actual_absmax={actual.abs().max().item():.6g}"
     )
-    assert finite and pcc > 0.99, f"{mask_mode} kv_sdpa diverges from torch: finite={finite}, PCC={pcc}, MAE={mae}"
+    assert finite and pcc > 0.999 and mae < 1e-2, (
+        f"{mask_mode} kv_sdpa diverges from torch: finite={finite}, PCC={pcc}, MAE={mae}"
+    )
+
+
+def test_absolute_attention_probabilities(device):
+    """Use V=I so the output directly exposes the computed attention probabilities."""
+    sq = TILE_HEIGHT
+    torch.manual_seed(11)
+    q_t = torch.randn(1, 1, sq, 32, dtype=torch.bfloat16)
+    k_t = torch.randn(1, 1, sq, 32, dtype=torch.bfloat16)
+    v_t = torch.eye(sq, 32, dtype=torch.bfloat16).reshape(1, 1, sq, 32)
+
+    def upload(x):
+        return ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            tile=ttnn.Tile((sq, 32)),
+            device=device,
+            memory_config=_L1,
+        )
+
+    q, k, v = upload(q_t), upload(k_t), upload(v_t)
+    actual = ttnn.to_torch(ttnn.kv_sdpa(q, k, v)).float()
+    expected = F.scaled_dot_product_attention(
+        ttnn.to_torch(q).float(), ttnn.to_torch(k).float(), ttnn.to_torch(v).float()
+    )
+    pcc = _pcc(actual, expected)
+    mae = (actual - expected).abs().mean().item()
+    row_sum = actual[..., :sq].sum(dim=-1)
+    print(
+        f"\n[absolute probabilities] tile={sq} PCC={pcc:.6f} MAE={mae:.6g} "
+        f"row_sum=[{row_sum.min().item():.6g},{row_sum.max().item():.6g}] "
+        f"tail_absmax={actual[..., sq:].abs().max().item() if sq < 32 else 0:.6g}"
+    )
+    print(f"expected row0={expected[0, 0, 0, :sq].tolist()}")
+    print(f"actual row0={actual[0, 0, 0, :sq].tolist()}")
+    assert pcc > 0.999 and mae < 1e-3
+
+
+def test_absolute_attention_probabilities_two_chunks(device):
+    """V=I with two one-tile chunks isolates the online-softmax combine."""
+    sq = TILE_HEIGHT
+    kv_len = 2 * sq
+    torch.manual_seed(13)
+    q_t = torch.randn(1, 1, sq, 32, dtype=torch.bfloat16)
+    k_t = torch.randn(1, 1, kv_len, 32, dtype=torch.bfloat16)
+    v_t = torch.eye(kv_len, 32, dtype=torch.bfloat16).reshape(1, 1, kv_len, 32)
+
+    def upload(x):
+        return ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            tile=ttnn.Tile((sq, 32)),
+            device=device,
+            memory_config=_L1,
+        )
+
+    q, k, v = upload(q_t), upload(k_t), upload(v_t)
+    actual = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, max_kv_chunk_tiles=1)).float()
+    expected = F.scaled_dot_product_attention(q_t.float(), k_t.float(), v_t.float())
+    finite = bool(torch.isfinite(actual).all())
+    pcc = _pcc(actual, expected) if finite else float("nan")
+    mae = (actual - expected).abs().mean().item() if finite else float("inf")
+    print(f"\n[absolute probabilities 2 chunks] tile={sq} finite={finite} PCC={pcc:.6f} MAE={mae:.6g}")
+    assert finite and pcc > 0.999 and mae < 1e-3
+
+
+def test_absolute_attention_probabilities_mixed_tiles(device):
+    """V=I for the production tiny-Q/full-height-prefix geometry."""
+    sq = TILE_HEIGHT
+    torch.manual_seed(17)
+    q_t = torch.randn(1, 1, sq, 32, dtype=torch.bfloat16)
+    k_t = torch.randn(1, 1, 32, 32, dtype=torch.bfloat16)
+    v_t = torch.eye(32, dtype=torch.bfloat16).reshape(1, 1, 32, 32)
+
+    def upload(x, tile_h):
+        return ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            tile=ttnn.Tile((tile_h, 32)),
+            device=device,
+            memory_config=_L1,
+        )
+
+    q, k, v = upload(q_t, sq), upload(k_t, 32), upload(v_t, 32)
+    actual = ttnn.to_torch(ttnn.kv_sdpa(q, k, v)).float()
+    expected = F.scaled_dot_product_attention(q_t.float(), k_t.float(), v_t.float())
+    finite = bool(torch.isfinite(actual).all())
+    pcc = _pcc(actual, expected) if finite else float("nan")
+    mae = (actual - expected).abs().mean().item() if finite else float("inf")
+    print(f"\n[absolute probabilities mixed] q_tile={sq} finite={finite} PCC={pcc:.6f} MAE={mae:.6g}")
+    print(f"expected row0={expected[0, 0, 0].tolist()}")
+    print(f"actual row0={actual[0, 0, 0].tolist()}")
+    assert finite and pcc > 0.999 and mae < 1e-3
+
+
+def test_absolute_wide_prefix_chunks(device):
+    """Match the production prefix's two 16-tile chunks without the suffix phase."""
+    sq = TILE_HEIGHT
+    kv_len = 1024
+    torch.manual_seed(19)
+    q_t = torch.randn(1, 1, sq, 32, dtype=torch.bfloat16)
+    k_t = torch.randn(1, 1, kv_len, 32, dtype=torch.bfloat16)
+    v_t = torch.randn(1, 1, kv_len, 32, dtype=torch.bfloat16)
+
+    def upload(x, tile_h):
+        return ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            tile=ttnn.Tile((tile_h, 32)),
+            device=device,
+            memory_config=_L1,
+        )
+
+    q, k, v = upload(q_t, sq), upload(k_t, 32), upload(v_t, 32)
+    actual = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, max_kv_chunk_tiles=16)).float()
+    expected = F.scaled_dot_product_attention(q_t.float(), k_t.float(), v_t.float())
+    finite = bool(torch.isfinite(actual).all())
+    pcc = _pcc(actual, expected) if finite else float("nan")
+    mae = (actual - expected).abs().mean().item() if finite else float("inf")
+    print(f"\n[absolute wide prefix] tile={sq} finite={finite} PCC={pcc:.6f} MAE={mae:.6g}")
+    assert finite and pcc > 0.99 and mae < 1e-2
+
+
+def test_absolute_wide_prefix_production_dtype(device):
+    """Production bf8/HD256 prefix geometry without the folded suffix."""
+    sq = TILE_HEIGHT
+    kv_len = 1024
+    torch.manual_seed(23)
+    q_t = torch.randn(1, NQH, sq, HD)
+    k_t = torch.randn(1, NKH, kv_len, HD)
+    v_t = torch.randn(1, NKH, kv_len, HD)
+
+    def upload(x, tile_h):
+        return ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            tile=ttnn.Tile((tile_h, 32)),
+            device=device,
+            memory_config=_L1,
+        )
+
+    q, k, v = upload(q_t, sq), upload(k_t, 32), upload(v_t, 32)
+    actual = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, max_kv_chunk_tiles=64)).float()
+    expected = F.scaled_dot_product_attention(
+        ttnn.to_torch(q).float(), ttnn.to_torch(k).float(), ttnn.to_torch(v).float()
+    )
+    finite = bool(torch.isfinite(actual).all())
+    pcc = _pcc(actual, expected) if finite else float("nan")
+    mae = (actual - expected).abs().mean().item() if finite else float("inf")
+    print(f"\n[absolute wide bf8] tile={sq} finite={finite} PCC={pcc:.6f} MAE={mae:.6g}")
+    assert finite
 
 
 def test_mask_composes_with_prefix_tile_skipping(device):

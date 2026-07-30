@@ -48,7 +48,10 @@ inline void flash_accumulate_chunk(
     const uint32_t out_in1_num_subblocks = DHt / out_subblock_w;
 
     /* QK = Q_CHUNK @ K_CHUNK^T -> cb_qk_im [Sq_chunk_t x Sk_chunk_t] */
-    reconfig_data_format(k_src, cb_q_in);
+    // Prefix K is commonly 32x32 while Q and suffix K are 16x32. Their data formats can be identical,
+    // so a format-only reconfig leaves SrcA's tile descriptor at the geometry programmed by mm_init.
+    // Explicitly update dimensions/stride as well (the gap documented in matmul.h #46769).
+    reconfig_data_format<false /*to_from_int8*/, true /*is_tile_dim_reconfig_en*/>(k_src, cb_q_in);
     pack_reconfig_data_format(cb_qk_im);
     matmul_blocks(
         cb_q_in,
@@ -80,11 +83,16 @@ inline void flash_accumulate_chunk(
     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_id_scale, Sq_chunk_t>(
         cur_max, prev_max, Sk_chunk_t, processed_k_chunks > 0);
 
-    /* QK = exp((QK - cur_max) * scale) in place; cur_sum = partial rowsum(QK) */
-    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(cur_max, cur_sum, Sk_chunk_t);
+    /* QK = exp((QK - cur_max) * scale) in place; cur_sum = partial rowsum(QK).
+       A tiny 16x32 score tile must traverse its two side-by-side faces with VectorMode::R; RC assumes
+       four faces and writes through a nonexistent second face-row. */
+    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true, true, QK_TILE_VECTOR_MODE>(
+        cur_max, cur_sum, Sk_chunk_t);
 
     /* OUT_IM = QK @ V_CHUNK */
-    reconfig_data_format(v_src, cb_qk_im);
+    // QK is always Q-height x 32, while prefix/suffix V can switch 32x32 -> 16x32 at the phase
+    // boundary. Reprogram both unpack descriptors even when their data formats are unchanged.
+    reconfig_data_format<false /*to_from_int8*/, true /*is_tile_dim_reconfig_en*/>(v_src, cb_qk_im);
     pack_reconfig_data_format(cur_out);
     matmul_blocks(
         cb_qk_im,

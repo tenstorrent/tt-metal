@@ -47,6 +47,12 @@
 #define QK_COL_VECTOR_MODE_DEFINED
 static constexpr VectorMode QK_COL_VECTOR_MODE = (QK_NUM_FACES == 2) ? VectorMode::None : VectorMode::C;
 #endif
+#ifndef QK_TILE_VECTOR_MODE_DEFINED
+#define QK_TILE_VECTOR_MODE_DEFINED
+// Whole-score-tile SFPU traversal: a 16x32 tile has one face-row and both face-columns, which is
+// VectorMode::R. A full 32x32 tile uses the normal four-face RC traversal.
+static constexpr VectorMode QK_TILE_VECTOR_MODE = (QK_NUM_FACES == 2) ? VectorMode::R : VectorMode::RC;
+#endif
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
