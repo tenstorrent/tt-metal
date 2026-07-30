@@ -60,6 +60,15 @@ jobs:
     outputs:
       idle: ${{ steps.check.outputs.idle }}
     steps:
+      # Scripts only -- preflight must stay cheap and must not clone the tree it may not touch.
+      # Defaults to this workflow's own ref, which is where the helpers live (the tool branch does
+      # not carry them: it has no berlin_gate.sh either).
+      - name: Checkout CI helpers
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
+
       - name: Is the device free?
         id: check
         run: |
@@ -70,18 +79,22 @@ jobs:
           fi
 
           REASONS=""
+          eval "$(bash .github/scripts/tt_device_state.sh)"
 
           # Primary signal: does ANY process hold a device node? This catches every holder,
           # including orphaned or wedged runs whose command line matches no known pattern.
-          for d in /dev/tenstorrent/[0-9]*; do
-            [ -e "$d" ] || continue
-            holders=$(fuser "$d" 2>/dev/null | tr -s ' ') || true
-            [ -n "$holders" ] && REASONS="$REASONS\n  $d held by PID(s):$holders"
-          done
+          [ -n "$TT_HOLDERS" ] && REASONS="$REASONS\n  device node(s) held by PID(s): $TT_HOLDERS"
 
-          # Secondary: a known perf/bring-up harness running even if it has not opened a chip yet.
-          BUSY=$(pgrep -af 'agent\.loop|agent\.before_loop|tt_hw_planner|tracy-capture' | grep -v pgrep || true)
-          [ -n "$BUSY" ] && REASONS="$REASONS\n  harness process(es):\n$BUSY"
+          # Secondary: a known perf/bring-up harness that is ALIVE -- holding a chip, or burning
+          # CPU on its way to grabbing one. A name match on its own is not enough (see the script).
+          [ -n "$TT_ACTIVE_HARNESS" ] && REASONS="$REASONS\n  active harness PID(s): $TT_ACTIVE_HARNESS"
+
+          # Name matches that hold nothing and burn no CPU are leftovers, not work. Say so out loud
+          # -- they need reaping -- but do NOT let them postpone verification indefinitely.
+          if [ -n "$TT_ORPHAN_HARNESS" ]; then
+            echo "::warning::Ignoring idle harness leftovers (no device handle, no CPU): $TT_ORPHAN_HARNESS"
+            echo "::warning::Reap them with: pkill -f 'agent\.loop|agent\.before_loop|tt_hw_planner|tracy-capture'"
+          fi
 
           # A stale tracy-capture listener breaks any later profile/capture.
           if command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ':8086'; then
@@ -106,15 +119,16 @@ jobs:
           # with "Read 0xffffffff over PCIe ID N: the board should be reset". Seen for real: a run
           # spun 100 minutes inside from_torch on a FABRIC_1D_RING mesh and left a chip unresponsive.
           # Catch it here, cheaply, instead of after a full build.
-          if command -v tt-smi >/dev/null; then
-            if ! timeout 45 tt-smi -s >/dev/null 2>&1; then
-              echo "idle=false" >> "$GITHUB_OUTPUT"
-              echo "::warning::Board looks UNHEALTHY -- tt-smi could not read telemetry (hung or errored)."
-              echo "::warning::This needs a human: reset the board (tt-smi -r ...) before verification can pass."
-              exit 0
-            fi
-            echo "tt-smi telemetry readable."
+          # Health is per chip. `tt-smi -s` was used here and is the wrong instrument: it hangs when
+          # ANY chip's ARC is down, so three dead chips beside one good one read as a dead board and
+          # postponed verification forever. sysfs answers per chip and cannot hang the step.
+          if [ "$TT_HEALTHY_COUNT" -eq 0 ]; then
+            echo "idle=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No chip has responsive telemetry (all report tt_serial=FFFFFFFFFFFFFFFF)."
+            echo "::warning::Needs a human: tt-smi -r <ids>, and a power cycle if the ARC will not start."
+            exit 0
           fi
+          echo "Healthy chips: $TT_HEALTHY_CHIPS (of $(ls -d /dev/tenstorrent/[0-9]* 2>/dev/null | wc -l) present)"
 
           echo "idle=true" >> "$GITHUB_OUTPUT"
           echo "Device is free and responsive."
@@ -160,26 +174,32 @@ jobs:
           fi
           echo "Tool present: this is the tool branch."
 
+      # The checked-out tool branch does not carry these helpers, so take them from the branch the
+      # workflow itself came from. After the root checkout, which would otherwise clean this away.
+      - name: Checkout CI helpers from the workflow branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
+          path: _ci
+
       - name: Device-idle re-check (races between preflight and here)
         if: ${{ inputs.force != true }}
         run: |
           # preflight ran minutes ago and a human may have started something since. Cheap re-check
           # right before we touch the chips. This one DOES fail the job: we already committed to
           # running, so the safe move is to stop loudly rather than fight for the device.
-          for d in /dev/tenstorrent/[0-9]*; do
-            [ -e "$d" ] || continue
-            holders=$(fuser "$d" 2>/dev/null | tr -s ' ') || true
-            if [ -n "$holders" ]; then
-              echo "::error::$d became busy after preflight (PID(s):$holders) -- aborting before we touch it."
-              exit 1
-            fi
-          done
-          BUSY=$(pgrep -af 'agent\.loop|agent\.before_loop|tt_hw_planner|tracy-capture' | grep -v 'pgrep' || true)
-          if [ -n "$BUSY" ]; then
-            echo "::error::A harness started after preflight -- aborting."
-            echo "$BUSY"
+          eval "$(bash _ci/.github/scripts/tt_device_state.sh)"
+          if [ -n "$TT_HOLDERS" ]; then
+            echo "::error::Device became busy after preflight (PID(s): $TT_HOLDERS) -- aborting before we touch it."
             exit 1
           fi
+          if [ -n "$TT_ACTIVE_HARNESS" ]; then
+            echo "::error::A harness started after preflight (PID(s): $TT_ACTIVE_HARNESS) -- aborting."
+            exit 1
+          fi
+          [ -n "$TT_ORPHAN_HARNESS" ] && echo "::warning::Idle harness leftovers ignored: $TT_ORPHAN_HARNESS"
           # A stale tracy-capture on :8086 breaks any subsequent profile/capture.
           if command -v ss >/dev/null && ss -ltnp 2>/dev/null | grep -q ':8086'; then
             echo "::error::Stale listener on :8086 (tracy-capture?) -- kill it before verifying."
@@ -207,15 +227,68 @@ jobs:
           . python_env/bin/activate
           ./build_metal.sh
 
+      - name: Pin the gates to a healthy chip
+        run: |
+          # Without this the gates open the device unpinned, and on a p300c that is NOT "use chip 0":
+          # cluster construction runs TopologyDiscovery across every chip on the bus before a single
+          # op executes, so one wedged chip aborts everything with
+          #   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset
+          # -- which reads as a branch failure and files an issue against a tree that is fine. On
+          # 2026-07-30 the same two gates that died this way passed on the first try once pinned.
+          #
+          # One chip, not several. Exposing a single chip ALONE trips "CUSTOM cluster type for P300
+          # with 1 chip, Custom fabric mesh graph descriptor path must be specified"; exposing two or
+          # more brings up cross-chip fabric and hangs on the ethernet handshake. The p150 single-chip
+          # mesh-graph descriptor satisfies the cluster check while needing no fabric at all.
+          eval "$(bash _ci/.github/scripts/tt_device_state.sh)"
+          if [ "$TT_HEALTHY_COUNT" -eq 0 ]; then
+            echo "::error::No healthy chip left to verify on -- board needs a reset or power cycle."
+            exit 1
+          fi
+          CHIP=${TT_HEALTHY_CHIPS%%,*}
+          DESC="$GITHUB_WORKSPACE/tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto"
+          test -f "$DESC" || { echo "::error::mesh-graph descriptor missing: $DESC"; exit 1; }
+          {
+            echo "TT_VISIBLE_DEVICES=$CHIP"
+            echo "TT_METAL_VISIBLE_DEVICES=$CHIP"
+            echo "TT_MESH_GRAPH_DESC_PATH=$DESC"
+            echo "TT_HEALTHY_CHIPS=$TT_HEALTHY_CHIPS"
+            echo "TT_MESH_DESC=$DESC"
+          } >> "$GITHUB_ENV"
+          echo "Pinned to chip $CHIP (healthy: $TT_HEALTHY_CHIPS) with the p150 single-chip descriptor."
+
+          # A green run must never imply the whole board is well. Pinning deliberately steps around
+          # dead chips, so without this a 1-of-4 board and a 4-of-4 board produce identical output.
+          PRESENT=$(ls -d /dev/tenstorrent/[0-9]* 2>/dev/null | wc -l)
+          if [ "$TT_HEALTHY_COUNT" -lt "$PRESENT" ]; then
+            DEAD=""
+            for d in /dev/tenstorrent/[0-9]*; do
+              id=${d##*/}
+              echo ",$TT_HEALTHY_CHIPS," | grep -q ",$id," || DEAD="$DEAD $id"
+            done
+            echo "::warning::PARTIAL BOARD: verified on $TT_HEALTHY_COUNT of $PRESENT chips. Unresponsive:$DEAD"
+            echo "::warning::Those chips need tt-smi -r, or a power cycle if the ARC will not start."
+            echo "::warning::Multi-chip work (TP>1, fabric, p300_x2) is NOT covered by this run."
+          fi
+
       - name: Import gate
         run: |
           . python_env/bin/activate
           python -c "import ttnn; print('ttnn import OK', ttnn.__file__)"
 
-      - name: On-device matmul gate
+      - name: On-device matmul gate (every healthy chip)
         run: |
           . python_env/bin/activate
-          python - <<'PY'
+          # One chip at a time, each in its own process: pinning is read once at cluster
+          # construction, so a second chip needs a fresh interpreter. Serial and ~3s per chip.
+          # This is the only step with per-chip coverage -- the pytest gate below uses a
+          # single-device fixture and runs on the pinned chip only.
+          rc=0
+          for chip in $(echo "$TT_HEALTHY_CHIPS" | tr ',' ' '); do
+            echo "--- chip $chip ---"
+            TT_VISIBLE_DEVICES=$chip TT_METAL_VISIBLE_DEVICES=$chip \
+            TT_MESH_GRAPH_DESC_PATH="$TT_MESH_DESC" \
+            python - <<'PY' || rc=1
           import torch, ttnn
           d = ttnn.open_device(device_id=0)
           try:
@@ -230,6 +303,9 @@ jobs:
           finally:
               ttnn.close_device(d)
           PY
+          done
+          [ "$rc" -eq 0 ] || echo "::error::matmul gate failed on at least one healthy chip."
+          exit $rc
 
       - name: PCC gate (rms_norm on device)
         run: |
