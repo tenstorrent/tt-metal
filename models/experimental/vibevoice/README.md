@@ -1,4 +1,4 @@
-# VibeVoice-1.5B (TTNN / TT-Metal)
+# VibeVoice-1.5B
 
 TTNN implementation of [microsoft/VibeVoice-1.5B](https://huggingface.co/microsoft/VibeVoice-1.5B),
 a long-form, multi-speaker text-to-speech model. Runs fully on Tenstorrent hardware
@@ -657,27 +657,6 @@ repeated here — see [Model description](#model-description) and [Upstream refe
   negative branch is not user-controllable.
 - **Batch 1 only.** The reference generates batched (per-row `finished_tags`, `correct_cnt` and
   `audio_chunks`). The TT generator hard-wires row 0 throughout, so one script per `generate()` call.
-
-**Numerical parity vs the reference**
-
-- **KV-cache K PCC degrades with ISL.** Post-RoPE key-cache median PCC falls below the 0.99 gate from
-  ISL ≥ 1024 (0.986 at 1k → 0.696 at 24k; worst layer often 13), while speech embeds, LM hidden and
-  the V cache stay high. Suspected K layout/remap precision after the fused-RoPE change. Gate and
-  remapping follow-up are tracked separately from the measured values above.
-- **The closed decode loop is not PCC-gateable.** It is chaotic: one separatrix frame cascades under
-  feedback (latent PCC 0.999 → 0.16 over ~24 frames). Only open-loop per-stage parity is gated;
-  whole-loop fidelity relies on the perceptual WER/SIM tests.
-- **The diffusion latent needs a distribution gate, not a min gate.** The DPM sampler is
-  separatrix-sensitive for a rare, perceptually-inert subset of conditions.
-- **Prefill LM hidden is median-gated at 0.96**, not min-gated: a few text-token positions are
-  outliers that pull the flattened PCC down.
-- **Not bit-reproducible, unlike the reference.** The fp32 CPU reference is deterministic for a fixed
-  input; TT output varies run to run (bf16 accumulation order under trace / 2 CQs), so rendered audio
-  and even the emitted text can differ slightly between identical invocations.
-- **Validation measures parity, not absolute quality.** The WER and SIM tests compare TT against the
-  reference render, so they certify "TT matches the torch model", not "the audio is good". Our SIM
-  additionally uses a different SV backend from the paper's WavLM-large and gates on a relative
-  margin, so those numbers are **not comparable** to the paper's Table 1/2 values.
 
 **Device / deployment constraints of the port**
 
