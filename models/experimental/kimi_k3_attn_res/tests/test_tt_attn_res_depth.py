@@ -97,7 +97,9 @@ def _walk_torch(hidden_states, weights, q_pre, q_post, q_out, dtype):
     return out.float(), curve
 
 
-def _walk_device(mesh_device, hidden_states, weights, q_pre, q_post, q_out, hidden_size):
+def _walk_device(mesh_device, hidden_states, weights, q_pre, q_post, q_out, hidden_size, record=None):
+    """`record` defaults to collecting the whole per-layer curve. At production `T`
+    that is 93 x [T, d] on the host, so the Phase-7 harness passes its own."""
     to_tt = lambda t: ttnn.from_torch(
         t.reshape(1, 1, -1, hidden_size), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
     )
@@ -112,7 +114,7 @@ def _walk_device(mesh_device, hidden_states, weights, q_pre, q_post, q_out, hidd
         op.to_query(q_out),
         ttnn.mul,
         ttnn.deallocate,
-        lambda _, s: curve.append(ttnn.to_torch(s.prefix_sum).reshape(-1, hidden_size).float()),
+        record or (lambda _, s: curve.append(ttnn.to_torch(s.prefix_sum).reshape(-1, hidden_size).float())),
     )
     result = ttnn.to_torch(out).reshape(-1, hidden_size).float()
     ttnn.deallocate(out)
