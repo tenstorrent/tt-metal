@@ -7,7 +7,7 @@
 // Consumes the compute kernel's transposed [w_block_size x x_block_size] blocks
 // from cb_2 and scatters each of the w_block_size output rows (x_read_size bytes)
 // to its permuted output page. The compute transposed input axes x_dim <-> W, so
-// perm is swapped on those two axes here before addressing.
+// input_shape and perm are swapped on those two axes here before addressing.
 //
 // Named CT: N, output_page_size(=x_block_size*elem), num_rows, X, x_dim,
 //           x_blocks, w_blocks, x_block_size, w_block_size, W, element_size,
@@ -16,6 +16,8 @@
 // RT: [dst_addr, start_block, end_block, input_shape[N], perm[N], dest_strides[N]]
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
@@ -47,7 +49,12 @@ void kernel_main() {
         dest_strides[i] = get_arg_val<uint32_t>(3 + 2 * N + i);
     }
 
-    // The compute kernel transposed x_dim <-> W. Reflect that in perm.
+    // The compute kernel transposed x_dim <-> W. Reflect that in shape + perm.
+    {
+        uint32_t t = input_shape[x_dim];
+        input_shape[x_dim] = input_shape[w_dim];
+        input_shape[w_dim] = t;
+    }
     for (uint32_t i = 0; i < N; i++) {
         if (perm[i] == x_dim) {
             perm[i] = w_dim;
@@ -65,6 +72,9 @@ void kernel_main() {
     }
 
     const auto s = TensorAccessor(dst_args, dst_addr, out_page_size);
+
+    Noc noc;
+    CircularBuffer cb_out(cb_id);
 
     uint32_t src_multi_idx[N] = {0};
     uint32_t dest_multi_idx[N] = {0};
@@ -105,19 +115,22 @@ void kernel_main() {
             }
         }
 
-        cb_wait_front(cb_id, w_block_size);
-        uint32_t read_addr = get_read_ptr(cb_id);
+        cb_out.wait_front(w_block_size);
 
         for (uint32_t w = w_start; w < w_end; ++w) {
             uint32_t dest_linear_idx = dest_linear_idx_base;
             if (x_dim_in_dest < w_dim) {
                 dest_linear_idx += w * dest_strides[x_dim_in_dest];
             }
-            uint32_t l1_addr = read_addr + (w - w_start) * output_page_size;
-            uint64_t noc_addr = get_noc_addr(dest_linear_idx, s) + x_offset;
-            noc_async_write(l1_addr, noc_addr, x_read_size_bytes);
+            uint32_t l1_offset = (w - w_start) * output_page_size;
+            noc.async_write(
+                cb_out,
+                s,
+                x_read_size_bytes,
+                {.offset_bytes = l1_offset},
+                {.page_id = dest_linear_idx, .offset_bytes = x_offset});
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id, w_block_size);
+        noc.async_write_barrier();
+        cb_out.pop_front(w_block_size);
     }
 }

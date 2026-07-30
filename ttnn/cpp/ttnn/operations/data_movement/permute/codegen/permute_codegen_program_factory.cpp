@@ -52,6 +52,15 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::RowInvariant::cre
     const uint32_t rank = operation_attributes.rank;
     const uint32_t aligned_stick_bytes = operation_attributes.aligned_stick_bytes;
 
+    // The writer's L1 page stride is read back from this CB's own configured page size
+    // (get_local_cb_interface(cb_id).fifo_page_size), so a CB sized only to the input's DRAM
+    // alignment (operation_attributes.aligned_stick_bytes) would under-size the transfer whenever
+    // the destination buffer's page pitch is larger (e.g. a stricter alignment than the input's).
+    // Mirrors spec.py's build_permute_rm CB page_size = max(source_page_size, destination_page_size).
+    const uint32_t raw_stick_bytes = operation_attributes.elem_size * operation_attributes.input_shape[rank - 1];
+    const uint32_t output_aligned_stick_bytes = tt::align(raw_stick_bytes, output_buffer->alignment());
+    const uint32_t cb_stick_bytes = std::max(aligned_stick_bytes, output_aligned_stick_bytes);
+
     auto* device = input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_core_group_1, rows_per_core_group_2] =
@@ -62,12 +71,12 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::RowInvariant::cre
     constexpr uint32_t kCbId = 0;
     const uint32_t cb_depth = std::max(kRmReadBatch, kRmWriteBatch) * 2;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_depth * aligned_stick_bytes,
+        .total_size = cb_depth * cb_stick_bytes,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = kCbId,
             .data_format = datatype_to_dataformat_converter(input_tensor.dtype()),
-            .page_size = aligned_stick_bytes,
+            .page_size = cb_stick_bytes,
         }}},
     });
 
@@ -176,7 +185,6 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::BlockedGeneric::c
     const uint32_t num_blocks_total = operation_attributes.num_blocks_total;
 
     auto* device = input_tensor.device();
-    const auto dram_alignment = input_buffer->alignment();
 
     const uint32_t input_cb_page_size = kBlockSize * elem_size;   // cb_0 page (one W-chunk row)
     const uint32_t output_cb_page_size = kBlockSize * elem_size;  // cb_2 page (one X row)
@@ -184,8 +192,12 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::BlockedGeneric::c
 
     const uint32_t in_row_bytes = w * elem_size;
     const uint32_t out_row_bytes = x * elem_size;  // output_shape[-1] == X
-    const uint32_t in_page_size = tt::align(in_row_bytes, dram_alignment);
-    const uint32_t out_page_size = tt::align(out_row_bytes, dram_alignment);
+    // Each buffer's own alignment, not a shared constant: an output buffer type that differs
+    // from the (always-DRAM, per supported_by_codegen) input has a different page pitch.
+    // Matches spec.py's build_permute_rm_blocked, which queries in_t/out_t independently via
+    // interleaved_accessor_page_size.
+    const uint32_t in_page_size = tt::align(in_row_bytes, input_buffer->alignment());
+    const uint32_t out_page_size = tt::align(out_row_bytes, output_buffer->alignment());
 
     // Bit-exact reinterpret: run the tilize -> transpose_tile -> pack_untilize compute as int32
     // for float32 (elem_size == 4). transpose_tile routes float32 through the matrix engine

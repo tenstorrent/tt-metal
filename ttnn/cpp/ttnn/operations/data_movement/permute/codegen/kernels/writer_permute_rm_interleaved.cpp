@@ -9,6 +9,8 @@
 // CT args: cb_id, page_size, TensorAccessorArgs(out_t)..., BATCH, N
 // RT args: dst_addr, num_rows, start_row, input_shape[N], perm[N], dest_strides[N]
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -16,12 +18,20 @@ void kernel_main() {
     uint32_t start_row = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    constexpr uint32_t requested_write_size = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
     constexpr uint32_t BATCH = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
     constexpr uint32_t N = get_compile_time_arg_val(dst_args.next_compile_time_args_offset() + 1);
 
-    const auto d = TensorAccessor(dst_args, dst_addr, page_size);
+    const uint32_t destination_page_size = dst_args.get_aligned_page_size();
+    const auto d = TensorAccessor(dst_args, dst_addr, destination_page_size);
+    const uint32_t l1_page_stride = get_local_cb_interface(cb_id).fifo_page_size << cb_addr_shift;
+    const uint32_t write_size_dst =
+        requested_write_size < destination_page_size ? requested_write_size : destination_page_size;
+    const uint32_t write_size = write_size_dst < l1_page_stride ? write_size_dst : l1_page_stride;
+
+    Noc noc;
+    CircularBuffer cb_out(cb_id);
 
     // Read input_shape, perm, dest_strides from runtime args (starting at index 3)
     uint32_t input_shape[N], perm[N], dest_strides[N];
@@ -38,8 +48,8 @@ void kernel_main() {
         // Pipelined batched writer: overlap NOC DMA with compute delivery.
         // Prime the pipeline
         uint32_t batch = (rows_left < BATCH) ? rows_left : BATCH;
-        cb_wait_front(cb_id, batch);
-        uint32_t l1_addr = get_read_ptr(cb_id);
+        cb_out.wait_front(batch);
+        uint32_t l1_offset = 0;
 
         for (uint32_t t = 0; t < batch; t++) {
             // Decompose row index into multi-dim source index
@@ -58,8 +68,9 @@ void kernel_main() {
                 dest_linear_idx += src_multi_idx[perm[i]] * dest_strides[i];
             }
 
-            noc_async_write_page(dest_linear_idx, d, l1_addr);
-            l1_addr += page_size;
+            noc.async_write(
+                cb_out, d, write_size, {.offset_bytes = l1_offset}, {.page_id = dest_linear_idx, .offset_bytes = 0});
+            l1_offset += l1_page_stride;
             row++;
         }
         rows_left -= batch;
@@ -68,11 +79,11 @@ void kernel_main() {
         // Steady state
         while (rows_left > 0) {
             batch = (rows_left < BATCH) ? rows_left : BATCH;
-            cb_wait_front(cb_id, prev_batch + batch);
-            noc_async_writes_flushed();
-            cb_pop_front(cb_id, prev_batch);
+            cb_out.wait_front(prev_batch + batch);
+            noc.async_writes_flushed();
+            cb_out.pop_front(prev_batch);
 
-            l1_addr = get_read_ptr(cb_id);
+            l1_offset = 0;
             for (uint32_t t = 0; t < batch; t++) {
                 uint32_t src_multi_idx[N];
                 uint32_t remaining = row;
@@ -88,8 +99,13 @@ void kernel_main() {
                     dest_linear_idx += src_multi_idx[perm[i]] * dest_strides[i];
                 }
 
-                noc_async_write_page(dest_linear_idx, d, l1_addr);
-                l1_addr += page_size;
+                noc.async_write(
+                    cb_out,
+                    d,
+                    write_size,
+                    {.offset_bytes = l1_offset},
+                    {.page_id = dest_linear_idx, .offset_bytes = 0});
+                l1_offset += l1_page_stride;
                 row++;
             }
             rows_left -= batch;
@@ -97,8 +113,8 @@ void kernel_main() {
         }
 
         // Drain final batch
-        noc_async_writes_flushed();
-        cb_pop_front(cb_id, prev_batch);
+        noc.async_writes_flushed();
+        cb_out.pop_front(prev_batch);
     } else {
         // Non-batched: per-row barrier
         for (uint32_t i = 0; i < num_rows; i++) {
@@ -116,12 +132,13 @@ void kernel_main() {
                 dest_linear_idx += src_multi_idx[perm[j]] * dest_strides[j];
             }
 
-            cb_wait_front(cb_id, 1);
-            noc_async_write_page(dest_linear_idx, d, get_read_ptr(cb_id));
-            noc_async_writes_flushed();
-            cb_pop_front(cb_id, 1);
+            cb_out.wait_front(1);
+            noc.async_write(
+                cb_out, d, write_size, {.offset_bytes = 0}, {.page_id = dest_linear_idx, .offset_bytes = 0});
+            noc.async_writes_flushed();
+            cb_out.pop_front(1);
             row++;
         }
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

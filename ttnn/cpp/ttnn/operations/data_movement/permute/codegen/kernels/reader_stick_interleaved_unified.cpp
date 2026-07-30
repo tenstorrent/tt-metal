@@ -1,4 +1,3 @@
-// ONLY-USES: MODE_SEQUENCED. The rest of this file is unused shared infra for other ports.
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -11,21 +10,21 @@
 // Positional CT args: TensorAccessorArgs (index 0)
 //
 // Modes:
-//   MODE_SEQUENTIAL (0): Coalesced stick reads, num_reads work units of
-//     sticks_per_read sticks each. (reshape)
-//   MODE_TILEROW (1): TILE_H sticks per tile-row, column chunking. (tilize)
-//   MODE_NONALIGNED (2): 64B-aligned scratch reads. (reshape BH)
-//   MODE_LASTDIM_REPEAT (3): Read stick, replicate N times in L1. (repeat W)
-//   MODE_SEQUENCED (4): Batched stick reads with seq_id-dispatched address.
+//   MODE_SEQUENCED (0): Batched stick reads with seq_id-dispatched address.
 //     seq_id selects the address sequencer (same IDs as tile reader).
+//   MODE_TILEROW (1): TILE_H sticks per tile-row, column chunking. (tilize)
+//   MODE_NONALIGNED (2): page-bounded, alignment-matched scratch reads. (reshape)
+//   MODE_LASTDIM_REPEAT (3): Read stick, replicate N times in L1. (repeat W)
 //   MODE_TILEROW_PAD (5): Pad-aware tile-row reader. NOC-reads the valid prefix
 //     of each stick, fills column-pad bytes from a packed pad value, and emits
 //     whole pad tile-rows for height/outer padding. (tilize_with_val_padding)
-//   MODE_PARTIAL_READ (6): Read one page's aligned partial slab, then spread
-//     each stick_bytes element onto an L1_ALIGN-aligned slot for scatter
-//     writeback. (reshape scatter parallelization)
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "sequencers.h"
 
 constexpr uint32_t MODE_SEQUENTIAL = 0;  // Legacy: coalesced stick reads (reshape)
@@ -44,28 +43,39 @@ FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t 
     static_assert(val_size == 2 || val_size == 4, "Unsupported val_size");
     using IntType = std::conditional_t<(val_size == 2), uint16_t, uint32_t>;
 
+    // Nothing to write: return before forming any L1 pointer.  A zero-length
+    // fill is legitimately requested at the *end* of the reserved window (a row
+    // with no column padding, or a tile-row with no pad rows), where start_addr
+    // is one-past-the-end of the reserved pages.  Materializing that pointer is
+    // harmless on silicon (never dereferenced), but the emule CB-boundary
+    // sanitizer checks the pointer cast itself and would flag the one-past-end
+    // address.  Skipping the no-op fill avoids forming the pointer at all.
+    if (n_bytes == 0) {
+        return;
+    }
+
     uint32_t end_addr = start_addr + n_bytes;
     uint32_t start_addr_4B = (start_addr + 0x3) & 0xFFFFFFFC;  // ceil aligned to 4B
     uint32_t end_addr_4B = end_addr & 0xFFFFFFFC;              // floor aligned to 4B
 
     {
-        auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_addr_4B);
-        auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(end_addr_4B);
-        for (auto* ptr = start_ptr_4B; ptr < end_ptr_4B; ++ptr) {
+        CoreLocalMem<volatile uint32_t> start_ptr_4B(start_addr_4B);
+        CoreLocalMem<volatile uint32_t> end_ptr_4B(end_addr_4B);
+        for (auto ptr = start_ptr_4B; ptr < end_ptr_4B; ++ptr) {
             *ptr = val;
         }
     }
 
     if constexpr (val_size < 4) {
-        auto* start_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr);
-        auto* end_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr);
-        auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr_4B);
-        auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr_4B);
+        CoreLocalMem<volatile IntType> start_ptr(start_addr);
+        CoreLocalMem<volatile IntType> end_ptr(end_addr);
+        CoreLocalMem<volatile IntType> start_ptr_4B(start_addr_4B);
+        CoreLocalMem<volatile IntType> end_ptr_4B(end_addr_4B);
         IntType val_ = static_cast<IntType>(val);
-        for (auto* ptr = start_ptr; ptr < start_ptr_4B; ++ptr) {
+        for (auto ptr = start_ptr; ptr < start_ptr_4B; ++ptr) {
             *ptr = val_;
         }
-        for (auto* ptr = end_ptr_4B; ptr < end_ptr; ++ptr) {
+        for (auto ptr = end_ptr_4B; ptr < end_ptr; ++ptr) {
             *ptr = val_;
         }
     }
@@ -193,23 +203,28 @@ template <typename Accessor, typename State, typename NextFn>
 FORCE_INLINE void read_sticks(
     uint32_t cb_id,
     uint32_t stick_bytes,
+    uint32_t cb_page_stride,
     uint32_t batch,
     const Accessor& accessor,
     uint32_t num_sticks,
     State& state,
     NextFn next_fn) {
+    Noc noc;
+    CircularBuffer cb(cb_id);
+
     uint32_t left = num_sticks;
     while (left > 0) {
         uint32_t b = (left < batch) ? left : batch;
-        cb_reserve_back(cb_id, b);
-        uint32_t l1 = get_write_ptr(cb_id);
+        cb.reserve_back(b);
+        uint32_t l1_offset = 0;
         for (uint32_t t = 0; t < b; t++) {
-            uint64_t noc_addr = get_noc_addr(next_fn(state), accessor);
-            noc_async_read(noc_addr, l1, stick_bytes);
-            l1 += stick_bytes;
+            const uint32_t source_page = next_fn(state);
+            noc.async_read(
+                accessor, cb, stick_bytes, {.page_id = source_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
+            l1_offset += cb_page_stride;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id, b);
+        noc.async_read_barrier();
+        cb.push_back(b);
         left -= b;
     }
 }
@@ -236,18 +251,20 @@ void kernel_main() {
         };
         const auto* a = reinterpret_cast<const ArgsSeq*>(get_arg_addr(0));
         const auto s = TensorAccessor(src_args, a->src_addr, aligned_page_size);
+        Noc noc;
+        CircularBuffer cb(cb_id);
         uint32_t i_stick = a->start_stick;
         for (uint32_t iter = 0; iter < a->num_reads; ++iter) {
-            cb_reserve_back(cb_id, a->sticks_per_cb_push);
-            uint32_t l1_addr = get_write_ptr(cb_id);
+            cb.reserve_back(a->sticks_per_cb_push);
+            uint32_t l1_offset = 0;
             for (uint32_t i = 0; i < a->sticks_per_read; ++i) {
-                uint64_t noc_addr = get_noc_addr(i_stick, s);
-                noc_async_read(noc_addr, l1_addr, stick_bytes);
-                l1_addr += stick_bytes;
+                noc.async_read(
+                    s, cb, stick_bytes, {.page_id = i_stick, .offset_bytes = 0}, {.offset_bytes = l1_offset});
+                l1_offset += stick_bytes;
                 i_stick++;
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_id, a->sticks_per_cb_push);
+            noc.async_read_barrier();
+            cb.push_back(a->sticks_per_cb_push);
         }
     }
 
@@ -257,41 +274,50 @@ void kernel_main() {
         constexpr uint32_t BATCH = get_named_compile_time_arg_val("batch");
         const auto* base = reinterpret_cast<const ArgsStickBase*>(get_arg_addr(0));
         const auto s = TensorAccessor(src_args, base->src_addr, aligned_page_size);
+        // One sequenced stick is one CB page.  The logical transfer bytes can
+        // be narrower than an aligned/shard-backed CB page, so only the NOC
+        // length uses stick_bytes; L1 page traversal follows the descriptor.
+        const uint32_t cb_page_stride = get_local_cb_interface(cb_id).fifo_page_size << cb_addr_shift;
 
         if constexpr (SEQ_ID == SEQ_IDENTITY) {
             auto st = seq_identity_init(base->start_id);
-            read_sticks(cb_id, stick_bytes, BATCH, s, base->num_sticks, st, seq_identity_next);
+            read_sticks(cb_id, stick_bytes, cb_page_stride, BATCH, s, base->num_sticks, st, seq_identity_next);
         } else if constexpr (SEQ_ID == SEQ_REPEAT) {
             const auto* a = reinterpret_cast<const ArgsStickRepeat*>(get_arg_addr(0));
             auto st = seq_repeat_init(a->start_id, a->num_repeats, a->lower_pages, a->rep_dim_pages);
-            read_sticks(cb_id, stick_bytes, BATCH, s, a->num_sticks, st, seq_repeat_next);
+            read_sticks(cb_id, stick_bytes, cb_page_stride, BATCH, s, a->num_sticks, st, seq_repeat_next);
         } else if constexpr (SEQ_ID == SEQ_SLICE) {
             const auto* a = reinterpret_cast<const ArgsStickSlice*>(get_arg_addr(0));
             tt_l1_ptr uint32_t* num_unpadded = (tt_l1_ptr uint32_t*)(&a->num_dims + 1);
             tt_l1_ptr uint32_t* num_padded = num_unpadded + a->num_dims;
             tt_l1_ptr uint32_t* id_per_dim = num_padded + a->num_dims;
             auto st = seq_slice_init(a->start_id, a->num_dims, num_unpadded, num_padded, id_per_dim);
-            read_sticks(cb_id, stick_bytes, BATCH, s, a->num_sticks, st, seq_slice_next);
+            read_sticks(cb_id, stick_bytes, cb_page_stride, BATCH, s, a->num_sticks, st, seq_slice_next);
         } else if constexpr (SEQ_ID == SEQ_HC) {
             const auto* a = reinterpret_cast<const ArgsStickHc*>(get_arg_addr(0));
             auto st = seq_hc_init(a->start_id, a->curr_c, a->curr_h, a->curr_n, a->C, a->H);
-            read_sticks(cb_id, stick_bytes, BATCH, s, a->num_sticks, st, seq_hc_next);
+            read_sticks(cb_id, stick_bytes, cb_page_stride, BATCH, s, a->num_sticks, st, seq_hc_next);
         } else if constexpr (SEQ_ID == SEQ_CN) {
             const auto* a = reinterpret_cast<const ArgsStickCn*>(get_arg_addr(0));
             auto st = seq_cn_init(a->start_id, a->hw, a->n, a->N, a->HtWt, a->batch_step, a->channel_step);
-            read_sticks(cb_id, stick_bytes, BATCH, s, a->num_sticks, st, seq_cn_next);
+            read_sticks(cb_id, stick_bytes, cb_page_stride, BATCH, s, a->num_sticks, st, seq_cn_next);
         } else if constexpr (SEQ_ID == SEQ_PAD) {
             // PAD: conditional read (source vs fill) — custom loop
             const auto* a = reinterpret_cast<const ArgsStickPad*>(get_arg_addr(0));
+            Noc noc;
+            CircularBuffer cb(cb_id);
+            CircularBuffer cb_pad(a->cb_pad);
             // Fill pad stick in scratch CB
             {
-                volatile tt_l1_ptr uint32_t* ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(a->cb_pad));
-                for (uint32_t i = 0; i < a->out_stick_bytes / 4 + 1; ++i) {
+                CoreLocalMem<volatile uint32_t> ptr(cb_pad.get_write_ptr());
+                for (uint32_t i = 0; i < (a->out_stick_bytes + 3) / 4; ++i) {
                     ptr[i] = a->packed_pad_val;
                 }
             }
-            uint64_t pad_noc_addr = get_noc_addr(get_read_ptr(a->cb_pad));
+            const uint32_t pad_l1 = cb_pad.get_read_ptr();
+            UnicastEndpoint self_ep;
+            const uint32_t my_noc_x = my_x[noc.get_noc_id()];
+            const uint32_t my_noc_y = my_y[noc.get_noc_id()];
 
             // front_* = 0 reproduces this legacy stick-pad branch's original
             // back-only is_data exactly (W front pad is applied via
@@ -320,33 +346,51 @@ void kernel_main() {
             uint32_t left = a->num_sticks;
             while (left > 0) {
                 uint32_t b = (left < BATCH) ? left : BATCH;
-                cb_reserve_back(cb_id, b);
-                uint32_t l1 = get_write_ptr(cb_id);
+                cb.reserve_back(b);
+                uint32_t l1_offset = 0;
                 for (uint32_t t = 0; t < b; t++) {
                     seq_pad_next(pad_st);
                     if (pad_st.is_data) {
                         // Data stick: read from DRAM, pad W dimension in L1
-                        uint64_t noc_addr = get_noc_addr(src_stick, s);
                         // Write front pad
                         if (a->front_pad_w_bytes > 0) {
-                            noc_async_read(pad_noc_addr, l1, a->front_pad_w_bytes);
+                            noc.async_read(
+                                self_ep,
+                                cb,
+                                a->front_pad_w_bytes,
+                                {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = pad_l1},
+                                {.offset_bytes = l1_offset});
                         }
                         // Write data
-                        noc_async_read(noc_addr, l1 + a->front_pad_w_bytes, a->in_stick_bytes);
+                        noc.async_read(
+                            s,
+                            cb,
+                            a->in_stick_bytes,
+                            {.page_id = src_stick, .offset_bytes = 0},
+                            {.offset_bytes = l1_offset + a->front_pad_w_bytes});
                         // Write back pad
                         if (a->pad_w_back_bytes > 0) {
-                            noc_async_read(
-                                pad_noc_addr, l1 + a->front_pad_w_bytes + a->in_stick_bytes, a->pad_w_back_bytes);
+                            noc.async_read(
+                                self_ep,
+                                cb,
+                                a->pad_w_back_bytes,
+                                {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = pad_l1},
+                                {.offset_bytes = l1_offset + a->front_pad_w_bytes + a->in_stick_bytes});
                         }
                         src_stick++;
                     } else {
                         // Full pad stick
-                        noc_async_read(pad_noc_addr, l1, a->out_stick_bytes);
+                        noc.async_read(
+                            self_ep,
+                            cb,
+                            a->out_stick_bytes,
+                            {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = pad_l1},
+                            {.offset_bytes = l1_offset});
                     }
-                    l1 += a->out_stick_aligned;
+                    l1_offset += a->out_stick_aligned;
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_id, b);
+                noc.async_read_barrier();
+                cb.push_back(b);
                 left -= b;
             }
         } else if constexpr (SEQ_ID == SEQ_CONCAT) {
@@ -355,25 +399,27 @@ void kernel_main() {
             const auto s1 = TensorAccessor(src_args, a->src_addr_1, aligned_page_size);
             auto st =
                 seq_concat_init(a->start_tensor, a->start_tensor_id, a->page_id_0, a->page_id_1, a->ppb_0, a->ppb_1);
+            Noc noc;
+            CircularBuffer cb(cb_id);
             uint32_t left = a->num_sticks;
             while (left > 0) {
                 uint32_t b = (left < BATCH) ? left : BATCH;
-                cb_reserve_back(cb_id, b);
-                uint32_t l1 = get_write_ptr(cb_id);
+                cb.reserve_back(b);
+                uint32_t l1_offset = 0;
                 for (uint32_t t = 0; t < b; t++) {
                     uint32_t read_tensor = st.curr_tensor;
                     uint32_t src_page = seq_concat_next(st);
                     if (read_tensor == 0) {
-                        uint64_t noc_addr = get_noc_addr(src_page, s);
-                        noc_async_read(noc_addr, l1, stick_bytes);
+                        noc.async_read(
+                            s, cb, stick_bytes, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
                     } else {
-                        uint64_t noc_addr = get_noc_addr(src_page, s1);
-                        noc_async_read(noc_addr, l1, stick_bytes);
+                        noc.async_read(
+                            s1, cb, stick_bytes, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
                     }
-                    l1 += stick_bytes;
+                    l1_offset += cb_page_stride;
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_id, b);
+                noc.async_read_barrier();
+                cb.push_back(b);
                 left -= b;
             }
         }
@@ -386,35 +432,43 @@ void kernel_main() {
         const uint32_t chunk_read_bytes = a->chunk_Wt * a->elem_w_bytes;
         uint32_t i_stick = a->start_stick;
 
+        Noc noc;
+        CircularBuffer cb(cb_id);
+
         if (a->num_col_chunks == 1) {
             for (uint32_t tr = 0; tr < a->num_tile_rows; ++tr) {
-                cb_reserve_back(cb_id, a->chunk_Wt);
-                uint32_t l1_addr = get_write_ptr(cb_id);
+                cb.reserve_back(a->chunk_Wt);
+                uint32_t l1_offset = 0;
                 for (uint32_t h = 0; h < a->H_per_tile; ++h) {
-                    uint64_t noc_addr = get_noc_addr(i_stick, s);
-                    noc_async_read(noc_addr, l1_addr, chunk_read_bytes);
-                    l1_addr += chunk_read_bytes;
+                    noc.async_read(
+                        s, cb, chunk_read_bytes, {.page_id = i_stick, .offset_bytes = 0}, {.offset_bytes = l1_offset});
+                    l1_offset += chunk_read_bytes;
                     i_stick++;
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_id, a->chunk_Wt);
+                noc.async_read_barrier();
+                cb.push_back(a->chunk_Wt);
             }
         } else {
             for (uint32_t tr = 0; tr < a->num_tile_rows; ++tr) {
-                uint64_t base_noc[32];
-                for (uint32_t h = 0; h < a->H_per_tile; ++h) {
-                    base_noc[h] = get_noc_addr(i_stick + h, s);
-                }
+                // The legacy path hoisted one base NoC address per stick row into
+                // base_noc[] and advanced it by chunk_read_bytes per column chunk.
+                // The object API resolves the source address from
+                // (page_id, offset_bytes) at each call, so the same addresses are
+                // expressed directly as a chunk offset into the page.
                 for (uint32_t c = 0; c < a->num_col_chunks; ++c) {
-                    cb_reserve_back(cb_id, a->chunk_Wt);
-                    uint32_t l1_addr = get_write_ptr(cb_id);
+                    cb.reserve_back(a->chunk_Wt);
+                    uint32_t l1_offset = 0;
                     for (uint32_t h = 0; h < a->H_per_tile; ++h) {
-                        noc_async_read(base_noc[h], l1_addr, chunk_read_bytes);
-                        l1_addr += chunk_read_bytes;
-                        base_noc[h] += chunk_read_bytes;
+                        noc.async_read(
+                            s,
+                            cb,
+                            chunk_read_bytes,
+                            {.page_id = i_stick + h, .offset_bytes = c * chunk_read_bytes},
+                            {.offset_bytes = l1_offset});
+                        l1_offset += chunk_read_bytes;
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_id, a->chunk_Wt);
+                    noc.async_read_barrier();
+                    cb.push_back(a->chunk_Wt);
                 }
                 i_stick += a->H_per_tile;
             }
@@ -429,10 +483,23 @@ void kernel_main() {
         const auto* a = reinterpret_cast<const ArgsStickNonaligned*>(get_arg_addr(0));
         const auto s = TensorAccessor(src_args, a->src_addr, aligned_page_size);
 
-        cb_reserve_back(a->cb_scratch_id, 1);
-        uint32_t scratch_addr = get_write_ptr(a->cb_scratch_id);
+        Noc noc;
+        CircularBuffer cb(cb_id);
+        CircularBuffer cb_scratch(a->cb_scratch_id);
+
+        cb_scratch.reserve_back(1);
+        uint32_t scratch_addr = cb_scratch.get_write_ptr();
         uint32_t i_stick = a->start_stick;
-        const uint32_t read_size = aligned_page_size + 64;
+        // A NOC read requires source and local-L1 destination addresses to have
+        // equal residues modulo the architecture's read alignment (64B on BH,
+        // 32B on WH). Keep one 64B alignment margin per slot and shift only the
+        // L1 destination. The source transaction remains exactly one physical
+        // page; aligning the source down and extending the read crossed page and
+        // allocation boundaries.
+        constexpr uint32_t READ_ALIGNMENT = 64;
+        constexpr uint32_t READ_ALIGNMENT_MASK = READ_ALIGNMENT - 1;
+        const uint32_t read_size = aligned_page_size;
+        const uint32_t scratch_slot_size = aligned_page_size + READ_ALIGNMENT;
 
         if (a->split) {
             // old > new: each old stick produces ratio new sticks.
@@ -444,24 +511,53 @@ void kernel_main() {
                 uint32_t batch = (remaining < NABATCH) ? remaining : NABATCH;
                 uint32_t byte_offsets[NABATCH];
                 for (uint32_t b = 0; b < batch; ++b) {
-                    uint64_t noc_addr = get_noc_addr(i_stick + b, s);
-                    byte_offsets[b] = noc_addr & 63;
-                    noc_async_read(noc_addr & ~uint64_t(63), scratch_addr + b * read_size, read_size);
+                    uint64_t noc_addr = s.get_noc_addr(i_stick + b, 0, noc.get_noc_id());
+                    uint32_t scratch_slot = scratch_addr + b * scratch_slot_size;
+                    byte_offsets[b] = (noc_addr - scratch_slot) & READ_ALIGNMENT_MASK;
+                    noc.async_read(
+                        s,
+                        cb_scratch,
+                        read_size,
+                        {.page_id = i_stick + b, .offset_bytes = 0},
+                        {.offset_bytes = b * scratch_slot_size + byte_offsets[b]});
                 }
-                noc_async_read_barrier();
+                noc.async_read_barrier();
                 for (uint32_t b = 0; b < batch; ++b) {
                     // Reserve all ratio pages at once (1 semaphore check vs ratio)
-                    cb_reserve_back(cb_id, a->ratio);
-                    uint32_t cb_base = get_write_ptr(cb_id);
-                    uint16_t* src_ptr = reinterpret_cast<uint16_t*>(scratch_addr + b * read_size + byte_offsets[b]);
-                    for (uint32_t r = 0; r < a->ratio; ++r) {
-                        uint16_t* dst_ptr = reinterpret_cast<uint16_t*>(cb_base + r * cb_page_bytes);
-                        uint32_t off = r * new_half;
-                        for (uint32_t w = 0; w < new_half; ++w) {
-                            dst_ptr[w] = src_ptr[off + w];
+                    cb.reserve_back(a->ratio);
+                    uint32_t cb_base = cb.get_write_ptr();
+                    uint16_t* src_ptr =
+                        reinterpret_cast<uint16_t*>(scratch_addr + b * scratch_slot_size + byte_offsets[b]);
+                    // Fast path: when new_stick_size is 16B-aligned (cb_page_bytes ==
+                    // new_stick_size), the `ratio` destination pages and the source form
+                    // one contiguous block of ratio*new_half uint16, so the per-element
+                    // scalar repack is a single bulk copy. Widen to uint64 (byte-identical)
+                    // when both endpoints are 8B-aligned; any miss falls through to the
+                    // unchanged scalar path. Confined to MODE_NONALIGNED (reshape-only) —
+                    // zero blast radius on other ops.
+                    if (cb_page_bytes == a->new_stick_size && (reinterpret_cast<uintptr_t>(src_ptr) & 7u) == 0 &&
+                        (cb_base & 7u) == 0) {
+                        const uint32_t n16 = a->ratio * new_half;  // total uint16 elems
+                        const uint32_t n64 = n16 >> 2;             // full uint64 words
+                        uint64_t* d64 = reinterpret_cast<uint64_t*>(cb_base);
+                        const uint64_t* s64 = reinterpret_cast<const uint64_t*>(src_ptr);
+                        for (uint32_t w = 0; w < n64; ++w) {
+                            d64[w] = s64[w];
+                        }
+                        uint16_t* d16 = reinterpret_cast<uint16_t*>(cb_base);
+                        for (uint32_t w = n64 << 2; w < n16; ++w) {
+                            d16[w] = src_ptr[w];
+                        }
+                    } else {
+                        for (uint32_t r = 0; r < a->ratio; ++r) {
+                            uint16_t* dst_ptr = reinterpret_cast<uint16_t*>(cb_base + r * cb_page_bytes);
+                            uint32_t off = r * new_half;
+                            for (uint32_t w = 0; w < new_half; ++w) {
+                                dst_ptr[w] = src_ptr[off + w];
+                            }
                         }
                     }
-                    cb_push_back(cb_id, a->ratio);
+                    cb.push_back(a->ratio);
                 }
                 i_stick += batch;
                 remaining -= batch;
@@ -470,8 +566,8 @@ void kernel_main() {
             // new >= old: ratio old sticks pack into one new stick.
             const uint32_t old_half = a->old_stick_size / 2;
             for (uint32_t iter = 0; iter < a->num_reads; ++iter) {
-                cb_reserve_back(cb_id, 1);
-                uint16_t* cb_dst = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
+                cb.reserve_back(1);
+                uint16_t* cb_dst = reinterpret_cast<uint16_t*>(cb.get_write_ptr());
                 uint32_t dst_off = 0;
                 uint32_t spr = a->sticks_per_read;
                 uint32_t done = 0;
@@ -479,13 +575,20 @@ void kernel_main() {
                     uint32_t batch = ((spr - done) < NABATCH) ? (spr - done) : NABATCH;
                     uint32_t byte_offsets[NABATCH];
                     for (uint32_t b = 0; b < batch; ++b) {
-                        uint64_t noc_addr = get_noc_addr(i_stick + b, s);
-                        byte_offsets[b] = noc_addr & 63;
-                        noc_async_read(noc_addr & ~uint64_t(63), scratch_addr + b * read_size, read_size);
+                        uint64_t noc_addr = s.get_noc_addr(i_stick + b, 0, noc.get_noc_id());
+                        uint32_t scratch_slot = scratch_addr + b * scratch_slot_size;
+                        byte_offsets[b] = (noc_addr - scratch_slot) & READ_ALIGNMENT_MASK;
+                        noc.async_read(
+                            s,
+                            cb_scratch,
+                            read_size,
+                            {.page_id = i_stick + b, .offset_bytes = 0},
+                            {.offset_bytes = b * scratch_slot_size + byte_offsets[b]});
                     }
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                     for (uint32_t b = 0; b < batch; ++b) {
-                        uint16_t* src_ptr = reinterpret_cast<uint16_t*>(scratch_addr + b * read_size + byte_offsets[b]);
+                        uint16_t* src_ptr =
+                            reinterpret_cast<uint16_t*>(scratch_addr + b * scratch_slot_size + byte_offsets[b]);
                         for (uint32_t w = 0; w < old_half; ++w) {
                             cb_dst[dst_off + w] = src_ptr[w];
                         }
@@ -494,7 +597,7 @@ void kernel_main() {
                     i_stick += batch;
                     done += batch;
                 }
-                cb_push_back(cb_id, 1);
+                cb.push_back(1);
             }
         }
     }
@@ -507,35 +610,50 @@ void kernel_main() {
 
         // CB page = in_stick_size * num_repeats (full output stick)
         const uint32_t out_stick_size = a->in_stick_size * a->num_repeats;
+        const uint32_t output_page_stride = get_local_cb_interface(cb_id).fifo_page_size << cb_addr_shift;
         uint32_t src_page = a->start_page;
         uint32_t pages_left = a->num_pages;
 
+        Noc noc;
+        CircularBuffer cb(cb_id);
+        UnicastEndpoint self_ep;
+        const uint32_t my_noc_x = my_x[noc.get_noc_id()];
+        const uint32_t my_noc_y = my_y[noc.get_noc_id()];
+
         while (pages_left > 0) {
             uint32_t batch = (pages_left < BATCH) ? pages_left : BATCH;
-            cb_reserve_back(cb_id, batch);
-            uint32_t l1_base = get_write_ptr(cb_id);
+            cb.reserve_back(batch);
+            uint32_t l1_base = cb.get_write_ptr();
 
             // Read original sticks from DRAM
             for (uint32_t t = 0; t < batch; t++) {
-                uint64_t noc_addr = get_noc_addr(src_page, s);
-                noc_async_read(noc_addr, l1_base + t * out_stick_size, a->in_stick_size);
+                noc.async_read(
+                    s,
+                    cb,
+                    a->in_stick_size,
+                    {.page_id = src_page, .offset_bytes = 0},
+                    {.offset_bytes = t * output_page_stride});
                 src_page++;
             }
-            noc_async_read_barrier();
+            noc.async_read_barrier();
 
             // Replicate each stick N-1 times via L1-to-L1 NOC copies
             if (a->num_repeats > 1) {
                 for (uint32_t t = 0; t < batch; t++) {
-                    uint32_t l1_addr = l1_base + t * out_stick_size;
-                    uint64_t src_noc = get_noc_addr(l1_addr);
+                    uint32_t l1_addr = l1_base + t * output_page_stride;
                     for (uint32_t r = 1; r < a->num_repeats; r++) {
-                        noc_async_read(src_noc, l1_addr + r * a->in_stick_size, a->in_stick_size);
+                        noc.async_read(
+                            self_ep,
+                            cb,
+                            a->in_stick_size,
+                            {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = l1_addr},
+                            {.offset_bytes = t * output_page_stride + r * a->in_stick_size});
                     }
                 }
-                noc_async_read_barrier();
+                noc.async_read_barrier();
             }
 
-            cb_push_back(cb_id, batch);
+            cb.push_back(batch);
             pages_left -= batch;
         }
     }
@@ -545,32 +663,35 @@ void kernel_main() {
     // Reads the valid prefix of each stick, fills column padding from a packed
     // pad value, and emits whole pad tile-rows for height/outer padding.
     else if constexpr (MODE == MODE_TILEROW_PAD) {
+        constexpr uint32_t elem_size = get_named_compile_time_arg_val("elem_size");
         constexpr uint32_t tile_height = get_named_compile_time_arg_val("tile_height");
         constexpr uint32_t tile_row_shift_bits = get_named_compile_time_arg_val("tile_row_shift_bits");
         constexpr uint32_t num_pages_in_row = get_named_compile_time_arg_val("num_pages_in_row");
         constexpr uint32_t unpadded_X_size = get_named_compile_time_arg_val("unpadded_X_bytes");
         constexpr uint32_t valid_last_page_bytes = get_named_compile_time_arg_val("valid_last_page_bytes");
-        // page_size for the TensorAccessor: full padded/unaligned input page size.
+        // ``page_size`` is the logical payload copied from each input stick.
+        // TensorAccessorArgs owns the physical page pitch (DRAM alignment is
+        // architecture-dependent and interleaved L1 uses a different pitch).
         constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
 
         const auto* a = reinterpret_cast<const ArgsStickTilerowPad*>(get_arg_addr(0));
-        const auto s = TensorAccessor(src_args, a->src_addr, page_size);
+        const uint32_t source_page_size = src_args.get_aligned_page_size();
+        const auto s = TensorAccessor(src_args, a->src_addr, source_page_size);
 
         const uint32_t padded_X_size = a->padded_X_size;
         const uint32_t pad_value = a->packed_pad_value;
         const uint32_t num_tiles_per_row = padded_X_size >> tile_row_shift_bits;
 
+        Noc noc;
+        CircularBuffer cb(cb_id);
+
         // pad_blocks: emit `num_blocks` whole pad tile-rows.
         auto pad_blocks = [&](uint32_t num_blocks) {
             for (uint32_t i = 0; i < num_blocks; i++) {
-                cb_reserve_back(cb_id, num_tiles_per_row);
-                uint32_t l1_write_addr = get_write_ptr(cb_id);
-                // MODE_TILEROW_PAD is unreachable for this op (permute always sets mode =
-                // MODE_SEQUENCED); the toolchain still fully compiles this branch (see the
-                // factory comment on named_compile_time_args), and fill_with_val<elem_size>
-                // fails template-argument substitution here, so the val_size is hardcoded.
-                fill_with_val<4>(l1_write_addr, padded_X_size << 5, pad_value);
-                cb_push_back(cb_id, num_tiles_per_row);
+                cb.reserve_back(num_tiles_per_row);
+                uint32_t l1_write_addr = cb.get_write_ptr();
+                fill_with_val<elem_size>(l1_write_addr, padded_X_size << 5, pad_value);
+                cb.push_back(num_tiles_per_row);
             }
         };
 
@@ -580,25 +701,37 @@ void kernel_main() {
             uint32_t padding_rows = (tile_height - num_rows) & 31;
             bool has_rows = (num_rows + padding_rows) > 0;
 
-            cb_reserve_back(cb_id, num_tiles_per_row * has_rows);
-            uint32_t l1_write_addr = get_write_ptr(cb_id);
+            cb.reserve_back(num_tiles_per_row * has_rows);
+            // fill_with_val writes L1 directly, so the CB base address is kept
+            // alongside the running offset used for the NoC destinations.
+            const uint32_t l1_base = cb.get_write_ptr();
+            uint32_t l1_offset = 0;
             for (uint32_t k = 0; k < num_rows; k++) {
-                uint32_t start_of_row_l1_write_addr = l1_write_addr;
+                uint32_t start_of_row_l1_offset = l1_offset;
                 for (uint32_t i = 0; i < num_pages_in_row - 1; i++) {
-                    uint64_t noc_addr = get_noc_addr(base_page_id + k * num_pages_in_row + i, s);
-                    noc_async_read(noc_addr, l1_write_addr, page_size);
-                    l1_write_addr += page_size;
+                    noc.async_read(
+                        s,
+                        cb,
+                        page_size,
+                        {.page_id = base_page_id + k * num_pages_in_row + i, .offset_bytes = 0},
+                        {.offset_bytes = l1_offset});
+                    l1_offset += page_size;
                 }
                 // Last page in the row may carry column padding.
-                uint64_t noc_addr = get_noc_addr(base_page_id + k * num_pages_in_row + num_pages_in_row - 1, s);
-                noc_async_read(noc_addr, l1_write_addr, valid_last_page_bytes);
+                noc.async_read(
+                    s,
+                    cb,
+                    valid_last_page_bytes,
+                    {.page_id = base_page_id + k * num_pages_in_row + num_pages_in_row - 1, .offset_bytes = 0},
+                    {.offset_bytes = l1_offset});
                 uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
-                fill_with_val<4>(start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
-                l1_write_addr += valid_last_page_bytes + size_of_padding_columns;
+                fill_with_val<elem_size>(
+                    l1_base + start_of_row_l1_offset + unpadded_X_size, size_of_padding_columns, pad_value);
+                l1_offset += valid_last_page_bytes + size_of_padding_columns;
             }
-            fill_with_val<4>(l1_write_addr, padding_rows * padded_X_size, pad_value);
-            noc_async_read_barrier();
-            cb_push_back(cb_id, num_tiles_per_row * has_rows);
+            fill_with_val<elem_size>(l1_base + l1_offset, padding_rows * padded_X_size, pad_value);
+            noc.async_read_barrier();
+            cb.push_back(num_tiles_per_row * has_rows);
         };
 
         uint32_t page_id = a->start_page_id;
@@ -660,22 +793,23 @@ void kernel_main() {
         };
         const auto* a = reinterpret_cast<const ArgsPartial*>(get_arg_addr(0));
         const auto s = TensorAccessor(src_args, a->src_addr, aligned_page_size);
-        cb_reserve_back(cb_id, 1);
-        uint32_t l1 = get_write_ptr(cb_id);
-        uint64_t noc = get_noc_addr(a->src_page, s) + a->col_off;
-        noc_async_read(noc, l1, a->nbytes);
-        noc_async_read_barrier();
+        Noc noc;
+        CircularBuffer cb(cb_id);
+        cb.reserve_back(1);
+        uint32_t l1 = cb.get_write_ptr();
+        noc.async_read(s, cb, a->nbytes, {.page_id = a->src_page, .offset_bytes = a->col_off}, {.offset_bytes = 0});
+        noc.async_read_barrier();
         // Spread packed -> 16B-strided, in place, HIGH index first so the write of
         // slot i (offset i*L1_ALIGN) never clobbers a not-yet-read packed source
         // (offset i'*stick_bytes for i' < i, since i*L1_ALIGN > i'*stick_bytes).
         const uint32_t n_elems = a->nbytes / stick_bytes;
         for (uint32_t i = n_elems; i-- > 0;) {
-            volatile tt_l1_ptr uint8_t* dst = (volatile tt_l1_ptr uint8_t*)(l1 + i * L1_ALIGN);
-            volatile tt_l1_ptr uint8_t* srcp = (volatile tt_l1_ptr uint8_t*)(l1 + i * stick_bytes);
+            CoreLocalMem<volatile uint8_t> dst(l1 + i * L1_ALIGN);
+            CoreLocalMem<volatile uint8_t> srcp(l1 + i * stick_bytes);
             for (uint32_t b = 0; b < stick_bytes; ++b) {
                 dst[b] = srcp[b];
             }
         }
-        cb_push_back(cb_id, 1);
+        cb.push_back(1);
     }
 }

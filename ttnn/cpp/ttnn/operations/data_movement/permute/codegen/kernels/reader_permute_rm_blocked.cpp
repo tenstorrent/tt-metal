@@ -16,6 +16,8 @@
 // RT: [src_addr, start_block, end_block, input_shape[N], src_strides[N]]
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
@@ -49,6 +51,9 @@ void kernel_main() {
     const uint32_t non_x_rows = num_rows / X;
 
     const auto s = TensorAccessor(src_args, src_addr, in_page_size);
+
+    Noc noc;
+    CircularBuffer cb_in(cb_id);
 
     uint32_t idxs[N];
 
@@ -87,16 +92,15 @@ void kernel_main() {
             }
         }
 
-        cb_reserve_back(cb_id, x_block_size);
-        uint32_t l1 = get_write_ptr(cb_id);
+        cb_in.reserve_back(x_block_size);
         uint32_t page_offset = 0;
         for (uint32_t x = x_start; x < x_end; ++x) {
             uint32_t row = base_addr_offset + x * X_stride;
-            uint64_t noc_addr = get_noc_addr(row, s) + w_offset;
-            noc_async_read(noc_addr, l1 + page_offset, w_read_size_bytes);
+            noc.async_read(
+                s, cb_in, w_read_size_bytes, {.page_id = row, .offset_bytes = w_offset}, {.offset_bytes = page_offset});
             page_offset += page_size;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id, x_block_size);
+        noc.async_read_barrier();
+        cb_in.push_back(x_block_size);
     }
 }
