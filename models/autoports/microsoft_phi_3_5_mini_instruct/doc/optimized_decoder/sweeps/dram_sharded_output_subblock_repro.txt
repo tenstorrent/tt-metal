@@ -1,0 +1,30 @@
+Command:
+python - <<'PY'
+import inspect, ttnn
+cls = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+print(cls.__doc__)
+print(inspect.signature(cls))
+print(cls(
+    in0_block_w=6,
+    per_core_M=1,
+    per_core_N=3,
+    fused_activation=None,
+    out_subblock_h=1,
+    out_subblock_w=1,
+))
+PY
+
+Output:
+This program config is a specialized config for very narrow tensors stored in DRAM.
+(*args, **kwargs)
+TypeError: __init__(): incompatible function arguments. The following argument
+types are supported:
+  __init__(self, *, in0_block_w: int, per_core_M: int, per_core_N: int,
+           fused_activation: UnaryWithParam | None = None) -> None
+
+The DRAM-sharded matmul family selected by the advisor exposes only
+in0_block_w, per_core_M, per_core_N, and fused_activation. It does not expose
+out_subblock_h/out_subblock_w or a core grid. The tt-perf-report generic
+"No output subblock size found" advice therefore cannot be acted on within
+this program family. The supported geometry controls were swept under the
+final BFP4/LoFi policy at both B1 and B32 in geometry_bfp4_lofi.log.
