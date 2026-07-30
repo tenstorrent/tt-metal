@@ -29,8 +29,10 @@ namespace {
 
 using namespace tt::tt_metal::experimental;
 
-// Spec names are prefixed per factory so this file can share a unity-build translation unit with
-// the sibling EMA factory in this op directory.
+// The constants below carry a per-factory prefix so this file and the sibling EMA factory can
+// safely share a translation unit: both are sources of the unity-built ttnn_op_reduction target,
+// which merges their anonymous namespaces. The spec-name strings they hold are scoped to one
+// ProgramSpec, so those need no prefix and are identical in both factories.
 const KernelSpecName ACCUM_READER{"reader"};
 const KernelSpecName ACCUM_WRITER{"writer"};
 // The compute kernel is instantiated once per work-split core group. The two instances are

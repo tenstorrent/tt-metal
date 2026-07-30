@@ -40,7 +40,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_rows; i++) {
         // Synchronize unpacker-packer between iterations
-        // This is necessary to avoid data-races on dfb_acc_obj
+        // This is necessary to avoid data-races on the accumulator buffer
         dfb_acc_obj.wait_front(ONE_TILE);
         dfb_acc_obj.pop_front(ONE_TILE);
 
@@ -54,7 +54,7 @@ void kernel_main() {
 
         tile_regs_wait();
 
-        // out_of_order_output to keep packing to dfb_acc_obj at the same location
+        // out_of_order_output to keep packing to the accumulator buffer at the same location
         dfb_acc_obj.reserve_back(ONE_TILE);
 
         pack_reconfig_data_format(dfb::acc);

@@ -25,8 +25,10 @@ namespace {
 
 using namespace tt::tt_metal::experimental;
 
-// Spec names are prefixed per factory so this file can share a unity-build translation unit with
-// the sibling accumulation factory in this op directory.
+// The constants below carry a per-factory prefix so this file and the sibling accumulation factory
+// can safely share a translation unit: both are sources of the unity-built ttnn_op_reduction
+// target, which merges their anonymous namespaces. The spec-name strings they hold are scoped to
+// one ProgramSpec, so those need no prefix and are identical in both factories.
 const KernelSpecName EMA_READER{"reader"};
 const KernelSpecName EMA_WRITER{"writer"};
 const KernelSpecName EMA_COMPUTE{"compute"};
@@ -127,6 +129,12 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
 
     // Create kernel specs
     // -------------------
+    // This factory targets Gen1 (Wormhole / Blackhole) only. The two data movement kernels place
+    // the reader on RISCV_0 and the writer on RISCV_1, which is the reverse of the conventional
+    // assignment, so neither matches a role default and neither can go through the
+    // architecture-agnostic reader / writer helpers without changing where they run. Spelling out
+    // the Gen1 config is therefore what preserves the placement, and it pins this whole factory to
+    // Gen1: a Gen2 build would need placement decisions that cannot be derived from these values.
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
@@ -203,6 +211,9 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
              {"tiles_per_channel", tiles_per_channel},
              {"alpha_bits", alpha_bits},
              {"beta_bits", beta_bits}},
+        // Translates the TTNN ComputeKernelConfig this op resolves into its Metal 2.0 equivalent.
+        // The helper picks the alternative matching the architecture, but that does not make the
+        // program portable: the data movement kernels above are Gen1-only, so the whole factory is.
         .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
     };
 
