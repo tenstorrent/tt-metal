@@ -1,0 +1,61 @@
+{
+  "incumbent_ms": 937.128544,
+  "final_ms": 937.128544,
+  "noise_floor_ms": 0.69776,
+  "delta_ms": 0.0,
+  "delta_pct": 0.0,
+  "changed": false,
+  "shipped_change": false,
+  "winning_config": {
+    "optimization_policy": "bfp4_all_dram_w8"
+  },
+  "best_single_ms": 937.367808,
+  "combination": {
+    "best_set": [
+      "incumbent"
+    ],
+    "measured_sets": [
+      {
+        "set": [
+          "incumbent"
+        ],
+        "measured_ms": 937.128544,
+        "oracle_passed": true
+      },
+      {
+        "set": [
+          "full_attention:qk_per_head_rms_norm"
+        ],
+        "measured_ms": 937.367808,
+        "repeats_ms": [
+          937.7436,
+          937.367808,
+          937.473984
+        ],
+        "oracle_passed": true
+      }
+    ],
+    "pairwise_sets": [],
+    "reason_no_pairwise_sets": "Only one material challenger chain existed, so its single measurement is also the cumulative set and there is no distinct pair to measure."
+  },
+  "oracle": "models/autoports/qwen_qwen3_6_27b/tests/traced_synthetic_pcc.py at PCC >= 0.995, batch 32, both layer kinds, two stateful trace steps, exact replay determinism, and batch-row alias check",
+  "oracle_passed": true,
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial once-per-layer-kind capture after freezing the batch-32 incumbent; full attention was corrected once before screening because the first skeleton omitted Q/K per-head norms",
+      "captures": {
+        "full_attention": 2,
+        "linear_attention": 1
+      },
+      "profiled_from": {
+        "full_attention": "tracy/incumbent_full_b32/perf_report.csv",
+        "linear_attention": "tracy/incumbent_linear_b32/perf_report.csv"
+      },
+      "screened": [
+        "full_attention:qk_per_head_rms_norm"
+      ],
+      "result": "candidate rejected inside the frozen noise floor; no winner was applied, so no changed graph existed to re-profile or re-rank"
+    }
+  ]
+}

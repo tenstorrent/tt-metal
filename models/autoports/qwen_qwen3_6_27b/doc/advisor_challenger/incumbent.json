@@ -1,0 +1,47 @@
+{
+  "cell_tag": "fuse-noadvise/qwen_qwen3_6_27b",
+  "commit": "7111bd53815cf835e5a1511e509c57878c8e9d1c",
+  "harness": "models/autoports/qwen_qwen3_6_27b/tests/traced_synthetic_pcc.py",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "measured_at": "2026-07-30T17:09:30Z",
+  "metric": "16 * full_attention layer median + 48 * linear_attention layer median",
+  "layer_counts": {
+    "full_attention": 16,
+    "linear_attention": 48
+  },
+  "per_kind_repeats_ms": {
+    "full_attention": [
+      1.208874,
+      1.208242,
+      1.208673
+    ],
+    "linear_attention": [
+      19.13509,
+      19.120764,
+      19.128778
+    ]
+  },
+  "repeats_ms": [
+    937.826304,
+    937.128544,
+    937.520112
+  ],
+  "incumbent_ms": 937.128544,
+  "noise_floor_ms": 0.69776,
+  "shipped_policy": {
+    "optimization_policy": "bfp4_all_dram_w8"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/final_w8_{full,linear}_b32/perf_report.csv (BFLOAT4_B, LoFi, DRAM Sharded=True) and doc/optimized_decoder/README.md selected policy bfp4_all_dram_w8",
+  "incumbent_perf_reports": {
+    "full_attention": "tracy/incumbent_full_b32/perf_report.csv",
+    "linear_attention": "tracy/incumbent_linear_b32/perf_report.csv"
+  },
+  "oracle": "tests/traced_synthetic_pcc.py at PCC >= 0.995 with two stateful trace steps, exact replay determinism, and batch-row alias check",
+  "oracle_passed": true
+}

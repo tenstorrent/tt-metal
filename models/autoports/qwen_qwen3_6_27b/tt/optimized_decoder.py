@@ -7,6 +7,12 @@ This path starts from :class:`FusedDecoder` and keeps its packed projection,
 cache, recurrent-state, non-aligned sequence, and public tensor contracts.  The
 optimization policy is explicit so profiler evidence can be tied to the dtype
 and fidelity actually used by each material projection group.
+
+The post-optimization advisor-challenger pass at decode batch 32 tested the
+remaining material Q/K per-head RMSNorm chain.  Its best weighted decoder time
+was 937.367808 ms versus the 937.128544 ms incumbent, inside the frozen
+0.697760 ms noise floor, so the required incumbent tie-break leaves this
+decoder intentionally unchanged.
 """
 
 from __future__ import annotations

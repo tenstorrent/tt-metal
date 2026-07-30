@@ -1,0 +1,91 @@
+{
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share",
+  "reconcile_commands": [
+    "python .agents/skills/advisor-challenger/scripts/reconcile.py --report shard_advise/full_attention/report.json --ir shard_advise/full_attention/final_ir.mlir --perf tracy/incumbent_full_b32/perf_report.csv --layers-of-kind 16 --total-layers 64 --layer-kind full_attention --threshold-pct 1.0 --out /tmp/reconcile_full.json",
+    "python .agents/skills/advisor-challenger/scripts/reconcile.py --report shard_advise/linear_attention/report.json --ir shard_advise/linear_attention/final_ir.mlir --perf tracy/incumbent_linear_b32/perf_report.csv --layers-of-kind 48 --total-layers 64 --layer-kind linear_attention --threshold-pct 1.0 --out /tmp/reconcile_linear.json"
+  ],
+  "format_note": "reconcile.py was run as required, but its parser does not recognize this revision's final_ir layout aliases or tt-perf-report Device Time column. The chain below is the direct reconciliation of those same advisor and incumbent artifacts; its row shares come from the frozen incumbent CSV and are summed before thresholding.",
+  "chains": [
+    {
+      "chain": "full_attention:qk_per_head_rms_norm",
+      "ops": [
+        "q_norm",
+        "k_norm"
+      ],
+      "op_count": 2,
+      "summed_window_share_pct": 1.2394788519138077,
+      "measured_ms": 937.367808,
+      "repeats_ms": [
+        937.7436,
+        937.367808,
+        937.473984
+      ],
+      "verdict": "rejected",
+      "reason": "The advisor's block-sharded Q/K norm chain was screened as one change. Its best result was 0.239264 ms slower than the frozen best repeat and inside the 0.697760 ms noise floor, so the incumbent wins the tie."
+    },
+    {
+      "chain": "linear_attention:recurrent_gated_rms_norm",
+      "ops": [
+        "recurrent gated RMSNorm"
+      ],
+      "op_count": 1,
+      "summed_window_share_pct": 0.432635,
+      "verdict": "below_threshold",
+      "reason": "This chain is beyond the tracer-terminal softplus/state-copy boundary and its frozen incumbent share is below the 1% chain threshold."
+    }
+  ],
+  "disagreements": [
+    {
+      "layer_kind": "full_attention",
+      "chain": "full_attention:qk_per_head_rms_norm",
+      "op": "q_norm LayerNormDeviceOperation",
+      "incumbent": "DRAM interleaved, 24 cores",
+      "advisor": "L1 block sharded, 8x8 cores",
+      "window_share_pct": 0.619698101730328,
+      "measured_ms": 937.367808,
+      "verdict": "rejected",
+      "oracle": "batch-32 two-step traced synthetic PCC >= 0.995 and exact replay determinism",
+      "oracle_passed": true,
+      "candidate_perf_report": "tracy/qk_norm_candidate_full_b32/perf_report.csv"
+    },
+    {
+      "layer_kind": "full_attention",
+      "chain": "full_attention:qk_per_head_rms_norm",
+      "op": "k_norm LayerNormDeviceOperation",
+      "incumbent": "DRAM interleaved, 4 cores",
+      "advisor": "L1 block sharded, 8x4 cores",
+      "window_share_pct": 0.6197807501834797,
+      "measured_ms": 937.367808,
+      "verdict": "rejected",
+      "oracle": "batch-32 two-step traced synthetic PCC >= 0.995 and exact replay determinism",
+      "oracle_passed": true,
+      "candidate_perf_report": "tracy/qk_norm_candidate_full_b32/perf_report.csv"
+    },
+    {
+      "layer_kind": "linear_attention",
+      "chain": "linear_attention:recurrent_gated_rms_norm",
+      "op": "recurrent gated RMSNorm",
+      "incumbent": "measured terminal recurrent path",
+      "advisor": "uncapturable beyond softplus/state-copy terminal",
+      "window_share_pct": 0.432635,
+      "verdict": "below_threshold"
+    }
+  ],
+  "matched_advice": {
+    "full_attention": {
+      "advisor_dram_sharded_matmuls": 5,
+      "incumbent_dram_sharded_matmuls": 5,
+      "outer_rms_norms_already_l1_sharded": 2
+    },
+    "linear_attention": {
+      "advisor_dram_sharded_matmuls": 5,
+      "incumbent_dram_sharded_matmuls": 5,
+      "outer_rms_norms_already_l1_sharded": 2
+    }
+  },
+  "incumbent_perf_reports": {
+    "full_attention": "tracy/incumbent_full_b32/perf_report.csv",
+    "linear_attention": "tracy/incumbent_linear_b32/perf_report.csv"
+  }
+}
