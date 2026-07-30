@@ -21,6 +21,7 @@ Useful overrides:
   HOST=127.0.0.1 PORT=8010
   MAX_MODEL_LEN=4096 MAX_GEN_TOKS=<derived: MAX_MODEL_LEN - 2432, floored to a canvas>
   THINKING_MODE=1                 # enable the checkpoint's server-side thinking template
+  REASONING_PARSER=0              # 1 splits the answer into message.reasoning; the score then lies
   OUTPUT_ROOT=/home/zni/dg_runs/diffusion_gemma/upfront_gpqa/<timestamp>
   RESET_BEFORE=1 RESET_AFTER=1
 
@@ -95,8 +96,29 @@ case "${THINKING_MODE}" in
         DEFAULT_PREFILL_WARMUP_LENS="128,160,192,224,256,288,320,352,384,416,448,480,512,544,576,608,672,832,2432"
         SERVER_CHAT_ARGS=(
             --default-chat-template-kwargs '{"enable_thinking":true}'
-            --reasoning-parser diffusion_gemma
         )
+        # The reasoning parser splits the response on the model's own `<channel|>`
+        # delimiter: everything before it (the chain of thought, INCLUDING the \boxed{}
+        # answer) goes to `message.reasoning`, and only what follows goes to
+        # `message.content`. lm_eval local-chat-completions reads `content`, so with the
+        # parser on, every response that closes its thinking channel scores [invalid] --
+        # measured on the 2-question smoke, 1/2 vs 2/2, on bit-identical model output.
+        #
+        # This is new on the vllm-tt-plugin / vLLM 0.24 path only. The parser has always
+        # asked for its delimiters (`adjust_request` sets skip_special_tokens=False); the
+        # fork ignored that, so `extract_reasoning` never saw `<channel|>` and handed the
+        # whole text to `content`. 0.24 honours it. See
+        # doc/vllm_integration/plugin_migration_024.md, break 5.
+        #
+        # Default OFF for scoring: an eval must see the answer. Set
+        # REASONING_PARSER=1 to serve the way an API client should be served (clean
+        # `content`, thinking in `reasoning`) -- but then do not read the lm_eval score.
+        if [[ "${REASONING_PARSER:-0}" == "1" ]]; then
+            SERVER_CHAT_ARGS+=(--reasoning-parser diffusion_gemma)
+            echo "WARNING: reasoning parser ON -- the \boxed{} answer will land in" >&2
+            echo "         message.reasoning, and the lm_eval score (which reads" >&2
+            echo "         message.content) will be meaningless." >&2
+        fi
         ;;
     0)
         # gpqa_diamond_cot_zeroshot, thinking=0. COMPUTED:

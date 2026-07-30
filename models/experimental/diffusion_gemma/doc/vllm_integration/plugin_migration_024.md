@@ -202,11 +202,17 @@ explicitly asks to see its own delimiters. vLLM 0.24 honours that; the fork did 
 The plugin's behaviour is the parser working as designed.
 
 Nothing is lost — the answer is in `reasoning`. But `lm_eval local-chat-completions` reads
-`message.content`, so any response that closes its thinking channel now scores
-`[invalid]` under flexible-extract. **Any full 198-question comparison against a fork
-number is invalid until the harness reads `reasoning`** (the same trap already recorded for
-the reference-server path: read `reasoning`, not `reasoning_content`). This is eval
-plumbing, not serving quality.
+`message.content`, so any response that closes its thinking channel scores `[invalid]` under
+flexible-extract (the same trap already recorded for the reference-server path: read
+`reasoning`, not `reasoning_content`). This is eval plumbing, not serving quality.
+
+**Fixed and confirmed on device.** `run_upfront_gpqa.sh` now gates the parser behind
+`REASONING_PARSER`, **default off** — an eval has to be able to see the answer. Set it to 1
+to serve the way an API client should be served (clean `content`, thinking in `reasoning`),
+and then do not read the lm_eval score. Re-running the same smoke on the plugin with the
+parser off (`smoke_024_noparser`): **2/2, and both responses byte-identical to the fork**
+(1796 and 3857 chars). Thinking mode itself is untouched — `enable_thinking:true` stays on;
+only the response *split* is off.
 
 ## Host-side evidence
 
@@ -235,13 +241,17 @@ a pristine clone of plugin `main` @ `0c4e21c` fails the same 12 against the same
 | block latency p50 / max (s) | 3.52 / 5.19 | 3.55 / 5.19 |
 | tok/block/s min / p50 / max | 49.4 / 72.6 / 115.3 | 49.3 / 72.0 / 118.7 |
 | DRAM free delta over the run (GiB) | −9.585 | −9.585 |
-| GPQA flexible-extract | 0.5 | 1.0 |
-| per-question responses | Q1 byte-identical; Q2 `content` truncated to the post-`<channel|>` 322 chars | Q1 identical; Q2 full 3857 chars |
+| GPQA flexible-extract, parser on | 0.5 | 1.0 |
+| GPQA flexible-extract, parser off | **1.0** | 1.0 |
+| per-question responses, parser on | Q1 byte-identical; Q2 `content` truncated to the post-`<channel|>` 322 chars | Q1 identical; Q2 full 3857 chars |
+| per-question responses, parser off | **both byte-identical to fork** | — |
 
-Both runs are true greens by the false-green check (`prefill_block0` count equals the
-question count, no fatal engine error, engine alive at the end). The score gap is entirely
-Break 5. Serving throughput, memory behaviour, halting and the generated tokens themselves
-are indistinguishable — which is the actual migration result.
+All three runs are true greens by the false-green check (`prefill_block0` count equals the
+question count, no fatal engine error, engine alive at the end). Serving throughput, memory
+behaviour, halting and the generated tokens themselves are indistinguishable, and with the
+response split off the scores and the response bytes match the fork exactly — which is the
+actual migration result. The remaining gap is coverage, not quality: two questions is a
+smoke, not the 198-question number.
 
 Registration resolves end to end on 0.24: `TTDiffusionGemmaForBlockDiffusion` →
 `models.experimental.diffusion_gemma.tt.generator_vllm.DiffusionGemmaForCausalLM`, MRO
