@@ -75,7 +75,30 @@ per-frame re-head from a real RoCE arrival, no depth-4 recv-post on the same EUs
 (recv-drain + seq-patch + gather-egress on the same EUs) will run below this; Stage 2/3 must measure the loaded
 per-EU rate. But the fundamental question — "can the DPA reach 200 G at 8 KB at all" — is now **YES**.
 
-## Staged rewrite (E3 PASSED — proceed)
+## ★★ STAGE 1 SOLVED — the depth-4 lock was the DBR umem (silicon, 2026-07-30)
+
+**Root cause: `VERBS_SAMPLE_DBR_SIZE = 64` (too small).** The external-datapath DPA QP needs a **full 4 KB page**
+for its DBR umem; at `rq_wr > 4` a 64 B DBR faults the DPA recv-post with **Fatal error (0x2) on RPC polling**
+(`unpacked_process_call:726`) — a DPA *memory* fault at the first `post_recv`, decoded via SDK TRACE (E2).
+
+Single-variable bisect on silicon (all at RQ target > 4):
+| RQ/SQ | CQ | DBR | result |
+|---|---|---|---|
+| 8 | 8 | 64 | ❌ Fatal 0x2 |
+| 8 | 8 | 64, sq_wr=0 | ❌ Fatal 0x2 (rules out shared-completion + send-side theories, Findings 1/3) |
+| 8 | 8 | **4096** | ✅ 1000/1000, then **50000/50000 byte-exact, exactly-once** |
+| 64 | 64 | **4096** | ✅ 5000/5000, then **50000/50000 byte-exact, exactly-once** (sq_wr=macro — DBR is the SOLE fix) |
+
+**Finding 4 (DBR/umem) was RIGHT; Findings 1/3 (which dismissed the DBR as "8 B, irrelevant") were WRONG.** This
+one line also retroactively explains the **d.1 "async-ring 0x2 fault"** (the WIP bumped depth without the DBR) —
+it was never a kernel-loop bug, just the same undersized DBR. **The fix is `dpa_verbs_initiator_target_sample.c`:
+`VERBS_SAMPLE_DBR_SIZE 64 → 4096`** (+ `VERBS_SAMPLE_QUEUE_SIZE 4 → 64`, completion tied to the macro). No SRQ
+pivot needed for the depth fix. Recv-post is now **depth-parametric (RQ=64 validated)**.
+
+**Still 0.37 Mpps** — the kernel posts 1 recv/iteration (1-in-flight). Deep RQ is now *available*; converting it
+to throughput is Stage 2 (post N recvs + pipeline). SRQ remains the Stage-3 multi-EU buffer model.
+
+## Staged rewrite (Stage 1 DONE — Stage 2 next)
 
 - **Stage 1 — depth-parametric recv-post.** Separate recv-only completion sized `==rq_wr` (`:539/:545/:1447`);
   RC `sq_wr=0` (E4-gated); batch pre-post `rq_wr` recvs + single `commit_recv` in

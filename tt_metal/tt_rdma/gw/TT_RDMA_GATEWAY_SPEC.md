@@ -336,7 +336,12 @@ Arm-driven HW-TX (`doca_eth_txq`, ~198 G) remains an option but is Arm-in-the-lo
      8 KB N2 = 186.7 G, 8 KB N6 = 197.8 G, 0 dropped.** The 144 G plateau is the ~4.4 Mpps **pps wall, NOT a
      byte-bandwidth wall** — 8 KB reaches **200 G line rate with just 4 EUs.** DPA rewrite JUSTIFIED; no Arm-HW-TX
      pivot. Caveat: this is the pure-egress prefill-blast ceiling — the loaded gateway (recv-drain + re-head on the
-     same EUs) is measured in Stage 2/3. Next: Stage 1 depth-parametric recv-post (`gw/D2B_RESEARCH_PLAN.md`).
+     same EUs) is measured in Stage 2/3.
+     **★★ STAGE 1 SOLVED (silicon 2026-07-30): the depth-4 lock was `VERBS_SAMPLE_DBR_SIZE=64` (too small).** SDK
+     TRACE decoded a DPA `Fatal error (0x2) on RPC polling` at the first `post_recv`; bisect proved RQ=8/CQ=8 and
+     RQ=8/CQ=8/sq_wr=0 both still fault, but **DBR 64→4096 (one 4 KB page) fixes it** — RQ=64 runs **50000/50000
+     byte-exact, exactly-once**. DBR is the SOLE fix (Finding 4 right; 1/3 wrong); also retro-explains the d.1
+     async-ring 0x2. Throughput still 0.37 Mpps (kernel posts 1 recv/iter) → **Stage 2 = pipeline N-in-flight**.
 
 ### Ordering
 Stage-1 byte-exact **DONE** (§10 (e): validated on silicon). d.1 depth-bump bisect **DONE** (root cause
