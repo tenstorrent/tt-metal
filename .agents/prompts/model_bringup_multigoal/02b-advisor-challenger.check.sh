@@ -11,6 +11,11 @@
 set -uo pipefail
 
 MD=${1:?model_dir}
+# The stage prompt's MODEL_DIR placeholder expands to `models/autoports/<md>`, while callers on the
+# command line pass the bare `<md>`. Accept both rather than silently building
+# models/autoports/models/autoports/<md> and then reporting "stage produced nothing".
+MD=${MD#models/autoports/}
+MD=${MD%/}
 ROOT=${TT_METAL_HOME:-$(pwd)}
 D="$ROOT/models/autoports/$MD/doc/advisor_challenger"
 fail=0

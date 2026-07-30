@@ -1,6 +1,6 @@
 GOAL 02b — advisor challenger: make the finished optimized decoder faster, or prove it cannot be.
 
-You are given a FINISHED, TAGGED `optimized_decoder.py` for models/autoports/<MODEL_DIR>, produced by an
+You are given a FINISHED, TAGGED `optimized_decoder.py` for MODEL_DIR, produced by an
 optimize stage that never ran the shard advisor. Your job is to produce a NEW optimized decoder that is
 measured to be the best of the incumbent and everything `$shard-advise` suggests.
 
@@ -45,13 +45,13 @@ monotone-improving axis. Derive your own geometry, or sweep the advisor's value 
 `compute_config` / `math_fidelity` in final_ir.mlir is TRACED STATE, NOT ADVICE — overriding it is
 mandatory; taking it literally cost north 30.8 us (-10.7%).
 
-DELIVERABLES under models/autoports/<MODEL_DIR>/:
-  tt/optimized_decoder.py                     (updated, or unchanged with a recorded no-change outcome)
-  doc/advisor_challenger/incumbent.json
-  doc/advisor_challenger/shard_advise/<layer_kind>/{report.json,final_ir.mlir,report.txt,pipeline.log}
-  doc/advisor_challenger/reconciliation.json
-  doc/advisor_challenger/final.json
-  doc/advisor_challenger/README.md             (advised / kept / rejected-with-number / uncapturable)
-  doc/advisor_challenger/tracy/                (tt-perf-report outputs only, not raw Tracy captures)
+DELIVERABLES under MODEL_DIR/:
+  MODEL_DIR/tt/optimized_decoder.py                     (updated, or unchanged with a recorded no-change outcome)
+  MODEL_DIR/doc/advisor_challenger/incumbent.json
+  MODEL_DIR/doc/advisor_challenger/shard_advise/<layer_kind>/{report.json,final_ir.mlir,report.txt,pipeline.log}
+  MODEL_DIR/doc/advisor_challenger/reconciliation.json
+  MODEL_DIR/doc/advisor_challenger/final.json
+  MODEL_DIR/doc/advisor_challenger/README.md             (advised / kept / rejected-with-number / uncapturable)
+  MODEL_DIR/doc/advisor_challenger/tracy/                (tt-perf-report outputs only, not raw Tracy captures)
 
-Finish by running: .agents/prompts/model_bringup_multigoal/02b-advisor-challenger.check.sh <MODEL_DIR>
+Finish by running: .agents/prompts/model_bringup_multigoal/02b-advisor-challenger.check.sh MODEL_DIR
