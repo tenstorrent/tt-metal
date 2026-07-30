@@ -1,0 +1,160 @@
+name: "(TEMPORARY) Test prefill-worker image build"
+
+# Scaffolding to validate the prefill-worker image end to end WITHOUT running a
+# release: it builds the same bake target the release job builds, with the same
+# two injected bases and the same BuildKit secret, and pushes to a throwaway tag.
+#
+# Why a `push` trigger and not just workflow_dispatch: `gh workflow run` resolves
+# workflows from the DEFAULT branch only, so a brand-new dispatch-only workflow on
+# a feature branch cannot be triggered (404). A push trigger runs the definition
+# from the pushed branch itself. Once this is on main, the workflow_dispatch form
+# below works too.
+#
+# DELETE THIS FILE once the prefill-worker release job has run green.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base-version:
+        description: "Tag of the published release-models image to layer on (e.g. 'latest' or 'v0.76.0-dev20260726')"
+        required: false
+        default: latest
+        type: string
+      test-tag:
+        description: "Throwaway tag to push the built worker as"
+        required: false
+        default: prefill-worker-buildtest
+        type: string
+  push:
+    branches-ignore:
+      - main
+      - stable
+    paths:
+      - dockerfile/Dockerfile.prefill-worker
+      - dockerfile/Dockerfile.prefill-worker.dockerignore
+      - dockerfile/docker-bake.hcl
+      - .github/workflows/test-prefill-worker-image.yaml
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-prefill-worker:
+    name: Build prefill-worker (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Capture proxy env for the buildx builder
+        id: proxy-env
+        run: |
+          echo "PROXY_HTTP=${HTTP_PROXY:-${http_proxy:-}}" >> "$GITHUB_ENV"
+          echo "PROXY_HTTPS=${HTTPS_PROXY:-${https_proxy:-}}" >> "$GITHUB_ENV"
+          echo "PROXY_NO_PROXY=tenstorrent.net" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          driver-opts: |
+            env.HTTP_PROXY=${{ env.PROXY_HTTP }}
+            env.HTTPS_PROXY=${{ env.PROXY_HTTPS }}
+            env.NO_PROXY=${{ env.PROXY_NO_PROXY }}
+
+      - name: Resolve inputs and image refs
+        id: refs
+        env:
+          BASE_VERSION: ${{ inputs.base-version || 'latest' }}
+          TEST_TAG: ${{ inputs.test-tag || 'prefill-worker-buildtest' }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          BASE="ghcr.io/${GITHUB_REPOSITORY}/tt-metalium-${PLATFORM}-release-models-amd64:${BASE_VERSION}"
+          # The dev image tag is content-addressed, so resolve it the same way the
+          # real build does rather than hardcoding a hash.
+          PLATFORM_DATA=$(.github/scripts/compute-platform-data.sh "${PLATFORM#ubuntu-}" "$GITHUB_REPOSITORY" --no-check-exists)
+          BUILDER=$(echo "$PLATFORM_DATA" | jq -r '.dev_tag')
+          OUT="ghcr.io/${GITHUB_REPOSITORY}/tt-metalium-${PLATFORM}-prefill-worker-amd64:${TEST_TAG}"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "builder=$BUILDER" >> "$GITHUB_OUTPUT"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+          echo "Base:    $BASE"
+          echo "Builder: $BUILDER"
+          echo "Output:  $OUT"
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify the token can read tt-llm-engine
+        env:
+          GH_TOKEN: ${{ secrets.TENSTORRENT_ORG_READ_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::TENSTORRENT_ORG_READ_TOKEN is empty or not set."
+            exit 1
+          fi
+          if ! git ls-remote --exit-code -h \
+                "https://x-access-token:${GH_TOKEN}@github.com/tenstorrent/tt-llm-engine.git" HEAD \
+                > /dev/null 2>&1; then
+            echo "::error::TENSTORRENT_ORG_READ_TOKEN is set but cannot read" \
+              "tenstorrent/tt-llm-engine - it needs contents read on that private repo."
+            exit 1
+          fi
+          echo "Token can read tenstorrent/tt-llm-engine."
+
+      - name: Verify the release-models base exists
+        run: |
+          set -euo pipefail
+          if ! docker manifest inspect "${{ steps.refs.outputs.base }}" > /dev/null 2>&1; then
+            echo "::error::Base image ${{ steps.refs.outputs.base }} not found in GHCR." \
+              "Re-run with base-version set to a release-models tag that exists."
+            exit 1
+          fi
+          echo "Base image found."
+
+      - name: Prepare bake overrides
+        id: bake
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+          BUILDER: ${{ steps.refs.outputs.builder }}
+          OUT: ${{ steps.refs.outputs.out }}
+          PROXY_HTTP: ${{ env.PROXY_HTTP }}
+          PROXY_HTTPS: ${{ env.PROXY_HTTPS }}
+          PROXY_NO_PROXY: ${{ env.PROXY_NO_PROXY }}
+        run: |
+          set -euo pipefail
+          SET=""
+          SET+="prefill-worker.contexts.release-base=docker-image://${BASE}"$'\n'
+          SET+="prefill-worker.contexts.llm-build-base=docker-image://${BUILDER}"$'\n'
+          SET+="prefill-worker.tags=${OUT}"$'\n'
+          SET+="prefill-worker.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
+          if [ -n "$PROXY_HTTP" ]; then
+            SET+="prefill-worker.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
+            SET+="prefill-worker.args.HTTPS_PROXY=${PROXY_HTTPS}"$'\n'
+            SET+="prefill-worker.args.NO_PROXY=${PROXY_NO_PROXY}"$'\n'
+          fi
+          {
+            echo "set<<EOF"
+            echo "$SET"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push prefill-worker
+        uses: ./.github/actions/manual-docker-bake
+        with:
+          targets: prefill-worker
+          set-lines: ${{ steps.bake.outputs.set }}
+          gh-token: ${{ secrets.TENSTORRENT_ORG_READ_TOKEN }}
+          retries: "2"
+          retry-delay-seconds: "15"
