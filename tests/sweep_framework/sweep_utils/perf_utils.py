@@ -298,12 +298,12 @@ def run_with_cache_comparison(
     if measure_dp:
         device_perf_cached = gather_single_test_perf(_resolve_perf_device(device, test_module), status_cached)
 
-    # A profiler readback failure on EITHER run means no comparable perf pair. Return the
-    # READBACK_FAILED sentinel straight away (rather than letting the sentinel string reach
-    # simplify_device_perf() / get_updated_message()) so the runner sees the readback
-    # failure and can pair it with the uncached run's verdict.
-    if DEVICE_PERF_READBACK_FAILED in (device_perf_uncached, device_perf_cached):
-        return status_uncached, message_uncached, e2e_uncached_ms, DEVICE_PERF_READBACK_FAILED, peak_memory
+    # A profiler readback failure on either run means no comparable perf pair, so the
+    # sentinel replaces the perf value. It must NOT short-circuit the status combination
+    # below: returning status_uncached here would report PASS whenever the uncached run
+    # passed and the CACHED run failed, masking a cache-only correctness failure under
+    # --perf-with-cache --device-perf. Recorded and returned after the combination instead.
+    readback_failed = DEVICE_PERF_READBACK_FAILED in (device_perf_uncached, device_perf_cached)
 
     # Determine combined status and message
     if not status_uncached:
@@ -333,6 +333,11 @@ def run_with_cache_comparison(
     e2e_perf = {"uncached": e2e_uncached_ms, "cached": e2e_cached_ms}
 
     # Device perf dict (simplified) and message augmentation
+    if readback_failed:
+        # Combined status/message preserved -- only the perf value is replaced, so a
+        # cache-only failure still reports as a failure (and the runner's wedged-device
+        # rule sees both the readback failure and that verdict).
+        return status, message, e2e_perf, DEVICE_PERF_READBACK_FAILED, peak_memory
     if measure_dp:
         combined_device_perf = {"uncached": device_perf_uncached, "cached": device_perf_cached}
         if device_perf_uncached or device_perf_cached:

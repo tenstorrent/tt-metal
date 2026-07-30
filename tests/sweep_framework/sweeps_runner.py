@@ -1042,11 +1042,19 @@ def _execute_vector_with_retry(
                 p.start()
 
             result["_child_process"] = p
-            result["_abort_suite"] = config.skip_on_timeout
+            # Preserve an abort already requested by a previous attempt's
+            # _populate_result_from_response rather than downgrading it.
+            result["_abort_suite"] = result.get("_abort_suite", False) or config.skip_on_timeout
             return result
 
     result["_child_process"] = p
-    result["_abort_suite"] = False
+    # setdefault, NOT assignment: _populate_result_from_response may already have set
+    # _abort_suite=True (wedged-device rule: profiler readback failed + vector failed).
+    # Overwriting it with False left execute_suite with infra_aborted set but no
+    # abort_suite, so it skipped the mark-remaining-NOT_RUN-and-break branch and kept
+    # feeding every remaining vector of the suite to the device just declared wedged --
+    # the run only ended at the next module boundary, defeating the fail-fast entirely.
+    result.setdefault("_abort_suite", False)
     return result
 
 
@@ -1270,17 +1278,15 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     return results, invalid_vectors_count, infra_aborted
 
 
-def _vector_mesh_dims(vector) -> str | None:
-    """Classify a raw (pre-sanitize) vector's mesh as '1d', '2d', or None.
+def _vector_mesh_pair(vector, extended_sources=True):
+    """The (rows, cols) mesh a raw (pre-sanitize) vector was traced on, or None.
 
-    '1d' when the mesh has a unit axis (rows==1 or cols==1) -> FABRIC_1D/RING;
-    '2d' when both axes > 1 -> FABRIC_2D. Returns None when the mesh shape can't
-    be determined (such vectors are never filtered out). Mirrors how the
-    all_gather sweep body itself derives mesh_shape (tensor_placement first).
+    Mirrors how the sweep bodies themselves derive it (tensor_placement first). Several
+    modules -- add_model_traced.py and linear_model_traced.py among them -- pin
+    os.environ["MESH_DEVICE_SHAPE"] to THIS value per vector before opening their device,
+    so the mesh shape is a real per-vector component of _job_device_key, not a per-job
+    constant.
     """
-
-    def _dims_from_pair(r, c):
-        return "1d" if (r == 1 or c == 1) else "2d"
 
     def _parse_two_ints(value):
         if isinstance(value, (list, tuple)) and len(value) >= 2:
@@ -1294,31 +1300,62 @@ def _vector_mesh_dims(vector) -> str | None:
                 return int(nums[0]), int(nums[1])
         return None
 
-    # 1) Explicit tensor placement mesh_device_shape (model_traced vectors).
-    for key in ("input_a_tensor_placement", "input_tensor_tensor_placement"):
+    # 1) Explicit tensor placement mesh_device_shape (model_traced vectors). Same key
+    #    order the modules use before pinning MESH_DEVICE_SHAPE.
+    keys = ("input_a_tensor_placement", "input_tensor_tensor_placement")
+    if extended_sources:
+        # Extra sources are used for device-key GROUPING only, never for the --mesh-dims
+        # filter: they make the shape determinable for more vectors, and a vector the
+        # filter previously could not classify was always KEPT. Widening it there could
+        # start dropping vectors, which is a behaviour change well beyond this fix.
+        keys = (
+            "input_a_tensor_placement",
+            "input_b_tensor_placement",
+            "input_tensor_b_tensor_placement",
+            "input_tensor_tensor_placement",
+        )
+    for key in keys:
         tp = vector.get(key)
         if isinstance(tp, dict):
             pair = _parse_two_ints(tp.get("mesh_device_shape"))
             if pair:
-                return _dims_from_pair(*pair)
+                return pair
     # 2) Explicit mesh_shape field (generality / lead_model vectors).
     pair = _parse_two_ints(vector.get("mesh_shape"))
     if pair:
-        return _dims_from_pair(*pair)
+        return pair
     # 3) mesh_device descriptor.
     md = vector.get("mesh_device")
     if isinstance(md, dict):
         pair = _parse_two_ints(md.get("shape") or md.get("repr", ""))
         if pair:
-            return _dims_from_pair(*pair)
-    # 4) .mesh_RxC suffix on the stored sweep/suite name.
+            return pair
+    # 4) Per-vector traced_machine_info -- add_model_traced's own last resort, and every
+    #    vector records it. Grouping only (see above).
+    if extended_sources:
+        ti = vector.get("traced_machine_info")
+        for entry in ti if isinstance(ti, list) else [ti]:
+            if isinstance(entry, dict):
+                pair = _parse_two_ints(entry.get("mesh_device_shape"))
+                if pair:
+                    return pair
+    # 5) .mesh_RxC suffix on the stored sweep/suite name.
     for key in ("sweep_name", "suite_name"):
         name = vector.get(key)
         if isinstance(name, str):
             ms = parse_mesh_suffix(name)
             if ms:
-                return _dims_from_pair(ms[0], ms[1])
+                return (ms[0], ms[1])
     return None
+
+
+def _vector_mesh_dims(vector) -> str | None:
+    """Classify a vector's mesh as '1d' (a unit axis -> FABRIC_1D/RING), '2d' (both axes
+    > 1 -> FABRIC_2D), or None when the shape can't be determined (never filtered out)."""
+    pair = _vector_mesh_pair(vector, extended_sources=False)
+    if pair is None:
+        return None
+    return "1d" if (pair[0] == 1 or pair[1] == 1) else "2d"
 
 
 def _filter_vectors_by_mesh_dims(vectors, mesh_dims):
@@ -1346,12 +1383,26 @@ def _filter_vectors_by_mesh_dims(vectors, mesh_dims):
     return kept
 
 
-def _vector_dispatch_group(vector, env_axis):
-    """Device-key group for a vector: the dispatch axis its module will open.
+def _vector_device_group(vector, env_axis):
+    """Device-key group for a vector: (mesh shape, dispatch axis).
 
-    'row'/'col' when the vector's grids force an axis, else the pass's
-    TTNN_DISPATCH_AXIS (the axis a module passing None inherits), else 'auto'.
+    Both components matter because both are part of _job_device_key:
+
+    - mesh shape: several modules (add_model_traced, linear_model_traced, ...) pin
+      os.environ["MESH_DEVICE_SHAPE"] to THIS vector's traced shape before opening, so a
+      job's vectors legitimately span [4,8]/[8,4]/[4,4]/[1,32]/[1,1]. Grouping on the axis
+      alone would interleave those and could ADD reopens rather than remove them, which is
+      the opposite of the point. Mesh shape leads the key since it is the coarser split.
+    - axis: 'row'/'col' when the vector's grids force one, else the pass's
+      TTNN_DISPATCH_AXIS (what a module passing None inherits), else 'auto'.
+
+    The axis is a HEURISTIC, not a reproduction of each module's logic -- e.g. linear's
+    gather_in0 path deliberately ignores the nominal compute width and keys off output/hop
+    grids, while the shared scanner classifies the nominal width. A mis-predicted axis only
+    costs an extra reopen (it can never change a result), and the log line reports the
+    transitions actually achieved, so a wrong hint shows up as a smaller-than-expected win.
     """
+    mesh = _vector_mesh_pair(vector)
     try:
         from split_vectors_by_axis import vector_dispatch_axis_hint
 
@@ -1359,8 +1410,8 @@ def _vector_dispatch_group(vector, env_axis):
     except Exception:
         hint = None
     if hint is None:
-        return env_axis if env_axis in ("col", "row") else "auto"
-    return hint
+        hint = env_axis if env_axis in ("col", "row") else "auto"
+    return (mesh, hint)
 
 
 def _order_vectors_by_device_key(vectors, module_name, suite_name):
@@ -1386,14 +1437,18 @@ def _order_vectors_by_device_key(vectors, module_name, suite_name):
         return vectors
     try:
         env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
-        groups = [_vector_dispatch_group(v, env_axis) for v in vectors]
-        distinct = sorted(set(groups))
-        if len(distinct) < 2:
+        groups = [_vector_device_group(v, env_axis) for v in vectors]
+        first_seen = {}
+        for g in groups:
+            first_seen.setdefault(g, len(first_seen))
+        if len(first_seen) < 2:
             return vectors  # nothing to gain -- leave the order byte-identical
-        first = env_axis if env_axis in distinct else distinct[0]
 
-        # (rank, group, original index) -> stable within a group, env axis first.
-        order = sorted(range(len(vectors)), key=lambda i: (groups[i] != first, groups[i], i))
+        # Order groups by FIRST APPEARANCE, and keep original order within a group. This
+        # keeps the first vector's device first (so the device already open is not
+        # immediately swapped) and yields exactly len(groups)-1 transitions, without
+        # needing to know which device is currently open.
+        order = sorted(range(len(vectors)), key=lambda i: (first_seen[groups[i]], i))
         reordered = [vectors[i] for i in order]
 
         # Permutation check by identity: same objects, same multiplicity, none lost.
@@ -1406,11 +1461,14 @@ def _order_vectors_by_device_key(vectors, module_name, suite_name):
             )
             return vectors
         moved = builtins.sum(1 for i, j in enumerate(order) if i != j)
-        counts = ", ".join(f"{g}={groups.count(g)}" for g in distinct)
+        counts = ", ".join(
+            f"mesh{g[0] if g[0] else '?'}/{g[1]}={groups.count(g)}"
+            for g in sorted(first_seen, key=lambda g: first_seen[g])
+        )
         logger.info(
-            f"vector order for {module_name}/{suite_name}: grouped {len(vectors)} vector(s) by dispatch "
-            f"axis ({counts}), '{first}' first; {moved} moved, {len(distinct) - 1} device reopen(s) "
-            f"instead of {builtins.sum(1 for a, b in zip(groups, groups[1:]) if a != b)}."
+            f"vector order for {module_name}/{suite_name}: grouped {len(vectors)} vector(s) by "
+            f"(mesh shape, dispatch axis) ({counts}); {moved} moved, {len(first_seen) - 1} device "
+            f"reopen(s) instead of {builtins.sum(1 for a, b in zip(groups, groups[1:]) if a != b)}."
         )
         return reordered
     except Exception as e:
