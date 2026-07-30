@@ -39,7 +39,7 @@ def _decoder(decoder_type, config, mesh_device, batch, **kwargs):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("batch", [1, 32])
+@pytest.mark.parametrize("batch", [int(value) for value in os.environ.get("OPT_PERF_BATCHES", "1,32").split(",")])
 def test_candidate_traced_decode(mesh_device, batch):
     config = _config()
     hidden = torch.randn(batch, 1, config.hidden_size, generator=torch.Generator().manual_seed(9100 + batch)).to(
@@ -54,9 +54,9 @@ def test_candidate_traced_decode(mesh_device, batch):
             OptimizedDecoder,
             {
                 "optimization_policy": OptimizationPolicy(
-                    attention_weight_dtype=ttnn.bfloat8_b,
+                    attention_weight_dtype=ttnn.bfloat4_b,
                     mlp_gate_up_weight_dtype=ttnn.bfloat4_b,
-                    mlp_down_weight_dtype=ttnn.bfloat8_b,
+                    mlp_down_weight_dtype=ttnn.bfloat4_b,
                 )
             },
         ),
@@ -111,7 +111,7 @@ def test_candidate_traced_decode(mesh_device, batch):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("batch", [1, 32])
+@pytest.mark.parametrize("batch", [int(value) for value in os.environ.get("OPT_PERF_BATCHES", "1,32").split(",")])
 def test_candidate_warmed_prefill(mesh_device, batch):
     config = _config()
     hidden = torch.randn(batch, 128, config.hidden_size, generator=torch.Generator().manual_seed(9500 + batch)).to(
@@ -120,7 +120,10 @@ def test_candidate_warmed_prefill(mesh_device, batch):
     tt_hidden = _to_tt_prefill(hidden, mesh_device)
     page_table = _page_table(batch, 128, mesh_device, permute=True)
     results = {}
-    for name, decoder_type in (("fused", FusedDecoder), ("optimized", OptimizedDecoder)):
+    decoder_types = {"fused": FusedDecoder, "optimized": OptimizedDecoder}
+    candidate_names = os.environ.get("OPT_PREFILL_CANDIDATES", "fused,optimized").split(",")
+    for name in candidate_names:
+        decoder_type = decoder_types[name]
         decoder = _decoder(decoder_type, config, mesh_device, batch)
         key_cache, value_cache = decoder.create_paged_kv_cache()
 
@@ -132,10 +135,14 @@ def test_candidate_warmed_prefill(mesh_device, batch):
         prefill()
         ttnn.synchronize_device(mesh_device)
         samples = []
+        if name == "optimized":
+            signpost(f"PERF_PREFILL_B{batch}")
         for _ in range(int(os.environ.get("OPT_PREFILL_ITERATIONS", "20"))):
             start = time.perf_counter()
             prefill()
             ttnn.synchronize_device(mesh_device)
             samples.append(1000 * (time.perf_counter() - start))
+        if name == "optimized":
+            signpost(f"PERF_PREFILL_B{batch}_END")
         results[name] = statistics.mean(samples)
     print(f"OPT_PREFILL batch={batch} sequence=128 values={results}")

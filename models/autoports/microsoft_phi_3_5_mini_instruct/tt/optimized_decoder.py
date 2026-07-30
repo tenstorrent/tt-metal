@@ -10,6 +10,7 @@ construction; forward methods remain entirely on device.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import ttnn
@@ -18,9 +19,9 @@ from models.autoports.microsoft_phi_3_5_mini_instruct.tt.fused_decoder import Fu
 
 @dataclass(frozen=True)
 class OptimizationPolicy:
-    attention_weight_dtype: object = ttnn.bfloat8_b
+    attention_weight_dtype: object = ttnn.bfloat4_b
     mlp_gate_up_weight_dtype: object = ttnn.bfloat4_b
-    mlp_down_weight_dtype: object = ttnn.bfloat8_b
+    mlp_down_weight_dtype: object = ttnn.bfloat4_b
 
 
 DEFAULT_OPTIMIZATION_POLICY = OptimizationPolicy()
@@ -40,6 +41,9 @@ class OptimizedDecoder(FusedDecoder):
             optimization_policy=optimization_policy,
             **kwargs,
         )
+        # The base constructor ignores unknown subclass kwargs, so preserve
+        # this subclass-specific policy explicitly.
+        decoder.optimization_policy = optimization_policy
         policy = decoder.optimization_policy
         dtype_by_weight = {
             "qkv": policy.attention_weight_dtype,
@@ -87,7 +91,7 @@ class OptimizedDecoder(FusedDecoder):
             dtype=ttnn.bfloat16,
             memory_config=self._decode_projection_memcfg(self.hidden_size),
             program_config=ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                in0_block_w=8,
+                in0_block_w=16,
                 per_core_M=1,
                 per_core_N=(self.hidden_size // ttnn.TILE_SIZE) // 16,
                 fused_activation=None,
@@ -100,6 +104,26 @@ class OptimizedDecoder(FusedDecoder):
             ),
         )
         return ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
+
+    def _prefill_down(self, value):
+        shape = tuple(value.shape)
+        m_tiles = math.ceil(shape[-2] * shape[-3] / ttnn.TILE_SIZE)
+        return ttnn.linear(
+            value,
+            self.weights["down"],
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=8,
+                out_subblock_h=1,
+                out_subblock_w=4,
+                per_core_M=math.ceil(m_tiles / 8),
+                per_core_N=(self.hidden_size // ttnn.TILE_SIZE) // 8,
+                transpose_mcast=False,
+                fused_activation=None,
+            ),
+        )
 
     def _mlp(self, hidden_states):
         normalized = self._norm(hidden_states, self.weights["post_norm"])
@@ -114,6 +138,6 @@ class OptimizedDecoder(FusedDecoder):
         )
         activated = ttnn.multiply(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         if not is_decode:
-            return ttnn.add(hidden_states, ttnn.linear(activated, self.weights["down"], dtype=ttnn.bfloat16))
+            return ttnn.add(hidden_states, self._prefill_down(activated))
         projected = self._decode_down(activated)
         return ttnn.add(hidden_states, projected)

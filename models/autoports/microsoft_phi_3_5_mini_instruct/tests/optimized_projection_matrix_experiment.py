@@ -82,9 +82,10 @@ def test_projection_matrix(mesh_device, batch):
     state = _real_state()
     prefix = f"model.layers.{LAYER_IDX}."
     roles = {
-        "qkv": ("self_attn.qkv_proj.weight", config.hidden_size, 3 * config.hidden_size, ttnn.bfloat8_b),
-        "output": ("self_attn.o_proj.weight", config.hidden_size, config.hidden_size, ttnn.bfloat8_b),
+        "qkv": ("self_attn.qkv_proj.weight", config.hidden_size, 3 * config.hidden_size, ttnn.bfloat4_b),
+        "output": ("self_attn.o_proj.weight", config.hidden_size, config.hidden_size, ttnn.bfloat4_b),
         "gate_up": ("mlp.gate_up_proj.weight", config.hidden_size, 2 * config.intermediate_size, ttnn.bfloat4_b),
+        "down": ("mlp.down_proj.weight", config.intermediate_size, config.hidden_size, ttnn.bfloat4_b),
     }
     torch.manual_seed(9700 + batch)
     for role, (suffix, k, n, weight_dtype) in roles.items():
@@ -127,10 +128,13 @@ def test_projection_matrix(mesh_device, batch):
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             memory_config=_dram_width(mesh_device, k, n),
         )
-        for cores, block_ws in ((16, (6, 3, 2, 1)), (32, (3, 1))):
+        block_matrix = (
+            ((16, (16, 8, 4, 2, 1)), (32, (8, 4, 2, 1))) if role == "down" else ((16, (6, 3, 2, 1)), (32, (3, 1)))
+        )
+        for cores, block_ws in block_matrix:
             sharded = ttnn.to_memory_config(activation, _l1_width(mesh_device, k, cores))
             output_config = _l1_width(mesh_device, n, cores)
-            for fidelity_name, fidelity in (("hifi2", ttnn.MathFidelity.HiFi2), ("lofi", ttnn.MathFidelity.LoFi)):
+            for fidelity_name, fidelity in (("lofi", ttnn.MathFidelity.LoFi),):
                 for block_w in block_ws:
                     pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                         in0_block_w=block_w,

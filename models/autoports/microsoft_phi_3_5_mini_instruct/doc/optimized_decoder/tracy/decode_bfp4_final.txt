@@ -1,0 +1,22 @@
+Phi-3.5 shipped BFP4 decode profiler summary
+================================================
+
+Bounded Tracy commands used OPT_PERF_BATCHES={1,32},
+OPT_PROFILE_ITERATIONS=2, and `-k candidate_traced_decode`.
+
+Source reports:
+- B1: `decode_b1_bfp4_final.csv`
+- B32: `decode_b32_bfp4_final.csv`
+
+`tt-perf-report`, bounded by PERF_DECODE_B{1,32} and its END marker:
+
+| Row | B1 device time | B32 device time | Runtime policy |
+| --- | ---: | ---: | --- |
+| packed QKV | 73 us | 73 us | 96 cores, HiFi2 BF16 x BFP4 |
+| output projection | 30 us | 30 us | 32 cores, HiFi2 BF16 x BFP4 |
+| packed gate/up | 99-104 us | 101-104 us | 103 cores, HiFi2 BF16 x BFP4 |
+| selected down | 47.879 us | 47.992 us | 12 active cores, block16, LoFi BF16 x BFP4, 51.2-51.3% modeled DRAM |
+
+The paired profiler regions contain fused BF16 control rows followed by
+optimized BFP4 rows. B1 contains 232 device ops, 0 host ops; B32 contains 220
+device ops, 0 host ops. There is no Torch conversion or host fallback.
