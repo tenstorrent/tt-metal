@@ -315,5 +315,16 @@ current watcher run passed all seven selected optimized cases in 102.02
 seconds, and `current_branch_watcher_device_log.txt` has no watcher/device
 fault signature.
 
+## Final independent rereview
+
+The first current-branch review returned `more-work-needed` only because the
+regenerated evidence had not yet been checkpointed and the commit checklist
+was still open. After commits `4a121c45dccfef24b7c7d476d9fb026cdf1275a2`
+and `c35b4c004723fe50ea86ccd37a621f9ef0a8ea43`, a fresh independent rereviewer
+returned `clean-pass` with no required work or hard-check gaps. It verified
+the recorded SHAs, exact optimized source/test hashes, path-scoped clean
+stage tree, current JUnit/watcher evidence, and the preserved opt-in and
+profiler artifacts.
+
 The persistent `/dev/shm` warning did not abort any gate. All evidence above
 was regenerated from base `bae72d8aa452c8bcdf2d8d70216de58a1fb32c25`.
