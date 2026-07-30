@@ -936,6 +936,19 @@ class TTVibeVoiceGenerator:
             t_embs=t_embs,
         )
 
+    def _sf_replay_ready(self) -> bool:
+        """True when the next ``_run_segment_frame_traced`` call will only replay (no warmup/capture).
+
+        Default production path is CFG batch-2 (``_sf_lm2trace_tid``); cap-split uses the three
+        per-frame tids; legacy fused uses ``_sf_tid``.  Checking only ``_sf_tid`` left
+        ``steady_decode_frames`` stuck at 0 on the default path
+        """
+        if self._sf_cfg_b2:
+            return self._sf_lm2trace_tid is not None
+        if self._sf_cap_split:
+            return self._sf_postrace_tid is not None
+        return self._sf_tid is not None
+
     def _reset_segment_frame_trace(self) -> None:
         """Release the whole-segment fused trace at a segment boundary.  The boundary's eager LM
         decodes (speech_end/speech_start) allocate DRAM; a live capture would be corrupted once
@@ -1672,7 +1685,10 @@ class TTVibeVoiceGenerator:
                 # self-advance, RoPE is gathered on device.  Time ONLY steady replay frames
                 # (a segment's first frame recaptures and is not timed).
                 seg_frame_idx = 0 if neg_prev_diffusion_token is None else 1
-                _sf_replay = self._sf_tid is not None
+                # Attribute steady time only when a capture already exists (CFG-B2 / cap-split /
+                # legacy fused).  The first frame after a (re)capture warms+captures internally
+                # and must not pollute decode tok/s.
+                _sf_replay = self._sf_replay_ready()
                 _frame_t0 = time.perf_counter() if _sf_replay else None
                 diffusion_frames += 1
                 # With the device noise table the traced frame gathers its own row, so only the row

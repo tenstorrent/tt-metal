@@ -17,7 +17,7 @@ Env::
 
     VV_ISL_SWEEP=32,64,128          # override ISL list (default: 32…16384 + full prompt length)
     VV_ISL_SWEEP_MAX_ISL=2048       # drop checkpoints above this
-    VV_ISL_WARMUP_TOKENS=4             # warmup AR steps (default 4)
+    VV_ISL_WARMUP_TOKENS=32            # warmup AR steps (default 32; must enter speech-diffusion)
     VV_ISL_MAX_LENGTH_TIMES=2.0        # AR budget multiplier (default 2)
     VV_TRACE_SEGMENT=0                 # disable fused-frame trace (on by default for max perf)
 
@@ -74,7 +74,10 @@ def _isl_list(full_len: int) -> list[int]:
 
 
 def _warmup_tokens() -> int:
-    return max(1, int(os.environ.get("VV_ISL_WARMUP_TOKENS", "4")))
+    # Default 32: enough AR steps to emit speech_start + several speech_diffusion frames so the
+    # fused-frame capture path (and acoustic/semantic conv programs) compile outside the timed run.
+    # With only ~4 tokens the timed window still paid first-time compile and decode tok/s dipped.
+    return max(1, int(os.environ.get("VV_ISL_WARMUP_TOKENS", "32")))
 
 
 def _max_length_times() -> float:
@@ -216,14 +219,16 @@ def test_e2e_isl_sweep_4p_climate_100min(mesh_device, device_params):
     print("\n[isl_sweep] ===== summary =====", flush=True)
     hdr = (
         f"{'ISL':>6} {'prefill_s':>10} {'pref_tok/s':>10} {'TTFT_s':>8} "
-        f"{'dec_tok/s':>10} {'ms/tok':>8} {'e2e_s':>10} {'ar_tok':>8}"
+        f"{'dec_tok/s':>10} {'ms/tok':>8} {'e2e_s':>10} {'ar_tok':>8} "
+        f"{'mode':>13} {'steady_fr':>9}"
     )
     print(hdr, flush=True)
     for m in rows:
         print(
             f"{m['prefill_tokens']:6d} {m['prefill_s']:10.3f} {m['prefill_tok_s']:10.1f} "
             f"{m['ttft_s']:8.3f} {m['decode_tok_s']:10.2f} {m['ms_per_tok_steady']:8.2f} "
-            f"{m['e2e_s']:10.3f} {m['ar_tokens_generated']:8d}",
+            f"{m['e2e_s']:10.3f} {m['ar_tokens_generated']:8d} "
+            f"{m['decode_mode']:>13} {m['steady_decode_frames']:9d}",
             flush=True,
         )
 
