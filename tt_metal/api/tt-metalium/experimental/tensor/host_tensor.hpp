@@ -19,6 +19,8 @@
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 
+#include <tt_stl/pimpl.hpp>
+
 // It is intentional to not reflect the experimental status of this header in its namespace,
 // as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
 // long time, it is expected for the implementation to graduate out of experimental really quickly.
@@ -45,7 +47,7 @@ class HostTensorImpl;
  * Note: A moved-from HostTensor is in a valid but unspecified state. All member functions except destruction and
  * assignment will fail on a moved-from instance.
  */
-class HostTensor {
+class HostTensor : public ttsl::PimplBase<HostTensorImpl> {
 public:
     using volume_type = std::uint64_t;
 
@@ -199,22 +201,9 @@ public:
     // Updates the topology of the HostTensor post construction.
     void update_tensor_topology(TensorTopology tensor_topology);
 
-    /**
-     * Access to the implementation.
-     *
-     * pre-condition: The HostTensor must be initialized.
-     */
-    HostTensorImpl& impl();
-    const HostTensorImpl& impl() const;
-
 private:
     // Internal constructors. Use the from_buffer factories to build a HostTensor from a backing buffer.
     explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
-
-    // impl_ could be a nullptr if HostTensor is in a moved-from state.
-    // Avoid using impl_ pointer directly, use the impl() accessor instead.
-    // Otherwise, please add manual TT_FATAL checks for nullptr.
-    std::unique_ptr<HostTensorImpl> impl_;
 };
 
 }  // namespace tt::tt_metal

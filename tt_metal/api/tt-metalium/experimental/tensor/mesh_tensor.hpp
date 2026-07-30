@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 
 #include <tt_stl/optional_reference.hpp>
+#include <tt_stl/pimpl.hpp>
 
 // It is intentional to not reflect the experimental status of this header in its namespace,
 // as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
@@ -48,7 +49,7 @@ class MeshBuffer;
  * Note: A moved-from MeshTensor is in a valid but unspecified state. All member functions except destruction and
  * assignment will fail on a moved-from instance.
  */
-class MeshTensor {
+class MeshTensor : public ttsl::PimplBase<MeshTensorImpl> {
 public:
     using volume_type = std::uint64_t;
 
@@ -170,14 +171,6 @@ public:
      * Update the topology of the MeshTensor post construction.
      */
     void update_tensor_topology(TensorTopology tensor_topology);
-
-    /**
-     * Access to the implementation.
-     *
-     * pre-condition: The MeshTensor must not be in a default constructed state.
-     */
-    MeshTensorImpl& impl();
-    const MeshTensorImpl& impl() const;
 
 private:
     // Internal constructor for transition. Use the from_buffer factory or allocate_on_device

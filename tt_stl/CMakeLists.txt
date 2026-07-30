@@ -21,6 +21,7 @@ target_sources(
             tt_stl/indestructible.hpp
             tt_stl/optional_reference.hpp
             tt_stl/overloaded.hpp
+            tt_stl/pimpl.hpp
             tt_stl/reflection.hpp
             tt_stl/small_vector.hpp
             tt_stl/llvm/llvm_small_vector.hpp
