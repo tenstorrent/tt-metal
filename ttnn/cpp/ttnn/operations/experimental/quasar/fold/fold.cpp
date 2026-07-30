@@ -530,8 +530,14 @@ Tensor fold(
                 processed_tensor, pad_top, pad_bottom, pad_left, pad_right);
         }
 
-        // Apply channel padding separately if needed
-        if (has_c_padding) {
+        // Apply channel padding separately if needed.
+        // Skip on the channels-last (input_is_nhwc) path: per the contract above, that caller uploads C
+        // ALREADY padded to the 16B-aligned width (and the quasar pad op cannot inject channel padding on
+        // device anyway). Re-padding here would double-count the pad channels and, worse, break the 16B
+        // row-major shard-page alignment -- e.g. C=8 (aligned) + pad_c=5 -> width 13 -> 26 bytes, which fails
+        // pad_device_operation's `page_size % l1_alignment(16) == 0` check on both WH and Quasar. On the NCHW
+        // (else) branch C is padded on device via the c_aligned pad above, so this stays gated to that path.
+        if (has_c_padding && !input_is_nhwc) {
             const auto current_shape = processed_tensor.logical_shape();
             const ttnn::Array4D padded_shape = {
                 static_cast<uint32_t>(current_shape[0]),
