@@ -20,7 +20,15 @@ namespace ttnn::prim::qsr {
 using namespace tt::tt_metal;
 
 namespace {
-constexpr uint32_t kSmallDestWriteSlots = 8;
+// Page-size alignment the kernel needs to write straight from the source CB; must stay in
+// sync with MASK_16/OFFSET_16 and the can_be_clean predicate in rm_reshape_interleaved.cpp.
+constexpr uint32_t noc_page_alignment_bytes = 16;
+
+// Depth of the L1 staging ring used when pages are not NoC-aligned. Eight destination
+// pages share one write barrier, which is enough to keep the tiny-page case (2 B pages for
+// the [N, 1] reshape in #50191) off a per-page barrier without making the ring so deep that
+// wide destinations stop fitting in L1.
+constexpr uint32_t small_dest_write_slots = 8;
 
 // Kept local (not a shared header): this factory mirrors data_movement reshape_view;
 // extracting a cross-op helper would only dedupe ~30 lines and add CMake coupling.
@@ -28,11 +36,11 @@ constexpr uint32_t kSmallDestWriteSlots = 8;
 // wide odd destinations (e.g. bf16 width 100001 from #50191) still fit.
 uint32_t choose_num_dest_write_slots(
     IDevice* device,
-    bool pages_16b_aligned,
+    bool pages_noc_aligned,
     bool can_use_dual_kernel,
     uint32_t cb_size0,
     uint32_t dest_slot_size_bytes) {
-    if (pages_16b_aligned) {
+    if (pages_noc_aligned) {
         return 1u;
     }
 
@@ -55,7 +63,7 @@ uint32_t choose_num_dest_write_slots(
         l1_available);
 
     const uint32_t max_slots = (l1_available - source_cb_bytes) / (dest_slot_size_bytes * num_kernel_copies);
-    return std::max(1u, std::min(kSmallDestWriteSlots, max_slots));
+    return std::max(1u, std::min(small_dest_write_slots, max_slots));
 }
 }  // namespace
 
@@ -102,21 +110,22 @@ ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
     const uint32_t cb_size0 = source_read_size_bytes;
     const uint32_t dest_slot_size_bytes = ((dest_page_size_bytes - 1) & MASK_64) + 80;
 
-    const bool pages_16b_aligned = (source_page_size_bytes % 16 == 0) && (dest_page_size_bytes % 16 == 0);
+    const bool pages_noc_aligned = (source_page_size_bytes % noc_page_alignment_bytes == 0) &&
+                                   (dest_page_size_bytes % noc_page_alignment_bytes == 0);
     const bool pages_divisible =
         (source_page_size_bytes % dest_page_size_bytes == 0 || dest_page_size_bytes % source_page_size_bytes == 0);
     // Avoid dual-kernel on non-aligned DRAM dests (Blackhole SYS-1419 / #50191).
-    const bool can_use_dual_kernel = pages_divisible && (pages_16b_aligned || !dst_buffer->is_dram());
+    const bool can_use_dual_kernel = pages_divisible && (pages_noc_aligned || !dst_buffer->is_dram());
 
     const uint32_t num_dest_write_slots =
-        choose_num_dest_write_slots(device, pages_16b_aligned, can_use_dual_kernel, cb_size0, dest_slot_size_bytes);
+        choose_num_dest_write_slots(device, pages_noc_aligned, can_use_dual_kernel, cb_size0, dest_slot_size_bytes);
     const uint32_t cb_size1 = dest_slot_size_bytes * num_dest_write_slots;
 
     const uint32_t write_alignment =
         dst_buffer->is_dram() ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
     const uint32_t noc_write_align = std::min(write_alignment, tt::tt_metal::hal::get_l1_alignment());
     const uint32_t dest_write_size_bytes =
-        pages_16b_aligned ? dest_page_size_bytes : tt::align(dest_page_size_bytes, noc_write_align);
+        pages_noc_aligned ? dest_page_size_bytes : tt::align(dest_page_size_bytes, noc_write_align);
 
     constexpr uint32_t src0_cb_index = 0;
     constexpr uint32_t src1_cb_index = 1;
