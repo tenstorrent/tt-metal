@@ -63,6 +63,10 @@ constexpr uint32_t L1_SLACK = 0x1000;      // keep clear of whatever sits at the
 //   [24..31] the address this hop writes to
 //   [32..63] reserved
 constexpr uint32_t CMBF2D_SLOT_TAIL_BYTES = 64;
+// Forwarded tokens between semaphore bumps to the downstream reader. A bump always follows a sentinel
+// regardless, so this only sets how finely the downstream reader can pipeline within a chunk. Hardcoded
+// for P9.2 correctness; P9.3 promotes it to an op parameter and sweeps it.
+constexpr uint32_t CMBF2D_FWD_BUMP_EVERY = 8;
 static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
 static_assert(DRAIN_SINK_OFF < TELEMETRY_OFF, "telemetry region overlaps the drain sink");
 static_assert(TELEMETRY_OFF + TELEMETRY_SIZE <= PROD_BUF_OFF, "telemetry region overlaps the token ring");
@@ -605,6 +609,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     uint32_t batch,
     uint32_t ring_filled_addr,
     uint32_t ring_freed_addr,
+    uint32_t fwd_arrived_addr,
     tt::tt_metal::Buffer* dram_out_buf,
     tt::tt_metal::Buffer* dram_in_buf,
     tt::tt_metal::Buffer* dram_fwd_buf) {
@@ -657,6 +662,35 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         peer_virtual_by_eth.emplace(eth_logical, pit->second.worker_virtual);
     }
 
+    // Find, on chip `nbr`, the worker whose cable points the same way (`step`) on the same plane. That is
+    // the reader which will drain the forwarding-buffer quarter our producer writes — NOT the worker at the
+    // far end of our own cable, whose cable points back at us.
+    auto downstream_same_direction_worker =
+        [&](const ttnn::MeshCoordinate& nbr, uint32_t step, uint32_t link) -> CoreCoord {
+        const auto& nbr_placement = placements.get(nbr);
+        ttnn::MeshCoordinate want = nbr;
+        want[static_cast<int32_t>(axis)] = (nbr[static_cast<int32_t>(axis)] + step) % extent;
+        auto* nbr_dev = mesh->get_device(nbr);
+        for (const auto& [eth2, wp2] : nbr_placement.by_eth_logical) {
+            if (wp2.link_idx != link) {
+                continue;
+            }
+            const auto far2 = nbr_dev->get_connected_ethernet_core(eth2);
+            const auto it = chip_to_coord.find(static_cast<uint32_t>(std::get<0>(far2)));
+            if (it != chip_to_coord.end() && it->second == want) {
+                return wp2.worker_virtual;
+            }
+        }
+        TT_FATAL(
+            false,
+            "combine_fabric2d: chip {} has no plane-{} cable continuing to {}, so the forwarding chain has "
+            "nowhere to go",
+            nbr,
+            link,
+            want);
+        return CoreCoord{0, 0};
+    };
+
     // ---- Phase B: split this device's movements across its producers.
     std::map<ttnn::MeshCoordinate, tt::tt_fabric::FabricNodeId> node_by_coord;
     for (const auto& c : ttnn::MeshCoordinateRange(mesh->shape())) {
@@ -698,6 +732,28 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         const CoreCoord peer_virtual = peer_virtual_by_eth.at(eth_logical);
         const auto& my_assignments = assignments.at(eth_logical);
 
+        // Phase-9 forwarding geometry for this producer. m = how many destinations it serves (distances
+        // 1..m in its direction), and everything else follows:
+        //   incoming chunks   = m(m-1)/2   (a chunk per (source, destination) pair passing through us)
+        //   own forwarding    = m-1        (distances 2..m)
+        //   re-forwarded      = (m-1)(m-2)/2
+        // own + re-forwarded == incoming, which is what makes the upstream writer and downstream reader
+        // agree on how many chunks a quarter holds without exchanging anything.
+        const uint32_t m = static_cast<uint32_t>(my_assignments.size());
+        const uint32_t num_incoming_chunks = m * (m - 1) / 2;
+        TT_FATAL(
+            num_incoming_chunks <= fwd_chunks_per_quarter(extent),
+            "combine_fabric2d {}: producer expects {} incoming chunks but a quarter only holds {}",
+            coord,
+            num_incoming_chunks,
+            fwd_chunks_per_quarter(extent));
+        // Quarter index from (plane, direction). Both the upstream producer that writes it and the
+        // downstream reader that drains it compute this the same way, which is the whole point.
+        const uint32_t step = ring_offset(coord, far_coord, axis, extent);
+        const uint32_t my_quarter = wp.link_idx * 2 + (step == 1 ? 0u : 1u);
+        // The downstream worker continuing in the SAME direction on the SAME plane.
+        const CoreCoord fwd_worker = downstream_same_direction_worker(far_coord, step, wp.link_idx);
+
         // ---- Producer (writer RISC, NOC_1): drains the L1 ring to the destination chips' DRAM over fabric.
         tt::tt_metal::KernelDescriptor prod;
         prod.kernel_source =
@@ -725,19 +781,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             ring_freed_addr,
             static_cast<uint32_t>(wp.worker_virtual.x),
             static_cast<uint32_t>(wp.worker_virtual.y),
-            static_cast<uint32_t>(my_assignments.size()),
-            // Forwarding buffer (P9.1 plumbing; P9.2 starts using it).
-            dram_fwd_addr,
-            fwd_chunks_per_quarter(extent),
-            args.tokens_per_movement + 1,  // pages per chunk, incl. the sentinel
+            // The downstream chip's worker that continues in OUR direction on OUR plane: the reader that
+            // drains the forwarding quarter we write. Distinct from `peer_virtual`, whose cable points back.
+            static_cast<uint32_t>(fwd_worker.x),
+            static_cast<uint32_t>(fwd_worker.y),
+            fwd_arrived_addr,
+            CMBF2D_FWD_BUMP_EVERY,
         };
-        // Per-assignment block: [out_base_token, num_tokens, dst_chip_id, dst_mesh_id] x num_assignments.
-        for (const auto& a : my_assignments) {
-            prod.compile_time_args.push_back(a.out_base_token);
-            prod.compile_time_args.push_back(a.num_tokens);
-            prod.compile_time_args.push_back(a.dst_chip_id);
-            prod.compile_time_args.push_back(a.dst_mesh_id);
-        }
+        // The producer no longer needs the assignment table: every send is one hop to its own cable's peer,
+        // and both the command and the destination address arrive per token in the slot's metadata tail.
         // TensorAccessorArgs for the interleaved output buffer (compile-time config).
         tt::tt_metal::TensorAccessorArgs(dram_out_buf).append_to(prod.compile_time_args);
         prod.config = tt::tt_metal::DataMovementConfigDescriptor{
@@ -768,19 +820,29 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             static_cast<uint32_t>(wp.worker_virtual.y),
             l1.telemetry,
             dram_in_addr,
-            static_cast<uint32_t>(my_assignments.size()),
-            // Forwarding buffer (P9.1 plumbing; P9.2 starts using it).
+            dram_out_addr,
             dram_fwd_addr,
             fwd_chunks_per_quarter(extent),
             args.tokens_per_movement + 1,  // pages per chunk, incl. the sentinel
+            my_quarter,
+            num_incoming_chunks,
+            fwd_arrived_addr,
+            static_cast<uint32_t>(wp.peer_node.chip_id),  // the chip one hop away, across our own cable
+            static_cast<uint32_t>(my_assignments.size()),
         };
-        // Per-assignment block: [in_base_token, num_tokens] x num_assignments.
+        // Per-assignment block: [in_base_token, num_tokens, out_base_token, dst_chip_id] x num_assignments.
+        // The reader owns routing now, so it needs the destination as well as the source.
         for (const auto& a : my_assignments) {
             rdr.compile_time_args.push_back(a.in_base_token);
             rdr.compile_time_args.push_back(a.num_tokens);
+            rdr.compile_time_args.push_back(a.out_base_token);
+            rdr.compile_time_args.push_back(a.dst_chip_id);
         }
-        // TensorAccessorArgs for the interleaved input buffer (compile-time config).
+        // Three accessors, in this order: input (local reads), output (final-address arithmetic), forwarding
+        // buffer (local reads AND next-hop address arithmetic).
         tt::tt_metal::TensorAccessorArgs(dram_in_buf).append_to(rdr.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(dram_out_buf).append_to(rdr.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(dram_fwd_buf).append_to(rdr.compile_time_args);
         rdr.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_0,
@@ -966,14 +1028,21 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
         ttnn::global_semaphore::create_global_semaphore(mesh_device, all_workers, 0, tt::tt_metal::BufferType::L1);
     auto ring_freed_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, all_workers, 0, tt::tt_metal::BufferType::L1);
+    // Forwarding arrivals: bumped by the UPSTREAM chip's producer, polled by this chip's reader on the same
+    // (plane, direction). ONE semaphore suffices for all four quarters — each quarter is drained by a
+    // different worker core, so the per-core copy at this uniform L1 offset already separates them, and the
+    // producer simply targets the right core.
+    auto fwd_arrived_sem =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, all_workers, 0, tt::tt_metal::BufferType::L1);
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
     const uint32_t ring_filled_addr = static_cast<uint32_t>(ring_filled_sem.address());
     const uint32_t ring_freed_addr = static_cast<uint32_t>(ring_freed_sem.address());
+    const uint32_t fwd_arrived_addr = static_cast<uint32_t>(fwd_arrived_sem.address());
     const auto l1 = compute_l1_layout(
         mesh_device,
         operation_attributes.num_l1_slots,
         operation_attributes.token_size_bytes,
-        std::min(ring_filled_addr, ring_freed_addr));
+        std::min(std::min(ring_filled_addr, ring_freed_addr), fwd_arrived_addr));
     // Slots move between the reader and the producer in half-ring batches, so one half can be refilled
     // while the other drains. This is the knob that amortises the ring bookkeeping over several packets.
     const uint32_t batch = std::max(1u, operation_attributes.num_l1_slots / 2);
@@ -1037,6 +1106,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(ring_filled_sem);
     workload_descriptor.semaphores.push_back(ring_freed_sem);
+    workload_descriptor.semaphores.push_back(fwd_arrived_sem);
 
     // ---- Op-internal forwarding buffer. Never initialised and never read back: it is pure staging for
     // tokens passing through a chip on their way somewhere else (phase 9). One page per token, and the page
@@ -1098,6 +1168,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
             batch,
             ring_filled_addr,
             ring_freed_addr,
+            fwd_arrived_addr,
             dram_out_buf,
             dram_in_buf,
             dram_fwd_buf);
