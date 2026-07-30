@@ -135,4 +135,13 @@ void kernel_main() {
     for (uint32_t w = 0; w < num_ag_workers; w++) {
         noc_semaphore_set(per_worker_sem_ptrs[w], 0);
     }
+
+    // Drain the non-posted atomic increments issued to the matmul semaphores above. Without this the
+    // final noc_semaphore_inc's ack can still be in flight when this core is released; the next op
+    // reusing this core inherits the outstanding atomic on the NIU and its terminal
+    // noc_async_atomic_barrier() (which checks cumulative issued==acked) hangs off-by-one. This
+    // surfaces under NOC contention (8k fabric payload) as an intermittent, device-random,
+    // aggregator-core-fixed mesh deadlock. Mirrors the writer kernel's teardown barriers.
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }

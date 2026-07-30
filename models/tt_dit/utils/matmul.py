@@ -256,13 +256,24 @@ class FusedMMRSConfig(NamedTuple):
     subblock_w: int
     num_buffers_per_channel: int | None
     chunk_width_in_mm_blocks: int
+    # Optional explicit reduce-scatter worker count. When None (default) it is derived from the
+    # RS-zone geometry below. Set it to pin the value to an op-test-tuned count so the model and
+    # the ccl op test (tests/nightly/tg/ccl/test_minimal_matmul_strided_reduce_scatter_async.py)
+    # agree exactly -- the geometry derivation and the op test's explicit num_workers_per_link do
+    # not otherwise match (e.g. LTX ff2: derived 5 vs op-test-validated 3).
+    num_workers_per_link: int | None = None
 
     def get_params(self, core_grid, num_links):
-        rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
-        num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
         config_dict = self._asdict()
         num_buffers_per_channel = config_dict.pop("num_buffers_per_channel")
         chunk_width_in_mm_blocks = config_dict.pop("chunk_width_in_mm_blocks")
+        num_workers_override = config_dict.pop("num_workers_per_link")
+
+        if num_workers_override is not None:
+            num_workers_per_link = num_workers_override
+        else:
+            rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
+            num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
 
         # Order is important. Guaranteed for python 3.7+
         return {
@@ -284,6 +295,12 @@ fused_mmrs_configs = {
     ttnn.CoreCoord(12, 10): {
         (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
         (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
+        # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]. (12,8)=96-core MM grid
+        # with op-test-tuned b756 blocking: 7x5x6 tiles (224/160/192 elem), subblock 1x3, chunk=1,
+        # RS workers on rows 8-9. num_workers_per_link pinned to 3 (geometry would derive 5) to match
+        # ltx_ff2_4864_4096_4096_x12_y8_b756 in
+        # tests/nightly/tg/ccl/test_minimal_matmul_strided_reduce_scatter_async.py.
+        (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 7, 5, 6, 1, 3, None, 1, 3),
     },
 }
 
