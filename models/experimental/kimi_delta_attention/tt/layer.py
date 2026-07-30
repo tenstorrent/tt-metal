@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -16,7 +15,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import matmul_reduce_scatter_pre
 from models.experimental.kimi_delta_attention.config import KDAConfig, KDAProgramConfig
 from models.experimental.kimi_delta_attention.tt.recurrence import kda_prefill
 from models.experimental.kimi_delta_attention.tt.weights import KDAWeights, load_kda_weights
-from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
@@ -354,21 +353,13 @@ class KimiDeltaAttention:
             output_gate=output_gate,
         )
 
-    def _run_kda_and_norm(
+    def _kda_prefill(
         self,
         inputs: _KDAInputs,
-        *,
-        sequence: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run the recurrence and return normalized heads regardless of kernel fusion."""
-        config, weights = self.config, self.weights
+        """Run the KDA recurrence and return its raw output and updated state."""
+        config = self.config
         assert self.recurrent_state is not None
-        # The long-context grouped-prefix path returns raw scan output; normalize it
-        # after regrouping instead of asking the serial scan for a fused RMS tensor.
-        use_group_prefix = (
-            self.sequence_parallel_size > 1 or (sequence >= 5120 and sequence % 256 == 0)
-        ) and os.getenv("QWEN_KDA_SERIAL_SCAN") is None
-        fuse_scan_rms = sequence > 640 and os.getenv("QWEN_KDA_GROUP_PREFIX") is None and not use_group_prefix
         output, new_recurrent_state = kda_prefill(
             inputs.q,
             inputs.k,
@@ -377,9 +368,6 @@ class KimiDeltaAttention:
             inputs.beta,
             self.recurrent_state,
             self.chunk_const_tiles,
-            rms_gate=inputs.output_gate if fuse_scan_rms else None,
-            rms_weight=weights.norm if fuse_scan_rms else None,
-            rms_epsilon=config.norm_eps,
             summary_group_chunks=self.summary_group_chunks,
             sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
             affine_identity=self.affine_identity,
@@ -387,17 +375,24 @@ class KimiDeltaAttention:
         )
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
-        if not fuse_scan_rms:
-            output = ttnn.transformer.kda_gated_rms_norm(
-                output,
-                inputs.output_gate,
-                weights.norm,
-                config.num_heads,
-                epsilon=config.norm_eps,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_config,
-            )
         return output, new_recurrent_state
+
+    def _kda_rms_norm(
+        self,
+        output: ttnn.Tensor,
+        output_gate: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """Apply the KDA gated RMSNorm epilogue."""
+        config, weights = self.config, self.weights
+        return ttnn.transformer.kda_gated_rms_norm(
+            output,
+            output_gate,
+            weights.norm,
+            config.num_heads,
+            epsilon=config.norm_eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+        )
 
     def _project_output(
         self,
@@ -409,10 +404,7 @@ class KimiDeltaAttention:
         """Project normalized heads and perform the required TP reduction."""
         config, weights = self.config, self.weights
         output = ttnn.reshape(output, (batch, sequence, config.v_dim))
-        fused_output_collective = self.tensor_parallel_size > 1 and (
-            self.sequence_parallel_size > 1 or config.v_dim >= 8 * ttnn.TILE_SIZE
-        )
-        if fused_output_collective:
+        if self.tensor_parallel_size > 1:
             assert self.tt_ccl is not None
             # Keep the MMRS input and output dtypes equal: mixed page sizes corrupt the fused collective.
             # BF16 halves the projection intermediate and reduce-scatter traffic; accumulation remains FP32.
@@ -434,22 +426,6 @@ class KimiDeltaAttention:
                 weights.output_projection,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_config,
-            )
-        if self.tensor_parallel_size > 1 and not fused_output_collective:
-            assert self.tt_ccl is not None
-            output = ttnn.reshape(output, (batch, 1, sequence, self.global_config.hidden_size))
-            output = tt_all_reduce(
-                output,
-                self.device,
-                self.tt_ccl,
-                cluster_axis=None if self.sequence_parallel_size == 1 else self.tensor_parallel_axis,
-                dim=3,
-                topology=ttnn.Topology.Linear,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            output = ttnn.reshape(
-                output,
-                (batch, sequence, self.global_config.hidden_size // self.tensor_parallel_size),
             )
         return output
 
@@ -493,10 +469,8 @@ class KimiDeltaAttention:
             decay_rank=projected.decay_rank,
             output_gate=projected.output_gate,
         )
-        output, new_recurrent_state = self._run_kda_and_norm(
-            inputs,
-            sequence=sequence,
-        )
+        output, new_recurrent_state = self._kda_prefill(inputs)
+        output = self._kda_rms_norm(output, inputs.output_gate)
         output = self._project_output(output, batch=batch, sequence=sequence)
         self._commit_state(new_recurrent_state, new_convolution_state)
         return output
