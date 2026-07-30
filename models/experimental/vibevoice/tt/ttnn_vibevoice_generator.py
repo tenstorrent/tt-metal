@@ -260,11 +260,9 @@ class TTVibeVoiceGenerator:
         self._enc_step: Optional[Tuple[int, ttnn.Tensor]] = None
         self._enc_final: Optional[Tuple[int, ttnn.Tensor]] = None
         self._enc_in: Optional[ttnn.Tensor] = None
-        # Device-side encode audio (VV_DEV_ENC_AUDIO=1, default on): upload a voice row ONCE as a
-        # [n_chunks, chunk] table and gather the chunk row inside the capture from a self-advancing
-        # device index — 4 host uploads for the climate prompts instead of ~663.  =0 keeps the
-        # per-chunk host write (A/B + rollback).
-        self._enc_dev_audio = os.environ.get("VV_DEV_ENC_AUDIO", "1") == "1"
+        # Device-side encode audio: upload a voice row ONCE as a [n_chunks, chunk] table and gather
+        # the chunk row inside the capture from a self-advancing device index — 4 host uploads for
+        # the climate prompts instead of ~663.
         self._enc_table: Optional[ttnn.Tensor] = None
         self._enc_idx: Optional[ttnn.Tensor] = None
         self._sf_tid = None
@@ -276,11 +274,9 @@ class TTVibeVoiceGenerator:
         self._sf_pos_pos: Optional[ttnn.Tensor] = None
         self._sf_neg_pos: Optional[ttnn.Tensor] = None
         self._sf_noise: Optional[ttnn.Tensor] = None
-        # Device-side diffusion noise (VV_DEV_NOISE=1, default on): the whole run's pre-drawn noise
-        # is uploaded once as a [max_steps, 64] table and the frame's row is gathered INSIDE the
-        # capture from a device index that self-advances — so a replayed frame does no host work for
-        # noise at all.  =0 restores the per-frame host write (A/B + rollback).
-        self._sf_dev_noise = os.environ.get("VV_DEV_NOISE", "1") == "1"
+        # Device-side diffusion noise: the whole run's pre-drawn noise is uploaded once as a
+        # [max_steps, 64] table and the frame's row is gathered INSIDE the capture from a device
+        # index that self-advances — so a replayed frame does no host work for noise at all.
         # VV_TTNN_RANDN=1 draws that table with ttnn.randn ON DEVICE instead of torch.randn on host.
         # EXPERIMENTAL, default off: ttnn.randn is a different generator (device Box-Muller over
         # per-core PRNGs), so it does NOT reproduce torch's values for a seed — the diffusion init
@@ -290,10 +286,9 @@ class TTVibeVoiceGenerator:
         # across seeds, mean -0.004..-0.040, vs torch's steady std~1.000).  Judge by listening.
         self._sf_ttnn_randn = os.environ.get("VV_TTNN_RANDN", "0") == "1"
         self._ttnn_randn_draws = 0  # draw counter, so successive device draws use distinct seeds
-        # VV_DEV_ENC_LAT=1 keeps the voice-clone encode latents ON DEVICE: the chunk capture
-        # scatters its latent row into an accumulator (see _enc_scatter), so the per-chunk D2H and
-        # the host torch.cat/scale/bias all go away and the connector reads a device tensor.
-        self._enc_dev_lat = os.environ.get("VV_DEV_ENC_LAT", "0") == "1"
+        # The voice-clone encode latents stay ON DEVICE: the chunk capture scatters its latent row
+        # into an accumulator (see _enc_scatter), so the per-chunk D2H and the host
+        # torch.cat/scale/bias all go away and the connector reads a device tensor.
         self._enc_lat_buf: Optional[ttnn.Tensor] = None
         self._enc_lat_idx: Optional[ttnn.Tensor] = None
         self._enc_lat_shard_mc = None
@@ -305,49 +300,41 @@ class TTVibeVoiceGenerator:
         # `_sf_t_tensors` and reused every frame — byte-identical to per-step embed inside the head.
         self._sf_t_embs: Optional[list] = None
         self._sf_audio_out: Optional[ttnn.Tensor] = None
-        self._sf_logits_out: Optional[ttnn.Tensor] = None
         # Constrained-decode (split-capture path): subset lm_head + in-trace argmax → local index.
         self._sf_tok_out: Optional[ttnn.Tensor] = None
         self._sf_valid_ids_sorted: Optional[List[int]] = None
         self._sf_lm_head_valid: Optional[ttnn.Tensor] = None
-        # fp32 RoPE (VV_FP32_ROPE=1, default on): host-write the exact fp32 cos/sin rows per frame
-        # into persistent buffers so the traced decode matches the EAGER fp32-rope path (which slices
-        # the fp32 _cos_tt/_sin_tt table).  Off (=0) keeps the bf16 on-device embedding gather (A/B).
-        self._sf_fp32_rope = os.environ.get("VV_FP32_ROPE", "1") == "1"
+        # fp32 RoPE: host-write the exact fp32 cos/sin rows per frame into persistent buffers so the
+        # traced decode matches the EAGER fp32-rope path (which slices the fp32 _cos_tt/_sin_tt
+        # table).  VV_FUSED_ROPE=1 instead takes the bf16 on-device gather.
         self._sf_cos_pos: Optional[ttnn.Tensor] = None
         self._sf_sin_pos: Optional[ttnn.Tensor] = None
         self._sf_cos_neg: Optional[ttnn.Tensor] = None
         self._sf_sin_neg: Optional[ttnn.Tensor] = None
         self._sf_pos_pos_host = 0  # host mirror of the device _sf_pos_pos (for fp32 rope row select)
         self._sf_neg_pos_host = 0
-        # Split-frame capture (VV_CAP_SPLIT=1, default): capture the steady speech-diffusion frame as
-        # THREE separate traces — neg-LM | diffusion+post | pos-LM — instead of ONE monolithic capture.
-        # Co-capturing the LM together with diffusion+post in a single trace causes a buffer-scheduling
-        # aliasing whose replay diverges from eager at ~frame 177 (a tiny bf16 delta) and amplifies
-        # chaotically into an unintelligible (but RMS-flat) long-form render; separate traces are
-        # bit-identical to eager.  VV_CAP_SPLIT=0 falls back to the monolithic capture and reproduces
-        # that divergence.  _sf_neg_hidden and _sf_fused_out are the address-stable hand-off buffers
-        # between the three traces.
-        self._sf_cap_split = os.environ.get("VV_CAP_SPLIT", "1") == "1"
+        # Split-frame capture: the steady speech-diffusion frame is captured as SEPARATE traces
+        # rather than ONE monolithic capture.  Co-capturing the LM together with diffusion+post in a
+        # single trace causes a buffer-scheduling aliasing whose replay diverges from eager at
+        # ~frame 177 (a tiny bf16 delta) and amplifies chaotically into an unintelligible (but
+        # RMS-flat) long-form render; separate traces are bit-identical to eager.  _sf_neg_hidden and
+        # _sf_fused_out are the address-stable hand-off buffers between traces.
         self._sf_negtrace_tid = None
         self._sf_dptrace_tid = None
         self._sf_postrace_tid = None
         self._sf_neg_hidden: Optional[ttnn.Tensor] = None  # neg-LM last_hidden (neg-trace -> diff-trace)
         self._sf_fused_out: Optional[ttnn.Tensor] = None  # post-diffusion embed (diff-trace -> pos-LM-trace)
-        # CFG batch-2 LM fusion (VV_CFG_BATCH2=1): fold the neg-LM + pos-LM into ONE batch-2 decode
-        # forward that reads each layer's weights ONCE for both CFG rows (weight-DRAM-bound at M=1).
-        # Software-pipelined: each frame's batched forward computes pos-LM(k) [row0, → cond_pos(k+1)]
-        # and neg-LM(k+1) [row1, → cond_neg(k+1)]; the diffusion runs FIRST from cond buffers the
+        # CFG batch-2 LM fusion: the neg-LM + pos-LM fold into ONE batch-2 decode forward that reads
+        # each layer's weights ONCE for both CFG rows (weight-DRAM-bound at M=1).  Software-
+        # pipelined: each frame's batched forward computes pos-LM(k) [row0, → cond_pos(k+1)] and
+        # neg-LM(k+1) [row1, → cond_neg(k+1)]; the diffusion runs FIRST from cond buffers the
         # PREVIOUS frame's forward wrote.  A once-per-segment eager boot seeds neg-LM(0).  Each row
-        # is byte-identical to its B=1 forward.  Requires cap-split token semantics (in-trace
+        # is byte-identical to its B=1 forward.  Uses cap-split token semantics (in-trace
         # constrained argmax).
-        self._sf_cfg_b2 = self._sf_cap_split and os.environ.get("VV_CFG_BATCH2", "1") == "1"
-        # Fused frame output (VV_FUSE_FRAME_OUT=1, default on): append the constrained-argmax index
-        # to this frame's audio inside _lm2trace, so ONE D2H returns both.  The audio and the token
-        # are complete at the same point in the queue (dp2 is enqueued before lm2), and reading the
-        # 4-byte token separately costs ~0.06 ms of per-call overhead on every frame.  =0 keeps the
-        # two reads (A/B + rollback).
-        self._sf_out_fused = self._sf_cfg_b2 and os.environ.get("VV_FUSE_FRAME_OUT", "1") == "1"
+        # Fused frame output: the constrained-argmax index is appended to this frame's audio inside
+        # _lm2trace, so ONE D2H returns both.  The audio and the token are complete at the same point
+        # in the queue (dp2 is enqueued before lm2), and reading the 4-byte token separately costs
+        # ~0.06 ms of per-call overhead on every frame.
         self._sf_dp2trace_tid = None
         self._sf_lm2trace_tid = None
         # Diagnostic (VV_TRACE_NOCAPTURE=1): run the frame graph eagerly, with no ttnn
@@ -469,7 +456,7 @@ class TTVibeVoiceGenerator:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        if self._enc_dev_audio and n_rows:
+        if n_rows:
             # Row table + index, allocated BEFORE the capture so their addresses are stable for it.
             # Sized to the longest row (rows are processor-padded to a common length), with a floor
             # of the warmup count so the eager warmup gathers stay in bounds.
@@ -493,7 +480,7 @@ class TTVibeVoiceGenerator:
         # a capture cannot load new binaries.  Index overrun during warmup+capture is why the
         # accumulator's floor (8) exceeds the audio table's (4): 4 warmup + 2 capture writes.
         _warm = self.acoustic_tok.encode(self._enc_input(chunk), use_cache=True, is_final_chunk=False)
-        if self._enc_dev_lat and n_rows:
+        if n_rows:
             self._enc_lat_alloc(dev, max(n_rows, 8), int(_warm.shape[-1]), _warm.dtype)
             self._enc_scatter(_warm)
         for _final in (False, True, True):
@@ -550,8 +537,7 @@ class TTVibeVoiceGenerator:
         This is what makes keeping the latents on device a win: host-dispatched accumulation is a
         REGRESSION (measured over 663 chunks: paged_update_cache 887 ms, device concat 2287 ms, vs
         199 ms for the per-chunk D2H it replaces).  In-capture the write is free, so the 663 D2Hs
-        and the host torch.cat both disappear.  No-op when the accumulator is not allocated, so the
-        captured graph is byte-for-byte the old one with VV_DEV_ENC_LAT=0."""
+        and the host torch.cat both disappear.  No-op when the accumulator is not allocated."""
         if self._enc_lat_buf is None:
             return
         t, d = int(out.shape[2]), int(out.shape[-1])
@@ -568,8 +554,8 @@ class TTVibeVoiceGenerator:
     def _enc_input(self, chunk: int) -> ttnn.Tensor:
         """The chunk graph's audio input: this chunk's row gathered on device from the pre-uploaded
         row table, with the index self-advancing so a replay needs no host write.  Falls back to the
-        host-written buffer when VV_DEV_ENC_AUDIO=0.  Bit-identical either way — the table holds the
-        same bf16 samples, zero-padded exactly as the per-chunk path padded its tail, and
+        host-written buffer before the table is allocated.  Bit-identical either way — the table
+        holds the same bf16 samples, zero-padded exactly as the per-chunk path padded its tail, and
         ``ttnn.embedding`` is pure data movement (verified byte-equal at every row)."""
         if self._enc_table is None:
             return self._enc_in
@@ -961,7 +947,7 @@ class TTVibeVoiceGenerator:
             ttnn.release_trace(self.device, self._sf_tid)
         self._sf_tid = None
         self._sf_warm = 0
-        # Split-capture (VV_CAP_SPLIT): release all three per-frame traces too, so the next
+        # Split-capture: release all the per-frame traces too, so the next
         # segment's frame 0 re-warms + recaptures them (same coexistence-hazard reasoning).
         for _attr in (
             "_sf_negtrace_tid",
@@ -1023,9 +1009,9 @@ class TTVibeVoiceGenerator:
 
         Generated directly at the table's final shape and ROW_MAJOR layout (what ttnn.embedding
         consumes) — no reshape, so there is no tiled-reshape hazard.  Returns False when the gather
-        table is not the active noise path (eager / --no-trace / VV_DEV_NOISE=0), leaving the caller
-        on the host draw."""
-        if not (self._sf_dev_noise and self._trace_segment and self._sf_cfg_b2):
+        table is not the active noise path (eager / --no-trace), leaving the caller on the host
+        draw."""
+        if not self._trace_segment:
             return False
         self._sf_noise_table = ttnn.randn(
             [max_steps, 64],
@@ -1042,8 +1028,8 @@ class TTVibeVoiceGenerator:
 
         ``diffusion_noise`` is [max_steps, 2, 1, 1, 64]; only row 0 of the CFG pair is consumed per
         frame (``noise_2x[:1]``), so the table holds exactly the values the host used to upload."""
-        if not (self._sf_dev_noise and self._trace_segment and self._sf_cfg_b2) or diffusion_noise is None:
-            return  # only the cfg_b2 frame graph gathers it; other paths keep the host write
+        if not self._trace_segment or diffusion_noise is None:
+            return  # only the traced frame graph gathers it; the eager path keeps the host write
         rows = diffusion_noise[:, 0].reshape(diffusion_noise.shape[0], -1)
         self._sf_noise_table = ttnn.from_torch(
             rows,
@@ -1072,7 +1058,7 @@ class TTVibeVoiceGenerator:
         else:
             self._sf_pos_pos_host += 1  # mirror the on-device plus_one from the prior frame
             self._sf_neg_pos_host += 1
-        if self._sf_fp32_rope and not self.lm._fused_rope:
+        if not self.lm._fused_rope:
             # fp32 rope rows for the current positions (device positions self-advance for KV/sdpa).
             self._sf_write_rope(self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos_host)
             self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
@@ -1189,7 +1175,7 @@ class TTVibeVoiceGenerator:
             cond_pos = _condition_from_hidden(self._sf_hidden_buf)
             cond_neg = _condition_from_hidden(self._sf_neg_hidden)
             # Noise: gathered on device from the pre-uploaded table (index self-advances in-capture),
-            # or read from the host-written buffer when VV_DEV_NOISE=0.
+            # or read from the host-written buffer before that table exists.
             noise_in = self._sf_noise_row() if self._sf_noise_table is not None else self._sf_noise
             latent = sample_speech_latents(
                 self.diffusion_head,
@@ -1236,8 +1222,6 @@ class TTVibeVoiceGenerator:
             ttnn.plus_one(self._sf_pos_pos)
             ttnn.plus_one(self._sf_neg_pos)
             tok = ttnn.argmax(logits0, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # 1 elem, LOCAL idx
-            if not self._sf_out_fused:
-                return tok
             # Append the token index to this frame's audio (written by the dp2 replay that ran just
             # before this trace) so the host reads one tensor instead of two.  Casting the index to
             # the audio dtype is exact: it indexes _sf_valid_ids_sorted, i.e. the handful of control
@@ -1339,179 +1323,7 @@ class TTVibeVoiceGenerator:
             # allocate.  The reset then re-seeds from _sf_hidden_seed with an alloc-free copy.
             ttnn.copy(input_a=_condition_from_hidden(step_hidden), input_b=self._sf_hidden_seed)
 
-        if self._sf_cfg_b2:
-            return self._run_segment_frame_cfg_b2(seg_frame_idx, start_pos, noise_2x, kv_pos, kv_neg, noise_idx)
-
-        self._sf_set_inputs(seg_frame_idx, start_pos, noise_2x)
-
-        def _frame():
-            cond_pos = _condition_from_hidden(self._sf_hidden_buf)
-            if self._sf_fp32_rope:
-                _, neg_hidden = lm.forward_decode_traced_embeds(
-                    self._sf_neg_embed,
-                    self._sf_cos_neg,
-                    self._sf_sin_neg,
-                    self._sf_neg_pos,
-                    kv_neg,
-                    return_last_hidden=True,
-                )
-            else:
-                _, neg_hidden = lm.forward_decode_traced_embeds_dev_rope(
-                    self._sf_neg_embed, self._sf_neg_pos, kv_neg, return_last_hidden=True
-                )
-            cond_neg = _condition_from_hidden(neg_hidden)
-            latent = sample_speech_latents(
-                self.diffusion_head,
-                cond_pos,
-                cond_neg,
-                self.scheduler,
-                self._sf_noise,
-                cfg_scale=self.cfg_scale,
-                num_steps=self.num_diffusion_steps,
-                head_runner=None,
-                t_tensors=self._sf_t_tensors,
-                t_embs=self._sf_t_embs,
-            )
-            fused, audio = self._run_post_pipeline(latent)
-            if self._sf_fp32_rope:
-                logits, new_hidden = lm.forward_decode_traced_embeds(
-                    fused, self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos, kv_pos, return_last_hidden=True
-                )
-            else:
-                logits, new_hidden = lm.forward_decode_traced_embeds_dev_rope(
-                    fused, self._sf_pos_pos, kv_pos, return_last_hidden=True
-                )
-            ttnn.copy(input_a=new_hidden, input_b=self._sf_hidden_buf)  # loop-carry on device
-            # Same inputs_embeds for the next frame's neg-LM as for the pos-LM (see _dptrace).
-            ttnn.copy(input_a=fused, input_b=self._sf_neg_embed)
-            ttnn.plus_one(self._sf_pos_pos)
-            ttnn.plus_one(self._sf_neg_pos)
-            return audio, logits
-
-        if self._sf_cap_split:
-            # THREE separate captured traces (neg-LM | diffusion+post | pos-LM) — the fix.
-            def _negtrace():
-                _, nh = lm.forward_decode_traced_embeds(
-                    self._sf_neg_embed,
-                    self._sf_cos_neg,
-                    self._sf_sin_neg,
-                    self._sf_neg_pos,
-                    kv_neg,
-                    return_last_hidden=True,
-                    need_logits=False,  # neg logits are discarded — skip the full lm_head (bit-exact)
-                )
-                if self._sf_neg_hidden is None:
-                    self._sf_neg_hidden = ttnn.clone(
-                        nh, memory_config=ttnn.DRAM_MEMORY_CONFIG
-                    )  # persistent alloc (eager warmup)
-                else:
-                    ttnn.copy(input_a=nh, input_b=self._sf_neg_hidden)
-                ttnn.plus_one(self._sf_neg_pos)
-
-            def _dptrace():
-                cond_pos = _condition_from_hidden(self._sf_hidden_buf)
-                cond_neg = _condition_from_hidden(self._sf_neg_hidden)
-                latent = sample_speech_latents(
-                    self.diffusion_head,
-                    cond_pos,
-                    cond_neg,
-                    self.scheduler,
-                    self._sf_noise,
-                    cfg_scale=self.cfg_scale,
-                    num_steps=self.num_diffusion_steps,
-                    head_runner=None,
-                    t_tensors=self._sf_t_tensors,
-                    t_embs=self._sf_t_embs,
-                )
-                fu, au = self._run_post_pipeline(latent)
-                if self._sf_fused_out is None:
-                    self._sf_fused_out = ttnn.clone(
-                        fu, memory_config=ttnn.DRAM_MEMORY_CONFIG
-                    )  # persistent alloc (eager warmup)
-                else:
-                    ttnn.copy(input_a=fu, input_b=self._sf_fused_out)
-                # Hand this frame's fused embed to the NEXT frame's neg-LM: the reference feeds the
-                # negative branch the same inputs_embeds as the positive one (it only differs in
-                # attention context + position), and _negtrace runs before _dptrace, so the buffer
-                # still holds frame k-1's embed when the neg-LM reads it.
-                ttnn.copy(input_a=fu, input_b=self._sf_neg_embed)
-                return au
-
-            def _postrace():
-                lg, nh = lm.forward_decode_traced_embeds(
-                    self._sf_fused_out,
-                    self._sf_cos_pos,
-                    self._sf_sin_pos,
-                    self._sf_pos_pos,
-                    kv_pos,
-                    return_last_hidden=True,
-                    lm_head_w=self._sf_lm_head_valid,  # constrained-decode: project only selectable tokens
-                )
-                ttnn.copy(input_a=nh, input_b=self._sf_hidden_buf)  # loop-carry for next frame
-                ttnn.plus_one(self._sf_pos_pos)
-                # In-trace constrained argmax over the N selectable-token logits → LOCAL index
-                # (== full-vocab masked argmax; caller maps local -> token id).
-                return ttnn.argmax(lg, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-            if self._sf_postrace_tid is None:
-                for _ in range(self._SF_WARMUP):
-                    _negtrace()
-                    _dptrace()
-                    _postrace()
-                ta = ttnn.begin_trace_capture(dev, cq_id=0)
-                _negtrace()
-                ttnn.end_trace_capture(dev, ta, cq_id=0)
-                tb = ttnn.begin_trace_capture(dev, cq_id=0)
-                self._sf_audio_out = _dptrace()
-                ttnn.end_trace_capture(dev, tb, cq_id=0)
-                tc = ttnn.begin_trace_capture(dev, cq_id=0)
-                self._sf_tok_out = _postrace()  # constrained argmax LOCAL index (persistent)
-                ttnn.end_trace_capture(dev, tc, cq_id=0)
-                self._sf_negtrace_tid, self._sf_dptrace_tid, self._sf_postrace_tid = ta, tb, tc
-                self._sf_set_inputs(0, start_pos, noise_2x)  # reset positions/hidden/embed/rope
-                self._sf_zero_conv()
-            elif seg_frame_idx == 0:
-                self._sf_zero_conv()
-            ttnn.execute_trace(dev, self._sf_negtrace_tid, cq_id=0, blocking=False)
-            ttnn.execute_trace(dev, self._sf_dptrace_tid, cq_id=0, blocking=False)
-            ttnn.execute_trace(dev, self._sf_postrace_tid, cq_id=0, blocking=False)
-            return self._sf_audio_out, self._sf_tok_out
-
-        if self._sf_nocapture:
-            # EAGER (no capture/replay): set_inputs already rewound frame-0 state above.
-            if not self._sf_nocap_started:
-                _frame()  # throwaway: allocate conv caches (positions/hidden reset below)
-                self._sf_set_inputs(0, start_pos, noise_2x)
-                self._sf_zero_conv()
-                self._sf_nocap_started = True
-                return _frame()
-            if seg_frame_idx == 0:
-                self._sf_zero_conv()
-            return _frame()
-
-        if self._sf_tid is None:
-            # First frame-0 after a (re)capture: warmup (eager, compiles + allocates conv caches),
-            # throwaway capture, reset, then the real replay — all internal, so warmup/capture
-            # frames are discarded and never emitted (no capture-poison re-run needed).
-            for _ in range(self._SF_WARMUP):
-                _frame()
-            tid = ttnn.begin_trace_capture(dev, cq_id=0)
-            self._sf_audio_out, self._sf_logits_out = _frame()
-            ttnn.end_trace_capture(dev, tid, cq_id=0)
-            self._sf_tid = tid
-            # RESET: rewind positions, re-seed hidden + speech_start embed, and zero the (now
-            # allocated) conv caches in place — undoing the warmup/capture frames.  KV self-heals
-            # by forward overwrite on replay.
-            self._sf_set_inputs(0, start_pos, noise_2x)
-            self._sf_zero_conv()
-            ttnn.execute_trace(dev, tid, cq_id=0, blocking=False)
-            _vv_debug("segment_frame: captured + reset")
-            return self._sf_audio_out, self._sf_logits_out
-
-        if seg_frame_idx == 0:
-            self._sf_zero_conv()  # subsequent-segment reset (positions/hidden already rewound above)
-        ttnn.execute_trace(dev, self._sf_tid, cq_id=0, blocking=False)
-        return self._sf_audio_out, self._sf_logits_out
+        return self._run_segment_frame_cfg_b2(seg_frame_idx, start_pos, noise_2x, kv_pos, kv_neg, noise_idx)
 
     def _post_diffusion_embeds(self, speech_latent: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Diffusion latent → (fused next-step embed, current audio chunk)."""
@@ -1882,34 +1694,16 @@ class TTVibeVoiceGenerator:
                         noise_idx=diffusion_frames - 1,
                     )
                 neg_prev_diffusion_token = current_token
-                _local_idx = None
-                if self._sf_out_fused:
-                    # ONE D2H returns [audio ..., token_idx] (see _lm2trace).
-                    with prof.section("argmax"):
-                        _out = ttnn.to_torch(_tok_or_logits).reshape(-1)  # syncs frame
-                    _frame_audio = _out[:-1].to(torch.float32)
-                    _local_idx = int(_out[-1].item())
-                else:
-                    _frame_audio = ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)  # syncs frame
+                # ONE D2H returns [audio ..., token_idx] (see _lm2trace); the trace already folded
+                # the constrained argmax, so the tail element is a LOCAL index.
+                with prof.section("argmax"):
+                    _out = ttnn.to_torch(_tok_or_logits).reshape(-1)  # syncs frame
+                _frame_audio = _out[:-1].to(torch.float32)
+                _local_idx = int(_out[-1].item())
                 if self._traj_path:
                     self._log_traj(diffusion_frames, start_pos, _frame_audio)
                 _emit_audio(_frame_audio)
-                if _local_idx is not None:
-                    next_token = self._sf_valid_ids_sorted[_local_idx]
-                elif self._sf_cap_split:
-                    # Split-capture folds the constrained argmax into the trace → LOCAL index.
-                    with prof.section("argmax"):
-                        _local_idx = int(ttnn.to_torch(_tok_or_logits).reshape(-1)[-1].item())  # syncs frame
-                        next_token = self._sf_valid_ids_sorted[_local_idx]
-                else:
-                    with prof.section("token_constraint"):
-                        logits = ttnn.add(
-                            _tok_or_logits,
-                            self._token_constraint_mask(_tok_or_logits.shape[-1]),
-                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        )
-                    with prof.section("argmax"):
-                        next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)  # syncs frame (D2H)
+                next_token = self._sf_valid_ids_sorted[_local_idx]
                 if _sf_replay:
                     _steady_decode_s += time.perf_counter() - _frame_t0
                     _steady_decode_frames += 1
