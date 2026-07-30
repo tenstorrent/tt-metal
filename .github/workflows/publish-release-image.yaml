@@ -125,8 +125,8 @@ jobs:
               "cannot be built without a read token."
             exit 1
           fi
-          if ! git ls-remote --exit-code -h \
-                "https://x-access-token:${GH_TOKEN}@github.com/${ENGINE_REPO}.git" HEAD \
+          if ! GIT_TERMINAL_PROMPT=0 git ls-remote \
+                "https://x-access-token:${GH_TOKEN}@github.com/${ENGINE_REPO}.git" \
                 > /dev/null 2>&1; then
             echo "::error::VLLM_TT_PLUGIN_READ_TOKEN cannot read ${ENGINE_REPO}." \
               "It is set, so this is a SCOPE problem: the token needs contents read" \
@@ -219,7 +219,17 @@ jobs:
             SET+="${TARGET}.args.GIT_REF=${{ github.ref_name || 'main' }}"$'\n'
           fi
           SET+="${TARGET}.tags=${TAG_NAME}"$'\n'
-          SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
+          # force-compression is safe only for base images whose layers are all
+          # built locally. A derived image (DERIVE_FROM set) layers on a REMOTE
+          # base whose layers are referenced lazily; forcing them to recompress
+          # to zstd at export fails with 'failed to get compression blob "zstd":
+          # not found'. Omit it there so the base layers are reused by digest
+          # (kept shared with the base image) and only new layers are zstd.
+          if [ -n "$DERIVE_FROM" ]; then
+            SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=22,oci-mediatypes=true"$'\n'
+          else
+            SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
+          fi
           # RUN steps (apt-get, curl, uv pip) need the proxy too - BuildKit
           # auto-propagates these build-arg names into every RUN with no ARG
           # declaration needed.

@@ -152,8 +152,8 @@ jobs:
             value="${!name:-}"
             if [ -z "$value" ]; then
               printf '  %-32s EMPTY / not set\n' "$name"
-            elif git ls-remote --exit-code -h \
-                   "https://x-access-token:${value}@github.com/${ENGINE_REPO}.git" HEAD \
+            elif GIT_TERMINAL_PROMPT=0 git ls-remote \
+                   "https://x-access-token:${value}@github.com/${ENGINE_REPO}.git" \
                    > /dev/null 2>&1; then
               printf '  %-32s CAN READ\n' "$name"
               WORKING+=("$name")
@@ -255,7 +255,16 @@ jobs:
             SET+="prefill-worker.contexts.llm-build=${STUB_DIR}"$'\n'
           fi
           SET+="prefill-worker.tags=${OUT}"$'\n'
-          SET+="prefill-worker.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
+          # No force-compression here. This worker layers on a REMOTE base image
+          # (release-base = docker-image://.../release-models) whose layers are
+          # referenced lazily, not pulled. force-compression=true makes BuildKit
+          # recompress every layer - including those lazy base blobs - to zstd at
+          # export, which fails with 'failed to get compression blob "zstd": not
+          # found'. Without it, the base layers are reused by digest (and stay
+          # shared with release-models in the registry) and only the two new
+          # worker layers get zstd-compressed. oci-mediatypes allows the resulting
+          # mixed-compression (gzip base + zstd new) image.
+          SET+="prefill-worker.output=type=image,push=true,compression=zstd,compression-level=22,oci-mediatypes=true"$'\n'
           if [ -n "$PROXY_HTTP" ]; then
             SET+="prefill-worker.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
             SET+="prefill-worker.args.HTTPS_PROXY=${PROXY_HTTPS}"$'\n'
