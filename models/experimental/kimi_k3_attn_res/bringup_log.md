@@ -170,6 +170,30 @@ Numbered, dated, never renumbered. Each names what it rejected.
   alongside PCC, and `Σα = 1` is promoted to a primary gate rather than a nicety.
   Rejected alternative — inherit the analog's PCC-only gate unmodified — which is what
   let the defect through.
+- **D14 — 2026-07-30 — one shared `_walk` drives both backends in the depth harness.**
+  `TtAttnResStream` is deliberately interface-compatible with the torch `AttnResStream`
+  (`prefix_sum` / `num_sealed` / `read` / `seal` / `accumulate` / `block_size`), so the
+  93-layer walk is written once and parametrized by `apply_module` and `free`. The
+  read/seal/write order then *provably* cannot diverge between reference and device.
+  Rejected alternative — a separate device walk mirroring the torch one — where a seal
+  fired one layer late shows up as a precision-looking PCC dip, which is the single
+  hardest class of bug to attribute in a 186-read chain.
+- **D15 — 2026-07-30 — `TtAttnResStream` owns its tensors.** Construction takes
+  ownership of `hidden_states` and `accumulate` takes ownership of `module_out`, which
+  makes the first `seal` a zero-copy ownership move into `block_residual` and lets every
+  later `seal` free what it superseded. Rejected alternative — caller-owned tensors with
+  clone-on-seal — costs an `[1,1,N,d]` copy at each of the 8 seals and, worse, leaves
+  the layer-0 aliasing hazard unresolved: at `S = 0` the read is skipped, so the caller's
+  `h` *is* the stream's `prefix_sum`, and freeing it after the seal frees
+  `block_residual`.
+- **D16 — 2026-07-30 — gate the saturated-score case against torch-bf16, not against
+  `PCC_GATE`.** `PCC_GATE = 0.9999` is calibrated for scores of order 1, which is where
+  the folded query puts them; the saturated test drives `max|score|` to 120 on purpose
+  and the device lands at 0.99985/0.99987. Rejected alternatives — declare it a defect
+  and chase it (the fix is an fp32 `[1,C,N,d]` intermediate, 2× the op's largest tensor,
+  for a regime the model never enters), or loosen `PCC_GATE` globally (blinds the eight
+  order-1 configs where the gate does real work). The finiteness assert is what actually
+  pins the max-subtraction, and it is absolute.
 
 ---
 
@@ -299,7 +323,11 @@ tests use `assert_with_pcc(expected, actual, pcc=0.9999)`
 | `test_split_statistics_match_torch` | `S ∈ {1,8}` | rel err ≤ 2e-2 on `partial`, `shift`, `mass` |
 | `test_mixture_weights_are_row_stochastic` | `C ∈ {1,5,9}` | `\|Σα − 1\| ≤ 1e-2` |
 | `test_hand_rolled_softmax_beats_fused` | `C = 9`, fp32 | rel err no worse than `ttnn.softmax(dim=1)` (D12) |
-| `test_depth_fidelity` | 93 layers, random module outputs | **relative** gate, below |
+| `test_saturated_scores_do_not_overflow` | `max\|score\| = 120`, `d ∈ {256, 7168}` | output finite (absolute); PCC ≥ torch-bf16 − 1e-3 (D16) |
+| `test_values_are_not_normalized` | `S = 4`, `d = 7168` | output moves when a candidate is rescaled |
+| `test_sharded_stream_is_rejected` | last dim ≠ `hidden_size` | raises, via the repo's `expect_error` fixture |
+| `test_depth_fidelity` | 93 layers, random module outputs | **relative** gate, below, **plus** norm ratio within 2e-2 |
+| `test_device_lifecycle_matches_torch` | 93-layer device walk, `Bk=12` | 186 reads; seals at `{0,12,…,84}`; `S` ramps 0→8 monotonically |
 | `test_attn_res_dist_tp` | `(2,4)`, `S ∈ {4,8}` | PCC ≥ 0.9999 |
 | `test_attn_res_perf` | `T ∈ {640, 5120}`, `(8,1)` and `(2,4)` | no assertion; numbers transcribed here |
 | `test_pp_roundtrip` | 2 submeshes, `S=4` | bit-exact through the socket |
@@ -315,6 +343,12 @@ i.e. no worse than a bf16 torch implementation of the same math. Report the whol
 per-layer PCC curve, not just the final number: a mid-stack trough can be a pure
 precision artifact with end-to-end behaviour still correct. If a real checkpoint ever
 lands, greedy-token agreement becomes the authoritative metric.
+
+**But the relative depth gate is not a scale-defect detector.** Phase 6 mutation-tested
+it: depth *dilutes* a per-read scale error instead of compounding it, so the D12 defect
+walks all 93 layers and passes. The depth harness catches order-changing and
+algebra-changing bugs; D13's op-level magnitude gate is what catches scale. Both are
+required, and neither substitutes for the other — see §Learnings Phase 6.
 
 Test hygiene — two defects found in the mHC test wiring, do not repeat:
 
@@ -425,6 +459,66 @@ for reflexively, and the roofline constants in Phase 8 must be Blackhole's.
 not a numerics argument. Measure the fused op against its own decomposition before
 preferring it — and never gate a normalized quantity with a scale-invariant metric.*
 
+### Phase 6 — depth dilutes a scale defect, so the depth gate cannot be the safety net
+
+**The 93-layer harness is blind to D12.** Injecting each defect into the shipped op and
+running the full depth walk, `d = 7168`, against the fp32 reference (torch-bf16 baseline
+0.9999741, gate = baseline − 1e-3):
+
+| injected defect | final PCC | verdict |
+|---|---|---|
+| none (as shipped) | 0.9999408 | PASS |
+| `ttnn.softmax(dim=1)` — loses ~4 % of the mass per read | 0.9999205 | **PASS** |
+| unshifted softmax (no max-subtraction) | 0.9999540 | **PASS** |
+| values normalized before mixing | 0.5014967 | FAIL |
+
+Two of the three real defects survive 186 chained reads. The reason is that a per-read
+scale error does not compound: the mixture renormalizes, so a 4 % weight deficit shows up
+as a 0.5 % shift in the final output norm, not as `1.04^186`. The norm-ratio check added
+here (`|1 − ratio| ≤ 2e-2`, as-shipped 1.0037 at `d = 7168`) catches a *gross* scale
+error and cannot resolve the 0.5 % case, so it is documented as exactly that. The
+op-level gate is the primary detector for this defect class, and it does fire — the same
+injection fails 6 of 8 `forward` configs plus two row-stochastic configs.
+
+*Lesson: pick the instrument for the defect class. Depth compounds order and algebra
+errors and dilutes scale errors, so a depth harness cannot be the safety net under an
+op-level gate — it is a different measurement, not a stronger one.*
+
+**The device trails torch-bf16 more as scores saturate, and it is the `v ⊙ q` product.**
+Sweeping the query scale, PCC against the fp32 reference, both arms finite everywhere:
+
+| `max\|score\|` | device `d=256` | torch-bf16 `d=256` | device `d=7168` | torch-bf16 `d=7168` |
+|---|---|---|---|---|
+| 1.0 | 0.9999910 | 0.9999969 | 0.9999798 | 0.9999945 |
+| 8.0 | 0.9999687 | 0.9999916 | 0.9999770 | 0.9999932 |
+| 120.0 | 0.9998480 | 0.9999775 | 0.9998749 | 0.9999570 |
+
+The gap widens from ~1.5e-5 to ~1.3e-4. "Inherent bf16" does not explain it: the torch-bf16
+arm stores bf16 too. What differs is *where* the rounding lands — `attn_res` promotes with
+`_at_least_fp32` and computes the score reduction in fp32, while on device the `v ⊙ q`
+product is a bf16 `[1,C,N,d]` tensor before it is summed. At `|score| = 120` bf16's
+mantissa step is 0.5, so candidate score *differences* quantize to 0.5 and `exp(−Δ)`
+moves by 1.65×. Closing it means an fp32 `[1,C,N,d]` intermediate — 2× traffic on the
+op's largest tensor, on a bandwidth-bound op, for a regime the folded query
+(`|score| ≈ 5` over 9 candidates) never reaches. Not fixed; gated relatively per D16 and
+recorded here so Phase 9 does not rediscover it as a mystery.
+
+**186 reads, 187 parameter sets.** These are different numbers and conflating them cost a
+false assertion failure. The walk executes 185 in-layer reads plus the model-level read;
+the query count is `2·93 + 1 = 187` because `q_pre[0]` is loaded and never used — the
+layer-0 pre-attention read is skipped at `S = 0`. The test now asserts
+`parameter_sets == executed_reads + 1` so the relationship is stated rather than assumed.
+
+**The layer-0 read skip is an ownership hazard on device only.** Because that read is
+skipped, `h` aliases the stream's own `prefix_sum`, which `seal` then takes ownership of
+(D15) — so freeing `h` after the module call frees `block_residual` out from under the
+next 92 layers. In torch this is invisible (GC), which is exactly why the shared walk
+carries an explicit `borrowed` flag instead of an unconditional `free`.
+
+*Lesson: interface-compatible backends make lifecycle bugs impossible to hide, but they
+do not make ownership uniform. The reference path can afford to be sloppy about who frees
+what; the device path cannot, and the shared walk has to encode the difference.*
+
 ---
 
 ## Backlog
@@ -436,7 +530,7 @@ preferring it — and never gate a normalized quantity with a scale-invariant me
 - [x] Phase 5 — `tt/` composite, single device.
 - [ ] Measure the `N`-batched matmul `[N,R,S] × [N,S,d]` against 24 broadcast passes;
       decides whether the split form's remaining ~1.9× is reachable in composed ops.
-- [ ] Phase 6 — device correctness + 93-layer depth harness.
+- [x] Phase 6 — device correctness + 93-layer depth harness.
 - [ ] Phase 7 — remove host fallbacks; `T=5120`.
 - [ ] Phase 8 — `DISTRIBUTION.md`, TP on `(2,4)`, `ROOFLINE.md`.
 - [ ] Phase 9 — perf harness + numbered perf loop.
@@ -521,3 +615,28 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
   every test here is `N = 64`. Any performance claim — no perf run, and the split form is
   written for correctness, not traffic (see §The inter/intra-block split, Phase 5
   revision). Distribution, real K3 weights, decode.
+- **2026-07-30** — Phase 6 **PASS**: `tt/attn_res_stream.py` (device `block_residual`
+  lifecycle, D15) and `tests/test_tt_attn_res_depth.py` (the 93-layer harness, D14).
+  **74/74** across the three test modules, whole suite in ~41 s.
+  **Command:** `PYTHONPATH=$TT_METAL_HOME python_env/bin/python -m pytest
+  models/experimental/kimi_k3_attn_res/tests/ -q`
+
+  **VALIDATED:** A full 93-layer walk runs on device — 186 chained reads, 8 seals,
+  `S` ramping 0→8 — and holds the relative gate at both `d = 256` (device 0.9999791 vs
+  torch-bf16 0.9999922, worst layer 47: 0.9999545 vs 0.9999724) and `d = 7168` (device
+  0.9999408 vs 0.9999741, worst layer 92: 0.9999105 vs 0.9999501), with output norm ratios
+  1.000531 and 1.003655. The reference and device walks are the *same* walk, parametrized
+  only by `apply_module` and `free`, so the seal schedule cannot silently diverge; it is
+  separately asserted to fire at `{0,12,…,84}` with a monotonic snapshot count. Stream
+  norms stay in regime (14.0→7.8 and 84.9→65.1), so the PCCs are not measuring a decayed
+  or overflowed stream. The max-subtraction in the candidate softmax is gated by a
+  saturated case at `max|score| = 120`; removing the shift makes the output non-finite in
+  both configs, which the test catches.
+
+  **NOT VALIDATED:** Scale defects *at depth* — mutation testing shows the depth gate
+  passes both `ttnn.softmax(dim=1)` and an unshifted softmax; the op-level D13 gate is the
+  detector for that class. Production `T` — still `N = 64` everywhere. Real module
+  outputs: `apply_module` is an elementwise `h ⊙ w`, which exercises the residual
+  bookkeeping but not KDA/MLA/MoE traffic patterns. Memory headroom at production shape —
+  `block_residual` reaches `[1, 8, T, d]` and nothing has measured that against DRAM at
+  `T = 5120`. Any performance claim. Distribution, real K3 weights, decode.
