@@ -80,22 +80,28 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     r = r * f + 1.0f;
     r = r * f + 1.0f;
 
-    // exp(a) = 2^i * exp(f), applied via the result's biased exponent. e is that exponent; the
-    // legal IEEE-754 range is 1..254, and i pushes it outside for |a| beyond ~88. Writing
-    // (i + 127) << 23 directly would wrap into the sign bit there -- Quasar's integer adder is
-    // 32-bit two's complement and SHFT discards the high bits (Quasar/Trinity SFPU MAS), so
-    // a = -100 yields i + 127 = -17 -> 0xF7800000 = -2^112 rather than ~0. Clamp both ends, as
-    // the Blackhole source does; nothing routes large-magnitude inputs away from this path
-    // (calculate_exponential selects purely on EN_32BIT_DEST / APPROXIMATION_MODE).
+    // exp(a) = 2^i * exp(f), applied via the result's biased exponent e. The legal IEEE-754 range
+    // is 1..254, and i pushes e outside it for |a| beyond ~88. Writing (i + 127) << 23 directly
+    // would wrap into the sign bit there -- Quasar's integer adder is 32-bit two's complement and
+    // SHFT discards the high bits (Quasar/Trinity SFPU MAS), so a = -100 yields i + 127 = -17 ->
+    // 0xF7800000 = -2^112 rather than ~0. Nothing routes large-magnitude inputs away from this
+    // path (calculate_exponential selects purely on EN_32BIT_DEST / APPROXIMATION_MODE).
+    //
+    // Seed y with the overflow result unpredicated, as the Blackhole source does, and take the
+    // exponent path only when e is in range. Seeding from a (not from the polynomial, which is
+    // NaN for a = +-Inf because f = j*-ln2 + a is -Inf + Inf) keeps exp(+Inf) = +Inf.
     //
     // NB: the earlier Quasar port bug was elsewhere -- the Blackhole kernel's sign-magnitude
     // rounding (abs(as<vInt>(convert<vSMag16>(x))) + copysgn feeding a two's-complement add),
     // which relies on Blackhole's integer-format behaviour. _sfpu_round_to_nearest_int32_ above
     // replaces that.
+    sfpi::vFloat y = a * std::numeric_limits<float>::infinity();
     sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
-    sfpi::vFloat y = sfpi::setexp(r, e);
-    v_if(e > 254) { y = std::numeric_limits<float>::infinity(); }  // overflow
-    v_elseif(e < 1) { y = 0.0f; }                                  // underflow, incl. subnormals
+    v_if(e < 255) {
+        y = sfpi::setexp(r, e);
+        v_if(e < 1) { y = 0.0f; }  // underflow, incl. subnormals
+        v_endif;
+    }
     v_endif;
     return y;
 }
