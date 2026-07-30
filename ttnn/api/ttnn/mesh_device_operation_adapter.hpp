@@ -31,6 +31,7 @@
 #include "ttnn/metal_v2_artifacts.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "ttnn/operation_concepts.hpp"
+#include "ttnn/program_hash.hpp"
 #include "ttnn/operation.hpp"
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -247,14 +248,20 @@ public:
         return DeviceOperation::create_output_tensors(attrs, tensor_args);
     }
 
+    static_assert(
+        !(HasSpecProgramFactory<DeviceOperation> && HasLegacyProgramHash<DeviceOperation>),
+        "A Metal 2.0 spec-path operation must not define compute_program_hash(attrs, tensor_args). Express the "
+        "cache key as tensor_args_relaxations() and attributes_excluded_from_key instead, or drop the custom "
+        "hash and let the framework reflect.");
+    static_assert(
+        !(HasLegacyProgramHash<DeviceOperation> &&
+          (HasExcludedAttributes<operation_attributes_t> || HasTensorArgsRelaxations<DeviceOperation>)),
+        "An operation must not define both compute_program_hash and the declarative keying that supersedes it -- "
+        "only compute_program_hash would be used.");
+
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            return DeviceOperation::compute_program_hash(attrs, tensor_args);
-        } else {
-            return ttsl::hash::hash_objects_with_default_seed(
-                ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
-        }
+        return detail::compute_op_hash<DeviceOperation>(attrs, tensor_args);
     }
 
     // An adapter for creating a factory that abides to `MeshWorkloadFactoryConcept` out of `ProgramFactoryConcept`
@@ -977,14 +984,7 @@ public:
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        ttsl::hash::hash_t hash;
-
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            hash = DeviceOperation::compute_program_hash(attrs, tensor_args);
-        } else {
-            hash =
-                ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
-        }
+        ttsl::hash::hash_t hash = detail::compute_op_hash<DeviceOperation>(attrs, tensor_args);
 
         // Combine with the mesh coordinates the workload is targeting.
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
@@ -999,18 +999,18 @@ public:
     //
     // The key is prefixed with op_type_name (the DeviceOperation's type name) so distinct ops can
     // never alias on a hash collision.
-    // For ops with a custom compute_program_hash we can't infer which fields it keyed on (it may
-    // deliberately exclude some, e.g. an RNG seed), so we return only the op-identity prefix --
-    // opting that op out of attribute-level collision resolution. The default reflection-hash
-    // path is mirrored exactly.
+    // Op-declared keying excludes fields we can't enumerate here, so those ops get only the
+    // op-identity prefix. The default reflection-hash path is mirrored exactly.
     static std::string compute_mesh_workload_canonical_key(
         [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
         std::string_view op_type_name,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
         std::string key{op_type_name};
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            return key;  // custom hash -> opt out beyond the op-identity prefix
+        if constexpr (
+            HasLegacyProgramHash<DeviceOperation> || HasExcludedAttributes<operation_attributes_t> ||
+            HasTensorArgsRelaxations<DeviceOperation>) {
+            return key;  // op-declared key -> opt out beyond the op-identity prefix
         } else {
             key += ttsl::hash::canonical_key(attrs, tensor_args);
             for (const auto& coord :

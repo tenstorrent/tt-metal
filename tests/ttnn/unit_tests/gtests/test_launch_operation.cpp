@@ -201,6 +201,178 @@ static_assert(!device_operation::SupportsPerCoreAllocation<per_core_opt_in_test:
 static_assert(device_operation::SupportsPerCoreAllocation<per_core_opt_in_test::OptedIn>);
 static_assert(!device_operation::SupportsPerCoreAllocation<per_core_opt_in_test::OptedOut>);
 
+// Program-cache keying hooks: which half of the key each hook moves, and that a relaxation loosens a
+// TensorSpec comparison without letting two tensor_args layouts share a key.
+namespace keying_hooks_test {
+
+using tt::tt_metal::experimental::TensorSpecRelaxations;
+using ::ttnn::device_operation::detail::compute_op_hash;
+
+struct Attributes {
+    uint32_t knob = 0;
+    uint32_t seed = 0;
+};
+
+struct Inputs {
+    Tensor input;
+    std::optional<Tensor> first_optional;
+    std::optional<Tensor> second_optional;
+};
+
+ttsl::SmallVector<TensorSpecRelaxations> strict_for_each_tensor(
+    const Inputs& tensor_args, TensorSpecRelaxations input) {
+    ttsl::SmallVector<TensorSpecRelaxations> relaxations{input};
+    if (tensor_args.first_optional.has_value()) {
+        relaxations.emplace_back();
+    }
+    if (tensor_args.second_optional.has_value()) {
+        relaxations.emplace_back();
+    }
+    return relaxations;
+}
+
+struct DefaultKeyedOp {
+    using operation_attributes_t = Attributes;
+    using tensor_args_t = Inputs;
+};
+
+struct PaddedShapeOnlyOp {
+    using operation_attributes_t = Attributes;
+    using tensor_args_t = Inputs;
+    static ttsl::SmallVector<TensorSpecRelaxations> tensor_args_relaxations(const Inputs& tensor_args) {
+        return strict_for_each_tensor(tensor_args, TensorSpecRelaxations{.match_padded_shape_only = true});
+    }
+};
+
+// The rand pattern: names every field, declares the one the key ignores.
+struct SeedDroppingAttributes {
+    uint32_t knob = 0;
+    uint32_t seed = 0;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("knob", "seed");
+    auto attribute_values() const { return std::forward_as_tuple(knob, seed); }
+    static constexpr auto attributes_excluded_from_key = std::forward_as_tuple("seed");
+};
+
+struct SeedDroppingOp {
+    using operation_attributes_t = SeedDroppingAttributes;
+    using tensor_args_t = Inputs;
+};
+
+struct MiscountingOp {
+    using operation_attributes_t = Attributes;
+    using tensor_args_t = Inputs;
+    static ttsl::SmallVector<TensorSpecRelaxations> tensor_args_relaxations(const Inputs&) { return {}; }
+};
+
+static_assert(!device_operation::HasTensorArgsRelaxations<DefaultKeyedOp>);
+static_assert(device_operation::HasTensorArgsRelaxations<PaddedShapeOnlyOp>);
+static_assert(device_operation::HasExcludedAttributes<SeedDroppingAttributes>);
+static_assert(device_operation::attributes_fully_declared<SeedDroppingAttributes>());
+static_assert(!device_operation::HasTensorArgsRelaxations<SeedDroppingOp>);
+static_assert(!device_operation::HasLegacyProgramHash<SeedDroppingOp>);
+
+// The adapter static_asserts on "spec factory AND legacy hash"; pin that conjunction as detectable
+// (the adapter is deliberately not instantiated for the bad one).
+struct SpecFactoryOp {
+    using operation_attributes_t = Attributes;
+    using tensor_args_t = Inputs;
+    using program_factory_t = std::variant<ProgramSpecFactory>;
+};
+struct SpecFactoryOpWithLegacyHash {
+    using operation_attributes_t = Attributes;
+    using tensor_args_t = Inputs;
+    using program_factory_t = std::variant<ProgramSpecFactory>;
+    static ttsl::hash::hash_t compute_program_hash(const Attributes&, const Inputs&) { return 0; }
+};
+struct LegacyFactoryOpWithLegacyHash {
+    using operation_attributes_t = Attributes;
+    using tensor_args_t = Inputs;
+    using program_factory_t = std::variant<NewInfraProgramFactory>;
+    static ttsl::hash::hash_t compute_program_hash(const Attributes&, const Inputs&) { return 0; }
+};
+
+static_assert(device_operation::HasSpecProgramFactory<SpecFactoryOp>);
+static_assert(!device_operation::HasLegacyProgramHash<SpecFactoryOp>);
+static_assert(device_operation::HasSpecProgramFactory<SpecFactoryOpWithLegacyHash>);
+static_assert(device_operation::HasLegacyProgramHash<SpecFactoryOpWithLegacyHash>);
+static_assert(!device_operation::HasSpecProgramFactory<LegacyFactoryOpWithLegacyHash>);
+static_assert(device_operation::HasLegacyProgramHash<LegacyFactoryOpWithLegacyHash>);
+static_assert(!device_operation::HasSpecProgramFactory<DefaultKeyedOp>);
+
+Tensor make_host_tensor(const ttnn::Shape& logical_shape, Layout layout = Layout::TILE) {
+    const tt::tt_metal::TensorSpec spec(
+        logical_shape, tt::tt_metal::TensorLayout(DataType::FLOAT32, layout, MemoryConfig{}));
+    return Tensor::from_vector(std::vector<float>(logical_shape.volume()), spec);
+}
+
+// Same padded_shape (TILE rounds both to 32x32), different logical_shape.
+Tensor make_logical_30x32() { return make_host_tensor(ttnn::Shape{1, 1, 30, 32}); }
+Tensor make_logical_32x32() { return make_host_tensor(ttnn::Shape{1, 1, 32, 32}); }
+
+TEST(ProgramHashTest, DefaultKeysOnEverything) {
+    const Inputs tensor_args{.input = make_logical_30x32()};
+    const Inputs other_logical_shape{.input = make_logical_32x32()};
+
+    EXPECT_NE(
+        compute_op_hash<DefaultKeyedOp>(Attributes{.knob = 1, .seed = 1}, tensor_args),
+        compute_op_hash<DefaultKeyedOp>(Attributes{.knob = 1, .seed = 2}, tensor_args));
+    EXPECT_NE(
+        compute_op_hash<DefaultKeyedOp>(Attributes{.knob = 1, .seed = 1}, tensor_args),
+        compute_op_hash<DefaultKeyedOp>(Attributes{.knob = 1, .seed = 1}, other_logical_shape));
+}
+
+TEST(ProgramHashTest, AttributesHashDropsSeedButKeepsTheRest) {
+    const Inputs tensor_args{.input = make_logical_30x32()};
+
+    EXPECT_EQ(
+        compute_op_hash<SeedDroppingOp>(SeedDroppingAttributes{.knob = 1, .seed = 1}, tensor_args),
+        compute_op_hash<SeedDroppingOp>(SeedDroppingAttributes{.knob = 1, .seed = 2}, tensor_args));
+    EXPECT_NE(
+        compute_op_hash<SeedDroppingOp>(SeedDroppingAttributes{.knob = 1, .seed = 1}, tensor_args),
+        compute_op_hash<SeedDroppingOp>(SeedDroppingAttributes{.knob = 2, .seed = 1}, tensor_args));
+    EXPECT_NE(
+        compute_op_hash<SeedDroppingOp>(SeedDroppingAttributes{}, tensor_args),
+        compute_op_hash<SeedDroppingOp>(SeedDroppingAttributes{}, Inputs{.input = make_logical_32x32()}));
+}
+
+TEST(ProgramHashTest, PaddedShapeOnlyRelaxationSharesAKey) {
+    const Attributes attrs{};
+    const Inputs logical_30{.input = make_logical_30x32()};
+    const Inputs logical_32{.input = make_logical_32x32()};
+
+    EXPECT_NE(compute_op_hash<DefaultKeyedOp>(attrs, logical_30), compute_op_hash<DefaultKeyedOp>(attrs, logical_32));
+    EXPECT_EQ(
+        compute_op_hash<PaddedShapeOnlyOp>(attrs, logical_30), compute_op_hash<PaddedShapeOnlyOp>(attrs, logical_32));
+
+    // Relaxing logical_shape relaxes nothing else.
+    const Inputs row_major{.input = make_host_tensor(ttnn::Shape{1, 1, 32, 32}, Layout::ROW_MAJOR)};
+    EXPECT_NE(
+        compute_op_hash<PaddedShapeOnlyOp>(attrs, logical_32), compute_op_hash<PaddedShapeOnlyOp>(attrs, row_major));
+}
+
+TEST(ProgramHashTest, RelaxationPreservesTensorArgsStructure) {
+    const Attributes attrs{};
+    const Tensor tensor = make_logical_32x32();
+
+    // Same tensor and count, different slot -> different program, so different key.
+    const Inputs in_first_slot{.input = tensor, .first_optional = tensor};
+    const Inputs in_second_slot{.input = tensor, .second_optional = tensor};
+    EXPECT_NE(
+        compute_op_hash<PaddedShapeOnlyOp>(attrs, in_first_slot),
+        compute_op_hash<PaddedShapeOnlyOp>(attrs, in_second_slot));
+
+    EXPECT_NE(
+        compute_op_hash<PaddedShapeOnlyOp>(attrs, Inputs{.input = tensor}),
+        compute_op_hash<PaddedShapeOnlyOp>(attrs, in_first_slot));
+}
+
+TEST(ProgramHashTest, MiscountedRelaxationsAreRejected) {
+    EXPECT_ANY_THROW(compute_op_hash<MiscountingOp>(Attributes{}, Inputs{.input = make_logical_32x32()}));
+}
+
+}  // namespace keying_hooks_test
+
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
     using ::ttnn::operations::examples::ExampleDeviceOperation;
     EXPECT_EQ(

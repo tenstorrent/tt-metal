@@ -15,8 +15,10 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
 #include <cstdint>
+#include <tt_stl/small_vector.hpp>
 
 #include "ttnn/distributed/types.hpp"
 
@@ -182,6 +184,17 @@ consteval bool all_factories_valid(std::index_sequence<Is...>) {
           CustomProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
+
+// True iff at least one alternative builds a Metal 2.0 ProgramSpec. "Any", not "all": once one
+// factory of a multi-factory operation is ported, the operation's cache key is the spec path's
+// concern, so the keying restriction applies to the whole operation.
+template <typename Variant, std::size_t... Is>
+consteval bool any_spec_factory(std::index_sequence<Is...>) {
+    return (
+        (ProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>> ||
+         CustomProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) ||
+        ...);
+}
 }  // namespace detail
 
 template <typename Variant>
@@ -207,16 +220,82 @@ concept DeviceOperationConcept =
     (HasDirectDescriptor<device_operation_t> ||
      (HasProgramFactoryType<device_operation_t> && AllFactoriesValid<typename device_operation_t::program_factory_t>));
 
+// True iff any of the operation's program factories builds a Metal 2.0 ProgramSpec.
+template <typename device_operation_t>
+concept HasSpecProgramFactory =
+    HasProgramFactoryType<device_operation_t> &&
+    requires { std::variant_size_v<typename device_operation_t::program_factory_t>; } &&
+    detail::any_spec_factory<typename device_operation_t::program_factory_t>(
+        std::make_index_sequence<std::variant_size_v<typename device_operation_t::program_factory_t>>{});
+
+// A Metal 2.0 operation states its cache key in exactly two declarative places, and nowhere else:
+//   tensor half     -- tensor_args_relaxations(), one relaxation per Tensor reached in tensor_args
+//                      (engaged optionals only), so keying and Metal 2.0 validation stay in step.
+//   non-tensor half -- attribute_names lists every field; attributes_excluded_from_key names the ones
+//                      the key ignores. Key = names minus excluded, folded by the framework.
+template <typename device_operation_t>
+concept HasTensorArgsRelaxations = requires(const typename device_operation_t::tensor_args_t& tensor_args) {
+    {
+        device_operation_t::tensor_args_relaxations(tensor_args)
+    } -> std::convertible_to<ttsl::SmallVector<tt::tt_metal::experimental::TensorSpecRelaxations>>;
+};
+
+template <typename T>
+concept HasAttributeNames = requires { T::attribute_names; };
+
+template <typename T>
+concept HasExcludedAttributes = requires { T::attributes_excluded_from_key; };
+
+template <typename attributes_t>
+consteval std::size_t excluded_attribute_count() {
+    if constexpr (HasExcludedAttributes<attributes_t>) {
+        return std::tuple_size_v<std::decay_t<decltype(attributes_t::attributes_excluded_from_key)>>;
+    } else {
+        return 0;
+    }
+}
+
+// Every field is accounted for: named in the identity tuple, or named as excluded. Adding a field to a
+// spec-path attributes struct therefore breaks the build until someone decides which it is, rather than
+// silently dropping out of the cache key.
+template <typename attributes_t>
+consteval bool attributes_fully_declared() {
+    if constexpr (!HasAttributeNames<attributes_t> || !ttsl::concepts::Reflectable<attributes_t>) {
+        return true;  // no tuple at all -> full reflection already keys every field
+    } else {
+        return std::tuple_size_v<decltype(attributes_t::attribute_names)> + excluded_attribute_count<attributes_t>() ==
+               reflect::size<attributes_t>();
+    }
+}
+
+// Is attribute_names[I] listed in attributes_excluded_from_key? Resolved at compile time, so the fold in
+// program_hash.hpp skips excluded fields with no runtime name comparison.
+template <typename attributes_t, std::size_t I>
+consteval bool attribute_is_excluded() {
+    if constexpr (!HasExcludedAttributes<attributes_t>) {
+        return false;
+    } else {
+        return []<std::size_t... Es>(std::index_sequence<Es...>) {
+            constexpr std::string_view name{std::get<I>(attributes_t::attribute_names)};
+            return ((name == std::string_view{std::get<Es>(attributes_t::attributes_excluded_from_key)}) || ...);
+        }(std::make_index_sequence<excluded_attribute_count<attributes_t>()>{});
+    }
+}
+
+// The legacy freeform hash hook: one method keyed on both halves at once. Superseded by the two
+// hooks above, and forbidden on the spec path.
+template <typename device_operation_t>
+concept HasLegacyProgramHash = requires(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {
+        device_operation_t::compute_program_hash(operation_attributes, tensor_args)
+    } -> std::convertible_to<std::uint64_t>;
+};
+
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =
-    DeviceOperationConcept<device_operation_t> &&
-    requires(
-        const typename device_operation_t::operation_attributes_t& operation_attributes,
-        const typename device_operation_t::tensor_args_t& tensor_args) {
-        {
-            device_operation_t::compute_program_hash(operation_attributes, tensor_args)
-        } -> std::convertible_to<std::uint64_t>;
-    };
+    DeviceOperationConcept<device_operation_t> && HasLegacyProgramHash<device_operation_t>;
 
 template <typename device_operation_t>
 concept HasSkipLaunch = requires(
