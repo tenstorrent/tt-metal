@@ -186,8 +186,9 @@ def test_gtest_disabled_tests_do_not_get_epoch_timestamp():
         assert test.test_start_ts != workflows.GTEST_NOT_RUN_TIMESTAMP
         assert test.test_end_ts != workflows.GTEST_NOT_RUN_TIMESTAMP
 
-    # The two not-run (disabled) suites fall back to the run-level timestamp
-    disabled_tests = [t for t in tests if t.test_case_name in ("L1Usage", "SnapshotFeature")]
+    # The two not-run (disabled) suites fall back to the run-level timestamp. Note DISABLED_ can
+    # sit on the testcase name (DISABLED_L1Usage) or on the fixture/suite (DISABLED_MemoryUtilsTest).
+    disabled_tests = [t for t in tests if t.test_case_name in ("DISABLED_L1Usage", "SnapshotFeature")]
     assert len(disabled_tests) == 2
     for test in disabled_tests:
         assert test.test_start_ts == run_timestamp
