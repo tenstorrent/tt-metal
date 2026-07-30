@@ -44,21 +44,53 @@ constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = 9;
 // 32 SFPU vectors cover one 32-bit DEST tile at addresses 0,2,...,62 (same footprint as
 // typecast VectorMode::RC with ITERATIONS=8). Explicit offsets + ADDR_MOD_3 (incr=0) avoid
 // touching ADDR_MOD_6, which topk uses for alt-stores (incr=32).
-constexpr int TOPK_UINT16_ITERS_PER_TILE = 32;
-
 // Wormhole: with addr_mod_base=1, insn ADDR_MOD_3 → phys ADDR_MOD_7 (SFPU invariant, incr=0).
-inline void topk_uint16_strip_tile(std::uint32_t tile_index, std::uint32_t store_mode)
+// tile_index / store_mode are template parameters so the leaf uses TTI_SFPLOAD/TTI_SFPSTORE
+// (ISA-immediate encoding); no RISC-V setup for the operand registers per vector.
+#define TOPK_UINT16_STRIP_VEC(base, off, store_mode)                                  \
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, (base) + (off)); \
+    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);                                  \
+    TTI_SFPSTORE(p_sfpu::LREG0, store_mode, ADDR_MOD_3, (base) + (off))
+
+template <std::uint32_t tile_index, std::uint32_t store_mode>
+inline void topk_uint16_strip_tile()
 {
-    const std::uint32_t base = tile_index * 64;
-#pragma GCC unroll 0
-    for (int i = 0; i < TOPK_UINT16_ITERS_PER_TILE; i++)
-    {
-        const std::uint32_t addr = base + (i << 1);
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, addr);
-        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-        TT_SFPSTORE(p_sfpu::LREG0, store_mode, ADDR_MOD_3, addr);
-    }
+    constexpr std::uint32_t base = tile_index * 64;
+    TOPK_UINT16_STRIP_VEC(base, 0, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 2, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 4, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 6, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 8, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 10, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 12, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 14, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 16, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 18, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 20, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 22, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 24, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 26, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 28, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 30, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 32, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 34, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 36, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 38, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 40, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 42, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 44, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 46, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 48, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 50, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 52, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 54, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 56, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 58, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 60, store_mode);
+    TOPK_UINT16_STRIP_VEC(base, 62, store_mode);
 }
+
+#undef TOPK_UINT16_STRIP_VEC
 
 // Called from inside topk (addr_mod_base already 1).
 inline void topk_uint16_clear_value_tiles_high_bits()
@@ -68,8 +100,8 @@ inline void topk_uint16_clear_value_tiles_high_bits()
         sfpi::vConstIntPrgm0 = 0x0000FFFF;
         set_dst_write_addr(0);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        topk_uint16_strip_tile(0, static_cast<std::uint32_t>(InstrModLoadStore::INT32));
-        topk_uint16_strip_tile(1, static_cast<std::uint32_t>(InstrModLoadStore::INT32));
+        topk_uint16_strip_tile<0, static_cast<std::uint32_t>(InstrModLoadStore::INT32)>();
+        topk_uint16_strip_tile<1, static_cast<std::uint32_t>(InstrModLoadStore::INT32)>();
         set_dst_write_addr(0);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
@@ -85,7 +117,15 @@ inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t dst_tile_index
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
         set_dst_write_addr(0);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        topk_uint16_strip_tile(dst_tile_index, TOPK_SFPSTORE_MODE_PACK_UINT16);
+        if (dst_tile_index == 0)
+        {
+            topk_uint16_strip_tile<0, TOPK_SFPSTORE_MODE_PACK_UINT16>();
+        }
+        else
+        {
+            LLK_ASSERT(dst_tile_index == 1, "prepare_value_tile_for_pack expects dst tile 0 or 1");
+            topk_uint16_strip_tile<1, TOPK_SFPSTORE_MODE_PACK_UINT16>();
+        }
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
         TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 0);
         set_dst_write_addr(0);
