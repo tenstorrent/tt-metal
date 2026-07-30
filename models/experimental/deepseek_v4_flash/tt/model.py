@@ -60,7 +60,7 @@ def _env_pipeline_group_size() -> int:
     """``DEEPSEEK_V4_PIPELINE_GROUP_SIZE``: devices per pipeline group (see
     :func:`plan_layer_placement`). Unset (or <= 0) means "one group spanning every
     device", i.e. plain round-robin over the whole mesh."""
-    raw = os.environ.get("DEEPSEEK_V4_PIPELINE_GROUP_SIZE", "")
+    raw = os.environ.get("DEEPSEEK_V4_PIPELINE_GROUP_SIZE", "2")
     try:
         pgs = int(raw)
     except ValueError:
@@ -1531,7 +1531,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         ttnn.experimental.send_async_d2h(ttnn.reshape(out_rm, list(self._out_plan)), self._out_socket)
 
     def read_decoded_output(self) -> torch.Tensor:
-        """Read the oldest in-flight step output off the D2H socket, as ``[1, 1, N]``.
+        """Stage 3 of a step: read its output off the D2H socket, as ``[1, 1, N]``.
+
+        Returns the oldest in-flight step's output.
 
         Blocks until the device has pushed every page of that step, so this is where a
         traced step synchronizes. Outputs are read in the order they were dispatched,
@@ -1688,7 +1690,37 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # replay below.
         if not self._traced_captured:
             self._capture_traces(token_id, pos)
+        self.write_step_packet(token_id, pos)
+        self.replay_traced(pos)
+
+    # A step's three host-side stages, each split out so a pipelined caller can drive
+    # them independently — they touch disjoint state, so they can run concurrently (on
+    # separate threads) for different steps: push step n+1's packet while step n's
+    # traces replay and step n-1's output is read back.
+    def write_step_packet(self, token_id: int, pos: int) -> None:
+        """Stage 1 of a step: push its input packet to the device.
+
+        Talks only to the H2D socket (a direct PCIe write, no command queue work), and
+        may run ahead of the replays by as much as the socket FIFO holds.
+        """
         self._write_packet(token_id, pos)
+
+    def replay_traced(self, pos: int) -> None:
+        """Stage 2 of a step: replay the traces for a step at ``pos``.
+
+        The only stage that touches the command queue (and, in paged mode, the session
+        state), so a pipelined caller must keep it on a single thread. Expects the
+        step's packet from :meth:`write_step_packet` — pushed before or after this call,
+        since the trace's receive just waits for it — and its output to be picked up by
+        :meth:`read_decoded_output`.
+
+        Requires the traces to already be captured, which a pipelined caller cannot do
+        mid-flight: dispatch one blocking :meth:`decode_traced` first.
+        """
+        if not self._traced_captured:
+            raise RuntimeError("call decode_traced() once to capture the traces before replay_traced()")
+        if self._paged is not None:
+            self.ensure_session_capacity(pos)
         # Pick the variant whose baked-in compressor-pool schedule and SDPA mode match
         # this position (see :meth:`_capture_traces`).
         variant = self._variant_key(pos)
