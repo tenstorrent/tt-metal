@@ -323,6 +323,13 @@ firing-status contradiction: [early halt](../optimize_perf/early_halt.md).
 
 ## Registration, fork patches, install
 
+> **Migrating off the fork:** the serving work is being moved to the standalone
+> `tenstorrent/vllm-tt-plugin` on upstream vLLM 0.24.0. The port, the four 0.24 API breaks it
+> exposed, and a paired device smoke are in
+> [`plugin_migration_024.md`](plugin_migration_024.md). Read its Break 5 before comparing any
+> plugin GPQA score against a fork number.
+
+
 HF arch `DiffusionGemmaForBlockDiffusion` → the plugin auto-prefixes `TT` →
 `TTDiffusionGemmaForBlockDiffusion`, registered via `_register_model_if_missing` in
 `register_tt_models()`. The fork is not vendored in tt-metal, so the exact edit is saved as
