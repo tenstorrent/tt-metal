@@ -60,7 +60,7 @@ Recovery sequence:
 3. Run the bounded list/reset/list sequence above.
 4. If listing is incomplete after the first successful reset, run the bounded reset sequence once more.
 5. If devices are visible, clear stale TT UMD locks only after confirming no live process from this run owns the devices. Then run the mesh smoke.
-6. If reset, listing, or mesh smoke still fails, ask the monitor/operator for a physical Docker-host reboot and reservation re-acquire. If the current agent explicitly owns experiment monitoring or machine recovery, reboot the host directly and repeat list/reset/list plus mesh smoke after reconnecting.
+6. If reset, listing, or mesh smoke still fails, ask the monitor/operator for a physical Docker-host reboot and reservation re-acquire. **Never reboot a shared host without explicit user/operator approval** — owning experiment monitoring is not approval, because the reboot takes the box away from everyone else on it. After the approved reboot, repeat list/reset/list plus mesh smoke after reconnecting.
 7. Resume the same stage from preserved state by re-running the relevant stage slash-command under `commands/` (each stage is a `/dg-NN-...` command); do not restart completed earlier stages.
 8. Record this as infrastructure recovery, not a model correctness or performance result.
 
@@ -95,7 +95,7 @@ python -m pip install -r tools/triage/requirements.txt
 
 Read `tools/triage/tt-triage.md` for command details and available scripts. Keep the triage output with the stage evidence.
 
-After capturing triage, if ordinary log reading does not explain the failure, spawn a fresh subagent (via the Task/Agent tool) to investigate with a clean context. Give it the failing command, console log, `tt-triage.txt`, current stage work log, and relevant source paths. Do not declare a stage blocked for a hang until that subagent investigation has tried and failed, unless the remaining blocker is unavailable hardware or operator-only recovery.
+After capturing triage, if ordinary log reading does not explain the failure, spawn a fresh subagent (via the Task/Agent tool) to investigate with a clean context. Give it the failing command, console log, `tt-triage.txt`, current stage work log, and relevant source paths. If subagents are unavailable, perform the same read-only investigation serially and record that fallback. Do not declare a stage blocked for a hang until that investigation has tried and failed, unless the remaining blocker is unavailable hardware or operator-only recovery.
 
 ## Evidence To Record
 

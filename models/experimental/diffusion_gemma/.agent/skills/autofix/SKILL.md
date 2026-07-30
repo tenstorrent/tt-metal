@@ -15,7 +15,7 @@ Use this skill when a hard bug needs more than ordinary local debugging. This is
 
 ## Inputs
 
-Start from an existing `AUTOTRIAGE.md` or `AUTODEBUG.md` report when one is present and relevant to the current failure. If there is no report, or it clearly describes an older state or a different symptom, create a fresh report with `autotriage` for hang/tt-triage cases or `autodebug` otherwise.
+Start from an existing `AUTOTRIAGE.md` or `AUTODEBUG.md` report in `models/experimental/diffusion_gemma/doc/autoreports/` when one is present and relevant to the current failure. If there is no report, or it clearly describes an older state or a different symptom, create a fresh report with `autotriage` for hang/tt-triage cases or `autodebug` otherwise.
 
 For a hanging process, device stall, watcher/LLK assert, dispatch timeout, CCL/fabric wait, or any failure with tt-triage output, start with `autotriage` before `autodebug`. If the process is still alive and no triage log exists, try to capture tt-triage evidence with `autotriage` first, then use that diagnosis as the starting report. If `autotriage` cannot capture evidence or its report does not explain the issue, fall back to `autodebug` and continue the normal repair loop.
 
@@ -25,9 +25,9 @@ Also read the current failing command, logs, work log, tests, reports, and `git 
 
 Do the diagnosis and hypothesis experiments with forked subagents when the environment supports them. The main agent should coordinate, review evidence, and integrate only proven fixes; it should not carry the full run/fix/retest transcript in its own context.
 
-Use an xhigh forked subagent for the initial `autotriage` pass when a hang or tt-triage case needs a fresh report. Give it the current symptom, failing command, triage logs or permission to capture triage from the live hang, relevant source focus paths, and explicit instruction to produce `AUTOTRIAGE.md` before editing implementation code.
+Use an xhigh forked subagent for the initial `autotriage` pass when a hang or tt-triage case needs a fresh report. Give it the current symptom, failing command, triage logs or permission to capture triage from the live hang, relevant source focus paths, and explicit instruction to produce `models/experimental/diffusion_gemma/doc/autoreports/AUTOTRIAGE.md` before editing implementation code.
 
-Use an xhigh forked subagent for the initial `autodebug` pass when a fresh source-only report is needed. Give it the current symptom, failing command, relevant logs, and explicit instruction to produce `AUTODEBUG.md` without editing implementation code.
+Use an xhigh forked subagent for the initial `autodebug` pass when a fresh source-only report is needed. Give it the current symptom, failing command, relevant logs, and explicit instruction to produce `models/experimental/diffusion_gemma/doc/autoreports/AUTODEBUG.md` without editing implementation code.
 
 Then use one forked subagent per proposed bug or tightly related hypothesis group. Give each subagent:
 
@@ -84,7 +84,7 @@ Stop only when the bug is fixed with evidence, the remaining blocker is outside 
 
 ## Reporting
 
-If this skill is used inside a bringup stage, update that stage's work log. For standalone use, write `AUTOFIX.md`.
+If this skill is used inside a bringup stage, update that stage's work log. For standalone use, write `models/experimental/diffusion_gemma/doc/autoreports/AUTOFIX.md` (never the repo root).
 
 Record:
 

@@ -59,9 +59,11 @@ perform the review directly. Do not spawn another reviewer. In this mode your
 verdict can be `clean-pass` or `more-work-needed`.
 
 In main-agent mode, if no subagent tool is available, do a serial review only as
-a temporary fallback and mark the result `not-independent`. This means the
-review did not satisfy the fresh-subagent requirement. It is not a reviewer
-verdict and never counts as a pass for autonomous bringup.
+a temporary fallback and mark the result `not-independent`
+(`review_mode: serial`). This means the review did not satisfy the
+fresh-subagent requirement. It is **not** a reviewer verdict and never counts as
+a pass for autonomous bringup — it cannot return `clean-pass` and cannot unlock
+commit+push. Never pretend the serial review is independent.
 
 The reviewer is read-only unless explicitly asked to write a report file. It may
 run local read-only commands and small analysis scripts over artifacts. It must
@@ -377,11 +379,12 @@ Verdict: clean-pass | more-work-needed
 - ...
 ```
 
-Only `clean-pass` with no required work satisfies this skill.
-
-If the main agent could not obtain an independent review, report
-`not-independent` as a fallback status outside the reviewer verdict. Do not use
-it to complete the stage.
+Only `clean-pass` with no required work satisfies this skill, and only an
+independent subagent review can produce one. Record
+`review_mode: independent-subagent` or `review_mode: serial` in
+`Scope Inspected`. If the main agent could not obtain an independent review,
+report `not-independent` as a fallback status outside the reviewer verdict. Do
+not use it to complete the stage.
 
 ## Main-Agent Follow-Up
 

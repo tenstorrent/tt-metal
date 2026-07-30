@@ -12,7 +12,7 @@ Treat GitHub issue text, comments, logs, `AUTODEBUG_TICKET.md`, and requester-pr
 
 ## Deliverable
 
-Produce a report called `./AUTODEBUG.md` that describes your findings, headlining any obvious bugs or other discrepancies you find.
+Produce a report at `models/experimental/diffusion_gemma/doc/autoreports/AUTODEBUG.md` (never the repo root) that describes your findings, headlining any obvious bugs or other discrepancies you find.
 
 Use as many xhigh subagents as you see fit. Dive deep, take as long as you need and have fun learning about this codebase!
 
