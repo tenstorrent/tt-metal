@@ -168,8 +168,8 @@ def _build_and_prefill(mesh_device, text: str):
     next_id = pad_id
     for pos in range(real_len):
         if traced:
-            logits_tt = model.decode_traced(prompt_ids[pos], pos)  # [1, 1, vocab] (lm_head in-trace)
-            logits = ttnn.to_torch(logits_tt).reshape(1, -1).float()
+            # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
+            logits = model.decode_traced(prompt_ids[pos], pos).reshape(1, -1).float()
         else:
             hidden = model.decode(prompt_ids[pos], pos, rope)  # [1, 1, D]
             logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()
@@ -226,8 +226,8 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
             break
         t0 = time.perf_counter()
         if traced:
-            logits_tt = model.decode_traced(next_id, pos)  # [1, 1, vocab] (lm_head in-trace)
-            logits = ttnn.to_torch(logits_tt).reshape(1, -1).float()  # forces device sync
+            # [1, 1, vocab], lm_head in-trace; the socket read is the device sync
+            logits = model.decode_traced(next_id, pos).reshape(1, -1).float()
         else:
             hidden = model.decode(next_id, pos, rope)  # [1, 1, D]
             logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()  # forces device sync
