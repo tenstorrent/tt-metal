@@ -26,7 +26,10 @@ reference audio, via ``tests/test_speaker_encoder_profile.py``):
   directly (``conv2 -> bn2``, ``downsample``) it folds into that conv's weight and bias and
   costs nothing. Only ``bn1`` cannot fold — coqui's block order puts a relu between conv1
   and bn1 — so the relu rides on conv1 as a fused activation and bn1 becomes a diagonal
-  matmul (:func:`_scale_channels`), as does the SE's channel scaling.
+  matmul (:func:`_scale_channels`). The SE's channel scaling is one too, but only on the tall
+  early stages — past ~200 tile rows a broadcast multiply is cheaper, and the SE runs after
+  its stage's downsampling, so it crosses over where the other per-channel affines do not.
+  See :meth:`TtSELayer.forward`.
 * **A stage stops being sharded once its shard is mostly tile padding**
   (:func:`_stage_memory_config`), which is what the narrowest stage was paying for.
 * **bfloat16 throughout; fp32 only for what leaves.** The body is bandwidth-bound, so the
@@ -50,7 +53,7 @@ reference audio, via ``tests/test_speaker_encoder_profile.py``):
   ops. See :func:`_matmul_1d`, :func:`_se_core_grid`, and
   ``tests/test_speaker_encoder_matmul_sweep.py``, which measures the alternatives per site.
 
-Together: 26.9 ms -> 1.82 ms per pass by the profiler's summed DEVICE FW DURATION, or 2.00 ms
+Together: 26.9 ms -> 1.79 ms per pass by the profiler's summed DEVICE FW DURATION, or 1.93 ms
 as a replayed trace, both at mel_len=801. At PCC 0.9990 against the torch reference (0.9998 on
 a real reference clip; the fp32 implementation this replaces scored 0.9994), and >= 0.9985
 across mel_len 32..1601. The two device-time metrics do not always rank a change the same way —
@@ -79,6 +82,11 @@ BODY_DTYPE = ttnn.bfloat16
 # so the embedding this returns keeps the dtype its consumers were written against.
 TAIL_DTYPE = ttnn.bfloat16
 OUT_DTYPE = ttnn.float32
+# Keep the three ASP tail weights (att_w1, att_w2, fc_w) resident in L1 rather than DRAM --
+# the profiler's "place input 0 in L1" advice on the tail matmuls, which read their *weight*
+# as in0. Worth -0.2% (~4us) and it costs 5.37 MB of permanent residency; see
+# TtResNetSpeakerEncoder.__init__ for the measurement and the reason that is affordable.
+TAIL_WEIGHTS_L1 = True
 # HiFi4, not HiFi2: dropping fidelity costs far more accuracy than it buys time here (the
 # body is bandwidth-bound, not math-bound). Measured end-to-end PCC at mel_len=200 —
 # convs/affines both HiFi2: 0.967, only one of them HiFi4: 0.986-0.991, both HiFi4: 0.998.
@@ -101,6 +109,12 @@ BODY_FIDELITY = ttnn.MathFidelity.HiFi4
 # Height (in tiles) above which :func:`_global_mean` switches to its batched form. Measured
 # crossover is ~50 tiles; 64 keeps the cheaper path on ties.
 _MEAN_BATCH_MIN_TILES = 64
+# Height (in tiles) up to which the SE applies its excitation as a plain broadcast multiply
+# rather than a diagonal matmul -- see :meth:`TtSELayer.forward`. Swept per stage: the
+# broadcast wins at every C at 192 tile rows (by 5.1/4.3/0.4/0.9us at C=32/64/128/256) and
+# has lost at every C by 384, with the per-C crossover between 200 and 380. 192 is the
+# largest height that is on the right side of all four.
+_SE_BROADCAST_MAX_TILES = 192
 RELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 SIGMOID = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
 LOG = ttnn.UnaryWithParam(ttnn.UnaryOpType.LOG)
@@ -207,6 +221,12 @@ def _scale_channels(x, diag, compute_config, core_grid, bias=None):
     for the same-shape (non-broadcast) residual add. As a matmul the ``[C, C]`` weight is
     read once per core instead — 6.6us including the bias — and it is bit-identical
     (PCC 1.0), the off-diagonal terms being exact zeros.
+
+    Note **on the first stage**. That 43us is the broadcast at its worst, 1602 tile rows
+    tall; the cost is roughly linear in height and the matmul's is flat, so the two cross at
+    ~200-380 tile rows and below that the broadcast wins. Every caller here is above it —
+    ``bn1`` and the folded BatchNorms run at full stage height — except the SE scaling, which
+    runs after the same stage's downsampling and so switches; see :meth:`TtSELayer.forward`.
 
     ``core_grid`` is what gets the bias *fused*: ttnn.linear post-processes a bias as a
     separate (43us broadcast) add whenever it has to guess a program config for a non-DRAM
@@ -404,10 +424,8 @@ def _se_core_grid(out_channels, grid):
 class TtSELayer(LightweightModule):
     """Squeeze-excite: global avg-pool -> Linear(C->C/8) -> relu -> Linear -> sigmoid -> scale.
 
-    ``forward`` returns the excitation already as the ``[C, C]`` **diagonal matrix** the
-    caller multiplies by, because scaling the activation's channels is 6x cheaper as a
-    matmul than as a broadcast multiply (see :func:`_scale_channels`). Building the diagonal
-    is one 2us op on the small ``[C, C]`` tile, and the sigmoid rides on it."""
+    ``forward`` applies the scaling itself (as the torch reference does) because *how* it is
+    applied depends on the activation's height -- see there."""
 
     def __init__(self, device, se):
         super().__init__()
@@ -422,9 +440,32 @@ class TtSELayer(LightweightModule):
         self.grid1 = _se_core_grid(se.fc[0].weight.shape[0], grid)
         self.grid2 = _se_core_grid(channels, grid)
         self.ncores = grid.x * grid.y  # what _global_mean sizes its block count against
+        self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
         self.compute_config = _body_compute_config(device)
 
-    def forward(self, x, hw):  # x: [1, 1, H*W, C] -> diag(sigmoid(excitation)) [1, 1, C, C]
+    def forward(self, x, hw):  # x: [1, 1, H*W, C] -> x with its channels scaled
+        """Two ways to apply the excitation, and which one wins depends on ``hw``.
+
+        As a **broadcast multiply** ``x * sigmoid(y)``, the ``[1, C]`` operand is re-read once
+        per output tile row, so the cost grows with the activation's height: measured
+        5.8us at 32 tile rows, 9.4 at 256, 22.2 at 768 (C=32).
+
+        As a **diagonal matmul** ``x @ diag(sigmoid(y))`` (:func:`_scale_channels`) it is flat
+        at ~12.7us, and flat across *stages* too -- each stage quarters the spatial extent
+        while doubling C, so ``hw * C^2`` is the same at all four and every stage does the
+        same work. It costs one extra op to build the diagonal (``eye * y``, ~3.8us, itself
+        fixed-cost: the same time for C=32's 2 KB matrix as for C=256's 128 KB).
+
+        So the matmul wins on tall activations and loses on short ones, and the model has
+        both: at mel_len=801 the four stages are 1602 / 401 / 100 / 25 tile rows. The
+        docstring on :func:`_scale_channels` recorded the broadcast at 43us against 6.6us,
+        which is true -- of the *first* stage, the tallest, where it is worst by far. On the
+        last two it is the other way round, worth 4.0us at layer3 and 6.4us at layer4 per
+        block, and it drops the diagonal-build op entirely (the sigmoid moves onto the linear
+        below, where it is free -- fusing it onto the broadcast instead costs 0.8-2.9us,
+        presumably re-evaluated per tile row, and a standalone ttnn.sigmoid costs 2.8-5.7us).
+        """
+        broadcast = hw <= _SE_BROADCAST_MAX_TILES * TILE
         y = _global_mean(x, hw, self.ncores)
         y = ttnn.linear(
             y,
@@ -439,17 +480,21 @@ class TtSELayer(LightweightModule):
             y,
             self.w2,
             bias=self.b2,
+            activation="sigmoid" if broadcast else None,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=self.grid2,
             compute_kernel_config=self.compute_config,
         )
-        return ttnn.mul(self.eye, y, input_tensor_b_activations=[SIGMOID], memory_config=ttnn.L1_MEMORY_CONFIG)
+        if broadcast:
+            return ttnn.mul(x, y, memory_config=x.memory_config())
+        diag = ttnn.mul(self.eye, y, input_tensor_b_activations=[SIGMOID], memory_config=ttnn.L1_MEMORY_CONFIG)
+        return _scale_channels(x, diag, self.compute_config, self.core_grid)
 
 
 class TtSEBasicBlock(LightweightModule):
     """conv1 -> relu -> bn1 -> conv2 -> bn2 -> SE -> (+downsample) -> relu. The relus ride on
     the conv / the residual add, bn2 (and the downsample's BN) are folded into their conv's
-    weights, and bn1 and the SE scaling are diagonal matmuls."""
+    weights, bn1 is a diagonal matmul, and the SE applies its own scaling."""
 
     def __init__(self, device, block, **conv_kwargs):
         super().__init__()
@@ -484,9 +529,8 @@ class TtSEBasicBlock(LightweightModule):
         out, oh, ow = self.conv1(x, h, w, mem)  # relu fused
         out = self.bn1(out)
         out, _, _ = self.conv2(out, oh, ow, mem)  # bn2 folded into the weights
-        se_diag = self.se(out, oh * ow)
+        out = self.se(out, oh * ow)  # SE scale, applied inside the SE
         residual = x if self.downsample_conv is None else self.downsample_conv(x, h, w, mem)[0]
-        out = _scale_channels(out, se_diag, self.compute_config, self.core_grid)  # SE scale
         return ttnn.add(out, residual, activations=[RELU]), oh, ow
 
 
@@ -523,7 +567,24 @@ class TtResNetSpeakerEncoder(LightweightModule):
         asp_dim = att[0].weight.shape[1]  # C * F' (2048)
         asp_freq = asp_dim // asp_channels  # F' (8)
         asp_perm = torch.tensor([(k % asp_channels) * asp_freq + (k // asp_channels) for k in range(asp_dim)])
-        self.att_w1 = _to_tile(att[0].weight.detach().squeeze(-1)[:, asp_perm], device)  # [128, 2048]
+        # ``TAIL_WEIGHTS_L1``: the tail computes ``W @ x``, so the *weight* is in0, and the
+        # profiler asks for in0 in L1 on all three of these matmuls. Moving them there is worth
+        # -1.42us on att_w1, -0.19us on att_w2 and -3.24us on fc, i.e. -0.2% of the pass --
+        # small, and confirmed small on both metrics (a traced-replay A/B over four mel lengths
+        # gives -0.21%, and -0.17% with the order reversed) at bit-identical PCC.
+        #
+        # What had to be checked was not the speed but the residency: 5.37 MB is 50 KB per core,
+        # and ``xtts_conv._SHARD_L1_BUDGET_BYTES`` (48 KB/core) is a *hardcoded* budget, so
+        # ``sharded_chain_fits_l1`` cannot see this and will still claim the vocoder's resblock
+        # chain fits. Against per-core L1 it is 3.6% (50 KB of 1395 KB), and the whole traced
+        # pipeline -- conditioning, speaker encoder, GPT prefill+decode, HiFi-GAN vocoder, all
+        # resident together -- passes ``tests/test_tt_trace.py`` with it on. If L1 ever does get
+        # tight, drop fc_w first: it is 4.0 MB of the 5.37 for -3.24us, while att_w1 returns
+        # 2.8us/MB against fc_w's 0.81.
+        wmem = ttnn.L1_MEMORY_CONFIG if TAIL_WEIGHTS_L1 else None
+        self.att_w1 = _to_tile(
+            att[0].weight.detach().squeeze(-1)[:, asp_perm], device, memory_config=wmem
+        )  # [128, 2048]
         self.att_b1 = _to_tile(att[0].bias.detach().reshape(-1, 1), device)  # [128, 1]
         # The BatchNorm1d between the two attention convs folds into the second one, exactly:
         # it is a per-channel affine and conv2 is linear in that channel, so
@@ -532,7 +593,9 @@ class TtResNetSpeakerEncoder(LightweightModule):
         # one 11us addcmul over the whole [128, T'] attention map that stops existing.
         att_scale, att_shift = _bn_scale_shift(att[2])  # BatchNorm1d(128)
         w2 = att[3].weight.detach().squeeze(-1)[asp_perm]  # [2048, 128], ASP rows reordered
-        self.att_w2 = _to_tile(w2 * att_scale.reshape(1, -1), device)  # scale is per *input* channel
+        self.att_w2 = _to_tile(
+            w2 * att_scale.reshape(1, -1), device, memory_config=wmem
+        )  # scale is per *input* channel
         att_b2 = w2 @ att_shift + att[3].bias.detach()[asp_perm]
         self.att_b2 = _to_tile(att_b2.reshape(-1, 1), device)  # [2048, 1]
 
@@ -545,7 +608,7 @@ class TtResNetSpeakerEncoder(LightweightModule):
         # 5.6us and it feeds the softmax the variance depends on.
         # ``feat`` is concat([mu, sg]), so both halves of fc's 4096 columns take the ASP reorder.
         fc_perm = torch.cat([asp_perm, asp_perm + asp_dim])
-        self.fc_w = _to_tile(ref.fc.weight.detach()[:, fc_perm], device, ttnn.bfloat16)  # [512, 4096]
+        self.fc_w = _to_tile(ref.fc.weight.detach()[:, fc_perm], device, ttnn.bfloat16, wmem)  # [512, 4096]
         self.fc_b = _to_tile(ref.fc.bias.detach().reshape(-1, 1), device, OUT_DTYPE)  # [512, 1]
 
         # The tail's three matmuls got no program config at all, which left them on ttnn's
@@ -615,9 +678,9 @@ class TtResNetSpeakerEncoder(LightweightModule):
         c = x.shape[-1]
         # Gather the body's last L1 shards, and keep the whole ASP chain in L1: the three tail
         # matmuls read both operands from DRAM otherwise, and this side of it is transient --
-        # it costs no residency and measures -18.8us. Their *weights* are the other 5.37 MB and
-        # stay in DRAM: L1-resident for the model's lifetime buys only 5.8us, and this module
-        # shares L1 with the vocoder that runs after it (see :func:`_to_body`).
+        # it costs no residency and measures -18.8us. Their *weights* are a further 5.37 MB and
+        # are L1-resident too, but that one is a residency decision rather than a free one --
+        # see ``TAIL_WEIGHTS_L1``.
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         x = ttnn.reshape(x, [1, 1, h, w * c])  # [1, 1, T', 2048]
         x = ttnn.transpose(x, -2, -1)  # [1, 1, 2048, T']
