@@ -6,6 +6,7 @@
 
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::experimental {
 
@@ -22,7 +23,7 @@ void queue_tensor_prefetcher_request(
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
-    std::optional<uint8_t> cq_id) {
+    bool capture_into_trace) {
     std::vector<tt::tt_metal::experimental::TensorPrefetcherInput> inputs;
     inputs.reserve(tensors.size());
     for (const auto& item : tensors) {
@@ -36,14 +37,29 @@ void queue_tensor_prefetcher_request(
             inputs.push_back({tensor.mesh_tensor(), block_count, rotation});
         }
     }
-    tt::tt_metal::experimental::QueueTensorPrefetcherRequest(*mesh_device, global_cb, device_subset, inputs, cq_id);
+    // The command queue to consider is always the calling thread's current one: ttnn's
+    // FastOperation wrapper consumes a `cq_id`/`queue_id` keyword before this function is
+    // reached and applies it by pushing that queue as the thread's current one (see
+    // ttnn/ttnn/decorators.py), which is also what ttnn.command_queue(n) does. So the
+    // caller-visible knob here is whether to consider a queue at all: with
+    // capture_into_trace false we hand metal no queue, and the request is sent immediately
+    // even if that queue is mid trace-capture.
+    tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
+        *mesh_device,
+        global_cb,
+        device_subset,
+        inputs,
+        capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr);
 }
 
 void wait_for_cq_on_tensor_prefetcher(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    uint8_t cq_id,
+    std::optional<uint8_t> cq_id,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset) {
-    tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(*mesh_device, cq_id, device_subset);
+    // std::nullopt fences the calling thread's current queue. That covers the keyword form
+    // too: ttnn's FastOperation wrapper consumes a `cq_id=` keyword and applies it by making
+    // that queue current (ttnn/ttnn/decorators.py), so it never arrives here as a value.
+    tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(mesh_device->mesh_command_queue(cq_id), device_subset);
 }
 
 void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {

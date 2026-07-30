@@ -914,9 +914,12 @@ void TensorPrefetcherManager::queue(
     const experimental::GlobalCircularBuffer& gcb,
     const std::optional<MeshCoordinateRangeSet>& device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& tensors,
-    std::optional<uint8_t> cq_id) {
+    MeshCommandQueue* trace_capture_cq) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
+    TT_FATAL(
+        trace_capture_cq == nullptr || trace_capture_cq->device() == mesh_device_,
+        "QueueTensorPrefetcherRequest command queue belongs to a different mesh device than the prefetcher");
     TT_FATAL(
         experimental::sender_core_type(gcb) == experimental::SenderCoreType::Dram,
         "QueueTensorPrefetcherRequest requires a DRAM-sender GlobalCircularBuffer");
@@ -945,10 +948,12 @@ void TensorPrefetcherManager::queue(
         }
     }
 
-    // If the target command queue is mid trace-capture, capture this request into the trace
-    // instead of sending it now; it is (re)sent on every replay of that trace. Otherwise send
-    // immediately via the host worker.
-    const std::optional<MeshTraceId> recording_trace_id = mesh_device_->mesh_command_queue(cq_id).trace_id();
+    // If the caller named a command queue and it is mid trace-capture, capture this request into
+    // the trace instead of sending it now; it is (re)sent on every replay of that trace. With no
+    // queue (nullptr) the request is never captured — it is sent immediately via the host worker,
+    // as is a named queue that is not capturing.
+    const std::optional<MeshTraceId> recording_trace_id =
+        trace_capture_cq != nullptr ? trace_capture_cq->trace_id() : std::nullopt;
 
     {
         // Push all pages of this call under one lock so they stay contiguous and ordered
@@ -988,7 +993,7 @@ void TensorPrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
 }
 
 void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
-    uint8_t cq_id, const std::optional<MeshCoordinateRangeSet>& device_subset) {
+    MeshCommandQueue& cq, const std::optional<MeshCoordinateRangeSet>& device_subset) {
     // Hold the API lock across this whole call. Three things must be atomic together:
     //   1. the counter bump (++cq_signal_counter_[cq_id]),
     //   2. the dispatcher write that pushes that value to the device, and
@@ -1003,8 +1008,12 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     auto lock = lock_api_function_();
     TT_FATAL(active_, "WaitForCqOnTensorPrefetcher called before StartTensorPrefetcher");
     TT_FATAL(
+        cq.device() == mesh_device_,
+        "WaitForCqOnTensorPrefetcher command queue belongs to a different mesh device than the prefetcher");
+    const uint32_t cq_id = cq.id();
+    TT_FATAL(
         cq_id < cq_signal_counter_.size(),
-        "WaitForCqOnTensorPrefetcher cq_id ({}) out of range [0, {})",
+        "WaitForCqOnTensorPrefetcher command queue id ({}) out of range [0, {})",
         cq_id,
         cq_signal_counter_.size());
 
@@ -1047,7 +1056,9 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
 
     // (a) Dispatcher write: bump every target DRAM core's signal slot for this CQ. Runs
     // under the api lock we already hold (the method does not re-lock).
-    mesh_device_->impl().mesh_command_queue_base(cq_id).enqueue_write_dram_core_counter(
+    auto* cq_base = dynamic_cast<MeshCommandQueueBase*>(&cq);
+    TT_FATAL(cq_base != nullptr, "MeshCommandQueue is not a MeshCommandQueueBase");
+    cq_base->enqueue_write_dram_core_counter(
         ttsl::Span<const DeviceMemoryAddress>(targets), signal_value, /*blocking=*/false);
 
     // (b) Queue a WAIT_CQ request. It rides the same async worker path as prefetch
@@ -1061,7 +1072,7 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     req.sender_pages.assign(1, std::vector<uint8_t>(page_bytes, 0));
     auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(req.sender_pages[0].data());
     header->base.cmd_id = DRAM_PREFETCHER_CMD_WAIT_CQ;
-    header->wait_cq.cq_index = cq_id;
+    header->wait_cq.cq_index = static_cast<uint8_t>(cq_id);
     header->wait_cq.cq_wait_value = signal_value;
     req.target_devices = std::move(target_devices);
 
@@ -1232,17 +1243,17 @@ void QueueTensorPrefetcherRequest(
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
-    std::optional<uint8_t> cq_id) {
+    distributed::MeshCommandQueue* trace_capture_cq) {
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
-    manager.queue(gcb, device_subset, input_tensors, cq_id);
+    manager.queue(gcb, device_subset, input_tensors, trace_capture_cq);
 }
 
 void WaitForCqOnTensorPrefetcher(
-    distributed::MeshDevice& mesh_device,
-    uint8_t cq_id,
-    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset) {
-    auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
-    manager.enqueue_cq_signal_and_wait(cq_id, device_subset);
+    distributed::MeshCommandQueue& cq, const std::optional<distributed::MeshCoordinateRangeSet>& device_subset) {
+    auto* mesh_device = cq.device();
+    TT_FATAL(mesh_device != nullptr, "WaitForCqOnTensorPrefetcher command queue has no mesh device");
+    auto& manager = mesh_device->impl().tensor_prefetcher(mesh_device);
+    manager.enqueue_cq_signal_and_wait(cq, device_subset);
 }
 
 void StopTensorPrefetcher(distributed::MeshDevice& mesh_device) {

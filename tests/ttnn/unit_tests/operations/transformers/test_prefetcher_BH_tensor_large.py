@@ -640,11 +640,13 @@ def test_tensor_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
 # ---------------------------------------------------------------------------
 # `queue_tensor_prefetcher_request` does not go through the command queue: it
 # serializes a request into socket pages and a host worker thread fans them out to
-# the DRAM sender cores over NOC. When called with a `cq_id` whose command queue is
-# mid trace-capture, the request must be *captured* (not sent) and re-sent on every
+# the DRAM sender cores over NOC. When it names a command queue that is mid
+# trace-capture, the request must be *captured* (not sent) and re-sent on every
 # `execute_trace` of that trace, so a captured matmul that consumes the GCB is
-# refilled on each replay. This test captures a (queue request + consuming linear)
-# pair into a trace, replays it several times, and PCC-checks every replay.
+# refilled on each replay. `prefetch_and_linear` names the thread's current CQ --
+# the one its `ttnn.linear` dispatches on -- so the pair is captured together. This
+# test captures that pair into a trace, replays it several times, and PCC-checks
+# every replay.
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872}], indirect=True)
 @pytest.mark.parametrize("replay_count", [1, 3])
 def test_tensor_prefetcher_trace_replay(device, replay_count):
@@ -756,7 +758,6 @@ def test_tensor_prefetcher_trace_replay(device, replay_count):
             tt_weight,
             global_cb=gcb,
             program_config=program_config,
-            cq_id=0,
             memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
             dtype=dtype,

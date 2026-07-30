@@ -40,13 +40,17 @@ using TensorPrefetcherQueueTensor =
 //        is per-GCB (read from each GCB's sender state block on every
 //        request), so a single prefetcher can serve GCBs with different
 //        num_receivers values.
-//   2. queue_tensor_prefetcher_request(device, tensors, global_cb, device_subset=None)
+//   2. queue_tensor_prefetcher_request(device, tensors, global_cb, device_subset=None,
+//                                      cq_id=None)
 //      - Push one request. `tensors` is the full, flattened list of weights (at
 //        least one), streamed in list order; each item is (weight, block_count)
 //        or (weight, block_count, rotation) (see TensorPrefetcherQueueTensor).
 //        block_count is the number of K-blocks to divide that tensor's K
 //        dimension into. Pass distinct tensors for distinct layers, or repeat a
-//        tensor to replay it. device_subset defaults to the full mesh.
+//        tensor to replay it. device_subset defaults to the full mesh. Set
+//        capture_into_trace=True to let the request be captured into a trace being
+//        recorded on the current command queue; by default it is always sent
+//        immediately and never captured.
 //   3. stop_tensor_prefetcher(device)
 //      - Sends the stop sentinel, joins the worker, waits for the kernels
 //        to exit. Caller must call this before destroying the device.
@@ -57,20 +61,25 @@ bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_
 
 void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
+// `capture_into_trace` selects whether this request may be captured into a trace: when true
+// and the calling thread's current command queue is mid trace-capture, the request is captured
+// and re-sent on every execute_trace of that trace; when false the request is always sent
+// immediately. Which queue that is follows ttnn's usual convention (a `cq_id`/`queue_id`
+// keyword, or ttnn.command_queue(n)) — see the note in the .cpp.
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt,
-    std::optional<uint8_t> cq_id = std::nullopt);
+    bool capture_into_trace = false);
 
-// Fence the prefetcher against command queue `cq_id`: every prefetch request queued
-// after this call waits until all work previously enqueued on `cq_id` has completed
-// on device before the prefetcher reads DRAM. Call after the data writes and before
-// the dependent queue_tensor_prefetcher_request.
+// Fence the prefetcher against a command queue: every prefetch request queued after this
+// call waits until all work previously enqueued on that queue has completed on device before
+// the prefetcher reads DRAM. Call after the data writes and before the dependent
+// queue_tensor_prefetcher_request. `cq_id` defaults to the calling thread's current queue.
 void wait_for_cq_on_tensor_prefetcher(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    uint8_t cq_id,
+    std::optional<uint8_t> cq_id = std::nullopt,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt);
 
 void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);

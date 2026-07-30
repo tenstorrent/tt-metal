@@ -34,6 +34,7 @@ class Program;
 
 namespace distributed {
 
+class MeshCommandQueue;
 class MeshDevice;
 
 // Long-lived Tensor prefetcher (DRISC) for a single MeshDevice. Holds the
@@ -79,16 +80,16 @@ public:
 
     void start();
 
-    // When `cq_id`'s command queue is mid trace-capture, the serialized request pages are
-    // captured into trace_requests_ keyed by that trace's MeshTraceId instead of being sent
-    // immediately; they are (re)sent on every replay_trace() of that trace. Otherwise the
-    // pages are queued for immediate fan-out. `cq_id` == std::nullopt resolves to the
-    // current/default command queue (see MeshDevice::mesh_command_queue).
+    // When `trace_capture_cq` is non-null and mid trace-capture, the serialized request pages
+    // are captured into trace_requests_ keyed by that trace's MeshTraceId instead of being sent
+    // immediately; they are (re)sent on every replay_trace() of that trace. Otherwise — a
+    // non-capturing queue, or a null `trace_capture_cq` — the pages are queued for immediate
+    // fan-out. A non-null queue must belong to this manager's mesh device.
     void queue(
         const experimental::GlobalCircularBuffer& gcb,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
         const std::vector<experimental::TensorPrefetcherInput>& tensors,
-        std::optional<uint8_t> cq_id = std::nullopt);
+        MeshCommandQueue* trace_capture_cq);
 
     // Re-queue every request captured under `trace_id` for immediate fan-out. No-op if no
     // prefetcher requests were captured during that trace's capture. Called from the trace
@@ -99,13 +100,14 @@ public:
     void release_trace(const MeshTraceId& trace_id);
 
     // Make the prefetcher wait until all work currently enqueued on command queue
-    // `cq_id` has landed before it reads DRAM. Bumps a host-side per-CQ counter,
+    // `cq` has landed before it reads DRAM. Bumps a host-side per-CQ counter,
     // has the dispatcher write the new value into every DRAM core's signal slot
     // (ordered after prior CQ work), and queues a WAIT_CQ request so each kernel
     // blocks until that value is observed. Must be called synchronously on the
     // host thread that enqueues the data writes (after them, before the dependent
-    // prefetch request).
-    void enqueue_cq_signal_and_wait(uint8_t cq_id, const std::optional<MeshCoordinateRangeSet>& device_subset);
+    // prefetch request). `cq` must belong to this manager's mesh device, and its id
+    // must be within [0, kNumCqSignalSlots).
+    void enqueue_cq_signal_and_wait(MeshCommandQueue& cq, const std::optional<MeshCoordinateRangeSet>& device_subset);
 
     void stop();
 
@@ -169,7 +171,7 @@ private:
     // across all sender cores. Carved at the front of the kernel working region.
     uint32_t cq_signal_l1_addr_ = 0;
     // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
-    // pre-increments cq_signal_counter_[cq_id] and uses it for both the dispatcher
+    // pre-increments cq_signal_counter_[cq.id()] and uses it for both the dispatcher
     // write and the WAIT_CQ request value.
     std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
 
