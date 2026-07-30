@@ -148,6 +148,7 @@ void kernel_main() {
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                DeviceZoneScopedN("in1 block");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         cb_wait_front(cb_id_out, out_block_num_tiles);

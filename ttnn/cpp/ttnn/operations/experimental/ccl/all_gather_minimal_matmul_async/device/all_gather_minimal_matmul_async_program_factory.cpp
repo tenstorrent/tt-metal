@@ -47,7 +47,8 @@ static inline std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_a
     uint32_t axis_length,
     tt::tt_metal::NOC noc,
     bool axis_is_x_when_not_transposed,
-    const CoreCoord& initial_endpoint) {
+    const CoreCoord& initial_endpoint,
+    bool force_increasing = false) {
     std::vector<CoreCoord> order;
     order.reserve(axis_length);
     order.push_back(initial_endpoint);
@@ -56,8 +57,14 @@ static inline std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_a
     const size_t current_axis_value = transpose_core_grid ? (axis_is_x_when_not_transposed ? core.y : core.x)
                                                           : (axis_is_x_when_not_transposed ? core.x : core.y);
 
-    // Direction along the axis: increasing for NOC_0, decreasing for NOC_1
-    const bool increasing = (noc == tt::tt_metal::NOC::NOC_0);
+    // Direction along the axis: increasing for NOC_0, decreasing for NOC_1.
+    // The in0 forwarding chain must always run from the injector (initial_endpoint, the low-coordinate
+    // top/left core) toward the fabric/sink end (the high-coordinate side adjacent to the mux), because
+    // the kernel identifies fabric senders by chain position (index >= size-1/size-2) and the host
+    // dispatches the fabric kernel to those geometric cores. force_increasing pins that order regardless
+    // of the NOC's preferred direction (the relay uses explicit per-core unicast addresses, so its
+    // correctness is direction-independent). This is a no-op when noc == NOC_0.
+    const bool increasing = force_increasing || (noc == tt::tt_metal::NOC::NOC_0);
 
     uint32_t index_of_current = 0;  // default to 0 if axis_length == 1
     for (uint32_t worker_idx = 1; worker_idx < axis_length; ++worker_idx) {
@@ -324,6 +331,50 @@ all_gather_minimal_matmul_async_factory_helper(
     log_debug(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
     log_debug(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
 
+    // [AGMM-DEBUG] effective block sizes actually used by the fused matmul (log_info so it shows in
+    // Release builds, where log_debug is compiled out). Compares config-supplied vs default to catch
+    // any silent overwrite, and prints the values fed to the compute kernel.
+    log_info(
+        tt::LogOp,
+        "[AGMM-DEBUG] config_present={} | used M_block={} K_block={} N_block={} sh={} sw={} | "
+        "defaults M={} K={} N={} sh={} sw={} | M_tiles={} K_tiles={} N_tiles={} ring_size={} "
+        "transpose={} grid={}x{} | M_blocks_per_core={} N_blocks_per_core={} K_blocks(=compute K_num_blocks)={}",
+        config.has_value(),
+        M_block_tiles,
+        K_block_tiles,
+        N_block_tiles,
+        subblock_h,
+        subblock_w,
+        default_M_block_tiles,
+        default_K_block_tiles,
+        default_N_block_tiles,
+        default_subblock_h,
+        default_subblock_w,
+        M_tiles,
+        K_tiles,
+        N_tiles,
+        ring_size,
+        transpose_core_grid,
+        grid_size.x,
+        grid_size.y,
+        M_blocks_per_core,
+        N_blocks_per_core,
+        K_blocks);
+    log_info(
+        tt::LogOp,
+        "[AGMM-DEBUG-FMT] FUSED in0_df={} in1_df={} out_df={} interm_df={} | math_fidelity={} "
+        "fp32_dest_acc={} math_approx={} packer_l1_acc={} dst_full_sync={} use_bias={}",
+        in0_data_format,
+        in1_data_format,
+        output_data_format,
+        intermediate_data_format,
+        static_cast<int>(math_fidelity),
+        fp32_dest_acc_en,
+        math_approx_mode,
+        packer_l1_acc,
+        dst_full_sync_en,
+        use_bias);
+
     uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
@@ -422,12 +473,26 @@ all_gather_minimal_matmul_async_factory_helper(
         !((transpose_core_grid ? grid_size.x : grid_size.y) % num_links),
         "The number of in0 rows must be a multiple of num_links");
     uint32_t num_mux_cores = num_links * 2;  // 2 being the number of directions
+    // Mux cores run along x when the core grid is transposed (bottom row) and along y when it is
+    // not (right column), so the axis that must be large enough is the one carrying the mux index.
     TT_FATAL(
-        (transpose_core_grid ? full_grid_size.y : full_grid_size.x) >= num_mux_cores,
+        (transpose_core_grid ? full_grid_size.x : full_grid_size.y) >= num_mux_cores,
         "The are not enough cores for the number of mux cores requested");
 
     const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
+    };
+
+    // Map a scalar mux index to its logical core, accounting for core-grid orientation:
+    //   transpose=true  -> mux cores on the BOTTOM ROW   (index on x, wrap on full_grid_size.x)
+    //   transpose=false -> mux cores on the RIGHT COLUMN (index on y, wrap on full_grid_size.y)
+    const auto make_mux_logical_core = [transpose_core_grid, full_grid_size](uint32_t mux_index) -> CoreCoord {
+        const uint32_t wrap = transpose_core_grid ? full_grid_size.x : full_grid_size.y;
+        if (mux_index >= wrap) {
+            mux_index -= wrap;
+        }
+        return transpose_core_grid ? CoreCoord(mux_index, full_grid_size.y - 1)
+                                   : CoreCoord(full_grid_size.x - 1, mux_index);
     };
 
     std::vector<CoreRange> mux_core_ranges;
@@ -435,11 +500,8 @@ all_gather_minimal_matmul_async_factory_helper(
         uint32_t dir = mux_id % 2;  // 2 being the number of directions
         if (mux_connection_valid(dir)) {
             uint32_t link = mux_id / 2;  // 2 is the num directions
-            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-            if (mux_x_index >= full_grid_size.x) {
-                mux_x_index = mux_x_index - full_grid_size.x;
-            }
-            auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
+            uint32_t mux_index = (num_workers_per_link * (link + 1)) - (1 - dir);
+            auto mux_logical_core = make_mux_logical_core(mux_index);
             mux_core_ranges.emplace_back(mux_logical_core);
         }
     }
@@ -513,6 +575,12 @@ all_gather_minimal_matmul_async_factory_helper(
         if (fused_ternary_input_b.value().dtype() == ttnn::DataType::FLOAT32) {
             defines["TERNARY_B_IS_FLOAT32"] = "1";
         }
+    }
+    const char* env_profiling_mode = std::getenv("AGMM_MATMUL_ISOLATION");
+    bool matmul_isolation = false;
+    if (env_profiling_mode != nullptr && std::string(env_profiling_mode) == "1") {
+        defines["MATMUL_ISOLATION_MODE"] = "1";
+        matmul_isolation = true;
     }
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
@@ -796,15 +864,18 @@ all_gather_minimal_matmul_async_factory_helper(
             .defines = compute_defines});
 
     // mux kernel
-    auto mux_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        mux_core_range_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    tt::tt_metal::KernelHandle mux_kernel_id{};
+    if (!matmul_isolation) {
+        mux_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+            mux_core_range_set,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_1_default,
+                .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    }
 
     /**
      * The receiver writer cores defer their writes in order to reduce NOC congestion.
@@ -822,28 +893,27 @@ all_gather_minimal_matmul_async_factory_helper(
     // for requests that the receiver will never issue, leading to deadlock. Keep the original uniform
     // div_up-based ranges for M and N.
 
-    for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
-        uint32_t dir = mux_id % 2;  // 2 being the number of directions
-        if (mux_connection_valid(dir)) {
-            uint32_t link = mux_id / 2;  // 2 is the num directions
-            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-            if (mux_x_index >= full_grid_size.x) {
-                mux_x_index = mux_x_index - full_grid_size.x;
-            }
-            auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
+    if (!matmul_isolation) {
+        for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
+            uint32_t dir = mux_id % 2;  // 2 being the number of directions
+            if (mux_connection_valid(dir)) {
+                uint32_t link = mux_id / 2;  // 2 is the num directions
+                uint32_t mux_index = (num_workers_per_link * (link + 1)) - (1 - dir);
+                auto mux_logical_core = make_mux_logical_core(mux_index);
 
-            std::vector<uint32_t> mux_rt_args = {};
-            const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
-            if (dir) {  // forward
-                const auto dst_node_id = device->get_fabric_node_id(backward_coord.value());
-                mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, program, {mux_logical_core});
-            } else {
-                const auto dst_node_id = device->get_fabric_node_id(forward_coord.value());
-                mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, program, {mux_logical_core});
+                std::vector<uint32_t> mux_rt_args = {};
+                const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
+                if (dir) {  // forward
+                    const auto dst_node_id = device->get_fabric_node_id(backward_coord.value());
+                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                } else {
+                    const auto dst_node_id = device->get_fabric_node_id(forward_coord.value());
+                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                }
+                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             }
-            tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
         }
     }
 
@@ -916,7 +986,10 @@ all_gather_minimal_matmul_async_factory_helper(
             in1_parallel_axis_cores,
             in0_noc,
             /*axis_is_x_when_not_transposed=*/true,
-            /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core));
+            /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core),
+            /*force_increasing=*/false);  // chain direction follows in0_noc: increasing on NOC_0 (transposed),
+                                          // decreasing on NOC_1 (non-transposed). Role indices below use the same
+                                          // predicate.
 
         auto [in1_core_order, in1_core_order_index] = build_core_order_for_axis(
             core,
@@ -935,6 +1008,14 @@ all_gather_minimal_matmul_async_factory_helper(
         auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
         auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
         auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
+
+        // Fabric senders sit beside the mux (high-coordinate end). With an increasing chain (NOC_0)
+        // that is the chain tail; with a decreasing chain (NOC_1) it is chain indices 1 and 2. Derive
+        // the indices from the same predicate as the chain direction so roles land on the fixed geometry.
+        const bool in0_increasing = (in0_noc == tt::tt_metal::NOC::NOC_0);
+        const uint32_t in0_fwd_idx = in0_increasing ? (uint32_t)(in0_core_order.size() - 1) : 1u;
+        const uint32_t in0_bwd_idx = in0_increasing ? (uint32_t)(in0_core_order.size() - 2) : 2u;
+        const bool in0_is_fabric_core = (in0_core_order_index == in0_fwd_idx) || (in0_core_order_index == in0_bwd_idx);
 
         /**
          * NOTE: Some cores are doing unnecessary work, on blocks which are processed just to make
@@ -976,27 +1057,27 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_injector_virtual_core.x,
             in0_injector_virtual_core.y,
             in0_core_order_index,
-            in0_core_order.size()};
-        if (in0_core_order_index > (in0_core_order.size() - 3)) {
+            in0_core_order.size(),
+            in0_fwd_idx,
+            in0_bwd_idx};
+        if (in0_is_fabric_core) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
-            auto last_in0_core = in0_core_order.back();
+            const auto in0_bwd_core = in0_core_order.at(in0_bwd_idx);
+            const auto in0_fwd_core = in0_core_order.at(in0_fwd_idx);
             auto termination_master_logical_core_backward = transpose_core_grid
-                                                                ? CoreCoord(in0_idx - worker_idx, last_in0_core.y - 1)
-                                                                : CoreCoord(last_in0_core.x - 1, in0_idx - worker_idx);
+                                                                ? CoreCoord(in0_idx - worker_idx, in0_bwd_core.y)
+                                                                : CoreCoord(in0_bwd_core.x, in0_idx - worker_idx);
             CoreCoord termination_master_virtual_core_backward =
                 device->worker_core_from_logical_core(termination_master_logical_core_backward);
 
             // in0 backward sender
             uint32_t mux_core_index_backward =
                 ((in0_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
-            if (mux_core_index_backward >= full_grid_size.x) {
-                mux_core_index_backward = mux_core_index_backward - full_grid_size.x;
-            }
-            auto mux_logical_core_backward = CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
+            auto mux_logical_core_backward = make_mux_logical_core(mux_core_index_backward);
             CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
             fabric_mux_connection_rt_args(
                 mux_connection_valid(0),
-                (in0_core_order_index == (in0_core_order.size() - 2)) && !(in0_idx % num_workers_per_link),
+                (in0_core_order_index == in0_bwd_idx) && !(in0_idx % num_workers_per_link),
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 mux_virtual_core_backward,
                 worker_idx,
@@ -1007,22 +1088,19 @@ all_gather_minimal_matmul_async_factory_helper(
                 in0_args);
 
             auto termination_master_logical_core_forward = transpose_core_grid
-                                                               ? CoreCoord(in0_idx - worker_idx, last_in0_core.y)
-                                                               : CoreCoord(last_in0_core.x, in0_idx - worker_idx);
+                                                               ? CoreCoord(in0_idx - worker_idx, in0_fwd_core.y)
+                                                               : CoreCoord(in0_fwd_core.x, in0_idx - worker_idx);
             CoreCoord termination_master_virtual_core_forward =
                 device->worker_core_from_logical_core(termination_master_logical_core_forward);
 
             // in0 forward sender
             uint32_t mux_core_index_forward =
                 ((in0_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
-            if (mux_core_index_forward >= full_grid_size.x) {
-                mux_core_index_forward = mux_core_index_forward - full_grid_size.x;
-            }
-            auto mux_logical_core_forward = CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
+            auto mux_logical_core_forward = make_mux_logical_core(mux_core_index_forward);
             CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
             fabric_mux_connection_rt_args(
                 mux_connection_valid(1),
-                (in0_core_order_index == (in0_core_order.size() - 1)) && !(in0_idx % num_workers_per_link),
+                (in0_core_order_index == in0_fwd_idx) && !(in0_idx % num_workers_per_link),
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 mux_virtual_core_forward,
                 worker_idx,
@@ -1035,7 +1113,7 @@ all_gather_minimal_matmul_async_factory_helper(
         if (in0_core_order_index == 0) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
-        } else if (in0_core_order_index > (in0_core_order.size() - 3)) {
+        } else if (in0_is_fabric_core) {
             // in0 receiver fabric
             SetRuntimeArgs(program, in0_receiver_fabric_kernels_id, core, in0_args);
         } else {

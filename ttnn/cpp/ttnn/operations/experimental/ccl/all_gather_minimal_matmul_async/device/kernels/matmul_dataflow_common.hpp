@@ -8,6 +8,10 @@
 #include <utility>
 #include "api/dataflow/dataflow_api.h"
 
+#ifndef MATMUL_ISOLATION_MODE
+#define MATMUL_ISOLATION_MODE 0
+#endif
+
 namespace detail {
 template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple_impl(
@@ -131,6 +135,7 @@ void compute_actual_k_block(
             (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block + k_left_tiles;
     }
 #ifdef IS_IN0
+#if MATMUL_ISOLATION_MODE == 0
     if (device_iter > 0 && is_first_n_block) {
         // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
         if (is_injector_core) {
@@ -140,6 +145,7 @@ void compute_actual_k_block(
             sem_target_backward += in0_core_order_size;
         }
     }
+#endif  // MATMUL_ISOLATION_MODE == 0
 #endif
 }
 

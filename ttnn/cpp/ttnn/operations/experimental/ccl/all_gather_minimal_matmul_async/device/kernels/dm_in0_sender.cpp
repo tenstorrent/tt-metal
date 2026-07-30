@@ -11,6 +11,12 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+
+#ifndef MATMUL_ISOLATION_MODE
+#define MATMUL_ISOLATION_MODE 0
+#endif
+
 using ttnn::ccl::Topology;
 
 ///////////////////////////////////////////////////
@@ -129,6 +135,11 @@ void kernel_main() {
     const uint8_t out_ready_sem_injector_noc0_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
+    // Fabric-sender chain indices (host order: forward then backward). Read unconditionally so argidx
+    // stays aligned across all kernel variants. The chain may run decreasing (NOC_1, non-transposed),
+    // so these are not necessarily the chain tail.
+    const uint32_t forward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
+    const uint32_t backward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
@@ -140,10 +151,8 @@ void kernel_main() {
     auto outputs_tuple =
         make_tensor_accessor_tuple_uniform_page_size_common(outputs_args, out_addr_common_arg_start, out_tile_size);
 
+#if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
-    uint32_t backward_in0_core_order_index = in0_core_order_size - 2;
-    uint32_t forward_in0_core_order_index = in0_core_order_size - 1;
-
     auto mux_backward =
         parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
             argidx, in0_core_order_index, backward_in0_core_order_index);
@@ -154,6 +163,7 @@ void kernel_main() {
     auto* mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_status_address);
     auto* mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_status_address);
 #endif
+#endif  // MATMUL_ISOLATION_MODE == 0
 
 #ifdef FUSE_BIAS
     constexpr uint32_t in2_args_cta_offset =
@@ -241,6 +251,7 @@ void kernel_main() {
     uint64_t out_ready_sem_injector_noc_addr_forward_in_pkt =
         safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, out_ready_sem_forward, 0);
 
+#if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
     auto pkt_hdrs_backward = allocate_and_init_packet_headers(
         detail::valid_targets(1),
@@ -252,6 +263,7 @@ void kernel_main() {
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
 #endif
+#endif  // MATMUL_ISOLATION_MODE == 0
 
     /**
      * This is a Row-Major output block ordering.
@@ -281,6 +293,7 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                DeviceZoneScopedN("in0 block");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         cb_wait_front(cb_id_out, out_block_num_tiles);
@@ -346,6 +359,7 @@ void kernel_main() {
                     k_block_left_tile,
                     k_block_right_tile);
                 if (is_injector_core) {
+                    DeviceZoneScopedN("injector core read in0 block");
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
@@ -393,15 +407,16 @@ void kernel_main() {
 
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                 }
+#if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
-                    DeviceZoneScopedN("send");
+                    DeviceZoneScopedN("AGMM Zone: in0 fabric half-block send (all-gather payload + sem inc)");
                     bool forward_slice = false;
                     if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
                         forward_slice = true;
                     }
                     if (forward_slice) {
-                        if (in0_core_order_index >= forward_in0_core_order_index) {
+                        if (in0_core_order_index == forward_in0_core_order_index) {
                             // If forward, send backward
                             forward_half_block_to_fabric_neighbor(
                                 m_tile,
@@ -420,7 +435,7 @@ void kernel_main() {
                                 true,
                                 M_tiles,
                                 true);
-                        } else if (in0_core_order_index >= backward_in0_core_order_index) {
+                        } else if (in0_core_order_index == backward_in0_core_order_index) {
                             // If backward, send forward
                             forward_half_block_to_fabric_neighbor(
                                 m_tile,
@@ -443,6 +458,7 @@ void kernel_main() {
                     }
                 }
 #endif
+#endif  // MATMUL_ISOLATION_MODE == 0
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
@@ -525,6 +541,7 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
+#if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
     if (mux_backward.connection_valid) {
         close_mux(
@@ -551,6 +568,7 @@ void kernel_main() {
             mux_forward.termination_master_noc_y);
     }
 #endif
+#endif  // MATMUL_ISOLATION_MODE == 0
 
     noc_async_write_barrier();
 
