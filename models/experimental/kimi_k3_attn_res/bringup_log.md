@@ -663,12 +663,21 @@ rows are correct.
 
 1. **Fidelity is part of the candidate, not a knob.** At default (LoFi) fidelity both
    one-pass forms lose an order of magnitude — the statistics kernel goes to 4.78e-2 against
-   the 2.44e-3 that `mul` + `sum` achieves, the matvec to 1.28e-2 — because LoFi truncates
-   the bf16 mantissa going into the multiply. HiFi4 with `fp32_dest_acc_en` restores both
-   (2.54e-3 and 3.155e-3, against today's 2.44e-3 and 3.189e-3) and is **free on device**:
+   the 2.44e-3 that `mul` + `sum` achieves, the matvec to 1.28e-2. HiFi4 with
+   `fp32_dest_acc_en` restores both (2.54e-3 and 3.155e-3, against today's 2.44e-3 and
+   3.189e-3) and is **free on device**:
    232.3 against 229.5 µs, 450.1 against 439.4. These reductions are bandwidth-bound, so the
    extra math passes hide under the reads. Had the accuracy been checked after the timing,
    the honest version of this row would have been 2% slower and the fast one wrong.
+
+   **Corrected after P9 (this row called both defaults "LoFi"; only one of them is).**
+   `rms_norm_pre_all_gather` *already defaults to HiFi4* — with `fp32_dest_acc_en=false` and
+   `math_approx_mode=true` (`rmsnorm_pre_all_gather.cpp:24`). So the squares' 4.78e-2 →
+   2.54e-3 is **not a fidelity effect**; it is `fp32_dest_acc_en`, and possibly approx mode.
+   `ttnn.matmul` on bf16 inputs does default to LoFi (`matmul_device_operation.cpp`:
+   `increase_fidelity ? HiFi2 : LoFi`), so the matvec's 1.28e-2 → 3.155e-3 is fidelity plus
+   dest accumulation. The reading survives with its mechanism swapped for one op: the knob
+   that buys the squares' accuracy is the accumulator's width, not the multiplier's.
 2. **The floor is one pass, and the squares reach it.** 232.3 µs against a 229.0 µs
    `sum(v)` control is 1.4% off a pure single read of `v`. The matvec does not: 1.97×,
    because `N = 1` wastes 31 of 32 output columns and gives the matmul no reuse.
@@ -803,7 +812,7 @@ turns on a sub-percent difference and one sample cannot tell that from noise:
 | **floor**: `sum(v)` — reduce dim 3 | 228.8 | 228.6 | 228.7 | 1.00 |
 | **floor**: `sum(v, dim=1)` | 229.0 | 228.4 | 228.7 | 1.00 |
 | **floor**: `fast_reduce_nc(v, dims=[1])` | 228.4 | 229.2 | 228.8 | 1.00 |
-| **floor**: `fast_reduce_nc` **HiFi4** | 228.5 | 228.5 | 228.5 | 1.00 |
+| **floor**: `fast_reduce_nc` **+fp32 dest acc** | 228.5 | 228.5 | 228.5 | 1.00 |
 | mix, `[1,1,1,d]` broadcast (P7's row) | 789.8 | 790.5 | 790.2 | 3.46 |
 | mix, real `[1,C,N,1]` weight: `mul` + `sum` | 688.4 | 688.2 | **688.3** | **3.01** |
 | mix, real weight: `mul` + `fast_reduce_nc` | 687.5 | 688.0 | 687.8 | 3.01 |
@@ -816,11 +825,18 @@ turns on a sub-percent difference and one sample cannot tell that from noise:
    the absence of a fused op. Read from run 1 alone this row said 0.13% and would have
    invited the same conclusion for the wrong reason.
 2. **Four different reductions cost exactly one read of `v`** — 228.4 to 229.0 µs, a 0.26%
-   spread, across two axes, two kernels and two fidelities. The dim-1 output is **8.75 MiB**
+   spread, across two axes, two kernels, and fp32 dest accumulation on and off. **Not two
+   fidelities, which is what this row claimed before the defaults were read:** every row here
+   is HiFi4. `ttnn.sum` defaults to HiFi4 + `fp32_dest_acc_en` on Blackhole
+   (`reduce_op.cpp:109`, the LoFi branch is Wormhole-only) and `fast_reduce_nc` defaults to
+   HiFi4 (`fast_reduce_nc.cpp:31`), so the bare-vs-`HIFI` pair varies the accumulator and the
+   packer, not the multiplier. The conclusion is unchanged and the support is narrower.
+   The dim-1 output is **8.75 MiB**
    against the dim-3 output's **1.41 MiB** (`[1, 9, N, 1]` tile-pads to 32 wide, so the
    padding is 97% of it), a 6× difference in bytes written that does not register at all
-   against a 79 MiB read. HiFi4 is free again, as in P7. Every floor row across P7 and P9
-   lands in 228.2–229.5 µs; the number is the bandwidth, not the kernel.
+   against a 79 MiB read. fp32 dest accumulation is free here, as HiFi4 was in P7. Every
+   floor row across P7 and P9 lands in 228.2–229.5 µs; the number is the bandwidth, not the
+   kernel and not the compute config.
 3. **P7's mix row overstated the op, and this is the load-bearing finding.** That row
    multiplied by `q`, a `[1, 1, 1, d/tp]` broadcast, because it reused the matvec's operand.
    `_mix` multiplies by a `[1, C, N, 1]` weight. Same bytes read, same bytes written, same
@@ -1389,6 +1405,33 @@ not a saving.
 call; it is silent about the call you never made. Run the delta table before the perf loop —
 and if the order slips, run it anyway rather than declaring it redundant.*
 
+### Phase 9 — an A/B against a default you have not read is not an A/B
+
+Two rows in this log compared an op "at default fidelity" against the same op with an explicit
+HiFi4 config, and both labelled the default LoFi. One was right by luck. On Blackhole:
+
+| op | default fidelity | default `fp32_dest_acc_en` |
+|---|---|---|
+| `ttnn.sum` (`reduce_op.cpp:109`) | **HiFi4** (LoFi branch is Wormhole-only) | **true** |
+| `ttnn.experimental.fast_reduce_nc` (`fast_reduce_nc.cpp:31`) | **HiFi4** | false |
+| `ttnn.rms_norm_pre_all_gather` (`rmsnorm_pre_all_gather.cpp:24`) | **HiFi4** | false |
+| `ttnn.matmul`, bf16 in (`matmul_device_operation.cpp`) | LoFi (HiFi2 if `increase_fidelity`) | `false` unless fp32 out |
+
+So P9's "two fidelities" varied no fidelity at all — every row was HiFi4 — and P7's claim that
+LoFi mantissa truncation cost the squares an order of magnitude was attributing to the
+multiplier what `fp32_dest_acc_en` did in the accumulator. Both timing conclusions survive
+(the config is free either way; ~229 µs is bandwidth). Both *mechanisms* were wrong, and a
+reader who trusted them would have reached for the wrong knob on the next op.
+
+The tell was available for free: `init_device_compute_kernel_config(arch, cfg, default)` takes
+the default fidelity as its **third positional argument**, so every op states its own default
+in one grep-able line. Nothing had to be measured to catch this.
+
+*Lesson: "at default" is not a measurement, it is a citation — and an uncited one. When a row
+compares default against explicit, read the default's `file:line` first, or the row measures a
+difference you cannot name. An accuracy A/B that varies three knobs at once and gets attributed
+to one of them is worse than no A/B, because it reads as mechanism.*
+
 ---
 
 ## Backlog
@@ -1806,3 +1849,22 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
   were probed once off-mesh at one bf16 ulp from `ttnn.sum`
   (`scratchpad/probe_fast_reduce_nc.py`) and never gated, which is enough for a refutation
   and would not be enough for adoption.
+
+- **2026-07-30** — **Correction pass, source-only, no device run.** Read the compute-kernel
+  defaults that P7 and P9 had A/B'd against. Both rows that compared "default fidelity"
+  against explicit HiFi4 were mislabelled.
+
+  **CORRECTED (P9):** its four floor rows were claimed to span "two fidelities". They span
+  none — `ttnn.sum` defaults to HiFi4 + `fp32_dest_acc_en` on Blackhole (`reduce_op.cpp:109`;
+  the LoFi branch is `is_wormhole`) and `fast_reduce_nc` defaults to HiFi4
+  (`fast_reduce_nc.cpp:31`). The bare-vs-`HIFI` pair varies `fp32_dest_acc_en` and
+  `packer_l1_acc`. Table row and test id renamed from `hifi` to `fp32acc`.
+
+  **CORRECTED (P7):** the squares' 4.78e-2 → 2.54e-3 was attributed to LoFi truncating the
+  bf16 mantissa. `rms_norm_pre_all_gather` already defaults to HiFi4
+  (`rmsnorm_pre_all_gather.cpp:24`) with `fp32_dest_acc_en=false` and `approx_mode=true`, so
+  the knob was the accumulator, not the multiplier. The matvec row's LoFi label **is** right —
+  `ttnn.matmul` on bf16 defaults to LoFi.
+
+  **UNCHANGED:** every timing conclusion. The compute config is free on these bandwidth-bound
+  reductions either way, and ~229 µs is still the one-pass floor.

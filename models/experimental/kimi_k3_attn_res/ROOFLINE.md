@@ -24,10 +24,12 @@ one op launch costs in the regime the harness runs in. Both changed the conclusi
 > memo that P8 made **more** wrong rather than less.
 >
 > P9 changes no conclusion here, but it hardens the one number Phase 10 has to beat: the
-> **~229 µs single-pass floor** over `v` is now measured by four independent kernels — two
-> reduction axes, `ttnn.sum` and `ttnn.experimental.fast_reduce_nc`, LoFi and HiFi4 — to
-> within 0.26%. It also corrects §7's figure for `_mix` from 791 to **688 µs**, which was a
-> measurement of the wrong broadcast rather than a modelling error.
+> **~229 µs single-pass floor** over `v` is now measured four independent ways — two
+> reduction axes, `ttnn.sum` and `ttnn.experimental.fast_reduce_nc`, fp32 dest accumulation on
+> and off — to within 0.26%. (Not "LoFi and HiFi4", as this said first: both ops default to
+> HiFi4 on Blackhole, so no row varied fidelity. See §Learnings Phase 9.) It also corrects
+> §7's figure for `_mix` from 791 to **688 µs**, which was a measurement of the wrong
+> broadcast rather than a modelling error.
 
 ---
 
