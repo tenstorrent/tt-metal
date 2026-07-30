@@ -314,6 +314,15 @@ Arm-driven HW-TX (`doca_eth_txq`, ~198 G) remains an option but is Arm-in-the-lo
   2. **d.2b N-EU DPA-Verbs ETH-SQ fan-out** (multi-QP/SRQ), landing in **DPA-private DDR** (host-MR gather caps
      ~42 G; DPA-heap scales ~134 G). Frame-size napkin: DPA-issue hits a ~4.4 Mpps aggregate wall (~145 G @4 KB),
      so **≥~5.7 KB is needed for 200 G → target 8 KB + ~4 EUs, Arm-off, latency preserved.**
+     **★ FOUNDATION BLOCKER pinned (2026-07-29):** the stock `dpa_verbs_initiator_target` sample is **hard-baked to
+     queue depth 4.** Bisected on silicon: RQ=CQ=4 works (0.38 Mpps, byte-exact); **RQ=CQ=8, RQ=4/CQ=128, and
+     RQ=64/CQ=128 ALL fail** the recv-post `__dpa_rpc__` (`Flexio RPC failed → RPC failed to post receive: DOCA
+     Driver call failure`, target aborts, 0 frames egress). The CQ umem is DOCA-managed (`doca_dpa_completion_create
+     (queue_size)`) and the QP shares one completion for send+recv, so it is **not** a byte-sizing miss — it's a
+     depth-4 assumption in the recv-post path (`tt_post_recv` → `doca_dpa_dev_verbs_qp_post_recv_wr`/`commit_recv`).
+     **d.2b's first task = make the recv-post depth-parametric** (post/track N recvs at RQ>4 without the RPC
+     failing) before any pipelining or N-EU fan-out. This is a DOCA-`doca_dpa_dev_verbs`-API-level fix, not a host
+     constant bump. Until it's solved, single-EU is capped at ~0.3 Mpps (depth-4, 1-in-flight synchronous kernel).
 
 ### Ordering
 Stage-1 byte-exact **DONE** (§10 (e): validated on silicon). d.1 depth-bump bisect **DONE** (root cause
