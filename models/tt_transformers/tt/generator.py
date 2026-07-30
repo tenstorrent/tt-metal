@@ -24,6 +24,7 @@ from models.common.sampling import (
     broadcast_sampling_params,
     chunk_sampling_params,
     format_sampling_params,
+    should_align_decode_seed_counters,
 )
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.common.warmup import WarmupForwardMixin
@@ -1269,6 +1270,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         defer_device_sampling: bool = False,
+        reload_inputs: bool | None = None,
+        reload_page_table: bool | None = None,
+        reload_sampling_params: bool | None = None,
+        reset_sampling_state: bool | None = None,
         **kwargs,
     ):
         mode_switched = False
@@ -1281,6 +1286,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.model[i].switch_mode(Mode.DECODE)
 
         on_device_sampling = (sampling_params is not None) or defer_device_sampling
+        contract_flags = (
+            reload_inputs,
+            reload_page_table,
+            reload_sampling_params,
+            reset_sampling_state,
+        )
+        explicit_contract = any(flag is not None for flag in contract_flags)
+        if explicit_contract and not all(flag is not None for flag in contract_flags):
+            raise ValueError(
+                "decode update contract requires reload_inputs, "
+                "reload_page_table, reload_sampling_params, and "
+                "reset_sampling_state together"
+            )
         B = tokens.shape[0]
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
@@ -1294,6 +1312,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # only taking host tokens for slots freshly prefilled since the last
         # decode submit (their last token came from prefill, not decode).
         if (
+            not explicit_contract
+            and
             on_device_sampling
             and (reset_batch or mode_switched)
             and enable_trace
@@ -1382,6 +1402,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             tt_decode_output = self._decode_forward_trace_text(
                 **decode_kwargs,
                 reset_batch=reset_batch or mode_switched,
+                reload_inputs=reload_inputs,
+                reload_page_table=reload_page_table,
             )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(
@@ -1402,6 +1424,23 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
+                reload_sampling_params=(
+                    bool(reload_sampling_params)
+                    if explicit_contract
+                    else True
+                ),
+                reset_sampling_state=(
+                    bool(reset_sampling_state)
+                    if explicit_contract
+                    else reset_batch
+                ),
+                align_seed_counters=should_align_decode_seed_counters(
+                    explicit_contract=explicit_contract,
+                    reset_sampling_state=bool(reset_sampling_state),
+                    # This generator historically aligned active seeded slots
+                    # on every legacy decode.
+                    legacy_alignment=True,
+                ),
             )
         # Host sampling
         if read_from_device:
@@ -1553,6 +1592,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         kv_cache=None,
         on_device_sampling=False,
         reset_batch=False,
+        reload_inputs: bool | None = None,
+        reload_page_table: bool | None = None,
     ):
         """
         Run decode forward text with tracing
@@ -1566,20 +1607,45 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.trace_inputs_decode[on_device_sampling] = device_inputs
             self.trace_output_decode[on_device_sampling] = tt_out_trace
 
-        # reset inputs when mode switches from prefill to decode,
-        # or when sampling mode changes (different trace has stale inputs)
-        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
-        self._prev_on_device_sampling = on_device_sampling
-        sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
-        reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed
-        page_table_changed = page_table is not None and (
-            self.prev_page_table is None
-            or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
+        explicit_contract = (
+            reload_inputs is not None or reload_page_table is not None
         )
+        if explicit_contract:
+            if reload_inputs is None or reload_page_table is None:
+                raise ValueError(
+                    "reload_inputs and reload_page_table must be provided together"
+                )
+            reset_inputs = reload_inputs
+            page_table_changed = reload_page_table
+        else:
+            # Legacy callers retain the previous generator-local policy.
+            prev_on_device_sampling = getattr(
+                self, "_prev_on_device_sampling", None
+            )
+            self._prev_on_device_sampling = on_device_sampling
+            sampling_mode_changed = (
+                prev_on_device_sampling is not None
+                and prev_on_device_sampling != on_device_sampling
+            )
+            reset_inputs = (
+                reset_batch or not on_device_sampling or sampling_mode_changed
+            )
+            page_table_changed = page_table is not None and (
+                self.prev_page_table is None
+                or any(
+                    not torch.equal(prev, curr)
+                    for prev, curr in zip(self.prev_page_table, page_table)
+                )
+            )
 
         for i in range(self.data_parallel):
-            refresh_trace_inputs = reset_inputs or getattr(
-                self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False
+            refresh_trace_inputs = reset_inputs or (
+                not explicit_contract
+                and getattr(
+                    self.model[i],
+                    "_tt_vllm_always_refresh_decode_trace_inputs",
+                    False,
+                )
             )
             user_page_table = page_table[i] if page_table is not None else None
 
@@ -1620,7 +1686,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         enable_trace=False,
+        reload_sampling_params: bool = True,
+        reset_sampling_state: bool | None = None,
+        align_seed_counters: bool | None = None,
     ):
+        if reset_sampling_state is None:
+            reset_sampling_state = reset_batch
+        if align_seed_counters is None:
+            # Direct callers without explicit flags retain legacy behavior.
+            align_seed_counters = True
         # sampling_dp may differ from data_parallel for models that internally
         # shard users across mesh rows (users_row_sharded) — each row samples
         # 32 users independently, so sampling params must be chunked by the
@@ -1661,9 +1735,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 else None
             )
 
+            # Reindex continuing per-slot state before params/history are
+            # refreshed for the new layout.
+            if slot_remap is not None:
+                sm_bs = sampling_module.seed_manager.max_batch_size
+                rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
+                sampling_module.seed_manager.apply_slot_remap(rank_remap)
             sampling_module.apply_decode_state(
                 model_chunks,
-                reset_batch=reset_batch,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
                 prompt_tokens=model_prompt,
                 output_tokens=model_output,
             )
@@ -1672,11 +1753,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 max_seed_slots = sampling_module.seed_manager.max_batch_size
                 start_values = torch.as_tensor(start_pos[i]).reshape(-1).tolist()
                 active_seed_slots = [idx for idx, pos in enumerate(start_values[:max_seed_slots]) if int(pos) >= 0]
-            # Apply slot remap from condense before advancing seeds.
-            if slot_remap is not None:
-                sm_bs = sampling_module.seed_manager.max_batch_size
-                rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
-                sampling_module.seed_manager.apply_slot_remap(rank_remap)
             # Register each request's explicit seed into the seed manager and
             # tie its RNG counter to the absolute decode position before
             # advancing. Without registration the per-request seed never reaches
@@ -1686,7 +1762,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # flow). Position alignment then keeps the stream reproducible even
             # when vLLM evicts a running request and re-admits it in a different
             # slot under async scheduling. Mirrors the llama3_70b_galaxy decode path.
-            if active_seed_slots:
+            if active_seed_slots is not None and (
+                reload_sampling_params or reset_sampling_state
+            ):
                 seed_bs = sampling_module.tt_sampling.max_batch_size
                 if len(model_chunks) == 1:
                     seed_values = format_sampling_params(model_chunks[0], seed_bs).seed
@@ -1695,10 +1773,23 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     for chunk in model_chunks:
                         s = format_sampling_params(chunk, seed_bs).seed
                         seed_values += s if isinstance(s, list) else [s] * seed_bs
-                sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
-                sampling_module.seed_manager.align_seed_counters_to_positions(
-                    seed_values, active_seed_slots, start_values
-                )
+                if reset_sampling_state:
+                    # A layout/mode transition reinitializes every active slot,
+                    # including unseeded requests reusing an identity slot.
+                    sampling_module.seed_manager.reset_decode_batch(
+                        seed_values, active_seed_slots
+                    )
+                    sampling_module.seed_manager.align_seed_counters_to_positions(
+                        seed_values, active_seed_slots, start_values
+                    )
+                else:
+                    sampling_module.seed_manager.reset_seed_from_slots_if_needed(
+                        seed_values, active_seed_slots
+                    )
+                    if align_seed_counters:
+                        sampling_module.seed_manager.align_seed_counters_to_positions(
+                            seed_values, active_seed_slots, start_values
+                        )
             sampling_module.seed_manager.get_new_values(active_seed_slots)
 
         sampled_outputs = []
