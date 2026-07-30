@@ -539,3 +539,66 @@ switched multi-endpoint fabric: it makes the BF↔BH edge a reliable pipe, lets 
 **gateway table own endpoint demux**, above the link. The engineering is not the ttpacket format — it's the
 **shared-fate HoL** (lossless + multi-link/channel) and the **RoCE↔mesh congestion coupling**. Both solvable, both
 must be explicit. Gated, as always, on **Spike A** (AN/LT link up) and Path-B DPA timing feasibility (§13.5).
+
+### 13.6.1 Return-path detail (mesh → RoCE endpoint): the DPA as a multi-QP RC *initiator*
+
+The inbound direction reuses the ConnectX HW RC *responder* + a straightforward re-head. The return direction is
+the harder, less-built half: the DPA becomes a **stateful RC initiator that fans out across N QPs**. On the
+BH-facing port (p0) the DPA holds an **ETH RQ** (receives ttpacket), an **ETH SQ** (BF→BH ttpacket + acks), and on
+the RoCE side **N RC QPs** (one per endpoint) — it bridges them.
+
+**Two triggers (same wire pattern, different addressing):**
+- **READ response** — an endpoint's inbound READ landed at a target BH; that BH returns the data. The destination
+  `{endpoint, QP, remote addr}` comes from the *stored original-request context*, carried back as a **correlation
+  tag** in the inner descriptor.
+- **BH-initiated WRITE** — a BH pushes to an endpoint (e.g., compute result → GPU HBM). The BH must already *name*
+  the remote target `{endpoint-id, remote addr, rkey}`, which means the **control plane** handed the TT side a
+  remote-MR handle first (see below).
+
+**Stage-by-stage (headers shown at each hop):**
+1. **Source BH builds:** `[EDM fabric hdr → gateway BH][inner egress desc: endpoint-id X, corr-tag, remote addr,
+   rkey, op, len][data]`. The EDM header routes the mesh; the inner descriptor is opaque payload to EDM.
+2. **EDM mesh route (HW-reliable per hop):** router kernels forward source BH → gateway BH; **every mesh link is
+   packet mode → HW Go-back-N**. At the gateway BH the EDM header is stripped.
+3. **Gateway BH → BF (ttpacket link):** `eth_send_packet(q, src, dest_addr, words)` → HW inserts the 16-B header
+   (TX seq, RX-seq ack, dest, ctrl) + HW Go-back-N. Payload on the wire = `[inner egress desc][data]`. The
+   `dest_addr` field is a **convention the DPA interprets** (e.g., a per-flow RX-ring slot), since the peer RX is
+   software.
+4. **BF DPA packet-mode peer-half (SW):** parse the 16-B header; check TX seq (in-order accept / gap → arm drop
+   flag); consume RX-seq ack to advance its BF→BH window; **send an ack** (piggyback or seq-update packet) **within
+   the gateway BH's `REMOTE_SEQ_TIMEOUT`** or the BH HW spuriously resends; deliver `[inner desc][data]` up.
+5. **Outbound demux (the genuinely-new logic):** `outbound_map[endpoint-id X] → {RC QP handle, SQ PI/doorbell
+   state}`. Point-to-point had one endpoint→one QP→no demux; with the switch the DPA holds **N QP handles** and
+   selects one per frame. READ responses resolve the **corr-tag → stored request context**.
+6. **Stage + post:** copy the payload into a **local staging MR** (RoCE WRITE source must be a registered MR — this
+   is the unavoidable BF-side re-head copy), then post a DPA-Verbs WQE `RDMA WRITE {src=staging, dst={remote addr
+   X, rkey X}, len, QP X}` (Arm-free doorbell).
+7. **ConnectX RC HW → switch → endpoint:** segments into RoCE packets (BTH/PSN + IB/UDP/IP/eth + ICRC), delivers
+   **HW-reliable** BF↔endpoint X; the switch forwards; endpoint X's NIC **HW-lands into its MR (zero-copy on the
+   endpoint side)**.
+
+**Three subtle problems this path forces:**
+- **RC READ doesn't fit a remote responder.** The ConnectX RC responder wants to read *local* memory, but the data
+  is on the BH. Either **pre-stage** (on the inbound READ, fetch from BH first via the return path, RNR-NAK the
+  requester until staged, then respond — adds a full BH round-trip to READ latency) or **avoid RC READ at the
+  edge** (model reads as *endpoint SEND request → gateway WRITE-back*, so every gateway→endpoint transfer is a
+  WRITE). Most gateways choose the latter.
+- **Staging MR = the one copy.** The WRITE source must be a registered MR, so the DPA lands the ttpacket payload
+  into a local staging buffer before posting — the BF-side re-head copy neither path removes.
+- **Completion coupling (end-to-end).** The ttpacket link ack only proves "the BF received it," **not** "endpoint X
+  landed it." For true end-to-end completion the BF must wait for the **ConnectX SQ CQE** and then send a
+  **completion notification back to the source BH** over the ttpacket link. Without it the BH has no proof of
+  endpoint delivery.
+
+**Control plane behind it:**
+- **QP/endpoint setup:** on endpoint X connect (RC handshake / RDMA-CM through the switch), allocate QP X and record
+  `endpoint-id X ↔ QP X` in both maps.
+- **Remote-MR federation / naming:** for BH-initiated WRITEs, advertise remote RoCE MRs into the mesh as
+  TT-nameable handles (rkey-like); the source BH puts the handle in the inner descriptor and the outbound map
+  translates `handle → {QP, remote addr, rkey}`. This is **B2 extended to name *remote RoCE* targets**, not just BH
+  MRs.
+
+**Why it's the one genuinely-new piece:** it's where the gateway stops being a re-header and becomes a **stateful
+multi-QP RC initiator** — per-frame QP selection, per-QP SQ management, READ-response correlation, staging-MR, and
+completion coupling back into the mesh. All buildable on DPA-Verbs (post WRITE on a selected QP, Arm-free), but it
+is the piece to scope carefully.
