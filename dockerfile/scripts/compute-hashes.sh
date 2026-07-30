@@ -78,6 +78,14 @@ curl -fsSL -o "$TMPDIR/yq_linux_amd64" \
 echo "YQ_SHA256=$($SHA_CMD "$TMPDIR/yq_linux_amd64" | cut -d' ' -f1)"
 echo ""
 
+# curl
+CURL_VERSION="${CURL_VERSION:-8.21.0}"
+echo "Downloading curl ${CURL_VERSION}..."
+curl -fsSL -o "$TMPDIR/curl.tar.gz" \
+    "https://curl.se/download/curl-${CURL_VERSION}.tar.gz"
+echo "CURL_SHA256=$($SHA_CMD "$TMPDIR/curl.tar.gz" | cut -d' ' -f1)"
+echo ""
+
 # OpenMPI — integrity is verified by git commit SHA, not tarball hash.
 # The OMPI_COMMIT_SHA in Dockerfile.tools is the dereferenced commit for the tag.
 # To update: git ls-remote --refs https://github.com/open-mpi/ompi.git <new-tag>

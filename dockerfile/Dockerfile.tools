@@ -42,6 +42,15 @@ ARG YQ_SHA256=0c2b24e645b57d8e7c0566d18643a6d4f5580feeea3878127354a46f2a1e4598
 ARG ZSTD_VERSION=1.5.7
 ARG ZSTD_SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
 
+# curl 8.21.0. curl.se publishes PGP signatures rather than a sidecar
+# checksum file, so SHA256 is computed directly from a signature-verified
+# download of curl-8.21.0.tar.gz (same trust model already used here for
+# gdb/doxygen). See MINFRA-1374: curl --aws-sigv4 only started sending the
+# X-Amz-Content-Sha256 header Garage requires in curl 8.x, and Ubuntu
+# 22.04's apt package is permanently pinned at 7.81.
+ARG CURL_VERSION=8.21.0
+ARG CURL_SHA256=d9b327997999045a24cda50f3983e69e51c516bd8be6ef9842fc7f99135e33bb
+
 # NOTE: OMPI_VERSION is the single source of truth for the OpenMPI version.
 # If you change this value, you MUST also update OMPI_VERSION in:
 #   - dockerfile/Dockerfile (ENV OMPI_VERSION in base stage)
@@ -305,6 +314,45 @@ LABEL org.opencontainers.image.description="Zstandard - fast real-time compressi
 LABEL org.opencontainers.image.licenses="BSD-3-Clause OR GPL-2.0-only"
 LABEL org.opencontainers.image.version="${ZSTD_VERSION}"
 COPY --from=zstd-builder /install/ /install/
+
+#############################################################
+# curl - requires configure/make to build (see MINFRA-1374)
+# Outputs: /install/bin/curl, /install/lib/libcurl.*, /install/include/...
+#
+# Built in an ubuntu:22.04 base (matching gdb-builder) rather than the
+# manylinux base zstd/openmpi use, since curl's only consumer is the
+# Ubuntu-based CI images in the main Dockerfile - no manylinux ABI
+# constraint applies here.
+#############################################################
+
+FROM ubuntu:22.04 AS curl-builder
+ARG CURL_VERSION
+ARG CURL_SHA256
+
+ENV DEBIAN_FRONTEND=noninteractive
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+# libssl-dev/zlib1g-dev are required (TLS + compression); libnghttp2-dev is
+# picked up automatically by configure if present (enables HTTP/2), matching
+# the feature set of the apt curl package this replaces.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates build-essential pkg-config \
+    libssl-dev zlib1g-dev libnghttp2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY dockerfile/scripts/install-curl.sh /tmp/install-curl.sh
+RUN CURL_VERSION=${CURL_VERSION} \
+    CURL_SHA256=${CURL_SHA256} \
+    INSTALL_PREFIX=/install \
+    /bin/bash /tmp/install-curl.sh
+
+FROM scratch AS curl
+ARG CURL_VERSION
+LABEL org.opencontainers.image.source="https://github.com/curl/curl"
+LABEL org.opencontainers.image.description="curl - command line tool and library for transferring data with URLs"
+LABEL org.opencontainers.image.licenses="curl"
+LABEL org.opencontainers.image.version="${CURL_VERSION}"
+COPY --from=curl-builder /install/ /install/
 
 #############################################################
 # SFPI - Tenstorrent SFPI compiler
