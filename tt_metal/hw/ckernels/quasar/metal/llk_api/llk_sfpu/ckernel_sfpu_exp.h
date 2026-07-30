@@ -75,6 +75,11 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+// Non-finite behaviour of this path:
+//   +NaN -> NaN    -NaN -> 0    +Inf -> +Inf    -Inf -> 0
+// -NaN diverges from Blackhole, which returns NaN for either sign: a negative-signed NaN drives i
+// negative, so the lane lands in the underflow arm. Derived from simulation of this routine, NOT
+// silicon-verified -- no Quasar target available.
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     sfpi::vInt i;
     sfpi::vFloat f, r, j;
