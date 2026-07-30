@@ -28,8 +28,10 @@
 #if DFB_IS_COMPUTE_MATH
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {}
 #else
-inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_cb_interface(logical_dfb_id)) {}
+inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) :
+    logical_dfb_id_(logical_dfb_id),
+    local_dfb_interface_(get_local_cb_interface(logical_dfb_id)),
+    region_tracker_(local_dfb_interface_.fifo_limit - local_dfb_interface_.fifo_size, local_dfb_interface_.fifo_size) {}
 #endif
 
 inline uint32_t DataflowBuffer::get_entry_size() const {

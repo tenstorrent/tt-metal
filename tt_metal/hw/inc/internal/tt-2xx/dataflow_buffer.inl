@@ -29,8 +29,10 @@ inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
 }
 #else
-inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)) {
+inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) :
+    logical_dfb_id_(logical_dfb_id),
+    local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)),
+    region_tracker_(address_units_to_bytes(local_dfb_interface_.tc_slots[0].base_addr), get_ring_span_bytes()) {
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
 }
 #endif
