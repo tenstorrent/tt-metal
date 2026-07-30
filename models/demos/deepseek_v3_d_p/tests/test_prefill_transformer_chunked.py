@@ -1434,6 +1434,7 @@ def run_chunked_transformer_no_pcc(
         f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, " f"num_iters={num_iters})"
     )
     moe_workload_probe.dump()
+    moe_workload_probe.write_captured_routing()
     perf_failures, perf_table_lines = print_duration_table(iteration_chunk_times)
     timing_lines = [f"  {key}: {profiler.get(key) * 1000:.2f} ms" for key in profiler.times]
     if perf_table_lines:

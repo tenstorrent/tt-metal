@@ -58,15 +58,30 @@ import ttnn
 
 ENV_ENABLE = "TT_DS_MOE_WORKLOAD_PROBE"
 ENV_OUT = "TT_DS_MOE_WORKLOAD_PROBE_OUT"
+ENV_CAPTURE = "TT_DS_MOE_ROUTING_CAPTURE"
 
 # (iter, chunk, layer, col) -> {"in_col": int, "fabric": int, "per_row": [int, ...]}
 _rows: dict[tuple[int, int, int, int], dict] = {}
+# layer -> {chunk: LongTensor[chunk_tokens, top_k]} of global expert ids, iteration 0 only.
+_captured: dict[int, dict[int, "torch.Tensor"]] = {}
 _ctx = {"iter": -1, "chunk": -1, "tag": "unknown"}
 _warned = False
 
 
 def enabled() -> bool:
-    return os.getenv(ENV_ENABLE) == "1"
+    return os.getenv(ENV_ENABLE) == "1" or capture_enabled()
+
+
+def capture_enabled() -> bool:
+    """Dump the raw per-layer routing to an `expert_routing.safetensors` for replay.
+
+    Produces the exact format `load_captured_routing` consumes (keys ``expert_ids_layer_{N}``,
+    Galaxy-global expert ids), so a chunked-prefill run can supply captured routing for models
+    or datasets that have no ``routing/`` stream in their golden trace — notably the DeepSeek
+    code_debug trace, whose own tensor_mapping.json records "NO routing/ stream (expert
+    ids/weights not saved)".
+    """
+    return os.getenv(ENV_CAPTURE) == "1"
 
 
 def set_context(iter_idx: int, chunk_idx: int, tag: str | None = None) -> None:
@@ -115,8 +130,17 @@ def record_dispatch(
         # per_col_row[c][r] = picks landing on the chip at (row r, col c) — intra-column skew.
         per_col_row = [[0] * rows for _ in range(num_dispatch_groups)]
 
+        # Raw per-row picks, kept 2-D ([tokens_on_this_row, top_k]) for the routing capture. The
+        # loader reads a flat tensor as view(dispatch_group_size, seq_len_per_chip, top_k), i.e.
+        # chip-major, so stacking rows in mesh-row order is already the layout it expects.
+        row_picks_2d: list[torch.Tensor] = []
+
         for src_row, t in enumerate(col0):
-            picks = ttnn.to_torch(t).to(torch.int64).reshape(-1)
+            raw = ttnn.to_torch(t).to(torch.int64)
+            top_k = int(raw.shape[-1])
+            if capture_enabled() and _ctx["iter"] == 0:
+                row_picks_2d.append(raw.reshape(-1, top_k).clone())
+            picks = raw.reshape(-1)
             picks = picks[(picks >= 0) & (picks < num_routed_experts)]
             if picks.numel() == 0:
                 continue
@@ -141,6 +165,11 @@ def record_dispatch(
             slot["fabric"] += per_col_fabric[c]
             for r in range(rows):
                 slot["per_row"][r] += per_col_row[c][r]
+
+        # [rows, tokens_per_row_per_chunk, top_k]; the builder concatenates chunks along the
+        # token axis per row, so the final flat tensor stays chip-major.
+        if row_picks_2d and len(row_picks_2d) == rows:
+            _captured.setdefault(int(layer_idx), {})[int(_ctx["chunk"])] = torch.stack(row_picks_2d, dim=0)
     except Exception as e:  # instrumentation must never break a run
         if not _warned:
             _warned = True
@@ -150,6 +179,43 @@ def record_dispatch(
 def _out_prefix() -> str:
     base = os.getenv(ENV_OUT) or f"/tmp/moe_workload_{_ctx['tag']}"
     return base
+
+
+def write_captured_routing() -> str | None:
+    """Write the captured routing as ``<prefix>_expert_routing.safetensors``.
+
+    Layout matches what :func:`load_captured_routing` expects: one flat int32 tensor per key
+    ``expert_ids_layer_{N}``, read back as ``view(dispatch_group_size, seq_len_per_chip, top_k)``.
+    Chunks are concatenated along each chip's token axis, so ``seq_len_per_chip`` ends up
+    ``n_chunks * chunk_tokens_per_chip`` (11 chunks x 640 = 7040 for an 8x4 mesh at CHUNK=5120).
+    Slice it down to a worker's expected token count with
+    ``scripts/build_captured_routing.py --tokens N``.
+    """
+    if not capture_enabled() or not _captured:
+        return None
+    try:
+        from safetensors.torch import save_file
+    except ImportError:
+        logger.warning("[moe-workload-probe] safetensors not importable; routing capture not written")
+        return None
+    out = f"{_out_prefix()}_expert_routing.safetensors"
+    tensors: dict[str, torch.Tensor] = {}
+    for layer, per_chunk in sorted(_captured.items()):
+        # [rows, tokens_per_chunk, top_k] per chunk -> concat on the token axis -> flat, chip-major.
+        stacked = torch.cat([per_chunk[c] for c in sorted(per_chunk)], dim=1)
+        tensors[f"expert_ids_layer_{layer}"] = stacked.reshape(-1).to(torch.int32).contiguous()
+    try:
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+        save_file(tensors, out)
+    except Exception as e:
+        logger.warning(f"[moe-workload-probe] routing capture write failed: {e!r}")
+        return None
+    any_key = next(iter(tensors))
+    logger.success(
+        f"[moe-workload-probe] wrote routing capture: {len(tensors)} layers, "
+        f"{tensors[any_key].numel()} ids/layer -> {out}"
+    )
+    return out
 
 
 def dump(top_n: int = 4) -> str | None:
