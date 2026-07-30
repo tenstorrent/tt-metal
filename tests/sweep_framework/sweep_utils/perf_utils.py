@@ -102,7 +102,28 @@ def gather_single_test_perf(device, test_passed):
     # meshes (T3K / galaxy); the legacy CSV path only worked single-chip and host-
     # read remote chips mid-run -> inter-chip ethernet timeout.
     logger.info("Reading profiler data from device")
-    ttnn.ReadDeviceProfiler(device)
+    try:
+        ttnn.ReadDeviceProfiler(device)
+    except Exception as e:
+        # A profiler READBACK failure is a tooling failure, not a test failure: the op and
+        # its PCC check have already completed by the time we get here. Leaving this call
+        # unguarded (while the get_latest_programs_perf_data() call below WAS guarded)
+        # meant the exception propagated out of the test body and the vector was recorded
+        # as FAIL_ASSERT_EXCEPTION for a passing op.
+        #
+        # Seen on Galaxy run 30509849370 job 90770018256, copy_model_traced 75a4...:
+        # the op ran, comp_pcc ran, then 1.2s later
+        #   TT_THROW @ tt_metal/impl/profiler/profiler.cpp:1830: Invalid packet type
+        #   DeviceProfiler::readRiscProfilerResults(...)
+        # i.e. the host decoded a marker whose 3-bit packet-type field was 6 or 7 (only
+        # 0-5 are valid and all six are handled), so it parsed past the data this
+        # iteration actually wrote -- a stale DEVICE_BUFFER_END_INDEX_* for some risc.
+        #
+        # Return the SKIPPED sentinel (not None) so the runner marks PASS with device-perf
+        # N/A, matching the existing _SKIP_DEVICE_PERF / _should_skip_device_profiler
+        # behaviour, instead of FAIL_UNSUPPORTED_DEVICE_PERF.
+        logger.warning(f"Device profiler readback failed ({e}); reporting device-perf N/A for this vector.")
+        return DEVICE_PERF_SKIPPED
     logger.info("Reading profiler data from device done")
 
     if not test_passed:
@@ -258,6 +279,14 @@ def run_with_cache_comparison(
     if measure_dp:
         device_perf_cached = gather_single_test_perf(_resolve_perf_device(device, test_module), status_cached)
 
+    # A profiler readback failure on EITHER run means no comparable perf pair, so treat the
+    # whole vector as perf-skipped rather than letting the sentinel string reach
+    # simplify_device_perf() / get_updated_message().
+    if DEVICE_PERF_SKIPPED in (device_perf_uncached, device_perf_cached):
+        dp_skipped = True
+        measure_dp = False
+        device_perf_uncached = device_perf_cached = None
+
     # Determine combined status and message
     if not status_uncached:
         if status_cached:
@@ -323,6 +352,10 @@ def run_single(
         return status, message, e2e_ms, DEVICE_PERF_SKIPPED, peak_memory
     if dp_requested:
         perf_result = gather_single_test_perf(_resolve_perf_device(device, test_module), status)
+        if perf_result == DEVICE_PERF_SKIPPED:
+            # Profiler readback failed -- pass the sentinel through untouched so the
+            # runner marks PASS/perf-N/A. simplify_device_perf() expects a dict.
+            return status, message, e2e_ms, DEVICE_PERF_SKIPPED, peak_memory
         message = get_updated_message(message, perf_result)
         simplified_perf = simplify_device_perf(perf_result)
         return status, message, e2e_ms, simplified_perf, peak_memory
