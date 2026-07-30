@@ -361,6 +361,96 @@ def test_sort_uint16_index_correctness(n, hi, descending, device):
     assert_equal(golden, dev_idx)
 
 
+@pytest.mark.parametrize(
+    "n, hi, descending",
+    [
+        # Wt > SORT_WT_THRESHOLD (64) forces the MultiCore factory:
+        #   Wt = ceil(n / 32) after padding.  n=2048 → Wt=64 (still SingleCore).
+        #   n=2080 → Wt=65 → MultiCore.  n=8192 → Wt=256 → MultiCore.
+        # Use hi <= 65535 so all values fit in UINT16.
+        (2080, 2079, False),
+        (2080, 2079, True),
+        (4096, 4095, False),
+        (8192, 8191, False),
+    ],
+)
+def test_sort_uint16_index_correctness_multicore(n, hi, descending, device):
+    """
+    Regression test for UINT16 sort keys with Wt > SORT_WT_THRESHOLD.
+
+    Selects the MultiCore factory (SortProgramFactorySingleRowMultiCore) whose
+    reader/writer kernels now perform an element-wise UInt16↔Float32 conversion
+    so the SFPU compares keys in fp32_dest_acc_en mode (exact for 0..65535).
+    """
+    torch.manual_seed(0)
+    shape = [1, n]
+
+    assert hi + 1 >= n, f"hi+1={hi+1} must be >= n={n} to guarantee uniqueness"
+    if descending:
+        vals = torch.randperm(hi + 1)[:n].to(torch.int32) + 1
+    else:
+        vals = torch.randperm(hi + 1)[:n].to(torch.int32)
+    x_torch = vals.reshape(shape)
+
+    ttnn_input = ttnn.from_torch(x_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    _sort_vals, ttnn_idx = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    assert ttnn_idx.dtype == ttnn.uint32, f"Expected UINT32 indices for UINT16 input, got {ttnn_idx.dtype}"
+
+    dev_idx = ttnn.to_torch(ttnn_idx).to(torch.int64)
+    golden = torch.argsort(x_torch.to(torch.int64), dim=-1, descending=descending)
+
+    assert_equal(golden, dev_idx)
+
+
+@pytest.mark.parametrize(
+    "n, hi, descending",
+    [
+        # ROW_MAJOR UINT16 sort:
+        #   Wt = ceil(n / 32) after W-padding.  n <= 2048 (Wt <= 64) routes to
+        #   SingleCore; n > 2048 (Wt > 64) routes to MultiCore, which now also
+        #   does the UInt16↔Float32 conversion in its ROW_MAJOR reader/writer.
+        (64, 63, False),  # Wt = 2, SingleCore RM
+        (551, 550, False),  # Wt = 18, SingleCore RM
+        (551, 550, True),
+        # Wt = 64 SingleCore RM UINT16 hits L1 OOM (~2 MB CBs) — pre-existing
+        # SingleCore limit, unrelated to the new MultiCore RM path.  Skip here.
+        (2080, 2079, False),  # Wt = 65, MultiCore RM (new path)
+        (4096, 4095, False),  # Wt = 128, MultiCore RM
+        (4096, 4095, True),
+    ],
+)
+def test_sort_uint16_row_major_correctness(n, hi, descending, device):
+    """
+    Regression test for UINT16 sort in ROW_MAJOR layout across both SingleCore
+    (Wt <= 64) and MultiCore (Wt > 64) factories.  All values in [0, 65535] must
+    round-trip through the UInt16↔Float32 conversion loops with exact indices.
+    """
+    torch.manual_seed(0)
+    shape = [32, n]  # combined_h must be a multiple of TILE_HEIGHT (32) for RM
+
+    assert hi + 1 >= n, f"hi+1={hi+1} must be >= n={n} to guarantee uniqueness"
+    if descending:
+        vals = torch.stack([torch.randperm(hi + 1)[:n].to(torch.int32) + 1 for _ in range(shape[0])])
+    else:
+        vals = torch.stack([torch.randperm(hi + 1)[:n].to(torch.int32) for _ in range(shape[0])])
+    x_torch = vals
+
+    ttnn_input = ttnn.from_torch(x_torch, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ttnn_vals, ttnn_idx = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    assert ttnn_idx.dtype == ttnn.uint32, f"Expected UINT32 indices for UINT16 input, got {ttnn_idx.dtype}"
+
+    dev_vals = ttnn.to_torch(ttnn_vals).to(torch.int64)
+    dev_idx = ttnn.to_torch(ttnn_idx).to(torch.int64)
+    golden_vals, golden_idx = torch.sort(x_torch.to(torch.int64), dim=-1, descending=descending)
+
+    assert_equal(golden_vals, dev_vals)
+    assert_equal(golden_idx, dev_idx)
+
+
 def create_descending_tensor(shape, dim, dtype=torch.bfloat16):
     size_along_dim = shape[dim]
 

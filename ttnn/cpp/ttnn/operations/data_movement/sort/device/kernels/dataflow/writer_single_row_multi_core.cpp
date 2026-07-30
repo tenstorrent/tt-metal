@@ -88,19 +88,77 @@ void kernel_main() {
                             const uint32_t row_base = h * TILE_H;
 
                             if constexpr (is_row_major) {
-                                for (uint32_t tile_id : {left_tile_id, right_tile_id}) {
+                                // Compute pushed TILE_H pair-rows into c_9 (index) and
+                                // c_8 (value).  Each CB page holds one row of BOTH
+                                // tiles' data concatenated: left half at offset 0,
+                                // right half at offset W_index/value_bytes.  Split
+                                // each page into two DRAM writes (one per tile).
+                                for (uint32_t row = 0; row < TILE_H; row++) {
+                                    rm_output_index_dfb.wait_front(one_tile);
+                                    noc.async_write(
+                                        rm_output_index_dfb,
+                                        index_tensor_addr_gen,
+                                        W_index_bytes,
+                                        {.offset_bytes = 0},
+                                        {.page_id = row_base + row,
+                                         .offset_bytes = static_cast<uint32_t>(left_tile_id * W_index_bytes)});
+                                    noc.async_write(
+                                        rm_output_index_dfb,
+                                        index_tensor_addr_gen,
+                                        W_index_bytes,
+                                        {.offset_bytes = W_index_bytes},
+                                        {.page_id = row_base + row,
+                                         .offset_bytes = static_cast<uint32_t>(right_tile_id * W_index_bytes)});
+                                    noc.async_write_barrier();
+                                    rm_output_index_dfb.pop_front(one_tile);
+                                }
+                                if constexpr (is_uint16_fp32_mode) {
+                                    // c_8 holds Float32 pair-rows (2 * W_sort_value_bytes per
+                                    // page).  Convert 2 * W_elements floats → 2 * W_elements
+                                    // UInt16s into the staging CB, then split the raw pair-row
+                                    // into two DRAM half-writes at left_/right_tile offsets.
+                                    DataflowBuffer conv_dfb(uint16_conv_cb_index);
+                                    constexpr uint32_t W_elements_pair = 2 * W_tile_bytes / sizeof(uint16_t);
                                     for (uint32_t row = 0; row < TILE_H; row++) {
-                                        rm_output_index_dfb.wait_front(one_tile);
+                                        rm_output_value_dfb.wait_front(one_tile);
+                                        conv_dfb.reserve_back(one_tile);
+
+                                        volatile tt_l1_ptr uint32_t* fp32_src =
+                                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                                rm_output_value_dfb.get_read_ptr());
+                                        volatile tt_l1_ptr uint16_t* u16_dst =
+                                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(conv_dfb.get_write_ptr());
+
+                                        for (uint32_t i = 0; i < W_elements_pair; i++) {
+                                            const uint32_t fp32_bits = fp32_src[i];
+                                            float fval;
+                                            __builtin_memcpy(&fval, &fp32_bits, sizeof(fval));
+                                            u16_dst[i] = static_cast<uint16_t>(static_cast<uint32_t>(fval));
+                                        }
+                                        __sync_synchronize();
+
+                                        rm_output_value_dfb.pop_front(one_tile);
+                                        conv_dfb.push_back(one_tile);
+
+                                        conv_dfb.wait_front(one_tile);
                                         noc.async_write(
-                                            rm_output_index_dfb,
-                                            index_tensor_addr_gen,
-                                            W_index_bytes,
+                                            conv_dfb,
+                                            input_tensor_addr_gen,
+                                            W_tile_bytes,
                                             {.offset_bytes = 0},
                                             {.page_id = row_base + row,
-                                             .offset_bytes = static_cast<uint32_t>(tile_id * W_index_bytes)});
+                                             .offset_bytes = static_cast<uint32_t>(left_tile_id * W_tile_bytes)});
+                                        noc.async_write(
+                                            conv_dfb,
+                                            input_tensor_addr_gen,
+                                            W_tile_bytes,
+                                            {.offset_bytes = W_tile_bytes},
+                                            {.page_id = row_base + row,
+                                             .offset_bytes = static_cast<uint32_t>(right_tile_id * W_tile_bytes)});
                                         noc.async_write_barrier();
-                                        rm_output_index_dfb.pop_front(one_tile);
+                                        conv_dfb.pop_front(one_tile);
                                     }
+                                } else {
                                     for (uint32_t row = 0; row < TILE_H; row++) {
                                         rm_output_value_dfb.wait_front(one_tile);
                                         noc.async_write(
@@ -109,7 +167,14 @@ void kernel_main() {
                                             W_tile_bytes,
                                             {.offset_bytes = 0},
                                             {.page_id = row_base + row,
-                                             .offset_bytes = static_cast<uint32_t>(tile_id * W_tile_bytes)});
+                                             .offset_bytes = static_cast<uint32_t>(left_tile_id * W_tile_bytes)});
+                                        noc.async_write(
+                                            rm_output_value_dfb,
+                                            input_tensor_addr_gen,
+                                            W_tile_bytes,
+                                            {.offset_bytes = W_tile_bytes},
+                                            {.page_id = row_base + row,
+                                             .offset_bytes = static_cast<uint32_t>(right_tile_id * W_tile_bytes)});
                                         noc.async_write_barrier();
                                         rm_output_value_dfb.pop_front(one_tile);
                                     }
@@ -154,6 +219,10 @@ void kernel_main() {
                                             __builtin_memcpy(&fval, &fp32_bits, sizeof(fval));
                                             u16_ptr[i] = static_cast<uint16_t>(static_cast<uint32_t>(fval));
                                         }
+
+                                        // Drain RISC-V store buffer before the NoC reads
+                                        // from the same L1 buffer (see single-core writer).
+                                        __sync_synchronize();
 
                                         input_output_dfb.pop_front(one_tile);
                                         conv_dfb.push_back(one_tile);

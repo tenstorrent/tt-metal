@@ -67,6 +67,15 @@ Tensor pre_sort_transform_tensor(
     // UINT16 cannot represent ±inf.  Use UINT16_MAX (65535) as the sentinel for ascending
     // (sorts past all real values) and 0 for descending (sorts after all real values).
     // For all other dtypes use ±inf as before.
+    //
+    // Known limitation: 0 and 65535 are valid UINT16 values, so these sentinels
+    // can collide with real input data.  If the input contains 65535 (ascending)
+    // or 0 (descending) and the last dimension needs W-padding to the next power
+    // of two, a padded element with the same sentinel value could sort into the
+    // sliced result, producing an index that points outside the original
+    // sort dimension.  In practice the primary use case (position indices
+    // bounded well below 65535) is not affected, but full-range UINT16 inputs
+    // may see incorrect indices for tied values at the boundary.
     const bool is_uint16_input = (input_tensor.dtype() == DataType::UINT16);
     const float pad_ascending = is_uint16_input ? 65535.0f : std::numeric_limits<float>::infinity();
     const float pad_descending = is_uint16_input ? 0.0f : -std::numeric_limits<float>::infinity();
