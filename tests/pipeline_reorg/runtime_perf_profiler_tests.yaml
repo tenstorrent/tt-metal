@@ -66,11 +66,13 @@
     if [ "$ARCH_NAME" = "blackhole" ]; then
       GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/profiler_overhead_blackhole_golden.json
     fi
-    # BRING-UP: goldens ship with placeholder times, so --ignore-times validates only the
-    # benchmark set (names) for now. Arm the gate by replacing the golden with a real CI
-    # benchmark_out JSON captured on this SKU, then drop --ignore-times.
+    # ARMED: metrics with a numeric real_time in the golden are gated at +/-tolerance; metrics
+    # with real_time=null are record-only (measured value printed, not gated). Currently gated:
+    # Wormhole BM_profiler_read (real wh_n300_civ2 capture). Record-only: profiled_dispatch on
+    # both SKUs (too noisy) and all Blackhole metrics (no real bh_p150_perf capture yet -- arm by
+    # populating the Blackhole golden from the numbers this job prints).
     ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_profiler_overhead_ci.py \
-      profiler_overhead_bench.json --golden "$GOLDEN" --ignore-times
+      profiler_overhead_bench.json --golden "$GOLDEN"
   skus:
     wh_n300_civ2:
       timeout: 10
