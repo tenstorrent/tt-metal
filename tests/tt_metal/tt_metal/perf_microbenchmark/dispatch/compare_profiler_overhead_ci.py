@@ -10,9 +10,11 @@ These benchmarks report host-side latency via Google Benchmark manual time (the
 ``real_time`` field, in nanoseconds): the cost of ``ReadMeshDeviceProfilerResults`` (the
 profiler-buffer writeout) and of profiler-enabled dispatch. A result is a regression if it
 is more than ``--tolerance`` percent slower than the golden. Being faster only prints an
-advisory to refresh the golden. ``--ignore-times`` performs a structural check only (names
-must match, no benchmark errored), useful while a new benchmark's timings are still being
-characterized on a given SKU.
+advisory to refresh the golden. A golden entry with ``real_time`` set to ``null`` is
+record-only: its measured value is reported but never gated (used for metrics that are too
+noisy to gate on a given SKU, or SKUs without a real CI capture yet). ``--ignore-times``
+performs a structural check only (names must match, no benchmark errored), useful while a
+new benchmark's timings are still being characterized on a given SKU.
 """
 
 import argparse
@@ -63,7 +65,9 @@ def collect(bench_obj):
             # A raw iteration entry from a multi-repetition run; skip in favor of the min aggregate.
             continue
         if "real_time" in b:
-            times[name] = float(b["real_time"])
+            rt = b["real_time"]
+            # A null real_time in a golden marks a record-only (tracked, not gated) metric.
+            times[name] = None if rt is None else float(rt)
     return times, errors
 
 
@@ -88,6 +92,13 @@ def main():
             exit_code = 1
             continue
         result_ns = result_times[name]
+        if golden_ns is None:
+            # Record-only metric: report the measured value but do not gate on it. Used for the
+            # profiled_dispatch metrics (host-side jitter too high to gate on some SKUs) and for
+            # SKUs without a real CI capture yet; populate a numeric golden real_time to gate.
+            shown = f"{result_ns:.0f}ns" if result_ns is not None else "no real_time"
+            print(f"[record only] {name}: measured {shown} (not gated)")
+            continue
         diff_pct = result_ns / golden_ns * 100 - 100
         if diff_pct > args.tolerance:
             msg = f"Test {name} expected {golden_ns:.0f}ns but got {result_ns:.0f}ns ({diff_pct:.2f}% worse)"
