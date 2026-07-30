@@ -239,7 +239,7 @@ jobs:
       - name: Create changelog
         if: ${{ !inputs.dry-run }}
         id: create-changelog
-        uses: mikepenz/release-changelog-builder-action@v4
+        uses: mikepenz/release-changelog-builder-action@32e3c96f29a6532607f638797455e9e98cfc703d # v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           configuration: infra/release-changelog-config.json
