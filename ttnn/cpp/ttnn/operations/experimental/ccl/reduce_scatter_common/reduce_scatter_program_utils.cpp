@@ -131,7 +131,7 @@ RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
     }
 
     const uint32_t single_tile_bytes = input_tensor.buffer()->page_size();
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const uint32_t num_pages_per_packet = packet_size_bytes / single_tile_bytes;
     const uint32_t num_tiles_to_write_per_packet = std::min(4u, num_pages_per_packet);
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4u : 8u;

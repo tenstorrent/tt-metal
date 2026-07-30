@@ -51,6 +51,17 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
+
+    if (tensor_args.optional_intermediate_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.optional_intermediate_tensor->device() == input_tensor.device(),
+            "Persistent intermediate tensor must be allocated on the same mesh device as the input tensor");
+    }
+    if (tensor_args.optional_penult_intermediate_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.optional_penult_intermediate_tensor->device() == input_tensor.device(),
+            "Persistent penult intermediate tensor must be allocated on the same mesh device as the input tensor");
+    }
 }
 
 void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
@@ -87,6 +98,9 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         const auto& interm = tensor_args.optional_intermediate_tensor.value();
         TT_FATAL(interm.storage_type() == StorageType::DEVICE, "Persistent intermediate tensor must be on device");
+        TT_FATAL(
+            interm.device() == input_tensor.device(),
+            "Persistent intermediate tensor must be allocated on the same mesh device as the input tensor");
         if (!use_contiguous) {
             if (stage_spec.has_value()) {
                 // The contiguous layout was available and this buffer is not it, so the caller must
@@ -134,6 +148,9 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
             "penult intermediate staging spec must apply whenever the contiguous path is used");
         TT_FATAL(
             penult_interm.storage_type() == StorageType::DEVICE, "Persistent penult intermediate must be on device");
+        TT_FATAL(
+            penult_interm.device() == input_tensor.device(),
+            "Persistent penult intermediate tensor must be allocated on the same mesh device as the input tensor");
         TT_FATAL(
             ttnn::experimental::ccl::reduce_scatter_tensor_matches_spec(penult_interm, *penult_intermediate_spec),
             "Persistent penult intermediate does not match the contiguous reduce-scatter penult intermediate "

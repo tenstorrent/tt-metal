@@ -44,11 +44,12 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
 
             * Contiguous (chunk-paged). The intermediate is a row-major, interleaved-DRAM staging
               tensor whose page holds a whole chunk, so a chunk's tiles are contiguous at the
-              destination. The writer sends each chunk as a single fused-unicast write instead of a
-              scatter write, and the reader reads it back in one coalesced transaction instead of one
-              per tile. Requires a companion penult intermediate, which the op allocates alongside the
-              intermediate unless you pass persistent buffers; to pass your own, allocate both with
-              reduce_scatter_minimal_async_create_intermediate_buffer.
+              destination. The writer sends a chunk as one or more fused-unicast writes (one per
+              fabric packet, since a chunk may exceed a single packet's payload) instead of
+              scatter-writing tile by tile, and the reader reads it back in one coalesced
+              transaction instead of one per tile. Requires a companion penult intermediate, which
+              the op allocates alongside the intermediate unless you pass persistent buffers; to
+              pass your own, allocate both with reduce_scatter_minimal_async_create_intermediate_buffer.
             * Tiled. The intermediate mirrors the input tensor's shape and tiled addressing, one tile
               per page. This is the only layout available for Linear topology or scatter dim 0.
 
