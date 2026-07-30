@@ -7,8 +7,8 @@
 # instead of the raw object-API bake-off kernels.
 #
 # What changed vs the bake-off:
-#   * The fence is BAKED IN to flush — there is no barrier variant to test (the helper has no
-#     barrier knob, by design), and linking is always on (no unlinked variant).
+#   * The fence is selected internally: remote-only sends stop at SENT, while real sender
+#     loopback copies wait for ACKED completion. Linking is always on (no unlinked variant).
 #   * Variants exercise the helper's actual axes: the data-ready signal (Flag default | Counter
 #     knob) and PRE_HANDSHAKE.
 #   * Loopback is NOT a knob: the Pipe infers it at runtime from sender-in-rect. So these tests
@@ -455,7 +455,7 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
     # Mcast2D fully-inside (sender at the column corner, in the rect); no handshake -> data_ready only.
     mc = ttnn.Mcast2D(device, full_crs, ttnn.CoreCoord(0, 0), ttnn.McastConfig(handshake=False, base_sem_id=0))
 
-    cb_src, cb_dst = 0, 1
+    cb_src, cb_dst, cb_result = 0, 1, 16
     cbs = [
         ttnn.CBDescriptor(
             total_size=payload_pages * page_bytes,
@@ -471,6 +471,13 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
                 ttnn.CBFormatDescriptor(buffer_index=cb_dst, data_format=ttnn.bfloat16, page_size=page_bytes)
             ],
         ),
+        ttnn.CBDescriptor(
+            total_size=payload_pages * page_bytes,
+            core_ranges=sender_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb_result, data_format=ttnn.bfloat16, page_size=page_bytes)
+            ],
+        ),
     ]
     # ---- semaphores: no handshake -> Mcast2D creates just data_ready, on the rect ----
     semaphores = mc.owned_semaphores()
@@ -480,7 +487,7 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
     # handshake=False -> flags pre_handshake bit clear, so the sender/receiver run without the ack.
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
-    sender_ct += [payload_pages, page_bytes, n_iters]
+    sender_ct += [payload_pages, page_bytes, n_iters, cb_result]
     sender_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     sender_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     sender_rt = ttnn.RuntimeArgs()
@@ -499,7 +506,16 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    kernels = [sender_k]
+    compute_k = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/pipe_f3_compute.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=sender_crs,
+        compile_time_args=[cb_dst, cb_result, payload_pages],
+        runtime_args=[],
+        config=ttnn.ComputeConfigDescriptor(),
+    )
+
+    kernels = [sender_k, compute_k]
     # receiver kernel on the other column cores (shards 1..R-1); none in the degenerate case
     if has_receivers:
         recv_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, R - 1))])
@@ -534,7 +550,7 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
 
 @pytest.mark.parametrize("payload_tiles", [1, 4, 16])
 def test_f3_loopback(device, payload_tiles):
-    _run_f3(device, rect_len=4, payload_tiles=payload_tiles, n_iters=1)
+    _run_f3(device, rect_len=4, payload_tiles=payload_tiles, n_iters=32)
 
 
 # Degenerate guard: rect_len==1 => area==1 self-only (excl==0). The Pipe must collapse the
