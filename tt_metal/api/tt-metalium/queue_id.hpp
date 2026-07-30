@@ -4,7 +4,7 @@
 
 #pragma once
 
-#warning "tt-metalium/queue_id.hpp header is deprecated. Replaced with #include <ttnn/api/ttnn/common/queue_id.hpp>"
+// #warning "tt-metalium/queue_id.hpp header is deprecated. Replaced with #include <ttnn/api/ttnn/common/queue_id.hpp>"
 
 #include <optional>
 #include <tt_stl/strong_type.hpp>
