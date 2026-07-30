@@ -79,7 +79,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: RelWithDebInfo
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: true
       platform: "Ubuntu 22.04"
       skip-tt-train: false
@@ -98,7 +98,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: RelWithDebInfo
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: true
       platform: "Ubuntu 24.04"
       skip-tt-train: false
