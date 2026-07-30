@@ -65,7 +65,7 @@ protected:
 //
 // Proves that DFB local accessor names work end-to-end on real WH/BH hardware:
 //   1. kernel_bindings_generated.h is emitted correctly (dfb::buf resolves at compile time)
-//   2. The DFBAccessor mechanism works (DFB ID maps to the correct underlying CB)
+//   2. The DFBBindingToken mechanism works (DFB ID maps to the correct underlying CB)
 //   3. Data flows correctly through the DFB from producer to consumer
 //
 // Pipeline:
