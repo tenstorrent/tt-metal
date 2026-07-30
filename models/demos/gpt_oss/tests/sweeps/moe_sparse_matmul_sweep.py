@@ -193,7 +193,9 @@ def build_pc(cx, cy, per_core_N, in0_block_w, Kt, out_subblock_h=1, out_subblock
         out_subblock_h=osh,
         out_subblock_w=osw,
         out_block_h=1,
-        out_block_w=1,
+        # Lucas Chin (Anduril), PR #51514: out_block_w=1 forced in1_num_subblocks=0
+        # for osw>1, so no osw>1 config was ever really exercised. Derive from osw.
+        out_block_w=osw,
         per_core_M=1,
         per_core_N=per_core_N,
         fuse_batch=False,
@@ -436,8 +438,11 @@ def run_orchestrator(args):
             # the device when per_core_N cannot be subdivided into >=2 N-blocks of
             # size out_subblock_w (e.g. 90 cores -> pcn=2, osw=2 -> 1 block -> hang).
             # It PASSes when pcn >= 2*osw (e.g. 12 cores -> pcn=15, osw=2 -> ok).
-            if eff_osw > 1 and pcn < 2 * eff_osw:
-                continue
+            # Lucas Chin (Anduril), PR #51514: this filter was a workaround for the
+            # deadlock that out_block_w=1 caused. With out_block_w=osw it is not
+            # needed, so it is disabled to let the full osw axis run.
+            # if eff_osw > 1 and pcn < 2 * eff_osw:
+            #     continue
             key = (cx, cy, pcn, eff_ibw, eff_osw, osh, fid, adt, fp32, pl1, wmem, omem, amem)
             if key in seen_eff:
                 continue
