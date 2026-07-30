@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/where.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 ALWI void process_masked_tile(
     DataflowBuffer& dfb_data_in, DataflowBuffer& dfb_mask, DataflowBuffer& dfb_data_out, uint32_t fill_bits) {
@@ -87,68 +88,69 @@ ALWI void process_corner_tile(
 }
 
 void kernel_main() {
-    constexpr uint32_t W_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t H_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t has_right_pad = get_compile_time_arg_val(2);
-    constexpr uint32_t has_bottom_pad = get_compile_time_arg_val(3);
-    constexpr uint32_t elem_size = get_compile_time_arg_val(4);
-    constexpr uint32_t fill_bits_ct = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_data_in_id = get_compile_time_arg_val(6);
-    constexpr uint32_t dfb_right_mask_id = get_compile_time_arg_val(7);
-    constexpr uint32_t dfb_bot_mask_id = get_compile_time_arg_val(8);
-    constexpr uint32_t cb_data_out_id = get_compile_time_arg_val(9);
+    // W_tiles / H_tiles / elem_size are declared for parity with the dataflow kernels but are
+    // unused in this compute body (preserved verbatim). has_right_pad / has_bottom_pad are the
+    // HAS_RIGHT_PAD / HAS_BOTTOM_PAD #defines (they gate the conditionally-bound mask DFBs).
+    constexpr auto W_tiles = get_arg(args::W_tiles);
+    constexpr auto H_tiles = get_arg(args::H_tiles);
+    constexpr auto elem_size = get_arg(args::elem_size);
+    constexpr auto fill_bits_ct = get_arg(args::fill_bits);
 
     // Per-phase tile counts. Phases with num == 0 are skipped. When the
-    // corresponding global has_*_pad CT is 0 the host always sets num to 0,
-    // so the if constexpr gating below removes the dead code path entirely.
-    const uint32_t num_right = get_arg_val<uint32_t>(0);
-    const uint32_t num_bottom = get_arg_val<uint32_t>(1);
-    const uint32_t num_corner = get_arg_val<uint32_t>(2);
+    // corresponding HAS_*_PAD macro is undefined the host always sets num to 0,
+    // so the #ifdef gating below removes the dead code path entirely.
+    const uint32_t num_right = get_arg(args::num_right);
+    const uint32_t num_bottom = get_arg(args::num_bottom);
+    const uint32_t num_corner = get_arg(args::num_corner);
 
     if (num_right + num_bottom + num_corner == 0) {
         return;
     }
 
-    DataflowBuffer dfb_data_in(cb_data_in_id);
-    DataflowBuffer dfb_right_mask(dfb_right_mask_id);
-    DataflowBuffer dfb_bot_mask(dfb_bot_mask_id);
-    DataflowBuffer dfb_data_out(cb_data_out_id);
+    DataflowBuffer dfb_data_in(dfb::data_in);
+    DataflowBuffer dfb_data_out(dfb::data_out);
+#ifdef HAS_RIGHT_PAD
+    DataflowBuffer dfb_right_mask(dfb::right_mask);
+#endif
+#ifdef HAS_BOTTOM_PAD
+    DataflowBuffer dfb_bot_mask(dfb::bot_mask);
+#endif
 
     // Standard init for unary-style SFPU compute with one primary input CB.
-    unary_op_init_common(cb_data_in_id, cb_data_out_id);
+    unary_op_init_common(dfb::data_in, dfb::data_out);
 
     // Wait for persistent mask tiles pushed once by the writer. They are popped
     // once at cleanup; during the main loop they are reused persistently.
-    if constexpr (has_right_pad) {
-        dfb_right_mask.wait_front(1);
-    }
-    if constexpr (has_bottom_pad) {
-        dfb_bot_mask.wait_front(1);
-    }
+#ifdef HAS_RIGHT_PAD
+    dfb_right_mask.wait_front(1);
+#endif
+#ifdef HAS_BOTTOM_PAD
+    dfb_bot_mask.wait_front(1);
+#endif
 
     // ---- Main loop: same tile ordering as reader and writer (right/bottom/corner) ----
 
-    if constexpr (has_right_pad) {
-        for (uint32_t i = 0; i < num_right; ++i) {
-            process_masked_tile(dfb_data_in, dfb_right_mask, dfb_data_out, fill_bits_ct);
-        }
+#ifdef HAS_RIGHT_PAD
+    for (uint32_t i = 0; i < num_right; ++i) {
+        process_masked_tile(dfb_data_in, dfb_right_mask, dfb_data_out, fill_bits_ct);
     }
-    if constexpr (has_bottom_pad) {
-        for (uint32_t j = 0; j < num_bottom; ++j) {
-            process_masked_tile(dfb_data_in, dfb_bot_mask, dfb_data_out, fill_bits_ct);
-        }
+#endif
+#ifdef HAS_BOTTOM_PAD
+    for (uint32_t j = 0; j < num_bottom; ++j) {
+        process_masked_tile(dfb_data_in, dfb_bot_mask, dfb_data_out, fill_bits_ct);
     }
-    if constexpr (has_right_pad && has_bottom_pad) {
-        for (uint32_t k = 0; k < num_corner; ++k) {
-            process_corner_tile(dfb_data_in, dfb_right_mask, dfb_bot_mask, dfb_data_out, fill_bits_ct);
-        }
+#endif
+#if defined(HAS_RIGHT_PAD) && defined(HAS_BOTTOM_PAD)
+    for (uint32_t k = 0; k < num_corner; ++k) {
+        process_corner_tile(dfb_data_in, dfb_right_mask, dfb_bot_mask, dfb_data_out, fill_bits_ct);
     }
+#endif
 
     // Clean-up
-    if constexpr (has_right_pad) {
-        dfb_right_mask.pop_front(1);
-    }
-    if constexpr (has_bottom_pad) {
-        dfb_bot_mask.pop_front(1);
-    }
+#ifdef HAS_RIGHT_PAD
+    dfb_right_mask.pop_front(1);
+#endif
+#ifdef HAS_BOTTOM_PAD
+    dfb_bot_mask.pop_front(1);
+#endif
 }

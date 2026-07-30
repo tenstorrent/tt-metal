@@ -27,6 +27,9 @@ std::pair<bool, std::string> use_composite_all_gather(
     std::optional<uint32_t> cluster_axis) {
     const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
     const int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+    // padded_shape can outrank logical_shape -- a tiled rank-<2 tensor is promoted to rank 2 -- so the
+    // logical gather dim has to be shifted by the rank difference to index it.
+    const int32_t rank_diff = static_cast<int32_t>(input_tensor.padded_shape().rank()) - rank;
 
     // Below is equivalent to: axis_num_devices[0] * axis_num_devices[1]
     const auto& mesh_shape = input_tensor.device()->shape();
@@ -35,14 +38,14 @@ std::pair<bool, std::string> use_composite_all_gather(
     // Gather-dim padding would need the output's gather-dim extent to be num_devices * the input's
     // padded extent, but it is num_devices * the logical one.
     auto gathered_padded_shape = input_tensor.padded_shape();
-    if (input_tensor.logical_shape()[gather_dim] != gathered_padded_shape[gather_dim]) {
+    if (input_tensor.logical_shape()[gather_dim] != gathered_padded_shape[gather_dim + rank_diff]) {
         return {
             true,
             fmt::format(
                 "gather dim {} is padded from {} to {}; size must be a multiple of the tile/shard extent",
                 gather_dim,
                 input_tensor.logical_shape()[gather_dim],
-                gathered_padded_shape[gather_dim])};
+                gathered_padded_shape[gather_dim + rank_diff])};
     }
 
     // Keep the padding check above this: building the spec can TT_FATAL on a legacy output config that
@@ -53,7 +56,7 @@ std::pair<bool, std::string> use_composite_all_gather(
     // The kernel walks the output page grid as the input's with only the gather dim scaled, so any
     // other difference breaks it -- e.g. an output shard width that doesn't divide the row, which
     // pads the last dim.
-    gathered_padded_shape[gather_dim] *= num_devices;
+    gathered_padded_shape[gather_dim + rank_diff] *= num_devices;
     if (output_spec.padded_shape() != gathered_padded_shape) {
         return {
             true,
@@ -133,6 +136,10 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     bool use_l1_small_for_semaphores) {
+    // Validate the gather dim before anything indexes the shape with it
+    const int32_t input_rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
+    TT_FATAL(dim >= -input_rank && dim < input_rank, "Invalid gather dim {} for {}D input tensor", dim, input_rank);
+
     // Throw deprecation notice
     if (num_links.has_value() || topology.has_value() || chunks_per_sync.has_value() ||
         num_workers_per_link.has_value() || num_buffers_per_channel.has_value() || use_l1_small_for_semaphores) {

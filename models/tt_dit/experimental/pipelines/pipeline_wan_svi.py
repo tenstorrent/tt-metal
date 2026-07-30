@@ -8,6 +8,9 @@ Chains short I2V clips into long videos with latent-space continuity.
 See ``experimental/models/Wan2_2_SVI.md`` for the regime parameters,
 upstream-workflow comparison, and the documented scheduler gap.
 """
+
+from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Literal, Optional, Union

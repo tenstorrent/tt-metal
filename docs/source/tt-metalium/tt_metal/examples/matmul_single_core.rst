@@ -244,7 +244,7 @@ The compute kernel
 This kernel performs the tile-by-tile matrix multiplication ``C_tile += A_tile @ B_tile``.
 Key operations include:
 
-*   ``mm_init(cb_in0, cb_in1, cb_out)``: Initializes the FPU for matrix multiplication, specifying the input CBs (``cb_in0`` for A, ``cb_in1`` for B) and the output CB (``cb_out``).
+*   ``compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out)`` then ``matmul_init(cb_in0, cb_in1)``: Performs the one-time hardware setup and configures the FPU for matrix multiplication, specifying the input CBs (``cb_in0`` for A, ``cb_in1`` for B) and the output CB (``cb_out``). Matmul maps ``in0`` onto ``SrcB`` and ``in1`` onto ``SrcA``, so the startup uses ``SrcOrder::Reverse``.
 *   The outer loops iterate ``Mt`` times (for rows of C) and ``Nt`` times (for columns of C) to compute each output tile.
 *   ``tile_regs_acquire()``: Called before the inner accumulation loop (over ``Kt``). This prepares the FPU's destination/accumulator registers, typically by zeroing them, for the upcoming sum of products.
 *   The inner loop iterates ``Kt`` times, performing the dot-product-like accumulation for a single output tile.
@@ -266,8 +266,10 @@ The dimensions ``Mt``, ``Kt``, ``Nt`` are passed as compile-time arguments, enab
         constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
         constexpr tt::CBIndex cb_out = tt::CBIndex::c_16;
 
-        // Setup the FPU (matrix engine) for the matmul operation
-        mm_init(cb_in0, cb_in1, cb_out);
+        // Setup the FPU (matrix engine) for the matmul operation. And specify the input
+        // and output circular buffers.
+        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out);
+        matmul_init(cb_in0, cb_in1);
         for (uint32_t mt = 0; mt < Mt; ++mt) {
             for (uint32_t nt = 0; nt < Nt; ++nt) {
                 // Make sure registers can be used for the output tile. This also sets the registers to zero.

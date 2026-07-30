@@ -750,9 +750,9 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     s.is_metal2 = kernel.is_metal2_kernel();
     s.runtime_arg_names = kernel.get_runtime_arg_names();
     s.common_runtime_arg_names = kernel.get_common_runtime_arg_names();
-    kernel.process_dataflow_buffer_local_accessor_handles(
+    kernel.process_dataflow_buffer_binding_handles(
         [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
-    kernel.process_semaphore_local_accessor_handles(
+    kernel.process_semaphore_binding_handles(
         [&s](const std::string& name, uint16_t id) { s.sem_accessors[name] = id; });
     kernel.process_tensor_binding_handles(
         // Match the genfiles.cpp pattern: drop num_runtime_field_crta_words. Emule's
@@ -844,7 +844,7 @@ static void emit_metal2_namespaces(
     if (!s.dfb_accessors.empty()) {
         f << "namespace dfb {\n";
         for (const auto& [name, id] : s.dfb_accessors) {
-            f << "constexpr DFBAccessor " << name << "{" << id << "};\n";
+            f << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
         }
         f << "}  // namespace dfb\n";
     }
@@ -867,7 +867,7 @@ static void emit_metal2_namespaces(
     if (!s.scratch_accessors.empty()) {
         f << "namespace scratch {\n";
         for (const auto& sp : s.scratch_accessors) {
-            f << "constexpr ScratchpadAccessor " << sp.name << "{" << sp.addr_crta_word << "u, " << sp.size_bytes
+            f << "constexpr ScratchpadBindingToken " << sp.name << "{" << sp.addr_crta_word << "u, " << sp.size_bytes
               << "u};\n";
         }
         f << "}  // namespace scratch\n";
