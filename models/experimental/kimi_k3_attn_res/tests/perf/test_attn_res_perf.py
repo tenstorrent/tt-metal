@@ -436,7 +436,10 @@ def _reduce_variants(v, q, weights):
             ttnn.mul(v, weights), lambda w: ttnn.experimental.fast_reduce_nc(w, dims=[1])
         ),
         "mix floor: fast_reduce_nc(v, dim=1)": lambda: ttnn.experimental.fast_reduce_nc(v, dims=[1]),
-        "mix floor: fast_reduce_nc hifi": lambda: ttnn.experimental.fast_reduce_nc(
+        # Not a fidelity variant: `fast_reduce_nc` already defaults to HiFi4
+        # (`fast_reduce_nc.cpp:31`), so what HIFI adds over the bare call above is
+        # `fp32_dest_acc_en` and `packer_l1_acc`. Named for what it varies.
+        "mix floor: fast_reduce_nc fp32acc": lambda: ttnn.experimental.fast_reduce_nc(
             v, dims=[1], compute_kernel_config=HIFI
         ),
     }
@@ -467,7 +470,7 @@ def _consume(intermediate, then):
         "mix shaped: mul+sum",
         "mix shaped: mul+fast_reduce_nc",
         "mix floor: fast_reduce_nc(v, dim=1)",
-        "mix floor: fast_reduce_nc hifi",
+        "mix floor: fast_reduce_nc fp32acc",
     ],
     ids=[
         "floor",
@@ -482,7 +485,7 @@ def _consume(intermediate, then):
         "mix-shaped-sum",
         "mix-shaped-frnc",
         "mix-floor-frnc",
-        "mix-floor-frnc-hifi",
+        "mix-floor-frnc-fp32acc",
     ],
 )
 def test_perf_d_reduction_by_form(mesh_device, variant):
@@ -510,7 +513,10 @@ def test_perf_d_reduction_by_form(mesh_device, variant):
     things. The reduce is refuted as a lever: `fast_reduce_nc` lands within
     0.08% of `ttnn.sum` over two runs, inside a 0.35% band, because both already
     run at the memory floor — which the four floor rows now pin to ~229 µs across
-    two axes, two kernels and two fidelities. And P7's own `mix` row above sits
+    two axes, two kernels, and fp32 dest accumulation on and off. Not two
+    fidelities: `ttnn.sum` defaults to HiFi4 + fp32 dest acc on Blackhole
+    (`reduce_op.cpp:109`) and `fast_reduce_nc` defaults to HiFi4, so every row
+    here is HiFi4. And P7's own `mix` row above sits
     15% high — it reuses `q`, so it measures a `[1, 1, 1, d/tp]` broadcast where
     the op performs a `[1, C, N, 1]` one. Both rows are kept: the first for
     continuity with the recorded P7 number, the second because it is the op.
