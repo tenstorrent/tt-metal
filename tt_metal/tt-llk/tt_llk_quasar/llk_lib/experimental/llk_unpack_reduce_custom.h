@@ -17,10 +17,11 @@ using namespace ckernel;
 /**
  * @brief Builds the block reduce_max_row unpack MOP.
  *
- * Per block tile: unpacks all operand faces into SrcA (transposed for reduce-row) and the scaler face
- * once into SrcB. buf_desc_id_0 feeds UNPACKER0 -> SRCA, buf_desc_id_1 feeds UNPACKER1 -> SRCB.
+ * For 16-bit DEST, a single MOP streams the complete operand block into SrcA,
+ * one face per source-bank token; the scaler is unpacked once separately.
+ * FP32 instead programs one tile per MOP and supplies a scaler token per tile.
  *
- * @tparam block_ct_dim: number of operand tiles in the block (MOP outer-loop count).
+ * @tparam block_ct_dim: number of operand tiles streamed by the MOP.
  * @tparam is_fp32_dest_acc_en: reserved for the 32-bit dest path; does not change the unpack stream.
  * @param buf_desc_id_0/1: buffer descriptor IDs for the operand (SrcA) and scaler (SrcB).
  * @param tensor_shape: operand tile shape (num faces, face dims).
@@ -35,17 +36,23 @@ inline void _llk_unpack_reduce_block_max_row_mop_config_(
     const std::uint32_t MOP_INNER_LOOP = tensor_shape.total_num_faces();
 
     std::uint32_t unpack_srcA_face;
+    std::uint32_t unpack_srcA_face_last;
     std::uint32_t unpack_srcB_face;
-
     if (tensor_shape.total_num_faces() == NUM_FACES)
     {
-        unpack_srcA_face = TT_OP_UNPACR0_FACE_INC(0, 1 /*Src face Idx*/, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
-        unpack_srcB_face = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+        // Every face is written to rows 0-15 in alternating SrcA banks. The
+        // final face also advances to the next source tile.
+        unpack_srcA_face      = TT_OP_UNPACR0_FACE_INC(0, 1 /* Src face Idx */, 0, 0, buf_desc_id_0, 1 /* Set Dvalid */);
+        unpack_srcA_face_last = TT_OP_UNPACR0_FACE_INC(0, 1 /* Src face Idx */, 0, 1, buf_desc_id_0, 1 /* Set Dvalid */);
+        unpack_srcB_face      = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /* Set Dvalid */);
     }
     else
     {
-        unpack_srcA_face = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
-        unpack_srcB_face = TT_OP_UNPACR1_TILE_INC(0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+        // Tiny-tile indices address individual faces, so TILE_INC already
+        // advances the source stream after each face.
+        unpack_srcA_face      = TT_OP_UNPACR0_TILE_INC(0, 1 /* Src tile Idx */, buf_desc_id_0, 1 /* Set Dvalid */);
+        unpack_srcA_face_last = unpack_srcA_face;
+        unpack_srcB_face      = TT_OP_UNPACR1_TILE_INC(0, 0, buf_desc_id_1, 1 /* Set Dvalid */);
     }
 
     // Reduce-row with a full face row needs no SrcA padding; a partial face row (face_r_dim < 16) seeds
@@ -58,13 +65,21 @@ inline void _llk_unpack_reduce_block_max_row_mop_config_(
             TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC_ZERO);
 
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_zero_srcA, unpack_srcA_face);
-        temp.set_start_op(unpack_srcB_face);
+        temp.set_last_inner_loop_instr(unpack_srcA_face_last);
+        if constexpr (is_fp32_dest_acc_en)
+        {
+            temp.set_start_op(unpack_srcB_face);
+        }
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
     else
     {
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_srcA_face);
-        temp.set_start_op(unpack_srcB_face);
+        temp.set_last_inner_loop_instr(unpack_srcA_face_last);
+        if constexpr (is_fp32_dest_acc_en)
+        {
+            temp.set_start_op(unpack_srcB_face);
+        }
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
 }
@@ -96,16 +111,20 @@ inline void _llk_unpack_reduce_block_max_row_init_(
 
     if constexpr (!is_fp32_dest_acc_en)
     {
-        static_assert(block_ct_dim == 4, "16x32 block row max currently supports four tiles per block");
         if (tensor_shape.num_faces_r_dim == 1)
         {
             static_assert(tile_count_x % block_ct_dim == 0, "Tiny block row max requires complete horizontal blocks");
             static_assert(tile_count_x * tile_count_y < 1024, "Tiny block row max tile count exceeds the Quasar limit");
         }
     }
-    // Match the canonical reduce handshake: each math tile consumes and
-    // releases one SrcB scaler token, so each unpack MOP supplies one token.
-    _llk_unpack_reduce_block_max_row_mop_config_<1, is_fp32_dest_acc_en>(buf_desc_id_0, buf_desc_id_1, tensor_shape);
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        _llk_unpack_reduce_block_max_row_mop_config_<1, true>(buf_desc_id_0, buf_desc_id_1, tensor_shape);
+    }
+    else
+    {
+        _llk_unpack_reduce_block_max_row_mop_config_<block_ct_dim, false>(buf_desc_id_0, buf_desc_id_1, tensor_shape);
+    }
 }
 
 /**
@@ -123,26 +142,45 @@ inline void _llk_unpack_reduce_block_max_row_(
     [[maybe_unused]] const std::uint32_t buf_desc_id_1,
     const ckernel::TensorShape& tensor_shape)
 {
-    const auto unpack_tiles = [=](const std::uint32_t tile_offset)
+    if constexpr (is_fp32_dest_acc_en)
     {
-        const std::uint32_t tile_idx_A = start_l1_tile_idx_0 + tile_offset;
-        const std::uint32_t tile_idx_B = start_l1_tile_idx_1 + tile_offset;
-        const std::uint32_t l1_idx_A   = (tensor_shape.total_num_faces() == NUM_FACES) ? tile_idx_A : tile_idx_A * tensor_shape.total_num_faces();
-        const std::uint32_t l1_idx_B   = (tensor_shape.total_num_faces() == NUM_FACES) ? tile_idx_B : tile_idx_B * tensor_shape.total_num_faces();
+        for (std::uint32_t tile = 0; tile < block_ct_dim; ++tile)
+        {
+            const std::uint32_t tile_idx_A = start_l1_tile_idx_0 + tile;
+            const std::uint32_t tile_idx_B = start_l1_tile_idx_1 + tile;
 
-        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_idx_A);
-        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, l1_idx_B);
+            TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, tile_idx_A);
+            TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, tile_idx_B);
+            TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
+            TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
 
-        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
-        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
-
-        ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-    };
-
-    for (std::uint32_t tile = 0; tile < block_ct_dim; ++tile)
-    {
-        unpack_tiles(tile);
+            ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+        }
+        return;
     }
+
+    const bool full_tiles        = (tensor_shape.total_num_faces() == NUM_FACES);
+    const std::uint32_t l1_idx_A = full_tiles ? start_l1_tile_idx_0 : start_l1_tile_idx_0 * tensor_shape.total_num_faces();
+    const std::uint32_t l1_idx_B = full_tiles ? start_l1_tile_idx_1 : start_l1_tile_idx_1 * tensor_shape.total_num_faces();
+
+    // SrcB is constant and remains valid through every GMPOOL and the final
+    // MOVD2B transpose. It is released once by the math thread at block end.
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, l1_idx_B);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
+    if (full_tiles)
+    {
+        TTI_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /* Set Dvalid */);
+    }
+    else
+    {
+        TTI_UNPACR1_TILE_INC(0, 0, buf_desc_id_1, 1 /* Set Dvalid */);
+    }
+
+    // The MOP walks all faces of all block tiles. Dst_Face_Idx_Inc stays zero,
+    // so SrcA is a two-bank stream at a fixed address rather than a row walk.
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_idx_A);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
+    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 }
 
 /**

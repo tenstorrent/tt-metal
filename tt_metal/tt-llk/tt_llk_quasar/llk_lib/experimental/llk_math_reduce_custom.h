@@ -15,6 +15,9 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
+// F2/F3 reduce into a separate row-form accumulator at DEST row 32.
+static constexpr std::uint32_t REDUCE_BLOCK_SLOT1_DST = TILE_R_DIM;
+
 /**
  * @brief Configure the FPU address modifiers used by block reduce_max_row.
  *
@@ -80,9 +83,9 @@ inline void _reduce_max_row_transpose_fp32_fpu_()
 /**
  * @brief Reduce one 32x32 FP32 tile into the current DEST tile.
  *
- * GMPOOL max-accumulates the top and bottom face pairs into arbitrary DEST
- * rows 0 and 32. Transposing after each tile preserves both the packed column
- * and the row-form accumulator needed by the following tile.
+ * Quasar's split-half FP32 transpose modifies SrcA and needs a fresh SrcB
+ * token for each tile. Keep this proven per-tile handshake separate from the
+ * 16-bit block-stream schedule below.
  */
 inline void _llk_math_reduce_row_fp32_tile_()
 {
@@ -93,7 +96,7 @@ inline void _llk_math_reduce_row_fp32_tile_()
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
     _reduce_max_row_transpose_fp32_fpu_();
 
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, MAX_TILE_R_DIM, p_setrwc::SET_D);
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, REDUCE_BLOCK_SLOT1_DST, p_setrwc::SET_D);
     TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 0, p_setrwc::SET_B);
 
     TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
@@ -107,10 +110,68 @@ inline void _llk_math_reduce_row_fp32_tile_()
 }
 
 /**
+ * @brief Configure the 16-bit pool-only block MOP.
+ *
+ * Quasar streams every transposed face through SrcA rows 0-15, alternating
+ * banks. Each GMPOOL therefore consumes exactly one bank token with
+ * CLR_SRCA_VLD. F0/F1 accumulate at DEST row 0 and F2/F3 at row 32. There is
+ * deliberately no trailing SETRWC(CLR_A): that would release SrcA twice.
+ */
+template <std::uint32_t block_ct_dim>
+inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShape& tensor_shape)
+{
+    static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
+
+    const bool two_face_rows     = (tensor_shape.num_faces_r_dim > 1);
+    const std::uint32_t pool_len = two_face_rows ? 4u : 2u;
+
+    load_replay_buf(
+        0,
+        pool_len,
+        false,
+        0,
+        0,
+        [two_face_rows]
+        {
+            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS,
+                       0); // F0 -> slot 0
+            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS,
+                       0); // F1 -> slot 0
+            if (two_face_rows)
+            {
+                TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS,
+                           REDUCE_BLOCK_SLOT1_DST); // F2 -> slot 1
+                TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS,
+                           REDUCE_BLOCK_SLOT1_DST); // F3 -> slot 1
+            }
+        });
+
+    const std::uint32_t pool_replay = TT_OP_REPLAY(0, pool_len, 0, 0, 0, 0);
+    ckernel_template temp(1 /* outer */, block_ct_dim /* inner */, pool_replay);
+    temp.program_bank0_sw_cntl(instrn_buffer);
+}
+
+/**
+ * @brief Transpose one final 16-bit row accumulator into an output column.
+ */
+inline void _reduce_max_row_transpose_fp16b_face_(const bool wide_face)
+{
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, 0);
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, 0);
+    TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
+    if (wide_face)
+    {
+        TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
+    }
+}
+
+/**
  * @brief Initialize GMPOOL/FPU block reduce_max_row.
  *
- * FP32 uses the runtime split-half transpose above. BF16 reuses Quasar's
- * canonical 16x32 row-reduce MOP.
+ * The 16-bit path keeps GMPOOL results in row form for the complete horizontal
+ * block, matching the working Quasar/Blackhole schedule, then transposes once.
+ * FP32 retains its independent per-tile source handshake.
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_init_(const ckernel::TensorShape& tensor_shape)
@@ -118,6 +179,7 @@ inline void _llk_math_reduce_block_max_row_init_(const ckernel::TensorShape& ten
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     reduce_max_row_configure_addrmod();
+    static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
     if constexpr (is_fp32_dest_acc_en)
     {
         static_assert(block_ct_dim == 2, "FP32 block row max currently supports two tiles per block");
@@ -126,9 +188,8 @@ inline void _llk_math_reduce_block_max_row_init_(const ckernel::TensorShape& ten
     }
     else
     {
-        static_assert(block_ct_dim == 4, "16x32 block row max currently supports four tiles per block");
-        LLK_ASSERT(tensor_shape.total_num_faces() == 2, "16-bit block row max currently requires 16x32 tiles");
-        _llk_math_reduce_row_mop_config_<PoolType::MAX, ckernel::MathFidelity::LoFi>(tensor_shape);
+        LLK_ASSERT(tensor_shape.total_num_faces() == 2 || tensor_shape.total_num_faces() == NUM_FACES, "16-bit block row max requires a 16x32 or 32x32 tile");
+        _llk_math_reduce_block_max_row_mop_config_<block_ct_dim>(tensor_shape);
     }
 
     _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));
@@ -143,8 +204,8 @@ inline void _llk_math_reduce_block_max_row_uninit_()
 /**
  * @brief Max-reduce all horizontal block tiles into one destination tile.
  *
- * Each tile has a distinct SrcB token. Releasing that token before the next
- * tile is required for reliable SrcB/MOVD2B bank selection.
+ * The 16-bit path streams SrcA faces through the two banks and holds one SrcB
+ * token for the block. FP32 uses one independently released token per tile.
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
@@ -163,11 +224,16 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
     }
     else
     {
-#pragma GCC unroll 4
-        for (std::uint32_t tile = 0; tile < block_ct_dim; ++tile)
+        ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+
+        const bool two_face_rows = (tensor_shape.num_faces_r_dim > 1);
+        const bool wide_face     = (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS);
+        _reduce_max_row_transpose_fp16b_face_(wide_face);
+        if (two_face_rows)
         {
-            ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, p_setrwc::SET_ABD_F);
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, REDUCE_BLOCK_SLOT1_DST, p_setrwc::SET_D);
+            _reduce_max_row_transpose_fp16b_face_(wide_face);
         }
+        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, p_setrwc::SET_ABD_F);
     }
 }
