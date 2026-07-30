@@ -136,7 +136,10 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       build-type: 'ASan'
-      build-wheel: true
+      # No manylinux wheel in the PR gate: build-docs imports ttnn in-place
+      # from the lean ttnn-import artifact instead (no duplicate compile).
+      build-wheel: false
+      build-ttnn-import-artifact: true
       publish-artifact: false
       publish-package: true
       tracy: true
@@ -155,7 +158,7 @@ jobs:
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
   find-changed-files:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
@@ -182,7 +185,7 @@ jobs:
       - id: find-changes
         uses: ./.github/actions/find-changed-files
 
-  metalium-smoke-tests:
+  runtime-smoke-tests:
     needs: [asan-build, find-changed-files]
     if: ${{
       github.ref_name == 'main' ||
@@ -197,6 +200,7 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-metalium
       test-category: pr_gate
+      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       upload-coverage: false
       enable-kernel-ccache: true
   ttnn-smoke-tests:
@@ -215,6 +219,7 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-nn
       test-category: pr_gate
+      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       upload-coverage: false
       enable-kernel-ccache: true
 
@@ -229,10 +234,10 @@ jobs:
       # build-docs runs on ubuntu-latest (external runner) — no harbor access.
       # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from asan-build.
       docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
-      wheel-artifact-name: ${{ needs.asan-build.outputs.wheel-artifact-name }}
+      ttnn-import-artifact-id: ${{ needs.asan-build.outputs.ttnn-import-artifact-id }}
       build-type: 'ASan'
 
-  metalium-examples:
+  runtime-examples:
     needs: [ asan-build, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
@@ -246,6 +251,7 @@ jobs:
       product: tt-metalium
       build-type: 'ASan'
       enable-kernel-ccache: true
+      per-test-timeout: 15
     secrets: inherit
 
   ttnn-examples:
@@ -263,6 +269,7 @@ jobs:
       product: tt-nn
       build-type: 'ASan'
       enable-kernel-ccache: true
+      per-test-timeout: 15
     secrets: inherit
 
   # A quick check that parses the models charts in README.md and models/README.md
@@ -270,7 +277,7 @@ jobs:
   model-charts-sync:
     needs: [find-changed-files]
     if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
     - name: Checkout repo
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -324,7 +331,7 @@ jobs:
          needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true')
       }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Sync LLK labels based on changes
         uses: actions/github-script@v7
@@ -384,12 +391,13 @@ jobs:
       issues: write
       pull-requests: write
       copilot-requests: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: tenstorrent/tt-github-actions/.github/actions/copilot-pr-labeler@629b4727fa0dff3d43895601dd538e303880ecbc # main (tt-github-actions#144)
 
   # PR-gate LLK python_tests matrix (tests/pipeline_reorg/llk_pr_gate_tests.yaml).
-  # SKU coverage is narrowed below based on find-changed-files outputs.
+  # SKU coverage is narrowed via sku-allowlist from find-changed-files.
+  # merge_group prio routing is via prepare_test_matrix --event + sku_config.
   llk-smoke-tests:
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
@@ -407,9 +415,10 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-      # Priority runners only accept merge-queue traffic. Regular PRs and
-      # other triggers must continue using the original non-priority runner.
-      enabled-skus: ${{
+      per-test-timeout: 15
+      enabled-skus: ALL_SKUS_IN_TESTS
+      # "*" = no allowlist filter; empty = skip all; else CSV of logical SKUs.
+      sku-allowlist: ${{
           (github.ref_name == 'main'
            || needs.find-changed-files.outputs.llk-common-changed == 'true'
            || needs.find-changed-files.outputs.llk-sfpi-changed == 'true'
@@ -417,9 +426,9 @@ jobs:
            || needs.find-changed-files.outputs.llk-ci-changed == 'true'
            || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true'
                && needs.find-changed-files.outputs.llk-blackhole-changed == 'true'))
-          && (github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2')
+          && '*'
           || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
-          || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && (github.event_name == 'merge_group' && 'bh_p150b_civ2_viommu_prio' || 'bh_p150b_civ2'))
+          || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu')
           || '' }}
       pytest-markers: "not perf and not nightly and not quasar and not accuracy"
 
@@ -461,16 +470,16 @@ jobs:
       }}
     needs:
       - asan-build
-      - metalium-smoke-tests
+      - runtime-smoke-tests
       - ttnn-smoke-tests
-      - metalium-examples
+      - runtime-examples
       - ttnn-examples
       - code-analysis
       - model-charts-sync
       - build-docs
       - llk-smoke-tests
       - llk-build-quasar
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 5
@@ -482,7 +491,7 @@ jobs:
           required-jobs: ""
           optional-jobs: >-
             asan-build, code-analysis,
-            metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttnn-examples,
+            runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
             llk-smoke-tests, llk-build-quasar
         env:

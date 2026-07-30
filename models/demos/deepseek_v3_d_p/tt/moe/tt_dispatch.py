@@ -67,7 +67,7 @@ class TtDispatchModule(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         fp8_output: bool = False,
         subdevice_id=None,
-        num_untilizers_per_sender: int = 2,
+        num_workers_per_sender: int = 2,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -88,7 +88,7 @@ class TtDispatchModule(LightweightModule):
             num_links: Number of fabric links for remote token writes.
             topology: Fabric topology for remote token writes.
             fp8_output: Output dtype for the dispatched buffer.
-            num_untilizers_per_sender: Number of untilizer cores per sender (any N >= 1).
+            num_workers_per_sender: Number of worker cores per sender (any N >= 1).
         """
         if fp8_output and "blackhole" not in ttnn.get_arch_name():
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -106,9 +106,9 @@ class TtDispatchModule(LightweightModule):
         self.topology = topology
         self.fp8_output = fp8_output
         self.subdevice_id = subdevice_id
-        # num_untilizers_per_sender >= 1 is validated on the device op side
+        # num_workers_per_sender >= 1 is validated on the device op side
         # (DispatchDeviceOperation::validate_on_program_cache_miss).
-        self.num_untilizers_per_sender = num_untilizers_per_sender
+        self.num_workers_per_sender = num_workers_per_sender
 
     @staticmethod
     def shard_expert_offsets(
@@ -202,6 +202,7 @@ class TtDispatchModule(LightweightModule):
         tt_expert_offsets: ttnn.Tensor,
         tt_expert_dispatch_table: ttnn.Tensor,
         padding_config: ttnn.Tensor = None,
+        scales: ttnn.Tensor = None,
     ):
         """
         Route input tokens to destination device dispatch buffers based on top-k expert indices.
@@ -233,6 +234,11 @@ class TtDispatchModule(LightweightModule):
                 ROW_MAJOR). When provided, the dispatch kernels bound their token loop to the
                 real (unpadded) tokens. Must match the tensor the gate used to sentinel-mark
                 padded tokens. None means process the full token range.
+            scales: Optional per-token fp8 scales (ROW_MAJOR, shape
+                (1, seq_len_per_chip, emb_dim/128)) produced by per_token_cast_to_fp8 alongside
+                the fp8 input x. When provided, each token's scales are copied into the metadata
+                tail (fields 3..) so the routed buffer can be dequantized downstream. Requires
+                metadata_len == 3 + emb_dim/128 and fp8 ROW_MAJOR input. None for the bf16 path.
 
         Returns:
             dispatched_buffer: Flat expert-centric token buffer on each destination device.
@@ -243,6 +249,8 @@ class TtDispatchModule(LightweightModule):
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=3),
                 int32, ROW_MAJOR.
                 Fields per token: [linearized_mesh_coord, token_idx, topk_idx].
+                Metadata length is 3 by default, and grows to 3 + emb_dim/128 when scales
+                are dispatched, with fields 3.. holding the per-128-block fp32 scale tail.
                 Used by TtCombineModule to route processed tokens back to their origin.
         """
         logger.debug(f"[TtDispatchModule.forward] INPUT SHAPES:")
@@ -268,6 +276,8 @@ class TtDispatchModule(LightweightModule):
             expert_offsets_tensor=tt_expert_offsets,
             expert_dispatch_table_tensor=tt_expert_dispatch_table,
             padding_config=padding_config,
+            scales_tensor=scales,
+            fp8_scaled_input=scales is not None,
             dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,
             num_routed_experts=self.num_routed_experts,
@@ -277,9 +287,9 @@ class TtDispatchModule(LightweightModule):
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
-            use_fp8_dispatch=self.fp8_output,
+            fp8_output=self.fp8_output,
             subdevice_id=self.subdevice_id,
-            num_untilizers_per_sender=self.num_untilizers_per_sender,
+            num_workers_per_sender=self.num_workers_per_sender,
         )
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape

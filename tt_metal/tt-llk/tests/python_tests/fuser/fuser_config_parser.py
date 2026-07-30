@@ -67,10 +67,12 @@ class OperandDefinition(BaseModel):
     name: str = Field(..., min_length=1)
     dims: Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     format: DataFormat
+    const_value: Optional[float] = None
+    # Optional per-operand tile geometry (rows, cols). Defaults to a full 32x32 tile
+    # (4 faces). Use (16, 32) for a 16x32 tiny tile (num_faces=2, one face-row).
     tile_dims: Optional[
         Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     ] = None
-    const_value: Optional[float] = None
 
     @field_validator("dims")
     @classmethod

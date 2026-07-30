@@ -108,21 +108,30 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     tt::ARCH arch, const ComputeKernelConfig& config) {
+    // Translate the universal TTNN ComputeKernelConfig (legacy scalar vocabulary) into the
+    // Metal 2.0 vocabulary. Two representation changes are worth calling out:
+    //   - double_buffer_dest is the logical inverse of the legacy dst_full_sync_en.
+    //   - the approximate/precise bool becomes a Precision enum.
+    const tt::tt_metal::Precision sfpu_precision_mode =
+        config.math_approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise;
+
     if (arch == tt::ARCH::QUASAR) {
         return tt::tt_metal::experimental::ComputeGen2Config{
-            .math_fidelity = config.math_fidelity,
-            .fp32_dest_acc_en = config.fp32_dest_acc_en,
-            .dst_full_sync_en = config.dst_full_sync_en,
-            .math_approx_mode = config.math_approx_mode,
-            // Omitted fields use defaults: enable_2x_src_format, unpack_to_dest_en, unpack_to_dest_mode
+            .fpu_math_fidelity = config.math_fidelity,
+            .sfpu_precision_mode = sfpu_precision_mode,
+            .enable_32_bit_dest = config.fp32_dest_acc_en,
+            .double_buffer_dest = !config.dst_full_sync_en,
+            // Per-DFB unpack_modes is left default for the program factory to set.
+            // The temporary Gen2 fields (enable_2x_src_register, unpack_to_dest_en) are left default.
         };
     }
     return tt::tt_metal::experimental::ComputeGen1Config{
-        .math_fidelity = config.math_fidelity,
-        .fp32_dest_acc_en = config.fp32_dest_acc_en,
-        .dst_full_sync_en = config.dst_full_sync_en,
-        .math_approx_mode = config.math_approx_mode,
-        // Omitted fields use defaults: bfp8_pack_precise, unpack_to_dest_mode
+        .fpu_math_fidelity = config.math_fidelity,
+        .sfpu_precision_mode = sfpu_precision_mode,
+        // bfp_pack_precision_mode is left default (rarely set non-default).
+        .enable_32_bit_dest = config.fp32_dest_acc_en,
+        .double_buffer_dest = !config.dst_full_sync_en,
+        // Per-DFB unpack_modes is left default for the program factory to set.
     };
 }
 

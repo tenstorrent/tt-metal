@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 
 #include "host_tensor_impl.hpp"
+#include "spec/layout/tensor_layout_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -98,7 +99,7 @@ std::size_t HostTensor::element_size() const {
     }
 }
 
-Strides HostTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
+Strides HostTensor::strides() const { return tensor_spec().tensor_layout().impl().compute_strides(logical_shape()); }
 
 HostTensor HostTensor::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
     auto transformed_buffer =

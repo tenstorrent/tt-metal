@@ -85,7 +85,7 @@ class DispatcherCoreData:
     # Whether kernel_config.enables turned this specific risc on. False => idle by design (no kernel
     # launched on it). None => unknown (read failed / corrupt), so callers must not hide the core.
     risc_enabled_by_kernel: bool | None = None
-    # Hint surfaced when find_kernel fails — explains the most likely cause (program cache off,
+    # Hint surfaced when find_kernel fails - explains the most likely cause (program cache off,
     # or workload destroyed despite cache being on) so callers can append it to "PC not in range" style errors.
     kernel_lookup_warning: str | None = None
 
@@ -282,7 +282,7 @@ class DispatcherData:
                 f"Enable program cache to see the callstack."
             )
         return (
-            "No host-side live program owns the kernel on this device —"
+            "No host-side live program owns the kernel on this device -"
             " the program should remain alive on host while its kernel is running."
         )
 

@@ -32,9 +32,7 @@ _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
 if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
     from ttexalens import tt_exalens_init as _tt_exalens_init
 
-    _tt_exalens_init.init_ttexalens(
-        simulation_directory=_SIMULATOR_PATH, use_4B_mode=False
-    )
+    _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
 
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
@@ -153,6 +151,18 @@ def pytest_addoption(parser):
         "--coverage",
         action="store_true",
         help="Enables coverage *.info file generation for every test variant run",
+    )
+
+    parser.addoption(
+        "--bit-exact-runs",
+        action="store",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Execute each test variant N times on device and assert every run "
+        "produces a bit-identical result buffer. Use to check the hardware "
+        "returns the same output for the same input (e.g. --bit-exact-runs=20). "
+        "Default 1 (no repetition).",
     )
 
     parser.addoption(
@@ -280,6 +290,25 @@ def pytest_addoption(parser):
         "setting TT_METAL_DISABLE_SFPLOADMACRO=1).",
     )
 
+    parser.addoption(
+        "--op",
+        action="append",
+        default=[],
+        metavar="OP",
+        help="Run only tests for the given SFPU op(s), by MathOperation name "
+        "(case-insensitive, exact). Repeatable: --op=exp --op=log.",
+    )
+
+    parser.addoption(
+        "--mode",
+        action="store",
+        default="accuracy",
+        choices=["accuracy", "perf", "both"],
+        help="SFPU sweep selector (accuracy | perf | both): keeps only that sweep "
+        "test and deselects the other two. Defaults to 'accuracy'. "
+        "Exact-match shorthand for -k.",
+    )
+
 
 _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
@@ -303,6 +332,12 @@ def pytest_configure(config):
         os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
+
+    bit_exact_runs = config.getoption("--bit-exact-runs", default=1)
+    if bit_exact_runs < 1:
+        raise pytest.UsageError(f"--bit-exact-runs must be >= 1, got {bit_exact_runs}")
+    TestConfig.BIT_EXACT_RUNS = bit_exact_runs
+
     TestConfig.DUMP_RAW_COUNTERS = config.getoption(
         "--dump-raw-counters", default=False
     )
@@ -422,7 +457,7 @@ def pytest_configure(config):
                     port=TestConfig.TEST_TARGET.simulator_port,
                 )
         else:
-            tt_exalens_init.init_ttexalens(use_4B_mode=False)
+            tt_exalens_init.init_ttexalens()
 
 
 def pytest_ignore_collect(collection_path, config):
@@ -467,8 +502,66 @@ def _collapse_runtime_only_variants(config, items):
         items[:] = keep
 
 
+def _item_op_names(item) -> set:
+    """Return the op name(s) a test covers, lowercased.
+
+    Reads the MathOperation from the test's parameters, falling back to the op name in the test id.
+    """
+    from helpers.llk_params import MathOperation
+
+    names = set()
+    callspec = getattr(item, "callspec", None)
+    if callspec is not None:
+        for val in callspec.params.values():
+            if isinstance(val, MathOperation):
+                names.add(val.name.lower())
+    if not names:
+        names.update(
+            m.lower() for m in re.findall(r"MathOperation\.(\w+)", item.nodeid)
+        )
+    return names
+
+
+def _select_tests_by_op(config, items):
+    """Run only the tests for the op(s) passed with --op.
+
+    Each op is a MathOperation name, matched case-insensitively and exactly. An
+    unknown name raises an error; a valid op with no matching test selects
+    nothing. Does nothing without --op.
+    """
+    requested = config.getoption("--op") or []
+    if not requested:
+        return
+
+    from helpers.llk_params import MathOperation
+
+    valid = {op.name.lower() for op in MathOperation}
+    wanted = set()
+    for raw in requested:
+        key = raw.lower()
+        if key not in valid:
+            raise pytest.UsageError(
+                f"--op {raw!r}: not a known SFPU op. Expected a MathOperation "
+                f"name (case-insensitive), e.g. Exp, Reciprocal, Gelu."
+            )
+        wanted.add(key)
+
+    selected, deselected = [], []
+    for item in items:
+        (selected if _item_op_names(item) & wanted else deselected).append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+    logger.info(
+        f"--op kept {len(selected)} test(s) for op(s): {', '.join(sorted(wanted))}"
+    )
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
+    _select_tests_by_op(config, items)
+
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
         _collapse_runtime_only_variants(config, items)
 
@@ -720,7 +813,7 @@ def pytest_runtest_setup(item):
     if not _exalens_server.running and not _exalens_server.ever_started:
         _exalens_server.start()
         tt_exalens_init.init_ttexalens_remote(
-            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port
         )
     elif not _exalens_server.running:
         logger.error("tt-exalens server is no longer running unexpectedly.")
@@ -730,7 +823,7 @@ def pytest_runtest_setup(item):
         tt_exalens_init.cleanup_global_context()
         _exalens_server.restart()
         tt_exalens_init.init_ttexalens_remote(
-            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port
         )
 
 

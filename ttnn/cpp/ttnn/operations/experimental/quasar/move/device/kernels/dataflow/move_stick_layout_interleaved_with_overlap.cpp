@@ -7,7 +7,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -50,12 +49,14 @@ void kernel_main() {
 
     // read a ublock of tiles from src to CB
     cb.reserve_back(num_pages);
-    uint32_t l1_write_addr = cb.get_write_ptr();
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        CoreLocalMem<uint32_t> dst(l1_write_addr);
-        noc.async_read(src_addrgen, dst, page_size, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read(
+            src_addrgen,
+            cb,
+            page_size,
+            {.page_id = i, .offset_bytes = 0},
+            {.offset_bytes = (i - start_id) * aligned_page_size});
         noc.async_read_barrier();
-        l1_write_addr += aligned_page_size;
     }
 
     if (is_controller) {

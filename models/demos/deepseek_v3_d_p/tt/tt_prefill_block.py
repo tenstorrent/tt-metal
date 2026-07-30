@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import time
 from pathlib import Path
 from typing import Callable, Optional, Tuple, Union
 
@@ -16,6 +18,26 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
+
+# Optional per-layer MLA-vs-FFN host timing (rough ratio only). Gated by TT_PREFILL_BLOCK_TIMING=1.
+# Host wall-clock with a device sync bracketing each region, so the syncs serialize the pipeline and
+# ABSOLUTE times inflate vs an un-instrumented run — trust the MLA:FFN ratio and the per-layer shape,
+# NOT the totals. When off (default) there is no sync and no timing, so normal runs are unperturbed.
+# Keyed by global layer_idx -> {"mla": [seconds...], "ffn": [seconds...]} (one entry per forward call).
+_BLOCK_TIMING_ENABLED = os.environ.get("TT_PREFILL_BLOCK_TIMING", "0") == "1"
+_BLOCK_TIMINGS: dict[int, dict[str, list[float]]] = {}
+
+
+def reset_block_timings() -> None:
+    """Drop all recorded per-layer MLA/FFN samples (e.g. to exclude a warmup iteration)."""
+    _BLOCK_TIMINGS.clear()
+
+
+def get_block_timings() -> dict[int, dict[str, list[float]]]:
+    """Per-layer {"mla": [s...], "ffn": [s...]} host-timing samples recorded since the last reset."""
+    return _BLOCK_TIMINGS
+
 
 # Per-axis CCL topology. A scalar applies to both mesh axes; a 2-tuple (row = SP-axis-0,
 # col = TP-axis-1) configures each axis independently — e.g. (Ring, Linear) for
@@ -204,6 +226,7 @@ class TtPrefillBlock(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -259,13 +282,16 @@ class TtPrefillBlock(LightweightModule):
             seq_len=max_seq_len if max_seq_len is not None else seq_len,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
-            topology=tp_topology,  # MLA's q/kv all-gathers run on the TP axis (cluster_axis=tp_axis)
+            # Pass the full per-axis topology: MLA's q/kv/wo CCLs use the TP element (cluster_axis=
+            # tp_axis), but its ring-attention SDPA runs on the SP axis and needs the SP element.
+            topology=topology,
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
             is_chunked=is_chunked,
             slot_num=slot_num,
             layer_num=layer_num,
             kv_only=kv_only,
+            sparse_kv_cache_format=sparse_kv_cache_format,
         )
 
         if kv_only:
@@ -402,11 +428,12 @@ class TtPrefillBlock(LightweightModule):
         self,
         x: ttnn.Tensor,
         rope_tensors: dict,
-        kvpe_cache: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
         cache_layer_idx: int = 0,
         return_kv_cache: bool = False,
         return_intermediates: bool = False,
         on_layer_complete: Optional[Callable[[int], None]] = None,
+        on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
@@ -427,6 +454,10 @@ class TtPrefillBlock(LightweightModule):
                 region-offset bounds). Has no effect on dense layers.
             on_layer_complete: optional per-layer migration ack. In chunked prefill, after MLA writes
                 the chunk this block zeros the pad window past actual_end, flushes, then fires this.
+            on_layer_hidden: optional tap fired at the END of the block with (GLOBAL layer index, output
+                residual x) — for consumers that need the post-FFN hidden (e.g. the DFlash drafter
+                matching target_layer_ids). NOT fired for kv_only blocks (no output). The callback must
+                not free/mutate x — it flows on to the next layer.
             actual_start: chunked-prefill absolute KV pos of this chunk's first real token (the cache
                 write offset = cumulative valid-KV count before it; None for single-shot). Selects
                 MLA's chunked path; requires the block to have been built with is_chunked=True.
@@ -436,13 +467,23 @@ class TtPrefillBlock(LightweightModule):
                 tt_kv_rope, tt_kvpe) and this returns (output_tensor, kv_intermediates_dict) — also
                 carrying post_mla_residual + post_attn_norm — instead of (output_tensor, kv_cache).
             actual_isl: actual (unpadded) count of real tokens; threaded to the MoE FFN for
-                padding-aware routing.
+                padding-aware routing. Paired with actual_start there: under chunked prefill the MoE
+                sees the ROTATED block-cyclic layout, so the per-chip real-token split depends on
+                BOTH values (see MoeGate.build_padding_config).
             padding_side: "right" or "left"; threaded to the MoE FFN for padding-aware routing.
 
         Returns:
             (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
             (output_tensor, kv_intermediates_dict) when return_kv_intermediates=True.
         """
+        # Optional MLA-vs-FFN host timing (TT_PREFILL_BLOCK_TIMING=1). Bracket each region with a device
+        # sync so the wall-clock reflects device work; disabled by default (no sync, no perturbation).
+        # Skip kv_only layers (they run no FFN and return early below).
+        _timing = _BLOCK_TIMING_ENABLED and not self.kv_only
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_start = time.perf_counter()
+
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
         seq_len_local = attn_norm_out.shape[2]
@@ -480,9 +521,10 @@ class TtPrefillBlock(LightweightModule):
             # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
             # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
             # sparse.
-            if kvpe_cache.layout == ttnn.TILE_LAYOUT:
+            cache_tensor = kvpe_cache.storage
+            if cache_tensor.layout == ttnn.TILE_LAYOUT:
                 ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                    kvpe_cache,
+                    cache_tensor,
                     cache_user_id,
                     cache_layer_idx,
                     self.mla.layer_num,
@@ -503,6 +545,9 @@ class TtPrefillBlock(LightweightModule):
 
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_mla = time.perf_counter()
         if return_kv_intermediates:
             # post-MLA residual (x + mla_out), TP-sharded on hidden.
             kv_intermediates["post_mla_residual"] = ttnn.clone(x)
@@ -519,6 +564,7 @@ class TtPrefillBlock(LightweightModule):
                 return_intermediates=return_intermediates,
                 actual_isl=actual_isl,
                 padding_side=padding_side,
+                actual_start=actual_start,
             )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
@@ -526,6 +572,18 @@ class TtPrefillBlock(LightweightModule):
         ttnn.deallocate(ffn_norm_out)
         x = ttnn.add(x, ffn_out)
         ttnn.deallocate(ffn_out)
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_ffn = time.perf_counter()
+            rec = _BLOCK_TIMINGS.setdefault(self.mla.layer_idx, {"mla": [], "ffn": []})
+            rec["mla"].append(_t_mla - _t_start)  # attn_norm + MLA + residual
+            rec["ffn"].append(_t_ffn - _t_mla)  # ffn_norm + (MoE|dense FFN) + residual
+
+        # Post-FFN output-residual tap (e.g. the DFlash drafter): fire with this block's GLOBAL layer
+        # index (self.mla.layer_idx) and its final output residual. Not reached for kv_only blocks (they
+        # returned above with no output). The callback must NOT free/mutate x — it flows to the next layer.
+        if on_layer_hidden is not None:
+            on_layer_hidden(self.mla.layer_idx, x)
 
         if return_kv_intermediates:
             if return_indexer_indices:
@@ -543,6 +601,7 @@ class TtPrefillBlock(LightweightModule):
         return_intermediates: bool = False,
         actual_isl: Optional[int] = None,
         padding_side: str = "right",
+        actual_start: Optional[int] = None,
     ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE."""
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
@@ -552,6 +611,7 @@ class TtPrefillBlock(LightweightModule):
             return_intermediates=return_intermediates,
             actual_isl=actual_isl,
             padding_side=padding_side,
+            actual_start=actual_start,
         )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)

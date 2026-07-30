@@ -341,11 +341,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         input_cores == output_cores || block_sharded,
         "For height sharded convs input and output cores must be the same");
 
+    // Anchor the compute / kernel-placement rectangle on the INPUT shard grid's bounding box rather than a
+    // (0,0)-origin grid_size rectangle.  For height-sharded, input_cores == output_cores and their bbox
+    // equals (grid_size.x, grid_size.y) whenever the grid starts at (0,0) — so this is byte-identical on
+    // the default grid.  On an offset grid (conv_config.core_grid placed away from (0,0), e.g. a 2-core
+    // sub-grid at logical y=1) it keeps the kernels on the tensor's actual cores instead of requesting
+    // non-existent logical coords (e.g. (1,1) on a 2x1 grid).
     CoreRangeSet all_cores;
     if (height_sharded) {
-        all_cores = CoreRangeSet(CoreRange(
-            CoreCoord(0, 0),
-            CoreCoord(parallelization_config.grid_size.x - 1, parallelization_config.grid_size.y - 1)));
+        all_cores = CoreRangeSet(input_cores.bounding_box());
     } else {
         all_cores = input_cores.merge(output_cores);
     }
@@ -811,11 +815,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
     const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
 
-    const CoreCoord top_left_core = {(std::size_t)0, (std::size_t)0};
-    const CoreCoord top_left_core_plus_one = {(std::size_t)1, (std::size_t)1};
+    // Anchor mcast geometry on the actual grid origin (input shard bbox top-left) so an offset core_grid
+    // (e.g. a sub-grid at logical y=1) works; grid_start == (0,0) on the default grid, so every derived
+    // coord below is unchanged there.
+    const CoreCoord grid_start = input_cores.bounding_box().start_coord;
+    const CoreCoord top_left_core = grid_start;
+    const CoreCoord top_left_core_plus_one = {grid_start.x + 1, grid_start.y + 1};
     const CoreCoord bottom_right_core = {(std::size_t)in_num_cores_x - 1, (std::size_t)in_num_cores_y - 1};
     const CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    const CoreCoord top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
+    // top_left_core_plus_one (logical origin + {1,1}) is consumed ONLY by the block-sharded 2D
+    // weights-mcast sender path.  Resolving its physical coord unconditionally throws on grids that don't
+    // contain that logical coord (a height-sharded 1D conv on a 2x1 grid, or any 2-core sub-grid), so only
+    // resolve it when block-sharded; height-sharded leaves it unused.
+    const CoreCoord top_left_core_plus_one_physical =
+        block_sharded ? device->worker_core_from_logical_core(top_left_core_plus_one) : CoreCoord{0, 0};
     const CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
     CoreRangeSet mcast_sender_cores =
@@ -970,6 +983,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         // Non-block-sharded paths consume ACT_TILIZED from compute:
         // - depthwise path emits/consumes ACT_TILIZED in compute
         // - height-sharded non-depthwise path tilizes ACT internally in compute
+        // (The 2x ACT_TILIZED double-buffering diagnostic was reverted: a 392-tile K-block is ~800 KB
+        //  = 50,176 units of 16 B, and 2x = 100,352 units overflows the uint16_t DFB ring-extent field
+        //  (max 65,536 = 1 MB). Capacity double-buffering of a full K-block is structurally impossible
+        //  on Quasar — see dfb_conv2d_analysis.md.)
         spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
     }
 
@@ -1099,7 +1116,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     m2::DataMovementHardwareConfig reader_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        reader_hw = m2::DataMovementGen2Config{};
+        // QSR: this conv activation reader fills the ACT/ACT_ROW_MAJOR DFB via per-window "stick" sub-tile NOC
+        // reads (read_sticks()); that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
+        // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
+        reader_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         reader_hw =
             m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};

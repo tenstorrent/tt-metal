@@ -5,8 +5,8 @@
 # ci-quiet log mode is hard-coded.
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
 # so every group below shares one identical cmd that calls a shared runner in
-# tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh (plain pytest-split) and
-# run_llk_perf_blackhole.sh (slice-level bin-pack + per-slice tt-smi reset).
+# tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh and run_llk_perf_blackhole.sh
+# (both use pytest-split sharding).
 
 - name: llk_perf_wormhole group 1/5
   split_group: 1
@@ -71,7 +71,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 150
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 2/5
@@ -82,7 +82,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 150
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 3/5
@@ -93,7 +93,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 150
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 4/5
@@ -104,7 +104,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 150
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 5/5
@@ -115,5 +115,5 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 150
   owner_id: U07J3K6KS1K

@@ -335,15 +335,15 @@ static void matmul_tile_block(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .math_fidelity = cfg.math_fidelity,
-            .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
-            .dst_full_sync_en = cfg.dst_full_sync_en,
+            .fpu_math_fidelity = cfg.math_fidelity,
+            .enable_32_bit_dest = cfg.fp32_dest_acc_en,
+            .double_buffer_dest = !cfg.dst_full_sync_en,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .math_fidelity = cfg.math_fidelity,
-            .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
-            .dst_full_sync_en = cfg.dst_full_sync_en,
+            .fpu_math_fidelity = cfg.math_fidelity,
+            .enable_32_bit_dest = cfg.fp32_dest_acc_en,
+            .double_buffer_dest = !cfg.dst_full_sync_en,
         };
     }
     experimental::KernelSpec compute_spec{

@@ -56,6 +56,9 @@ struct CopyBlockMatmulPartialsConfig {
     bool fp32_dest_acc_en = false;
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
+    // Compute kernel exercised by the test. Defaults to the copy_block_matmul_partials / pack_tile_block
+    // kernel; the copy_block / pack_block variant points this at eltwise_copy_pack_block.cpp.
+    std::string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp";
 };
 
 static std::vector<uint32_t> generate_copy_block_stimulus(
@@ -158,31 +161,29 @@ void run_single_core_copy_block_matmul_partials(
     experimental::ComputeHardwareConfig compute_hw_config;
     {
         // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
-        // consumes it, so the Metal 2.0 host API requires an explicit unpack_to_dest_mode entry.
-        // Default is unpack via SrcA/B, ~19-bit precision.
-        experimental::ComputeUnpackToDestModes unpack_modes{};
+        // consumes it, so the Metal 2.0 host API requires an explicit unpack_modes entry.
+        // UnpackToSrc is unpack via SrcA/B, ~19-bit precision.
+        experimental::ComputeUnpackModes unpack_modes{};
         if (test_config.fp32_dest_acc_en) {
-            unpack_modes = {{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}};
+            unpack_modes = {{SRC0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}};
         }
         if (mesh_device->arch() == tt::ARCH::QUASAR) {
             compute_hw_config = experimental::ComputeGen2Config{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .unpack_to_dest_mode = unpack_modes,
+                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+                .double_buffer_dest = !test_config.dst_full_sync_en,
+                .unpack_modes = unpack_modes,
             };
         } else {
             compute_hw_config = experimental::ComputeGen1Config{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .unpack_to_dest_mode = unpack_modes,
+                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+                .double_buffer_dest = !test_config.dst_full_sync_en,
+                .unpack_modes = unpack_modes,
             };
         }
     }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
+        .source = test_config.compute_kernel,
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
@@ -261,6 +262,10 @@ void run_single_core_copy_block_matmul_partials(
     EXPECT_EQ(src_vec, result_vec);
 }
 
+// Compute kernel exercising the uniform copy_block + pack_block surface (shared by the
+// TensixComputeCopyPackBlock* cases below); the default kernel is the struct member initializer.
+constexpr const char* kBlockKernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_pack_block.cpp";
+
 }  // namespace unit_tests::compute::matmul_partials
 
 ////////////////////////////////////////////////////////////////////////////
@@ -269,6 +274,9 @@ void run_single_core_copy_block_matmul_partials(
 // These tests aim to cover usage of these API calls:
 // - copy_block_matmul_partials
 // - pack_tile_block
+// and the uniform op_block surface that supersedes them:
+// - copy_block
+// - pack_block
 ////////////////////////////////////////////////////////////////////////////
 
 TEST_F(LLKMeshDeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
@@ -313,6 +321,52 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
                 .compute_ublock = 1,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en};
+            unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
+                this->devices_.at(0), test_config);
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                return;
+            }
+        }
+    }
+}
+
+// Same coverage as TensixComputeCopyBlockMultiple, but exercises the uniform op_block surface
+// (copy_block + pack_block) directly instead of the deprecated copy_block_matmul_partials /
+// pack_tile_block. The golden is an identity copy, so results must match bit-for-bit.
+TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockMultiple) {
+    for (bool fp32_dest_acc_en : {true, false}) {
+        for (bool dst_full_sync_en : {true, false}) {
+            log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
+            unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
+                .num_tiles = 8,
+                .reader_ublock = 8,
+                .writer_ublock = 8,
+                .compute_ublock = 4,  // compute_ublock must be <= get_dest_max_tiles (4 for SyncHalf+FP32)
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .compute_kernel = unit_tests::compute::matmul_partials::kBlockKernel};
+            unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
+                this->devices_.at(0), test_config);
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                return;
+            }
+        }
+    }
+}
+
+// copy_block + pack_block with a single tile per block (compute bottleneck shape).
+TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockComputeBottleneck) {
+    for (bool fp32_dest_acc_en : {true, false}) {
+        for (bool dst_full_sync_en : {true, false}) {
+            log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
+            unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
+                .num_tiles = 8,
+                .reader_ublock = 8,
+                .writer_ublock = 8,
+                .compute_ublock = 1,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .compute_kernel = unit_tests::compute::matmul_partials::kBlockKernel};
             unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
                 this->devices_.at(0), test_config);
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {

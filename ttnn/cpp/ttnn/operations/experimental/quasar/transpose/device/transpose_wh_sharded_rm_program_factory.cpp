@@ -174,8 +174,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32.
         std::visit(
             [&](auto& c) {
-                c.unpack_to_dest_mode.emplace(CB_IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-                c.unpack_to_dest_mode.emplace(CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+                c.unpack_modes.emplace(CB_IN, tt::tt_metal::UnpackMode::UnpackToDest);
+                c.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
             },
             compute_hw);
     }

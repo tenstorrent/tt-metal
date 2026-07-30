@@ -653,8 +653,8 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InputRegionDuplicate
 }
 
 // #48928: op(X, X, out=X) — X at two genuine input positions plus the in-place output_tensor slot.
-// The output-alias skip is granted ONCE; the extra input occurrence still bails, so a later
-// same-shape op(X, Y, out=X) cache hit can't patch input-b to X's address.
+// Even with the in-place opt-in ON, the output-alias skip is granted ONCE; the extra input
+// occurrence still bails, so a later same-shape op(X, Y, out=X) cache hit can't patch input-b to X.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_OutputAliasRepeatedInInputs_ReturnsEmpty) {
     auto buf_a = MakeDramBuffer(device());
 
@@ -670,9 +670,55 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_OutputAliasRepeatedI
         program,
         desc,
         std::vector<Buffer*>{buf_a.get(), buf_a.get(), buf_a.get(), buf_a.get()},
-        /*num_input_buffers=*/3);
+        /*num_input_buffers=*/3,
+        /*allow_inplace_output_tensor_alias=*/true);
 
     EXPECT_TRUE(resolved.empty());
+}
+
+// #48928/#49573: an in-place op's output_tensor carried INSIDE tensor_args (input region) aliasing
+// an input — [input=X, output_tensor=X | return=X].  This is the SDXL-silu / MorehAdamW shape.
+//   - Default (opt-out): treated as an ambiguous input-region duplicate → BAIL to slow-path rebuild.
+//     This is the safe behavior for ops whose get_dynamic_runtime_args is incomplete.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InplaceOutputTensorInInputs_Default_ReturnsEmpty) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    // num_input_buffers=2 (input + output_tensor), 1 output (return). Default opt-in (false) → bail.
+    ResolvedBindings resolved = resolve_bindings(
+        program, desc, std::vector<Buffer*>{buf_a.get(), buf_a.get(), buf_a.get()}, /*num_input_buffers=*/2);
+
+    EXPECT_TRUE(resolved.empty());
+}
+
+//   - Opt-in (allow_inplace_output_tensor_alias=true): the op re-applies every cache-hit-varying arg
+//     itself (binary_ng), so the output_tensor is a safe in-place alias → KEEP the fast path.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InplaceOutputTensorInInputs_OptIn_KeepsFastPath) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    ResolvedBindings resolved = resolve_bindings(
+        program,
+        desc,
+        std::vector<Buffer*>{buf_a.get(), buf_a.get(), buf_a.get()},
+        /*num_input_buffers=*/2,
+        /*allow_inplace_output_tensor_alias=*/true);
+
+    EXPECT_FALSE(resolved.empty());
+    ASSERT_EQ(resolved.rt_args.size(), 1u);
+    EXPECT_EQ(resolved.rt_args[0].tensor_buffer_idx, 0u);
 }
 
 // resolve_bindings fires TT_FATAL when a runtime-arg binding buffer is not in

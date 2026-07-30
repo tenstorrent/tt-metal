@@ -300,8 +300,11 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         });
     }
 
-    // Per-reader pad scratch (only used when pad_val != 0).
-    const bool use_pad_scratch = enable_padding && (pad_val != 0);
+    // Per-reader pad scratch. Always allocate it when padding is enabled: Quasar has no static
+    // MEM_ZEROS L1 region (WH/BH-only) for the zero-pad case to copy from, so the kernel always
+    // sources padding from this scratch DFB -- filled via noc.async_write_zeros for pad_val==0, or
+    // the immediate value otherwise.
+    const bool use_pad_scratch = enable_padding;
     const uint32_t pad_cb_pagesize = aligned_stick_nbytes;
     if (use_pad_scratch) {
         dataflow_buffers.push_back(DataflowBufferSpec{
@@ -396,7 +399,11 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                                  NOC noc) {
         DataMovementHardwareConfig reader_hw;
         if (device->arch() == tt::ARCH::QUASAR) {
-            reader_hw = DataMovementGen2Config{};
+            // QSR: this reader fills/drains DFBs with many sub-tile (per-row stick) NOC reads/writes (gather
+            // scatter-writes, pad replication, partial-page DRAM config reads); that sub-tile pattern stalls the
+            // DFB implicit-sync credit accounting. Opt out so explicit push_back/pop_front stay authoritative
+            // (mirrors tilize default / transpose HC-sharded).
+            reader_hw = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
         } else {
             reader_hw = DataMovementGen1Config{.processor = processor, .noc = noc};
         }

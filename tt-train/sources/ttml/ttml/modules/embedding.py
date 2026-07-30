@@ -6,6 +6,11 @@
 
 from __future__ import annotations
 
+from typing import Callable, Optional
+
+import numpy as np
+
+import ttnn
 import ttml
 
 from .module_base import AbstractModuleBase
@@ -41,3 +46,239 @@ class Embedding(AbstractModuleBase):
             Output tensor of embeddings
         """
         return ttml.ops.embedding.embedding(x, self.weight.tensor)
+
+
+class VocabParallelEmbedding(AbstractModuleBase):
+    """Embedding whose table is sharded along the vocabulary dimension.
+
+    Each device shifts the ids into its local window,
+    looks up the ids that fall in its slice, zeroes the rest, and an all-reduce
+    then sums the per-device contributions — each token is owned by exactly one
+    device, so the sum reconstructs the full, replicated embedding.
+
+    Args:
+        num_embeddings: Vocabulary size. Must be divisible by ``tp_size``.
+        embedding_dim: Dimension of embeddings.
+        weight_init: Initializer for the weight tensor. Defaults to normal(0, 0.02).
+        axis_name: Mesh axis used for tensor parallelism.
+
+    Note:
+        ``num_embeddings`` need only be divisible by ``tp_size`` — the per-device
+        shard is not required to be tile-aligned. The embedding *backward* kernel,
+        however, requires ``seq_len`` and ``embedding_dim`` to be multiples of 32,
+        so for training callers must tile-align the sequence length (the model
+        forward paths already pad it).
+    """
+
+    def __init__(
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        weight_init: Optional[Callable] = None,
+        axis_name: str = "tp",
+    ) -> None:
+        super().__init__()
+
+        mesh = ttml.mesh()
+        self.axis_name = axis_name
+        self.cluster_axis = mesh.axis_index(axis_name)
+        self.tp_size = mesh.axis_size(axis_name)
+
+        if num_embeddings % self.tp_size != 0:
+            raise ValueError(
+                f"num_embeddings ({num_embeddings}) must be divisible by the tensor-parallel "
+                f"size ({self.tp_size}) of mesh axis '{axis_name}'."
+            )
+        if embedding_dim % 32 != 0:
+            raise ValueError(f"embedding_dim ({embedding_dim}) must be a multiple of 32 for the embedding kernel.")
+
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.num_embeddings_per_partition = num_embeddings // self.tp_size
+
+        if weight_init is None:
+            weight_init = ttml.init.normal(0.0, 0.02)
+
+        weight_shape = (1, 1, num_embeddings, embedding_dim)
+        weight_mapper = mesh.axis_mapper(axis_name, tdim=2)
+        self.weight = Parameter(weight_init(weight_shape, mapper=weight_mapper))
+
+        # Per-device vocab-start offset (one shard per TP rank); int32 + row-major to
+        # match the ids so the subtract in forward stays off the tile path.
+        starts_np = (np.arange(self.tp_size, dtype=np.int32) * self.num_embeddings_per_partition).reshape(
+            1, 1, self.tp_size, 1
+        )
+        self._vocab_start = ttml.autograd.Tensor.from_numpy(
+            starts_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.INT32, weight_mapper
+        ).get_value(ttml.autograd.PreferredPrecision.NATIVE)
+
+    def _check_tp_replicated(self, x: ttml.autograd.Tensor) -> None:
+        """Reject ids that are sharded along the TP axis.
+
+        The per-rank offset masking is only correct when every TP device sees the
+        full ids, so a shard on the TP axis silently produces wrong embeddings.
+        """
+        placements = ttml.Sharding.from_tensor(x).placements
+        if placements is None or self.cluster_axis >= len(placements):
+            return
+        p = placements[self.cluster_axis]
+        if isinstance(p, ttnn.PlacementShard):
+            raise ValueError(
+                f"VocabParallelEmbedding expects ids replicated across TP axis '{self.axis_name}', "
+                f"got PlacementShard(dim={p.dim}). Each TP device must see the full ids for the "
+                f"offset masking to be correct."
+            )
+
+    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        """Forward pass of the vocab-parallel embedding.
+
+        Args:
+            x: Token indices, shape ``[batch_size, 1, 1, seq_len]`` (uint32,
+                row-major), replicated across the TP axis.
+
+        Returns:
+            Embeddings ``[batch_size, 1, seq_len, embedding_dim]``, replicated
+            across the TP axis.
+        """
+        self._check_tp_replicated(x)
+
+        # Ids stay row-major (arrive RM, gather needs RM), so the index math skips the
+        # tile round-trip. int32 is signed, so out-of-range-below ids go negative for the
+        # ge(., 0) check.
+        ids = x.get_value(ttml.autograd.PreferredPrecision.FULL)
+        ids_signed = ttnn.typecast(ids, ttnn.DataType.INT32)
+
+        local = ttnn.subtract(ids_signed, self._vocab_start)
+        in_range = ttnn.multiply(
+            ttnn.ge(local, 0),
+            ttnn.lt(local, self.num_embeddings_per_partition),
+        )
+
+        # Multiply by the 0/1 mask so out-of-range ids gather row 0 (in-bounds); the
+        # output mask below nulls their looked-up value.
+        local_ids = ttnn.typecast(ttnn.multiply(local, in_range), ttnn.DataType.UINT32)
+
+        emb = ttml.ops.embedding.embedding(
+            ttml.autograd.create_tensor(local_ids, requires_grad=False), self.weight.tensor
+        )
+
+        # Zero out-of-range tokens before the sum (they gathered the bogus row 0); this
+        # also zeroes their grad, so nothing accumulates onto row 0. Mask -> TILE to match
+        # emb's layout for the multiply; fp32 mixes cleanly with the bf16 emb.
+        mask = ttnn.transpose(ttnn.to_layout(ttnn.typecast(in_range, ttnn.DataType.FLOAT32), ttnn.Layout.TILE), 2, 3)
+        emb = ttml.ops.binary.mul(emb, ttml.autograd.create_tensor(mask, requires_grad=False))
+
+        return ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)
+
+
+class FeatureParallelEmbedding(AbstractModuleBase):
+    """Embedding whose table is sharded along the embedding (hidden) dimension.
+
+    Each device holds the *entire* vocabulary but only an ``embedding_dim //
+    tp_size`` slice of every row. Versus :class:`VocabParallelEmbedding` this
+    makes the lookup fully local — no vocab offset, range mask, or out-of-range
+    handling — and replaces the full-hidden all-reduce with a single all-gather
+    over the embedding dim (roughly half the bandwidth), mirroring
+    ``ColumnParallelLinear(gather_output=True)``. The trade-off: its layout does
+    not match the vocab-parallel LM head, so weight tying is unavailable.
+
+    Args:
+        num_embeddings: Vocabulary size (rows). Held in full on every device.
+        embedding_dim: Embedding width. Sharded across ``tp_size``.
+        weight_init: Initializer for the weight tensor. Defaults to normal(0, 0.02).
+        axis_name: Mesh axis used for tensor parallelism.
+        gather_output: If ``True`` (default) an all-gather reconstructs the full
+            TP-replicated embedding. If ``False`` the hidden-sharded slice
+            ``[batch, 1, seq, embedding_dim/tp]`` is returned for a TP-aware consumer.
+
+    Note:
+        The shard must be tile-width aligned: ``embedding_dim`` divisible by
+        ``tp_size`` and ``embedding_dim // tp_size`` a multiple of 32 (the
+        embedding kernel's last-dim requirement). Backward also needs ``seq_len``
+        tile-aligned.
+    """
+
+    def __init__(
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        weight_init: Optional[Callable] = None,
+        axis_name: str = "tp",
+        gather_output: bool = True,
+    ) -> None:
+        super().__init__()
+
+        mesh = ttml.mesh()
+        self.axis_name = axis_name
+        self.cluster_axis = mesh.axis_index(axis_name)
+        self.tp_size = mesh.axis_size(axis_name)
+        self.gather_output = gather_output
+
+        if embedding_dim % self.tp_size != 0:
+            raise ValueError(
+                f"embedding_dim ({embedding_dim}) must be divisible by the tensor-parallel "
+                f"size ({self.tp_size}) of mesh axis '{axis_name}'."
+            )
+        if (embedding_dim // self.tp_size) % 32 != 0:
+            raise ValueError(
+                f"embedding_dim per partition ({embedding_dim // self.tp_size} = {embedding_dim} / "
+                f"{self.tp_size}) must be a multiple of 32 for the embedding kernel."
+            )
+
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.embedding_dim_per_partition = embedding_dim // self.tp_size
+
+        if weight_init is None:
+            weight_init = ttml.init.normal(0.0, 0.02)
+
+        weight_shape = (1, 1, num_embeddings, embedding_dim)
+        weight_mapper = mesh.axis_mapper(axis_name, tdim=3)
+        self.weight = Parameter(weight_init(weight_shape, mapper=weight_mapper))
+
+    def _check_tp_replicated(self, x: ttml.autograd.Tensor) -> None:
+        """Reject ids sharded along the TP axis.
+
+        Every device holds a different embedding-dim slice of the *full* vocab,
+        so each needs the complete ids; a TP shard would silently drop tokens.
+        """
+        placements = ttml.Sharding.from_tensor(x).placements
+        if placements is None or self.cluster_axis >= len(placements):
+            return
+        p = placements[self.cluster_axis]
+        if isinstance(p, ttnn.PlacementShard):
+            raise ValueError(
+                f"FeatureParallelEmbedding expects ids replicated across TP axis "
+                f"'{self.axis_name}', got PlacementShard(dim={p.dim}). Each TP device must see "
+                f"the full ids to look up its embedding-dim slice for every token."
+            )
+
+    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        """Look up the local hidden-dim shard for every id.
+
+        Args:
+            x: Token indices ``[batch_size, 1, 1, seq_len]``, replicated across TP.
+
+        Returns:
+            ``gather_output`` (default): full embedding
+            ``[batch_size, 1, seq_len, embedding_dim]`` replicated across TP.
+            Otherwise the hidden-sharded slice
+            ``[batch_size, 1, seq_len, embedding_dim/tp]``.
+        """
+        self._check_tp_replicated(x)
+
+        # Every id is valid on every device, so no masking — a plain local lookup on the hidden-dim shard.
+        emb = ttml.ops.embedding.embedding(x, self.weight.tensor)
+
+        if not self.gather_output:
+            return emb
+
+        # GradOutputType.REPLICATED divides the backward reduce_scatter by tp_size
+        # (output is replicated, consumed replicated), matching
+        # ColumnParallelLinear(gather_output=True).
+        return ttml.ops.distributed.all_gather(
+            emb,
+            3,
+            self.cluster_axis,
+            ttml.ops.distributed.GradOutputType.REPLICATED,
+        )

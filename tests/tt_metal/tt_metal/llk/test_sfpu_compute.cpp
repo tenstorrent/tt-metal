@@ -63,6 +63,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
     {"reciprocal", {{"SFPU_OP_CHAIN_0", "recip_tile_init(); recip_tile(0);"}}},
     {"gelu", {{"SFPU_OP_CHAIN_0", "gelu_tile_init(); gelu_tile(0);"}}},
+    {"gelu_accurate", {{"SFPU_OP_CHAIN_0", "gelu_tile_init<false>(); gelu_tile<false>(0);"}}},
     {"sqrt", {{"SFPU_OP_CHAIN_0", "sqrt_tile_init(); sqrt_tile(0);"}}},
     {"sigmoid", {{"SFPU_OP_CHAIN_0", "sigmoid_tile_init(); sigmoid_tile(0);"}}},
     {"silu", {{"SFPU_OP_CHAIN_0", "silu_tile_init(); silu_tile(0);"}}},
@@ -72,6 +73,10 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"rsqrt", {{"SFPU_OP_CHAIN_0", "rsqrt_tile_init(); rsqrt_tile(0);"}}},
     {"mul_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); mul_unary_tile(0, 0x40000000u);"}}},  // 2.0f
     {"square", {{"SFPU_OP_CHAIN_0", "square_tile_init(); square_tile(0);"}}},
+    {"negative", {{"SFPU_OP_CHAIN_0", "negative_tile_init(); negative_tile(0);"}}},
+    {"softplus",
+     {{"SFPU_OP_CHAIN_0", "softplus_tile_init(); softplus_tile(0, /* beta */ 0x3F800000u, /* recip */0x3F800000u, /* threshold */ 0x41A00000u);"}}},
+    {"clamp", {{"SFPU_OP_CHAIN_0", "clamp_tile_init(); clamp_tile(0, 0xBF800000u, 0x3F800000u);"}}},  // [-1.0f, 1.0f]
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
     {"nez", {{"SFPU_OP_CHAIN_0", "nez_tile_init(); nez_tile(0);"}}},
@@ -142,6 +147,12 @@ float sfpu_function(const std::string& op_name, float input) {
         auto x3 = input * input * input;
         return input * 0.5 * (1.0 + tanhf(alpha * (input + 0.044715 * x3)));
     }
+    if (op_name == "gelu_accurate") {
+        // In double: erf(x/sqrt(2)) tends to -1 in the negative tail, so 1 + erf cancels. Computed
+        // in float the golden is already 1.8% off at x = -4.84, past this op's 1% rtol.
+        const double x = input;
+        return static_cast<float>(0.5 * x * (1.0 + erf(x * M_SQRT1_2)));
+    }
     if (op_name == "sqrt") {
         return sqrtf(input);
     }
@@ -168,6 +179,15 @@ float sfpu_function(const std::string& op_name, float input) {
     }
     if (op_name == "square") {
         return bfloat16(static_cast<float>(input) * static_cast<float>(input));
+    }
+    if (op_name == "negative") {
+        return -input;
+    }
+    if (op_name == "softplus") {
+        return (input > 20.0f) ? input : std::log1p(std::exp(input));
+    }
+    if (op_name == "clamp") {
+        return std::clamp(input, -1.0f, 1.0f);
     }
     if (op_name == "eqz") {
         return bfloat16(static_cast<float>(input) == 0.0f ? 1.0f : 0.0f);
@@ -276,11 +296,20 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
     }
+    if (op_name == "gelu_accurate") {
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed);
+    }
     if ((op_name == "eqz") || (op_name == "nez") || (op_name == "ltz") || (op_name == "gtz") || (op_name == "gez") ||
         (op_name == "lez")) {
         // Include exact zeros so the eqz/nez/lez/gez at-zero branches are exercised.
         auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.0f, 0.5f, 1.0f});
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
+    }
+    if (op_name == "softplus") {
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 30.0f, numel, seed);
+    }
+    if (op_name == "clamp") {
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed);
     }
     return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
 }
@@ -342,18 +371,26 @@ std::tuple<vector<uint32_t>, vector<uint32_t>, vector<uint32_t>> generate_packed
 // Per-op (rtol, atol) for the device-vs-golden comparison. Shared by the bf16
 // and Float32 close-checks so the tolerances live in one place. Defaults match
 // is_close()'s own defaults for the "everything else" bucket.
-std::pair<float, float> sfpu_tolerance(const std::string& op_name) {
+std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_dest = false) {
     if (op_name == "tanh") {
         return {0.175f, 0.1f};
     }
     if ((op_name == "gelu") || (op_name == "relu")) {
         return {0.15f, 0.001f};
     }
+    if (op_name == "gelu_accurate") {
+        return {0.01f, 0.001f};
+    }
     if (op_name == "exponential") {
-        return {0.1f, 0.1f};
+        // 16-bit Dest runs the approximate (HW LUT) exp; 32-bit Dest runs the fp32-accurate
+        // path, so hold it to a much tighter tolerance.
+        return fp32_dest ? std::pair<float, float>{0.02f, 0.01f} : std::pair<float, float>{0.1f, 0.1f};
     }
     if (op_name == "log") {
         return {0.03f, 0.02f};
+    }
+    if (op_name == "softplus") {
+        return {0.06f, 0.02f};
     }
     return {0.06f, 0.006f};
 }
@@ -385,7 +422,7 @@ bool is_close_packed_sfpu_output_f32(
     if (vec_a.size() != vec_b.size()) {
         return false;
     }
-    const auto [rtol, atol] = sfpu_tolerance(op_name);
+    const auto [rtol, atol] = sfpu_tolerance(op_name, /*fp32_dest=*/true);
     for (size_t i = 0; i < vec_a.size(); ++i) {
         const float a = std::bit_cast<float>(vec_a[i]);
         const float b = std::bit_cast<float>(vec_b[i]);
@@ -724,25 +761,27 @@ std::vector<uint32_t> run_sfpu_pipeline(
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    experimental::ComputeUnpackToDestModes unpack_modes{};
+    experimental::ComputeUnpackModes unpack_modes{};
     if (test_config.unpack_to_dest_fp32) {
-        unpack_modes = {{IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+        unpack_modes = {{IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
     const bool fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
-            .math_approx_mode = test_config.approx_mode,
+            .sfpu_precision_mode =
+                test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .unpack_modes = unpack_modes,
             .unpack_to_dest_en = test_config.unpack_to_dest_fp32 || test_config.unpack_to_dest_en,
-            .unpack_to_dest_mode = unpack_modes,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
-            .math_approx_mode = test_config.approx_mode,
-            .unpack_to_dest_mode = unpack_modes,
+            .sfpu_precision_mode =
+                test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .unpack_modes = unpack_modes,
         };
     }
 
@@ -872,6 +911,8 @@ bool run_sfpu_all_same_buffer(
     sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_CLAMP_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
@@ -1043,13 +1084,15 @@ bool run_sfpu_binary_two_input_buffer(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = is_int8_op,
-            .math_approx_mode = test_config.approx_mode,
+            .sfpu_precision_mode =
+                test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
+            .enable_32_bit_dest = is_int8_op,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = is_int8_op,
-            .math_approx_mode = test_config.approx_mode,
+            .sfpu_precision_mode =
+                test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
+            .enable_32_bit_dest = is_int8_op,
         };
     }
 
@@ -1218,11 +1261,13 @@ bool run_sfpu_ternary_three_input_buffer(
         experimental::ComputeHardwareConfig compute_hw_config;
         if (mesh_device->arch() == tt::ARCH::QUASAR) {
             compute_hw_config = experimental::ComputeGen2Config{
-                .math_approx_mode = test_config.approx_mode,
+                .sfpu_precision_mode =
+                    test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
             };
         } else {
             compute_hw_config = experimental::ComputeGen1Config{
-                .math_approx_mode = test_config.approx_mode,
+                .sfpu_precision_mode =
+                    test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
             };
         }
 
@@ -1547,10 +1592,17 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "lez"),
         std::make_tuple(1, "square"),
         std::make_tuple(4, "square"),
+        std::make_tuple(1, "negative"),
+        std::make_tuple(4, "negative"),
+        std::make_tuple(1, "softplus"),
+        std::make_tuple(4, "softplus"),
+        std::make_tuple(1, "clamp"),
+        std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
         std::make_tuple(1, "gelu"),
+        std::make_tuple(1, "gelu_accurate"),
         std::make_tuple(1, "sqrt"),
         std::make_tuple(1, "sigmoid"),
         std::make_tuple(1, "silu"),
@@ -1563,6 +1615,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
         std::make_tuple(4, "gelu"),
+        std::make_tuple(4, "gelu_accurate"),
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
         std::make_tuple(4, "silu"),
@@ -1670,10 +1723,17 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
     SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture,
     ::testing::Values(
+        std::make_tuple(1, "negative"),
+        std::make_tuple(4, "negative"),
+        std::make_tuple(1, "softplus"),
+        std::make_tuple(4, "softplus"),
+        std::make_tuple(1, "clamp"),
+        std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
         std::make_tuple(1, "gelu"),
+        std::make_tuple(1, "gelu_accurate"),
         std::make_tuple(1, "sqrt"),
         std::make_tuple(1, "sigmoid"),
         std::make_tuple(1, "silu"),
@@ -1685,6 +1745,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
         std::make_tuple(4, "gelu"),
+        std::make_tuple(4, "gelu_accurate"),
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
         std::make_tuple(4, "silu"),

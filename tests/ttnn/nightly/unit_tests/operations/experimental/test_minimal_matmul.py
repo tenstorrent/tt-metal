@@ -168,6 +168,39 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
     assert check_result["relative_rmse"] < 0.02
 
 
+# Correctness guard for the granular output-writer path (write_block_sync_granular): each row's
+# write-source reads out of the cb_out slot must be flushed before cb_pop_front releases it back to
+# the compute producer, otherwise the producer can repack the freed slot while the writes are still
+# reading it (WAR on the output CB) and corrupt the output. This shape drives the output-writer core
+# through the granular-write path and turns an ordering regression there into a PCC failure; the WAR
+# is timing-masked, so this is a value-correctness guard, not a deterministic reproducer.
+@pytest.mark.parametrize(
+    "M, K, N",
+    [(4096, 512, 2048)],
+)
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear_granular_write_ordering(
+    device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w
+):
+    check_result = run_test_linear(
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+    )
+
+    assert check_result["pcc"] > 0.999_500, f'Expected PCC > 0.999500, got {check_result["pcc"]}'
+    assert check_result["relative_rmse"] < 0.02, f'Expected relative RMSE < 0.02, got {check_result["relative_rmse"]}'
+
+
 @pytest.mark.parametrize(
     "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [(512, 512, 512, 1, 1, 1, 1, 1)],

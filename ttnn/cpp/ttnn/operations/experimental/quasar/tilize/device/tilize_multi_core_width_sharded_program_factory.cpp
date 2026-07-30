@@ -103,9 +103,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreWidthShardedProgramFacto
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(input.device()->arch(), compute_config);
     if (fp32_llk_acc) {
-        std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(WS_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32); },
-            compute_hw);
+        std::visit([&](auto& c) { c.unpack_modes.emplace(WS_INPUT_DFB, UnpackMode::UnpackToDest); }, compute_hw);
     }
     KernelSpec compute{
         .unique_id = WS_COMPUTE_KERNEL,

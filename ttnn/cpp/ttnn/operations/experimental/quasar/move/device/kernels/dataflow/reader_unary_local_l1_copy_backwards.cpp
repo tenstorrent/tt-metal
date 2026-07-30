@@ -31,34 +31,29 @@ void kernel_main() {
     // The op only takes this (backwards, intra-L1, overlapping) path when the output buffer is at a
     // higher address than the input buffer, so the delta is strictly positive.
     uint32_t chunk_size_bytes = dst_cb_base_addr - src_cb_base_addr;
-    uint32_t num_chunks = total_size_bytes / chunk_size_bytes;
-    uint32_t remainder_chunk_size_bytes = total_size_bytes % chunk_size_bytes;
 
-    // Copy from top of src cb to top of dst cb (backwards)
+    // Copy from top of src cb to top of dst cb (backwards) in chunks of chunk_size_bytes, with a
+    // final smaller chunk for any remainder. Computed with a subtraction loop instead of `/` and `%`
+    // so this kernel does NOT pull in the libgcc software-divide routines (__udivsi3/__umodsi3).
+    // On the Quasar XIP build those extra library routines perturb the crt0 layout and trip XIPify's
+    // HI20/LO12 pairing (orphaned R_RISCV_HI20 for __tdata_lma -> tt_elffile.cpp TT_THROW). Behaviour
+    // is identical to the prior num_chunks/remainder form for the valid (dst>src, chunk>0) inputs
+    // this backwards-overlapping path is only ever taken with.
     uint32_t src_cb_addr = src_cb_base_addr + total_size_bytes;
     uint32_t dst_cb_addr = dst_cb_base_addr + total_size_bytes;
-    for (uint32_t i = 0; i < num_chunks; i += 1) {
-        src_cb_addr -= chunk_size_bytes;
-        dst_cb_addr -= chunk_size_bytes;
+    uint32_t bytes_remaining = total_size_bytes;
+    while (bytes_remaining > 0) {
+        uint32_t this_chunk_bytes = (bytes_remaining >= chunk_size_bytes) ? chunk_size_bytes : bytes_remaining;
+        src_cb_addr -= this_chunk_bytes;
+        dst_cb_addr -= this_chunk_bytes;
         CoreLocalMem<uint32_t> dst(dst_cb_addr);
         noc.async_read(
             UnicastEndpoint{},
             dst,
-            chunk_size_bytes,
+            this_chunk_bytes,
             {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = src_cb_addr},
             {.offset_bytes = 0});
         noc.async_read_barrier();
-    }
-    if (remainder_chunk_size_bytes > 0) {
-        src_cb_addr -= remainder_chunk_size_bytes;
-        dst_cb_addr -= remainder_chunk_size_bytes;
-        CoreLocalMem<uint32_t> dst(dst_cb_addr);
-        noc.async_read(
-            UnicastEndpoint{},
-            dst,
-            remainder_chunk_size_bytes,
-            {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = src_cb_addr},
-            {.offset_bytes = 0});
-        noc.async_read_barrier();
+        bytes_remaining -= this_chunk_bytes;
     }
 }
