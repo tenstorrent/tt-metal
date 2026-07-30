@@ -20,10 +20,10 @@ class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
     ):
         super().__init__(conv_act_dtype, conv_w_dtype, attention_weights_dtype, ff_weights_dtype)
 
-        self.sdpa_configs["64_K"] = ttnn.SDPAProgramConfig(
+        self.sdpa_configs["128_K"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             q_chunk_size=64,
-            k_chunk_size=64,
+            k_chunk_size=128,
             exp_approx_mode=False,
         )
 
@@ -201,4 +201,4 @@ class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
         return None
 
     def get_sdpa_config(self, module_path, is_self_attention):
-        return self.sdpa_configs["64_K"]
+        return self.sdpa_configs["128_K"]
