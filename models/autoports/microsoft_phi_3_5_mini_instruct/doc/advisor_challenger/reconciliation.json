@@ -1,0 +1,102 @@
+{
+  "layer_kind": "dense",
+  "layers_of_kind": 32,
+  "total_layers": 32,
+  "measured_window_us": 4035.9,
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, NOT per-op",
+  "source": "scripts/reconcile.py was run against tracy/incumbent_ops.csv; its current-format parser returned zero rows, so the rows below are the audited IR-to-CSV reconciliation",
+  "fidelity_isolation": "All DRAM-sharded geometry candidates retained the shipped HiFi2 used by QKV, output, and gate/up. The shipped down projection retained LoFi.",
+  "chains": [
+    {
+      "chain": "norm_residual",
+      "ops": ["ttnn.rms_norm[input]", "ttnn.rms_norm[post_attention]"],
+      "summed_window_share_pct": 2.614,
+      "verdict": "kept",
+      "measured_ms": 0.747679,
+      "perf_report": "tracy/norm_sharded/perf_report.csv",
+      "oracle": "tests/test_optimized_decoder.py, real weights, PCC >= 0.995"
+    },
+    {
+      "chain": "mlp_gate_up",
+      "ops": ["ttnn.linear[3072x16384]"],
+      "summed_window_share_pct": 2.553,
+      "verdict": "rejected",
+      "measured_ms": 0.880201,
+      "reason": "HiFi2 DRAM-sharded geometry was slower than the frozen 0.806821 ms incumbent"
+    },
+    {
+      "chain": "attention_qkv",
+      "ops": ["ttnn.linear[3072x9216]"],
+      "summed_window_share_pct": 1.798,
+      "verdict": "rejected",
+      "measured_ms": 0.83705,
+      "reason": "HiFi2 DRAM-sharded geometry was slower than the frozen 0.806821 ms incumbent"
+    },
+    {
+      "chain": "attention_output",
+      "ops": ["ttnn.linear[3072x3072]"],
+      "summed_window_share_pct": 0.765,
+      "verdict": "rejected",
+      "measured_ms": 0.816853,
+      "reason": "Measured with the attention projection family despite being individually below 1%; HiFi2 DRAM-sharded geometry was slower"
+    },
+    {
+      "chain": "rope_internal",
+      "ops": ["ttnn.neg", "ttnn.concat", "ttnn.multiply", "ttnn.add"],
+      "summed_window_share_pct": 0.948,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "reason": "0.948% summed direct advised-op share, below the 1.0% threshold"
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "ttnn.rms_norm[input]+ttnn.rms_norm[post_attention]",
+      "chain": "norm_residual",
+      "advised_layout": "sharded L1",
+      "shipped_layout": "DRAM interleaved",
+      "window_share_pct": 2.614,
+      "verdict": "kept",
+      "measured_ms": 0.747679,
+      "perf_report": "tracy/norm_sharded/perf_report.csv",
+      "oracle": "real-weight optimized decoder suite, PCC bar 0.995"
+    },
+    {
+      "op": "ttnn.linear[3072x16384]",
+      "chain": "mlp_gate_up",
+      "advised_layout": "DRAM-sharded weight; L1-sharded activation/output",
+      "shipped_layout": "DRAM-interleaved weight",
+      "window_share_pct": 2.553,
+      "verdict": "rejected",
+      "measured_ms": 0.880201
+    },
+    {
+      "op": "ttnn.linear[3072x9216]",
+      "chain": "attention_qkv",
+      "advised_layout": "DRAM-sharded weight; L1-sharded activation/output",
+      "shipped_layout": "DRAM-interleaved weight",
+      "window_share_pct": 1.798,
+      "verdict": "rejected",
+      "measured_ms": 0.83705
+    },
+    {
+      "op": "ttnn.linear[3072x3072]",
+      "chain": "attention_output",
+      "advised_layout": "DRAM-sharded weight; L1-sharded activation/output",
+      "shipped_layout": "DRAM-interleaved weight",
+      "window_share_pct": 0.765,
+      "verdict": "rejected",
+      "measured_ms": 0.816853
+    },
+    {
+      "op": "ttnn.neg+ttnn.concat+ttnn.multiply+ttnn.add",
+      "chain": "rope_internal",
+      "advised_layout": "L1 chain",
+      "shipped_layout": "DRAM-interleaved explicit rotate-half",
+      "window_share_pct": 0.948,
+      "verdict": "below_threshold",
+      "reason": "chain sum is below 1.0%"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "cell_tag": "fuse-noadvise/microsoft_phi_3_5_mini_instruct",
+  "commit": "7d23430dadbaf3b47b1971656e9bcd25a6e2dacf",
+  "harness": "models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_candidate_traced_decode",
+  "harness_iterations_per_repeat": 200,
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "repeats_ms": [
+    0.807734,
+    0.80855,
+    0.806821
+  ],
+  "incumbent_ms": 0.806821,
+  "noise_floor_ms": 0.001729,
+  "measured_at": "2026-07-30T18:09:53Z",
+  "shipped_policy": {
+    "optimization_policy": {
+      "attention_weight_dtype": "ttnn.bfloat4_b",
+      "mlp_gate_up_weight_dtype": "ttnn.bfloat4_b",
+      "mlp_down_weight_dtype": "ttnn.bfloat4_b"
+    },
+    "decode_down": {
+      "dram_sharded": true,
+      "activation_shards": 16,
+      "in0_block_w": 16,
+      "math_fidelity": "LoFi"
+    }
+  },
+  "shipped_weight_dtypes": {
+    "qkv": "BFLOAT4_B",
+    "o_proj": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/tracy/decode_b32_bfp4_final.csv and doc/optimized_decoder/tracy/decode_b1_bfp4_final.csv",
+  "incumbent_perf_report": "tracy/incumbent_ops.csv"
+}

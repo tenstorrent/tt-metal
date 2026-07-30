@@ -83,6 +83,21 @@ class OptimizedDecoder(FusedDecoder):
             use_height_and_width_as_shard_shape=True,
         )
 
+    def _norm(self, hidden_states, weight):
+        if tuple(hidden_states.shape) != (1, 1, 32, self.hidden_size):
+            return super()._norm(hidden_states, weight)
+        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 1))})
+        memory_config = ttnn.create_sharded_memory_config_(
+            shape=(ttnn.TILE_SIZE, self.hidden_size // 12),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        sharded = ttnn.to_memory_config(hidden_states, memory_config)
+        normalized = ttnn.rms_norm(sharded, epsilon=self.eps, weight=weight, memory_config=memory_config)
+        return ttnn.sharded_to_interleaved(normalized, ttnn.DRAM_MEMORY_CONFIG)
+
     def _decode_down(self, value):
         value = ttnn.to_memory_config(value, self._decode_projection_memcfg(tuple(value.shape)[-1]))
         output = ttnn.linear(

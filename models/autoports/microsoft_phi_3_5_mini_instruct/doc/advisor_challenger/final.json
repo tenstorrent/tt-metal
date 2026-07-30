@@ -1,0 +1,58 @@
+{
+  "changed": true,
+  "incumbent_ms": 0.806821,
+  "noise_floor_ms": 0.001729,
+  "final_repeats_ms": [0.748518, 0.747459, 0.747121],
+  "final_ms": 0.747121,
+  "delta_ms": -0.0597,
+  "delta_pct": -7.3994,
+  "best_single_ms": 0.747121,
+  "best_set": ["norm_sharded"],
+  "winning_config": {
+    "decode_batch": 32,
+    "norm_width_sharded_cores": 12,
+    "weight_dtypes": "unchanged BFLOAT4_B",
+    "qkv_o_gate_up_math_fidelity": "unchanged HiFi2",
+    "down_math_fidelity": "unchanged LoFi",
+    "rejected_dram_sharded_linears": ["qkv", "o_proj", "gate_up"]
+  },
+  "oracle": "models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py; real layer-0 weights; PCC >= 0.995",
+  "oracle_passed": true,
+  "oracle_results": {
+    "decode_b32_pcc": 0.9988919667416256,
+    "trace_b32_pcc": 0.9988641920927982,
+    "tests_passed": 10,
+    "tests_total": 10
+  },
+  "combination": {
+    "measured_sets": [
+      {"set": ["qkv_ds"], "measured_ms": 0.83705, "oracle_passed": false, "reason": "slower than incumbent; oracle not promoted"},
+      {"set": ["o_proj_ds"], "measured_ms": 0.816853, "oracle_passed": false, "reason": "slower than incumbent; oracle not promoted"},
+      {"set": ["gate_up_ds"], "measured_ms": 0.880201, "oracle_passed": false, "reason": "slower than incumbent; oracle not promoted"},
+      {"set": ["norm_sharded"], "measured_ms": 0.747679, "oracle_passed": true, "measurement_stage": "single-chain screen"},
+      {"set": ["qkv_ds", "o_proj_ds"], "measured_ms": 0.847579, "oracle_passed": false, "reason": "slower than incumbent; oracle not promoted"},
+      {"set": ["qkv_ds", "gate_up_ds"], "measured_ms": 0.913027, "oracle_passed": false, "reason": "slower than incumbent; oracle not promoted"},
+      {"set": ["qkv_ds", "norm_sharded"], "measured_ms": 0.776502, "oracle_passed": false, "reason": "slower than norm-only winner; oracle not promoted"},
+      {"set": ["o_proj_ds", "gate_up_ds"], "measured_ms": 0.891099, "oracle_passed": false, "reason": "slower than incumbent; oracle not promoted"},
+      {"set": ["o_proj_ds", "norm_sharded"], "measured_ms": 0.756583, "oracle_passed": false, "reason": "slower than norm-only winner; oracle not promoted"},
+      {"set": ["gate_up_ds", "norm_sharded"], "measured_ms": 0.820072, "oracle_passed": false, "reason": "slower than incumbent; oracle not promoted"},
+      {"set": ["qkv_ds", "o_proj_ds", "gate_up_ds", "norm_sharded"], "measured_ms": 0.86175, "oracle_passed": false, "reason": "slower than incumbent; oracle not promoted"},
+      {"set": ["norm_sharded"], "measured_ms": 0.747121, "oracle_passed": true, "measurement_stage": "final production harness best of three repeats"}
+    ]
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial capture after frozen incumbent",
+      "capture": "shard_advise/dense/report.json",
+      "ranked_from": "tracy/incumbent_ops.csv"
+    },
+    {
+      "iteration": 2,
+      "trigger": "screened norm winner applied; re-profile and re-rank remaining advice without recapture",
+      "reranked_from": "tracy/norm_sharded/perf_report.csv",
+      "capture_reused": "shard_advise/dense/report.json",
+      "remaining_material_disagreements": 0
+    }
+  ]
+}
