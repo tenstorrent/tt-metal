@@ -1,0 +1,57 @@
+GOAL 02b — advisor challenger: make the finished optimized decoder faster, or prove it cannot be.
+
+You are given a FINISHED, TAGGED `optimized_decoder.py` for models/autoports/<MODEL_DIR>, produced by an
+optimize stage that never ran the shard advisor. Your job is to produce a NEW optimized decoder that is
+measured to be the best of the incumbent and everything `$shard-advise` suggests.
+
+Read `.agents/skills/advisor-challenger/SKILL.md` first and follow its ordered procedure. Use
+`$shard-advise` for its SETUP and capture mechanics only; this stage replaces its "how to incorporate"
+part entirely.
+
+HARD REQUIREMENTS — the gate `02b-advisor-challenger.check.sh` enforces each of these:
+
+1. FREEZE THE INCUMBENT FIRST. Measure the shipped decoder with its own perf harness, >=3 repeats, and
+   write doc/advisor_challenger/incumbent.json BEFORE you run the advisor. incumbent_ms is the BEST
+   repeat. Record the shipped precision policy and NAME THE ARTIFACT IT CAME FROM — the final
+   tt-perf-report CSV or the selected candidate JSON. Do NOT read it from
+   resolved_policy.constructor_defaults; those are class defaults, not what executed.
+
+2. CAPTURE ONCE PER LAYER KIND, AT THE SHIPPED PRECISION. Construct the capture target with the shipped
+   policy. Pass --pipeline-options allow-bf16-dram-sharded-matmul=true if any traced weight is bf16.
+   Record traced_weight_dtypes in each report.json, and dram_sharded_considered; if it is 0, record
+   dram_sharded_zero_cause as either wrong_precision_capture or bf16_eligibility_default.
+   Note which layer kinds are uncapturable (sparse_matmul / SSM ops are terminal in the tracer) and what
+   share of layers they carry.
+
+3. RECONCILE, THEN MEASURE. Run .agents/skills/advisor-challenger/scripts/reconcile.py to produce
+   doc/advisor_challenger/reconciliation.json. Every disagreement ends with a measured number or an
+   explicit below_threshold + window_share_pct. No prose-only rejections.
+
+4. ONE VARIABLE PER MEASUREMENT, AND CORRECTNESS ON EVERY KEPT CHANGE. Re-run the incumbent's own test
+   suite at its own PCC bar; record which oracle. Prefer a real-weight oracle if the cell has one, and
+   say so explicitly when only synthetic weights exist.
+
+5. THE INVARIANT: final_ms <= incumbent_ms. Ties (inside the noise floor) go to the INCUMBENT. If nothing
+   wins, SHIP THE INCUMBENT UNCHANGED and record the no-change outcome in final.json with
+   changed=false. A no-change result is a valid deliverable for this stage. Do not manufacture a change.
+
+6. ITERATION IS ALLOWED, BOUNDED. Re-capture only after a topology rewrite that changes an op's shape
+   (a dtype change is not a rewrite). Max 3 captures per layer kind. Record each iteration's trigger.
+
+USE THE ADVICE AS RECALL, NOT GEOMETRY. The high-value query is "what did I leave interleaved or on <=2
+cores that is legally shardable?" Its geometry has no demonstrated value in the reference corpus: rejected
+on phi (-34 us), tied on qwen, and on north it only "won" because nobody tested above it on a
+monotone-improving axis. Derive your own geometry, or sweep the advisor's value in BOTH directions.
+`compute_config` / `math_fidelity` in final_ir.mlir is TRACED STATE, NOT ADVICE — overriding it is
+mandatory; taking it literally cost north 30.8 us (-10.7%).
+
+DELIVERABLES under models/autoports/<MODEL_DIR>/:
+  tt/optimized_decoder.py                     (updated, or unchanged with a recorded no-change outcome)
+  doc/advisor_challenger/incumbent.json
+  doc/advisor_challenger/shard_advise/<layer_kind>/{report.json,final_ir.mlir,report.txt,pipeline.log}
+  doc/advisor_challenger/reconciliation.json
+  doc/advisor_challenger/final.json
+  doc/advisor_challenger/README.md             (advised / kept / rejected-with-number / uncapturable)
+  doc/advisor_challenger/tracy/                (tt-perf-report outputs only, not raw Tracy captures)
+
+Finish by running: .agents/prompts/model_bringup_multigoal/02b-advisor-challenger.check.sh <MODEL_DIR>
