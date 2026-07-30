@@ -969,9 +969,10 @@ jobs:
               team=$(echo "$team_entry" | cut -d':' -f1)
               clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API")
+              MEMBERS_RESPONSE=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API")
+              MEMBERS_HTTP_CODE=$(echo "$MEMBERS_RESPONSE" | tail -n1)
+              MEMBERS_DATA=$(echo "$MEMBERS_RESPONSE" | sed '$d')
               if [ "$MEMBERS_HTTP_CODE" = "200" ]; then
-                MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API" 2>/dev/null)
                 TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
                 [ -n "$TEAM_MEMBER_LOGINS" ] && TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|" || TEAM_MEMBERS="$TEAM_MEMBERS$team:no-members|"
               elif [ "$MEMBERS_HTTP_CODE" = "404" ]; then
@@ -1356,40 +1357,53 @@ jobs:
           if [ "$CREATE_NEW" = "true" ]; then
             # Create new comment
             echo "Creating new comment..."
-            curl -s -X POST \
+            COMMENT_RESPONSE=$(curl -s -w '\n%{http_code}' -X POST \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
               --data-binary @"$TEMP_JSON_FILE" \
-              "$COMMENTS_API"
+              "$COMMENTS_API")
+            COMMENT_HTTP_CODE=$(echo "$COMMENT_RESPONSE" | tail -n1)
+            if [ "$COMMENT_HTTP_CODE" != "201" ]; then
+              echo "❌ Failed to create comment (HTTP $COMMENT_HTTP_CODE): $(echo "$COMMENT_RESPONSE" | sed '$d')"
+            fi
           elif [ -z "$EXISTING_COMMENT_ID" ] || [ "$EXISTING_COMMENT_ID" = "null" ]; then
             # No existing comment found - create new for all commands except explicit "new"
             if [ "$CREATE_NEW" = "false" ]; then
               echo "No existing CodeOwners analysis found. Creating new summary comment..."
               # Create new comment for bare commands and ping commands
-              curl -s -X POST \
+              COMMENT_RESPONSE=$(curl -s -w '\n%{http_code}' -X POST \
                 -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                 -H "Accept: application/vnd.github.v3+json" \
                 -H "Content-Type: application/json" \
                 --data-binary @"$TEMP_JSON_FILE" \
-                "$COMMENTS_API"
-              echo "Created new CodeOwners summary comment"
+                "$COMMENTS_API")
+              COMMENT_HTTP_CODE=$(echo "$COMMENT_RESPONSE" | tail -n1)
+              if [ "$COMMENT_HTTP_CODE" = "201" ]; then
+                echo "Created new CodeOwners summary comment"
+              else
+                echo "❌ Failed to create CodeOwners summary comment (HTTP $COMMENT_HTTP_CODE): $(echo "$COMMENT_RESPONSE" | sed '$d')"
+              fi
             else
               echo "No existing comment found and CREATE_NEW=true - this shouldn't happen"
             fi
           else
             # Edit existing comment
             echo "Updating existing comment (ID: $EXISTING_COMMENT_ID)..."
-            curl -s -X PATCH \
+            COMMENT_RESPONSE=$(curl -s -w '\n%{http_code}' -X PATCH \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
               --data-binary @"$TEMP_JSON_FILE" \
-              "https://api.github.com/repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID"
+              "https://api.github.com/repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID")
+            COMMENT_HTTP_CODE=$(echo "$COMMENT_RESPONSE" | tail -n1)
+            if [ "$COMMENT_HTTP_CODE" != "200" ]; then
+              echo "❌ Failed to update comment (HTTP $COMMENT_HTTP_CODE): $(echo "$COMMENT_RESPONSE" | sed '$d')"
+            fi
           fi
 
           rm -f "$TEMP_JSON_FILE"
-          echo "Comment updated for PR #$PR_NUMBER"
+          echo "Comment update attempt finished for PR #$PR_NUMBER"
 
           # If we updated an existing comment, post an acknowledgment (but not for manual workflow runs)
           if [ "$CREATE_NEW" = "false" ] && [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
@@ -1889,13 +1903,11 @@ jobs:
           # Get members of thirdparty-moreh team to exclude from selection (they're not in Slack)
           MOREH_TEAM_MEMBERS=""
           MOREH_MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/thirdparty-moreh/members"
-          MOREH_MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+          MOREH_RESPONSE=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$MOREH_MEMBERS_API" 2>/dev/null)
-
-          MOREH_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                                   -H "Accept: application/vnd.github.v3+json" \
-                                   "$MOREH_MEMBERS_API")
+          MOREH_HTTP_CODE=$(echo "$MOREH_RESPONSE" | tail -n1)
+          MOREH_MEMBERS_DATA=$(echo "$MOREH_RESPONSE" | sed '$d')
 
           if [ "$MOREH_HTTP_CODE" = "200" ] && [ -n "$MOREH_MEMBERS_DATA" ] && [ "$MOREH_MEMBERS_DATA" != "null" ]; then
             MOREH_TEAM_MEMBERS=$(echo "$MOREH_MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
@@ -2451,88 +2463,6 @@ jobs:
           echo "selected-owners=$SELECTED_OWNERS" >> $GITHUB_OUTPUT
           echo "selected-slack-groups=$SELECTED_SLACK_GROUPS" >> $GITHUB_OUTPUT
           echo "no-owners-available=$NO_OWNERS_AVAILABLE" >> $GITHUB_OUTPUT
-
-      - name: Send notifications
-        if: needs.parse-comment.outputs.is-direct-ping != 'true'
-        run: |
-          PING_OWNERS="${{ steps.generate-comment.outputs.ping-owners }}"
-          SEND_SLACK="${{ steps.generate-comment.outputs.send-slack }}"
-          SELECTED_OWNERS="${{ steps.select-owners.outputs.selected-owners }}"
-          PR_AUTHOR_LOGIN="${{ steps.setup-notifications.outputs.pr-author-login }}"
-          PR_AUTHOR_NAME="${{ steps.setup-notifications.outputs.pr-author-name }}"
-          AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
-          PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
-
-          # Fetch PR title safely to avoid shell injection
-          PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
-          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                         -H "Accept: application/vnd.github.v3+json" \
-                         "$PR_API")
-          PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
-          # Escape angle brackets so Slack mrkdwn link text is not malformed
-          PR_TITLE=$(echo "$PR_TITLE" | sed 's/</\&lt;/g; s/>/\&gt;/g')
-
-          # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
-
-          # Define API endpoint
-          COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
-
-          # Check if we have any owners to ping
-          if [ -n "$SELECTED_OWNERS" ]; then
-            # Get full names for selected owners and build ping message
-            # NOTE: Do NOT use GitHub mention syntax [@username] as it subscribes users to the PR
-            PING_MESSAGE="Hi"
-            IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
-            OWNER_COUNT=${#SELECTED_ARRAY[@]}
-            for i in "${!SELECTED_ARRAY[@]}"; do
-              owner="${SELECTED_ARRAY[$i]}"
-              if [ -n "$owner" ]; then
-                # Get user info
-                USER_API="https://api.github.com/users/$owner"
-                USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                               -H "Accept: application/vnd.github.v3+json" \
-                               "$USER_API" 2>/dev/null)
-                USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
-                  PING_MESSAGE="$PING_MESSAGE $USER_NAME (@$owner)"
-                else
-                  PING_MESSAGE="$PING_MESSAGE (@$owner)"
-                fi
-
-                # Add comma if not the last owner
-                if [ $((i + 1)) -lt $OWNER_COUNT ]; then
-                  PING_MESSAGE="$PING_MESSAGE,"
-                fi
-              fi
-            done
-
-            # Get full name for PR author
-            PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"  # Default to what we got from PR API
-            if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
-              # Try to fetch full name from GitHub API
-              AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
-              AUTHOR_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                                     -H "Accept: application/vnd.github.v3+json" \
-                                     "$AUTHOR_USER_API" 2>/dev/null)
-              AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-              if [ -n "$AUTHOR_FULL_NAME" ] && [ "$AUTHOR_FULL_NAME" != "null" ]; then
-                PR_AUTHOR_FULL_NAME="$AUTHOR_FULL_NAME"
-              fi
-            fi
-
-            PING_MESSAGE="$PING_MESSAGE, this PR **[""$PR_TITLE""](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN) needs your approval/review to merge this."
-
-            # Log the ping message (comment posting to PR is disabled)
-            echo "Ping message (comment posting disabled, Slack-only):"
-            if [ ${#PING_MESSAGE} -gt 2000 ]; then
-              echo "${PING_MESSAGE:0:2000}... (truncated)"
-            else
-              echo "$PING_MESSAGE"
-            fi
-          else
-            echo "No pending owners to ping"
-          fi
 
       - name: Send Slack notifications
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
