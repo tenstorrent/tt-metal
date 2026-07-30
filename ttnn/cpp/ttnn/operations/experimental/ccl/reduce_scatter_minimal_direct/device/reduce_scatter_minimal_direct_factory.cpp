@@ -181,7 +181,19 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_mesh_workload(
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     auto compute_gen_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+    // Start-barrier counter, only consumed when the writer's init sync is compiled in (below).
+    auto init_sync_sem =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+
+    // The writer's start barrier is needed only when the op allocates a buffer a peer writes into, since
+    // then its address is not pinned across invocations -- see the writer kernel's barrier comment. Both
+    // buffers gate it: staging is the address peers actually target, and the output is included because
+    // it is the caller's declaration that this call reuses a stable buffer set. Baked in as a compile-time
+    // arg so the fully-persistent path pays nothing; compute_program_hash folds the flag in, so the two
+    // variants can never share a cached program.
+    const bool needs_init_sync =
+        !(tensor_args.persistent_output_tensor.has_value() && tensor_args.persistent_staging_tensor.has_value());
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
@@ -192,7 +204,9 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_mesh_workload(
             arrival_sems,
             reader_gen_sem,
             writer_gen_sem,
-            compute_gen_sem);
+            compute_gen_sem,
+            init_sync_sem,
+            needs_init_sync);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -209,7 +223,9 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
     const std::vector<tt::tt_metal::GlobalSemaphore>& arrival_sems,
     const tt::tt_metal::GlobalSemaphore& reader_gen_sem,
     const tt::tt_metal::GlobalSemaphore& writer_gen_sem,
-    const tt::tt_metal::GlobalSemaphore& compute_gen_sem) {
+    const tt::tt_metal::GlobalSemaphore& compute_gen_sem,
+    const tt::tt_metal::GlobalSemaphore& init_sync_sem,
+    bool needs_init_sync) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& output_tensor = output_tensors.at(0);
     const auto& staging = output_tensors.at(1);
@@ -353,7 +369,8 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
         direct_cb_send_id,
         direct_cb_out_id,
         (uint32_t)arrivals_in_cb,
-        parity_stride_tiles};
+        parity_stride_tiles,
+        (uint32_t)needs_init_sync};
     tt::tt_metal::TensorAccessorArgs(staging.buffer()).append_to(writer_ct_args);        // chunk-paged
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);  // tiled
 
@@ -401,6 +418,29 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
     std::stable_sort(dests.begin(), dests.end(), [](const Dest& a, const Dest& b) { return a.hops > b.hops; });
     const bool uses_backward = std::any_of(dests.begin(), dests.end(), [](const Dest& d) { return d.conn == 1; });
     const uint32_t num_connections = uses_backward ? 2u : 1u;
+
+    // Start-barrier multicast ranges, derived from the same destination split so they cannot drift from
+    // it: nearest-direction routing gives each direction a set of hops that is contiguous from 1, so a
+    // direction's range is just its destination count, and the two together cover every peer exactly once.
+    uint32_t mcast_range[2] = {0u, 0u};
+    uint32_t max_hops[2] = {0u, 0u};
+    for (const auto& d : dests) {
+        ++mcast_range[d.conn];
+        max_hops[d.conn] = std::max(max_hops[d.conn], d.hops);
+    }
+    for (uint32_t c = 0; c < 2; ++c) {
+        TT_FATAL(
+            mcast_range[c] == max_hops[c],
+            "start-barrier multicast assumes direction {}'s destinations are hops 1..{} with no gaps, but the "
+            "{} destinations routed that way reach out to {} hops",
+            c,
+            mcast_range[c],
+            mcast_range[c],
+            max_hops[c]);
+    }
+    TT_FATAL(
+        mcast_range[1] == 0 || num_connections == 2,
+        "start barrier would multicast backward on a connection that was never opened");
 
     // --- Runtime args ---
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
@@ -451,7 +491,10 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
             arrival_sems[device_idx].address(),  // our source slot's counter, same address on every peer
             (uint32_t)peer_core.x,
             (uint32_t)peer_core.y,
-            num_connections};
+            num_connections,
+            init_sync_sem.address(),  // same address on every peer's mirror core
+            mcast_range[0],
+            mcast_range[1]};
         for (const auto& d : dests) {
             writer_rt.push_back(d.conn);
         }
@@ -493,6 +536,7 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
         .reader_gen_sem = reader_gen_sem,
         .writer_gen_sem = writer_gen_sem,
         .compute_gen_sem = compute_gen_sem,
+        .init_sync_sem = init_sync_sem,
         .reduce_cb_handle = arrivals_in_cb ? std::optional{reduce_cb_handle} : std::nullopt,
     };
     return {std::move(program), std::move(shared_variables)};

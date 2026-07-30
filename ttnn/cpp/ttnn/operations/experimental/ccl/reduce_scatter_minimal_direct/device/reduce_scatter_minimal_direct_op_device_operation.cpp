@@ -193,6 +193,20 @@ ReduceScatterMinimalDirectDeviceOperation::select_program_factory(const operatio
     return program_factory_t{ReduceScatterMinimalDirectMeshWorkloadFactory{}};
 }
 
+std::uint64_t ReduceScatterMinimalDirectDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Default hash plus the two "was a persistent buffer supplied?" bits. Those bits pick the writer's
+    // start barrier, which is compiled into the kernel, so a program built with the barrier omitted must
+    // never be served to a call that allocates its own buffers. Stated explicitly rather than left to how
+    // the default hash happens to treat an engaged vs empty optional tensor field.
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<ReduceScatterMinimalDirectDeviceOperation>,
+        args,
+        tensor_args,
+        tensor_args.persistent_output_tensor.has_value(),
+        tensor_args.persistent_staging_tensor.has_value());
+}
+
 // Build the operation attributes + inputs by querying the machine/fabric setup, mirroring the unicast op.
 static std::tuple<ReduceScatterMinimalDirectParams, ReduceScatterMinimalDirectInputs> build_operation_args(
     const Tensor& input_tensor,

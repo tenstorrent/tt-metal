@@ -42,4 +42,14 @@ ttnn::Tensor reduce_scatter_minimal_direct(
 std::vector<ttnn::Tensor> reduce_scatter_minimal_direct_create_persistent_buffers(
     const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis = std::nullopt);
 
+// Allocate ONLY the staging buffer (element [1] of the set above), for callers that own their output
+// tensor already and just want the op's staging half. The output is an ordinary tiled tensor a caller
+// can build directly (the input shape with `dim` divided by the ring size); staging is the part that
+// cannot be reproduced by hand -- it is an opaque chunk-paged UINT8 tensor whose page size follows the
+// op's chunk granularity and whose placement (L1 height-sharded over the whole compute grid / L1
+// interleaved / DRAM) is chosen from the shape. Pass the result through as
+// persistent_buffers = {your_output, this}. `dim` and `cluster_axis` must match the op call.
+ttnn::Tensor reduce_scatter_minimal_direct_create_staging_buffer(
+    const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis = std::nullopt);
+
 }  // namespace ttnn::experimental

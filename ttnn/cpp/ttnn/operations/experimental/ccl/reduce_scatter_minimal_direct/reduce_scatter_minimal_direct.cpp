@@ -44,32 +44,50 @@ ttnn::Tensor reduce_scatter_minimal_direct(
     return result.at(0);
 }
 
+namespace {
+
+// Both allocators below go through the device op's own compute_output_specs, so a caller-provided
+// buffer is byte-identical to what the op would have allocated itself -- including the staging
+// L1-sharded / L1-interleaved / DRAM placement decision, which depends on the shape and would be
+// impossible for a caller to reproduce by hand.
+std::vector<ttnn::TensorSpec> reduce_scatter_minimal_direct_buffer_specs(
+    const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis) {
+    ttnn::experimental::prim::ReduceScatterMinimalDirectInputs inputs{.input_tensor = input_tensor};
+    const uint32_t rank = input_tensor.logical_shape().rank();
+
+    ttnn::experimental::prim::ReduceScatterMinimalDirectParams params{};
+    params.dim = (dim < 0) ? static_cast<int32_t>(rank) + dim : dim;
+    params.output_mem_config = input_tensor.memory_config();
+    params.cluster_axis = cluster_axis;
+    params.num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+
+    return ttnn::experimental::prim::ReduceScatterMinimalDirectDeviceOperation::compute_output_specs(params, inputs);
+}
+
+}  // namespace
+
 std::vector<ttnn::Tensor> reduce_scatter_minimal_direct_create_persistent_buffers(
     const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis) {
-    // Route through the device op's own spec computation so a caller-provided buffer set is byte-identical
-    // to what the op would have allocated itself (including the staging L1/DRAM placement decision).
     auto* device = input_tensor.device();
     TT_FATAL(device != nullptr, "input tensor must be on device to allocate persistent buffers");
 
-    ttnn::experimental::prim::ReduceScatterMinimalDirectInputs inputs{.input_tensor = input_tensor};
-    const uint32_t rank = input_tensor.logical_shape().rank();
-    const int32_t scatter_dim = (dim < 0) ? static_cast<int32_t>(rank) + dim : dim;
-
-    const uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
-    ttnn::experimental::prim::ReduceScatterMinimalDirectParams params{};
-    params.dim = scatter_dim;
-    params.output_mem_config = input_tensor.memory_config();
-    params.cluster_axis = cluster_axis;
-    params.num_devices = num_devices;
-
-    auto specs =
-        ttnn::experimental::prim::ReduceScatterMinimalDirectDeviceOperation::compute_output_specs(params, inputs);
+    auto specs = reduce_scatter_minimal_direct_buffer_specs(input_tensor, dim, cluster_axis);
     std::vector<ttnn::Tensor> buffers;
     buffers.reserve(specs.size());
     for (const auto& spec : specs) {
         buffers.push_back(create_device_tensor(spec, device));
     }
     return buffers;
+}
+
+ttnn::Tensor reduce_scatter_minimal_direct_create_staging_buffer(
+    const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis) {
+    auto* device = input_tensor.device();
+    TT_FATAL(device != nullptr, "input tensor must be on device to allocate the staging buffer");
+
+    // Index 1 is the staging spec, by the same create_output_tensors convention the op uses.
+    auto specs = reduce_scatter_minimal_direct_buffer_specs(input_tensor, dim, cluster_axis);
+    return create_device_tensor(specs.at(1), device);
 }
 
 }  // namespace ttnn::experimental
