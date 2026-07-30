@@ -738,7 +738,14 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
         if (input_buffer->page_size() != output_buffer->page_size()) {
             auto output_core_to_page_range_pair =
                 detail::get_core_page_ranges_diff_width(input_buffer, output_buffer, input);
-            const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
+            // create_stride_of_strides_ret_map drops any core whose stride list is empty, so a
+            // core that receives no pages is absent here and .at() throws (see #36477). It still
+            // needs runtime args, and the builder below emits a well-formed zero-range set from
+            // an empty vector.
+            static const std::vector<detail::CompressedStrideBlock> kNoStrideBlocks;
+            const auto it = output_core_to_page_range_pair.find(core);
+            const auto& page_stride_vector =
+                (it != output_core_to_page_range_pair.end()) ? it->second : kNoStrideBlocks;
             runtime_args_0 = detail::get_runtime_args_for_given_ranges_diff_width(
                 physical_core_coords,
                 page_stride_vector,
@@ -756,7 +763,13 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
                 page_stride_vector.size());
         } else {
             auto output_core_to_page_range_pair = detail::get_core_page_ranges(input_buffer, output_buffer);
-            const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
+            // create_map_for_reshard seeds an entry for every core in the output buffer's page
+            // mapping, but this loop walks the worker cores from
+            // get_optimal_worker_cores_for_sharded_tensor, which need not be the same set. Look
+            // the core up tolerantly rather than throwing when the two diverge.
+            static const std::vector<detail::PageStride> kNoPageStrides;
+            const auto it = output_core_to_page_range_pair.find(core);
+            const auto& page_stride_vector = (it != output_core_to_page_range_pair.end()) ? it->second : kNoPageStrides;
             runtime_args_0 = detail::get_runtime_args_for_given_ranges(
                 physical_core_coords,
                 page_stride_vector,
