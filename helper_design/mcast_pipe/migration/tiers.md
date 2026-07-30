@@ -1,51 +1,148 @@
-# mcast_pipe API v9 production-port tiers — reconciled 2026-07-30
+# mcast_pipe API v9 host-integration tiers — 2026-07-30
 
-The July v8 worklist is complete for the current branch. There are no pending
-production rows.
+Entry mode: re-entry. The ten production kernels are current at API v9, but
+the paired host-helper rollout is incomplete: ten required factory bindings
+are pending and no kernel is fully end-to-end current.
 
-## Tier 0 — migrated and fully validated
+Mode: `run-all`. A failing unit is restored and quarantined without stopping
+the remaining units.
 
-- Matmul in1 sender/receiver pair
-- Conv 1D weights sender/receiver pair
-- Conv 2D weights sender/receiver pair
-- GroupNorm legacy and Welford sender/receiver pairs
+## Mapping coverage
 
-## Tier D1 — typed control values
+All participating kernels reuse device-verified operation inventories from
+`test_map.json`; no kernel is newly unmapped:
 
-- Matmul in0 1D sender/receiver
+- Matmul in1: `MM-IN1-ALL` and `MM-IN1-RECEIVER-2D`
+  (302 passed, 188 expected skips).
+- Conv2d height-sharded weights: `CONV-HEIGHT`
+  (49 passed, 16 expected skips) plus 14 DRAM regressions.
+- Conv2d block-sharded weights: `CONV-BLOCK`
+  (49 passed, 16 expected skips) plus 14 DRAM regressions.
+- GroupNorm v2: `GN-SHARDED-PARAMETERIZED`, separately covering legacy and
+  Welford sender/receiver paths plus fixed/default-routing nodes.
 
-Required helper work: publish/consume typed values such as `IGNORE_BATCH`
-without exposing the shared semaphore.
+The helper intake is green: 68/68 `test_mcast_pipe.py` cases and 19/19
+`McastHostFixture` cases passed on 2026-07-30.
 
-## Tier D2 — acknowledged control channels and streaming
+## Tier 1 — Conv2d single-sender rectangle
 
-- Pre-allgather LayerNorm sender/receiver
-- Plain sharded LayerNorm sender/receiver
+Unit: `conv2d-weights-single-sender-rect`
 
-Required helper work: acknowledged signal-only traffic and, for plain sharded
-LayerNorm, one-gate/multi-block mixed flag/counter streaming.
+Binding:
+`weights-mcast:conv2d-sharded:single-sender-rect`
 
-## Tier D3 — rotating and explicit-loopback protocols
+Why first: one factory branch, one fixed sender, one rectangle, and the
+materialized `Mcast2D` directly expresses the existing split between the full
+geometric fan-out and the active receiver ACK count.
 
-- Block-sharded rotating matmul
-- Width-sharded rotating Conv activation reader
-- Post-allgather LayerNorm sender/receiver
+Atomic scope:
 
-Required work differs by row:
+- 1D weights sender and receiver kernels;
+- `conv2d_op_sharded_program_factory.cpp`;
+- the height-sharded/default writer dispatch;
+- its descriptor-time RT packing and buffer bindings;
+- both kernel and host-binding ledger rows.
 
-- block-sharded matmul needs independent data/signal loopback selection and
-  sender-side ready participation;
-- width-sharded Conv now has ACKed loopback support but needs a fresh full
-  re-port/retest after its earlier migrated attempt failed numerically; and
-- post-allgather LayerNorm needs explicit out-of-rectangle loopback plus
-  explicit fan-out independent of rectangle area, or checked dense geometry.
+Validation: one exact `CONV-HEIGHT` compile-focused case first, then the
+complete mapped `CONV-HEIGHT` inventory and the shared DRAM regression slice.
 
-## Tier D4 — startup ordering
+Risk: noop cores receive the multicast but intentionally do not ACK. The host
+wire must preserve `num_active = total_active_num_cores - 1` while retaining
+the full rectangle as the data fan-out.
 
-- TopK reader/writer pair
+## Tier 2 — Conv2d fixed-line weights
 
-Required helper work: a no-handshake receiver mode that trusts host-owned
-initialization and cannot erase the first sender signal.
+Unit: `conv2d-weights-fixed-line`
 
-The exact test inventory is in `test_map.json`; failure evidence is in the
-per-kernel migration logs.
+Binding:
+`weights-mcast:conv2d-sharded:fixed-line`
+
+Atomic scope:
+
+- 2D weights sender and receiver kernels;
+- both row and column branches in `conv2d_op_sharded_program_factory.cpp`;
+- split-reader pad-out runtime state;
+- both kernel and host-binding ledger rows.
+
+Validation: one exact `CONV-BLOCK` compile-focused case first, explicit JIT
+confirmation for both row and column routes, then the complete mapped
+`CONV-BLOCK` inventory and shared DRAM regression slice.
+
+Gap/risk: `Mcast1D` requires a zero-anchored dense rectangle. The factory
+appears to assume that topology but does not state the invariant explicitly.
+If an accepted configuration violates it, quarantine this unit and continue.
+Split-reader semaphores remain outside the multicast helper.
+
+## Tier 3 — Matmul in1, all live emitters
+
+Unit: `matmul-in1-mcast-padding-host`
+
+Required bindings:
+
+- `matmul-in1-mcast:reuse-2d:legacy`
+- `matmul-in1-mcast:reuse-2d:descriptor`
+- `matmul-in1-mcast:reuse-1d:mcast-in1:legacy`
+- `matmul-in1-mcast:reuse-1d:mcast-in1:descriptor`
+
+Atomic scope:
+
+- in1 sender/writer and receiver/writer kernels;
+- legacy and descriptor emitters in both production 1D and 2D factories;
+- runtime override and descriptor tensor-reference offsets;
+- all six kernel/host ledger rows.
+
+Validation: one exact 1D and one exact 2D compile-focused parameter, including
+a non-zero sub-device origin, then `MM-IN1-ALL` and the exact 2D receiver
+inventory.
+
+Risks:
+
+- receiver RT grows by two words, shifting output and fused-op slots;
+- legacy and descriptor paths duplicate the shared ABI and must move together;
+- 2D split receivers compile the same source with two NoCs;
+- sub-device offsets rule out direct `Mcast1D`; use one `Mcast2D` per line.
+
+The MCAST_IN0 and sparse bindings are `not_applicable`: those builds compile
+the shared sender source with `SKIP_MCAST` and instantiate no in1 receiver.
+
+## Tier 4 — GroupNorm v2 multi-rectangle
+
+Unit: `groupnorm-sharded-v2-mcast-host`
+
+Required bindings:
+
+- `groupnorm-v2:sharded:legacy:mcast`
+- `groupnorm-v2:sharded:legacy:degenerate`
+- `groupnorm-v2:sharded:welford:mcast`
+- `groupnorm-v2:sharded:welford:degenerate`
+
+Atomic scope:
+
+- legacy and Welford sender/receiver kernels;
+- the shared sharded GroupNorm factory;
+- mcast and group-size-one dispatches;
+- variable sender RT packing and cache-rebuild path;
+- all eight kernel/host ledger rows.
+
+Validation: one exact legacy parameter and one exact Welford parameter first,
+then the complete mapped legacy/Welford inventory and fixed/default-routing
+nodes.
+
+Gaps/risks:
+
+- the current sender wire contains up to three optional rectangles and a
+  variable gather-coordinate tail, while `Mcast2D` emits one fixed RT block;
+- optionality varies per sender and must remain RT-controlled;
+- offset-grid and NoC1 cases are mandatory;
+- three dead per-rectangle count words can be removed, but the raw pre-gather
+  ACK gate and gather-coordinate tail must remain.
+
+If the materialized host helper cannot compose the optional rectangles without
+changing observable behavior, quarantine this unit and continue; helper design
+belongs back in `tune-dm-helper`.
+
+## Existing deferred kernel backlog
+
+The 82 kernel-deferred ledger rows remain outside this host-only invocation.
+This run neither reopens their kernel migrations nor changes the helper API
+version.

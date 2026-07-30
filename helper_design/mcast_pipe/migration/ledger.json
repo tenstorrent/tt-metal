@@ -5,6 +5,210 @@
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
   "source_of_truth_note": "Current v9 status is reconciled through commit 307951cc8dc from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
+  "host_bindings": [
+    {
+      "id": "weights-mcast:conv2d-sharded:single-sender-rect",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "height-sharded/default 1D writer pair with weights multicast enabled",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp"
+      ],
+      "migration_unit": "conv2d-weights-single-sender-rect",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "CONV-HEIGHT",
+        "test_conv_dram"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": null,
+      "flags": []
+    },
+    {
+      "id": "weights-mcast:conv2d-sharded:fixed-line",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "block-sharded non-depthwise row/column fixed-line weights multicast",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp"
+      ],
+      "migration_unit": "conv2d-weights-fixed-line",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "CONV-BLOCK",
+        "test_conv_dram"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": null,
+      "flags": [
+        "verify-zero-anchored-dense-grid"
+      ]
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-2d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy 2D matmul create path, both transpose_mcast values",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
+      ],
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "MM-IN1-ALL",
+        "MM-IN1-RECEIVER-2D"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": null,
+      "flags": []
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-2d:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor 2D matmul create path, both transpose_mcast values",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
+      ],
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "MM-IN1-ALL",
+        "MM-IN1-RECEIVER-2D"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": null,
+      "flags": []
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in1:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy 1D matmul path with gather_in0=false and mcast_in0=false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
+      ],
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "MM-IN1-ALL"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": null,
+      "flags": []
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in1:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor 1D matmul path with gather_in0=false and mcast_in0=false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
+      ],
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "MM-IN1-ALL"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": null,
+      "flags": []
+    },
+    {
+      "id": "groupnorm-v2:sharded:legacy:mcast",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=false and use_mcast=true",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp"
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "GN-SHARDED-PARAMETERIZED legacy"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": null,
+      "flags": [
+        "multi-rectangle-wire"
+      ]
+    },
+    {
+      "id": "groupnorm-v2:sharded:legacy:degenerate",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=false and use_mcast=false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp"
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "GN-SHARDED-PARAMETERIZED legacy fixed/default routing"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": null,
+      "flags": [
+        "multi-rectangle-wire"
+      ]
+    },
+    {
+      "id": "groupnorm-v2:sharded:welford:mcast",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=true and use_mcast=true",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp"
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "GN-SHARDED-PARAMETERIZED Welford"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": null,
+      "flags": [
+        "multi-rectangle-wire"
+      ]
+    },
+    {
+      "id": "groupnorm-v2:sharded:welford:degenerate",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=true and use_mcast=false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp"
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "GN-SHARDED-PARAMETERIZED Welford fixed/default routing"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": null,
+      "flags": [
+        "multi-rectangle-wire"
+      ]
+    }
+  ],
   "entries": [
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
@@ -62,7 +266,8 @@
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
       "census_note": "V9 migrated; explicit active receiver acknowledgement count handles rectangles containing inactive cores.",
-      "flags": []
+      "flags": [],
+      "migration_unit": "matmul-in1-mcast-padding-host"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
@@ -78,7 +283,8 @@
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
       "census_note": "V9 migrated; all in1 and optional bias multicast semaphore operations are pipe-owned.",
-      "flags": []
+      "flags": [],
+      "migration_unit": "matmul-in1-mcast-padding-host"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
@@ -239,7 +445,8 @@
       "census_note": "V9 migrated; runtime consumer_ack_count is total_active_num_cores-1 while McastRect derives full fan-out including noop cores. Weights and optional-bias handshakes are pipe-owned.",
       "flags": [
         "tier:1"
-      ]
+      ],
+      "migration_unit": "conv2d-weights-single-sender-rect"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
@@ -257,7 +464,8 @@
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
       "census_note": "V9 migrated; weights and bias receive handshakes are pipe-owned.",
-      "flags": []
+      "flags": [],
+      "migration_unit": "conv2d-weights-single-sender-rect"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
@@ -275,7 +483,8 @@
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
       "census_note": "V9 migrated; weights and bias send handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
-      "flags": []
+      "flags": [],
+      "migration_unit": "conv2d-weights-fixed-line"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
@@ -293,7 +502,8 @@
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
       "census_note": "V9 migrated; weights and bias receive handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
-      "flags": []
+      "flags": [],
+      "migration_unit": "conv2d-weights-fixed-line"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp",
@@ -415,7 +625,8 @@
       "census_note": "V9 migrated. The raw acknowledgement gate remains before remote L1 reads; all data/flag multicasts use no-handshake SenderPipes. Mapped inventories validate the host-generated rectangle partition.",
       "flags": [
         "tier:2a"
-      ]
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp",
@@ -431,7 +642,8 @@
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
       "census_note": "V9 migrated; every readiness-counter and data-ready-flag operation is pipe-owned.",
-      "flags": []
+      "flags": [],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
@@ -511,7 +723,8 @@
       "census_note": "V9 migrated. The raw acknowledgement gate remains before remote L1 reads; the persistent no-handshake middle SenderPipe owns data/flag send. Optional rectangles partition num_mcast_cores-1.",
       "flags": [
         "tier:2a"
-      ]
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp",
@@ -545,7 +758,8 @@
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
       "census_note": "V9 migrated; every readiness-counter and data-ready-flag operation is pipe-owned.",
-      "flags": []
+      "flags": [],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp",
