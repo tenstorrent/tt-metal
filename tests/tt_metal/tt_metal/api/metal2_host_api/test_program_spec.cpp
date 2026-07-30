@@ -2591,7 +2591,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigInversionAndEnumMapToInternal) {
 //    coupling through the shared DFB binding induces additional DM solver constraints.
 //
 //    NOTE: The original plan called for lifting this artificial constraint once LLK adopted
-//    DFBBindingToken using implicit RTAs. However, to realize performance gains, we're
+//    DFBBindingToken using implicit RTAs. However, to realize performance gains, we've
 //    chosen instead to GUARANTEE using implicit CTAs for DFBBindingToken. This
 //    constraint is therefore permanent.
 //
