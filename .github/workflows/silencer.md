@@ -53,14 +53,14 @@ tools:
     toolsets: [actions, repos, issues, pull_requests, search, context]
     lockdown: false
     min-integrity: none
-    # Exempt the built-in `github` MCP server from the gateway's default
-    # sink-visibility="public" enforcement. The gateway tags job-log content
-    # secrecy=private, so once the agent has read a log it carries a private
-    # secrecy tag and a write to a public sink (PR/issue) would be refused.
-    # The list form is deliberate: the blanket `allow` form is a compile error
-    # here (incompatible with strict mode) and would also disable
-    # forcePublicRepos, which we want to keep.
-    private-to-public-flows: [github]
+    # The gateway tags job-log content secrecy=private regardless of repository
+    # visibility, which blocked `get_job_logs` twice over: on the read side
+    # `forcePublicRepos` clamps this agent to public scope, and on the write side
+    # `sink-visibility="public"` would refuse a PR once any log had been read.
+    # `allow` clears both. tt-metal is public and Silencer only ever reads
+    # tt-metal's own already-world-readable CI logs, so no genuinely private data
+    # is released. Requires `strict: false` (see below).
+    private-to-public-flows: allow
   # bash is REQUIRED: Silencer downloads CI logs to disk and greps/aggregates them
   # locally instead of streaming whole logs through the model. This is the primary
   # token-cost control for this workflow.
@@ -101,6 +101,16 @@ safe-outputs:
 
 source: githubnext/agentics/workflows/ci-doctor.md@497230d3867fe453aae74b15d06178d45a39fcce
 engine: copilot
+
+# Required by `private-to-public-flows: allow`, which strict mode rejects. Scoped
+# to this workflow only (`strict` defaults to true; the other agentic workflows
+# are unaffected). This drops compile-time enforcement, not the properties
+# themselves — Silencer still satisfies all five strict constraints in fact:
+# writes only via safe-outputs (no contents/issues/pull-requests write), an
+# explicit `network` allowlist with no bare `*`, all actions pinned to SHAs, no
+# custom container MCP servers, and no deprecated fields. Re-enable if that
+# stops being true.
+strict: false
 ---
 
 # Silencer (tt-metal)
