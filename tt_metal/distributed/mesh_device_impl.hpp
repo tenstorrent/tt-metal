@@ -436,6 +436,7 @@ public:
 
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
+    // If cq_id is not provided, the current command queue is returned from the current thread
     MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const;
 
     // Same queue as mesh_command_queue() but returned as the internal
