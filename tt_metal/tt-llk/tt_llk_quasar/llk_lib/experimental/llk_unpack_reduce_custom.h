@@ -19,7 +19,7 @@ using namespace ckernel;
  *
  * For 16-bit DEST, a single MOP streams the complete operand block into SrcA,
  * one face per source-bank token; the scaler is unpacked once separately.
- * FP32 instead programs one tile per MOP and supplies a scaler token per tile.
+ * FP32 uses a face-row stream in the execute path and does not run this MOP.
  *
  * @tparam block_ct_dim: number of operand tiles streamed by the MOP.
  * @tparam is_fp32_dest_acc_en: reserved for the 32-bit dest path; does not change the unpack stream.
@@ -117,11 +117,7 @@ inline void _llk_unpack_reduce_block_max_row_init_(
             static_assert(tile_count_x * tile_count_y < 1024, "Tiny block row max tile count exceeds the Quasar limit");
         }
     }
-    if constexpr (is_fp32_dest_acc_en)
-    {
-        _llk_unpack_reduce_block_max_row_mop_config_<1, true>(buf_desc_id_0, buf_desc_id_1, tensor_shape);
-    }
-    else
+    if constexpr (!is_fp32_dest_acc_en)
     {
         _llk_unpack_reduce_block_max_row_mop_config_<block_ct_dim, false>(buf_desc_id_0, buf_desc_id_1, tensor_shape);
     }
@@ -144,17 +140,25 @@ inline void _llk_unpack_reduce_block_max_row_(
 {
     if constexpr (is_fp32_dest_acc_en)
     {
-        for (std::uint32_t tile = 0; tile < block_ct_dim; ++tile)
+        // One scaler token remains valid through both block-level face-row
+        // reductions and their FP32 transposes.
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1);
+        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
+        TTI_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /* Set Dvalid */);
+
+        // Stream all top face pairs across the block, then all bottom pairs.
+        // Math retains the final pair token while transposing the accumulated
+        // row, so unpack naturally pauses between the two face rows.
+        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
+        for (std::uint32_t face_row = 0; face_row < 2; ++face_row)
         {
-            const std::uint32_t tile_idx_A = start_l1_tile_idx_0 + tile;
-            const std::uint32_t tile_idx_B = start_l1_tile_idx_1 + tile;
-
-            TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, tile_idx_A);
-            TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, tile_idx_B);
-            TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
-            TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
-
-            ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+            for (std::uint32_t tile = 0; tile < block_ct_dim; ++tile)
+            {
+                TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, start_l1_tile_idx_0 + tile);
+                TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_unpacr::UNP_A, face_row * 2);
+                TTI_UNPACR0_FACE_INC(0, 1, 0, 0, buf_desc_id_0, 1 /* Set Dvalid */);
+                TTI_UNPACR0_FACE_INC(0, 1, 0, 0, buf_desc_id_0, 1 /* Set Dvalid */);
+            }
         }
         return;
     }

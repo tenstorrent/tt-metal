@@ -81,32 +81,30 @@ inline void _reduce_max_row_transpose_fp32_fpu_()
 }
 
 /**
- * @brief Reduce one 32x32 FP32 tile into the current DEST tile.
+ * @brief Pool one face row from every FP32 tile in a horizontal block.
  *
- * Quasar's split-half FP32 transpose modifies SrcA and needs a fresh SrcB
- * token for each tile. Keep this proven per-tile handshake separate from the
- * 16-bit block-stream schedule below.
+ * The final pool keeps its SrcA token valid because the FP32 transpose helper
+ * fills that bank with MOVB2A and consumes it with MOVA2D. All preceding pools
+ * release SrcA so unpack can stream through the block.
  */
-inline void _llk_math_reduce_row_fp32_tile_()
+template <std::uint32_t block_ct_dim>
+inline void _llk_math_reduce_row_fp32_block_face_row_()
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
-    tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
-    tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
-    _reduce_max_row_transpose_fp32_fpu_();
+    for (std::uint32_t tile = 0; tile < block_ct_dim; ++tile)
+    {
+        TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
+        tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
 
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, REDUCE_BLOCK_SLOT1_DST, p_setrwc::SET_D);
-    TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 0, p_setrwc::SET_B);
-
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
-    tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
-    tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
-    _reduce_max_row_transpose_fp32_fpu_();
-
-    TTI_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_BD);
+        TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
+        if (tile + 1 == block_ct_dim)
+        {
+            tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
+        }
+        else
+        {
+            tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
+        }
+    }
 }
 
 /**
@@ -171,7 +169,8 @@ inline void _reduce_max_row_transpose_fp16b_face_(const bool wide_face)
  *
  * The 16-bit path keeps GMPOOL results in row form for the complete horizontal
  * block, matching the working Quasar/Blackhole schedule, then transposes once.
- * FP32 retains its independent per-tile source handshake.
+ * FP32 streams one face row across the block at a time and transposes each
+ * accumulated row once.
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_init_(const ckernel::TensorShape& tensor_shape)
@@ -204,8 +203,8 @@ inline void _llk_math_reduce_block_max_row_uninit_()
 /**
  * @brief Max-reduce all horizontal block tiles into one destination tile.
  *
- * The 16-bit path streams SrcA faces through the two banks and holds one SrcB
- * token for the block. FP32 uses one independently released token per tile.
+ * Both paths stream SrcA through the two banks and hold one SrcB scaler token
+ * for the complete horizontal block.
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
@@ -215,12 +214,18 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
 
     if constexpr (is_fp32_dest_acc_en)
     {
-#pragma GCC unroll 4
-        for (std::uint32_t tile = 0; tile < block_ct_dim; ++tile)
-        {
-            _llk_math_reduce_row_fp32_tile_();
-            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, p_setrwc::SET_ABD_F);
-        }
+        _llk_math_reduce_row_fp32_block_face_row_<block_ct_dim>();
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
+        _reduce_max_row_transpose_fp32_fpu_();
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, REDUCE_BLOCK_SLOT1_DST, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 0, p_setrwc::SET_B);
+
+        _llk_math_reduce_row_fp32_block_face_row_<block_ct_dim>();
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
+        _reduce_max_row_transpose_fp32_fpu_();
+        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_BD);
+
+        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, p_setrwc::SET_ABD_F);
     }
     else
     {
