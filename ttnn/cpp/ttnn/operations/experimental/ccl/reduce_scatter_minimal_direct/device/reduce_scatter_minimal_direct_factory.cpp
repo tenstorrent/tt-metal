@@ -25,6 +25,81 @@ constexpr uint32_t direct_cb_reduce_id = tt::CBIndex::c_1;  // num_devices block
 constexpr uint32_t direct_cb_out_id = tt::CBIndex::c_16;    // reduced result (compute -> writer)
 }  // namespace
 
+ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
+    const ReduceScatterMinimalDirectParams& args, const ttnn::Tensor& input_tensor, bool fp32_dest_acc_en) {
+    const uint32_t num_devices = args.num_devices;
+    TT_FATAL(input_tensor.layout() == ttnn::TILE_LAYOUT, "reduce_scatter_minimal_direct requires TILE layout");
+
+    const auto padded_shape = input_tensor.padded_shape();
+    const uint32_t rank = padded_shape.rank();
+    TT_FATAL(rank >= 2, "reduce_scatter_minimal_direct requires a rank >= 2 input, got rank {}", rank);
+    TT_FATAL(
+        args.dim >= 0 && args.dim < static_cast<int32_t>(rank),
+        "scatter dim {} out of range for rank {}",
+        args.dim,
+        rank);
+    const uint32_t dim = static_cast<uint32_t>(args.dim);
+
+    // Size of dim `d` in PAGES: the two innermost dims are counted in tiles, the rest in elements.
+    const auto tile = input_tensor.tensor_spec().tile();
+    const auto dim_pages = [&](uint32_t d) -> uint32_t {
+        if (d == rank - 1) {
+            return padded_shape[d] / tile.get_width();
+        }
+        if (d == rank - 2) {
+            return padded_shape[d] / tile.get_height();
+        }
+        return padded_shape[d];
+    };
+
+    // Only the two innermost dims can carry tile padding, and scattering a padded dim would hand the
+    // last device a slice of padding rather than data -- the op slices in page space.
+    TT_FATAL(
+        dim < rank - 2 || padded_shape[dim] == input_tensor.logical_shape()[dim],
+        "scatter dim {} is tile-padded (logical {} vs padded {}); slice boundaries would not line up with "
+        "the logical tensor",
+        args.dim,
+        input_tensor.logical_shape()[dim],
+        padded_shape[dim]);
+
+    const uint32_t dim_size_pages = dim_pages(dim);
+    TT_FATAL(
+        dim_size_pages % num_devices == 0,
+        "scatter dim {} (padded size {}, {} pages) must split into {} whole-page slices",
+        args.dim,
+        padded_shape[dim],
+        dim_size_pages,
+        num_devices);
+
+    uint32_t inner_pages = 1;  // pages under one index of the scatter dim
+    for (uint32_t d = dim + 1; d < rank; ++d) {
+        inner_pages *= dim_pages(d);
+    }
+
+    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
+    TT_FATAL(
+        num_input_pages % num_devices == 0, "input pages {} must divide num_devices {}", num_input_pages, num_devices);
+
+    // Chunking / packet sizing is shared with the ring ops (a chunk = tile_granularity tiles stored
+    // contiguously, so one contribution chunk is one coalesced fabric write). Only the size fields are
+    // taken from there: its chunk COUNTS are per-4D-channel, which this op does not need -- a slice is
+    // chunked as one flat page run regardless of how many batches/channels it spans.
+    const auto sp = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_params(
+        input_tensor, ttnn::ccl::Topology::Ring, dim, num_devices, fp32_dest_acc_en);
+
+    const uint32_t pages_per_slice = num_input_pages / num_devices;
+    return ReduceScatterDirectGeometry{
+        .single_tile_bytes = sp.single_tile_bytes,
+        .tile_granularity = sp.tile_granularity,
+        .interm_tiles_per_packet = sp.interm_tiles_per_packet,
+        .page_bytes = sp.page_bytes,
+        .pages_per_slice = pages_per_slice,
+        .chunks_per_slice = (pages_per_slice + sp.tile_granularity - 1) / sp.tile_granularity,
+        .slice_run_pages = (dim_size_pages / num_devices) * inner_pages,
+        .stride_pages = dim_size_pages * inner_pages,
+    };
+}
+
 uint32_t reduce_scatter_direct_num_links(const ReduceScatterMinimalDirectParams& args, uint32_t chunks_per_slice) {
     // Clamped to chunks_per_slice so no worker is handed zero chunks.
     return std::min(std::max(1u, args.num_links), chunks_per_slice);
@@ -164,46 +239,23 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
         ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, sender_device_coord, -1, topology, axis);
     TT_FATAL(fwd_coord.has_value() && bwd_coord.has_value(), "ring must have both neighbors");
 
-    // Scatter on the last (width) dim only, TILE layout.
-    TT_FATAL(input_tensor.layout() == ttnn::TILE_LAYOUT, "requires TILE layout");
-    const auto padded_shape = input_tensor.padded_shape();
-    const uint32_t rank = padded_shape.rank();
-    TT_FATAL(
-        operation_attributes.dim == static_cast<int32_t>(rank) - 1,
-        "reduce_scatter_minimal_direct supports scatter on the last dim only, got dim {}",
-        operation_attributes.dim);
-
-    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
-    TT_FATAL(
-        num_input_pages % num_devices == 0, "input pages {} must divide num_devices {}", num_input_pages, num_devices);
-    const uint32_t pages_per_slice = num_input_pages / num_devices;  // tiles per slice (== output tiles)
-
-    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
-    TT_FATAL(
-        padded_shape[rank - 1] % (num_devices * tile_width) == 0,
-        "last dim {} must be divisible by num_devices*tile_width ({}*{})",
-        padded_shape[rank - 1],
-        num_devices,
-        tile_width);
-    const uint32_t width_tiles = padded_shape[rank - 1] / tile_width;
-    const uint32_t slice_Wt = width_tiles / num_devices;  // slice width in tiles (per-row run of the input walk)
-
-    // Chunk-paged staging geometry, shared with the ring ops (a chunk = tile_granularity tiles stored
-    // contiguously, so one contribution chunk is one coalesced fabric write).
+    // Scatter geometry in page space -- the scatter dim only shows up as the (run, stride) pair the
+    // reader walks a slice with. See ReduceScatterDirectGeometry.
     const bool fp32_dest_acc_en = (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32);
-    const auto sp = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_params(
-        input_tensor, topology, static_cast<uint32_t>(operation_attributes.dim), num_devices, fp32_dest_acc_en);
-    TT_FATAL(sp.use_contiguous, "contiguous staging path required (Ring topology, scatter dim != 0)");
-    const uint32_t single_tile_bytes = sp.single_tile_bytes;
-    const uint32_t tile_granularity = sp.tile_granularity;                // tiles per chunk
-    const uint32_t interm_tiles_per_packet = sp.interm_tiles_per_packet;  // tiles per fabric packet
-    const uint32_t chunks_per_slice = sp.chunks_per_channel;              // dim = last -> slice_C == 1
+    const auto geom = reduce_scatter_direct_geometry(operation_attributes, input_tensor, fp32_dest_acc_en);
+    const uint32_t pages_per_slice = geom.pages_per_slice;  // tiles per slice (== output tiles)
+    const uint32_t slice_run_pages = geom.slice_run_pages;
+    const uint32_t stride_pages = geom.stride_pages;
+    const uint32_t single_tile_bytes = geom.single_tile_bytes;
+    const uint32_t tile_granularity = geom.tile_granularity;                // tiles per chunk
+    const uint32_t interm_tiles_per_packet = geom.interm_tiles_per_packet;  // tiles per fabric packet
+    const uint32_t chunks_per_slice = geom.chunks_per_slice;
     TT_FATAL(interm_tiles_per_packet >= 1, "a tile must fit in a fabric packet");
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     TT_FATAL(
-        sp.page_bytes % dram_alignment == 0,
+        geom.page_bytes % dram_alignment == 0,
         "staging page_bytes {} must be a multiple of DRAM alignment {}",
-        sp.page_bytes,
+        geom.page_bytes,
         dram_alignment);
 
     // --- Core selection: one worker core per link. Unlike the store-and-forward ring op there is no
@@ -278,8 +330,8 @@ ReduceScatterMinimalDirectMeshWorkloadFactory::create_at(
         tile_granularity,
         chunks_per_slice,
         pages_per_slice,
-        slice_Wt,
-        width_tiles,
+        slice_run_pages,
+        stride_pages,
         num_devices,
         direct_cb_send_id,
         direct_cb_reduce_id,

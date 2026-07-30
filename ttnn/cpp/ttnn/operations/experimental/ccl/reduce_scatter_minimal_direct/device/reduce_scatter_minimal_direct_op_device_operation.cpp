@@ -7,7 +7,6 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
@@ -55,22 +54,14 @@ constexpr uint64_t k_l1_shard_budget_bytes = 640ull << 10;  // aliased-CB path, 
 static ttnn::TensorSpec reduce_scatter_direct_staging_spec(
     const ReduceScatterMinimalDirectParams& args, const ttnn::Tensor& input_tensor, bool fp32_dest_acc_en) {
     const uint32_t num_devices = args.num_devices;
-    const auto params = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_params(
-        input_tensor, ttnn::ccl::Topology::Ring, static_cast<uint32_t>(args.dim), num_devices, fp32_dest_acc_en);
-    TT_FATAL(
-        params.use_contiguous,
-        "reduce_scatter_minimal_direct requires the contiguous staging path (Ring topology, scatter dim != 0)");
-    TT_FATAL(
-        params.total_chunks == num_devices * params.chunks_per_channel,
-        "reduce_scatter_minimal_direct addresses staging as num_devices x chunks_per_slice, so the input must "
-        "have a single channel per slice (total_chunks {} != num_devices {} * chunks_per_channel {})",
-        params.total_chunks,
-        num_devices,
-        params.chunks_per_channel);
+    // A slice is chunked as one flat page run (chunks_per_slice), whatever dim it was cut on -- the
+    // reader walks it linearly, so staging never needs a per-batch/channel axis.
+    const auto geom = reduce_scatter_direct_geometry(args, input_tensor, fp32_dest_acc_en);
+    const uint32_t total_chunks = num_devices * geom.chunks_per_slice;
 
     const auto row_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
-    const uint32_t shard_rows = 2 * params.chunks_per_channel * num_devices;
-    const uint64_t shard_bytes = uint64_t{shard_rows} * params.page_bytes;
+    const uint32_t shard_rows = 2 * geom.chunks_per_slice * num_devices;
+    const uint64_t shard_bytes = uint64_t{shard_rows} * geom.page_bytes;
 
     if (shard_bytes <= k_l1_shard_budget_bytes) {
         // Sharded over the WHOLE compute grid, deliberately, rather than over the worker cores: this spec
@@ -86,9 +77,9 @@ static ttnn::TensorSpec reduce_scatter_direct_staging_spec(
         // Height-sharded: every shard sits at the SAME L1 address on every core of every device, which is
         // what lets a sender address the mirror core's reduce CB with nothing but its own staging address.
         tt::tt_metal::ShardSpec shard_spec(
-            shard_grid, {shard_rows, params.page_bytes}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+            shard_grid, {shard_rows, geom.page_bytes}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
         return ttnn::TensorSpec(
-            ttnn::Shape({num_shards * shard_rows, params.page_bytes}),
+            ttnn::Shape({num_shards * shard_rows, geom.page_bytes}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::UINT8,
                 row_config,
@@ -96,7 +87,7 @@ static ttnn::TensorSpec reduce_scatter_direct_staging_spec(
                     tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec)));
     }
 
-    const uint64_t total_bytes = 2ull * params.total_chunks * params.page_bytes;
+    const uint64_t total_bytes = 2ull * total_chunks * geom.page_bytes;
     const auto buffer_type =
         total_bytes <= k_l1_staging_budget_bytes ? tt::tt_metal::BufferType::L1 : tt::tt_metal::BufferType::DRAM;
 
@@ -105,7 +96,7 @@ static ttnn::TensorSpec reduce_scatter_direct_staging_spec(
     // allocator is lockstep, so the buffer lands at the same address on every device -- required, since a
     // sender computes the destination address from its own accessor.
     return ttnn::TensorSpec(
-        ttnn::Shape({2 * params.total_chunks, params.page_bytes}),
+        ttnn::Shape({2 * total_chunks, geom.page_bytes}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT8,
             row_config,
