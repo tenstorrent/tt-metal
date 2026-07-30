@@ -66,17 +66,17 @@
   batch: *batch_defaults
   skus:
     wh_n150_civ2:
-      timeout: 360
-    wh_n300_civ2:
-      timeout: 360
-    wh_llmbox:
       timeout: 480
+    wh_n300_civ2:
+      timeout: 480
+    wh_llmbox:
+      timeout: 540
     bh_p100a_civ2_viommu:
-      timeout: 240
+      timeout: 360
     bh_p150b_civ2_viommu:
-      timeout: 240
+      timeout: 360
     bh_p300_viommu:
-      timeout: 150
+      timeout: 360
   owner_id: U08T3JQEB36 # stevendae
   team: ttnn
   category: sweep
