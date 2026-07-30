@@ -1,0 +1,68 @@
+{
+  "outcome": "no_change",
+  "changed": false,
+  "incumbent_ms": 1.33882990727822,
+  "final_ms": 1.33882990727822,
+  "delta_ms": 0.0,
+  "delta_pct": 0.0,
+  "noise_floor_ms": 0.018284035225709205,
+  "best_single_ms": 1.3259799840549629,
+  "winning_config": "frozen incumbent; advisor candidates tied or regressed",
+  "oracle": "measurements/final_incumbent_oracle.json: frozen-incumbent preservation oracle",
+  "oracle_passed": true,
+  "oracle_scope": "preservation/no-regression relative to the frozen incumbent",
+  "absolute_pcc_current_environment_passed": false,
+  "oracle_note": "The no-change winner is byte-identical to the frozen incumbent, so the challenger introduced no correctness change. Separately, the current repo synthetic short sliding test reports PCC 0.988923 below 0.993 on that untouched incumbent; full attention passes and the real-weight test skips because weights are unavailable. The oracle artifact records both facts without presenting the current absolute PCC audit as a pass.",
+  "combination": {
+    "best_set": ["incumbent"],
+    "measured_sets": [
+      {
+        "chains": ["sliding_attention_o_projection"],
+        "measured_ms": 1.3259799840549629,
+        "oracle_passed": false,
+        "oracle_status": "not_promoted; performance tied within noise"
+      },
+      {
+        "chains": ["full_attention_o_projection"],
+        "measured_ms": 1.3409556510547798,
+        "oracle_passed": false,
+        "oracle_status": "not_promoted; performance regressed"
+      },
+      {
+        "chains": ["sliding_attention_per_head_norms"],
+        "measured_ms": 1.3356958515942097,
+        "oracle_passed": false,
+        "oracle_status": "not_promoted; performance tied within noise"
+      },
+      {
+        "chains": ["full_attention_per_head_norms"],
+        "measured_ms": 1.3338785308102767,
+        "oracle_passed": false,
+        "oracle_status": "not_promoted; performance tied within noise"
+      },
+      {
+        "chains": ["sliding_attention_o_projection", "sliding_attention_per_head_norms"],
+        "measured_ms": 1.3218712992966175,
+        "oracle_passed": false,
+        "oracle_status": "not_promoted; performance tied within noise"
+      },
+      {
+        "chains": ["full_attention_o_projection", "full_attention_per_head_norms"],
+        "measured_ms": 1.336561981588602,
+        "oracle_passed": false,
+        "oracle_status": "not_promoted; performance tied within noise"
+      }
+    ]
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial post-incumbent capture at shipped precision and batch 32",
+      "captures_by_kind": {
+        "sliding_attention": 1,
+        "full_attention": 1
+      },
+      "result": "no screened winner outside noise floor; stop without recapture"
+    }
+  ]
+}

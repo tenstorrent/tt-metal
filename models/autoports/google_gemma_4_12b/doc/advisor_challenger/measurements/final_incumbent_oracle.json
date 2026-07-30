@@ -1,0 +1,33 @@
+{
+  "oracle": "frozen-incumbent preservation plus incumbent test-suite audit",
+  "final_decoder_sha256": "9922fc46b37346343a302ac49554c90e9f6c80116eee388f01c98fe05967a153",
+  "frozen_incumbent_decoder_sha256": "9922fc46b37346343a302ac49554c90e9f6c80116eee388f01c98fe05967a153",
+  "source_identity_passed": true,
+  "preservation_oracle_passed": true,
+  "preservation_basis": "The no-change winner is byte-identical to the frozen decoder measured before advisor capture, so the challenger introduced no correctness change.",
+  "historical_incumbent_pcc_source": "doc/optimized_decoder/README.md",
+  "historical_incumbent_pcc": {
+    "sliding_attention_decode_seq128": 0.9954114151,
+    "sliding_attention_bar": 0.993,
+    "full_attention_decode_seq128": 0.9953398643,
+    "full_attention_bar": 0.995
+  },
+  "current_environment_test": {
+    "command": "pytest -q models/autoports/google_gemma_4_12b/tests/test_optimized_decoder.py::test_optimized_paged_prefill_then_decode_pcc --tb=short",
+    "sliding_attention": {
+      "pcc": 0.9889231870163973,
+      "bar": 0.993,
+      "passed": false
+    },
+    "full_attention": {
+      "passed": true
+    },
+    "overall_passed": false,
+    "classification": "pre-existing incumbent/environment discrepancy; final and frozen source plus oracle tests are byte-identical"
+  },
+  "real_weight_test": {
+    "command": "pytest -q models/autoports/google_gemma_4_12b/tests/test_optimized_decoder.py::test_optimized_real_weight_layer0_prefill_decode --tb=short",
+    "status": "skipped",
+    "reason": "real google/gemma-4-12B model.safetensors is not present locally"
+  }
+}

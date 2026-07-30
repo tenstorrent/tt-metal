@@ -1,0 +1,42 @@
+{
+  "layer_kind": "full_attention",
+  "decode_batch": 32,
+  "sequence_length": 128,
+  "repeats_ms": [
+    1.3684304431080818,
+    1.374802552163601,
+    1.369311474263668
+  ],
+  "best_ms": 1.3684304431080818,
+  "full_decoder_aggregation": "(40 * frozen sliding repeat + 8 * candidate full repeat) / 48, paired by repeat index",
+  "full_decoder_repeats_ms": [
+    1.3509068327645462,
+    1.3401123384634654,
+    1.3338785308102767
+  ],
+  "measured_ms": 1.3338785308102767,
+  "output_checksum": 860.99755859375,
+  "output_l2": 606.1893310546875,
+  "optimization_summary": {
+    "attention_dtype": "bf16",
+    "attention_qkv_dtype": "bf16",
+    "attention_o_dtype": "bf16",
+    "attention_prefill_weight_dtype": "bf16",
+    "attention_prefill_weight_layout": "dram_sharded",
+    "shared_mlp_gate_up_dtype": "bfp8",
+    "shared_mlp_down_dtype": "bfp8",
+    "shared_mlp_prefill_dtype": "bf16",
+    "shared_mlp_prefill_weight_layout": "dram_interleaved",
+    "shared_mlp_decode_gate_up_dtype": "bfp8",
+    "shared_mlp_decode_down_dtype": "bfp8",
+    "kv_cache_dtype": "bf16",
+    "activation_dtype": "bf16",
+    "decode_residual_layout": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":5,\"y\":4}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+    "mlp_fused_gelu_mul": true,
+    "decode_norm_sharded": true,
+    "attention_decode_o_interleaved": false,
+    "attention_decode_head_norm_sharded": true,
+    "moe": "not_applicable_dense_model",
+    "ccl": "not_applicable_single_chip_tp1"
+  }
+}

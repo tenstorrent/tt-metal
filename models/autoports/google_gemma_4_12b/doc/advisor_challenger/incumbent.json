@@ -1,0 +1,63 @@
+{
+  "cell_tag": "google_gemma_4_12b-finished-optimized-decoder",
+  "commit": "33221435e65171c16d671a309a8a209a65723b98",
+  "decoder_sha256": "9922fc46b37346343a302ac49554c90e9f6c80116eee388f01c98fe05967a153",
+  "harness": "doc/advisor_challenger/harness.py",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "sequence_length": 128,
+  "layer_counts": {
+    "sliding_attention": 40,
+    "full_attention": 8
+  },
+  "layer_kind_repeats_ms": {
+    "sliding_attention": [
+      1.347402110695839,
+      1.3331742957234383,
+      1.3267919421195984
+    ],
+    "full_attention": [
+      1.4056731015443802,
+      1.4062440022826195,
+      1.3990197330713272
+    ]
+  },
+  "aggregation": "(40 * sliding_attention_ms + 8 * full_attention_ms) / 48",
+  "repeats_ms": [
+    1.3571139425039291,
+    1.3453525801499684,
+    1.33882990727822
+  ],
+  "incumbent_ms": 1.33882990727822,
+  "noise_floor_ms": 0.018284035225709205,
+  "measured_at": "2026-07-30T20:35:20Z",
+  "shipped_policy_source": "tracy/incumbent_sliding_attention_perf_report.csv and tracy/incumbent_full_attention_perf_report.csv; effective policy cross-checked from measurements/incumbent_{sliding,full}.json optimization_summary",
+  "shipped_policy": {
+    "activation_dtype": "bf16",
+    "attention_dtype_by_kind": {
+      "sliding_attention": "bfp8",
+      "full_attention": "bf16"
+    },
+    "attention_qkv_dtype_by_kind": {
+      "sliding_attention": "bfp8",
+      "full_attention": "bf16"
+    },
+    "attention_o_dtype": "bf16",
+    "shared_mlp_gate_up_dtype": "bfp8",
+    "shared_mlp_down_dtype": "bfp8",
+    "shared_mlp_decode_gate_up_dtype": "bfp8",
+    "shared_mlp_decode_down_dtype": "bfp8",
+    "kv_cache_dtype": "bf16",
+    "fuse_mlp_gelu": true,
+    "decode_norm_sharded": true,
+    "attention_decode_o_interleaved": false
+  },
+  "shipped_weight_dtypes": {
+    "sliding_attention.qkv": "BFLOAT8_B",
+    "sliding_attention.o_proj": "BFLOAT16",
+    "full_attention.qkv": "BFLOAT16",
+    "full_attention.o_proj": "BFLOAT16",
+    "dense_mlp.gate_up": "BFLOAT8_B",
+    "dense_mlp.down": "BFLOAT8_B"
+  }
+}

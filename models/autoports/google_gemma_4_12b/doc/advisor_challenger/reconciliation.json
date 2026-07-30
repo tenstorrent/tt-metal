@@ -1,0 +1,108 @@
+{
+  "generated_by": ".agents/skills/advisor-challenger/scripts/reconcile.py plus manual current-schema reconciliation",
+  "stock_reconcile_results": {
+    "sliding_attention": "/tmp/gemma12b_reconcile_sliding.json",
+    "full_attention": "/tmp/gemma12b_reconcile_full.json",
+    "issue": "The stock parser did not recognize the current final_ir.mlir layout declarations or the tt-perf-report Device Time column, yielding zero placements and a zero window. The rows below reconcile traced weight shapes and ordered operations against the incumbent CSV."
+  },
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, not individual ops",
+  "incumbent_perf_reports": {
+    "sliding_attention": "tracy/incumbent_sliding_attention_perf_report.csv",
+    "full_attention": "tracy/incumbent_full_attention_perf_report.csv"
+  },
+  "chains": [
+    {
+      "chain": "sliding_attention_o_projection",
+      "layer_kind": "sliding_attention",
+      "summed_window_share_pct": 6.692772041918514,
+      "measured_ms": 1.3259799840549629,
+      "verdict": "rejected",
+      "reason": "0.012850 ms faster than the frozen incumbent, but inside the 0.018284 ms noise floor; tie goes to incumbent",
+      "candidate_artifact": "measurements/screen_sliding_attention_o.json"
+    },
+    {
+      "chain": "full_attention_o_projection",
+      "layer_kind": "full_attention",
+      "summed_window_share_pct": 9.577991425403146,
+      "measured_ms": 1.3409556510547798,
+      "verdict": "rejected",
+      "reason": "0.002126 ms slower than the frozen incumbent",
+      "candidate_artifact": "measurements/screen_full_attention_o.json"
+    },
+    {
+      "chain": "sliding_attention_per_head_norms",
+      "layer_kind": "sliding_attention",
+      "summed_window_share_pct": 8.101376735458206,
+      "measured_ms": 1.3356958515942097,
+      "verdict": "rejected",
+      "reason": "0.003134 ms faster than the frozen incumbent, but inside the 0.018284 ms noise floor; tie goes to incumbent",
+      "chain_scope": "Q/K/V sharded-to-interleaved boundaries, per-head reshapes, three RMSNorms, rotary embedding, and rotary output reshards",
+      "candidate_artifact": "measurements/screen_sliding_attention_head_norms.json"
+    },
+    {
+      "chain": "full_attention_per_head_norms",
+      "layer_kind": "full_attention",
+      "summed_window_share_pct": 13.527565994743007,
+      "measured_ms": 1.3338785308102767,
+      "verdict": "rejected",
+      "reason": "0.004951 ms faster than the frozen incumbent, but inside the 0.018284 ms noise floor; tie goes to incumbent",
+      "chain_scope": "Q/K/V sharded-to-interleaved boundaries, per-head reshapes, three RMSNorms, rotary embedding, and rotary output reshards",
+      "candidate_artifact": "measurements/screen_full_attention_head_norms.json"
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "attention_o_projection",
+      "chain": "sliding_attention_o_projection",
+      "layer_kind": "sliding_attention",
+      "window_share_pct": 6.692772041918514,
+      "advised_layout": "non-DS 1D multicast; compute_config ignored as traced state",
+      "shipped_layout": "DRAM-sharded weight and L1 width-sharded activation",
+      "measured_ms": 1.3259799840549629,
+      "verdict": "rejected"
+    },
+    {
+      "op": "attention_o_projection",
+      "chain": "full_attention_o_projection",
+      "layer_kind": "full_attention",
+      "window_share_pct": 9.577991425403146,
+      "advised_layout": "non-DS 1D multicast; compute_config ignored as traced state",
+      "shipped_layout": "DRAM-sharded weight and L1 width-sharded activation",
+      "measured_ms": 1.3409556510547798,
+      "verdict": "rejected"
+    },
+    {
+      "op": "q_k_v_layout_reshape_norm_rotary_chain",
+      "chain": "sliding_attention_per_head_norms",
+      "layer_kind": "sliding_attention",
+      "window_share_pct": 8.101376735458206,
+      "advised_layout": "keep split Q/K/V in L1, block-shard the per-head reshape and RMSNorm sequence, then reshard directly for rotary",
+      "shipped_layout": "move split Q/K/V through DRAM interleaved for per-head norm, then reshard for rotary",
+      "measured_ms": 1.3356958515942097,
+      "verdict": "rejected"
+    },
+    {
+      "op": "q_k_v_layout_reshape_norm_rotary_chain",
+      "chain": "full_attention_per_head_norms",
+      "layer_kind": "full_attention",
+      "window_share_pct": 13.527565994743007,
+      "advised_layout": "keep split Q/K/V in L1, block-shard the per-head reshape and RMSNorm sequence, then reshard directly for rotary",
+      "shipped_layout": "move split Q/K/V through DRAM interleaved for per-head norm, then reshard for rotary",
+      "measured_ms": 1.3338785308102767,
+      "verdict": "rejected"
+    }
+  ],
+  "already_shipped_matches": [
+    "sliding and full QKV projections are already DRAM-sharded",
+    "sliding and full MLP gate/up projections are already DRAM-sharded",
+    "sliding and full MLP down projections are already DRAM-sharded",
+    "decoder RMSNorm boundaries are already L1 width-sharded across 30 cores"
+  ],
+  "uncapturable": {
+    "ops": [],
+    "layer_kinds": [],
+    "layer_share_pct": 0.0,
+    "note": "Both dense Gemma layer kinds captured through the complete decode graph."
+  }
+}
