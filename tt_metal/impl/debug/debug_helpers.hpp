@@ -113,15 +113,8 @@ inline std::string_view get_core_type_name(CoreType ct) {
     }
 }
 
-// Quasar error_code layout (see TriscErrors in error_handling.h):
-//   [15:14] compute core (Neo) ID
-//   [13:8]  block ID, decoded by TriscErrors
-//   [7:0]   error index within that block, decoded by the per-block enums
-inline constexpr uint32_t kQuasarErrNeoShift = 14;
-inline constexpr uint32_t kQuasarErrNeoMask = 0x3;
-inline constexpr uint32_t kQuasarErrBlockShift = 8;
-inline constexpr uint32_t kQuasarErrBlockMask = 0x3f;
-inline constexpr uint32_t kQuasarErrIndexMask = 0xff;
+// The kQuasarErr* shifts and masks for the error code layout live in error_handling.h, shared
+// with the device side so both decode the same bits.
 
 // enchantum::to_string gives back an empty view for unnamed values, which ends up as a blank
 // field in the watcher log.

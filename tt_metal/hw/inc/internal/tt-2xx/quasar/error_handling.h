@@ -20,12 +20,23 @@ enum class DmErrors : uint32_t {
 
 };
 
+// Error code layout. Both sides decode these bits: the device to work out which Neo/TRISC to
+// blame, the host to render the message. Keep them here so the two can't drift apart.
+//   [15:14] Neo ID
+//   [13:8]  block ID, see TriscErrors
+//   [7:0]   error index within the block, see the per-block enums further down
+constexpr uint32_t kQuasarErrNeoShift = 14;
+constexpr uint32_t kQuasarErrNeoMask = 0x3;
+constexpr uint32_t kQuasarErrBlockShift = 8;
+constexpr uint32_t kQuasarErrBlockMask = 0x3f;
+constexpr uint32_t kQuasarErrIndexMask = 0xff;
+
 // TRISC errors
 // Values are taken from https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/564527286/Error+Aggregator, additional
 // error information is available in `ERR_DATA` register for errors 0-3.
 //
-// Block ID, error_code[13:8]. The rest of the word is [15:14] = Neo ID and [7:0] = error index
-// within the block. The index only means anything alongside its block, see the enums below.
+// Block ID, error_code[13:8]. The index in [7:0] only means anything alongside its block, see
+// the enums below.
 enum class TriscErrors : uint32_t {
     ERROR_TRISC0 = 0,
     ERROR_TRISC1 = 1,

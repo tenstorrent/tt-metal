@@ -655,6 +655,55 @@ TEST(WatcherHwFaultMessage, IllegalInstructionThreadOrderIsReversed) {
     }
 }
 
+// Full expected strings for a handful of codes. The table above covers breadth but only checks
+// pieces, so a scrambled field order or stray text would slip through it. Deliberately short:
+// every message reword has to touch these by hand.
+TEST(WatcherHwFaultMessage, ExactMessages) {
+    struct Golden {
+        uint32_t error_code;
+        uint32_t err_data;
+        std::string expected;
+    };
+    const std::vector<Golden> golden = {
+        // 0x19 and 0x16 are the pair that's easy to mix up, so pin both.
+        {0x0119,
+         0x00001234,
+         "hardware fault occurred at PC 0x00001234 on Neo 0 TRISC1 with cause: ERROR_TRISC1 (MEM_ACCESS_HANG), "
+         "error_code 0x0119"},
+        {0x0016,
+         0x00001234,
+         "hardware fault occurred at PC 0x00001234 on Neo 0 TRISC0 with cause: ERROR_TRISC0 (TTI_BUFFER_HANG), "
+         "error_code 0x0016"},
+        // Backwards thread numbering plus the trailing-field shape.
+        {0x2041,
+         0x00001234,
+         "hardware fault occurred on Neo 0 TRISC3 with cause: ILLEGAL_INSTRUCTION_TRISC3 (opcode 0x41), "
+         "error_code 0x2041, offending instruction: 0x00001234"},
+        // Both sticky bits joined.
+        {0x0e03,
+         0,
+         "hardware fault occurred on Neo 0 with cause: SFPU (CC_STACK_OVERFLOW + CC_STACK_UNDERFLOW), "
+         "error_code 0x0e03, faulting address or instruction: 0x00000000"},
+        {0x0c03,
+         0x00000100,
+         "hardware fault occurred on Neo 0 with cause: NEO_SEMAPHORES (GET_ON_UNINITIALIZED), error_code 0x0c03, "
+         "semaphore index: 0x00000100"},
+        {0x3f00,
+         0,
+         "hardware fault occurred on Neo 0 with cause: unknown code 0x3f, error_code 0x3f00, "
+         "faulting address or instruction: 0x00000000"},
+        // A DM mcause, which takes the other branch entirely.
+        {static_cast<uint32_t>(DmErrors::LOAD_ACCESS_FAULT),
+         0x00001234,
+         "hardware fault occurred at PC 0x0. Cause: LOAD_ACCESS_FAULT, faulting address or instruction: 0x00001234"},
+    };
+    for (const auto& g : golden) {
+        const uint64_t hw_fault_info = (static_cast<uint64_t>(g.err_data) << 32) | g.error_code;
+        EXPECT_EQ(get_debug_assert_message(dev_msgs::DebugAssertHwFault, 0, hw_fault_info), g.expected)
+            << "error_code 0x" << std::hex << g.error_code;
+    }
+}
+
 // The caller reads an empty message as data corruption, so nothing should produce one.
 TEST(WatcherHwFaultMessage, NeverEmptyForAnyErrorCode) {
     for (uint32_t error_code = 0; error_code <= 0xffff; error_code++) {
