@@ -32,6 +32,32 @@ HIDDEN_SIZE = 7168
 BLOCK_SIZE = 12
 EPS = 1e-5
 
+# Both one-pass `d`-reductions are inadmissible without this. At default fidelity
+# the bf16 mantissa is truncated going into the multiply, which costs the RMSNorm
+# statistics kernel an order of magnitude — 4.8e-2 relative error against the
+# 2.4e-3 that `mul` + `sum` achieves — and the matvec 4x. HiFi4 with fp32
+# accumulation restores both (2.5e-3 and 3.2e-3) and is free on device, because
+# these reductions are bandwidth-bound and the extra math passes hide under the
+# reads: 232 µs against 230 at default fidelity. `WormholeComputeKernelConfig` is
+# the name ttnn gives this on every non-Grayskull arch, Blackhole included.
+STATS_FIDELITY = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+)
+
+# `rms_norm_pre_all_gather` keeps a whole row of `v` in one core's L1: its program
+# factory sizes the circular buffers at `4 * Wt` tiles — the input double-buffered
+# plus a double-buffered `x**2` intermediate — on top of ~113 KiB of scaler and
+# output buffers. Measured on Blackhole's 1 572 864 B of L1, it asks for 1 590 144 B
+# at a 5 760-wide row, 1 688 448 at 6 144 and 1 950 592 at 7 168, and the steps
+# between those are exactly 8 192 B per tile of width, so the ceiling is 177 tiles.
+# Past it the op throws at program build rather than degrading, and
+# `use_2d_core_grid=True` is not the escape hatch — it splits tokens, not the row,
+# and asks for more (1 971 072 B at 7 168). Any `tp_factor >= 2` on a 7 168-wide
+# model fits; `tp_factor == 1` does not, so the read falls back there instead of
+# making the caller carry the constraint. Wormhole's smaller L1 moves this bound,
+# which is why the fallback exists at all rather than an assert.
+ONE_PASS_SQUARES_MAX_WIDTH = 177 * ttnn.TILE_SIZE
+
 
 class TtAttnRes(LightweightModule):
     """The AttnRes read, composed from ttnn primitives.
@@ -72,6 +98,15 @@ class TtAttnRes(LightweightModule):
             at `C = 18`, and the cost stops scaling with the candidate count.
             Costs two `ttnn.permute` calls, which is why it is off untraced —
             there two extra launches cancel the saving exactly.
+        one_pass_stats: take both `d`-reductions in a single pass over `v`, with
+            `rms_norm_pre_all_gather` for the sum of squares and a matmul for the
+            dot. Written as `mul` then `sum`, each reduction materializes a second
+            copy of `[1, C, N, d/tp]` in DRAM and reads it back — three passes to
+            produce 0.6% of the op's bytes. Phase 9 P7 on `(2,4)` at `C = 9`:
+            782 -> 232 us for the squares, 793 -> 450 for the dot, ~892 us of a
+            3 136 us read. Requires `STATS_FIDELITY`; see the note there. The
+            squares half is width-gated and falls back on its own, so this stays
+            a single knob for the caller — see `ONE_PASS_SQUARES_MAX_WIDTH`.
     """
 
     def __init__(
@@ -87,6 +122,7 @@ class TtAttnRes(LightweightModule):
         topology=None,
         stats_dtype=ttnn.float32,
         fold_stats=True,
+        one_pass_stats=True,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -98,6 +134,7 @@ class TtAttnRes(LightweightModule):
         self.num_links = num_links
         self.stats_dtype = stats_dtype
         self.fold_stats = fold_stats
+        self.one_pass_stats = one_pass_stats
 
         mesh_shape = tuple(mesh_device.shape)
         self.tp_factor = mesh_shape[tp_axis]
@@ -117,6 +154,8 @@ class TtAttnRes(LightweightModule):
         assert (
             self.shard_width % ttnn.TILE_SIZE == 0
         ), f"shard width {self.shard_width} is not a multiple of {ttnn.TILE_SIZE}"
+        # The matvec has no width limit; the RMSNorm statistics kernel does.
+        self.one_pass_squares = one_pass_stats and self.shard_width <= ONE_PASS_SQUARES_MAX_WIDTH
 
         # Both mappers are None at a single device, so placement there is exactly
         # what it was before distribution existed and every prior measurement
@@ -252,17 +291,46 @@ class TtAttnRes(LightweightModule):
         return head, tail
 
     def _local_sum_squares(self, v):
-        """[1, C, N, d/tp] -> [1, C, N, 1]. Not yet summed across ranks."""
-        squares = ttnn.mul(v, v)
-        sum_squares = ttnn.sum(squares, dim=3, keepdim=True)
-        ttnn.deallocate(squares)
-        return sum_squares
+        """[1, C, N, d/tp] -> [1, C, N, 1]. Not yet summed across ranks.
+
+        `mul` then `sum` is three DRAM passes over the largest tensor in the op to
+        produce one scalar per (token, candidate): read `v`, write a second copy of
+        it, read that back. `rms_norm_pre_all_gather` is the distributed-RMSNorm
+        statistics kernel, which squares inside the reduce and does it in one —
+        782 -> 232 µs traced at `C = 9`, against a 229 µs one-pass floor
+        (`bringup_log.md` P7). Its 32-wide output carries the sum in column 0.
+
+        Only where the row fits in L1 — see `ONE_PASS_SQUARES_MAX_WIDTH`.
+        """
+        if not self.one_pass_squares:
+            squares = ttnn.mul(v, v)
+            sum_squares = ttnn.sum(squares, dim=3, keepdim=True)
+            ttnn.deallocate(squares)
+            return sum_squares
+
+        wide = ttnn.rms_norm_pre_all_gather(v, dtype=v.dtype, compute_kernel_config=STATS_FIDELITY)
+        shape = list(wide.shape)
+        column = ttnn.slice(wide, [0, 0, 0, 0], [shape[0], shape[1], shape[2], 1])
+        ttnn.deallocate(wide)
+        return column
 
     def _local_dots(self, v, q):
-        """[1, C, N, d/tp] . [1, 1, 1, d/tp] -> [1, C, N, 1]. Rank-local."""
-        projected = ttnn.mul(v, q)
-        dots = ttnn.sum(projected, dim=3, keepdim=True)
-        ttnn.deallocate(projected)
+        """[1, C, N, d/tp] . [1, 1, 1, d/tp] -> [1, C, N, 1]. Rank-local.
+
+        The same three-pass shape as the sum of squares, and this one is a matvec,
+        so a matmul against `q` as a column does it without the intermediate —
+        793 -> 450 µs traced. Still 1.97x the one-pass floor: `N = 1` wastes 31 of
+        32 output columns and gives the matmul no reuse to exploit.
+        """
+        if not self.one_pass_stats:
+            projected = ttnn.mul(v, q)
+            dots = ttnn.sum(projected, dim=3, keepdim=True)
+            ttnn.deallocate(projected)
+            return dots
+
+        column = ttnn.permute(q, [0, 1, 3, 2])
+        dots = ttnn.matmul(v, column, compute_kernel_config=STATS_FIDELITY)
+        ttnn.deallocate(column)
         return dots
 
     def _to_reciprocal_rms(self, sum_squares):

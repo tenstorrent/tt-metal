@@ -14,6 +14,11 @@ one op launch costs in the regime the harness runs in. Both changed the conclusi
 > op runs at 70% of it), §5's algorithm rule holds exactly, §4's fabric term is **off
 > 2.7×**, and §6's verdict **inverts**. Read a section and its amendment together, in that
 > order.
+>
+> §4's **touch model is the part that held up best** — P7 measured 12.7V and 8.9V against
+> its 12V and 7V, and the 1.9V residual turned out to name a specific inefficiency rather
+> than absorb the error. It is also the section that mattered least at the time and got
+> amended last, which is its own lesson about which parts of a roofline to trust.
 
 ---
 
@@ -90,6 +95,25 @@ Three passes over `v` are structurally avoidable and one is not: the concat exis
 because `prefix_sum` and `block_residual` are separate buffers, and each of the three
 `mul`s materializes a full `V` intermediate that its paired `sum` immediately consumes.
 §7 prices removing them.
+
+> **Amended 2026-07-30 (P7 — two of the three `mul`s removed, in composed ops).** Both
+> `d`-reductions collapse to one pass without a fused kernel: `rms_norm_pre_all_gather`
+> squares inside the reduce (`4V → 1V`) and the dot is a matvec, so `matmul` against `q` as
+> a column needs no intermediate (`3V → 1V`). The table becomes **7V**: 2V concat, 1V
+> squares, 1V dot, 3V mixture.
+>
+> **The touch model checks out against the measurement, which is the first time it has been
+> tested rather than asserted.** Traced on `(2, 4)`, the per-candidate slope of the read is
+> 323.8 µs three-pass and 225.7 µs one-pass, and a single measured pass over `v` is 229.0 µs
+> at `C = 9` — 25.4 µs per candidate per `V`. That makes the slopes **12.7V and 8.9V** against
+> the model's 12V and 7V. The 0.7 is close enough to be the small-tensor ops the table calls
+> ~0 bytes; the 1.9 is not, and it has a name — the matvec runs at 1.97× its own floor
+> because `N = 1` wastes 31 of 32 output columns, which is exactly +1V.
+>
+> So the model is right to ~6% where the ops are efficient, and the residual is diagnostic
+> rather than noise. Note also what the ratio does *not* say: 12V → 7V predicts 1.71× and the
+> read measured **1.40×** at the peak shape, because a read is not all `V` — there is a
+> ~230 µs constant term per read, and it does not care how many passes the reductions take.
 
 **Arithmetic intensity.** Those 12 touches carry ~6 flops per element of `v`
 (three multiplies, three accumulate steps), so 6 flops per 24 bytes = **0.25
@@ -373,6 +397,20 @@ which a fused kernel that reads `v` once has already collapsed.
 > alone is 1 041 µs per read) and the statistics fold in §4's amendment. The split form's
 > **1.43×** on a mesh (P5, re-measured after the fold landed) is real and, as this section
 > says, does not compound with fusion.
+
+> **Amended again 2026-07-30 (P7 — the cheaper lever was taken, and it moved this number).**
+> The first of those two levers has landed in composed ops: 12V → 7V, **1.37×** on the read
+> at the schedule's mean shape, ~367 → 267 ms per forward. Phase 10's realizable win is
+> therefore **~5.3×**, not 7.6× — the same kernel, measured against a baseline that got
+> faster. Every iteration that lands before Phase 10 does this, which is the argument for
+> exhausting the composed form *first*: a fused kernel justified against a slow baseline is
+> justified against work someone else could have done in a day.
+>
+> What is left is now precisely characterized, and it is the part composed ops cannot reach.
+> P7 pays **682 µs to read `v` twice** for two reductions whose one-read floor is 229 µs, and
+> `_mix` reads it a third time (791 µs against a 228 µs floor) with no one-op form available
+> at the current layout. No composed op can produce two different reductions from one pass —
+> that gap, ~3V of the remaining 7V, is Phase 10's actual mandate rather than the whole 10.8×.
 
 ---
 

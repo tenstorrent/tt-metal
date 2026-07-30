@@ -622,6 +622,97 @@ settles the `num_links` question in the direction Phase 8 did not expect — lea
 because the fold makes the second link worthless, and on Galaxy a link not taken is a link
 another op can have.
 
+### P7 — the `d`-wide reductions, where the time actually was
+
+P4 through P6 spent three iterations on the collective and won 4.0% of the forward. The
+tracy profile had already said the weight was elsewhere: seven ops touch the full
+`[1, C, N, d/tp]` tensor and account for 76% of the read's device time, and both of the
+op's `d`-reductions were written as `mul` then `sum` — an elementwise pass that writes a
+second copy of the largest tensor in the op to DRAM, then a reduce that reads it back.
+**Three passes over 79 MiB to produce 0.6% of the op's bytes.**
+
+Two composed primitives do it in one. `ttnn.rms_norm_pre_all_gather` is the
+distributed-RMSNorm statistics kernel: it squares inside the reduce, returns `Σx²` (not the
+mean) in column 0 of a 32-wide output, batched over leading dims — exactly the shape
+`_local_sum_squares` has. And `_local_dots` is a matvec, so `ttnn.matmul` against `q` as a
+column needs no intermediate at all.
+
+Traced on `(2, 4)`, one variant per trace, `[1, 9, 2560, 1792]` bf16 = 79 MiB in:
+
+| form | µs | ×floor | admissible? |
+|---|---|---|---|
+| **floor**: `sum(v)` — one pass, no intermediate | 229.0 | 1.00 | control |
+| sumsq: `mul` + `sum` (what the op did) | 781.6 | 3.41 | — |
+| sumsq: `rms_norm_pre_all_gather` | 229.5 | 1.00 | **no** — 4.78e-2 |
+| sumsq: `rms_norm_pre_all_gather` **HiFi4** | **232.3** | 1.01 | **yes** — 2.54e-3 |
+| dots: `mul` + `sum` (what the op did) | 792.5 | 3.46 | — |
+| dots: `matmul` | 439.4 | 1.92 | **no** — 1.28e-2 |
+| dots: `matmul` **HiFi4** | **450.1** | 1.97 | **yes** — 3.155e-3 |
+| mix: `mul` + `sum` over the candidate axis | 791.1 | 3.45 | — |
+| **floor**: `sum(v, dim=1)` | 228.2 | 1.00 | control |
+
+1. **Fidelity is part of the candidate, not a knob.** At default (LoFi) fidelity both
+   one-pass forms lose an order of magnitude — the statistics kernel goes to 4.78e-2 against
+   the 2.44e-3 that `mul` + `sum` achieves, the matvec to 1.28e-2 — because LoFi truncates
+   the bf16 mantissa going into the multiply. HiFi4 with `fp32_dest_acc_en` restores both
+   (2.54e-3 and 3.155e-3, against today's 2.44e-3 and 3.189e-3) and is **free on device**:
+   232.3 against 229.5 µs, 450.1 against 439.4. These reductions are bandwidth-bound, so the
+   extra math passes hide under the reads. Had the accuracy been checked after the timing,
+   the honest version of this row would have been 2% slower and the fast one wrong.
+2. **The floor is one pass, and the squares reach it.** 232.3 µs against a 229.0 µs
+   `sum(v)` control is 1.4% off a pure single read of `v`. The matvec does not: 1.97×,
+   because `N = 1` wastes 31 of 32 output columns and gives the matmul no reuse.
+3. **Two reads of `v` is the composed-op floor.** 232.3 + 450.1 = 682.4 µs against a true
+   one-read floor of 229. No composed op can produce two different reductions from one pass
+   over the tensor — which is precisely the gap a fused kernel closes. This is the sharpest
+   case Phase 10 has.
+
+Priced in the op, where P6's lesson says it has to be — the one-pass forms are now charged
+for slicing column 0 out of the 32-wide output and transposing `q` into a column:
+
+| `C = S+1` | three-pass | one-pass | Δ | ratio |
+|---|---|---|---|---|
+| 2 | 867.4 | 657.5 | −209.9 | 1.32× |
+| 5 (**the schedule's mean**) | 1 868.9 | 1 367.4 | −501.5 | **1.37×** |
+| 9 | 3 136.4 | 2 240.6 | −896.2 | 1.40× |
+
+4. **This time the conversion is free.** 896.2 µs saved in the op against the 891.7 µs the
+   standalone variants predicted — the slice and the transpose cost nothing measurable, and
+   the per-candidate slope falls 323.8 → 225.7 µs, i.e. 98.1 µs per candidate against a
+   predicted 99.1. The contrast with P6 is the point: P6's permutes reshaped a
+   `2(S+1) × N`-row tensor and cost half the win, while P7's slice and transpose touch a
+   32-wide strip and a single row. **A layout conversion costs what it moves** — P6's moved
+   megabytes, P7's moves kilobytes.
+5. Fit over the real schedule (186 reads, Σ(S+1) = 1 002), linear to ~1% at three points:
+   **367 → 267 ms, 1.38×.** Against the 380 ms the ledger quotes from P3-era coefficients,
+   ~276 ms. Twenty-five times the fold's 15.3 ms, from one iteration.
+
+**The primitive does not fit a full-`d` row.** `rms_norm_pre_all_gather` keeps the row in one
+core's L1, sized at `4·Wt` tiles — input double-buffered plus a double-buffered `x²` — and it
+throws at program build past that. Measured against Blackhole's 1 572 864 B: 1 590 144 B
+asked for at `W = 5 760`, 1 688 448 at 6 144, 1 950 592 at 7 168, the steps between them
+exactly 8 192 B per tile of width. So the ceiling is 177 tiles, `W ≤ 5 664` — and
+`use_2d_core_grid=True` is **not** the escape hatch, asking for *more* (1 971 072 B at 7 168)
+because it splits tokens, not the row. Any `tp_factor ≥ 2` on a 7 168-wide model fits;
+`tp_factor == 1` does not, so `_local_sum_squares` gates on width and falls back to
+`mul` + `sum` there. The matvec has no such limit, so single-device still gets that half.
+
+Correctness gate — the 186-read depth walk, against P6's numbers on the same tests:
+
+| `T` | layout | P6 | P7 | Δ |
+|---|---|---|---|---|
+| 64 | folded | 0.9999545 | 0.9999530 | −1.5e-6 |
+| 64 | unfolded | 0.9999500 | 0.9999379 | −1.2e-5 |
+| 256 | folded | 0.9999207 | 0.9999273 | +6.6e-6 |
+| 256 | unfolded | 0.9999223 | 0.9999232 | +0.9e-6 |
+
+In both directions and inside the band P6 already characterized as reassociation noise. All
+95 correctness tests pass, including the `d = 7168` single-device rows that exercise the
+fallback (0.9999381 against 0.9999408 — moved because that path still takes the matvec).
+
+*Verdict:* **`one_pass_stats=True` by default**, width-gated on the squares half. The whole
+knob is one argument; the constraint lives in the op, not in the caller.
+
 ---
 
 ## Learnings
@@ -980,6 +1071,31 @@ prediction P4 got right for exactly this reason and I re-derived the hard way.
 conversion out. Measure the composite in place. And when a saving and its cost are both
 proportional to the same padded size, no sweep over that size will separate them.*
 
+### Phase 9 — three iterations on the 5%, one on the 76%
+
+The tracy attribution that opened this phase said seven full-`d` ops were 76% of the read
+and the collective was ~5%. P4, P5 and P6 then went after the collective, because the
+collective was the part I had a mental model of — a payload, a topology, a link count, a
+layout to fold. Three iterations, 15.3 ms of a 380 ms forward. P7 read the same profile and
+went after `mul(v, v)`, and got 100 ms in one.
+
+Nothing about the collective work was wrong; the fold is real and it stayed. But the
+profile had ranked the candidates before P4 started, and I ranked them by tractability
+instead. The `d`-reductions looked less tractable precisely because "elementwise then
+reduce" is the obvious way to write them — obvious enough that it reads as a given rather
+than as a choice with a 3.4× price on it.
+
+Two things made P7 cheap once started. The reductions had **one-pass primitives already in
+the tree**, written for a different op (distributed RMSNorm's statistics pass) and for a
+shape that happens to match; and a *floor* — `sum(v)`, one pass, no intermediate — made
+"how much is left" answerable before any candidate was implemented. The floor is what turned
+3.41× into a bounded question, and it is what says the matvec's remaining 1.97× is real
+headroom while the squares' 1.01× is done.
+
+*Lesson: profile, then attack in the profile's order, not in order of which part you already
+have a model for. And measure the floor first — a one-pass control turns "is this fast?"
+into "how much is left?", which is the question that decides whether to keep going.*
+
 ---
 
 ## Backlog
@@ -1005,7 +1121,7 @@ proportional to the same padded size, no sweep over that size will separate them
 - [ ] Try fp32 statistics on the **single-device** path — the sharded measurement says
       they buy ~1e-5 of depth PCC for 1.5 MB per read.
 - [x] Phase 9 — perf harness + numbered perf loop. `tests/perf/test_attn_res_perf.py`,
-      six numbered iterations P1–P6 plus a tracy attribution, five refutations recorded
+      seven numbered iterations P1–P7 plus a tracy attribution, five refutations recorded
       in §Phase 9 perf loop. Launch term measured first, as §6 demanded — and it refuted
       §6.
 - [x] Fold the statistics into `[1, 1, T/R, 2(S+1)]` — landed as `fold_stats`, default on.
@@ -1021,15 +1137,25 @@ proportional to the same padded size, no sweep over that size will separate them
       152 µs on eight, while Phase 8 measured an `all_reduce` enqueue at 481 µs. That
       ~3× excess is where per-call semaphore creation would live. The analog hoists it
       with `create_global_semaphores` (`tt_ccl.py`).
-- [ ] Close the composed form's **1.43× gap to its own DRAM floor** (2 766 µs measured
+- [x] Close the composed form's **1.43× gap to its own DRAM floor** (2 766 µs measured
       on `(8,1)` against §3's 1 935 µs) before treating Phase 10 as the only lever. The
       profiler says 76% of device time is 7 big-tensor ops; `mul(v,v)` + `sum` at 1 041 µs
-      is the first candidate.
+      is the first candidate. **P7 took it**: both `d`-reductions are one-pass composed ops
+      behind `one_pass_stats`, 1.37× on the read at the schedule's mean shape (~367 → 267 ms
+      per forward). The squares land 1.4% off a one-pass floor; the matvec is still 1.97×
+      off it, and *two* reads of `v` is the composed-op floor either way.
+- [ ] `_mix` is the same 3.47× shape with no one-op form — 791.1 µs against a 228.2 µs
+      floor (P7), and it reduces over the candidate axis, so reaching the floor needs a
+      `[1, N, C, d/tp]` layout where the mix is a batched matmul. That is a layout change
+      with knock-on effects on both the collective and the fold, i.e. P8-scale, and P6 says
+      to price the conversions before believing the 563 µs.
 - [ ] Phase 10 — fused C++ op, only on measured evidence. `ROOFLINE.md` §7 puts the
       ceiling at 10.8× DRAM (215.5 ms → 20 ms per forward) with `v` resident in L1 at
-      every shape that matters. Phase 9 sharpens it: the composed form measures at 70%
-      of its own floor, so the *realizable* win over what runs today is **~7.6×**, and
-      the fused kernel is measured against 380 ms traced, not 622 ms untraced.
+      every shape that matters. Phase 9 sharpens it twice: the fused kernel is measured
+      against 380 ms traced, not 622 ms untraced — and after P7 against **~267 ms**, so the
+      realizable win is **~5.3×**, not 7.6×. What is left is exactly what composed ops
+      cannot do: P7 pays 682 µs to read `v` twice for two reductions whose one-read floor
+      is 229 µs, and `_mix` reads it a third time.
 - [ ] Phase 11 — `PIPELINE.md` + socket round-trip.
 - [ ] Fold `rms_inv` at seal time (needs the batched form first).
 - [ ] Decode path (`T=1`).
@@ -1260,3 +1386,32 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
   at `T = 64` and `T = 256`, both below the tile-row threshold where `all_reduce` switches
   algorithms on the *production* shape, so the fold's numerics at `T/R = 2560` rest on the
   fp32 probe rather than on a depth walk.
+
+- **2026-07-30** — Phase 9 **P7**: both `d`-wide reductions taken in one pass over `v`
+  (`one_pass_stats`, default on) — `rms_norm_pre_all_gather` for the sum of squares,
+  `matmul` for the dot. **95 passed** in 157.86 s.
+
+  **VALIDATED:** **1.37× on the read at the schedule's mean shape** (1 868.9 → 1 367.4 µs),
+  1.40× at the peak, ~**367 → 267 ms per forward** — twenty-five times the fold's 15.3 ms,
+  from one iteration. `mul` + `sum` was 3.41× and 3.46× a one-pass `sum(v)` floor; the
+  squares now land **1.4% off it**. The fidelity finding is load-bearing: at default LoFi
+  both one-pass forms lose an order of magnitude (4.78e-2 for the statistics kernel against
+  today's 2.44e-3), and HiFi4 + `fp32_dest_acc_en` restores both while costing **nothing on
+  device** — 232.3 µs against 229.5 — because these reductions are bandwidth-bound. Depth
+  PCC over 186 chained reads moves ≤1.2e-5, in both directions, inside P6's noise band.
+  Unlike P6, the conversions are free: 896.2 µs saved in the op against 891.7 predicted
+  standalone, because the slice and the `q` transpose move kilobytes where P6's permutes
+  moved megabytes.
+
+  **REFUTED:** `use_2d_core_grid=True` as the fix for the full-`d` row — it asks for *more*
+  L1 (1 971 072 B against the 1D factory's 1 950 592 at `W = 7 168`), because it splits
+  tokens, not the row. And my read of the factory's CB sizing as pure `4·Wt`: there is a
+  fixed ~113 KiB on top, so the ceiling is `W ≤ 5 664`, not the 6 144 the clean formula
+  gives. Both were found by measuring three widths rather than trusting the arithmetic.
+
+  **NOT VALIDATED:** The forward figure is a three-point fit (linear to ~1%), not a measured
+  93-layer walk — the same convention the 380 ms uses, and it inherits that convention's
+  weakness. The `W ≤ 5 664` bound is measured on Blackhole's L1 only; Wormhole's smaller L1
+  moves it, which is why the gate falls back rather than asserting. The matvec is still
+  **1.97×** off the floor (`N = 1` wastes 31 of 32 output columns) and `_mix` is untouched at
+  3.47×. Nothing here is asserted — the perf harness logs.
