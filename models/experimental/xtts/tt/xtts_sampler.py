@@ -136,7 +136,7 @@ class TtSampler:
             L = ttnn.where(ttnn.ge(L, thr), L, self._neg)
         return L
 
-    def pick_dev(self, logits, gumbel=None):
+    def pick_dev(self, logits, gumbel=None, bias=None):
         """Fully-on-device sample for the TRACED decode loop: same rep/temp/top-k/top-p shaping as
         the host path, then a Gumbel-max draw ``argmax(shaped_logits + gumbel)``. ``gumbel`` is a
         ``[1, V]`` fp32 tensor of PRE-DRAWN Gumbel noise ``-log(-log(U))``, ``U ~ uniform(0,1)`` —
@@ -145,9 +145,18 @@ class TtSampler:
         preprocessing, not a host fallback, and unlike an in-trace ``frac(sin)`` PRNG it is a true
         uniform draw, so this matches ``torch.multinomial`` in distribution (exact Gumbel-max
         equivalence). Returns the sampled id as a DEVICE ``[1, 1]`` uint32 tensor (no host readback)
-        and updates the ``seen`` mask on device. Greedy when ``temperature <= 0`` / ``gumbel`` None."""
+        and updates the ``seen`` mask on device. Greedy when ``temperature <= 0`` / ``gumbel`` None.
+
+        ``bias`` is an optional persistent ``[1, V]`` fp32 tensor added to the shaped logits — a
+        per-token additive mask the caller refreshes BETWEEN traced replays, exactly as it does
+        ``gumbel``. Used for STOP suppression (see ``generate_ondevice_traced``). It is applied
+        after the penalty/temperature/top-k shaping so a large negative entry cannot be rescaled
+        back into contention by the temperature divide, and it applies to greedy as well as
+        sampled draws."""
         L = self._apply_penalty_temp_topk(logits)
         Lf = ttnn.typecast(L, ttnn.float32)
+        if bias is not None:
+            Lf = ttnn.add(Lf, bias)
         if self.temperature > 0.0 and gumbel is not None:
             Lf = ttnn.add(Lf, gumbel)  # + pre-drawn Gumbel noise -> exact categorical sample
         tok = ttnn.argmax(Lf, dim=-1)  # argmax over TILE directly (respects logical V; no untilize)
