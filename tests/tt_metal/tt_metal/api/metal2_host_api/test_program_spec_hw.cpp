@@ -65,7 +65,7 @@ protected:
 //
 // Proves that DFB local accessor names work end-to-end on real WH/BH hardware:
 //   1. kernel_bindings_generated.h is emitted correctly (dfb::buf resolves at compile time)
-//   2. The DFBAccessor mechanism works (DFB ID maps to the correct underlying CB)
+//   2. The DFBBindingToken mechanism works (DFB ID maps to the correct underlying CB)
 //   3. Data flows correctly through the DFB from producer to consumer
 //
 // Pipeline:
@@ -1101,7 +1101,7 @@ void kernel_main() {
     spec.tensor_parameters = {TensorParameter{
         .unique_id = TensorParamName{"io"},
         .spec = tensor_spec,
-        .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true}}};
+        .relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = true}}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);

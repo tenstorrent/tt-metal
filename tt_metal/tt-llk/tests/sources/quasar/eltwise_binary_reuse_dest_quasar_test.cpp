@@ -90,9 +90,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 // Phase 1 datacopy consumes SrcA once per tile.
-                _perf_unpack_loop_set_valid<true, false>(INPUT_TILE_CNT);
+                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(INPUT_TILE_CNT);
                 // Phase 2 reuse-dest binary consumes both sources per face.
-                _perf_unpack_loop_set_valid<true, true>(INPUT_TILE_CNT * num_faces);
+                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(INPUT_TILE_CNT * num_faces);
             }
         }
         else
@@ -101,7 +101,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Phase 1 and phase 2 share unpack's bank0 instruction
                 // buffer, so select the phase 1 MOP before executing it.
-                _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32B_DEST_EN>(buf_desc_id_a, ckernel::DEFAULT_TENSOR_SHAPE, 1);
+                _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32B_DEST_EN>(
+                    buf_desc_id_a, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/);
                 for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
                 {
                     _llk_unpack_unary_operand_<p_unpacr::UNP_A>(i, ckernel::DEFAULT_TENSOR_SHAPE);
@@ -109,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 // Select the reuse-dest phase 2 MOP after phase 1 completes.
                 _llk_unpack_unary_operand_init_<unp_sel_phase2, TRANSPOSE_EN, IS_32B_DEST_EN, REUSE_DEST_TYPE>(
-                    buf_desc_id_phase2, ckernel::DEFAULT_TENSOR_SHAPE, 1);
+                    buf_desc_id_phase2, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/);
                 for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
                 {
                     _llk_unpack_unary_operand_<unp_sel_phase2, REUSE_DEST_TYPE>(i, ckernel::DEFAULT_TENSOR_SHAPE);
@@ -155,7 +156,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32*/>(src_format, src_format);
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
 
         PROFILER_SYNC();
     }
@@ -173,8 +174,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _perf_math_loop_clear_valid<true, false>(INPUT_TILE_CNT);
-                _perf_math_loop_clear_valid<true, true>(INPUT_TILE_CNT * num_faces);
+                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(INPUT_TILE_CNT);
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(INPUT_TILE_CNT * num_faces);
             }
         }
         else
@@ -182,7 +183,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 // Datacopy and binary share math's bank0 instruction buffer.
-                _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1);
+                _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
+                    num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
                 for (int i = 0; i < num_total_tiles; ++i)
                 {
                     _llk_math_eltwise_unary_datacopy_(i);
@@ -237,7 +239,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
+        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
@@ -263,7 +265,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
-        _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
+        _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();
     }
     {
