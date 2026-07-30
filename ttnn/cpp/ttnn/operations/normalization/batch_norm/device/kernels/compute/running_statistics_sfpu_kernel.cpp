@@ -45,6 +45,9 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(1) == 1;
+    static_assert(
+        old_running_mean_has_value || old_running_var_has_value,
+        "running_statistics requires at least one of running_mean / running_var");
 
     constexpr auto dfb_batch_mean = get_compile_time_arg_val(2);  // batch mean
     constexpr auto dfb_batch_var = get_compile_time_arg_val(3);   // batch var
@@ -92,21 +95,8 @@ void kernel_main() {
         constexpr uint32_t tile_index = 0;
 
         dfb_batch_mean_obj.wait_front(onetile);
+        dfb_batch_var_obj.wait_front(onetile);
         dfb_out0_obj.reserve_back(1);
-
-        if constexpr (!old_running_mean_has_value && !old_running_var_has_value) {
-            // Neither stat present: copy batch_mean to the output rather than leaving
-            // the reserved tile uninitialised. The return value of running_statistics is
-            // discarded by batch_norm.cpp, but the writer kernel still consumes it.
-            tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_batch_mean);
-            last_srca_dfb = dfb_batch_mean;
-            copy_tile(dfb_batch_mean, tile_index, tile_index * 2);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile_with_dt(tile_index * 2, dfb_out0);
-            tile_regs_release();
-        }
 
         if constexpr (old_running_mean_has_value) {
             // 1 - momentum
@@ -207,8 +197,6 @@ void kernel_main() {
             dfb_tmp2_obj.pop_front(onetile);
         }
 
-        dfb_batch_mean_obj.pop_front(onetile);
-
         if constexpr (old_running_var_has_value) {
             // 1 - momentum
             dfb_tmp1_obj.reserve_back(onetile);
@@ -230,7 +218,6 @@ void kernel_main() {
             dfb_tmp1_obj.push_back(onetile);
 
             // momentum * batch stat
-            dfb_batch_var_obj.wait_front(onetile);
             dfb_tmp2_obj.reserve_back(onetile);
             tile_regs_acquire();
             mul_binary_tile_init();
@@ -247,8 +234,6 @@ void kernel_main() {
             pack_tile_with_dt(tile_index * 2, dfb_tmp2);
             tile_regs_release();
             dfb_tmp2_obj.push_back(onetile);
-
-            dfb_batch_var_obj.pop_front(onetile);
 
             // cb_tmp1 * running stats --> (1 - momentum) * running stats
             dfb_tmp1_obj.wait_front(onetile);
@@ -305,16 +290,8 @@ void kernel_main() {
             dfb_tmp2_obj.pop_front(onetile);
         }
 
-        // Drain batch_var when the var block compiled out.
-        // Writer pushes batch_var every tile unconditionally; when
-        // old_running_var_has_value is false the only consumer (the var
-        // computation block above) is absent, so pop here to prevent the
-        // CB from filling and stalling the writer.
-        if constexpr (!old_running_var_has_value) {
-            dfb_batch_var_obj.wait_front(onetile);
-            dfb_batch_var_obj.pop_front(onetile);
-        }
-
+        dfb_batch_mean_obj.pop_front(onetile);
+        dfb_batch_var_obj.pop_front(onetile);
         dfb_out0_obj.push_back(1);
     }
     dfb_momentum_obj.pop_front(1);

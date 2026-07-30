@@ -24,7 +24,8 @@ pytestmark = pytest.mark.use_module_device
         torch.Size([5, 8, 32, 32]),
         torch.Size([7, 3, 23, 23]),
         torch.Size([3, 5, 64, 120]),
-        torch.Size([1, 128, 14, 14]),
+        # C=129: past CB depth (2) on WH n150 (64 cores) so mean-only/var-only drain hangs are covered
+        torch.Size([1, 129, 14, 14]),
         torch.Size([1, 8, 24, 42]),
     ],
 )
@@ -1032,21 +1033,20 @@ def test_batch_norm_fp32_acc_output_typecast(
         (True, True),
         (True, False),
         (False, True),
-        (False, False),
     ],
 )
 def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mean, check_var, device):
-    """Regression test for three latent defects in running_statistics_kernel.cpp (FPU path).
+    """First CI coverage of the FPU running_statistics kernel (fp32_dest_acc_en=False).
 
-    The FPU running-statistics compute kernel is selected when fp32_dest_acc_en=False and
-    all tensors are bfloat16.  It contained:
-      1. push_back without reserve_back on the output DFB,
-      2. a nested tile_regs_acquire wrapping helpers that run their own tile_regs cycle
-         (pack_tile reads stale/undefined DST),
-      3. undefined DST packed to output when both running stats are absent.
+    Default resolve_compute_kernel_config sets fp32_dest_acc_en=True, which selects the
+    SFPU kernel — so running_statistics_kernel.cpp was previously untested. This forces
+    the FPU path with all-bf16 tensors in training mode and checks main output plus
+    updated running stats.
 
-    This test forces the FPU path via fp32_dest_acc_en=False with all-bf16 tensors in
-    training mode and validates both the main output and the updated running stats.
+    Note: nested tile_regs / missing reserve_back are unobservable under Metal 1.0 CBs
+    (bit-identical vs main). The both-absent case is rejected by validate_tensors
+    (at least one stat must be present). Hang coverage for absent stats lives in
+    test_batch_norm_running_statistics_drain.
     """
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
@@ -1131,7 +1131,6 @@ def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mea
     [
         (True, False),  # mean-only: batch_var must still be drained
         (False, True),  # var-only: batch_mean must still be drained (FPU)
-        (False, False),  # both-absent: batch_var must still be drained
     ],
 )
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
@@ -1141,11 +1140,13 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
     Reader pushes batch_mean and writer pushes batch_var every tile with no
     presence guard. When the corresponding compute block compiles out, those
     CBs fill after b_num_tiles_per_cb (=2) tiles and the producer stalls.
-    Shape (1, 192, 14, 14) is past the hang threshold used in review repros
-    (C=129 mean-only / C=192 both-absent); C=5/8 in the existing FPU test
-    complete without exercising the stall.
+
+    Channel count is derived from the device grid so some core gets ≥3 tiles on
+    both WH (64 cores) and BH (~130 cores). Hardcoding C=192 only stalls on WH.
     """
-    input_shapes = torch.Size([1, 192, 14, 14])
+    grid = device.compute_with_storage_grid_size()
+    channels = 3 * grid.x * grid.y + 1
+    input_shapes = torch.Size([1, channels, 14, 14])
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if check_mean else (None, None)
@@ -1178,7 +1179,6 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
     )
     tt_output = ttnn.to_torch(tt_output_tensor)
 
-    channels = input_shapes[1]
     torch_mean_ref = mean_data.clone() if mean_data is not None else None
     torch_var_ref = var_data.clone() if var_data is not None else None
     ref_mean = (
@@ -1205,3 +1205,24 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
     assert_numeric_metrics(
         torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=frobenius_threshold
     )
+
+    if check_mean:
+        tt_updated_mean = ttnn.to_torch(tt_mean)
+        assert_numeric_metrics(
+            ref_mean.view(1, channels, 1, 1),
+            tt_updated_mean,
+            rtol=0.1,
+            atol=4.0,
+            frobenius_threshold=frobenius_threshold,
+            check_pcc=False,
+        )
+    if check_var:
+        tt_updated_var = ttnn.to_torch(tt_var)
+        assert_numeric_metrics(
+            ref_var.view(1, channels, 1, 1),
+            tt_updated_var,
+            rtol=0.1,
+            atol=4.0,
+            frobenius_threshold=frobenius_threshold,
+            check_pcc=False,
+        )
