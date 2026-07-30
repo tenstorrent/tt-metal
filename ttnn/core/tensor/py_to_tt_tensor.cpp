@@ -108,8 +108,12 @@ bool can_construct_on_single_device(
     // Logical shape must match physical shape for the tensor to be constructed on the device(no padding
     // required). tt::tt_metal::TensorSpec creation must follow after memory_config.is_sharded() check to avoid fatal
     // error
-    if (!tt::tt_metal::logical_matches_physical(tt::tt_metal::TensorSpec(tensor_shape, src_tensor_layout))) {
-        return false;
+    {
+        const auto candidate_spec = tt::tt_metal::TensorSpec(tensor_shape, src_tensor_layout);
+        if (!(candidate_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+              candidate_spec.logical_2d_shape() == candidate_spec.physical_shape())) {
+            return false;
+        }
     }
 
     // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.

@@ -588,10 +588,6 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
 //                                  Utility functions
 // ======================================================================================
 
-bool logical_matches_physical(const TensorSpec& tensor_spec) {
-    return tensor_spec.layout() == Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape();
-}
-
 namespace host_buffer {
 
 namespace {

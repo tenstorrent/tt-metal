@@ -36,7 +36,7 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
     size_t volume = spec.logical_shape().volume();
 
     TT_FATAL(
-        !logical_matches_physical(spec),
+        spec.layout() != Layout::ROW_MAJOR || spec.logical_2d_shape() != spec.physical_shape(),
         "Logical matches physical, don't support that case, use Tensor::from_span instead!");
 
     TT_FATAL(
@@ -56,7 +56,7 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
 
 template <typename T>
 HostTensor host_tensor_from_span_with_pad_value(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
-    if (!logical_matches_physical(spec)) {
+    if (spec.layout() != Layout::ROW_MAJOR || spec.logical_2d_shape() != spec.physical_shape()) {
         // If the logical shape doesn't match the physical shape, we need to encode the data
         // and write the result to a new buffer. This branch avoids the extra copy that
         // would otherwise occur in the from_vector function call.
@@ -103,7 +103,7 @@ HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, const
         TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config(), spec.tensor_layout().get_alignment()));
 
     auto host_buffer =
-        logical_matches_physical(buffer_spec)
+        buffer_spec.layout() == Layout::ROW_MAJOR && buffer_spec.logical_2d_shape() == buffer_spec.physical_shape()
             ? HostBuffer(std::move(buffer))
             : HostBuffer(tensor_impl::encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
 
@@ -132,11 +132,12 @@ std::vector<T> to_vector_generic(const HostTensor& tensor) {
         tensor.dtype(),
         convert_to_data_type<T>());
 
+    const auto& tensor_spec = tensor.tensor_spec();
     auto data = host_buffer::get_as<const T>(tensor);
-    if (logical_matches_physical(tensor.tensor_spec())) {
+    if (tensor_spec.layout() == Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape()) {
         return std::vector<T>(data.begin(), data.end());
     }
-    return tensor_impl::decode_tensor_data(data, tensor.tensor_spec());
+    return tensor_impl::decode_tensor_data(data, tensor_spec);
 }
 
 std::vector<float> to_vector_float(const HostTensor& tensor) {
@@ -148,10 +149,12 @@ std::vector<float> to_vector_float(const HostTensor& tensor) {
             std::transform(buffer.begin(), buffer.end(), std::back_inserter(physical_data), [](bfloat16 val) {
                 return static_cast<float>(val);
             });
-            if (logical_matches_physical(tensor.tensor_spec())) {
+            const auto& tensor_spec = tensor.tensor_spec();
+            if (tensor_spec.layout() == Layout::ROW_MAJOR &&
+                tensor_spec.logical_2d_shape() == tensor_spec.physical_shape()) {
                 return physical_data;
             }
-            return tensor_impl::decode_tensor_data(ttsl::make_const_span(physical_data), tensor.tensor_spec());
+            return tensor_impl::decode_tensor_data(ttsl::make_const_span(physical_data), tensor_spec);
         }
         case DataType::FLOAT32: {
             auto buffer = host_buffer::get_as<float>(tensor);

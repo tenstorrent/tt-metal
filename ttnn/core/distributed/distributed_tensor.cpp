@@ -319,7 +319,8 @@ private:
             if (buffer_pin == nullptr) {
                 return false;
             }
-            if (!tt::tt_metal::logical_matches_physical(shard_spec)) {
+            if (!(shard_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                  shard_spec.logical_2d_shape() == shard_spec.physical_shape())) {
                 return false;
             }
             if (tt::tt_metal::convert_to_data_type<std::remove_const_t<T>>() != shard_spec.data_type()) {
@@ -449,12 +450,16 @@ public:
         // is never reached. Guard explicitly so a future regression fails loudly instead of
         // silently skipping the conversion.
         if constexpr (std::is_same_v<T, float8_e4m3>) {
+            const auto& tensor_spec = tensor.tensor_spec();
             TT_FATAL(
-                tt::tt_metal::logical_matches_physical(tensor.tensor_spec()),
+                tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                    tensor_spec.logical_2d_shape() == tensor_spec.physical_shape(),
                 "float8_e4m3 tensors must have logical layout matching physical (row-major-only); "
                 "logical-to-physical conversion is not supported for FP8");
         } else {
-            if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
+            const auto& tensor_spec = tensor.tensor_spec();
+            if (!(tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                  tensor_spec.logical_2d_shape() == tensor_spec.physical_shape())) {
                 dst_buffer = dst_buffer.transform(
                     [&tensor](const tt::tt_metal::HostBuffer& shard) {
                         return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
