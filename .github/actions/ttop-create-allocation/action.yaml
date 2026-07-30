@@ -59,14 +59,15 @@ runs:
       run: |
         echo "[info] Waiting for allocation to be ready..."
 
-        # GitHub OIDC tokens are short-lived (~10-15 min). A single token cannot
-        # cover a long placement wait: once it expires mid-`kubectl wait`, the
-        # client-go watch loops "Unauthorized" forever and never observes the
-        # phase flip. Instead, poll every few seconds and reissue the token
-        # whenever the API server rejects it as unauthenticated.
-        POLL_INTERVAL=5          # seconds between polls
-        OVERALL_TIMEOUT=59940    # seconds (== 999m); matches the previous 999m cap
-        MAX_AUTH_FAILURES=3      # consecutive auth failures (despite reissue) before giving up
+        # GitHub OIDC tokens are short-lived (~10-15 min) and a placement wait can
+        # run far longer than one -- a Count:16 SC16 request sat Pending for 60 min
+        # on 2026-07-30 -- so the token WILL expire mid-wait and has to be reissued.
+        # Poll rather than `kubectl wait`: a client-go watch that goes unauthenticated
+        # loops forever and never observes the phase flip.
+        POLL_INTERVAL=5             # seconds between polls
+        OVERALL_TIMEOUT=59940       # seconds (== 999m); matches the previous 999m cap
+        MAX_CONSECUTIVE_ERRORS=60   # 60 x 5s == 5 min of unbroken failure before giving up
+        HEARTBEAT_EVERY=60          # re-log an UNCHANGED phase at most this often (seconds)
 
         mint_token() {
           curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
@@ -75,37 +76,73 @@ runs:
             -H "Content-Type: application/json" -d "{}" | jq -r '.value'
         }
 
+        # Dump whatever the API will tell us about the object before failing. Without
+        # this the log says only "waiting..." and diagnosing needs a human with
+        # cluster credentials -- after the run is over and the allocation is gone.
+        dump_status() {
+          echo "[info] Final allocation status:"
+          kubectl --token "$IDTOKEN" -n "$NAMESPACE" get "allocation/${ALLOCATION_NAME}" \
+            -o jsonpath='{"  phase="}{.status.phase}{"\n  result="}{.status.result}{"\n  message="}{.status.message}{"\n  nodes="}{.status.nodes}{"\n"}' 2>&1 \
+            | sed 's/^/  /' || true
+        }
+
         IDTOKEN=$(mint_token) || true
         echo "::add-mask::${IDTOKEN}"
 
-        auth_failures=0
+        errors=0
         start=$SECONDS
+        last_phase=""
+        last_log=0
+        stderr_file=$(mktemp)
+        trap 'rm -f "$stderr_file"' EXIT
+
         while true; do
           if (( SECONDS - start >= OVERALL_TIMEOUT )); then
-            echo "::error::Timed out after $((OVERALL_TIMEOUT / 60))m waiting for allocation to reach Allocated."
+            echo "::error::Timed out after $((OVERALL_TIMEOUT / 60))m waiting for allocation to reach Allocated. Last phase seen: '${last_phase:-<none>}'."
+            dump_status
             exit 1
           fi
 
-          output=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" get "allocation/${ALLOCATION_NAME}" -o jsonpath='{.status.phase}' 2>&1) && rc=0 || rc=$?
+          # stdout ONLY -- deliberately not `2>&1`. Merging stderr into this capture
+          # meant any kubectl warning printed on an otherwise-SUCCESSFUL call landed
+          # in the variable, so the exact-match test below compared e.g.
+          # "W0730 ... deprecated\nAllocated" against "Allocated" and failed while the
+          # allocation really was Allocated. Success condition already met, loop still
+          # spinning, until the caller's step timeout.
+          phase=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" get "allocation/${ALLOCATION_NAME}" \
+                    -o jsonpath='{.status.phase}' 2>"$stderr_file") && rc=0 || rc=$?
+          phase="${phase//[[:space:]]/}"
 
           if (( rc == 0 )); then
-            auth_failures=0
-            if [[ "$output" == "Allocated" ]]; then
-              echo "::notice::Allocation ${ALLOCATION_NAME} is Allocated."
+            errors=0
+            if [[ "$phase" == "Allocated" ]]; then
+              echo "::notice::Allocation ${ALLOCATION_NAME} is Allocated after $(( (SECONDS - start) / 60 ))m."
               exit 0
             fi
-            echo "[info] Allocation phase: '${output:-<empty>}' — waiting..."
-          elif echo "$output" | grep -qiE 'unauthorized|must be logged in|401'; then
-            auth_failures=$((auth_failures + 1))
-            echo "::warning::Auth failure (${auth_failures}/${MAX_AUTH_FAILURES}) while polling allocation; reissuing token."
-            if (( auth_failures >= MAX_AUTH_FAILURES )); then
-              echo "::error::Repeated auth failures despite token reissue; failing."
+            # Log on CHANGE plus a heartbeat. At 5s intervals a 60-minute wait was
+            # 720 identical lines, which is real log bloat on a shared runner disk.
+            if [[ "$phase" != "$last_phase" ]] || (( SECONDS - last_log >= HEARTBEAT_EVERY )); then
+              echo "[info] Allocation phase: '${phase:-<empty>}' ($(( (SECONDS - start) / 60 ))m elapsed) -- waiting..."
+              last_log=$SECONDS
+            fi
+            last_phase="$phase"
+          else
+            errors=$((errors + 1))
+            # Reissue on ANY error instead of only on ones matching an auth regex.
+            # The old classifier grepped 'unauthorized|must be logged in|401' and sent
+            # everything else to a warn-and-retry branch that never reissued -- but an
+            # expired token often surfaces as "error: the server has asked for the
+            # client to provide credentials", which matches none of those three. That
+            # run polled with a dead token until the step timeout. Minting is cheap and
+            # idempotent, so there is nothing to gain by classifying first.
+            echo "::warning::Poll failed (${errors}/${MAX_CONSECUTIVE_ERRORS}, rc=${rc}): $(tr '\n' ' ' < "$stderr_file" | cut -c1-300)"
+            if (( errors >= MAX_CONSECUTIVE_ERRORS )); then
+              echo "::error::Giving up after ${errors} consecutive failed polls ($(( errors * POLL_INTERVAL ))s). Last phase seen: '${last_phase:-<none>}'."
+              dump_status
               exit 1
             fi
             IDTOKEN=$(mint_token) || true
             echo "::add-mask::${IDTOKEN}"
-          else
-            echo "::warning::Transient error polling allocation (rc=${rc}): ${output}"
           fi
 
           sleep "$POLL_INTERVAL"
