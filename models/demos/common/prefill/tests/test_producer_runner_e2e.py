@@ -24,6 +24,10 @@ from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
 
 CHUNK_SIZE = 5120
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
+# GLM-5.2 golden trace carrying BOTH the 78 kv_cache layers and the 21 dsa/indexer_k_layer_* dirs, at
+# 56320 rows (= 11 x CHUNK_SIZE). The adapter's own prefill_trace_default omits dsa/, which would leave
+# the merged table's index config with no golden to PCC against.
+GLM52_TRACE = "/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k"
 SERVICE_ID = "ci_ds_prefill"
 TABLE_PATH = "/tmp/ci_prefill_kv_table.pb"  # IPC rendezvous files; cleaned up around each scenario
 DEVMAP_PATH = "/tmp/ci_prefill_kv_devmap.json"
@@ -87,6 +91,12 @@ pytestmark = [
 # Each scenario carries its OWN runner config (users / max_seq_len) + the producer schedule. Runners
 # run sequentially (one at a time), so each only needs users*max_seq_len to fit the KV budget on its
 # own. The producer inherits the runner's NUM_USERS (drives all its slots) unless overridden.
+#
+# Optional per-scenario keys:
+#   layers             -- PREFILL_NUM_LAYERS for this scenario (default: the module-level NUM_LAYERS)
+#   env                -- extra env applied to BOTH the runner and the producer (model, trace dir, ...)
+#   ready_timeout_s    -- override the runner startup budget (bigger models load + JIT for longer)
+#   producer_timeout_s -- override the producer budget (the PCC sweep scales with layers x seq_len)
 SCENARIOS = {
     # 1) Full-depth single user: 11 x 5120 = 56320 = the full Kimi golden trace. Deepest correctness gate.
     "single_user_full_depth": {
@@ -119,10 +129,38 @@ SCENARIOS = {
             "PREFILL_PRODUCER_P_BURST": "0.2",
         },
     },
+    # 4) GLM-5.2 (sparse / DSA) full-depth single user over ALL 78 layers. This is the gate for the
+    #    MERGED two-config KV chunk address table: config 0 = the bf16 ROW_MAJOR MLA KVPE cache (all 78
+    #    layers), config 1 = the bfp8 lightning-indexer KEY cache (only the 21 `full` layers, compacted).
+    #    The runner builds that single merged table under PREFILL_MOCK_MIGRATION and the producer reads
+    #    BOTH configs back through it over UMD, so a wrong address in either config shows up as a PCC
+    #    failure. 11 x 5120 = 56320 is exactly the trace depth.
+    #
+    #    ALL layers is mandatory here, not a preference: the index cache is sized from the model's whole
+    #    indexer_types map (21 full layers), so a truncated run leaves the upper index ranks unwritten —
+    #    the producer asserts on exactly that mismatch rather than PCC'ing untouched memory.
+    "glm52_full_depth_kv_table": {
+        "users": 1,
+        "layers": 78,
+        "max_seq_len": 56320,
+        "env": {
+            "PREFILL_MODEL": "glm_5_2",
+            "PREFILL_TRACE_DIR": GLM52_TRACE,
+            # The table describes all 78 layers, so the last layer must still WRITE its KV; the runner's
+            # default headless-last-layer optimization would leave layer 77 empty.
+            "PREFILL_KV_ONLY_LAST_LAYER": "0",
+        },
+        # 78 layers of GLM-5.2 weights + kernel JIT, then a two-config PCC sweep of ~174k sequential
+        # read_dram_umd block reads (78 x 1760 for KVPE + 21 x 1760 for the index cache). Both phases
+        # are far past the Kimi-sized defaults.
+        "ready_timeout_s": 3600,
+        "producer_timeout_s": 7200,
+        "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
+    },
 }
 
 
-def _transport_env(num_users: int, max_seq_len: int, **extra) -> dict:
+def _transport_env(num_users: int, max_seq_len: int, num_layers: int = NUM_LAYERS, **extra) -> dict:
     """Inherit the CI/dev env (weights cache, HF, golden trace) and add the shared orchestration knobs
     for this scenario's runner+producer. `extra` layers on the runner (MOCK_MIGRATION) or producer
     (schedule + CHECK_PCC) knobs.
@@ -134,7 +172,7 @@ def _transport_env(num_users: int, max_seq_len: int, **extra) -> dict:
     env.update(
         PREFILL_CHUNK_SIZE=str(CHUNK_SIZE),
         PREFILL_MAX_SEQ_LEN=str(max_seq_len),
-        PREFILL_NUM_LAYERS=str(NUM_LAYERS),
+        PREFILL_NUM_LAYERS=str(num_layers),
         PREFILL_NUM_USERS=str(num_users),
         PREFILL_H2D_SERVICE_ID=SERVICE_ID,
         PREFILL_MIGRATION_TABLE_PATH=TABLE_PATH,
@@ -147,6 +185,19 @@ def _transport_env(num_users: int, max_seq_len: int, **extra) -> dict:
         for key in _mpi_launcher_keys(env):
             env.pop(key, None)
     return env
+
+
+def _scenario_env(sc: dict, **extra) -> dict:
+    """Child environment for one scenario's runner or producer: the shared transport knobs, the
+    scenario's own layer count, its model-specific `env` (model, trace dir, ...), then the role-specific
+    `extra` (MOCK_MIGRATION for the runner; the schedule + CHECK_PCC for the producer). Both roles must
+    agree on model/layers/seq_len or the producer would validate against a differently-shaped cache."""
+    return _transport_env(
+        sc["users"],
+        sc["max_seq_len"],
+        num_layers=sc.get("layers", NUM_LAYERS),
+        **{**sc.get("env", {}), **extra},
+    )
 
 
 def _cleanup_ipc() -> None:
@@ -179,13 +230,14 @@ def _emit_log_group(title: str, path: str, n: int = _LOG_TAIL_LINES) -> None:
 
 
 @contextlib.contextmanager
-def _running_runner(tag: str, num_users: int, max_seq_len: int):
+def _running_runner(tag: str, sc: dict):
     """Spin up ONE runner (mock-migration, request mode) for a scenario and tear it down. Yields once
     it has published the H2D descriptor + KV table + device map (i.e. it is serving)."""
     os.makedirs(_REPORT_DIR, exist_ok=True)
     log_path = os.path.join(_REPORT_DIR, f"ci_runner_{tag}.log")
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
-    env = _transport_env(num_users, max_seq_len, PREFILL_MOCK_MIGRATION="1")
+    env = _scenario_env(sc, PREFILL_MOCK_MIGRATION="1")
+    ready_timeout_s = int(sc.get("ready_timeout_s", _READY_TIMEOUT_S))
     mode = _launch_mode()
     if mode == "ci":
         print(
@@ -198,14 +250,14 @@ def _running_runner(tag: str, num_users: int, max_seq_len: int):
     with open(log_path, "w") as log:
         proc = subprocess.Popen([sys.executable, "-m", _RUNNER_MODULE], env=env, stdout=log, stderr=subprocess.STDOUT)
     try:
-        deadline = time.monotonic() + _READY_TIMEOUT_S
+        deadline = time.monotonic() + ready_timeout_s
         while not (os.path.exists(_DESCRIPTOR) and os.path.exists(TABLE_PATH) and os.path.exists(DEVMAP_PATH)):
             if proc.poll() is not None:
                 raise RuntimeError(
                     f"runner [{tag}] exited early (rc={proc.returncode}) during startup:\n{_tail(log_path)}"
                 )
             if time.monotonic() > deadline:
-                raise TimeoutError(f"runner [{tag}] not ready within {_READY_TIMEOUT_S}s:\n{_tail(log_path)}")
+                raise TimeoutError(f"runner [{tag}] not ready within {ready_timeout_s}s:\n{_tail(log_path)}")
             time.sleep(2.0)
         yield log_path
     finally:
@@ -220,14 +272,37 @@ def _running_runner(tag: str, num_users: int, max_seq_len: int):
         _cleanup_ipc()
 
 
-@pytest.mark.parametrize("scenario", list(SCENARIOS))
+def _scenario_params():
+    """One pytest param per scenario, each carrying a pytest-timeout budget matching its own limits.
+
+    pytest.ini sets a blanket ``timeout = 300``, which is below what this test declares even for the
+    small scenarios (_READY_TIMEOUT_S + _PRODUCER_TIMEOUT_S = 2100s) and nowhere near a full-depth
+    model, which spends longer than that just loading weights. pytest-timeout reads the marker at
+    setup time, so the bound has to be attached at collection rather than inside the test body. The
+    real per-phase enforcement stays in _running_runner/subprocess.run; this only stops SIGALRM from
+    killing the test before those can report a useful failure.
+    """
+    return [
+        pytest.param(
+            name,
+            marks=pytest.mark.timeout(
+                sc.get("ready_timeout_s", _READY_TIMEOUT_S)
+                + sc.get("producer_timeout_s", _PRODUCER_TIMEOUT_S)
+                + 600  # slack for import, table build, teardown and log emission
+            ),
+        )
+        for name, sc in SCENARIOS.items()
+    ]
+
+
+@pytest.mark.parametrize("scenario", _scenario_params())
 def test_producer_runner_pcc(scenario):
     """Spin up a fresh runner for the scenario, drive it with the producer, and require the per-slot
     KV PCC gate to pass (the producer exits non-zero if any resident slot is below threshold)."""
     sc = SCENARIOS[scenario]
     prod_log = os.path.join(_REPORT_DIR, f"ci_producer_{scenario}.log")
-    with _running_runner(scenario, sc["users"], sc["max_seq_len"]) as runner_log:
-        env = _transport_env(sc["users"], sc["max_seq_len"], PREFILL_PRODUCER_CHECK_PCC="1", **sc["producer"])
+    with _running_runner(scenario, sc) as runner_log:
+        env = _scenario_env(sc, PREFILL_PRODUCER_CHECK_PCC="1", **sc["producer"])
         try:
             with open(prod_log, "w") as f:
                 result = subprocess.run(
@@ -235,7 +310,7 @@ def test_producer_runner_pcc(scenario):
                     env=env,
                     stdout=f,
                     stderr=subprocess.STDOUT,
-                    timeout=_PRODUCER_TIMEOUT_S,
+                    timeout=int(sc.get("producer_timeout_s", _PRODUCER_TIMEOUT_S)),
                 )
         finally:
             _emit_log_group(f"producer log [{scenario}]", prod_log)  # inline tail; the artifact has the full log

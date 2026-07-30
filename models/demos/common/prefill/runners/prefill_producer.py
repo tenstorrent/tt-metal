@@ -575,6 +575,26 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
     return min_pcc
 
 
+def _full_indexer_layer_indices(num_layers: int):
+    """Global layer indices that own a lightning indexer, over layers [0, num_layers).
+
+    GLM-5.2 reuses one ``full`` layer's top-k across the ``shared`` layers that follow, so only full
+    layers write the index cache and config 1 of the merged table is COMPACTED to that count: its layer
+    axis is the full-indexer RANK, not the global layer index. The golden trace's
+    ``dsa/indexer_k_layer_N`` is numbered by GLOBAL layer, so rank -> global has to be mapped before
+    loading it (GLM-5.2 full layers are {0, 1, 2, 6, 10, ... 74}, so rank 3 is global layer 6).
+
+    Returns None when the model has no ``indexer_types`` map (GLM-5.1 / v3.2: every layer is a full
+    indexer owner, so rank == global index and no mapping is needed).
+    """
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused
+
+    hf_config = ADAPTER.load_hf_config()  # host-only attribute config; no device, no weights
+    if not getattr(hf_config, "indexer_types", None):
+        return None
+    return [layer for layer in range(num_layers) if not indexer_layer_is_reused(hf_config, layer)]
+
+
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """Read slot `slot_id`'s KV over [0, real_len) via the table and validate it. Config 0 (the KVPE
     cache) is PCC'd vs the golden trace. For a sparse/DSA model the merged table also carries config 1
@@ -621,23 +641,38 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     if table.num_configs() > 1:
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         n_index_layers = table.config(1).num_layers
-        index_decode = _decoder_for_config(table, 1, index_head_dim)  # bf8 TILE on GLM-5.1/5.2
+        # Config 1's layer axis is the full-indexer RANK (GLM-5.2 compacts the shared layers out of the
+        # cache); the golden is numbered by GLOBAL layer, so map rank -> global before loading it.
+        full_layers = _full_indexer_layer_indices(NUM_LAYERS)
+        assert full_layers is None or len(full_layers) == n_index_layers, (
+            f"config 1 declares {n_index_layers} index-cache layers but layers [0,{NUM_LAYERS}) own only "
+            f"{len(full_layers)} full indexers. The index cache is sized from the model's WHOLE "
+            f"indexer_types map, so ranks {len(full_layers)}..{n_index_layers - 1} are never written by "
+            f"this run and would PCC against unwritten memory. Run the model's full layer count "
+            f"(PREFILL_NUM_LAYERS)."
+        )
         min_index = 1.0
-        for layer in range(n_index_layers):
+        for rank in range(n_index_layers):
             decoded_rows = []
             for pos in range(0, read_len, tokens_per_block):
-                loc = table.lookup(layer, pos, slot_id, 1)  # config 1 = index cache
+                loc = table.lookup(rank, pos, slot_id, 1)  # config 1 = index cache, keyed by full-layer rank
                 unique_id = _resolve_unique_id(
                     table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
                 )
                 raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-                decoded_rows.append(index_decode(raw, index_head_dim))
+                # Same byte-size-driven dispatch as config 0; a 128-wide bfp8 index chunk is
+                # (128/32) x 1088 = 4352 B, which lands on the bfp8 tile branch.
+                decoded_rows.append(_decode_kv_chunk(raw, index_head_dim))
             dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
 
-            golden_ik = _load_golden_index_k(trace_dir, layer, real_len)
+            golden_layer = rank if full_layers is None else full_layers[rank]
+            golden_ik = _load_golden_index_k(trace_dir, golden_layer, real_len)
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             min_index = min(min_index, pcc_index)
-            logger.info(f"[producer] slot {slot_id} layer {layer:>2} index PCC: {pcc_index:.5f}")
+            logger.info(
+                f"[producer] slot {slot_id} layer {golden_layer:>2} (index rank {rank:>2}) "
+                f"index PCC: {pcc_index:.5f}"
+            )
 
         logger.info(
             f"[producer] slot {slot_id} index PCC over [0,{real_len}) across {n_index_layers} layers -> {min_index:.6f}"
