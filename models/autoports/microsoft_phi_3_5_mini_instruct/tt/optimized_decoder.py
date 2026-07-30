@@ -1,1219 +1,269 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Optimized TTNN decoder layer for microsoft/Phi-3.5-mini-instruct.
+"""Single-device optimized Phi-3.5 decoder layer.
 
-Runtime contract
-----------------
-``from_state_dict`` is the weight-loading boundary. It accepts a HuggingFace
-decoder-layer state dict using canonical Phi-3 keys:
-
-* ``self_attn.qkv_proj.weight``
-* ``self_attn.o_proj.weight``
-* ``mlp.gate_up_proj.weight``
-* ``mlp.down_proj.weight``
-* ``input_layernorm.weight``
-* ``post_attention_layernorm.weight``
-
-The two forward methods are TTNN-only hot paths. Tests may create inputs and
-compare outputs with torch at explicit boundaries, but a measured forward pass
-does not call torch, ``ttnn.from_torch``, or ``ttnn.to_torch``.
-
-Prefill signature::
-
-    prefill_forward(
-        hidden_states,
-        *,
-        page_table,
-        kv_cache,
-        user_id=0,
-        start_pos=0,
-        rope_sequence_length=None,
-        cache_position_modulo=None,
-    )
-
-``hidden_states`` is a TILE-layout TTNN tensor of shape ``[1, 1, seq_len, 3072]``.
-``page_table`` is a ROW_MAJOR int32 TTNN tensor of shape
-``[max_batch, ceil(seq_len / block_size)]`` or wider. ``kv_cache`` is a pair
-``(k_cache, v_cache)`` of paged TTNN tensors shaped
-``[num_blocks, 32, block_size, 96]``. The method fills the paged cache and
-returns ``[1, 1, seq_len, 3072]``.
-
-Decode signature::
-
-    decode_forward(
-        hidden_states,
-        *,
-        current_pos,
-        position_ids=None,
-        page_table,
-        kv_cache,
-        rope_sequence_length=None,
-        cache_position_modulo=None,
-    )
-
-``hidden_states`` is a TILE-layout TTNN tensor of shape ``[1, 1, batch, 3072]``.
-``current_pos`` is an int32 TTNN tensor of shape ``[batch]`` and is used for
-paged cache updates and paged SDPA, making the decode pass trace-safe for fixed
-short-vs-long RoPE selection. ``page_table`` is the paged-attention mapping for
-the same batch. The method updates ``kv_cache`` and returns
-``[1, 1, batch, 3072]``.
+This stage starts from :class:`FusedDecoder` so the packed QKV, packed gate/up,
+and fused SiLU-multiply topology are preserved.  Phase-specific memory,
+precision, and program configurations are owned here; no runtime method
+dispatches back to ``FunctionalDecoder._mlp``.
 """
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, replace
-from functools import lru_cache
-from typing import Mapping
-
-import torch
+import os
 
 import ttnn
-from models.common.lightweightmodule import LightweightModule
-
-MODEL_ID = "microsoft/Phi-3.5-mini-instruct"
-HIDDEN_SIZE = 3072
-INTERMEDIATE_SIZE = 8192
-NUM_HEADS = 32
-NUM_KV_HEADS = 32
-HEAD_DIM = 96
-QKV_SIZE = (NUM_HEADS + 2 * NUM_KV_HEADS) * HEAD_DIM
-DEFAULT_BLOCK_SIZE = 32
-TILE_SIZE = 32
-PREFILL_QKV_CHUNK_SIZE = 2048
-PREFILL_MATMUL_CHUNK_SIZE = 1024
-PREFILL_SDPA_MAX_SEQ = 32768
+from models.autoports.microsoft_phi_3_5_mini_instruct.tt.fused_decoder import FusedDecoder
 
 
-@dataclass(frozen=True)
-class Phi35MiniOptimizedDecoderConfig:
-    hidden_size: int
-    intermediate_size: int
-    num_heads: int
-    num_kv_heads: int
-    head_dim: int
-    max_position_embeddings: int
-    original_max_position_embeddings: int
-    rope_theta: float
-    rms_norm_eps: float
-    block_size: int = DEFAULT_BLOCK_SIZE
-    dtype: ttnn.DataType = ttnn.bfloat16
-    attention_weight_dtype: ttnn.DataType = ttnn.bfloat8_b
-    mlp_weight_dtype: ttnn.DataType = ttnn.bfloat4_b
-    mlp_prefill_weight_dtype: ttnn.DataType = ttnn.bfloat8_b
-    cache_dtype: ttnn.DataType = ttnn.bfloat8_b
+class OptimizedDecoder(FusedDecoder):
+    """Phi-3.5 decoder with an explicitly owned optimized dense block."""
 
     @classmethod
-    def from_hf_config(cls, hf_config, *, block_size: int = DEFAULT_BLOCK_SIZE) -> "Phi35MiniOptimizedDecoderConfig":
-        head_dim = getattr(hf_config, "head_dim", None) or hf_config.hidden_size // hf_config.num_attention_heads
-        if hf_config.hidden_size != HIDDEN_SIZE:
-            raise ValueError(f"Phi-3.5 mini hidden_size must be {HIDDEN_SIZE}, got {hf_config.hidden_size}")
-        if hf_config.intermediate_size != INTERMEDIATE_SIZE:
-            raise ValueError(
-                f"Phi-3.5 mini intermediate_size must be {INTERMEDIATE_SIZE}, got {hf_config.intermediate_size}"
-            )
-        if hf_config.num_attention_heads != NUM_HEADS or hf_config.num_key_value_heads != NUM_KV_HEADS:
-            raise ValueError(
-                "Phi-3.5 mini optimized decoder expects dense 32Q/32KV attention, got "
-                f"{hf_config.num_attention_heads}Q/{hf_config.num_key_value_heads}KV"
-            )
-        if head_dim != HEAD_DIM:
-            raise ValueError(f"Phi-3.5 mini head_dim must be {HEAD_DIM}, got {head_dim}")
-        if getattr(hf_config, "attention_bias", False):
-            raise ValueError("Phi-3.5 mini attention_bias=True is not supported by this optimized decoder")
-
-        return cls(
-            hidden_size=hf_config.hidden_size,
-            intermediate_size=hf_config.intermediate_size,
-            num_heads=hf_config.num_attention_heads,
-            num_kv_heads=hf_config.num_key_value_heads,
-            head_dim=head_dim,
-            max_position_embeddings=hf_config.max_position_embeddings,
-            original_max_position_embeddings=hf_config.original_max_position_embeddings,
-            rope_theta=hf_config.rope_theta,
-            rms_norm_eps=hf_config.rms_norm_eps,
-            block_size=block_size,
-            dtype=ttnn.bfloat16,
-            attention_weight_dtype=ttnn.bfloat4_b,
-            mlp_weight_dtype=ttnn.bfloat4_b,
-            mlp_prefill_weight_dtype=ttnn.bfloat8_b,
-            cache_dtype=ttnn.bfloat8_b,
-        )
-
-
-class OptimizedDecoder(LightweightModule):
-    """Single dense Phi-3.5-mini decoder layer with TTNN decoder-stage optimizations."""
-
-    def __init__(
-        self,
-        *,
-        config: Phi35MiniOptimizedDecoderConfig,
-        mesh_device: ttnn.MeshDevice,
-        layer_idx: int,
-        batch: int,
-        input_norm_weight: ttnn.Tensor,
-        post_norm_weight: ttnn.Tensor,
-        qkv_weight: ttnn.Tensor,
-        o_weight: ttnn.Tensor,
-        gate_up_weight: ttnn.Tensor,
-        down_weight: ttnn.Tensor,
-        qkv_weight_prefill: ttnn.Tensor,
-        o_weight_prefill: ttnn.Tensor,
-        gate_up_weight_prefill: ttnn.Tensor,
-        down_weight_prefill: ttnn.Tensor,
-        rope_tables: dict[str, tuple[ttnn.Tensor, ttnn.Tensor]],
-        decode_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi,
-        decode_core_count: int = 16,
-        decode_max_in0_block_w: int = 16,
-        split_qkv_weights: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None = None,
-        split_gate_up_weights: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-    ) -> None:
-        super().__init__()
-        self.config = config
-        self.mesh_device = mesh_device
-        self.layer_idx = layer_idx
-        self.batch = batch
-        self.input_norm_weight = input_norm_weight
-        self.post_norm_weight = post_norm_weight
-        self.qkv_weight = qkv_weight
-        self.o_weight = o_weight
-        self.gate_up_weight = gate_up_weight
-        self.down_weight = down_weight
-        self.qkv_weight_prefill = qkv_weight_prefill
-        self.o_weight_prefill = o_weight_prefill
-        self.gate_up_weight_prefill = gate_up_weight_prefill
-        self.down_weight_prefill = down_weight_prefill
-        self.rope_tables = rope_tables
-        self.split_qkv_weights = split_qkv_weights
-        self.split_gate_up_weights = split_gate_up_weights
-        self.scale = 1.0 / math.sqrt(config.head_dim)
-        self.compute_kernel_config_hifi2 = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=decode_math_fidelity,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
-        self.compute_kernel_config_hifi4 = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        self.compute_kernel_config = self.compute_kernel_config_hifi2
-        self.decode_hidden_mem_config = _width_sharded_decode_mem_config(
-            mesh_device, config.hidden_size, core_count=decode_core_count
-        )
-        self.decode_qkv_mem_config = _width_sharded_decode_mem_config(
-            mesh_device, QKV_SIZE, core_count=decode_core_count
-        )
-        self.decode_gate_up_mem_config = _width_sharded_decode_mem_config(
-            mesh_device, 2 * config.intermediate_size, core_count=decode_core_count
-        )
-        self.decode_mlp_intermediate_mem_config = _width_sharded_decode_mem_config(
-            mesh_device, config.intermediate_size, core_count=decode_core_count
-        )
-        self.decode_kv_mem_config = _height_sharded_decode_mem_config(
-            mesh_device, config.num_kv_heads, config.head_dim, max_batch_size=batch
-        )
-        self.decode_k_mem_config, self.decode_v_mem_config = _disjoint_height_sharded_decode_mem_configs(
-            mesh_device, config.num_kv_heads, config.head_dim, batch_size=batch
-        )
-        self.decode_q_mem_config = _height_sharded_decode_mem_config(
-            mesh_device, config.num_heads, config.head_dim, max_batch_size=batch
-        )
-        self.decode_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=_sdpa_grid(mesh_device),
-            q_chunk_size=32,
-            k_chunk_size=32,
-            exp_approx_mode=False,
-        )
-        self.decode_qkv_program_config = _dram_matmul_config(
-            m=TILE_SIZE,
-            k=config.hidden_size,
-            n=QKV_SIZE,
-            num_cores=decode_core_count,
-            max_in0_block_w=decode_max_in0_block_w,
-        )
-        self.decode_o_program_config = _dram_matmul_config(
-            m=TILE_SIZE,
-            k=config.hidden_size,
-            n=config.hidden_size,
-            num_cores=decode_core_count,
-            max_in0_block_w=decode_max_in0_block_w,
-        )
-        self.decode_gate_up_program_config = _dram_matmul_config(
-            m=TILE_SIZE,
-            k=config.hidden_size,
-            n=2 * config.intermediate_size,
-            num_cores=decode_core_count,
-            max_in0_block_w=decode_max_in0_block_w,
-        )
-        self.decode_down_program_config = _dram_matmul_config(
-            m=TILE_SIZE,
-            k=config.intermediate_size,
-            n=config.hidden_size,
-            num_cores=decode_core_count,
-            max_in0_block_w=decode_max_in0_block_w,
-        )
-        self.decode_split_hidden_program_config = _dram_matmul_config(
-            m=TILE_SIZE,
-            k=config.hidden_size,
-            n=config.hidden_size,
-            num_cores=decode_core_count,
-            max_in0_block_w=decode_max_in0_block_w,
-        )
-        self.decode_split_intermediate_program_config = _dram_matmul_config(
-            m=TILE_SIZE,
-            k=config.hidden_size,
-            n=config.intermediate_size,
-            num_cores=decode_core_count,
-            max_in0_block_w=decode_max_in0_block_w,
-        )
-
-    @classmethod
-    def from_state_dict(
-        cls,
-        state_dict: Mapping[str, torch.Tensor],
-        *,
-        hf_config,
-        layer_idx: int,
-        mesh_device: ttnn.MeshDevice,
-        batch: int = 1,
-        block_size: int = DEFAULT_BLOCK_SIZE,
-        max_position_embeddings: int | None = None,
-        attention_weight_dtype: ttnn.DataType | None = None,
-        mlp_weight_dtype: ttnn.DataType | None = None,
-        decode_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi,
-        decode_core_count: int = 16,
-        decode_max_in0_block_w: int = 16,
-        split_qkv: bool = False,
-        split_gate_up: bool = True,
-        **_: object,
-    ) -> "OptimizedDecoder":
-        """Create a decoder from a HF layer state dict.
-
-        Weight conversion is intentionally eager and explicit here so runtime
-        forwards have no hidden host fallback.
-        """
-
-        config = Phi35MiniOptimizedDecoderConfig.from_hf_config(hf_config, block_size=block_size)
-        config = replace(
-            config,
-            attention_weight_dtype=attention_weight_dtype or config.attention_weight_dtype,
-            mlp_weight_dtype=mlp_weight_dtype or config.mlp_weight_dtype,
-        )
-        if max_position_embeddings is not None:
-            config = Phi35MiniOptimizedDecoderConfig(
-                hidden_size=config.hidden_size,
-                intermediate_size=config.intermediate_size,
-                num_heads=config.num_heads,
-                num_kv_heads=config.num_kv_heads,
-                head_dim=config.head_dim,
-                max_position_embeddings=max_position_embeddings,
-                original_max_position_embeddings=config.original_max_position_embeddings,
-                rope_theta=config.rope_theta,
-                rms_norm_eps=config.rms_norm_eps,
-                block_size=config.block_size,
-                dtype=config.dtype,
-                attention_weight_dtype=config.attention_weight_dtype,
-                mlp_weight_dtype=config.mlp_weight_dtype,
-                mlp_prefill_weight_dtype=config.mlp_prefill_weight_dtype,
-                cache_dtype=config.cache_dtype,
-            )
-
-        required = {
-            "self_attn.qkv_proj.weight": (QKV_SIZE, HIDDEN_SIZE),
-            "self_attn.o_proj.weight": (HIDDEN_SIZE, HIDDEN_SIZE),
-            "mlp.gate_up_proj.weight": (2 * INTERMEDIATE_SIZE, HIDDEN_SIZE),
-            "mlp.down_proj.weight": (HIDDEN_SIZE, INTERMEDIATE_SIZE),
-            "input_layernorm.weight": (HIDDEN_SIZE,),
-            "post_attention_layernorm.weight": (HIDDEN_SIZE,),
+    def from_state_dict(cls, state_dict, **kwargs):
+        """Materialize the independently swept decode precision/layout policy."""
+        decoder = super().from_state_dict(state_dict, **kwargs)
+        decoder.decode_matmul_family = os.environ.get("PHI_OPT_DECODE_MATMUL", "dram_sharded")
+        decoder.decode_in0_block_w = int(os.environ.get("PHI_OPT_IN0_BLOCK_W", "4"))
+        decoder.decode_math_fidelity = os.environ.get("PHI_OPT_MATH_FIDELITY", "lofi")
+        dtype_by_name = {
+            "qkv": os.environ.get("PHI_OPT_ATTENTION_DTYPE", "bfp4"),
+            "o_proj": os.environ.get("PHI_OPT_ATTENTION_DTYPE", "bfp4"),
+            "gate_up": os.environ.get("PHI_OPT_MLP_DTYPE", "bfp4"),
+            "down": os.environ.get("PHI_OPT_DOWN_DTYPE", os.environ.get("PHI_OPT_MLP_DTYPE", "bfp4")),
         }
-        for name, shape in required.items():
-            if name not in state_dict:
-                raise KeyError(f"missing Phi decoder weight: {name}")
-            if tuple(state_dict[name].shape) != shape:
-                raise ValueError(f"{name} shape {tuple(state_dict[name].shape)} != expected {shape}")
-
-        qkv_weight = _dram_sharded_weight_to_device(
-            state_dict["self_attn.qkv_proj.weight"].T,
-            mesh_device,
-            dtype=config.attention_weight_dtype,
+        dtype_map = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b, "bf16": ttnn.bfloat16}
+        for name in ("qkv", "o_proj", "gate_up", "down"):
+            decoder.weights[name] = ttnn.typecast(decoder.weights[name], dtype_map[dtype_by_name[name]])
+        gate_up_shape = tuple(decoder.weights["gate_up"].shape)
+        decoder.weights["gate"] = ttnn.slice(
+            decoder.weights["gate_up"], [0, 0], [gate_up_shape[0], decoder.intermediate_size]
         )
-        o_weight = _dram_sharded_weight_to_device(
-            state_dict["self_attn.o_proj.weight"].T,
-            mesh_device,
-            dtype=config.attention_weight_dtype,
+        decoder.weights["up"] = ttnn.slice(
+            decoder.weights["gate_up"],
+            [0, decoder.intermediate_size],
+            [gate_up_shape[0], 2 * decoder.intermediate_size],
         )
-        gate_up_weight = _dram_sharded_weight_to_device(
-            state_dict["mlp.gate_up_proj.weight"].T,
-            mesh_device,
-            dtype=config.mlp_weight_dtype,
-        )
-        down_weight = _dram_sharded_weight_to_device(
-            state_dict["mlp.down_proj.weight"].T,
-            mesh_device,
-            dtype=config.mlp_weight_dtype,
-        )
-        qkv_weight_prefill = _weight_to_device(
-            state_dict["self_attn.qkv_proj.weight"].T, mesh_device, dtype=config.attention_weight_dtype
-        )
-        o_weight_prefill = _weight_to_device(
-            state_dict["self_attn.o_proj.weight"].T, mesh_device, dtype=config.attention_weight_dtype
-        )
-        gate_up_weight_prefill = _weight_to_device(
-            state_dict["mlp.gate_up_proj.weight"].T, mesh_device, dtype=config.mlp_prefill_weight_dtype
-        )
-        down_weight_prefill = _weight_to_device(
-            state_dict["mlp.down_proj.weight"].T, mesh_device, dtype=config.mlp_prefill_weight_dtype
-        )
-        input_norm_weight = _norm_weight_to_device(state_dict["input_layernorm.weight"], mesh_device)
-        post_norm_weight = _norm_weight_to_device(state_dict["post_attention_layernorm.weight"], mesh_device)
-        rope_tables = _build_rope_tables(hf_config, config, mesh_device)
-        split_qkv_weights = None
-        if split_qkv:
-            split_qkv_weights = tuple(
-                _dram_sharded_weight_to_device(weight.T, mesh_device, dtype=config.attention_weight_dtype)
-                for weight in state_dict["self_attn.qkv_proj.weight"].chunk(3, dim=0)
+        decoder.decode_weights = decoder.weights
+        if decoder.decode_matmul_family == "dram_sharded":
+            decoder.decode_weights = dict(decoder.weights)
+            dram_grid = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(decoder.mesh_device.dram_grid_size().x - 1, 0))}
             )
-        split_gate_up_weights = None
-        if split_gate_up:
-            split_gate_up_weights = tuple(
-                _dram_sharded_weight_to_device(weight.T, mesh_device, dtype=config.mlp_weight_dtype)
-                for weight in state_dict["mlp.gate_up_proj.weight"].chunk(2, dim=0)
-            )
-
-        return cls(
-            config=config,
-            mesh_device=mesh_device,
-            layer_idx=layer_idx,
-            batch=batch,
-            input_norm_weight=input_norm_weight,
-            post_norm_weight=post_norm_weight,
-            qkv_weight=qkv_weight,
-            o_weight=o_weight,
-            gate_up_weight=gate_up_weight,
-            down_weight=down_weight,
-            qkv_weight_prefill=qkv_weight_prefill,
-            o_weight_prefill=o_weight_prefill,
-            gate_up_weight_prefill=gate_up_weight_prefill,
-            down_weight_prefill=down_weight_prefill,
-            rope_tables=rope_tables,
-            decode_math_fidelity=decode_math_fidelity,
-            decode_core_count=decode_core_count,
-            decode_max_in0_block_w=decode_max_in0_block_w,
-            split_qkv_weights=split_qkv_weights,
-            split_gate_up_weights=split_gate_up_weights,
-        )
-
-    @staticmethod
-    def allocate_paged_kv_cache(
-        *,
-        hf_config,
-        mesh_device: ttnn.MeshDevice,
-        max_batch_size: int,
-        max_seq_len: int,
-        block_size: int = DEFAULT_BLOCK_SIZE,
-        dtype: ttnn.DataType = ttnn.bfloat8_b,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Allocate empty paged K/V cache tensors for this decoder layer."""
-
-        head_dim = getattr(hf_config, "head_dim", None) or hf_config.hidden_size // hf_config.num_attention_heads
-        num_blocks_per_seq = math.ceil(max_seq_len / block_size)
-        num_blocks = max_batch_size * num_blocks_per_seq
-        cache_shape = (num_blocks, hf_config.num_key_value_heads, block_size, head_dim)
-        zero_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
-        k_cache = _host_to_device(zero_cache, mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
-        v_cache = _host_to_device(zero_cache, mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
-        return k_cache, v_cache
-
-    def forward(self, hidden_states: ttnn.Tensor, *, mode: str, **kwargs) -> ttnn.Tensor:
-        if mode == "prefill":
-            return self.prefill_forward(hidden_states, **kwargs)
-        if mode == "decode":
-            return self.decode_forward(hidden_states, **kwargs)
-        raise ValueError(f"unsupported mode {mode!r}; expected 'prefill' or 'decode'")
-
-    def prefill_forward(
-        self,
-        hidden_states: ttnn.Tensor,
-        *,
-        page_table: ttnn.Tensor,
-        kv_cache: tuple[ttnn.Tensor, ttnn.Tensor],
-        user_id: int = 0,
-        start_pos: int = 0,
-        rope_sequence_length: int | None = None,
-        cache_position_modulo: int | None = None,
-    ) -> ttnn.Tensor:
-        """Run paged prefill for one user and return layer output."""
-
-        cfg = self.config
-        prefill_batch = int(hidden_states.shape[1])
-        seq_len = int(hidden_states.shape[-2])
-        if hidden_states.shape[-1] != cfg.hidden_size:
-            raise ValueError(f"hidden width must be {cfg.hidden_size}, got {hidden_states.shape[-1]}")
-        if seq_len <= 1:
-            raise ValueError("prefill_forward requires seq_len > 1")
-
-        residual = hidden_states
-        attn_in = ttnn.rms_norm(
-            hidden_states,
-            epsilon=cfg.rms_norm_eps,
-            weight=self.input_norm_weight,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-        )
-
-        qkv_m = seq_len
-        chunk_qkv = prefill_batch == 1 and seq_len > PREFILL_QKV_CHUNK_SIZE and seq_len % PREFILL_QKV_CHUNK_SIZE == 0
-        if chunk_qkv:
-            attn_in = ttnn.reshape(attn_in, [1, seq_len // PREFILL_QKV_CHUNK_SIZE, PREFILL_QKV_CHUNK_SIZE, -1])
-            qkv_m = PREFILL_QKV_CHUNK_SIZE
-        qkv = ttnn.linear(
-            attn_in,
-            self.qkv_weight_prefill,
-            dtype=cfg.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=_prefill_matmul_config(qkv_m, cfg.hidden_size, QKV_SIZE),
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
-        ttnn.deallocate(attn_in)
-        if chunk_qkv:
-            qkv = ttnn.reshape(qkv, [1, 1, seq_len, -1])
-        qkv = ttnn.reshape(qkv, [prefill_batch, seq_len, QKV_SIZE])
-        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            qkv,
-            None,
-            num_heads=cfg.num_heads,
-            num_kv_heads=cfg.num_kv_heads,
-            transpose_key=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(qkv)
-
-        cos, sin = self._prefill_rope_tables(start_pos, seq_len, rope_sequence_length)
-        q = _apply_rope(q, cos, sin)
-        k = _apply_rope(k, cos, sin)
-
-        k_cache, v_cache = kv_cache
-        k_for_cache = _typecast_if_needed(k, k_cache.dtype)
-        v_for_cache = _typecast_if_needed(v, v_cache.dtype)
-        fill_kwargs = {}
-        if cache_position_modulo is not None:
-            fill_kwargs["cache_position_modulo"] = cache_position_modulo
-        for batch_idx in range(prefill_batch):
-            user_k = ttnn.slice(
-                k_for_cache,
-                (batch_idx, 0, 0, 0),
-                (batch_idx + 1, cfg.num_kv_heads, seq_len, cfg.head_dim),
-            )
-            user_v = ttnn.slice(
-                v_for_cache,
-                (batch_idx, 0, 0, 0),
-                (batch_idx + 1, cfg.num_kv_heads, seq_len, cfg.head_dim),
-            )
-            ttnn.experimental.paged_fill_cache(
-                k_cache, user_k, page_table, batch_idx=user_id + batch_idx, **fill_kwargs
-            )
-            ttnn.experimental.paged_fill_cache(
-                v_cache, user_v, page_table, batch_idx=user_id + batch_idx, **fill_kwargs
-            )
-            ttnn.deallocate(user_k)
-            ttnn.deallocate(user_v)
-
-        if seq_len <= PREFILL_SDPA_MAX_SEQ:
-            attn_out = ttnn.transformer.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                is_causal=True,
-                scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        else:
-            attended_chunks = []
-            chunk_start = 0
-            while chunk_start < seq_len:
-                chunk_capacity = PREFILL_SDPA_MAX_SEQ if chunk_start == 0 else 4 * TILE_SIZE
-                chunk_len = min(chunk_capacity, seq_len - chunk_start)
-                padded_len = math.ceil(chunk_len / TILE_SIZE) * TILE_SIZE
-                query_chunk = ttnn.slice(
-                    q,
-                    (0, 0, chunk_start, 0),
-                    (prefill_batch, cfg.num_heads, chunk_start + chunk_len, cfg.head_dim),
+            for name, weight in tuple(decoder.weights.items()):
+                if name not in ("qkv", "o_proj", "gate_up", "gate", "up", "down"):
+                    continue
+                k, n = tuple(weight.shape)
+                shard_spec = ttnn.ShardSpec(
+                    dram_grid,
+                    (k, n // decoder.mesh_device.dram_grid_size().x),
+                    ttnn.ShardOrientation.ROW_MAJOR,
                 )
-                if padded_len != chunk_len:
-                    query_chunk = ttnn.pad(
-                        query_chunk,
-                        [(0, 0), (0, 0), (0, padded_len - chunk_len), (0, 0)],
-                        value=0.0,
-                    )
-                if chunk_start == 0 and chunk_len == PREFILL_SDPA_MAX_SEQ:
-                    prefix_k = ttnn.slice(k, (0, 0, 0, 0), (prefill_batch, cfg.num_kv_heads, chunk_len, cfg.head_dim))
-                    prefix_v = ttnn.slice(v, (0, 0, 0, 0), (prefill_batch, cfg.num_kv_heads, chunk_len, cfg.head_dim))
-                    output_chunk = ttnn.transformer.scaled_dot_product_attention(
-                        query_chunk,
-                        prefix_k,
-                        prefix_v,
-                        is_causal=True,
-                        scale=self.scale,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
-                else:
-                    mask = self._offset_causal_mask(
-                        chunk_start=chunk_start,
-                        query_len=padded_len,
-                        key_len=seq_len,
-                    )
-                    output_chunk = ttnn.transformer.scaled_dot_product_attention(
-                        query_chunk,
-                        k,
-                        v,
-                        attn_mask=mask,
-                        is_causal=False,
-                        scale=self.scale,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        compute_kernel_config=self.compute_kernel_config_hifi4,
-                    )
-                if padded_len != chunk_len:
-                    output_chunk = ttnn.slice(
-                        output_chunk,
-                        (0, 0, 0, 0),
-                        (prefill_batch, cfg.num_heads, chunk_len, cfg.head_dim),
-                    )
-                attended_chunks.append(output_chunk)
-                chunk_start += chunk_len
-            attn_out = attended_chunks[0] if len(attended_chunks) == 1 else ttnn.concat(attended_chunks, dim=2)
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
-        if k_for_cache is not k:
-            ttnn.deallocate(k_for_cache)
-        if v_for_cache is not v:
-            ttnn.deallocate(v_for_cache)
-
-        attn_cat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(attn_out)
-        attn_cat = ttnn.reshape(attn_cat, [1, prefill_batch, seq_len, cfg.hidden_size])
-        attn_cat_for_proj = attn_cat
-        o_m = seq_len
-        chunk_o = (
-            prefill_batch == 1 and seq_len > PREFILL_MATMUL_CHUNK_SIZE and seq_len % PREFILL_MATMUL_CHUNK_SIZE == 0
-        )
-        if chunk_o:
-            attn_cat_for_proj = ttnn.reshape(
-                attn_cat_for_proj, [1, seq_len // PREFILL_MATMUL_CHUNK_SIZE, PREFILL_MATMUL_CHUNK_SIZE, -1]
-            )
-            o_m = PREFILL_MATMUL_CHUNK_SIZE
-        elif prefill_batch * seq_len <= TILE_SIZE:
-            attn_cat_for_proj = ttnn.to_memory_config(attn_cat, ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(attn_cat)
-        attn_proj = ttnn.linear(
-            attn_cat_for_proj,
-            self.o_weight_prefill,
-            dtype=cfg.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=_prefill_matmul_config(o_m, cfg.hidden_size, cfg.hidden_size),
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
-        if chunk_o:
-            attn_proj = ttnn.reshape(attn_proj, [1, 1, seq_len, -1])
-        ttnn.deallocate(attn_cat_for_proj)
-        hidden_states = ttnn.add(residual, attn_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=cfg.dtype)
-        ttnn.deallocate(attn_proj)
-
-        mlp_in = ttnn.rms_norm(
-            hidden_states,
-            epsilon=cfg.rms_norm_eps,
-            weight=self.post_norm_weight,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-        )
-        mlp_out = self._mlp_forward(mlp_in, is_decode=False)
-        ttnn.deallocate(mlp_in)
-        out = ttnn.add(hidden_states, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=cfg.dtype)
-        ttnn.deallocate(mlp_out)
-        return out
-
-    def _offset_causal_mask(self, *, chunk_start: int, query_len: int, key_len: int) -> ttnn.Tensor:
-        query_positions = ttnn.arange(
-            chunk_start,
-            chunk_start + query_len,
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        key_positions = ttnn.arange(
-            0,
-            key_len,
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        query_positions = ttnn.reshape(query_positions, (1, 1, query_len, 1))
-        key_positions = ttnn.reshape(key_positions, (1, 1, 1, key_len))
-        allowed = ttnn.typecast(ttnn.ge(query_positions, key_positions), ttnn.bfloat16)
-        mask = ttnn.add(ttnn.multiply(allowed, 1.0e4), -1.0e4)
-        return ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
-
-    def decode_forward(
-        self,
-        hidden_states: ttnn.Tensor,
-        *,
-        current_pos: ttnn.Tensor,
-        page_table: ttnn.Tensor,
-        kv_cache: tuple[ttnn.Tensor, ttnn.Tensor],
-        position_ids: ttnn.Tensor | None = None,
-        rope_sequence_length: int | None = None,
-        cache_position_modulo: int | None = None,
-    ) -> ttnn.Tensor:
-        """Run traced-safe paged decode and return layer output."""
-
-        cfg = self.config
-        batch_size = int(hidden_states.shape[-2])
-        if hidden_states.shape[-1] != cfg.hidden_size:
-            raise ValueError(f"hidden width must be {cfg.hidden_size}, got {hidden_states.shape[-1]}")
-        if int(hidden_states.shape[-3]) != 1:
-            raise ValueError(f"decode hidden_states must have seq_len=1, got shape {hidden_states.shape}")
-        if batch_size != self.batch:
-            raise ValueError(f"decode batch {batch_size} does not match configured batch {self.batch}")
-
-        residual = ttnn.to_memory_config(hidden_states, self.decode_hidden_mem_config)
-        attn_in = ttnn.rms_norm(
-            residual,
-            epsilon=cfg.rms_norm_eps,
-            weight=self.input_norm_weight,
-            memory_config=self.decode_hidden_mem_config,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-        )
-
-        if self.split_qkv_weights is None:
-            qkv = ttnn.linear(
-                attn_in,
-                self.qkv_weight,
-                dtype=cfg.dtype,
-                memory_config=self.decode_qkv_mem_config,
-                program_config=self.decode_qkv_program_config,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
-            )
-            qkv_interleaved = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
-            ttnn.deallocate(qkv)
-        else:
-            split_qkv = [
-                ttnn.linear(
-                    attn_in,
-                    weight,
-                    dtype=cfg.dtype,
-                    memory_config=self.decode_hidden_mem_config,
-                    program_config=self.decode_split_hidden_program_config,
-                    compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.DRAM,
+                    shard_spec,
                 )
-                for weight in self.split_qkv_weights
-            ]
-            split_qkv_interleaved = [
-                ttnn.sharded_to_interleaved(projection, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
-                for projection in split_qkv
-            ]
-            for projection in split_qkv:
-                ttnn.deallocate(projection)
-            qkv_interleaved = ttnn.concat(split_qkv_interleaved, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-            for projection in split_qkv_interleaved:
-                ttnn.deallocate(projection)
-        ttnn.deallocate(attn_in)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
-            qkv_interleaved,
-            num_heads=cfg.num_heads,
-            num_kv_heads=cfg.num_kv_heads,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(qkv_interleaved)
+                decoder.decode_weights[name] = ttnn.to_memory_config(weight, memory_config)
+        return decoder
 
-        cos, sin = self._decode_rope_tables(
-            position_ids if position_ids is not None else current_pos, batch_size, rope_sequence_length
+    def _decode_linear(self, value, weight_name):
+        if self.decode_matmul_family != "dram_sharded":
+            return ttnn.linear(value, self.weights[weight_name], dtype=ttnn.bfloat16)
+        weight = self.decode_weights[weight_name]
+        k, n = tuple(weight.shape)
+        num_cores = self.mesh_device.dram_grid_size().x
+        core_grid = ttnn.CoreGrid(x=num_cores, y=1)
+        value = ttnn.to_memory_config(
+            value,
+            ttnn.create_sharded_memory_config(
+                (ttnn.TILE_SIZE, k // num_cores),
+                core_grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
         )
-        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
-        q = _apply_rope(q, cos, sin)
-        k = _apply_rope(k, cos, sin)
-        q = ttnn.to_memory_config(q, self.decode_q_mem_config)
-        k = ttnn.to_memory_config(k, self.decode_k_mem_config if batch_size == 1 else self.decode_kv_mem_config)
-        v = ttnn.to_memory_config(v, self.decode_v_mem_config if batch_size == 1 else self.decode_kv_mem_config)
-
-        update_kwargs = {}
-        if cache_position_modulo is not None:
-            update_kwargs["cache_position_modulo"] = cache_position_modulo
-        k_cache, v_cache = kv_cache
-        if batch_size == 1 and cache_position_modulo is None:
-            # Preserve the fused decoder's measured batch-1 cache-write
-            # topology. The fused op has no cache_position_modulo contract, so
-            # sliding-window/modulo updates retain the two dedicated writes.
-            ttnn.experimental.paged_fused_update_cache(
-                k_cache,
-                k,
-                v_cache,
-                v,
-                update_idxs_tensor=current_pos,
-                page_table=page_table,
+        legal_k_tiles = k // (ttnn.TILE_SIZE * num_cores)
+        role_defaults = {"qkv": 12, "o_proj": 12, "gate_up": 6, "down": 32}
+        role_override = int(
+            os.environ.get(
+                f"PHI_OPT_{weight_name.upper()}_IN0_BLOCK_W",
+                str(role_defaults.get(weight_name, 0)),
             )
-        else:
-            ttnn.experimental.paged_update_cache(
-                k_cache, k, update_idxs_tensor=current_pos, page_table=page_table, **update_kwargs
-            )
-            ttnn.experimental.paged_update_cache(
-                v_cache, v, update_idxs_tensor=current_pos, page_table=page_table, **update_kwargs
-            )
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+        )
+        in0_block_w = role_override or self.decode_in0_block_w or legal_k_tiles
+        if legal_k_tiles % in0_block_w:
+            raise ValueError(f"in0_block_w={in0_block_w} must divide K tiles/core={legal_k_tiles} for {weight_name}")
+        output_memory_config = self._decode_linear_memory_config(n)
+        return ttnn.linear(
+            value,
+            weight,
+            dtype=ttnn.bfloat16,
+            memory_config=output_memory_config,
+            program_config=ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=in0_block_w,
+                per_core_M=1,
+                per_core_N=n // (ttnn.TILE_SIZE * num_cores),
+                fused_activation=None,
+            ),
+            compute_kernel_config=ttnn.types.BlackholeComputeKernelConfig(
+                math_fidelity=(
+                    ttnn.MathFidelity.HiFi2 if self.decode_math_fidelity == "hifi2" else ttnn.MathFidelity.LoFi
+                ),
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            ),
+        )
 
-        sdpa_kwargs = {}
-        if cache_position_modulo is not None:
-            sdpa_kwargs["cache_position_modulo"] = cache_position_modulo
-        attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-            q,
-            k_cache,
-            v_cache,
-            page_table_tensor=page_table,
-            cur_pos_tensor=current_pos,
-            scale=self.scale,
-            program_config=self.decode_sdpa_program_config,
-            compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **sdpa_kwargs,
-        )
-        ttnn.deallocate(q)
-        attn_out = ttnn.to_memory_config(attn_out, self._decode_concat_memory_config(batch_size))
-        attn_cat = ttnn.experimental.nlp_concat_heads_decode(attn_out, num_heads=cfg.num_heads)
-        ttnn.deallocate(attn_out)
-        attn_cat = ttnn.to_memory_config(attn_cat, self.decode_hidden_mem_config)
-        attn_proj = ttnn.linear(
-            attn_cat,
-            self.o_weight,
-            dtype=cfg.dtype,
-            memory_config=self.decode_hidden_mem_config,
-            program_config=self.decode_o_program_config,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
-        ttnn.deallocate(attn_cat)
-        if int(attn_proj.shape[-2]) != batch_size:
-            attn_proj_full = attn_proj
-            attn_proj = ttnn.slice(attn_proj_full, (0, 0, 0, 0), (1, 1, batch_size, cfg.hidden_size))
-            ttnn.deallocate(attn_proj_full)
-        hidden_states = ttnn.add(residual, attn_proj, memory_config=self.decode_hidden_mem_config, dtype=cfg.dtype)
-        ttnn.deallocate(attn_proj)
-
-        mlp_in = ttnn.rms_norm(
-            hidden_states,
-            epsilon=cfg.rms_norm_eps,
-            weight=self.post_norm_weight,
-            memory_config=self.decode_hidden_mem_config,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-        )
-        mlp_out = self._mlp_forward(mlp_in, is_decode=True)
-        ttnn.deallocate(mlp_in)
-        out = ttnn.add(hidden_states, mlp_out, memory_config=self.decode_hidden_mem_config, dtype=cfg.dtype)
-        ttnn.deallocate(mlp_out)
-        return out
-
-    def _decode_concat_memory_config(self, batch_size: int) -> ttnn.MemoryConfig:
-        """Use the rectangular one-core-per-user layout required by head concat."""
-        grid = self.mesh_device.compute_with_storage_grid_size()
-        grid_x = min(batch_size, grid.x)
-        while batch_size % grid_x != 0 or batch_size // grid_x > grid.y:
-            grid_x -= 1
-        cores = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, batch_size // grid_x - 1))}
-        )
+    def _decode_linear_memory_config(self, width):
+        num_cores = self.mesh_device.dram_grid_size().x
         return ttnn.create_sharded_memory_config(
-            shape=(TILE_SIZE, self.config.head_dim),
-            core_grid=cores,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            (ttnn.TILE_SIZE, width // num_cores),
+            ttnn.CoreGrid(x=num_cores, y=1),
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
 
-    def _mlp_forward(self, hidden_states: ttnn.Tensor, *, is_decode: bool) -> ttnn.Tensor:
-        cfg = self.config
-        prefill_seq_len = int(hidden_states.shape[-2])
-        reshape_prefill = (
-            (not is_decode)
-            and math.prod(_shape_tuple(hidden_states)[1:-2]) == 1
-            and prefill_seq_len > PREFILL_MATMUL_CHUNK_SIZE
-            and prefill_seq_len % PREFILL_MATMUL_CHUNK_SIZE == 0
+    def _decode_rope(self, query, key, current_positions, *, use_long_rope):
+        """Keep the functional Phi rotate-half contract with explicit layouts.
+
+        Explicit source/destination configs also make the graph analyzable by
+        shard-advise; the functional implementation queried transient tensor
+        metadata that is intentionally unknown during compiler analysis.
+        """
+        cos_table = self.long_cos if use_long_rope else self.short_cos
+        sin_table = self.long_sin if use_long_rope else self.short_sin
+        rope_positions = ttnn.typecast(current_positions, ttnn.uint32)
+        cos = ttnn.embedding(rope_positions, cos_table, layout=ttnn.TILE_LAYOUT)
+        sin = ttnn.embedding(rope_positions, sin_table, layout=ttnn.TILE_LAYOUT)
+        cos = ttnn.reshape(cos, [1, 1, self.batch, self.head_dim])
+        sin = ttnn.reshape(sin, [1, 1, self.batch, self.head_dim])
+        query = self._apply_rope(ttnn.to_memory_config(query, ttnn.DRAM_MEMORY_CONFIG), cos, sin)
+        key = self._apply_rope(ttnn.to_memory_config(key, ttnn.DRAM_MEMORY_CONFIG), cos, sin)
+        cache_update_memory_config = self._decode_concat_memory_config()
+        return (
+            ttnn.to_memory_config(query, cache_update_memory_config),
+            ttnn.to_memory_config(key, cache_update_memory_config),
         )
-        if reshape_prefill:
-            hidden_states = ttnn.reshape(
-                hidden_states, [1, prefill_seq_len // PREFILL_MATMUL_CHUNK_SIZE, PREFILL_MATMUL_CHUNK_SIZE, -1]
+
+    def _mlp(self, hidden_states, *, decode=False):
+        normalized = self._norm(hidden_states, self.weights["post_norm"])
+        split_gate_up = os.environ.get("PHI_OPT_SPLIT_GATE_UP", "0") == "1"
+        if split_gate_up:
+            linear = (
+                self._decode_linear
+                if decode
+                else (lambda value, name: ttnn.linear(value, self.weights[name], dtype=ttnn.bfloat16))
             )
-        if is_decode and self.split_gate_up_weights is not None:
-            gate, up = [
-                ttnn.linear(
-                    hidden_states,
-                    weight,
-                    dtype=cfg.dtype,
-                    memory_config=self.decode_mlp_intermediate_mem_config,
-                    program_config=self.decode_split_intermediate_program_config,
-                    compute_kernel_config=self.compute_kernel_config_hifi2,
-                )
-                for weight in self.split_gate_up_weights
-            ]
-        else:
-            gate_up = ttnn.linear(
-                hidden_states,
-                self.gate_up_weight if is_decode else self.gate_up_weight_prefill,
-                dtype=cfg.dtype,
-                memory_config=self.decode_gate_up_mem_config if is_decode else ttnn.DRAM_MEMORY_CONFIG,
-                program_config=self.decode_gate_up_program_config
-                if is_decode
-                else _prefill_matmul_config(
-                    int(hidden_states.shape[-2]), self.config.hidden_size, 2 * self.config.intermediate_size
-                ),
-                compute_kernel_config=self.compute_kernel_config_hifi2,
+            gate = linear(normalized, "gate")
+            up = linear(normalized, "up")
+            activated = ttnn.multiply(
+                gate,
+                up,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             )
-            gate_up_shape = _shape_tuple(gate_up)
-            gate = ttnn.slice(gate_up, (0, 0, 0, 0), (*gate_up_shape[:-1], cfg.intermediate_size))
-            up = ttnn.slice(
-                gate_up,
-                (0, 0, 0, cfg.intermediate_size),
-                (*gate_up_shape[:-1], 2 * cfg.intermediate_size),
+            down = (
+                self._decode_linear(activated, "down")
+                if decode
+                else ttnn.linear(activated, self.weights["down"], dtype=ttnn.bfloat16)
             )
-            ttnn.deallocate(gate_up)
-        down_in = ttnn.mul(
+            if decode:
+                output_memory_config = self._decode_linear_memory_config(self.hidden_size)
+                hidden_states = ttnn.to_memory_config(hidden_states, output_memory_config)
+                return ttnn.add(hidden_states, down, memory_config=output_memory_config)
+            if down.memory_config() != hidden_states.memory_config():
+                hidden_states = ttnn.to_memory_config(hidden_states, down.memory_config())
+            return ttnn.add(hidden_states, down, memory_config=down.memory_config())
+        gate_up = (
+            self._decode_linear(normalized, "gate_up")
+            if decode
+            else ttnn.linear(normalized, self.weights["gate_up"], dtype=ttnn.bfloat16)
+        )
+        gate_up_shape = tuple(gate_up.shape)
+        gate = ttnn.slice(gate_up, [0, 0, 0, 0], [*gate_up_shape[:-1], self.intermediate_size])
+        up = ttnn.slice(
+            gate_up,
+            [0, 0, 0, self.intermediate_size],
+            [*gate_up_shape[:-1], 2 * self.intermediate_size],
+        )
+        activated = ttnn.multiply(
             gate,
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            dtype=cfg.dtype,
-            memory_config=self.decode_mlp_intermediate_mem_config if is_decode else ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(gate)
-        ttnn.deallocate(up)
-        if is_decode:
-            down_in = ttnn.to_memory_config(down_in, self.decode_mlp_intermediate_mem_config)
-        elif math.prod(_shape_tuple(hidden_states)[:-1]) <= TILE_SIZE:
-            down_in = ttnn.to_memory_config(down_in, ttnn.L1_MEMORY_CONFIG)
-        down = ttnn.linear(
-            down_in,
-            self.down_weight if is_decode else self.down_weight_prefill,
-            dtype=cfg.dtype,
-            memory_config=self.decode_hidden_mem_config if is_decode else ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.decode_down_program_config
-            if is_decode
-            else _prefill_matmul_config(
-                int(hidden_states.shape[-2]), self.config.intermediate_size, self.config.hidden_size
-            ),
-            compute_kernel_config=self.compute_kernel_config_hifi2,
+        down = (
+            self._decode_linear(activated, "down")
+            if decode
+            else ttnn.linear(activated, self.weights["down"], dtype=ttnn.bfloat16)
         )
-        ttnn.deallocate(down_in)
-        if reshape_prefill:
-            down = ttnn.reshape(down, [1, 1, prefill_seq_len, cfg.hidden_size])
-        return down
+        if decode:
+            output_memory_config = self._decode_linear_memory_config(self.hidden_size)
+            hidden_states = ttnn.to_memory_config(hidden_states, output_memory_config)
+            return ttnn.add(hidden_states, down, memory_config=output_memory_config)
+        if down.memory_config() != hidden_states.memory_config():
+            hidden_states = ttnn.to_memory_config(hidden_states, down.memory_config())
+        return ttnn.add(hidden_states, down, memory_config=down.memory_config())
 
-    def _prefill_rope_tables(
-        self, start_pos: int, seq_len: int, rope_sequence_length: int | None
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        cfg = self.config
-        if rope_sequence_length is None:
-            rope_sequence_length = start_pos + seq_len
-        table_key = "long" if rope_sequence_length > cfg.original_max_position_embeddings else "short"
-        cos_table, sin_table = self.rope_tables[table_key]
-        end_pos = start_pos + seq_len
-        if end_pos > cfg.max_position_embeddings:
-            raise ValueError(f"RoPE request [{start_pos}, {end_pos}) exceeds {cfg.max_position_embeddings}")
-        return cos_table[:, :, start_pos:end_pos, :], sin_table[:, :, start_pos:end_pos, :]
-
-    def _decode_rope_tables(
-        self, current_pos: ttnn.Tensor, batch_size: int, rope_sequence_length: int | None
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        cfg = self.config
-        if rope_sequence_length is None:
-            raise ValueError("decode_forward requires rope_sequence_length for trace-stable short/long RoPE selection")
-        table_key = "long" if rope_sequence_length > cfg.original_max_position_embeddings else "short"
-        cos_table, sin_table = self.rope_tables[table_key]
-        if current_pos.dtype != ttnn.uint32:
-            current_pos = ttnn.typecast(current_pos, dtype=ttnn.uint32)
-        rot_idxs = ttnn.reshape(current_pos, (1, batch_size))
-        cos = ttnn.embedding(rot_idxs, cos_table, layout=ttnn.TILE_LAYOUT)
-        sin = ttnn.embedding(rot_idxs, sin_table, layout=ttnn.TILE_LAYOUT)
-        cos = ttnn.unsqueeze_to_4D(cos)
-        sin = ttnn.unsqueeze_to_4D(sin)
-        cos = ttnn.transpose(cos, 1, 2)
-        sin = ttnn.transpose(sin, 1, 2)
-        return cos, sin
-
-
-def _host_to_device(
-    tensor: torch.Tensor,
-    mesh_device: ttnn.MeshDevice,
-    *,
-    dtype: ttnn.DataType = ttnn.bfloat16,
-    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    return ttnn.Tensor(tensor.detach().contiguous(), dtype).to(layout).to(mesh_device, memory_config)
-
-
-def _weight_to_device(
-    weight: torch.Tensor, mesh_device: ttnn.MeshDevice, *, dtype: ttnn.DataType = ttnn.bfloat16
-) -> ttnn.Tensor:
-    return _host_to_device(weight.to(torch.bfloat16), mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
-
-
-def _dram_sharded_weight_to_device(
-    weight: torch.Tensor, mesh_device: ttnn.MeshDevice, *, dtype: ttnn.DataType
-) -> ttnn.Tensor:
-    memory_config = _dram_sharded_weight_mem_config(mesh_device, int(weight.shape[-2]), int(weight.shape[-1]))
-    return _host_to_device(
-        weight.to(torch.bfloat16),
-        mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=memory_config,
-    )
-
-
-def _norm_weight_to_device(weight: torch.Tensor, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
-    return _host_to_device(
-        weight.reshape(1, 1, 1, -1).to(torch.bfloat16),
-        mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-
-def _build_rope_tables(hf_config, config: Phi35MiniOptimizedDecoderConfig, mesh_device: ttnn.MeshDevice):
-    rope_scaling = hf_config.rope_scaling or {}
-    short_factor = torch.tensor(rope_scaling.get("short_factor", [1.0] * (config.head_dim // 2)), dtype=torch.float32)
-    long_factor = torch.tensor(rope_scaling.get("long_factor", [1.0] * (config.head_dim // 2)), dtype=torch.float32)
-    if short_factor.numel() != config.head_dim // 2 or long_factor.numel() != config.head_dim // 2:
-        raise ValueError("Phi LongRoPE factor length must equal head_dim / 2")
-
-    def make_tables(factors: torch.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        inv_shape = torch.arange(0, config.head_dim, 2, dtype=torch.float32) / config.head_dim
-        inv_freq = 1.0 / (factors * (config.rope_theta**inv_shape))
-        positions = torch.arange(config.max_position_embeddings, dtype=torch.float32)
-        freqs = torch.outer(positions, inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1)
-        scale = hf_config.max_position_embeddings / hf_config.original_max_position_embeddings
-        scaling_factor = (
-            1.0 if scale <= 1.0 else math.sqrt(1 + math.log(scale) / math.log(config.original_max_position_embeddings))
-        )
-        cos = (emb.cos() * scaling_factor).reshape(1, 1, config.max_position_embeddings, config.head_dim)
-        sin = (emb.sin() * scaling_factor).reshape(1, 1, config.max_position_embeddings, config.head_dim)
-        return (
-            _host_to_device(cos.to(torch.bfloat16), mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            _host_to_device(sin.to(torch.bfloat16), mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-        )
-
-    return {"short": make_tables(short_factor), "long": make_tables(long_factor)}
-
-
-def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    rotated = _rotate_half(x)
-    x_cos = ttnn.mul(x, cos, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    rot_sin = ttnn.mul(rotated, sin, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(rotated)
-    out = ttnn.add(x_cos, rot_sin, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-    ttnn.deallocate(x_cos)
-    ttnn.deallocate(rot_sin)
-    return out
-
-
-def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
-    shape = _shape_tuple(x)
-    half = shape[-1] // 2
-    x1 = ttnn.slice(x, (0, 0, 0, 0), (*shape[:-1], half))
-    x2 = ttnn.slice(x, (0, 0, 0, half), (*shape[:-1], shape[-1]))
-    neg_x2 = ttnn.neg(x2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(x2)
-    out = ttnn.concat([neg_x2, x1], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(neg_x2)
-    ttnn.deallocate(x1)
-    return out
-
-
-def _shape_tuple(tensor: ttnn.Tensor) -> tuple[int, ...]:
-    return tuple(int(tensor.shape[i]) for i in range(len(tensor.shape)))
-
-
-def _typecast_if_needed(tensor: ttnn.Tensor, dtype: ttnn.DataType) -> ttnn.Tensor:
-    if tensor.dtype == dtype:
-        return tensor
-    return ttnn.typecast(tensor, dtype=dtype)
-
-
-def _is_decode_tensor(tensor: ttnn.Tensor) -> bool:
-    return int(tensor.shape[-2]) == 1
-
-
-def _linear_output_mem_config(hidden_states: ttnn.Tensor, decode_mem_config: ttnn.MemoryConfig) -> ttnn.MemoryConfig:
-    return decode_mem_config if _is_decode_tensor(hidden_states) else ttnn.DRAM_MEMORY_CONFIG
-
-
-def _mlp_gate_up_program_config(self: OptimizedDecoder, hidden_states: ttnn.Tensor):
-    if _is_decode_tensor(hidden_states):
-        return self.decode_gate_up_program_config
-    return _prefill_matmul_config(
-        int(hidden_states.shape[-2]), self.config.hidden_size, 2 * self.config.intermediate_size
-    )
-
-
-def _mlp_down_program_config(self: OptimizedDecoder, hidden_states: ttnn.Tensor):
-    if _is_decode_tensor(hidden_states):
-        return self.decode_down_program_config
-    return _prefill_matmul_config(int(hidden_states.shape[-2]), self.config.intermediate_size, self.config.hidden_size)
-
-
-def _find_largest_divisor(n: int, max_divisor: int = 8) -> int:
-    for i in range(max_divisor, 0, -1):
-        if n % i == 0:
-            return i
-    return 1
-
-
-def _find_grid(n_tiles: int, max_rows: int = 8, max_cols: int = 8) -> tuple[int, int]:
-    max_cores = max_rows * max_cols
-    target = max_cores // 2
-    possible_cores = [k for k in range(1, max_cores + 1) if n_tiles % k == 0]
-    possible_cores.sort(key=lambda x: abs(x - target))
-    for cores in possible_cores:
-        for rows in range(1, max_rows + 1):
-            if cores % rows == 0:
-                cols = cores // rows
-                if cols <= max_cols:
-                    return rows, cols
-    raise AssertionError(f"Cannot find grid for {n_tiles} tiles within {max_rows}x{max_cols}")
-
-
-def _dram_shard_core_grid(k: int) -> ttnn.CoreGrid:
-    rows, cols = _find_grid(k // TILE_SIZE)
-    return ttnn.CoreGrid(x=cols, y=rows)
-
-
-def _get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
-    out_subblock_w = 4
-    while out_subblock_w > 1:
-        if out_subblock_w * out_subblock_h <= 4 and per_core_n % out_subblock_w == 0:
-            break
-        out_subblock_w -= 1
-    return out_subblock_w
-
-
-def _dram_matmul_config(
-    *, m: int, k: int, n: int, num_cores: int, max_in0_block_w: int
-) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
-    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-        in0_block_w=_find_largest_divisor(k // (TILE_SIZE * num_cores), max_divisor=max_in0_block_w),
-        per_core_M=math.ceil(m / TILE_SIZE),
-        per_core_N=math.ceil(n / (TILE_SIZE * num_cores)),
-        fused_activation=None,
-    )
-
-
-@lru_cache(maxsize=None)
-def _prefill_matmul_config(
-    m: int, k: int, n: int, grid_size: tuple[int, int] = (8, 8)
-) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None:
-    # Very large non-aligned logical lengths cannot use this static large-M
-    # config: its per-core M grows circular buffers beyond L1. TTNN's default
-    # factory selects a bounded program for that shape, as proven by the
-    # functional decoder's 32769/131071 context runs.
-    if m <= TILE_SIZE or m > 4096:
-        return None
-    per_core_m = max(1, math.ceil(m / (TILE_SIZE * grid_size[1])))
-    per_core_n = math.ceil(n / (TILE_SIZE * grid_size[0]))
-    max_in0_block_w = 4 if per_core_m >= 4 and per_core_n >= 64 else 8
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        in0_block_w=_find_largest_divisor(k // (TILE_SIZE * grid_size[1]), max_divisor=max_in0_block_w),
-        out_subblock_h=1,
-        out_subblock_w=_get_out_subblock_w(per_core_n),
-        per_core_M=per_core_m,
-        per_core_N=per_core_n,
-        transpose_mcast=False,
-        fused_activation=None,
-        fuse_batch=m <= TILE_SIZE,
-    )
-
-
-def _dram_sharded_weight_mem_config(mesh_device: ttnn.MeshDevice, k: int, n: int) -> ttnn.MemoryConfig:
-    dram_grid_size = mesh_device.dram_grid_size()
-    dram_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
-    )
-    padded_n = math.ceil(n / (TILE_SIZE * dram_grid_size.x)) * (TILE_SIZE * dram_grid_size.x)
-    shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_n // dram_grid_size.x), ttnn.ShardOrientation.ROW_MAJOR)
-    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
-
-
-def _sdpa_grid(mesh_device: ttnn.MeshDevice) -> ttnn.CoreCoord:
-    grid = mesh_device.compute_with_storage_grid_size()
-    return ttnn.CoreCoord(min(8, grid.x), min(4, grid.y))
-
-
-def _width_sharded_decode_mem_config(
-    mesh_device: ttnn.MeshDevice, width: int, *, core_count: int = 32
-) -> ttnn.MemoryConfig:
-    if (width // TILE_SIZE) % core_count != 0:
-        raise ValueError(f"{width=} must divide evenly into {core_count} tile shards")
-    rows, cols = _find_grid(core_count, max_rows=8, max_cols=8)
-    core_grid = ttnn.CoreGrid(x=cols, y=rows)
-    return ttnn.create_sharded_memory_config(
-        (TILE_SIZE, width // core_grid.num_cores),
-        core_grid,
-        ttnn.ShardStrategy.WIDTH,
-        ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-
-def _height_sharded_decode_mem_config(
-    mesh_device: ttnn.MeshDevice, num_heads: int, head_dim: int, *, max_batch_size: int
-) -> ttnn.MemoryConfig:
-    grid = mesh_device.compute_with_storage_grid_size()
-    shard_grid = ttnn.num_cores_to_corerangeset(max_batch_size, grid, True)
-    padded_heads = math.ceil(num_heads / 32) * 32
-    shard_spec = ttnn.ShardSpec(
-        shard_grid,
-        [padded_heads, head_dim],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-
-def _disjoint_height_sharded_decode_mem_configs(
-    mesh_device: ttnn.MeshDevice, num_heads: int, head_dim: int, *, batch_size: int
-) -> tuple[ttnn.MemoryConfig, ttnn.MemoryConfig]:
-    device_grid = mesh_device.compute_with_storage_grid_size()
-    full_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(int(device_grid.x) - 1, int(device_grid.y) - 1),
+    def decode_forward(
+        self,
+        hidden_states,
+        *,
+        key_cache,
+        value_cache,
+        page_table,
+        current_positions,
+        use_long_rope,
+    ):
+        if self.decode_matmul_family != "dram_sharded":
+            return super().decode_forward(
+                hidden_states,
+                key_cache=key_cache,
+                value_cache=value_cache,
+                page_table=page_table,
+                current_positions=current_positions,
+                use_long_rope=use_long_rope,
             )
-        }
-    )
-    key_grid = ttnn.num_cores_to_corerangeset(batch_size, device_grid, row_wise=True)
-    remaining_grid = full_grid.subtract(key_grid)
-    value_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        remaining_grid.ranges()[0].start,
-        batch_size,
-        remaining_grid,
-        True,
-    )
-    padded_heads = math.ceil(num_heads / 32) * 32
-    shard_shape = [padded_heads, head_dim]
-    return (
-        ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(key_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
-        ),
-        ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(value_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
-        ),
-    )
+        residual = hidden_states
+        normalized = self._norm(hidden_states, self.weights["input_norm"])
+        fused = self._decode_linear(normalized, "qkv")
+        query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
+            fused,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        )
+        query, key = self._decode_rope(query, key, current_positions, use_long_rope=use_long_rope)
+        ttnn.experimental.paged_update_cache(
+            key_cache, key, update_idxs_tensor=current_positions, page_table=page_table
+        )
+        ttnn.experimental.paged_update_cache(
+            value_cache, value, update_idxs_tensor=current_positions, page_table=page_table
+        )
+        attended = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            query,
+            key_cache,
+            value_cache,
+            cur_pos_tensor=current_positions,
+            page_table_tensor=page_table,
+            scale=self.scale,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=0,
+            ),
+        )
+        attended = ttnn.to_memory_config(attended, self._decode_concat_memory_config())
+        attended = ttnn.experimental.nlp_concat_heads_decode(attended, num_heads=self.num_heads)
+        if self.batch < ttnn.TILE_SIZE:
+            attended = ttnn.slice(attended, [0, 0, 0, 0], [1, 1, self.batch, self.hidden_size])
+        projected = self._decode_linear(attended, "o_proj")
+        projected_memory_config = self._decode_linear_memory_config(self.hidden_size)
+        residual = ttnn.to_memory_config(residual, projected_memory_config)
+        post_attention = ttnn.add(residual, projected, memory_config=projected_memory_config)
+        return ttnn.to_memory_config(self._mlp(post_attention, decode=True), ttnn.DRAM_MEMORY_CONFIG)

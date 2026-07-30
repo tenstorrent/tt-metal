@@ -1,629 +1,295 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import importlib
+from __future__ import annotations
+
 import inspect
-import json
-import os
 import time
-from pathlib import Path
 
 import pytest
 import torch
-from safetensors import safe_open
-from transformers import AutoConfig
 
 import ttnn
+from models.autoports.microsoft_phi_3_5_mini_instruct.tests.test_functional_decoder import (
+    LAYER_IDX,
+    _assert_pcc,
+    _config,
+    _page_table,
+    _positions,
+    _real_state,
+    _reference_decode_zero_prefix,
+    _reference_prefill,
+    _synthetic_state,
+    _to_torch_decode,
+    _to_torch_prefill,
+    _to_tt_decode,
+    _to_tt_prefill,
+)
+from models.autoports.microsoft_phi_3_5_mini_instruct.tt.functional_decoder import FunctionalDecoder
 from models.autoports.microsoft_phi_3_5_mini_instruct.tt.optimized_decoder import OptimizedDecoder
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-
-try:
-    from tracy import signpost
-except ImportError:
-
-    def signpost(*_args, **_kwargs):
-        return None
 
 
-MODEL_ID = "microsoft/Phi-3.5-mini-instruct"
-SNAPSHOT = "2fe192450127e6a83f7441aef6e3ca586c338b77"
-_HF_HOME = Path(os.getenv("HF_HOME", "/huggingface"))
-HF_CACHE = _HF_HOME / "hub/models--microsoft--Phi-3.5-mini-instruct/snapshots" / SNAPSHOT
-if not HF_CACHE.exists():
-    HF_CACHE = Path.home() / ".cache/huggingface/hub/models--microsoft--Phi-3.5-mini-instruct/snapshots" / SNAPSHOT
-PCC_THRESHOLD = 0.995
-TEST_TABLE_LEN = 512
-AUTO_DIR = Path(__file__).resolve().parents[1]
-WEIGHT_STATS_PATH = AUTO_DIR / "doc/functional_decoder/weight_stats_layer0.json"
-LAYER_WEIGHT_SHAPES = {
-    "self_attn.qkv_proj.weight": (9216, 3072),
-    "self_attn.o_proj.weight": (3072, 3072),
-    "mlp.gate_up_proj.weight": (16384, 3072),
-    "mlp.down_proj.weight": (3072, 8192),
-    "input_layernorm.weight": (3072,),
-    "post_attention_layernorm.weight": (3072,),
-}
+def test_optimized_runtime_dispatch_contract():
+    source = inspect.getsource(OptimizedDecoder._mlp)
+    assert "input_tensor_a_activations=[ttnn.UnaryOpType.SILU]" in source
+    assert "ttnn.silu" not in source
+    assert OptimizedDecoder._mlp is not FunctionalDecoder._mlp
+    assert OptimizedDecoder.decode_forward is not FunctionalDecoder.decode_forward
+    constructor = inspect.getsource(OptimizedDecoder.from_state_dict)
+    assert '"dram_sharded"' in constructor
+    assert '"bfp4"' in constructor
 
 
-@pytest.fixture
-def mesh_device():
-    device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
-    try:
-        yield device
-    finally:
-        if os.getenv("PHI35_SKIP_MESH_CLOSE") == "1":
-            return
-        ttnn.close_mesh_device(device)
-
-
-class Phi3LayerCache:
-    """Compatibility cache for the remote Phi-3 modeling file in this checkout."""
-
-    def __init__(self):
-        self.data = {}
-
-    def get_usable_length(self, _kv_seq_len, layer_idx):
-        if layer_idx not in self.data:
-            return 0
-        return self.data[layer_idx][0].shape[-2]
-
-    def get_seq_length(self, layer_idx=0):
-        return self.get_usable_length(0, layer_idx)
-
-    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
-        if layer_idx in self.data:
-            key_states = torch.cat([self.data[layer_idx][0], key_states], dim=-2)
-            value_states = torch.cat([self.data[layer_idx][1], value_states], dim=-2)
-        self.data[layer_idx] = (key_states, value_states)
-        return key_states, value_states
-
-    def __getitem__(self, layer_idx):
-        return self.data[layer_idx]
-
-
-def _hf_config():
-    cfg = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
-    cfg._attn_implementation = "eager"
-    return cfg
-
-
-def _hf_layer_class(cfg):
-    module = importlib.import_module(cfg.__class__.__module__.replace("configuration_phi3", "modeling_phi3"))
-    return module.Phi3DecoderLayer
-
-
-def _make_hf_layer(cfg, state_dict):
-    layer = _hf_layer_class(cfg)(cfg, layer_idx=0).eval().to(torch.bfloat16)
-    layer.load_state_dict({k: v.to(torch.bfloat16) for k, v in state_dict.items()})
-    return layer
-
-
-def _synthetic_state_dict(seed=0):
-    generator = torch.Generator().manual_seed(seed)
-    if WEIGHT_STATS_PATH.exists():
-        stats = json.loads(WEIGHT_STATS_PATH.read_text())["tensors"]
-        state = {}
-        for name, shape in LAYER_WEIGHT_SHAPES.items():
-            record = stats[name]
-            if tuple(record["shape"]) != shape:
-                raise ValueError(f"{name} stats shape {record['shape']} != expected {shape}")
-            mean = float(record["mean"])
-            std = float(record["std"])
-            if std == 0.0:
-                state[name] = torch.full(shape, mean, dtype=torch.float32)
-            else:
-                state[name] = torch.randn(shape, generator=generator, dtype=torch.float32) * std + mean
-        return state
-
-    return {
-        name: torch.randn(shape, generator=generator, dtype=torch.float32) * 0.01
-        for name, shape in LAYER_WEIGHT_SHAPES.items()
-    }
-
-
-def _real_layer0_state_dict():
-    index_path = HF_CACHE / "model.safetensors.index.json"
-    if not index_path.exists():
-        pytest.skip(f"real Phi-3.5 weights are not present at {HF_CACHE}")
-    index = json.loads(index_path.read_text())
-    wanted_prefix = "model.layers.0."
-    by_shard = {}
-    for key, shard in index["weight_map"].items():
-        if key.startswith(wanted_prefix):
-            by_shard.setdefault(shard, []).append(key)
-
-    state = {}
-    for shard, keys in by_shard.items():
-        with safe_open(HF_CACHE / shard, framework="pt", device="cpu") as f:
-            for key in keys:
-                state[key[len(wanted_prefix) :]] = f.get_tensor(key)
-    return state
-
-
-def _causal_mask(seq_len):
-    mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
-    return torch.triu(mask, diagonal=1).reshape(1, 1, seq_len, seq_len)
-
-
-def _page_table(num_blocks):
-    # Non-identity permutation catches page-table routing bugs.
-    values = list(range(num_blocks))
-    if len(values) > 1:
-        values = values[1:] + values[:1]
-    return torch.tensor([values], dtype=torch.int32)
-
-
-def _position_tensors(mesh_device, pos):
-    current_pos = ttnn.Tensor(torch.tensor([pos], dtype=torch.int32), ttnn.int32).to(mesh_device)
-    position_ids = ttnn.Tensor(torch.tensor([pos], dtype=torch.uint32), ttnn.uint32).to(mesh_device)
-    return current_pos, position_ids
-
-
-def _batch_position_tensors(mesh_device, positions):
-    current_pos = ttnn.Tensor(torch.tensor(positions, dtype=torch.int32), ttnn.int32).to(mesh_device)
-    position_ids = ttnn.Tensor(torch.tensor(positions, dtype=torch.uint32), ttnn.uint32).to(mesh_device)
-    return current_pos, position_ids
-
-
-def _decode_candidate_kwargs():
-    dtype_name = os.getenv("PHI35_DECODE_WEIGHT_DTYPE", "bfp4")
-    fidelity_name = os.getenv("PHI35_DECODE_FIDELITY", "lofi")
-    dtype = {"bfp4": ttnn.bfloat4_b, "bfp8": ttnn.bfloat8_b}[dtype_name]
-    fidelity = {"lofi": ttnn.MathFidelity.LoFi, "hifi2": ttnn.MathFidelity.HiFi2}[fidelity_name]
-    return {
-        "attention_weight_dtype": dtype,
-        "mlp_weight_dtype": dtype,
-        "decode_math_fidelity": fidelity,
-        "decode_core_count": int(os.getenv("PHI35_DECODE_CORE_COUNT", "16")),
-        "decode_max_in0_block_w": int(os.getenv("PHI35_DECODE_MAX_IN0_BLOCK_W", "16")),
-        "split_qkv": os.getenv("PHI35_SPLIT_QKV") == "1",
-        "split_gate_up": os.getenv("PHI35_SPLIT_GATE_UP", "1") == "1",
-    }
-
-
-def test_optimized_decode_batch32_traced_pcc(mesh_device):
-    cfg = _hf_config()
-    state_dict = _real_layer0_state_dict() if os.getenv("PHI35_REAL_WEIGHTS") == "1" else _synthetic_state_dict(seed=32)
-    hf_layer = _make_hf_layer(cfg, state_dict)
-    batch = 32
-    torch.manual_seed(33)
-    x_decode = (torch.randn(batch, 1, cfg.hidden_size, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-    with torch.no_grad():
-        ref_decode = hf_layer(
-            x_decode,
-            attention_mask=None,
-            position_ids=torch.zeros((batch, 1), dtype=torch.int64),
-            use_cache=False,
-        )[0]
-
-    decoder = OptimizedDecoder.from_state_dict(
-        state_dict,
-        hf_config=cfg,
-        layer_idx=0,
-        mesh_device=mesh_device,
-        batch=batch,
-        max_position_embeddings=TEST_TABLE_LEN,
-        **_decode_candidate_kwargs(),
-    )
-    kv_cache = OptimizedDecoder.allocate_paged_kv_cache(
-        hf_config=cfg,
-        mesh_device=mesh_device,
-        max_batch_size=batch,
-        max_seq_len=32,
-        block_size=32,
-    )
-    page_table = ttnn.Tensor(torch.arange(batch, dtype=torch.int32).reshape(batch, 1), ttnn.int32).to(mesh_device)
-    positions = [0] * batch
-    current_pos, position_ids = _batch_position_tensors(mesh_device, positions)
-    x_tt = (
-        ttnn.Tensor(x_decode.reshape(1, 1, batch, cfg.hidden_size), ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(mesh_device)
-    )
-
-    decoder.decode_forward(
-        x_tt,
-        current_pos=current_pos,
-        position_ids=position_ids,
-        page_table=page_table,
-        kv_cache=kv_cache,
-        rope_sequence_length=1,
-    )
-    ttnn.synchronize_device(mesh_device)
-
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    traced = decoder.decode_forward(
-        x_tt,
-        current_pos=current_pos,
-        position_ids=position_ids,
-        page_table=page_table,
-        kv_cache=kv_cache,
-        rope_sequence_length=1,
-    )
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-    signpost("PERF_DECODE_B32")
-    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-    signpost("PERF_DECODE_B32_END")
-    timing_iters = int(os.getenv("PHI35_HOST_TIMING_ITERS", "0"))
-    if timing_iters:
-        start = time.perf_counter()
-        for _ in range(timing_iters):
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-        ttnn.synchronize_device(mesh_device)
-        print(f"PHI35_HOST_TIMED_TRACE_DECODE_B32_E2E_US: {(time.perf_counter() - start) * 1e6 / timing_iters:.3f}")
-    got = ttnn.to_torch(traced).reshape(batch, 1, cfg.hidden_size)
-    ttnn.release_trace(mesh_device, trace_id)
-
-    passed, message = comp_pcc(ref_decode.float(), got.float(), pcc=PCC_THRESHOLD)
-    print(f"HF-vs-TTNN optimized traced batch32 decode PCC: {message}")
-    assert passed, message
-
-
-def test_optimized_prefill_batch32_pcc_and_warmed_latency(mesh_device):
-    cfg = _hf_config()
-    state_dict = _real_layer0_state_dict() if os.getenv("PHI35_REAL_WEIGHTS") == "1" else _synthetic_state_dict(seed=34)
-    hf_layer = _make_hf_layer(cfg, state_dict)
-    batch = 32
-    seq_len = 32
-    torch.manual_seed(35)
-    x = (torch.randn(batch, seq_len, cfg.hidden_size, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-    with torch.no_grad():
-        ref = hf_layer(
-            x,
-            attention_mask=_causal_mask(seq_len).expand(batch, -1, -1, -1),
-            position_ids=torch.arange(seq_len).reshape(1, seq_len).expand(batch, -1),
-            use_cache=False,
-        )[0]
-    decoder = OptimizedDecoder.from_state_dict(
-        state_dict,
-        hf_config=cfg,
-        layer_idx=0,
-        mesh_device=mesh_device,
-        batch=batch,
-        max_position_embeddings=TEST_TABLE_LEN,
-        **_decode_candidate_kwargs(),
-    )
-    kv_cache = OptimizedDecoder.allocate_paged_kv_cache(
-        hf_config=cfg,
-        mesh_device=mesh_device,
-        max_batch_size=batch,
-        max_seq_len=seq_len,
-    )
-    page_table = ttnn.Tensor(torch.arange(batch, dtype=torch.int32).reshape(batch, 1), ttnn.int32).to(mesh_device)
-    x_tt = (
-        ttnn.Tensor(x.reshape(1, batch, seq_len, cfg.hidden_size), ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(mesh_device)
-    )
-    warm = decoder.prefill_forward(x_tt, page_table=page_table, kv_cache=kv_cache, rope_sequence_length=seq_len)
-    ttnn.synchronize_device(mesh_device)
-    ttnn.deallocate(warm)
-    start = time.perf_counter()
-    signpost("PERF_PREFILL_B32")
-    got_tt = decoder.prefill_forward(x_tt, page_table=page_table, kv_cache=kv_cache, rope_sequence_length=seq_len)
-    ttnn.synchronize_device(mesh_device)
-    signpost("PERF_PREFILL_B32_END")
-    print(f"PHI35_HOST_TIMED_PREFILL_B32_E2E_US: {(time.perf_counter() - start) * 1e6:.3f}")
-    got = ttnn.to_torch(got_tt).reshape(batch, seq_len, cfg.hidden_size)
-    passed, message = comp_pcc(ref.float(), got.float(), pcc=PCC_THRESHOLD)
-    print(f"HF-vs-TTNN optimized batch32 prefill PCC: {message}")
-    assert passed, message
-
-
-@pytest.mark.skipif(
-    os.getenv("PHI35_RUN_FUNCTIONAL_B32_PREFILL_BASELINE") != "1",
-    reason="set PHI35_RUN_FUNCTIONAL_B32_PREFILL_BASELINE=1 for the same-harness A/B baseline",
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "mode,batch,seq_len",
+    [
+        ("prefill", 1, 31),
+        ("prefill", 1, 33),
+        ("prefill", 1, 65),
+        ("decode", 1, 1),
+        ("decode", 32, 1),
+    ],
 )
-def test_functional_prefill_batch32_warmed_latency_baseline(mesh_device):
-    """Same-shape baseline only; optimized-path acceptance is covered above."""
-    from models.autoports.microsoft_phi_3_5_mini_instruct.tt.functional_decoder import FunctionalDecoder
-
-    cfg = _hf_config()
-    batch = 32
-    seq_len = 32
-    decoder = FunctionalDecoder.from_state_dict(
-        _synthetic_state_dict(seed=34),
-        hf_config=cfg,
-        layer_idx=0,
+def test_optimized_matches_functional_on_device(mesh_device, mode, batch, seq_len):
+    config = _config()
+    state = _synthetic_state(config)
+    max_context = 96
+    functional = FunctionalDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=LAYER_IDX,
         mesh_device=mesh_device,
         batch=batch,
-        max_context=seq_len,
+        max_context=max_context,
     )
-    hidden = torch.randn(
-        1, batch, seq_len, cfg.hidden_size, generator=torch.Generator().manual_seed(35), dtype=torch.bfloat16
-    )
-    hidden_tt = ttnn.Tensor(hidden, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(mesh_device)
-    page_table = ttnn.Tensor(torch.arange(batch, dtype=torch.int32).reshape(batch, 1), ttnn.int32).to(mesh_device)
-    key_cache, value_cache = decoder.create_paged_kv_cache()
-    decoder.prefill_forward(hidden_tt, key_cache=key_cache, value_cache=value_cache, page_table=page_table)
-    ttnn.synchronize_device(mesh_device)
-    start = time.perf_counter()
-    decoder.prefill_forward(hidden_tt, key_cache=key_cache, value_cache=value_cache, page_table=page_table)
-    ttnn.synchronize_device(mesh_device)
-    print(f"PHI35_FUNCTIONAL_PREFILL_B32_E2E_US: {(time.perf_counter() - start) * 1e6:.3f}")
-
-
-def _run_prefill_decode_pcc(mesh_device, state_dict, *, seq_len=32, seed=1, trace_decode=True):
-    cfg = _hf_config()
-    hf_layer = _make_hf_layer(cfg, state_dict)
-    torch.manual_seed(seed)
-    x_prefill = (torch.randn(1, seq_len, cfg.hidden_size, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-    with torch.no_grad():
-        ref_prefill = hf_layer(
-            x_prefill,
-            attention_mask=_causal_mask(seq_len),
-            position_ids=torch.arange(seq_len).reshape(1, seq_len),
-            use_cache=False,
-        )[0]
-
-    decoder = OptimizedDecoder.from_state_dict(
-        state_dict,
-        hf_config=cfg,
-        layer_idx=0,
+    optimized = OptimizedDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=LAYER_IDX,
         mesh_device=mesh_device,
-        max_position_embeddings=max(TEST_TABLE_LEN, seq_len + 32),
-        **_decode_candidate_kwargs(),
+        batch=batch,
+        max_context=max_context,
     )
-    kv_cache = OptimizedDecoder.allocate_paged_kv_cache(
-        hf_config=cfg,
-        mesh_device=mesh_device,
-        max_batch_size=1,
-        max_seq_len=seq_len + 32,
-        block_size=32,
-    )
-    page_table_host = _page_table((seq_len + 31) // 32 + 1)
-    page_table = ttnn.Tensor(page_table_host, ttnn.int32).to(mesh_device)
-    x_tt = (
-        ttnn.Tensor(x_prefill.reshape(1, 1, seq_len, cfg.hidden_size), ttnn.bfloat16)
-        .to(ttnn.TILE_LAYOUT)
-        .to(mesh_device)
-    )
-
-    warm_prefill = decoder.prefill_forward(
-        x_tt,
-        page_table=page_table,
-        kv_cache=kv_cache,
-        start_pos=0,
-        rope_sequence_length=seq_len,
-    )
-    ttnn.synchronize_device(mesh_device)
-    ttnn.deallocate(warm_prefill)
-
-    prefill_start = time.perf_counter()
-    signpost("PERF_PREFILL")
-    tt_prefill = decoder.prefill_forward(
-        x_tt,
-        page_table=page_table,
-        kv_cache=kv_cache,
-        start_pos=0,
-        rope_sequence_length=seq_len,
-    )
-    ttnn.synchronize_device(mesh_device)
-    signpost("PERF_PREFILL_END")
-    print(f"PHI35_HOST_TIMED_PREFILL_E2E_US: {(time.perf_counter() - prefill_start) * 1e6:.3f}")
-
-    got_prefill = ttnn.to_torch(tt_prefill).reshape(1, seq_len, cfg.hidden_size)
-    prefill_ok, prefill_msg = comp_pcc(ref_prefill.float(), got_prefill.float(), pcc=PCC_THRESHOLD)
-    print(f"HF-vs-TTNN prefill PCC: {prefill_msg}")
-
-    cache = Phi3LayerCache()
-    with torch.no_grad():
-        hf_layer(
-            x_prefill,
-            attention_mask=_causal_mask(seq_len),
-            position_ids=torch.arange(seq_len).reshape(1, seq_len),
-            past_key_value=cache,
-            use_cache=True,
-        )
-        x_decode = (torch.randn(1, 1, cfg.hidden_size, dtype=torch.float32) * 0.1).to(torch.bfloat16)
-        ref_decode = hf_layer(
-            x_decode,
-            attention_mask=None,
-            position_ids=torch.tensor([[seq_len]]),
-            past_key_value=cache,
-            use_cache=True,
-        )[0]
-
-    x_decode_tt = (
-        ttnn.Tensor(x_decode.reshape(1, 1, 1, cfg.hidden_size), ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(mesh_device)
-    )
-    current_pos, position_ids = _position_tensors(mesh_device, seq_len)
-
-    # Compile/warm eager decode once. The same K/V slot is overwritten with the
-    # same tensors during traced capture/replay, so the measured output remains stable.
-    decoder.decode_forward(
-        x_decode_tt,
-        current_pos=current_pos,
-        position_ids=position_ids,
-        page_table=page_table,
-        kv_cache=kv_cache,
-        rope_sequence_length=seq_len + 1,
-    )
-    ttnn.synchronize_device(mesh_device)
-
-    if trace_decode:
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_decode = decoder.decode_forward(
-            x_decode_tt,
-            current_pos=current_pos,
-            position_ids=position_ids,
+    page_table = _page_table(batch, max_context, mesh_device, permute=True)
+    functional_cache = functional.create_paged_kv_cache()
+    optimized_cache = optimized.create_paged_kv_cache()
+    generator = torch.Generator().manual_seed(7100 + batch)
+    if mode == "prefill":
+        hidden = torch.randn(batch, seq_len, config.hidden_size, generator=generator).to(torch.bfloat16)
+        tt_hidden = _to_tt_prefill(hidden, mesh_device)
+        functional_out = functional.prefill_forward(
+            tt_hidden,
+            key_cache=functional_cache[0],
+            value_cache=functional_cache[1],
             page_table=page_table,
-            kv_cache=kv_cache,
-            rope_sequence_length=seq_len + 1,
         )
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(mesh_device)
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-        ttnn.synchronize_device(mesh_device)
-        signpost("PERF_DECODE")
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-        ttnn.synchronize_device(mesh_device)
-        signpost("PERF_DECODE_END")
-        timing_iters = int(os.getenv("PHI35_HOST_TIMING_ITERS", "0"))
-        if timing_iters > 0:
-            ttnn.synchronize_device(mesh_device)
-            start = time.perf_counter()
-            for _ in range(timing_iters):
-                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-            ttnn.synchronize_device(mesh_device)
-            elapsed_us = (time.perf_counter() - start) * 1_000_000.0
-            print(f"PHI35_HOST_TIMED_TRACE_DECODE_E2E_US: {elapsed_us / timing_iters:.3f}")
-        ttnn.release_trace(mesh_device, trace_id)
+        optimized_out = optimized.prefill_forward(
+            tt_hidden,
+            key_cache=optimized_cache[0],
+            value_cache=optimized_cache[1],
+            page_table=page_table,
+        )
+        _assert_pcc(
+            "optimized-vs-functional-prefill", _to_torch_prefill(functional_out), _to_torch_prefill(optimized_out)
+        )
+        reference, _ = _reference_prefill(config, state, hidden)
+        _assert_pcc(f"optimized-prefill-reference-{seq_len}", reference, _to_torch_prefill(optimized_out))
     else:
-        tt_decode = decoder.decode_forward(
-            x_decode_tt,
-            current_pos=current_pos,
-            position_ids=position_ids,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            rope_sequence_length=seq_len + 1,
+        hidden = torch.randn(batch, 1, config.hidden_size, generator=generator).to(torch.bfloat16)
+        tt_hidden = _to_tt_decode(hidden, mesh_device)
+        positions = _positions(list(range(batch)), mesh_device)
+        kwargs = dict(page_table=page_table, current_positions=positions, use_long_rope=False)
+        functional_out = functional.decode_forward(
+            tt_hidden,
+            key_cache=functional_cache[0],
+            value_cache=functional_cache[1],
+            **kwargs,
+        )
+        optimized_out = optimized.decode_forward(
+            tt_hidden,
+            key_cache=optimized_cache[0],
+            value_cache=optimized_cache[1],
+            **kwargs,
+        )
+        _assert_pcc(
+            f"optimized-vs-functional-decode-b{batch}",
+            _to_torch_decode(functional_out),
+            _to_torch_decode(optimized_out),
         )
 
-    got_decode = ttnn.to_torch(tt_decode).reshape(1, 1, cfg.hidden_size)
-    decode_ok, decode_msg = comp_pcc(ref_decode.float(), got_decode.float(), pcc=PCC_THRESHOLD)
-    print(f"HF-vs-TTNN decode PCC: {decode_msg}")
-    if os.getenv("PHI35_READ_DEVICE_PROFILER") == "1":
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_optimized_mlp_candidate_latency_probe(mesh_device):
+    config = _config()
+    state = _synthetic_state(config)
+    functional = FunctionalDecoder.from_state_dict(
+        state, hf_config=config, layer_idx=LAYER_IDX, mesh_device=mesh_device, max_context=64
+    )
+    optimized = OptimizedDecoder.from_state_dict(
+        state, hf_config=config, layer_idx=LAYER_IDX, mesh_device=mesh_device, max_context=64
+    )
+    hidden = _to_tt_prefill(
+        torch.randn(1, 32, config.hidden_size, generator=torch.Generator().manual_seed(7111)).to(torch.bfloat16),
+        mesh_device,
+    )
+
+    def measure(decoder):
+        decoder._mlp(hidden)
         ttnn.synchronize_device(mesh_device)
-        ttnn.ReadDeviceProfiler(mesh_device)
-    return {
-        "prefill_ok": prefill_ok,
-        "prefill_msg": prefill_msg,
-        "decode_ok": decode_ok,
-        "decode_msg": decode_msg,
-        "prefill_output": got_prefill,
-        "decode_output": got_decode,
-    }
+        samples = []
+        for _ in range(10):
+            start = time.perf_counter()
+            decoder._mlp(hidden)
+            ttnn.synchronize_device(mesh_device)
+            samples.append(time.perf_counter() - start)
+        return sum(samples) / len(samples)
+
+    functional_seconds = measure(functional)
+    optimized_seconds = measure(optimized)
+    print(f"FUSION_AB functional_ms={functional_seconds * 1000:.6f} " f"optimized_ms={optimized_seconds * 1000:.6f}")
+    # End-to-end traced decode is the performance selection gate.  This small
+    # component probe is intentionally informational because sub-millisecond
+    # host timing is noisy across device reopenings.
 
 
-@pytest.mark.timeout(240)
-def test_optimized_dense_layer_synthetic_prefill_decode_pcc_and_traced_decode(mesh_device):
-    seq_len = int(os.getenv("PHI35_PREFILL_SEQ_LEN", "32"))
-    state = _real_layer0_state_dict() if os.getenv("PHI35_REAL_WEIGHTS") == "1" else _synthetic_state_dict()
-    result = _run_prefill_decode_pcc(mesh_device, state, seq_len=seq_len, trace_decode=True)
-    assert result["prefill_ok"], result["prefill_msg"]
-    assert result["decode_ok"], result["decode_msg"]
-
-
-@pytest.mark.timeout(240)
-def test_optimized_non_aligned_prefill_and_decode_pcc(mesh_device):
-    result = _run_prefill_decode_pcc(mesh_device, _synthetic_state_dict(seed=33), seq_len=33, trace_decode=True)
-    assert result["prefill_ok"], result["prefill_msg"]
-    assert result["decode_ok"], result["decode_msg"]
-
-
-@pytest.mark.timeout(300)
-def test_optimized_dense_layer_real_weights_prefill_decode_pcc(mesh_device):
-    result = _run_prefill_decode_pcc(mesh_device, _real_layer0_state_dict(), seq_len=32, seed=7, trace_decode=True)
-    assert result["prefill_ok"], result["prefill_msg"]
-    assert result["decode_ok"], result["decode_msg"]
-
-
-@pytest.mark.timeout(300)
-def test_repeated_input_determinism(mesh_device):
-    state = _synthetic_state_dict(seed=11)
-    first = _run_prefill_decode_pcc(mesh_device, state, seq_len=32, seed=13, trace_decode=False)
-    second = _run_prefill_decode_pcc(mesh_device, state, seq_len=32, seed=13, trace_decode=False)
-    prefill_ok, prefill_msg = comp_pcc(first["prefill_output"].float(), second["prefill_output"].float(), pcc=0.9999)
-    decode_ok, decode_msg = comp_pcc(first["decode_output"].float(), second["decode_output"].float(), pcc=0.9999)
-    assert prefill_ok, prefill_msg
-    assert decode_ok, decode_msg
-
-
-def test_runtime_forward_fallback_audit_static():
-    runtime_callables = [
-        OptimizedDecoder.prefill_forward,
-        OptimizedDecoder.decode_forward,
-        OptimizedDecoder._mlp_forward,
-        OptimizedDecoder._prefill_rope_tables,
-        OptimizedDecoder._decode_rope_tables,
-        importlib.import_module("models.autoports.microsoft_phi_3_5_mini_instruct.tt.optimized_decoder")._apply_rope,
-        importlib.import_module("models.autoports.microsoft_phi_3_5_mini_instruct.tt.optimized_decoder")._rotate_half,
-        importlib.import_module(
-            "models.autoports.microsoft_phi_3_5_mini_instruct.tt.optimized_decoder"
-        )._typecast_if_needed,
-    ]
-    for callable_obj in runtime_callables:
-        source = inspect.getsource(callable_obj)
-        forbidden = ("torch.", "ttnn.from_torch", "ttnn.to_torch", "from_torch(", "to_torch(")
-        hits = [token for token in forbidden if token in source]
-        assert not hits, f"{callable_obj.__name__} contains forbidden runtime fallback tokens: {hits}"
-
-    decode_source = inspect.getsource(OptimizedDecoder.decode_forward)
-    assert "paged_fused_update_cache" in decode_source
-    assert "batch_size == 1 and cache_position_modulo is None" in decode_source
-
-
-@pytest.mark.skipif(
-    os.getenv("PHI35_RUN_LONG_CONTEXT") != "1", reason="set PHI35_RUN_LONG_CONTEXT=1 for full-context stress"
-)
-@pytest.mark.timeout(600)
-def test_full_context_decode_current_position_and_page_table(mesh_device):
-    cfg = _hf_config()
-    seq_len = cfg.max_position_embeddings
-    state = _synthetic_state_dict(seed=17)
-    decoder = OptimizedDecoder.from_state_dict(state, hf_config=cfg, layer_idx=0, mesh_device=mesh_device)
-    kv_cache = OptimizedDecoder.allocate_paged_kv_cache(
-        hf_config=cfg,
-        mesh_device=mesh_device,
-        max_batch_size=1,
-        max_seq_len=seq_len,
-        block_size=32,
-    )
-    page_blocks = seq_len // 32
-    page_table = ttnn.Tensor(torch.arange(page_blocks, dtype=torch.int32).reshape(1, page_blocks), ttnn.int32).to(
-        mesh_device
-    )
-    x_decode = (
-        ttnn.Tensor(torch.zeros(1, 1, 1, cfg.hidden_size, dtype=torch.bfloat16), ttnn.bfloat16)
-        .to(ttnn.TILE_LAYOUT)
-        .to(mesh_device)
-    )
-    current_pos, position_ids = _position_tensors(mesh_device, seq_len - 1)
-    out = decoder.decode_forward(
-        x_decode,
-        current_pos=current_pos,
-        position_ids=position_ids,
-        page_table=page_table,
-        kv_cache=kv_cache,
-        rope_sequence_length=seq_len,
-    )
-    got = ttnn.to_torch(out)
-    assert got.shape == (1, 1, 1, cfg.hidden_size)
-    assert torch.isfinite(got).all()
-
-
-@pytest.mark.skipif(os.getenv("PHI35_RUN_LONG_PREFILL") != "1", reason="set PHI35_RUN_LONG_PREFILL=1 for long prefill")
-@pytest.mark.timeout(900)
-def test_long_prefill_page_table(mesh_device):
-    cfg = _hf_config()
-    seq_len = int(os.getenv("PHI35_LONG_PREFILL_LEN", "32769"))
-    state = _synthetic_state_dict(seed=19)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("batch", [1, 32])
+def test_optimized_trace_replay_is_deterministic(mesh_device, batch):
+    config = _config()
+    state = _synthetic_state(config)
     decoder = OptimizedDecoder.from_state_dict(
         state,
-        hf_config=cfg,
-        layer_idx=0,
+        hf_config=config,
+        layer_idx=LAYER_IDX,
         mesh_device=mesh_device,
-        max_position_embeddings=seq_len,
+        batch=batch,
+        max_context=64,
     )
-    kv_cache = OptimizedDecoder.allocate_paged_kv_cache(
-        hf_config=cfg,
-        mesh_device=mesh_device,
-        max_batch_size=1,
-        max_seq_len=seq_len,
-        block_size=32,
+    hidden = torch.randn(batch, 1, config.hidden_size, generator=torch.Generator().manual_seed(7200 + batch)).to(
+        torch.bfloat16
     )
-    page_blocks = (seq_len + 31) // 32
-    page_table_host = _page_table(page_blocks)
-    page_table = ttnn.Tensor(page_table_host, ttnn.int32).to(mesh_device)
-    x_prefill = (
-        ttnn.Tensor(torch.zeros(1, 1, seq_len, cfg.hidden_size, dtype=torch.bfloat16), ttnn.bfloat16)
-        .to(ttnn.TILE_LAYOUT)
-        .to(mesh_device)
+    tt_hidden = _to_tt_decode(hidden, mesh_device)
+    positions = [33] if batch == 1 else list(range(1, batch + 1))
+    current_positions = _positions(positions, mesh_device)
+    page_table = _page_table(batch, 64, mesh_device, permute=True)
+    key_cache, value_cache = decoder.create_paged_kv_cache()
+
+    def decode():
+        return decoder.decode_forward(
+            tt_hidden,
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+            current_positions=current_positions,
+            use_long_rope=False,
+        )
+
+    decode()
+    ttnn.synchronize_device(mesh_device)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    trace_output = decode()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    replayed = []
+    try:
+        for _ in range(5):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            replayed.append(ttnn.to_torch(ttnn.get_device_tensors(trace_output)[0]).clone())
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+    assert all(torch.equal(replayed[0], item) for item in replayed[1:])
+    reference = _reference_decode_zero_prefix(config, state, hidden, positions, use_long=False)
+    _assert_pcc(f"optimized-trace-reference-b{batch}", reference, replayed[0].squeeze(0).transpose(0, 1))
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_optimized_real_weight_decode_matches_functional(mesh_device):
+    config = _config()
+    state = _real_state()
+    functional = FunctionalDecoder.from_state_dict(
+        state, hf_config=config, layer_idx=LAYER_IDX, mesh_device=mesh_device, batch=1, max_context=64
     )
-    out = decoder.prefill_forward(
-        x_prefill,
+    optimized = OptimizedDecoder.from_state_dict(
+        state, hf_config=config, layer_idx=LAYER_IDX, mesh_device=mesh_device, batch=1, max_context=64
+    )
+    hidden = torch.randn(1, 1, config.hidden_size, generator=torch.Generator().manual_seed(7301)).to(torch.bfloat16)
+    tt_hidden = _to_tt_decode(hidden, mesh_device)
+    kwargs = {
+        "page_table": _page_table(1, 64, mesh_device, permute=True),
+        "current_positions": _positions([0], mesh_device),
+        "use_long_rope": False,
+    }
+    functional_cache = functional.create_paged_kv_cache()
+    optimized_cache = optimized.create_paged_kv_cache()
+    functional_out = functional.decode_forward(
+        tt_hidden,
+        key_cache=functional_cache[0],
+        value_cache=functional_cache[1],
+        **kwargs,
+    )
+    optimized_out = optimized.decode_forward(
+        tt_hidden,
+        key_cache=optimized_cache[0],
+        value_cache=optimized_cache[1],
+        **kwargs,
+    )
+    _assert_pcc(
+        "optimized-real-weight-decode",
+        _to_torch_decode(functional_out),
+        _to_torch_decode(optimized_out),
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("batch", [1, 32])
+def test_optimized_decode_consumes_non_aligned_paged_prefill(mesh_device, batch):
+    config = _config()
+    state = _synthetic_state(config)
+    functional = FunctionalDecoder.from_state_dict(
+        state, hf_config=config, layer_idx=LAYER_IDX, mesh_device=mesh_device, batch=batch, max_context=64
+    )
+    optimized = OptimizedDecoder.from_state_dict(
+        state, hf_config=config, layer_idx=LAYER_IDX, mesh_device=mesh_device, batch=batch, max_context=64
+    )
+    page_table = _page_table(batch, 64, mesh_device, permute=True)
+    functional_cache = functional.create_paged_kv_cache()
+    optimized_cache = optimized.create_paged_kv_cache()
+    generator = torch.Generator().manual_seed(7400 + batch)
+    prompt = torch.randn(batch, 33, config.hidden_size, generator=generator).to(torch.bfloat16)
+    functional.prefill_forward(
+        _to_tt_prefill(prompt, mesh_device),
+        key_cache=functional_cache[0],
+        value_cache=functional_cache[1],
         page_table=page_table,
-        kv_cache=kv_cache,
-        start_pos=0,
-        rope_sequence_length=seq_len,
     )
-    got = ttnn.to_torch(out)
-    assert got.shape == (1, 1, seq_len, cfg.hidden_size)
-    assert torch.isfinite(got).all()
+    optimized.prefill_forward(
+        _to_tt_prefill(prompt, mesh_device),
+        key_cache=optimized_cache[0],
+        value_cache=optimized_cache[1],
+        page_table=page_table,
+    )
+    token = torch.randn(batch, 1, config.hidden_size, generator=generator).to(torch.bfloat16)
+    kwargs = {
+        "page_table": page_table,
+        "current_positions": _positions([33] * batch, mesh_device),
+        "use_long_rope": False,
+    }
+    functional_out = functional.decode_forward(
+        _to_tt_decode(token, mesh_device),
+        key_cache=functional_cache[0],
+        value_cache=functional_cache[1],
+        **kwargs,
+    )
+    optimized_out = optimized.decode_forward(
+        _to_tt_decode(token, mesh_device),
+        key_cache=optimized_cache[0],
+        value_cache=optimized_cache[1],
+        **kwargs,
+    )
+    _assert_pcc(
+        f"optimized-prefill-decode-cache-b{batch}",
+        _to_torch_decode(functional_out),
+        _to_torch_decode(optimized_out),
+    )
