@@ -13,6 +13,7 @@ Covers the control-flow the recapture fix depends on, without a device:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 
 import pytest
 
@@ -77,8 +78,20 @@ class _FakeKCache:
 
 
 class _FakeModel:
+    # `layers` + `hf_config.layer_types` are required, not decoration: the bounded sliding read
+    # inspects each layer's TYPE, and since DG_DENOISE_SLIDING_SPAN was deleted (2026-07-29) that
+    # path runs whenever retention is enforced -- which is the default. A fake without layers only
+    # passed while the span was gated off behind its own flag.
+    SLIDING_WINDOW = 1024
+
     def __init__(self, seq):
         self.tt_kv_cache = [(_FakeKCache(seq), _FakeKCache(seq))]
+        layer_types = ["sliding_attention"] * 5 + ["full_attention"]
+        self.layers = [
+            SimpleNamespace(self_attn=SimpleNamespace(config=SimpleNamespace(sliding_window=self.SLIDING_WINDOW)))
+            for _ in layer_types
+        ]
+        self.hf_config = SimpleNamespace(layer_types=layer_types, sliding_window=self.SLIDING_WINDOW)
 
 
 class _FakeAdapter:
@@ -97,6 +110,12 @@ class _FakeAdapter:
     # reader surface
     def set_read_span(self, p_max):
         self.calls.append(("set_read_span", p_max))
+
+    def prepare_window_buffers(self, window_layers):
+        self.calls.append(("prepare_window_buffers", dict(window_layers)))
+
+    def refresh_windows(self, prompt_len):
+        self.calls.append(("refresh_windows", prompt_len))
 
     # adapter reveal surface
     def prepare_reveal_mask_buffers(self, *, canvas_len, p_max, prompt_len, enforce_window=False, sliding_span=None):
@@ -133,18 +152,24 @@ def test_prepare_fixed_reveal_wires_read_span_and_mask(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "flag, expect_window, expect_masks",
+    "flag, expect_window, expect_masks, expect_span",
     [
-        ("0", False, ["full_attention"]),
-        ("1", True, ["full_attention", "sliding_attention"]),
+        ("0", False, ["full_attention"], None),
+        ("1", True, ["full_attention", "sliding_attention"], _FakeModel.SLIDING_WINDOW),
     ],
 )
-def test_prepare_fixed_reveal_forwards_the_retention_flag(monkeypatch, flag, expect_window, expect_masks):
+def test_prepare_fixed_reveal_forwards_the_retention_flag(monkeypatch, flag, expect_window, expect_masks, expect_span):
     """The env gate has to reach `prepare_reveal_mask_buffers`, and add the sliding mask when on.
 
     HF's sliding layers retain only `sliding_window - 1` committed keys (#51080). With the flag off
     one shared full-attention mask serves all 30 layers; with it on the sliding layers need their
     own mask, so the buffer set is what tells the two regimes apart.
+
+    It also carries the BOUNDED READ now. This used to assert `sliding_span is None` because the perf
+    half was its own gate (DG_DENOISE_SLIDING_SPAN); that flag was deleted on 2026-07-29 because the
+    bounded read is bit-identical whenever retention is enforced, so the span follows this flag and
+    nothing else. Retention off must still mean no bounded read -- that is the one part of the
+    bounded read which is NOT bit-identical.
     """
     monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "4096")
     monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", flag)
@@ -168,5 +193,10 @@ def test_prepare_fixed_reveal_forwards_the_retention_flag(monkeypatch, flag, exp
     TD._prepare_fixed_reveal(adapter, canvas_len=256)
 
     assert seen["enforce_window"] is expect_window
-    assert seen["sliding_span"] is None, "the bounded-span perf half is its own gate, off here"
+    assert seen["sliding_span"] == expect_span, "the bounded read must follow the retention flag"
     assert sorted(adapter._reveal_mask_bufs) == expect_masks
+    allocated = [c for c in adapter.calls if c[0] == "prepare_window_buffers"]
+    if expect_span is None:
+        assert not allocated, "no block-resident window buffers without the retention mask"
+    else:
+        assert allocated and set(allocated[0][1]) == {0, 1, 2, 3, 4}, "only the sliding layers bounded"

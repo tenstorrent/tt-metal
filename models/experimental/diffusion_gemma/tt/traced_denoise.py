@@ -29,7 +29,6 @@ from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTr
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     _layer_type_for_denoise,
     _sliding_window_for_denoise,
-    denoise_sliding_span_enabled,
     denoise_sliding_window_enabled,
     sliding_read_span,
 )
@@ -150,12 +149,21 @@ def _prepare_fixed_reveal(adapter, *, canvas_len: int) -> int:
     # is a fidelity fix (#51080) but decision-changing above prompt_len 1024, so it is gated.
     # Both masks share one shape, so this changes content only and every trace stays valid.
     enforce_window = denoise_sliding_window_enabled()
-    # Bounded sliding spans (perf half): sliding layers read only the retained window instead of
-    # the full p_max. The read must move OUT of the trace because its offset slides with the
-    # committed prefix, so allocate the block-resident buffers HERE, before begin_trace_capture.
+    # Bounded sliding spans (perf half of #51080): sliding layers read only the retained window
+    # instead of the full p_max. The read must move OUT of the trace because its offset slides with
+    # the committed prefix, so allocate the block-resident buffers HERE, before begin_trace_capture.
     sliding_span = None
     window_layers = {}
-    if denoise_sliding_span_enabled():
+    # Gated on the RETENTION mask, not on a flag of its own: the bounded read is bit-identical when
+    # retention is enforced (see sliding_read_span) and would silently change visibility without it.
+    # DG_DENOISE_SLIDING_SPAN was deleted 2026-07-29 -- there was nothing left for it to select.
+    #
+    # This WIDENED the input contract of this function, which is worth stating because the three
+    # fallbacks below cannot catch it: adapter.tt_model must expose `.layers` (dereferenced before the
+    # no-sliding-layers fallback can fire) and the reader must expose prepare_window_buffers /
+    # refresh_windows. Every real model and MutablePrefixKVReader do; it was an under-specified test
+    # double that noticed first, because before the flip nothing ever reached this code by default.
+    if enforce_window:
         window = _sliding_window_for_denoise(adapter.tt_model, 0)
         if window:
             sliding_span = sliding_read_span(window, p_max)
@@ -187,14 +195,12 @@ def _prepare_fixed_reveal(adapter, *, canvas_len: int) -> int:
         bounded = sum(1 for span in window_layers.values() if sliding_span and span == sliding_span)
         key_rows_before = n_layers * (p_max + canvas_len)
         key_rows_after = sum(window_layers.get(i, p_max) + canvas_len for i in range(n_layers))
-        # The engagement markers are a stable contract for the A/B harnesses in
-        # doc/optimize_perf/verify_sliding_span.sh, which fail loudly if
-        # the candidate arm did not actually turn the feature on.
-        markers = []
-        if bounded:
-            markers.append("DG_DENOISE_SLIDING_SPAN=1:")
+        # "bounded sliding read:" is a stable, greppable engagement contract -- it is how a run's log
+        # proves the bounded read actually took effect. It deliberately does NOT name an env var:
+        # the old "DG_DENOISE_SLIDING_SPAN=1:" marker outlived its flag, and a marker naming a
+        # deleted knob is exactly the kind of label that lies.
         logger.info(
-            f"[DiffusionGemma up-front] {' '.join(markers)} prefix spans: {bounded}/{n_layers} layers "
+            f"[DiffusionGemma up-front] bounded sliding read: {bounded}/{n_layers} layers "
             f"bounded to {sliding_span}, rest at {p_max}; "
             f"SDPA key rows/step {key_rows_before} -> {key_rows_after}"
         )

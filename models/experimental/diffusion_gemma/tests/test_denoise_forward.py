@@ -1066,3 +1066,39 @@ def test_dg_skip_accepts_every_documented_component(monkeypatch):
     assert DF._skip_components() == DF._SKIP_TOKENS
     monkeypatch.delenv("DG_SKIP")
     assert DF._skip_components() == frozenset()
+
+
+def test_bounded_window_refuses_a_nonzero_prefix_base(expect_error):
+    """The bounded sliding read must FAIL LOUD on prefill-from-non-zero, not read the wrong rows.
+
+    prepare_window_buffers/refresh_windows derive their absolute offset from prompt_len alone and pass
+    it straight through as seq_len_start; they do NOT add self.seq_len_start the way the unbounded read
+    at read_prompt_kv_cache_by_layer does. Every production construction passes 0 today, so this is
+    dormant -- but prefill-from-non-zero is the declared keystone of the vLLM-native plan, and the
+    bounded read went from opt-in to DEFAULT on 2026-07-29, so a silent 25-of-30-layers misread has to
+    be a raise. Delete this test when the offset folds seq_len_start in properly.
+    """
+
+    class _Cache:
+        def __init__(self, span):
+            self.shape = [1, 2, span, 8]
+
+    model = SimpleNamespace(tt_kv_cache=[(_Cache(4096), _Cache(4096))], layers=[None])
+    reader = DF.MutablePrefixKVReader(model, prompt_len=2048, seq_len_start=32)
+    reader.set_read_span(4096)
+    with expect_error(NotImplementedError, match="non-zero prefix base"):
+        reader.prepare_window_buffers({0: 1024})
+
+
+def test_bounded_window_is_a_noop_when_no_layers_are_listed():
+    """An empty window_layers map must not trip the non-zero-base guard -- there is no bounded read."""
+
+    class _Cache:
+        def __init__(self, span):
+            self.shape = [1, 2, span, 8]
+
+    model = SimpleNamespace(tt_kv_cache=[(_Cache(4096), _Cache(4096))], layers=[None])
+    reader = DF.MutablePrefixKVReader(model, prompt_len=2048, seq_len_start=32)
+    reader.set_read_span(4096)
+    reader.prepare_window_buffers({})  # must not raise
+    assert reader.window_layers == {}

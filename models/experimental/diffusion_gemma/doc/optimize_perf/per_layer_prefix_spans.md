@@ -9,7 +9,7 @@ The item split cleanly into a fidelity half and a perf half, and they are **bett
 separately** — the gating is completely different and bundling them would make the decision
 delta unattributable.
 
-**Landed: the fidelity fix** (`DG_DENOISE_SLIDING_WINDOW`, default OFF).
+**Landed: the fidelity fix** (`DG_DENOISE_SLIDING_WINDOW`, **default ON** since 2026-07-27; `=0` opts out).
 
 * Corrected the reference: the `abs(q_abs - k_abs) <= sliding_window` staircase is gone from
   `reference/attention_mask.py` (both the reveal-mask builder and `build_canvas_denoise_mask`),
@@ -32,10 +32,18 @@ distance predicate, so its mask is a staircase. The denoise pass is the **decode
 against the encoder reference is how the staircase got in. That test now asserts the
 encoder-side staircase *as encoder behaviour* and points at the decoder pinning test.
 
-**Not landed: the perf half** (bounded 1024-row sliding read + block-resident buffers). Design
-below stands unchanged. Note it becomes much easier to gate *after* the fidelity fix: once the
-out-of-window keys are already masked to `NEG`, not reading them at all changes only the flash
-K-chunk accumulation order, so it is a near-bit-exact perf change rather than a decision change.
+**Landed 2026-07-29: the perf half** (bounded 1024-row sliding read + block-resident buffers), and
+it is **unconditional** — it follows `DG_DENOISE_SLIDING_WINDOW` and has no flag of its own
+(`DG_DENOISE_SLIDING_SPAN` was deleted). Design below stands unchanged.
+
+The prediction in this section held, and turned out to be stronger than "near-bit-exact": once the
+out-of-window keys are already masked to `NEG`, not reading them changes only the flash K-chunk
+accumulation order, and an all-`NEG` chunk moves neither the running max nor the sum — so it is
+**byte-identical**, measured as equal sha256 on 10/10 completions in two independent pairings plus an
+earlier `committed_sha256` match at p_max 4096. That is exactly why it needed no flag: there was no
+decision to gate. Measured **-18.9% s/block** at p_max 16384 (SDPA key rows/step 499200 -> 115200).
+It is not free in DRAM though — net **+42.5 MiB/chip resident** (50 MiB of window buffers against a
+7.5 MiB smaller sliding mask, since masks are keyed by layer TYPE so there is one, not 25).
 
 ### Device results (full 30L, traced, `serving_smoke --upfront`)
 

@@ -85,7 +85,9 @@ against the 256K envelope before use there.
 
 Landed behind `DG_DENOISE_CANVAS_TAIL` (default OFF) and device-gated with
 `doc/optimize_perf/verify_canvas_tail.sh` (full 30L traced, `p_max=4096`, 6 blocks, both arms with
-`DG_DENOISE_SLIDING_WINDOW=1 DG_DENOISE_SLIDING_SPAN=1` so the workspace is the only variable):
+`DG_DENOISE_SLIDING_WINDOW=1 DG_DENOISE_SLIDING_SPAN=1` so the workspace is the only variable -- as of
+2026-07-29 the second flag is gone and the bounded read follows the first, so only
+`DG_DENOISE_SLIDING_WINDOW=1` is needed to reproduce this arm):
 
 | run | control (per-step concat) | candidate (workspace) | delta |
 |---|---|---|---|

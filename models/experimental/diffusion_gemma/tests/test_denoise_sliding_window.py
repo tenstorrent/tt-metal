@@ -210,15 +210,88 @@ def test_sliding_layer_needs_mask_threshold_is_window_minus_one():
 # bounded per-layer sliding span (#51080 item 3, perf half)
 
 
-def test_span_gate_requires_the_retention_mask(monkeypatch):
-    """A bounded read without the retention mask would CHANGE visibility, not implement it."""
-    monkeypatch.setenv("DG_DENOISE_SLIDING_SPAN", "1")
-    # Explicit "0", not delenv: the retention mask defaults ON now, so unsetting would satisfy the
-    # dependency instead of removing it, and the test would stop testing anything.
-    monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", "0")
-    assert DF.denoise_sliding_span_enabled() is False, "span must not engage without the window mask"
-    monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", "1")
-    assert DF.denoise_sliding_span_enabled() is True
+# Real magnitudes, not the toy W/P_MAX above: at W=8, P_MAX=32 the span rounds up to a whole tile
+# and hits the "span >= p_max -> nothing to save" fallback, so a toy geometry cannot observe a
+# bounded span at all.
+W_REAL, P_MAX_REAL, CANVAS_REAL, PROMPT_REAL = 1024, 4096, 256, 2048
+
+
+def _drive_fixed_reveal(monkeypatch, *, retention):
+    """Run the REAL _prepare_fixed_reveal and capture the sliding_span it prepares.
+
+    DG_DENOISE_SLIDING_SPAN is gone; the bounded read is now gated on the retention mask at its one
+    decision point inside this function. A test on a flag reader could not have caught that gate
+    regressing, and this module previously only ever monkeypatched the mask selector -- which is how a
+    NotImplementedError on a live flag pair once survived in the sibling builder. So drive the real
+    thing.
+    """
+    from models.experimental.diffusion_gemma.tt import traced_denoise as TD
+
+    captured = {}
+
+    class _Reader:
+        owns_result = True
+        borrow_full_span = False
+
+        def set_read_span(self, p_max):
+            captured["read_span"] = p_max
+
+        def prepare_window_buffers(self, layers):
+            captured["window_layers"] = dict(layers)
+
+        def refresh_windows(self, prompt_len):
+            captured["refreshed"] = prompt_len
+
+    layer_types = ["sliding_attention"] * 5 + ["full_attention"]
+    adapter = SimpleNamespace(
+        prompt_len=PROMPT_REAL,
+        prompt_hidden_by_layer=_Reader(),
+        tt_model=SimpleNamespace(
+            layers=[
+                SimpleNamespace(self_attn=SimpleNamespace(config=SimpleNamespace(sliding_window=W_REAL)))
+                for _ in layer_types
+            ],
+            hf_config=SimpleNamespace(layer_types=list(layer_types), sliding_window=W_REAL),
+            mesh_device=None,
+        ),
+        use_reveal_mask=True,
+        _reveal_mask_bufs={},
+        prepare_reveal_mask_buffers=lambda **kw: captured.update(kw),
+        update_reveal_mask_buffer=lambda prompt_len: None,
+    )
+
+    monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", "1" if retention else "0")
+    monkeypatch.setattr(TD, "_resolve_reveal_pmax", lambda a: P_MAX_REAL)
+    monkeypatch.setattr(TD, "prefix_borrow_enabled", lambda: False)
+    TD._prepare_fixed_reveal(adapter, canvas_len=CANVAS_REAL)
+    return captured
+
+
+def test_bounded_read_is_on_by_default_when_retention_is_enforced(monkeypatch):
+    """No flag any more: retention on (the default) is what engages the bounded read."""
+    cap = _drive_fixed_reveal(monkeypatch, retention=True)
+    assert cap["enforce_window"] is True
+    assert cap["sliding_span"] == W_REAL, "sliding layers must read the bounded window"
+    assert set(cap["window_layers"]) == {0, 1, 2, 3, 4}, "only the sliding layers are bounded"
+    assert all(v == W_REAL for v in cap["window_layers"].values())
+    assert cap["refreshed"] == PROMPT_REAL
+
+
+def test_bounded_read_does_not_engage_without_the_retention_mask(monkeypatch):
+    """A bounded read without the retention mask would CHANGE visibility, not implement it.
+
+    This is the property the deleted DG_DENOISE_SLIDING_SPAN gate used to carry, and it is the one
+    thing about the bounded read that is NOT bit-identical -- so it has to keep being tested.
+    """
+    cap = _drive_fixed_reveal(monkeypatch, retention=False)
+    assert cap["enforce_window"] is False
+    assert cap["sliding_span"] is None, "the bounded read must stay off without retention"
+    assert "window_layers" not in cap, "no block-resident window buffers may be allocated"
+
+
+def test_the_deleted_span_flag_stays_deleted():
+    """Reintroducing the selector should have to delete this test."""
+    assert not hasattr(DF, "denoise_sliding_span_enabled"), "the DG_DENOISE_SLIDING_SPAN gate is back"
 
 
 def test_read_span_is_tile_aligned_and_capped_by_pmax():

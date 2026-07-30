@@ -116,10 +116,10 @@ Also unfinished: the clean-question mechanism arm (`gate/padfix_regression_arm.s
 
 Set `DG_DENOISE_HIDE_PREFILL_PADS=0` for the old maskless behaviour.
 
-**Landmine:**
-combining this with a bounded sliding span (`DG_DENOISE_SLIDING_SPAN=1`, default off) raises
-`NotImplementedError` -- the bounded read is built for (span, lo), so pad slots need mapping into that
-window first.
+The bounded sliding read composes with it. That combination used to raise `NotImplementedError`;
+since `a25adba5260` the bounded builder takes the same absolute-position pad span, because its key
+axis already carries absolute positions. The bounded read is unconditional now and
+`DG_DENOISE_SLIDING_SPAN` no longer exists.
 
 `DG_VLLM_GUMBEL_MODE` defaults to **`device`**, the on-device permuted-vocab RNG: **~53.6 vs ~36.3
 tokens/block/s** against `host` (~1.48x), since it removes the per-step host RNG and its replicated

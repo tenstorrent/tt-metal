@@ -154,28 +154,41 @@ def build_device_canvas_reveal_window_mask(
     )
 
 
-def denoise_sliding_span_enabled() -> bool:
-    """Whether sliding layers read a BOUNDED prefix span instead of the full p_max (#51080 item 3).
-
-    This is the perf half of the sliding-window work: a sliding layer only needs the
-    ``sliding_window - 1`` most recent committed tokens, so reading the whole ``p_max`` prefix on
-    25 of 30 layers is wasted SDPA key rows. Bounding the read takes the per-step key rows from
-    ``30*(p_max+C)`` to ``25*(span+C) + 5*(p_max+C)``.
-
-    Requires :func:`denoise_sliding_window_enabled` — without the retention mask a bounded read
-    would silently change visibility rather than implement it. Default OFF for the same reason
-    that flag is: above ``prompt_len = sliding_window - 1`` it is decision-affecting.
-    """
-    if not denoise_sliding_window_enabled():
-        return False
-    return os.environ.get("DG_DENOISE_SLIDING_SPAN", "0").lower() in ("1", "true", "yes", "on")
-
-
 def sliding_read_span(sliding_window: int, p_max: int) -> int:
     """Tile-aligned rows a sliding layer must read to cover HF's retained window.
 
     HF retains ``sliding_window - 1`` tokens, which is not tile-aligned (1023), so read one whole
     tile more and let the mask drop the extra column(s). Never exceed ``p_max``.
+
+    This is the perf half of the sliding-window work (#51080 item 3): a sliding layer only needs the
+    ``sliding_window - 1`` most recent committed tokens, so reading the whole ``p_max`` prefix on 25
+    of 30 layers is wasted SDPA key rows. Bounding the read takes the per-step key rows from
+    ``30*(p_max+C)`` to ``25*(span+C) + 5*(p_max+C)`` — at ``p_max=16384, C=256, span=1024`` that is
+    499,200 -> 115,200, a 4.33x reduction, measured at **-18.9% s/block**.
+
+    It is BIT-IDENTICAL, and that is why there is no flag for it any more (``DG_DENOISE_SLIDING_SPAN``
+    was deleted 2026-07-29). Retention keeps ``[prompt_len-1023, prompt_len)``, a SUBSET of the window
+    ``[prompt_len-1024, prompt_len)``; the one window position that is not retained is masked either
+    way; and every key outside the window is masked in the full-span read. The attended set is
+    therefore the same, so the only difference is how many exactly-zero terms are summed, and an
+    all-``-inf`` flash-SDPA block moves neither the running max nor the sum. Measured: completions
+    byte-identical (sha256) 10/10 in two independent pairings, plus an earlier 4096 run recorded
+    ``committed_sha256`` bit-identical (doc/optimize_perf/README.md).
+
+    The argument depends on the retention mask being enforced, which is why the bounded read is gated
+    on :func:`denoise_sliding_window_enabled` at its one decision point in ``tt/traced_denoise.py``
+    rather than on a flag of its own. Without retention a bounded read would silently CHANGE
+    visibility instead of implementing it. That is also enforced independently:
+    :meth:`DenoiseLogitsAdapter.prepare_reveal_mask_buffers` raises on a span without
+    ``enforce_window``, so the invariant survives the gate regressing.
+
+    "Bit-identical" is about OUTPUT, not about memory: it is **not free in DRAM**. The block-resident
+    window buffers cost ~50 MiB/chip at ``p_max=16384``, while the smaller sliding-layer reveal mask
+    saves only ~7.5 MiB (masks are keyed by layer TYPE, so there is ONE sliding mask, not 25) — a net
+    **+42.5 MiB/chip resident**. Resident break-even is ``p_max`` ~103k, far above anything served
+    today; the win is the transient per-step read, not residency. ~1% of the measured 4 GiB headroom,
+    and a 71-question run at 16384 completed with it on, so it is affordable — but do not describe
+    this change as costless.
     """
     needed = int(sliding_window)  # (sliding_window - 1) rounded up to the next tile == sliding_window when W%32==0
     span = ((needed + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
@@ -253,13 +266,13 @@ def hide_prefill_pads_enabled() -> bool:
     have no pad slots, so the mask is unchanged there (verified: doc 47 is byte-identical across both
     arms). Set DG_DENOISE_HIDE_PREFILL_PADS=0 for the old maskless behaviour.
 
-    Composes with a BOUNDED sliding span (DG_DENOISE_SLIDING_SPAN=1). That combination used to raise
-    NotImplementedError; the bounded builder now takes the same absolute-position span, because its
-    key axis already carries absolute positions and needs no column arithmetic. In a sliding layer
-    the predicate is self-retiring: the pads sit at the start of the prompt, so once the window has
-    scrolled past them it is a no-op and the mask returns to its prompt_len-independent steady state.
-    The 5 full-attention layers read the whole p_max prefix and keep hiding the pads for the whole
-    run.
+    Composes with the bounded sliding read, which is now unconditional on the traced path whenever
+    retention is enforced. That combination used to raise NotImplementedError; the bounded builder
+    takes the same absolute-position span, because its key axis already carries absolute positions and
+    needs no column arithmetic. In a sliding layer the predicate is self-retiring: the pads sit at the
+    start of the prompt, so once the window has scrolled past them it is a no-op and the mask returns
+    to its prompt_len-independent steady state. The 5 full-attention layers read the whole p_max
+    prefix and keep hiding the pads for the whole run.
     """
     return os.environ.get("DG_DENOISE_HIDE_PREFILL_PADS", "1").lower() in ("1", "true", "yes", "on")
 
@@ -1071,6 +1084,23 @@ class MutablePrefixKVReader:
         self.window_layers = {int(k): int(v) for k, v in dict(window_layers).items()}
         if not self.window_layers:
             return
+        # FAIL LOUD on prefill-from-non-zero. The bounded read derives its absolute offset as
+        # ``sliding_read_offset(prompt_len, span, p_max)`` and passes that straight through as
+        # ``seq_len_start`` (below, and again in refresh_windows) -- it does NOT add
+        # ``self.seq_len_start`` the way the unbounded read does. While every production construction
+        # passes 0 that is invisible, but "prefill-from-non-zero" is the declared keystone of the
+        # vLLM-native plan (doc/vllm_integration), and the day it lands 25 of 30 layers would read the
+        # wrong 1024 rows with no error anywhere. This used to be reachable only by opting into
+        # DG_DENOISE_SLIDING_SPAN; the bounded read is the default now, so the hole has to be a raise
+        # rather than a dormant note. Fix is to fold seq_len_start into the offset in BOTH places and
+        # delete this guard, with a test at a non-zero base.
+        if self.seq_len_start != 0:
+            raise NotImplementedError(
+                f"bounded sliding read does not support a non-zero prefix base yet "
+                f"(seq_len_start={self.seq_len_start}); its offset is computed from prompt_len alone, "
+                f"so it would read the wrong absolute rows. Fold seq_len_start into "
+                f"sliding_read_offset before enabling prefill-from-non-zero."
+            )
         p_max = self.read_span if self.read_span is not None else self.prompt_len
         mesh_device = self.tt_model.mesh_device
         for layer_idx, span in sorted(self.window_layers.items()):

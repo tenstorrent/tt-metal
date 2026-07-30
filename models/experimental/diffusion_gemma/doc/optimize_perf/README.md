@@ -47,24 +47,17 @@ Current guardrails:
 - `DG_PREFILL_RAGGED_LONG` defaults on. Every multi-token prefill uses the ragged top-8 path;
   sequences above 4096 are processed in 4096-token slices. Setting it to `0` is a diagnostic
   control that reproduces the historical dense all-128-expert fallback and 4K→16K cliff.
-- `DG_SPARSE_MOE` (the denoise-step MoE) defaults **on** as of 2026-07-24: the true-sparse
-  token-gather path is the optimized default (~5× faster/step than dense-128; MoE is ~89% of the
-  denoise step). `DG_SPARSE_MOE=0` now **fails loud** (`RuntimeError`) — the ~5×-slower dense-128
-  reference is no longer a silent runtime fallback; set `DG_ALLOW_DENSE_MOE=1` to run it explicitly
-  for A/B / PCC baselines. **Correction 2026-07-27:** the "~5× faster/step than dense-128" figure
-  was measured at `DG_SPARSE_MOE_CAPACITY=32` against `gemma4`'s serial per-expert prefill
-  `sparse_matmul`. At the shipped `capacity=256` the gather (`sparse_moe.py`, `disp^T @ hidden`) and
-  combine (`comb @ down_flat`) matmuls add ~89% more MACs on top of an expert MAC count that is
-  *identical* to a dense concat-experts matmul, so the sparse path is not a win at the capacity we
-  serve; it has not been re-measured against a well-configured dense baseline. See
-  `winter_borrow_20260727.md`.
-- `DG_SPARSE_MOE_TUNED` is default-on (OPT-004 matmul geometry). **Correction 2026-07-27:** from
-  2026-07-15 (`746cfe53cb6`, which moved the capacity default to the canvas length) until
-  2026-07-27 the tuned configs were additionally gated on `C == DEFAULT_CAPACITY` (=32) and so were
-  **inert on the production path** — every MoE matmul ran the auto-config. The gate is gone; the
-  builders now walk the per-core blocking down to something L1-legal at any capacity and omit only
-  what genuinely does not fit (logged as a warning). The "3.47× / ~13×" numbers quoted for this
-  flag are C=32 measurements and are not a claim about C=256.
+- **The denoise MoE is `tt/concat_moe.py` concat-experts, and it is the ONLY one.** `DG_SPARSE_MOE`,
+  `DG_ALLOW_DENSE_MOE`, `DG_SPARSE_MOE_TUNED`, `DG_MOE_DISPATCH_FUSED2` and `DG_MOE_FUSED_GATHER`
+  were all DELETED with the token-gather path in `7417bd7d69d` (2026-07-29) — setting any of them now
+  does nothing. The token-gather dispatch was removed because it does not let the denoise trajectory
+  converge (entropy plateaus at ~0.46 against a 0.005 halt threshold, so the early halt never fires
+  and ~2/3 of requests end degenerate), and because at the shipped `capacity=256` its gather/combine
+  matmuls added ~89% MACs on top of an expert MAC count already equal to computing every expert.
+  `tt/sparse_moe.py` is now prefill-only (ragged zero-drop top-8); nothing in it is on the denoise
+  path. The OPT-004 geometry numbers ("3.47x / ~13x") were C=32 measurements of a path that no longer
+  exists — they are provenance, not guidance. See `winter_borrow_20260727.md` and
+  `flag_triage_20260728.md` for the history.
 - The current pure full-depth 64K-build artifact is
   `context_window_prefill_only_chunkedlong_20260713_msl65536.{json,md}`:
   1K 0.78 s, 4K 1.37 s, 8K 4.15 s, 16K 5.55 s, 32K 10.84 s, 64K 35.58 s.
@@ -250,8 +243,8 @@ prefix cost. Outcomes so far, including the one that was refuted:
 |---|---|---|
 | SDPA `q_chunk` 32 → 64/128 | **refuted** — bit-exact but ≤1%, inside noise. Default stays 32. | `qchunk_sweep_20260724.md`, `sweep_denoise_qchunk.sh` |
 | Borrow the KV cache instead of cloning it per step | **landed, default ON** (`DG_PREFIX_BORROW=0` to opt out). Bit-identical `committed_sha256`, ~5.5% off the steady block. | `verify_prefix_borrow.sh` |
-| HF sliding-layer key retention on the 25 sliding layers | **landed, default OFF** (`DG_DENOISE_SLIDING_WINDOW=1`). Fidelity fix; unbound blocks bit-identical, enforcement proven live on device. | `per_layer_prefix_spans.md`, `verify_denoise_sliding_window.sh` |
-| Bounded 1024-row sliding read (block-resident buffers) | **landed, gated** (`DG_DENOISE_SLIDING_SPAN=1`). SDPA key rows/step 130560 -> 53760 (2.43x), `committed_sha256` bit-identical. | `per_layer_prefix_spans.md`, `verify_sliding_span.sh` |
+| HF sliding-layer key retention on the 25 sliding layers | **landed, default ON** (`DG_DENOISE_SLIDING_WINDOW=0` to opt out). Fidelity fix; unbound blocks bit-identical, enforcement proven live on device. This row said "default OFF" long after the code default was `1` -- do not re-derive the default from a doc. | `per_layer_prefix_spans.md`, `verify_denoise_sliding_window.sh` |
+| Bounded 1024-row sliding read (block-resident buffers) | **landed, unconditional; the flag is DELETED** (2026-07-29). It follows the retention mask above, because the bounded read is bit-identical whenever retention is enforced and would change visibility without it. SDPA key rows/step 130560 -> 53760 (2.43x) at p_max 4096 and 499200 -> 115200 (4.33x) at 16384; **-18.9% s/block**, completions byte-identical 10/10. Grep a log for `bounded sliding read:` to confirm engagement. | `per_layer_prefix_spans.md` |
 | Canvas-tail workspace + `fill_cache` | **landed but NOT worth enabling** (`DG_DENOISE_CANVAS_TAIL`, default OFF). Bit-identical, ~1.4% *slower*: the bounded span above already removed the concat it targets. | `canvas_tail_workspace.md`, `verify_canvas_tail.sh` |
 
 Two method notes worth carrying forward, both learned the hard way here:
@@ -355,7 +348,12 @@ measured Blackhole TP=4 program geometry locally (`tt/prefill_moe.py`). Gate/up 
   `context_window_sweep_20260710_msl*.json` source artifacts. The original prompt recipe was
   not retained, so this is a directional historical comparison, not a same-input A/B.
 
-## OPT-004 — matmul-geometry tuning of the 5 sparse-MoE matmuls (rank 2)
+## OPT-004 — matmul-geometry tuning of the 5 sparse-MoE matmuls (rank 2) — RETIRED 2026-07-29
+
+**This whole section is history.** The 5 matmuls it tuned belonged to the token-gather denoise MoE,
+which was deleted in `7417bd7d69d` along with `DG_SPARSE_MOE_TUNED`. Nothing below is runnable; the
+weight-bound conclusion survives because it is a property of the all-128 weight bank, not of the
+dispatch.
 
 The sparse MoE's 5 `ttnn.matmul` calls (`tt/sparse_moe.py`) were never given a `program_config` — the
 Lever-A prototype let the op auto-select, reading the expert bank at only ~46 GB/s (~18% of the @256

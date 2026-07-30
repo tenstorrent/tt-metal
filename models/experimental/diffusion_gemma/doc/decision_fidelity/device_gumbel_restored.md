@@ -786,7 +786,8 @@ fidelity defect was also a throughput defect. Over 22 paired questions:
 | steady per-block latency | — | **0.652x → 1.53x faster** |
 | block throughput | 11.6 tok/blk/s | **17.6 tok/blk/s** |
 
-It also unlocks `DG_DENOISE_SLIDING_SPAN`, which refuses to engage without the retention mask and cuts
+It also unlocks the bounded sliding read, which refuses to engage without the retention mask and cuts
+(as of 2026-07-29 that read is unconditional and `DG_DENOISE_SLIDING_SPAN` no longer exists)
 SDPA key rows per step by 2.43x bit-identically -- so this gate opens a second perf lever that could
 not previously be evaluated at all.
 

@@ -10,8 +10,16 @@
 #
 # The change has a sharp regime split, and the gate is deliberately ONE-SIDED:
 #
+# NOTE 2026-07-29: this arm now moves TWO things, not one. The bounded sliding read became
+# unconditional and follows this same flag (DG_DENOISE_SLIDING_SPAN was deleted), so arm 0 has
+# neither retention nor the bounded read and arm 1 has both. The hard gate below still holds and in
+# fact tests a STRONGER claim: at P <= W-1 the bounded read's offset is lo = max(0, P-1024) = 0, so
+# its window [0,1024) already contains every committed key, and the bounded read is byte-identical
+# there just as the mask is. A failure now means either half.
+#
 #   committed prefix P at block k = cache_len + 256*(k-1)
-#     P <= W-1  -> nothing has been evicted yet, the sliding mask is IDENTICAL to today's
+#     P <= W-1  -> nothing has been evicted yet, the sliding mask is IDENTICAL to today's and the
+#                  bounded window covers the whole committed prefix
 #                  -> those blocks MUST be bit-identical (per_block_sha256). HARD GATE.
 #     P >= W    -> keys are evicted, so the mask differs. Committed tokens MAY differ, but
 #                  equality is NOT a failure: at the real W=1024 only P-(W-1) keys are evicted
