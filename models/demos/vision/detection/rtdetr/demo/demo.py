@@ -9,14 +9,17 @@ import requests
 import torch
 from loguru import logger
 from PIL import Image, ImageDraw
-from transformers import RTDetrForObjectDetection, RTDetrImageProcessor
+from transformers import RTDetrForObjectDetection, RTDetrImageProcessor, RTDetrV2ForObjectDetection
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.vision.detection.rtdetr.common.preprocessing import custom_preprocessor
 from models.demos.vision.detection.rtdetr.tt.model import TtRTDetrModel
 
-MODEL_NAME = "PekingU/rtdetr_r50vd"
+MODEL_CONFIGS = {
+    1: ("PekingU/rtdetr_r50vd", RTDetrForObjectDetection),
+    2: ("PekingU/rtdetr_v2_r50vd", RTDetrV2ForObjectDetection),
+}
 
 SAMPLE_TEST_IMAGES = [
     "http://images.cocodataset.org/val2017/000000039769.jpg",
@@ -108,16 +111,18 @@ def save_detection_images(
         logger.info(f"Saved TT output to {tt_path}")
 
 
-def run_demo(image_sources: list[str], threshold: float, device_id: int) -> Path:
+def run_demo(image_sources: list[str], threshold: float, device_id: int, version: int = 1) -> Path:
     if len(image_sources) != 1:
         raise ValueError("The current demo supports batch size 1")
 
     output_directory = create_output_directory()
     images = [load_image(source) for source in image_sources]
 
-    logger.info(f"Loading {MODEL_NAME}")
-    image_processor = RTDetrImageProcessor.from_pretrained(MODEL_NAME)
-    torch_model = RTDetrForObjectDetection.from_pretrained(MODEL_NAME).eval()
+    model_name, model_class = MODEL_CONFIGS[version]
+
+    logger.info(f"Loading RT-DETR v{version}: {model_name}")
+    image_processor = RTDetrImageProcessor.from_pretrained(model_name)
+    torch_model = model_class.from_pretrained(model_name).eval()
     pixel_values = image_processor(images=images, return_tensors="pt").pixel_values
     _, _, input_height, input_width = pixel_values.shape
     target_sizes = torch.tensor([(image.height, image.width) for image in images])
@@ -186,6 +191,7 @@ def main():
     parser.add_argument("--sample_image", type=int, default=0, help="Sample input image number from 0-9")
     parser.add_argument("--threshold", type=float, default=0.5, help="Detection confidence threshold")
     parser.add_argument("--device-id", type=int, default=0, help="TT device ID")
+    parser.add_argument("--model_version", type=int, choices=(1, 2), default=1, help="RT-DETR model version")
 
     args = parser.parse_args()
 
@@ -193,6 +199,7 @@ def main():
         image_sources=args.images or [SAMPLE_TEST_IMAGES[args.sample_image]],
         threshold=args.threshold,
         device_id=args.device_id,
+        version=args.model_version,
     )
 
 

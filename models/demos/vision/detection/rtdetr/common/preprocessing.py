@@ -300,10 +300,10 @@ def preprocess_rtdetr_enc_bbox_head(torch_module, *_):
 
 
 def custom_preprocessor(torch_module, name):
-    if torch_module.__class__.__name__ == "RTDetrHybridEncoder":
+    if torch_module.__class__.__name__ in ("RTDetrHybridEncoder", "RTDetrV2HybridEncoder"):
         return preprocess_rtdetr_hybrid_encoder(torch_module)
 
-    if torch_module.__class__.__name__ == "RTDetrConvNormLayer":
+    if torch_module.__class__.__name__ in ("RTDetrConvNormLayer", "RTDetrV2ConvNormLayer"):
         return preprocess_rtdetr_conv_norm_layer(torch_module)
 
     if name == "decoder":

@@ -119,7 +119,8 @@ class TtRTDetrMultiscaleDeformableAttention:
         self.num_heads = config.decoder_attention_heads
         self.n_points = config.decoder_n_points
         self.d_model = config.d_model
-        self.n_levels = config.num_feature_levels
+        self.n_levels = getattr(config, "decoder_n_levels", config.num_feature_levels)
+        self.offset_scale = getattr(config, "decoder_offset_scale", 0.5)
 
         self.im2col_step = 64
 
@@ -305,7 +306,9 @@ class TtRTDetrMultiscaleDeformableAttention:
             reference_points_wh = ttnn.reshape(
                 reference_points_wh, (batch_size, num_queries, 1, num_reference_levels, 1, 2)
             )
-            sampling_locations = reference_points_xy + sampling_offsets / self.n_points * reference_points_wh * 0.5
+            sampling_locations = (
+                reference_points_xy + sampling_offsets / self.n_points * reference_points_wh * self.offset_scale
+            )
         else:
             raise ValueError(f"Last dim of reference_points must be 2 or 4, but got {reference_points.shape[-1]}")
 
