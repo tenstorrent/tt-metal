@@ -68,12 +68,9 @@ BmmTensors create_bmm_tensors(distributed::MeshDevice& mesh_device, const BmmPar
     const uint32_t num_tiles_B = p.Kt * p.Nt * p.B_total;
     const uint32_t num_tiles_C = p.Mt * p.Nt * p.B_total;
     return {
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_A), TensorTopology{}),
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_B), TensorTopology{}),
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_C), TensorTopology{}),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_A)),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_B)),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_C)),
     };
 }
 

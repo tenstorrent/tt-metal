@@ -14,6 +14,8 @@
 
 #include "ttnn/tensor/storage.hpp"
 
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+
 namespace ttnn {
 
 using tt::tt_metal::Buffer;
@@ -97,8 +99,8 @@ struct DeviceStorage::MeshTensorHolder {
         if (auto* allocated = std::get_if<Allocated>(&state_)) {
             // Capture spec/topology, then replace the Allocated state. The MeshTensor is destroyed by this
             // assignment, and its destructor releases the underlying device memory.
-            state_ =
-                DeallocatedTombStone{allocated->mesh_tensor_.tensor_spec(), allocated->mesh_tensor_.tensor_topology()};
+            state_ = DeallocatedTombStone{
+                allocated->mesh_tensor_.tensor_spec(), tt::tt_metal::get_tensor_topology(allocated->mesh_tensor_)};
         }
     }
 };
@@ -258,7 +260,7 @@ DeviceStorage DeviceStorage::combine_device_storages(
         tt::tt_metal::distributed::MeshShape(vec_coords.size()), shard_dim);
 
     DeviceStorage res(model_storage, std::move(vec_coords));
-    res.get_mesh_tensor().update_tensor_topology(topology);
+    update_tensor_topology(res.get_mesh_tensor(), topology);
     return res;
 }
 
@@ -279,7 +281,7 @@ const TensorTopology& DeviceStorage::get_tensor_topology() const {
     return std::visit(
         ttsl::overloaded{
             [](const MeshTensorHolder::Allocated& allocated) -> const TensorTopology& {
-                return allocated.mesh_tensor_.tensor_topology();
+                return tt::tt_metal::get_tensor_topology(allocated.mesh_tensor_);
             },
             [](const MeshTensorHolder::DeallocatedTombStone& tombstone) -> const TensorTopology& {
                 return tombstone.tensor_topology_;
