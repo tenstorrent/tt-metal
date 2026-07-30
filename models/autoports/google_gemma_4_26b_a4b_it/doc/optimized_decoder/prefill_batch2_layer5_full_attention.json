@@ -5,11 +5,11 @@
   "layer_type": "full_attention",
   "model_id": "google/gemma-4-26B-A4B-it",
   "optimized_stage_provenance": {
-    "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+    "checkout_git_sha": "350fd696210cf21f61ba936e73f3285e1454073f",
     "exact_command": "pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_shape_batch2_prefill[blackhole-full_attention-device_params0-mesh_device0]",
     "hardware": {
       "arch": "Blackhole P300C",
-      "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+      "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39"
     },
     "optimized_decoder_sha256": "c3097938ef5162426d3f8684a9de9fdc3bccdbe0db51aa583aaeb4a9067fc37c",
     "optimized_test_sha256": "1b60098494fe482f7e06b6d83992b8b82ca214bfb1a643815c2d99af455b1013",
@@ -48,9 +48,7 @@
         "tensor_cache_path": "None",
         "weight_dtype": "DataType.BFLOAT16"
       },
-      "environment_overrides": {
-        "GEMMA4_OPT_CANDIDATE_ID": "final_v2_suite"
-      }
+      "environment_overrides": {}
     }
   },
   "page_table_shape": [
