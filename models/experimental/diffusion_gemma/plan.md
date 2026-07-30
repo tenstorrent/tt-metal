@@ -114,8 +114,11 @@ both pass, RoPE caches reach 262144, and integrated tiny-model denoise attention
 `P+C = 33280` and `262144` for both layer types. The work collapsed to re-keying the `prefill.py`
 `long_seq` guard against **K length** instead of Q `seq_len`. Repro (env: see §5):
 `DG_W2B_SDPA_SWEEP=full pytest models/experimental/diffusion_gemma/tests/test_device_long_sdpa_w2b.py -q`
-(29 passed), also wired into `tests/pipeline_reorg/blackhole_e2e_tests.yaml` as
-`bh-diffusion-gemma-w2b-full-sweep`. Residual: the integrated case is a tiny config (hidden 128,
+(29 passed). It was briefly wired into `tests/pipeline_reorg/blackhole_e2e_tests.yaml` as
+`bh-diffusion-gemma-w2b-full-sweep`, but that entry was **removed on 2026-07-30**: it is an
+out-of-folder change, it needed a `.github/time_budget.yaml` bump that never landed, and it could
+only red the Blackhole e2e workflow. Re-land it as its own change, with the budget bump in the same
+commit. Residual: the integrated case is a tiny config (hidden 128,
 head_dim 32); real-26B integration is #47464. Four refuted framings from that spike are in the
 [refuted list](doc/REFUTED.md#sampling-rng-and-decision-fidelity).
 

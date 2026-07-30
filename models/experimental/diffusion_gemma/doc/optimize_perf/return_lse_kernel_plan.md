@@ -103,15 +103,20 @@ existing indices stay stable; and `ttnn::prim::sdpa` keeps returning element `[0
 by `tt/attention_merge.py::merge_attention_partials` (task T7, device-verified,
 `tests/test_attention_merge.py` 3/3).
 
-## Reproduction
+## Reproduction (after re-landing the extension)
 
-env: see [plan](../../plan.md).
+env: see [plan](../../plan.md). The extension and its test are **not in the tree** — restore them
+first with `git checkout 2e18c599bd3 -- ttnn/cpp/ttnn/operations/transformer/sdpa/
+models/experimental/diffusion_gemma/tests/test_return_lse.py`, then:
 
 ```bash
 ninja -C build ttnn        # `build` -> `build_Release`
 cp build/ttnn/_ttnn.so ttnn/ttnn/_ttnn.so
 pytest tests/test_return_lse.py
 ```
+
+A stale `_ttnn.so` will keep accepting `return_lse=True` and mask whether the restore worked, so the
+copy is not optional.
 
 The compute kernel is JIT and recompiles on the next device run.
 
