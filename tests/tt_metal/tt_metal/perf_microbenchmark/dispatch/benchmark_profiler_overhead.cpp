@@ -211,17 +211,20 @@ BENCHMARK_CAPTURE(BM_profiled_dispatch, worst, WORST_SHAPE)->Apply(DispatchConfi
 
 int main(int argc, char** argv) {
 #if defined(TRACY_ENABLE)
-    // Force the device profiler on before any MetalContext / rtoptions construction so kernels
-    // JIT-compile with -DPROFILE_KERNEL and ReadMeshDeviceProfilerResults is not a no-op. On a
-    // non-Tracy build this env var would TT_FATAL, so it is only set when profiling is compiled in.
-    if (std::getenv("TT_METAL_DEVICE_PROFILER") == nullptr) {
-        setenv("TT_METAL_DEVICE_PROFILER", "1", /*overwrite=*/1);
-    }
+    // Force the benchmark's required runtime mode before any MetalContext / rtoptions construction,
+    // OVERWRITING any inherited value: kernels must JIT-compile with -DPROFILE_KERNEL and the read
+    // path must be active, so an inherited TT_METAL_DEVICE_PROFILER=0 would silently invalidate the
+    // measurement. Likewise clear TT_METAL_PROFILER_ACCUMULATE so each read performs the full
+    // L1->DRAM writeout (this benchmark's contract) rather than the accumulate read path.
+    setenv("TT_METAL_DEVICE_PROFILER", "1", /*overwrite=*/1);
+    unsetenv("TT_METAL_PROFILER_ACCUMULATE");
 #else
-    log_warning(
-        tt::LogTest,
-        "benchmark_profiler_overhead built without TRACY_ENABLE; profiler reads are no-ops and the "
-        "measured overhead will be ~0. Build with ENABLE_TRACY=ON to get meaningful numbers.");
+    // Without Tracy the profiler is compiled out: ReadMeshDeviceProfilerResults is a no-op and the
+    // measured overhead is ~0. Emitting near-zero results with exit code 0 would let a misconfigured
+    // (non-profiler) build pass CI, or read as an improvement under a future one-sided gate. Fail
+    // hard instead so the benchmark is only ever run against a meaningful build.
+    log_error(tt::LogTest, "benchmark_profiler_overhead requires a Tracy-enabled build; rebuild with ENABLE_TRACY=ON.");
+    return 1;
 #endif
 
     benchmark::Initialize(&argc, argv);
