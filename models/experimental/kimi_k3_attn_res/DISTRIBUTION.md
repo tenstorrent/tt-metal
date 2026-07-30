@@ -258,3 +258,13 @@ halves per device and the call count does not.
 > is there, so it and the fold are alternatives: with the fold in, the second link buys
 > 4.7 µs, and **`num_links` stays at 1** — the opposite of what this section expected. Full
 > record: `bringup_log.md` §Phase 9 perf loop.
+
+> **A distribution fact this memo did not anticipate (P7).** Sharding the hidden dim is not
+> only a memory and bandwidth argument — it decides which *primitives are available*. The
+> one-pass sum of squares (`rms_norm_pre_all_gather`, 3.4× faster than `mul` + `sum`) keeps a
+> whole row in one core's L1 and throws at program build past `W ≈ 5 664`. At `tp_factor = 4`
+> the row is 1 792 wide and it fits; at `tp_factor = 1` the row is the full 7 168 and it does
+> not, so single-device falls back. TP therefore *unlocks* a kernel rather than merely
+> dividing work — and the production mesh is on the right side of the line, while the
+> single-device path this bring-up validated against is on the wrong one. Worth remembering
+> when a future op is benchmarked on one device and declared slow.

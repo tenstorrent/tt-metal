@@ -375,3 +375,169 @@ def test_perf_read_by_stats_layout(mesh_device, num_sealed, num_links, fold_stat
     ttnn.release_trace(mesh_device, trace_id)
     for tensor in (out, tt_prefix, tt_block, tt_query):
         ttnn.deallocate(tensor)
+
+
+HIFI = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+)
+
+
+def _reduce_variants(v, q):
+    """The ways to get one scalar per (token, candidate) out of `v`.
+
+    Each entry reads `[1, C, N, d/tp]` and returns `[1, C, N, *]`. `mul-sum` is
+    what the op does today: an elementwise pass that writes a second full-size
+    tensor to DRAM, then a reduce that reads it back. Three passes over the
+    largest tensor in the op to produce 0.6% of its bytes.
+
+    The `hifi` rows are the only *admissible* one-pass forms. At default fidelity
+    both single-op replacements lose an order of magnitude of accuracy — the
+    RMSNorm statistics kernel goes to 4.8e-2 against today's 2.4e-3, and the
+    matvec to 1.3e-2 against 3.2e-3 — because LoFi truncates the bf16 mantissa
+    going into the multiply. HiFi4 with fp32 dest accumulation fixes both
+    (7.4e-4 and 3.2e-3), so it is part of the candidate, not a tuning knob, and
+    the timing below has to be read off those rows.
+    """
+    q_col = lambda: ttnn.permute(q, [0, 1, 3, 2])
+    return {
+        "floor: sum(v)": lambda: ttnn.sum(v, dim=3, keepdim=True),
+        "sumsq: mul+sum (today)": lambda: _consume(ttnn.mul(v, v), lambda s: ttnn.sum(s, dim=3, keepdim=True)),
+        "sumsq: rms_norm_pre_ag": lambda: ttnn.rms_norm_pre_all_gather(v, dtype=ttnn.bfloat16),
+        "sumsq: rms_norm_pre_ag hifi": lambda: ttnn.rms_norm_pre_all_gather(
+            v, dtype=ttnn.float32, compute_kernel_config=HIFI
+        ),
+        "dots: mul+sum (today)": lambda: _consume(ttnn.mul(v, q), lambda p: ttnn.sum(p, dim=3, keepdim=True)),
+        "dots: matmul": lambda: ttnn.matmul(v, q_col()),
+        "dots: matmul hifi": lambda: ttnn.matmul(v, q_col(), compute_kernel_config=HIFI),
+        # `_mix` has the same three-pass shape but reduces over candidates, so its
+        # output is full `d` wide. Its floor is one read of `v` plus a `d`-wide write,
+        # and there is no fused elementwise-then-reduce-over-a-batch-dim op to reach
+        # it — the gap prices a `[1, N, C, d/tp]` layout, where the mix is a batched
+        # matmul, against the cost of transposing to get there.
+        "mix: mul+sum (today)": lambda: _consume(ttnn.mul(v, q), lambda w: ttnn.sum(w, dim=1, keepdim=True)),
+        "mix floor: sum(v, dim=1)": lambda: ttnn.sum(v, dim=1, keepdim=True),
+    }
+
+
+def _consume(intermediate, then):
+    """Run `then` on a full-size intermediate and free it, as the op does."""
+    result = then(intermediate)
+    ttnn.deallocate(intermediate)
+    return result
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [((2, 4), FABRIC)], indirect=["mesh_device", "device_params"], ids=["mesh-2x4"]
+)
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "floor: sum(v)",
+        "sumsq: mul+sum (today)",
+        "sumsq: rms_norm_pre_ag",
+        "sumsq: rms_norm_pre_ag hifi",
+        "dots: mul+sum (today)",
+        "dots: matmul",
+        "dots: matmul hifi",
+        "mix: mul+sum (today)",
+        "mix floor: sum(v, dim=1)",
+    ],
+    ids=[
+        "floor",
+        "sumsq-today",
+        "sumsq-pre-ag",
+        "sumsq-pre-ag-hifi",
+        "dots-today",
+        "dots-matmul",
+        "dots-matmul-hifi",
+        "mix-today",
+        "mix-floor",
+    ],
+)
+def test_perf_d_reduction_by_form(mesh_device, variant):
+    """P7: the `d`-wide reductions, which are 76% of the read's device time.
+
+    P4 through P6 chased the collective and won 4.5%. The profiler says the
+    real weight is elsewhere: seven ops that touch the full `[1, C, N, d/tp]`
+    tensor, of which `mul(v, v)` + `sum` alone is 1 041 µs per read. Both of the
+    op's `d`-reductions are written as elementwise-then-reduce, so each one
+    writes a second copy of the biggest tensor in the op to DRAM and reads it
+    back — three passes where the arithmetic needs one.
+
+    `floor: sum(v)` is the control: one pass over `v`, a tile-column out, no
+    intermediate. Nothing in this table can beat it, and the gap between it and
+    `mul+sum` is what the extra two passes cost. `rms_norm_pre_ag` is the
+    distributed-RMSNorm statistics op doing the square inside the reduce kernel;
+    `matmul` is the dot as the matvec it actually is.
+
+    Traced, so this is device time. Precision is not free at either candidate —
+    the matvec accumulates ~3x looser than `mul` + `sum` at default fidelity
+    (`tests/probe_stats_primitive.py`) — so a win here buys a PCC re-gate, not
+    a drop-in.
+    """
+    tokens_per_rank = PRODUCTION_TOKENS // 2
+    width_per_rank = HIDDEN_SIZE // 4
+    torch.manual_seed(0)
+    place = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    v = place(torch.randn(1, NUM_SEALED + 1, tokens_per_rank, width_per_rank))
+    q = place(torch.randn(1, 1, 1, width_per_rank))
+
+    body = _reduce_variants(v, q)[variant]
+    ttnn.deallocate(body())
+    ttnn.synchronize_device(mesh_device)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = body()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    enqueue_us, total_us = _bench(
+        mesh_device, lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    )
+    read_mib = (NUM_SEALED + 1) * tokens_per_rank * width_per_rank * 2 / 1024**2
+    _report(f"{variant} [{read_mib:.0f} MiB in] traced", enqueue_us, total_us)
+
+    ttnn.release_trace(mesh_device, trace_id)
+    for tensor in (out, v, q):
+        ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [((2, 4), FABRIC)], indirect=["mesh_device", "device_params"], ids=["mesh-2x4"]
+)
+@pytest.mark.parametrize("num_sealed", [1, 4, 8])
+@pytest.mark.parametrize("one_pass_stats", [False, True], ids=["three-pass", "one-pass"])
+def test_perf_read_by_reduction_form(mesh_device, num_sealed, one_pass_stats):
+    """P7 in the op, not in isolation — the lesson P6 paid for.
+
+    The variants above say the one-pass forms are worth 892 µs of a 3 136 µs read
+    at `S = 8`. They were measured on a bare `v`, so they were not charged for
+    what the op has to do to use them: slice column 0 out of the statistics
+    kernel's 32-wide output, and transpose `q` into a column for the matvec. P6's
+    fold looked like a 301 µs win standalone and netted 148 in place.
+
+    Both `S` are here for the same reason as in the layout sweep: the schedule's
+    mean is 5.39. Unlike the fold, this saving is proportional to `C = S + 1`,
+    so the ratio should hold at both and the absolute saving should not.
+    """
+    prefix_sum, block_residual, query = _make_case(PRODUCTION_TOKENS, HIDDEN_SIZE, num_sealed)
+
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, one_pass_stats=one_pass_stats)
+    assert op.one_pass_squares == one_pass_stats, "the width gate should not fire at d/tp = 1792"
+    tt_prefix, tt_block, tt_query = _place(op, prefix_sum, block_residual, query)
+
+    ttnn.deallocate(op.forward(tt_prefix, tt_block, tt_query))
+    ttnn.synchronize_device(mesh_device)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = op.forward(tt_prefix, tt_block, tt_query)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    enqueue_us, total_us = _bench(
+        mesh_device, lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    )
+    form = "one-pass" if one_pass_stats else "three-pass"
+    _report(f"S={num_sealed} {form} traced", enqueue_us, total_us)
+
+    ttnn.release_trace(mesh_device, trace_id)
+    for tensor in (out, tt_prefix, tt_block, tt_query):
+        ttnn.deallocate(tensor)
