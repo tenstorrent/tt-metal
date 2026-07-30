@@ -222,8 +222,7 @@ cliff belongs to the pre-fix `ec5b64b4891` control only. Current pure-prefill ev
   with 0 empty replies and 0 responses over the 2% non-Latin threshold. **There is no budget-matched
   comparison for it** — no reference and no TT baseline was run at 13824. It was previously stated here
   as beating the 66.67% full run; that run used `max_gen_toks=5632`, 2.45x smaller, so the two are not
-  comparable and the norm's effect on score is unmeasured. The only budget-matched TT-vs-reference
-  reading is **66.67% vs 65.66% at 5632**.
+  comparable and the norm's effect on score is unmeasured. The only budget-matched TT-vs-reference reading is on **11 prompts** (those that drifted on TT, plus clean controls) at 5632 on both platforms: TT pads-hidden **8/11 = 72.7%** vs A100 **7/11 = 63.6%** ([vllm_integration/README.md](doc/vllm_integration/README.md)). That set was SELECTED for drift, so it is an enriched subset, not a population estimate. **There is no 198-question budget-matched TT-vs-reference comparison.**
 - **CURRENT PERF:** at 238 ms/step the split is MoE 75.5, attention 29.6, shared MLP 9.1,
   self-conditioning 2.3, and **~120 ms outside the layer stack** — layer matmul is no longer the
   bottleneck. Commit is 0.27–0.37 s/block (7–10%).
