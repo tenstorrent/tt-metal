@@ -62,6 +62,42 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
+# --- Host Init/Teardown Benchmark ---
+# Google Benchmark host-timing binary that isolates device bring-up and teardown cost:
+# MeshDevice open (create*) and close, over a topology sweep enumerated from the attached
+# cluster (single_chip always; then mesh_2, mesh_4, ... up to the full mesh on multi-device
+# SKUs - each shape probe-opened first and skipped if the hardware can't instantiate it).
+# Behaves identically on Wormhole and Blackhole (no profiler / device instrumentation).
+# SKU coverage: wh_n300_civ2 (2 chips -> single_chip, mesh_2), wh_llmbox_perf (T3K, 8 chips
+# -> single_chip, mesh_2, mesh_4, mesh_8), wh_galaxy_perf (6U galaxy, 32 chips -> single_chip,
+# mesh_2, mesh_4, mesh_8, mesh_16, mesh_32), bh_p150_perf (1 chip -> single_chip).
+- name: runtime_perf_host_init_teardown
+  cmd: |
+    mkdir -p generated/test_reports
+    ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_host_init_teardown \
+      --benchmark_out_format=json --benchmark_out=host_init_teardown_bench.json
+    GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/host_init_teardown_golden.json
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/host_init_teardown_blackhole_golden.json
+    fi
+    # BRING-UP: goldens ship with placeholder / single-SKU times, so --ignore-times validates
+    # structure only (no errored benchmarks; topology set is SKU-dependent) for now. Arm the
+    # gate by replacing the golden with a real CI benchmark_out JSON captured on this SKU, then
+    # drop --ignore-times.
+    ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_host_init_teardown_ci.py \
+      host_init_teardown_bench.json --golden "$GOLDEN" --ignore-times
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+    wh_llmbox_perf:
+      timeout: 15
+    wh_galaxy_perf:
+      timeout: 30
+    bh_p150_perf:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
 # --- JIT Build (local host compile) Throughput Benchmark ---
 # Adapts DISABLED_TensixCompileStress into a runtime perf gate: real attached
 # device, no remote compile server, N cache-bypassing kernels compiled locally

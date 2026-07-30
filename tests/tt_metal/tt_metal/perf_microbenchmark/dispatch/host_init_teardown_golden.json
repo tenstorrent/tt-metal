@@ -1,0 +1,89 @@
+{
+  "_comment": "Host init/teardown CI golden (Wormhole: wh_n300_civ2 2-chip + wh_llmbox_perf 8-chip T3K + wh_galaxy_perf 32-chip 6U galaxy). BRING-UP: real_time values are Blackhole-derived ESTIMATES (order-of-magnitude, from a local Blackhole capture; mesh_N scaled ~N x single_chip) used as realistic placeholders until a real Wormhole run is captured; they are NOT gated yet. The runtime_perf_host_init_teardown CI job runs compare_host_init_teardown_ci.py with --ignore-times, which for this benchmark validates structure only (no errored benchmarks) and treats topology-set mismatches as advisories, since the topology axis is enumerated from the attached cluster. Arm the gate by replacing these with a real benchmark_out JSON captured on the SKU, then drop --ignore-times. Metric = host-side real_time (ns) of the min aggregate: BM_host_init = MeshDevice open, BM_host_teardown = MeshDevice close. wh_n300_civ2 has two chips, so its sweep is single_chip (unit mesh) + mesh_2; wh_llmbox_perf (T3K, 8 chips) adds mesh_4 + mesh_8; wh_galaxy_perf (6U galaxy, 32 chips) adds mesh_16 + mesh_32 (full system mesh). Per-SKU topology-set differences are expected and treated as advisories under --ignore-times.",
+  "benchmarks": [
+    {
+      "name": "BM_host_init/single_chip/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 99958028.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_init/mesh_2/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 190000000.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_init/mesh_4/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 380000000.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_init/mesh_8/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 760000000.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_init/mesh_16/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 1520000000.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_init/mesh_32/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 3040000000.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/single_chip/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 112989542.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/mesh_2/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 215000000.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/mesh_4/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 430000000.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/mesh_8/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 860000000.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/mesh_16/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 1720000000.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/mesh_32/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 3440000000.0,
+      "time_unit": "ns"
+    }
+  ]
+}
