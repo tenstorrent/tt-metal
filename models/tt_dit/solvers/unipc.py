@@ -51,6 +51,14 @@ class UniPCSolver(Solver):
         if self._state is not None:
             self._state = _State(self._state.clean_preds, self._state.corrected, 0)
 
+    def alloc_state(self, latent: ttnn.Tensor) -> None:
+        if self._state is not None:
+            return
+        self._state = _State(
+            tuple(ttnn.empty_like(latent) for _ in range(self.order)),
+            ttnn.empty_like(latent),
+        )
+
     def step(self, *, step: int, latent: ttnn.Tensor, velocity_pred: ttnn.Tensor) -> ttnn.Tensor:
         self._assert_schedule()
 

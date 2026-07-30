@@ -672,6 +672,10 @@ class WanPipeline(PipelineAPIMixin):
                 else:
                     ttnn.copy(permuted_latent_tt, self.latent_buffer)
 
+                # Must precede the first traced op: state allocated later would sit in
+                # memory the trace has already claimed as scratch.
+                self._solver.alloc_state(self.latent_buffer)
+
                 permuted_latent_tt = self._step(
                     step=i,
                     t=t,

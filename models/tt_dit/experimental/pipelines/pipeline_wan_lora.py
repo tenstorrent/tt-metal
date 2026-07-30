@@ -9,21 +9,30 @@ on CPU before TT conversion so inference has no LoRA-specific runtime cost.
 See ``experimental/models/Wan2_2_LoRA.md`` for the adapter-key formats
 detected by ``fuse_lora_state_dict`` and the supported namespaces.
 """
+
+from __future__ import annotations
+
 import hashlib
+import os
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+from diffusers.schedulers import UniPCMultistepScheduler
 from loguru import logger
+from PIL import Image
 from safetensors.torch import load_file
 
 import ttnn
 from models.tt_dit.experimental.utils.lightx2v_loader import wan_lightx2v_to_diffusers_key
-from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
-from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
+from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
+from models.tt_dit.solvers import UniPCSolver, UniPCVariant
 from models.tt_dit.utils import cache
+from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width
+from models.tt_dit.utils.tensor import bf16_tensor_2dshard, fast_device_to_host
 
 
 @dataclass(frozen=True)
@@ -286,6 +295,41 @@ def _lora_stack_cache_namespace(specs_by_expert: dict[int, list[LoRASpec]]) -> s
     return f"Wan2.2-I2V-LoRA-{h.hexdigest()[:12]}"
 
 
+# encoder_t_chunk_size per mesh. None = full-T single pass, N = chunked with feat_cache;
+# the two are numerically identical and full-T is faster.
+_ENCODER_T_CHUNK_BY_MESH = {
+    (4, 8): 16,
+    (4, 32): None,
+}
+
+
+def _resolve_checkpoint(repo_id: str) -> str:
+    """Prefer a local checkpoint directory over a hub repo id.
+
+    All ranks share one HF cache on NFS; resolving by repo id makes each rank hit the hub
+    and write cache metadata concurrently, and a rank that loses that race fails with a
+    spurious missing-weights error. A directory path skips hub resolution.
+
+    WAN22_I2V_CHECKPOINT_DIR must share the repo id's basename: the tt_dit cache namespace
+    is os.path.basename(checkpoint_name), so a different basename orphans the compiled
+    cache. Falls back to the repo id when unset, missing, or mismatched.
+    """
+    local = os.environ.get("WAN22_I2V_CHECKPOINT_DIR")
+    if not local:
+        return repo_id
+    if not os.path.isdir(local):
+        logger.warning(f"WAN22_I2V_CHECKPOINT_DIR={local!r} is not a directory; falling back to {repo_id}")
+        return repo_id
+    if os.path.basename(local.rstrip("/")) != os.path.basename(repo_id):
+        logger.warning(
+            f"WAN22_I2V_CHECKPOINT_DIR={local!r} basename does not match {repo_id!r}; "
+            "using it would orphan the tt_dit cache. Falling back to the repo id."
+        )
+        return repo_id
+    logger.info(f"Resolving {repo_id} from local checkpoint dir {local} (no hub lookup)")
+    return local
+
+
 class WanPipelineI2VLora(WanPipelineI2V):
     """Wan2.2 I2V with LoRA stacks fused into the base PyTorch weights."""
 
@@ -298,6 +342,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
         config: WanPipelineConfig,
         lora_high: LoRAArg = None,
         lora_low: LoRAArg = None,
+        flow_shift: float | None = None,
     ) -> None:
         high_specs = _normalize_lora_arg(lora_high)
         low_specs = _normalize_lora_arg(lora_low)
@@ -319,6 +364,166 @@ class WanPipelineI2VLora(WanPipelineI2V):
         self._fused_state_dicts: dict[int, dict[str, torch.Tensor] | None] = {0: None, 1: None}
 
         super().__init__(device=device, config=config)
+
+        # Distilled few-step LoRAs need a different flow shift than the base schedule,
+        # which WanPipelineConfig pins at 12.0. Rebuilt here instead of plumbing it through
+        # the shared config. __call__ re-derives sigmas per call so a post-init swap takes
+        # effect, and this runs before the first traced call. Solver order/variant are
+        # unchanged by flow_shift, so the compiled graph is identical.
+        if flow_shift is not None:
+            self._scheduler = UniPCMultistepScheduler.from_pretrained(
+                self.checkpoint_name, subfolder="scheduler", flow_shift=flow_shift
+            )
+            self._solver = UniPCSolver(
+                order=self._scheduler.config.solver_order,
+                variant=UniPCVariant(self._scheduler.config.solver_type),
+            )
+            logger.info(f"WanPipelineI2VLora: scheduler flow_shift overridden to {flow_shift}")
+
+    def prepare_latents(
+        self,
+        batch_size: int,
+        image_prompt,
+        num_channels_latents: int = 16,
+        height: int = 480,
+        width: int = 832,
+        num_frames: int = 81,
+        dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
+    ):
+        """I2V conditioning that uploads only the conditioned frames.
+
+        The base implementation materializes the whole conditioning video on the host
+        (896 MB float32 at 81x720x1280) and uploads all of it, though every frame but the
+        conditioned one is zero. Here the real frames are padded and uploaded individually
+        and the zero runs are built on device, then encoded in one pass.
+        """
+        assert batch_size == 1, "Only batch size 1 is currently supported for I2V"
+
+        if isinstance(image_prompt, ImagePrompt):
+            image_prompt = [image_prompt]
+        elif isinstance(image_prompt, Image.Image):
+            image_prompt = [ImagePrompt(image=image_prompt, frame_pos=0)]
+
+        # Skip WanPipelineI2V.prepare_latents (the path being replaced) and take the
+        # plain noise-latent allocation from the grandparent.
+        latents, _ = WanPipeline.prepare_latents(
+            self,
+            batch_size=batch_size,
+            num_channels_latents=num_channels_latents,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            dtype=dtype,
+            device=device,
+        )
+        latent_shape = latents.shape
+        h_lat, w_lat = latent_shape[-2], latent_shape[-1]
+
+        # ---- host: preprocess + pad ONLY the conditioned frames --------------
+        cond_by_pos: dict[int, ttnn.Tensor] = {}
+        logical_h = None
+        seen: set[int] = set()
+        for image, frame_pos in image_prompt:
+            assert frame_pos not in seen, f"Frame position {frame_pos} already processed."
+            seen.add(frame_pos)
+            img = self.video_processor.preprocess(image, height=height, width=width).to(device, dtype=torch.float32)
+            # (B,C,H,W) -> (B,T=1,H,W,C)
+            frame_BTHWC = img.unsqueeze(2).permute(0, 2, 3, 4, 1)
+            frame_BTHWC = conv_pad_in_channels(frame_BTHWC)
+            frame_BTHWC, logical_h = conv_pad_height(
+                frame_BTHWC, self.vae_parallel_config.height_parallel.factor * self.vae_scale_factor_spatial
+            )
+            frame_BTHWC, _logical_w = conv_pad_width(
+                frame_BTHWC, self.vae_parallel_config.width_parallel.factor * self.vae_scale_factor_spatial
+            )
+            cond_by_pos[frame_pos] = bf16_tensor_2dshard(
+                frame_BTHWC,
+                self.mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                shard_mapping={
+                    self.vae_parallel_config.height_parallel.mesh_axis: 2,
+                    self.vae_parallel_config.width_parallel.mesh_axis: 3,
+                },
+            )
+            logical_w = _logical_w
+
+        tt_zero_1 = None
+
+        def _zero_run(n: int) -> ttnn.Tensor:
+            nonlocal tt_zero_1
+            if tt_zero_1 is None:
+                tt_zero_1 = ttnn.zeros_like(next(iter(cond_by_pos.values())))
+            z, built = tt_zero_1, 1
+            while built * 2 <= n:
+                z = ttnn.concat([z, z], dim=1)
+                built *= 2
+            if built < n:
+                z = ttnn.concat([z, z[:, : n - built, :, :, :]], dim=1)
+            return z
+
+        segments: list[ttnn.Tensor] = []
+        zero_start = None
+        for i in range(num_frames):
+            if i in cond_by_pos:
+                if zero_start is not None:
+                    segments.append(_zero_run(i - zero_start))
+                    zero_start = None
+                segments.append(cond_by_pos[i])
+            elif zero_start is None:
+                zero_start = i
+        if zero_start is not None:
+            segments.append(_zero_run(num_frames - zero_start))
+
+        tt_video_BTHWC = segments[0] if len(segments) == 1 else ttnn.concat(segments, dim=1)
+
+        chunk = _ENCODER_T_CHUNK_BY_MESH.get(tuple(self.mesh_device.shape))
+
+        encoded_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(
+            tt_video_BTHWC, logical_h, logical_w=logical_w, encoder_t_chunk_size=chunk
+        )
+
+        # tt_video_BTHWC may alias a conditioned frame or the zero tensor when there is
+        # only one segment, so guard against a double free.
+        owned = list(cond_by_pos.values()) + ([tt_zero_1] if tt_zero_1 is not None else [])
+        if all(tt_video_BTHWC is not t for t in owned):
+            ttnn.deallocate(tt_video_BTHWC)
+        for tt in owned:
+            ttnn.deallocate(tt)
+
+        # ---- host: replicate + normalize + mask ------------------------------
+        concat_dims = [None, None]
+        concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
+        concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+        encoded = fast_device_to_host(encoded_BCTHW, self.mesh_device, concat_dims, ccl_manager=self.vae_ccl_manager)
+        ttnn.deallocate(encoded_BCTHW)
+        ttnn.synchronize_device(self.mesh_device)
+        # Same crop convention as WanPipelineI2V.prepare_latents.
+        encoded = encoded[:, :, :, :new_logical_h, :new_logical_w].to(dtype=dtype)
+
+        f_lat_full = latent_shape[2]
+        if encoded.shape[2] != f_lat_full:
+            encoded = encoded[:, :, :f_lat_full, :, :]
+
+        latents_mean = (
+            torch.tensor(self._vae.config.latents_mean)
+            .view(1, self._vae.config.z_dim, 1, 1, 1)
+            .to(encoded.device, encoded.dtype)
+        )
+        latents_std = 1.0 / torch.tensor(self._vae.config.latents_std).view(1, self._vae.config.z_dim, 1, 1, 1).to(
+            encoded.device, encoded.dtype
+        )
+        encoded = (encoded - latents_mean) * latents_std
+
+        msk = torch.zeros(batch_size, num_frames, h_lat, w_lat)
+        for pos in cond_by_pos:
+            msk[:, pos, :, :] = 1
+        msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
+        msk = msk.view(1, msk.shape[1] // 4, 4, h_lat, w_lat)
+        msk = msk.transpose(1, 2)
+
+        y = torch.cat([msk, encoded], dim=1)
+        return latents, y
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         # guidance_scale=1.0 → encoder returns None for negative embeds; combined_step
@@ -396,12 +601,13 @@ class WanPipelineI2VLora(WanPipelineI2V):
         topology: ttnn.Topology | None = None,
         is_fsdp: bool | None = None,
         boundary_ratio: float | None = 0.875,
+        flow_shift: float | None = None,
         lora_high: LoRAArg = None,
         lora_low: LoRAArg = None,
     ) -> WanPipelineI2VLora:
         config = WanPipelineConfig.default(
             mesh_shape=mesh_device.shape,
-            checkpoint_name=cls.BASE_DIFFUSERS_REPO,
+            checkpoint_name=_resolve_checkpoint(cls.BASE_DIFFUSERS_REPO),
             height=height,
             width=width,
             num_frames=num_frames,
@@ -417,4 +623,5 @@ class WanPipelineI2VLora(WanPipelineI2V):
             config=config,
             lora_high=lora_high,
             lora_low=lora_low,
+            flow_shift=flow_shift,
         )

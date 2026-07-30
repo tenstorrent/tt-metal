@@ -28,6 +28,9 @@ class Solver(ABC):
         self._sigmas = list(sigmas)
         self._alphas = list(alphas) if alphas is not None else [1.0 - s for s in self._sigmas]
 
+    def alloc_state(self, latent: ttnn.Tensor) -> None:
+        """Allocate persistent device state shaped like ``latent``, before any traced op."""
+
     @abstractmethod
     def step(self, *, step: int, latent: ttnn.Tensor, velocity_pred: ttnn.Tensor) -> ttnn.Tensor:
         """Advance the latent one step toward the clean data.
