@@ -102,6 +102,48 @@ class _Stages:
         )
 
 
+def _record_baseline_anchor(profile: dict, model: str = "", task: str = "") -> None:
+    """Record the baseline profile as the ledger's eager anchor, at the point it is produced.
+
+    The baseline IS the "before" by definition, so the code that computes it has to be a ledger
+    writer -- otherwise the anchor depends on an optional downstream MCP call (see the call site).
+    Mirrors perf_mcp._ledger_record's phase rule so a rerun APPENDS an 'after' and can never
+    overwrite the original 'before'. Best-effort: a run must still produce its baseline if the
+    ledger is unavailable.
+    """
+    try:
+        import importlib.util as _ilu
+
+        _spec = _ilu.spec_from_file_location(
+            "_cc_measurements", str(Path(__file__).resolve().parent.parent / "cc_optimize" / "measurements.py")
+        )
+        led = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(led)
+        ms = (profile or {}).get("device_ms")
+        # Stamp the depth this was profiled at; an unstamped number is how a 2-layer reading once
+        # anchored a 16-layer run.
+        depth = str((profile or {}).get("perf_layers") or "all")
+        model = model or os.environ.get("PERF_MCP_MODEL_NAME") or ""
+        task = task or os.environ.get("PERF_MCP_TASK", "main")
+        seen = led.first(led.KIND_EAGER, led.PHASE_BEFORE, model=model, task=task)
+        phase = led.PHASE_AFTER if seen else led.PHASE_BEFORE
+        led.record(led.KIND_EAGER, phase, ms, depth=depth, mode="eager", source="before_loop", model=model, task=task)
+        _tr = led.trace_ms_from_profile(profile)
+        if _tr:
+            led.record(
+                led.KIND_TRACE_PASS,
+                phase,
+                _tr,
+                depth=depth,
+                mode="tracy-trace",
+                source="before_loop",
+                model=model,
+                task=task,
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def check_dependencies() -> list[str]:
     """Verify the two hard tool dependencies BEFORE any stage runs.
 
@@ -645,6 +687,14 @@ def before_loop(
         (run.dir / "perf_seq_len").write_text(_seq_env)
     # Persist the tagged buckets for the loop: ROUTE reads this, not the CSVs.
     (Path(run.profiles_dir) / "baseline_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True))
+    # ...and record the SAME profile as the ledger's eager anchor, right here. This file and the
+    # KIND_EAGER anchor are two views of one measurement, but only perf_mcp._ledger_record wrote the
+    # anchor and it fires solely from the agent-invoked profile_model MCP tool. A run whose ledger
+    # starts empty and never happens to make that call therefore had a complete baseline_profile.json
+    # and NO anchor, so the report printed "not measured (no ledger reading)" for a number it had
+    # just measured -- and each consumer reached for whichever store it knew about, which is how one
+    # profile showed up as three different totals (120.59 / 152.02 / 178.85).
+    _record_baseline_anchor(profile)
     try:
         import tempfile as _tf
 
