@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "config_id": "first_last_bfp8_guardrails",
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "description": "Current optimized policy except the first and last decoder layers use BFP8 attention and MLP weights.",
+  "runtime": {
+    "activation_dtype": "bfloat8_b",
+    "residual_dtype": "bfloat8_b",
+    "ccl_dtype": "bfloat8_b",
+    "kv_cache_dtype": "bfloat8_b",
+    "mlp_mul_dtype": "bfloat8_b",
+    "logits_device_dtype": "bfloat16",
+    "sampling_dtype": "device logits gathered through split sampling; host accuracy logits are converted to float32"
+  },
+  "weight_groups": {
+    "embedding": {
+      "dtype": "bfloat16"
+    },
+    "norms": {
+      "dtype": "bfloat16"
+    },
+    "attention": {
+      "dtype": "bfloat4_b",
+      "layers": "all"
+    },
+    "mlp": {
+      "dtype": "bfloat4_b",
+      "layers": "all"
+    },
+    "lm_head": {
+      "dtype": "bfloat8_b"
+    }
+  },
+  "compute_fidelities": {
+    "attention": "HiFi2",
+    "mlp": "LoFi",
+    "lm_head": "HiFi2",
+    "norms": "HiFi4"
+  },
+  "layer_exceptions": [
+    {
+      "layers": [
+        0,
+        31
+      ],
+      "weight_groups": {
+        "attention": {
+          "dtype": "bfloat8_b"
+        },
+        "mlp": {
+          "dtype": "bfloat8_b"
+        }
+      },
+      "compute_fidelities": {
+        "mlp": "HiFi2"
+      }
+    }
+  ],
+  "logits_sampling_dtype_assumptions": {
+    "accuracy_readback": "TT logits are converted to host float32 before top-k comparison.",
+    "token_out_sampling": "Split sampling consumes device logits directly; force-argmax is not enabled."
+  }
+}

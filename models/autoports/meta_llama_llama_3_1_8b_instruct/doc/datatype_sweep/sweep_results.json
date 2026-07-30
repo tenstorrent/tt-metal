@@ -1,0 +1,725 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-06-15T18:36:34.483200+00:00",
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "autoport_dir": "models/autoports/meta_llama_llama_3_1_8b_instruct",
+  "thresholds": {
+    "top1_min": 0.9,
+    "top5_min": 0.98,
+    "top100_expected": 1.0
+  },
+  "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+  "selected_config_id": "baseline_default",
+  "selected_precision_config_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/selected_precision_config.json",
+  "reference": {
+    "path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt",
+    "source": "AIME24 prompt source with chat template",
+    "prompt_tokens": 184,
+    "generated_tokens": 100,
+    "top_k": 100
+  },
+  "hardware": {
+    "chips": "8 Wormhole chips visible via tt-smi, N300 L/R boards, UMD ids 0-7",
+    "mesh_device": "T3K",
+    "mesh_shape": [
+      1,
+      8
+    ],
+    "fabric_config": "FABRIC_1D_RING"
+  },
+  "git": {
+    "branch": "agentic-research/experiment-17-llama31-8b",
+    "commit": "86f8bc022e6d526d9766539c6ea50137cabec799"
+  },
+  "results": [
+    {
+      "config_id": "baseline_default",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/configs/baseline_default.json",
+      "dtype_policy": {
+        "weights": {
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "norms": {
+            "dtype": "bfloat16"
+          },
+          "attention": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "mlp": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "lm_head": {
+            "dtype": "bfloat8_b"
+          }
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat8_b",
+        "ccl_dtype": "bfloat8_b",
+        "kv_cache_dtype": "bfloat8_b",
+        "mlp_mul_dtype": "bfloat8_b",
+        "logits_device_dtype": "bfloat16",
+        "sampling_dtype": "device logits gathered through split sampling; host accuracy logits are converted to float32",
+        "compute_fidelities": {
+          "attention": "HiFi2",
+          "mlp": "LoFi",
+          "lm_head": "HiFi2",
+          "norms": "HiFi4"
+        },
+        "layer_exceptions": []
+      },
+      "prefill": {
+        "top1": 0.93,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 93,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100
+      },
+      "teacher_forcing": {
+        "top1": 0.9,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 90,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "ttft_ms": 646.52,
+        "decode_t_s_u": 49.49,
+        "e2e_t_s_u": 37.78,
+        "trace_verified": true,
+        "trace_evidence": "models.common.readiness_check.run_teacher_forcing requires generate(..., enable_trace=True); logs contain sampling trace capture/reset."
+      },
+      "measurement_regime": "AIME24 chat-template readiness reference, 100 generated tokens, traced teacher forcing for ranking",
+      "reference_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt",
+      "token_count": 100,
+      "command": {
+        "prefill": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/baseline_default.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+        "teacher_forcing": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/baseline_default.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING"
+      },
+      "hardware": {
+        "chips": "8 Wormhole chips visible via tt-smi, N300 L/R boards, UMD ids 0-7",
+        "mesh_device": "T3K",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "git": {
+        "branch": "agentic-research/experiment-17-llama31-8b",
+        "commit": "86f8bc022e6d526d9766539c6ea50137cabec799"
+      },
+      "status": "pass",
+      "pass": true,
+      "rejection_reason": null,
+      "selected": true
+    },
+    {
+      "config_id": "safe_bfp8_bf16_act_hifi2",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/configs/safe_bfp8_bf16_act_hifi2.json",
+      "dtype_policy": {
+        "weights": {
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "norms": {
+            "dtype": "bfloat16"
+          },
+          "attention": {
+            "dtype": "bfloat8_b",
+            "layers": "all"
+          },
+          "mlp": {
+            "dtype": "bfloat8_b",
+            "layers": "all"
+          },
+          "lm_head": {
+            "dtype": "bfloat8_b"
+          }
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "mlp_mul_dtype": "bfloat8_b",
+        "logits_device_dtype": "bfloat16",
+        "sampling_dtype": "device logits gathered through split sampling; host accuracy logits are converted to float32",
+        "compute_fidelities": {
+          "attention": "HiFi2",
+          "mlp": "HiFi2",
+          "lm_head": "HiFi2",
+          "norms": "HiFi4"
+        },
+        "layer_exceptions": []
+      },
+      "prefill": {
+        "top1": 0.95,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 95,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100
+      },
+      "teacher_forcing": {
+        "top1": 0.96,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 96,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "ttft_ms": 790.51,
+        "decode_t_s_u": 27.84,
+        "e2e_t_s_u": 23.01,
+        "trace_verified": true,
+        "trace_evidence": "models.common.readiness_check.run_teacher_forcing requires generate(..., enable_trace=True); logs contain sampling trace capture/reset."
+      },
+      "measurement_regime": "AIME24 chat-template readiness reference, 100 generated tokens, traced teacher forcing for ranking",
+      "reference_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt",
+      "token_count": 100,
+      "command": {
+        "prefill": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/safe_bfp8_bf16_act_hifi2.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+        "teacher_forcing": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/safe_bfp8_bf16_act_hifi2.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING"
+      },
+      "hardware": {
+        "chips": "8 Wormhole chips visible via tt-smi, N300 L/R boards, UMD ids 0-7",
+        "mesh_device": "T3K",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "git": {
+        "branch": "agentic-research/experiment-17-llama31-8b",
+        "commit": "86f8bc022e6d526d9766539c6ea50137cabec799"
+      },
+      "status": "pass",
+      "pass": true,
+      "rejection_reason": null,
+      "selected": false
+    },
+    {
+      "config_id": "bf16_activation_current_weights",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/configs/bf16_activation_current_weights.json",
+      "dtype_policy": {
+        "weights": {
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "norms": {
+            "dtype": "bfloat16"
+          },
+          "attention": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "mlp": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "lm_head": {
+            "dtype": "bfloat8_b"
+          }
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "mlp_mul_dtype": "bfloat8_b",
+        "logits_device_dtype": "bfloat16",
+        "sampling_dtype": "device logits gathered through split sampling; host accuracy logits are converted to float32",
+        "compute_fidelities": {
+          "attention": "HiFi2",
+          "mlp": "LoFi",
+          "lm_head": "HiFi2",
+          "norms": "HiFi4"
+        },
+        "layer_exceptions": []
+      },
+      "prefill": {
+        "top1": 0.92,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 92,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100
+      },
+      "teacher_forcing": {
+        "top1": 0.9,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 90,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "ttft_ms": 615.08,
+        "decode_t_s_u": 48.52,
+        "e2e_t_s_u": 37.66,
+        "trace_verified": true,
+        "trace_evidence": "models.common.readiness_check.run_teacher_forcing requires generate(..., enable_trace=True); logs contain sampling trace capture/reset."
+      },
+      "measurement_regime": "AIME24 chat-template readiness reference, 100 generated tokens, traced teacher forcing for ranking",
+      "reference_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt",
+      "token_count": 100,
+      "command": {
+        "prefill": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/bf16_activation_current_weights.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+        "teacher_forcing": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/bf16_activation_current_weights.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING"
+      },
+      "hardware": {
+        "chips": "8 Wormhole chips visible via tt-smi, N300 L/R boards, UMD ids 0-7",
+        "mesh_device": "T3K",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "git": {
+        "branch": "agentic-research/experiment-17-llama31-8b",
+        "commit": "86f8bc022e6d526d9766539c6ea50137cabec799"
+      },
+      "status": "pass",
+      "pass": true,
+      "rejection_reason": null,
+      "selected": false
+    },
+    {
+      "config_id": "bf16_kv_current_weights",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/configs/bf16_kv_current_weights.json",
+      "dtype_policy": {
+        "weights": {
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "norms": {
+            "dtype": "bfloat16"
+          },
+          "attention": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "mlp": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "lm_head": {
+            "dtype": "bfloat8_b"
+          }
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat8_b",
+        "ccl_dtype": "bfloat8_b",
+        "kv_cache_dtype": "bfloat16",
+        "mlp_mul_dtype": "bfloat8_b",
+        "logits_device_dtype": "bfloat16",
+        "sampling_dtype": "device logits gathered through split sampling; host accuracy logits are converted to float32",
+        "compute_fidelities": {
+          "attention": "HiFi2",
+          "mlp": "LoFi",
+          "lm_head": "HiFi2",
+          "norms": "HiFi4"
+        },
+        "layer_exceptions": []
+      },
+      "prefill": {
+        "top1": 0.91,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 91,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100
+      },
+      "teacher_forcing": {
+        "top1": 0.91,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 91,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "ttft_ms": 1055.82,
+        "decode_t_s_u": 25.31,
+        "e2e_t_s_u": 20.13,
+        "trace_verified": true,
+        "trace_evidence": "models.common.readiness_check.run_teacher_forcing requires generate(..., enable_trace=True); logs contain sampling trace capture/reset."
+      },
+      "measurement_regime": "AIME24 chat-template readiness reference, 100 generated tokens, traced teacher forcing for ranking",
+      "reference_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt",
+      "token_count": 100,
+      "command": {
+        "prefill": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/bf16_kv_current_weights.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+        "teacher_forcing": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/bf16_kv_current_weights.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING"
+      },
+      "hardware": {
+        "chips": "8 Wormhole chips visible via tt-smi, N300 L/R boards, UMD ids 0-7",
+        "mesh_device": "T3K",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "git": {
+        "branch": "agentic-research/experiment-17-llama31-8b",
+        "commit": "86f8bc022e6d526d9766539c6ea50137cabec799"
+      },
+      "status": "pass",
+      "pass": true,
+      "rejection_reason": null,
+      "selected": false
+    },
+    {
+      "config_id": "bfp4_kv_current_weights",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/configs/bfp4_kv_current_weights.json",
+      "dtype_policy": {
+        "weights": {
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "norms": {
+            "dtype": "bfloat16"
+          },
+          "attention": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "mlp": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "lm_head": {
+            "dtype": "bfloat8_b"
+          }
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat8_b",
+        "ccl_dtype": "bfloat8_b",
+        "kv_cache_dtype": "bfloat4_b",
+        "mlp_mul_dtype": "bfloat8_b",
+        "logits_device_dtype": "bfloat16",
+        "sampling_dtype": "device logits gathered through split sampling; host accuracy logits are converted to float32",
+        "compute_fidelities": {
+          "attention": "HiFi2",
+          "mlp": "LoFi",
+          "lm_head": "HiFi2",
+          "norms": "HiFi4"
+        },
+        "layer_exceptions": []
+      },
+      "prefill": {
+        "top1": 0.8,
+        "top5": 0.99,
+        "top100": 1.0,
+        "matches_top1": 80,
+        "matches_top5": 99,
+        "matches_top100": 100,
+        "total": 100
+      },
+      "teacher_forcing": {
+        "top1": 0.83,
+        "top5": 0.99,
+        "top100": 1.0,
+        "matches_top1": 83,
+        "matches_top5": 99,
+        "matches_top100": 100,
+        "total": 100,
+        "ttft_ms": 1066.06,
+        "decode_t_s_u": 23.88,
+        "e2e_t_s_u": 19.19,
+        "trace_verified": true,
+        "trace_evidence": "models.common.readiness_check.run_teacher_forcing requires generate(..., enable_trace=True); logs contain sampling trace capture/reset."
+      },
+      "measurement_regime": "AIME24 chat-template readiness reference, 100 generated tokens, traced teacher forcing for ranking",
+      "reference_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt",
+      "token_count": 100,
+      "command": {
+        "prefill": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/bfp4_kv_current_weights.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+        "teacher_forcing": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/bfp4_kv_current_weights.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING"
+      },
+      "hardware": {
+        "chips": "8 Wormhole chips visible via tt-smi, N300 L/R boards, UMD ids 0-7",
+        "mesh_device": "T3K",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "git": {
+        "branch": "agentic-research/experiment-17-llama31-8b",
+        "commit": "86f8bc022e6d526d9766539c6ea50137cabec799"
+      },
+      "status": "fail",
+      "pass": false,
+      "rejection_reason": "top1 0.830 < 0.90",
+      "selected": false
+    },
+    {
+      "config_id": "bfp4_lm_head_current_weights",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/configs/bfp4_lm_head_current_weights.json",
+      "dtype_policy": {
+        "weights": {
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "norms": {
+            "dtype": "bfloat16"
+          },
+          "attention": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "mlp": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "lm_head": {
+            "dtype": "bfloat4_b"
+          }
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat8_b",
+        "ccl_dtype": "bfloat8_b",
+        "kv_cache_dtype": "bfloat8_b",
+        "mlp_mul_dtype": "bfloat8_b",
+        "logits_device_dtype": "bfloat16",
+        "sampling_dtype": "device logits gathered through split sampling; host accuracy logits are converted to float32",
+        "compute_fidelities": {
+          "attention": "HiFi2",
+          "mlp": "LoFi",
+          "lm_head": "LoFi",
+          "norms": "HiFi4"
+        },
+        "layer_exceptions": []
+      },
+      "prefill": {
+        "top1": 0.8,
+        "top5": 0.98,
+        "top100": 1.0,
+        "matches_top1": 80,
+        "matches_top5": 98,
+        "matches_top100": 100,
+        "total": 100
+      },
+      "teacher_forcing": {
+        "top1": 0.78,
+        "top5": 0.97,
+        "top100": 1.0,
+        "matches_top1": 78,
+        "matches_top5": 97,
+        "matches_top100": 100,
+        "total": 100,
+        "ttft_ms": 628.45,
+        "decode_t_s_u": 39.8,
+        "e2e_t_s_u": 32.09,
+        "trace_verified": true,
+        "trace_evidence": "models.common.readiness_check.run_teacher_forcing requires generate(..., enable_trace=True); logs contain sampling trace capture/reset."
+      },
+      "measurement_regime": "AIME24 chat-template readiness reference, 100 generated tokens, traced teacher forcing for ranking",
+      "reference_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt",
+      "token_count": 100,
+      "command": {
+        "prefill": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/bfp4_lm_head_current_weights.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+        "teacher_forcing": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/bfp4_lm_head_current_weights.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING"
+      },
+      "hardware": {
+        "chips": "8 Wormhole chips visible via tt-smi, N300 L/R boards, UMD ids 0-7",
+        "mesh_device": "T3K",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "git": {
+        "branch": "agentic-research/experiment-17-llama31-8b",
+        "commit": "86f8bc022e6d526d9766539c6ea50137cabec799"
+      },
+      "status": "fail",
+      "pass": false,
+      "rejection_reason": "top1 0.780 < 0.90; top5 0.970 < 0.98",
+      "selected": false
+    },
+    {
+      "config_id": "first_last_bfp8_guardrails",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/configs/first_last_bfp8_guardrails.json",
+      "dtype_policy": {
+        "weights": {
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "norms": {
+            "dtype": "bfloat16"
+          },
+          "attention": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "mlp": {
+            "dtype": "bfloat4_b",
+            "layers": "all"
+          },
+          "lm_head": {
+            "dtype": "bfloat8_b"
+          }
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat8_b",
+        "ccl_dtype": "bfloat8_b",
+        "kv_cache_dtype": "bfloat8_b",
+        "mlp_mul_dtype": "bfloat8_b",
+        "logits_device_dtype": "bfloat16",
+        "sampling_dtype": "device logits gathered through split sampling; host accuracy logits are converted to float32",
+        "compute_fidelities": {
+          "attention": "HiFi2",
+          "mlp": "LoFi",
+          "lm_head": "HiFi2",
+          "norms": "HiFi4"
+        },
+        "layer_exceptions": [
+          {
+            "layers": [
+              0,
+              31
+            ],
+            "weight_groups": {
+              "attention": {
+                "dtype": "bfloat8_b"
+              },
+              "mlp": {
+                "dtype": "bfloat8_b"
+              }
+            },
+            "compute_fidelities": {
+              "mlp": "HiFi2"
+            }
+          }
+        ]
+      },
+      "prefill": {
+        "top1": 0.92,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 92,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100
+      },
+      "teacher_forcing": {
+        "top1": 0.9,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 90,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "ttft_ms": 672.67,
+        "decode_t_s_u": 29.08,
+        "e2e_t_s_u": 24.53,
+        "trace_verified": true,
+        "trace_evidence": "models.common.readiness_check.run_teacher_forcing requires generate(..., enable_trace=True); logs contain sampling trace capture/reset."
+      },
+      "measurement_regime": "AIME24 chat-template readiness reference, 100 generated tokens, traced teacher forcing for ranking",
+      "reference_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt",
+      "token_count": 100,
+      "command": {
+        "prefill": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/first_last_bfp8_guardrails.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+        "teacher_forcing": "LLAMA31_8B_PRECISION_CONFIG=doc/datatype_sweep/configs/first_last_bfp8_guardrails.json timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --reference models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/aime24_chat_template_100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING"
+      },
+      "hardware": {
+        "chips": "8 Wormhole chips visible via tt-smi, N300 L/R boards, UMD ids 0-7",
+        "mesh_device": "T3K",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "git": {
+        "branch": "agentic-research/experiment-17-llama31-8b",
+        "commit": "86f8bc022e6d526d9766539c6ea50137cabec799"
+      },
+      "status": "pass",
+      "pass": true,
+      "rejection_reason": null,
+      "selected": false
+    }
+  ],
+  "post_selection_token_out": {
+    "path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/post_selection_token_out_trace_evidence.json",
+    "measurement_regime": "warmed token-out no-readback, 128 prompt tokens, 128 max new tokens, selected config loaded by default",
+    "ttft_ms": 635.2669731713831,
+    "steady_replay_tokens": 126,
+    "steady_replay_elapsed_s": 1.7860295842401683,
+    "steady_replay_t_s_u": 70.54754361955558,
+    "steady_replay_ms_per_token": 14.174837970160066,
+    "counters": {
+      "model_trace_captures": 1,
+      "model_trace_replays": 127,
+      "sampling_trace_invocations": 127,
+      "token_input_host_copies": 1,
+      "position_host_copies": 1,
+      "rope_index_host_copies": 1,
+      "page_table_host_copies": 1,
+      "sampled_token_readbacks": 0,
+      "position_device_increments": 127,
+      "rope_index_device_increments": 127,
+      "rope_matrix_device_refreshes": 0,
+      "hidden_device_refreshes": 0,
+      "last_page_table_refresh_changed_only": false,
+      "notes": [],
+      "decode_trace_captured": true,
+      "sampling_force_argmax": false,
+      "sampling_max_top_k": 32,
+      "padded_vocab_size": 128256,
+      "vocab_size": 128256
+    },
+    "sampling_path": {
+      "force_argmax": false,
+      "max_top_k": 32,
+      "num_gather_links": 1,
+      "sampling_dp": 1,
+      "sampling_all_gather_axis": 1
+    },
+    "command": "timeout 7200s python_env/bin/python -u models/autoports/meta_llama_llama_3_1_8b_instruct/doc/full_model/token_out_trace_evidence.py --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --prompt-file models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_full_model/prompt_128.txt --mesh-device T3K --fabric-config FABRIC_1D_RING --max-new-tokens 128 --output-json models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/post_selection_token_out_trace_evidence.json"
+  },
+  "qualitative_generation": {
+    "path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/autoregressive_story_128",
+    "degenerate_report_path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/autoregressive_degenerate_report.json",
+    "findings": [],
+    "metrics": {
+      "findings": [],
+      "measured": [
+        {
+          "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/autoregressive_story_128/autoregressive_meta.json",
+          "label": "tt free-running completion",
+          "source": "words",
+          "num_tokens": 101,
+          "adjacent_duplication": 0.0,
+          "trigram_loop_fraction": 0.0297
+        },
+        {
+          "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/autoregressive_story_128/autoregressive_meta.json",
+          "label": "hf/tt token agreement (informational)",
+          "matching_tokens": 30,
+          "compared_tokens": 128
+        }
+      ],
+      "exit_code": 0
+    },
+    "command": "timeout 7200s python_env/bin/python -u -m models.common.readiness_check.run_autoregressive --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct --hf-model meta-llama/Llama-3.1-8B-Instruct --mesh-device T3K --fabric-config FABRIC_1D_RING --max-new-tokens 128 --output-dir models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/autoregressive_story_128"
+  },
+  "propagation_check": {
+    "path": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/runs/selected_config_propagation_check.log",
+    "result": "build_generator(..., override_num_layers=1) with no precision override loaded selected_precision_config.json and reported BF4 attention/MLP, BF8 activation/KV/lm_head.",
+    "vllm_adapter": "No vLLM adapter exists in this autoport yet; vLLM integration was not started in this goal."
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "config_id": "selected_precision_config",
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "description": "Selected datatype-sweep policy. It matches the optimized-full-model default and is the fastest evaluated full-model config that satisfies the top-1/top-5 gate.",
+  "runtime": {
+    "activation_dtype": "bfloat8_b",
+    "residual_dtype": "bfloat8_b",
+    "ccl_dtype": "bfloat8_b",
+    "kv_cache_dtype": "bfloat8_b",
+    "mlp_mul_dtype": "bfloat8_b",
+    "logits_device_dtype": "bfloat16",
+    "sampling_dtype": "device logits gathered through split sampling; host accuracy logits are converted to float32"
+  },
+  "weight_groups": {
+    "embedding": {
+      "dtype": "bfloat16"
+    },
+    "norms": {
+      "dtype": "bfloat16"
+    },
+    "attention": {
+      "dtype": "bfloat4_b",
+      "layers": "all"
+    },
+    "mlp": {
+      "dtype": "bfloat4_b",
+      "layers": "all"
+    },
+    "lm_head": {
+      "dtype": "bfloat8_b"
+    }
+  },
+  "compute_fidelities": {
+    "attention": "HiFi2",
+    "mlp": "LoFi",
+    "lm_head": "HiFi2",
+    "norms": "HiFi4"
+  },
+  "layer_exceptions": [],
+  "logits_sampling_dtype_assumptions": {
+    "accuracy_readback": "TT logits are converted to host float32 before top-k comparison.",
+    "token_out_sampling": "Split sampling consumes device logits directly; force-argmax is not enabled."
+  },
+  "loader": {
+    "env_override": "LLAMA31_8B_PRECISION_CONFIG",
+    "baseline_override": "LLAMA31_8B_PRECISION_CONFIG=baseline"
+  },
+  "selected_from_config_id": "baseline_default",
+  "selection": {
+    "date": "2026-06-15",
+    "thresholds": {
+      "top1_min": 0.9,
+      "top5_min": 0.98,
+      "top100_expected": 1.0
+    },
+    "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+    "top1": 0.9,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 646.52,
+    "teacher_forcing_decode_t_s_u": 49.49,
+    "measurement_regime": "AIME24 chat-template readiness reference, 100 generated tokens, T3K 1x8 FABRIC_1D_RING, traced teacher forcing",
+    "reason": "Fastest evaluated candidate satisfying top1 >= 0.90 and top5 >= 0.98.",
+    "post_selection_token_out": {
+      "ttft_ms": 635.2669731713831,
+      "steady_replay_t_s_u": 70.54754361955558,
+      "steady_replay_ms_per_token": 14.174837970160066,
+      "steady_replay_tokens": 126,
+      "sampled_token_readbacks": 0,
+      "trace_captured": true
+    }
+  }
+}

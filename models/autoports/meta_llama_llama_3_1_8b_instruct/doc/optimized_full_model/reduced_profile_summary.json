@@ -1,0 +1,42 @@
+{
+  "hf_model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "model_dir": "models/autoports/meta_llama_llama_3_1_8b_instruct",
+  "prompt_file": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_full_model/prompt_128.txt",
+  "prompt_text": "Once upon a time, in a small village nestled between two great mountains, there lived a curious young girl named Elena. Every morning, she climbed the eastern hill to watch the sunrise paint the valley gold. One day, beneath her favorite oak tree, she noticed a faint shimmering light hovering above the grass and decided to follow it carefully through the meadow. The path led her toward an old stone arch covered in moss, where a quiet voice asked her to choose courage over certainty. Elena took a breath, stepped forward, and saw the valley transform into a map of stars. She remembered her grandmother's stories and kept walking with steady",
+  "prompt_tokens": 128,
+  "override_num_layers": 1,
+  "max_seq_len": 1024,
+  "max_num_blocks": 16,
+  "prefill_ms": 85.90895496308804,
+  "decode_replay_ms": [
+    1.6631982289254665,
+    1.5614130534231663,
+    1.5571806579828262,
+    1.5515307895839214
+  ],
+  "decode_replay_min_ms": 1.5515307895839214,
+  "decode_replay_avg_ms": 1.5833306824788451,
+  "trace_counters": {
+    "model_trace_captures": 1,
+    "model_trace_replays": 5,
+    "sampling_trace_invocations": 5,
+    "token_input_host_copies": 1,
+    "position_host_copies": 1,
+    "rope_index_host_copies": 1,
+    "page_table_host_copies": 1,
+    "sampled_token_readbacks": 0,
+    "position_device_increments": 5,
+    "rope_index_device_increments": 5,
+    "rope_matrix_device_refreshes": 0,
+    "hidden_device_refreshes": 0,
+    "last_page_table_refresh_changed_only": false,
+    "notes": [],
+    "decode_trace_captured": true,
+    "sampling_force_argmax": false,
+    "sampling_max_top_k": 32,
+    "padded_vocab_size": 128256,
+    "vocab_size": 128256
+  },
+  "sampling_force_argmax": false,
+  "sampling_max_top_k": 32
+}

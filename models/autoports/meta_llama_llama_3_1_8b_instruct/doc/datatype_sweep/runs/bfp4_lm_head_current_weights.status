@@ -1,0 +1,2 @@
+PREFILL_EXIT bfp4_lm_head_current_weights 0
+TEACHER_EXIT bfp4_lm_head_current_weights 0

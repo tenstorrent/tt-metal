@@ -1,0 +1,71 @@
+{
+  "hf_model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "model_dir": "models/autoports/meta_llama_llama_3_1_8b_instruct",
+  "mesh_device": "T3K",
+  "fabric_config": "FABRIC_1D_RING",
+  "prompt": {
+    "file": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_full_model/prompt_128.txt",
+    "num_tokens": 128,
+    "text": "Once upon a time, in a small village nestled between two great mountains, there lived a curious young girl named Elena. Every morning, she climbed the eastern hill to watch the sunrise paint the valley gold. One day, beneath her favorite oak tree, she noticed a faint shimmering light hovering above the grass and decided to follow it carefully through the meadow. The path led her toward an old stone arch covered in moss, where a quiet voice asked her to choose courage over certainty. Elena took a breath, stepped forward, and saw the valley transform into a map of stars. She remembered her grandmother's stories and kept walking with steady"
+  },
+  "sampling_contract": {
+    "max_top_k": 32,
+    "num_gather_links": 1,
+    "sampling_dp": 1,
+    "sampling_all_gather_axis": 1,
+    "pad_logits_to_power_of_2": true,
+    "force_argmax_available": {
+      "available": false,
+      "reason": "Llama31_8B_InstructFullModel.make_sampling_args() exposes model_config={} with no SAMPLING_AG_CONFIG.allow_force_argmax, and the readiness generator rejects force-argmax if it activates for greedy decode.",
+      "sampling_ag_config": null
+    }
+  },
+  "strategies": {
+    "split_greedy": {
+      "replay_count": 64,
+      "elapsed_s": 0.032910470850765705,
+      "ms_per_replay": 0.5142261070432141,
+      "replays_per_s": 1944.6698374572468,
+      "available": true,
+      "selected": true,
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_k": 1,
+        "top_p": 0.0
+      },
+      "force_argmax": false,
+      "sampled_token": 11,
+      "reference_argmax_token": 11,
+      "reference_logits_shape": [
+        1,
+        1,
+        32,
+        128256
+      ],
+      "semantically_greedy": true
+    },
+    "split_topk_topp": {
+      "replay_count": 64,
+      "elapsed_s": 0.032910967245697975,
+      "ms_per_replay": 0.5142338632140309,
+      "replays_per_s": 1944.6405060722088,
+      "available": true,
+      "selected_for_greedy": false,
+      "sampling_params": {
+        "temperature": 0.7,
+        "top_k": 8,
+        "top_p": 0.9
+      },
+      "force_argmax": false,
+      "sampled_token_after_replays": 323
+    },
+    "force_argmax": {
+      "available": false,
+      "benchmarked": false,
+      "selected": false,
+      "reason": "Llama31_8B_InstructFullModel.make_sampling_args() exposes model_config={} with no SAMPLING_AG_CONFIG.allow_force_argmax, and the readiness generator rejects force-argmax if it activates for greedy decode."
+    }
+  },
+  "selected_strategy": "split_greedy",
+  "status": "pass"
+}

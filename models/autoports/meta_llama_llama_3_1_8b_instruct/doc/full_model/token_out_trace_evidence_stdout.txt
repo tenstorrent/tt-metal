@@ -1,0 +1,6 @@
+Opening T3K FABRIC_1D_RING mesh
+Building full generator
+Running token-out 100-token decode from prompt_len=60
+Token-out pass complete: TTFT 616.64 ms, decode 49.65 t/s/u, replay 69.21 t/s/u
+Running focused reset/page-table probe on existing trace and existing prefilled KV state
+Running top-k/top-p capable split-sampler smoke

@@ -1,0 +1,64 @@
+Optimized vLLM runtime fallback audit
+Date: 2026-06-15
+
+Measured serving path:
+
+env TT_LLAMA_TEXT_VER=autoport_llama31_8b_instruct timeout 7200s \
+  python_env/bin/python -u -m models.common.readiness_check.run_vllm_server \
+  --stages serve,benchmark \
+  --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct \
+  --hf-model meta-llama/Llama-3.1-8B-Instruct \
+  --mesh-device T3K \
+  --max-num-seqs 1 \
+  --max-model-len 1024 \
+  --tt-config '{"trace_region_size":216580672,"fabric_config":"FABRIC_1D_RING","trace_mode":"decode_only"}' \
+  --benchmark-prompt-len 128 \
+  --benchmark-output-len 128 \
+  --benchmark-num-requests 32 \
+  --benchmark-concurrency 1 \
+  --port 8001
+
+Server/plugin evidence:
+
+- The archived server logs contain `sample_on_device_mode=all`,
+  `trace_mode=decode_only`, and `async_scheduling=True`.
+- The model was selected with `TT_LLAMA_TEXT_VER=autoport_llama31_8b_instruct`,
+  which maps `TTLlamaForCausalLM` to
+  `models.autoports.meta_llama_llama_3_1_8b_instruct.tt.generator_vllm:Llama31_8B_InstructForCausalLM`.
+- No archived after server log contains `Forcing argmax sampling`.
+
+Source audit:
+
+- `generator_vllm.py::decode_forward(...)` calls `_decode_trace_sample(...,
+  readback=False)` and returns device tensors when `read_from_device=False`.
+- `generator_vllm.py::read_decode_output(..., async_read=True)` submits the
+  minimal token/logprob CPU transfer and records the read event.
+- `generator_vllm.py::process_decode_output_host(...)` rejects non-token host
+  formatting and only converts sampled token/logprob outputs after the async
+  boundary.
+- `generator.py::_decode_trace_sample(...)` calls
+  `ttnn.execute_trace(..., blocking=False)` for model decode trace replay.
+- `generator.py::_decode_trace_sample(...)` passes
+  `tt_out_tok=self._decode_trace.tokens`, so sampled tokens feed the persistent
+  decode token input on device.
+- `generator.py` rejects unexpected force-argmax activation during generator
+  construction.
+
+Expected host boundaries:
+
+- Prefill returns one sampled token to host because vLLM needs the token result.
+- Decode returns sampled token/logprob outputs to host after
+  `read_decode_output(..., async_read=True)` and plugin event synchronization.
+- Standalone generator helpers still contain host logits readback and
+  `torch.argmax` paths for readiness/prefill/reference use. Those are not the
+  measured vLLM decode path.
+
+Cleanups:
+
+- `pgrep -af "vllm.entrypoints|EngineCore|TTEngineCore|run_vllm_server" || true`
+  after final runs matched only the audit command itself.
+- `tt-smi -ls --local` listed all 8 devices after final runs.
+
+Result: no adapter-side host greedy/top-1 argmax, full-logits readback, eager
+sampling, force-argmax path, standalone-cache assumption, or leftover
+vLLM/EngineCore process was found in the measured serving path.
