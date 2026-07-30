@@ -1,5 +1,6 @@
 import pytest
 import pathlib
+from datetime import datetime
 
 from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
@@ -170,6 +171,27 @@ def test_create_pipeline_json_for_gtest_testcases(
     assert job.job_status == JobStatus.success if job_success else JobStatus.failure
     if check_failing_tests:
         assert len([x for x in job.tests if not x.success]) > 0
+
+
+def test_gtest_disabled_tests_do_not_get_epoch_timestamp():
+    """gtest stamps not-run suites (e.g. all-DISABLED_ suites) with a 1970-01-01 epoch sentinel.
+    The producer should substitute the run-level timestamp instead of emitting epoch timestamps."""
+    report_path = (INFRA_TESTS_DIR / "_data/data_collection/cicd/gtest_disabled_epoch_timestamp/report.xml").resolve()
+
+    tests = workflows.get_tests_from_test_report_path(report_path)
+
+    assert len(tests) == 3
+    run_timestamp = datetime.fromisoformat("2026-07-30T13:24:31.000")
+    for test in tests:
+        assert test.test_start_ts != workflows.GTEST_NOT_RUN_TIMESTAMP
+        assert test.test_end_ts != workflows.GTEST_NOT_RUN_TIMESTAMP
+
+    # The two not-run (disabled) suites fall back to the run-level timestamp
+    disabled_tests = [t for t in tests if t.test_case_name in ("L1Usage", "SnapshotFeature")]
+    assert len(disabled_tests) == 2
+    for test in disabled_tests:
+        assert test.test_start_ts == run_timestamp
+        assert test.test_end_ts == run_timestamp
 
 
 def test_empty_gtest_xml(workflow_run_gh_environment):

@@ -668,6 +668,23 @@ def deduplicate_tests_by_full_name(tests):
     return deduplicated_tests
 
 
+# gtest stamps suites/testcases that never actually ran (e.g. a testsuite made up entirely
+# of DISABLED_ tests) with this epoch sentinel instead of a real timestamp. datetime.fromisoformat
+# parses it without complaint, so it otherwise flows downstream as a bogus 1970-01-01 timestamp.
+GTEST_NOT_RUN_TIMESTAMP = datetime(1970, 1, 1)
+
+
+def parse_report_timestamp_(raw_timestamp, fallback):
+    """Parse a junit/gtest timestamp attribute, substituting a fallback when the attribute is
+    missing or set to gtest's not-run epoch sentinel (1970-01-01T00:00:00)."""
+    if not raw_timestamp:
+        return fallback
+    parsed = datetime.fromisoformat(raw_timestamp)
+    if parsed.replace(tzinfo=None) == GTEST_NOT_RUN_TIMESTAMP:
+        return fallback
+    return parsed
+
+
 def get_tests_from_test_report_path(test_report_path):
     report_root_tree = junit_xml_utils.get_xml_file_root_element_tree(test_report_path)
 
@@ -677,7 +694,7 @@ def get_tests_from_test_report_path(test_report_path):
     if report_root.tag == "testsuite":
         logger.info("Root tag is testsuite, found ctest xml")
         tests = []
-        default_timestamp = datetime.fromisoformat(report_root.attrib["timestamp"])
+        default_timestamp = parse_report_timestamp_(report_root.attrib.get("timestamp"), fallback=datetime.now())
         for testcase in report_root.findall("testcase"):
             if is_valid_testcase_(testcase):
                 # Process ctest testcase
@@ -693,10 +710,13 @@ def get_tests_from_test_report_path(test_report_path):
     if is_pytest or is_gtest:
         logger.info(f"Found {len(report_root)} testsuites")
         tests = []
+        # The run-level timestamp on the <testsuites> root is a valid fallback for any individual
+        # <testsuite> that gtest stamped with the not-run epoch sentinel (all-DISABLED_ suites).
+        run_timestamp = parse_report_timestamp_(report_root.attrib.get("timestamp"), fallback=datetime.now())
         for i in range(len(report_root)):
             testsuite = report_root[i]
             testsuite_name = testsuite.attrib.get("name") if is_gtest else None
-            default_timestamp = datetime.fromisoformat(testsuite.attrib["timestamp"])
+            default_timestamp = parse_report_timestamp_(testsuite.attrib.get("timestamp"), fallback=run_timestamp)
             get_pydantic_test = partial(
                 get_pydantic_test_from_testcase_,
                 default_timestamp=default_timestamp,
