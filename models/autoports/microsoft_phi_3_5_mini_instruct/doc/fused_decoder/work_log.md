@@ -2,7 +2,10 @@
 
 Date: 2026-07-30 UTC
 
-- Started from branch `skillexp-cell/fuse-advise/phi`, HEAD `73e0b2d35eff`.
+- The implementation and evidence were originally produced from functional
+  decoder HEAD `73e0b2d35eff` on `skillexp-cell/fuse-advise/phi`, then
+  transplanted without optimized-decoder work onto the reviewed
+  `skillexp-cell/fuse-noadvise/phi` branch.
 - Kept scope to fused decoder implementation, tests, and fused-decoder docs.
 - Audited the complete functional topology and TTNN dedicated ops in source,
   bindings, model examples, and unit tests.
@@ -33,4 +36,7 @@ Date: 2026-07-30 UTC
   rejected log/profiler attempts, and records profiler teardown/category
   limitations.
 - Fresh independent rereview verdict: `clean-pass`; see `stage_review.md`.
-- Stage implementation/evidence checkpoint: `042cb2dade7`.
+- Original source-branch implementation/evidence checkpoint: `042cb2dade7`.
+- Current-branch implementation/evidence checkpoint: `e7c887226e7`.
+- Current-branch metadata checkpoint reviewed before this provenance
+  correction: `0e5ae20717c`.
