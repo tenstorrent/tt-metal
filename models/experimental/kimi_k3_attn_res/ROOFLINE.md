@@ -185,6 +185,15 @@ that is itself DRAM.
 > The folded layout is `[1, 1, T/R, 2(S+1)]`, whose padded envelope is 320 KiB **for every
 > `S` up to 15** — so the collective becomes ~47 µs flat, **8.7 ms per forward**, and stops
 > scaling with the candidate count at all.
+>
+> **Amended again 2026-07-30 (P6 — the fold implemented, not modelled).** 8.7 ms is the
+> collective's own cost and not the fold's worth: getting into and out of the layout costs
+> two `ttnn.permute` calls at ~153 µs per read at `S = 8`, so the net is **147.6 µs per read
+> (4.5%)**, fitting `18.6·(S+1) − 18` µs, or **15.3 ms of the 380 ms forward**. Half of what
+> the 348 → 47 µs row above implies, and the error is this section's habit in miniature:
+> pricing a collective in isolation and forgetting that a layout has to be reached. The
+> permutes track the *padded* tensor exactly as the collective does, so the two terms shrink
+> together and the fold's advantage never widens at small `S`.
 
 ---
 
@@ -362,7 +371,8 @@ which a fused kernel that reads `v` once has already collapsed.
 > Two cheaper levers come first and neither is in this section: the 1.43× of headroom
 > inside the composed form (76% of device time is 7 big-tensor ops; `mul(v,v)` + `sum`
 > alone is 1 041 µs per read) and the statistics fold in §4's amendment. The split form's
-> 1.47× on a mesh (P5) is real and, as this section says, does not compound with fusion.
+> **1.43×** on a mesh (P5, re-measured after the fold landed) is real and, as this section
+> says, does not compound with fusion.
 
 ---
 
@@ -396,10 +406,11 @@ which a fused kernel that reads `v` once has already collapsed.
   target than it was: its enqueue costs 481 µs against a 152 µs baseline, and per-call
   global-semaphore creation is the obvious suspect for the ~3× — the analog hoists that
   out with `create_global_semaphores` (`tt_ccl.py`). Untested.
-- ~~**`num_links` defaults to 1** while production uses 2.~~ **Now a real choice, not an
-  oversight.** P4: 2 links buys 1.48× at the 5 760 KiB payload and nothing at or below
-  640 KiB. If the statistics fold lands, there is no payload left for a second link to
-  help and 1 is correct; without the fold, 2 is.
+- ~~**`num_links` defaults to 1** while production uses 2.~~ **Answered — 1 is correct.**
+  P4: 2 links buys 1.48× at the 5 760 KiB payload and nothing at or below 640 KiB. The fold
+  landed (P6), so there is no payload left for a second link to help: on the real op it
+  buys 4.7 µs per read on top of the fold. Taking the layout instead of the link is also
+  the better Galaxy trade — the fabric is contended by dispatch/combine there.
 - ~~**Nothing is measured at production `T` on a mesh.**~~ **Superseded.** Everything in
   Phase 9 is `T = 5120` on `(1, 1)`, `(8, 1)` and `(2, 4)`, which §5's rule puts on the
   RS+AG path — the one production takes. The correctness suite still runs `T = 64` and
@@ -408,7 +419,7 @@ which a fused kernel that reads `v` once has already collapsed.
   directions and halves §4's Galaxy column; that has never been run. `(4, 2)` was skipped
   deliberately — it is between two measured points on both axes.
 - **The `N`-batched matmul is unmeasured**, so the split form's remaining headroom above
-  its measured 1.47× is unknown.
+  its measured 1.43× is unknown.
 - No decode (`T = 1`), no PP boundary, no real K3 weights.
 
 ~~Phase 9 owns turning §3, §4 and §6 into device time. The first thing it should measure

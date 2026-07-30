@@ -562,6 +562,66 @@ while issuing 49 collectives per block against the direct form's 24. Amortizing 
 half's RMS pass across 12 layers is worth ~1 047 µs per site; the extra collective costs
 ~350 µs. The split form is not a single-device artifact.
 
+*Re-measured after P6* (the fold is now the default): direct **3 127.8** vs split
+**2 186.6**, so **1.43×**. The ratio moved because the fold is worth 146.8 µs per site to
+the direct form and only 41.7 to the split one — the direct form's collective carries all
+`2(S+1) = 18` stats planes per site, the split form's two carry ~10 between them. The split
+form was already spending less on the collective, which is part of *why* it was faster, so
+the fold takes back some of its edge. The conclusion is unchanged; the number is 1.43×.
+(P5's first run also leaked its trace between the two forms — but the direct number lands
+within 0.3% of P6's independent unfolded row, so the fold explains the shift and the leak
+cost nothing measurable.)
+
+### P6 — the statistics fold, priced on the real op
+
+P4's 7.4× was measured on a bare `all_reduce`. This is the same fold inside the op, behind
+`fold_stats`, paying for its own two `ttnn.permute` calls. Hypothesis going in: worth
+~300 µs per read at the peak shape, and **widening as `S` falls**, since at small `S` the
+unfolded payload is nearly all padding while the folded one is a single tile row either way.
+
+Traced, `(2, 4)`, µs per read:
+
+| `S` | links | unfolded | folded | fold Δ |
+|---|---|---|---|---|
+| 1 | 1 | 885.7 | 867.4 | −18.3 |
+| 1 | 2 | **858.9** | 864.1 | +5.2 |
+| 8 | 1 | 3 283.9 | 3 136.3 | **−147.6** |
+| 8 | 2 | 3 174.2 | **3 131.6** | −42.6 |
+
+1. **The fold is worth 147.6 µs (4.5%) at the peak shape — half of what P4 priced it at.**
+   The permute pair costs ~153 µs, above the ~40–120 µs I guessed. P4 timed the collective
+   in isolation and never charged for getting into and out of the layout.
+2. **P6's own hypothesis is refuted.** At `S = 1` the fold is worth 18.3 µs, and
+   `links = 2` unfolded is the *best* row there. The permutes track the padded tensor
+   exactly as the collective does, so both terms shrink together and the ratio never moves.
+   There is no small-`S` regime where the fold wins bigger. Net saving fits
+   **18.6·(S+1) − 18 µs** (149 predicted vs 147.6 at `S=8`; 19.2 vs 18.3 at `S=1`), so over
+   the real schedule — 186 reads, Σ(S+1) = 1 002 — it is **15.3 ms of the 380 ms forward,
+   4.0%**.
+3. **P4's "alternatives, not additive" is confirmed on the real op.** `links = 2` alone
+   buys 109.7 µs; the fold alone buys 147.6; both together buy 152.3. The second link adds
+   **4.7 µs** on top of the fold.
+
+Correctness gate — the 186-read depth walk, both layouts at both `T` (at `T = 64` the two
+layouts can take *different* `all_reduce` algorithms, not just reassociate, so both are
+parametrized):
+
+| `T` | folded | unfolded | torch-bf16 analog |
+|---|---|---|---|
+| 64 | 0.9999545 | 0.9999500 | 0.9999741 |
+| 256 | 0.9999207 | 0.9999223 | 0.9999638 |
+
+±5e-6 **in both directions** — reassociation noise, not a precision cost. A probe against a
+replicated 4× fp32 reference showed *neither* layout is bit-exact through `ttnn.all_reduce`
+(unfolded 7.8e-3, folded 1.6e-2 at `C = 18`, both ~50× inside one bf16 ULP), so exactness
+was never the right gate; 186-read depth PCC is.
+
+*Verdict:* **`fold_stats=True` by default, `num_links=1` by default.** The fold is a strict
+improvement at every measured point but `(S=1, links=2)`, where it costs 5.2 µs. That
+settles the `num_links` question in the direction Phase 8 did not expect — leave it at 1,
+because the fold makes the second link worthless, and on Galaxy a link not taken is a link
+another op can have.
+
 ---
 
 ## Learnings
@@ -890,13 +950,35 @@ Same trap on the fabric side, in the other direction. The collective is payload-
 statistics in a 5 760 KiB envelope — costs 348 µs, 7.4× what the folded layout costs.
 `ROOFLINE.md` §4 deferred that fix because two extra `permute` launches would cost 260 µs
 against 83 µs of modelled fabric saving. Untraced, that arithmetic is right and the
-deferral holds. Traced, the launches cost nothing and the saving is 300 µs. **The same
-decision inverts between the two regimes**, which is the strongest possible argument for
-§6's rule that no number gets reported without naming its regime.
+deferral holds. Traced, the *launches* cost nothing and the saving is 148 µs net of what
+the permutes cost on device (P6). **The same decision inverts between the two regimes**,
+which is the strongest possible argument for §6's rule that no number gets reported
+without naming its regime.
 
 *Lesson: pick the measurement point from the workload's distribution, not from its
 maximum. Peak shape is the shape where fixed costs matter least, so it is the one shape
 guaranteed to hide the launch term — and a per-read table hides a ramp entirely.*
+
+### Phase 9 — a layout is not free to enter
+
+P4 priced the statistics fold by timing `all_reduce` on both layouts: 348 µs against 47.
+A 7.4× ratio, ~300 µs per read. The op-level measurement gave **147.6 µs** — the two
+`ttnn.permute` calls that reach the layout and come back cost ~153 µs, and I had guessed
+40–120. Not a modelling error in the usual sense; the model priced the right op and simply
+did not include the ops that must exist for it to see that input at all.
+
+The corollary is what actually mattered. I expected the fold to *widen* its lead as `S`
+falls, because the unfolded payload becomes almost entirely padding while the folded one
+stays one tile row. Wrong: `ttnn.permute` is billed on the padded tensor by the same
+mechanism the collective is, so both terms shrink at the same rate and the ratio is flat.
+At `S = 1` the fold is worth 18 µs and plain `num_links = 2` beats it. **Two costs driven
+by the same quantity do not trade off against each other at any scale** — which is also
+why the fold and the second link turned out to be alternatives rather than additive, a
+prediction P4 got right for exactly this reason and I re-derived the hard way.
+
+*Lesson: a data-layout optimization has three prices — the win, the conversion in, and the
+conversion out. Measure the composite in place. And when a saving and its cost are both
+proportional to the same padded size, no sweep over that size will separate them.*
 
 ---
 
@@ -915,25 +997,25 @@ guaranteed to hide the launch term — and a per-read table hides a ramp entirel
       read** on `(2,4)`, not the ~12 D10's text claims and not §6's ~25. D10's
       conclusion stands (its rejected alternative was ~90 launches); its count does not.
 - [x] Phase 8 — `DISTRIBUTION.md`, TP on `(2,4)`, `ROOFLINE.md`.
-- [x] Re-measure the split form's 1.50× on a mesh — **1.47×** traced on `(2,4)` (P5),
-      3 274.6 → 2 228.3 µs per read site, with 49 collectives per block against 24.
-      It survives; batching `inter_block`'s 24 dot tensors (49 → 26) is now an
-      optimization, not a rescue.
+- [x] Re-measure the split form's 1.50× on a mesh — **1.43×** traced on `(2,4)` (P5),
+      3 127.8 → 2 186.6 µs per read site, with 49 collectives per block against 24.
+      (1.47× before the fold landed; the fold is worth 3.5× more to the direct form,
+      which carries all 18 stats planes per site.) It survives; batching `inter_block`'s
+      24 dot tensors (49 → 26) is now an optimization, not a rescue.
 - [ ] Try fp32 statistics on the **single-device** path — the sharded measurement says
       they buy ~1e-5 of depth PCC for 1.5 MB per read.
 - [x] Phase 9 — perf harness + numbered perf loop. `tests/perf/test_attn_res_perf.py`,
-      five numbered iterations P1–P5 plus a tracy attribution, four refutations recorded
+      six numbered iterations P1–P6 plus a tracy attribution, five refutations recorded
       in §Phase 9 perf loop. Launch term measured first, as §6 demanded — and it refuted
       §6.
-- [ ] Fold the statistics into `[1, 1, T/R, 2(S+1)]` — P4 prices it at **7.4× on the
-      collective**, 348 → 47 µs, ~300 µs per read traced, against two `ttnn.permute`
-      calls at ~40–120 µs. Pays only traced; untraced the two extra launches cancel it
-      exactly, which is why Phase 8 deferred it correctly and for a reason that has
-      since expired.
-- [ ] `num_links` — leave at 1 **if** the fold lands, raise to 2 otherwise. P4: 2 links
-      is 1.48× at the 5 760 KiB payload and neutral-to-negative at ≤640 KiB, so the fold
-      and the second link are alternatives, not additive. `ROOFLINE.md` §4's "the default
-      should follow production's 2" is now conditional on the layout.
+- [x] Fold the statistics into `[1, 1, T/R, 2(S+1)]` — landed as `fold_stats`, default on.
+      P4's 7.4× on the bare collective is **147.6 µs per read (4.5%)** once the two
+      `ttnn.permute` calls are charged for, ~15.3 ms of the 380 ms forward (P6). Depth PCC
+      moves ±5e-6 in both directions.
+- [x] `num_links` — **stays 1**. P6: with the fold in place the second link buys 4.7 µs
+      per read. They are alternatives, not additive, so `ROOFLINE.md` §4's "the default
+      should follow production's 2" is answered by taking the layout instead of the link —
+      which is the better trade on Galaxy, where the fabric is contended.
 - [ ] Hoist the collective's global semaphores out of the per-call path — still
       unmeasured, but P1 narrows the target: a plain launch is 105 µs on one device and
       152 µs on eight, while Phase 8 measured an `all_reduce` enqueue at 481 µs. That
@@ -1134,7 +1216,7 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
   1 935 µs floor, so the composed form runs at **70% of DRAM peak**, 59% with TP. Sequence
   sharding scales 8.3× on the slope; TP costs 516 µs per read, 19%. Over the real 186-read
   schedule: **380 ms traced against 622 ms untraced**, so tracing is worth 1.64×. The split
-  form holds at **1.47×** on a TP mesh (P5) while issuing 49 collectives per block against
+  form holds at **1.47×** on a TP mesh (P5 — 1.43× once P6's fold landed) while issuing 49 collectives per block against
   24 — Phase 8's last open question, answered in the split form's favour. The collective is
   payload-bound at ~18 KiB/µs above a ~29 µs floor and charges tile padding at full price,
   which makes the deferred statistics fold worth **7.4×** on the collective (348 → 47 µs).
@@ -1154,3 +1236,27 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
   and the semaphore hoist are all priced and none are implemented. `(4,2)` skipped
   deliberately; `(8,4)`, `[LINE, RING]`, decode, PP and real weights untouched. The
   profiler ran untraced on `(2,4)` only, and its own overhead is ~35% of what it reports.
+
+- **2026-07-30** — Phase 9 **P6**: the statistics fold implemented and shipped on by
+  default (`fold_stats`), the first perf-loop iteration to change the op rather than
+  measure it. **95 passed** in 145.31 s with the fold as default, including a depth walk
+  parametrized over both layouts at both `T`.
+
+  **VALIDATED:** The fold is worth **147.6 µs per read, 4.5%**, at the peak shape and
+  **15.3 ms of the 380 ms forward** over the real schedule, fitting 18.6·(S+1) − 18 µs. It
+  is numerically free — depth PCC moves ±5e-6 in *both* directions across 186 chained
+  reads. P4's "the fold and `num_links = 2` are alternatives, not additive" holds on the
+  real op: the second link adds 4.7 µs on top of the fold, so **`num_links` stays at 1** and
+  the Phase-8 open question closes by taking the layout instead of the link.
+
+  **REFUTED, both mine:** P4's ~300 µs — it is 147.6, because P4 timed a bare collective
+  and never charged for the two permutes, which cost ~153 µs, above the ~40–120 µs I
+  guessed. And P6's own hypothesis that the fold would *widen* its lead at small `S`: the
+  permutes track the padded tensor exactly as the collective does, so both shrink together
+  and at `S = 1` the fold is worth 18.3 µs while plain `links = 2` is the best row.
+
+  **NOT VALIDATED:** Still logged, not asserted. The `~153 µs` permute cost is inferred
+  from the difference of two totals, not attributed by the profiler. Depth PCC is measured
+  at `T = 64` and `T = 256`, both below the tile-row threshold where `all_reduce` switches
+  algorithms on the *production* shape, so the fold's numerics at `T/R = 2560` rest on the
+  fp32 probe rather than on a depth walk.

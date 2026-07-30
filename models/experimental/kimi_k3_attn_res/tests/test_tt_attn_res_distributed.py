@@ -217,21 +217,41 @@ def test_statistics_reduction_is_load_bearing(mesh_device):
 
 
 @on_mesh
-def test_tp_depth_walk(mesh_device):
+@pytest.mark.parametrize(
+    "num_tokens, fold_stats",
+    [(64, True), (64, False), (256, True), (256, False)],
+    ids=["small-folded", "small-unfolded", "rs-ag-folded", "rs-ag-unfolded"],
+)
+def test_tp_depth_walk(mesh_device, num_tokens, fold_stats):
     """93 layers, 186 reads, 186 collectives, on the mesh.
 
     The per-read collective is what depth turns into a risk here: a reduction that
     is merely close rather than correct compounds through 186 chained mixtures, and
     a topology mismatch shows up as a hang rather than a number. Gated relatively
     against torch-bf16, like the single-device harness — an absolute PCC at this
-    depth measures bf16, not the mapping."""
-    hidden_size, num_tokens = 7168, 64
+    depth measures bf16, not the mapping.
+
+    Two token counts crossed with the statistics fold, because they exercise
+    different collectives and the fold interacts with which one runs:
+
+      * `T = 256` puts `T/R = 128` on the **reduce-scatter + all-gather** path
+        for both layouts — production's algorithm (`ROOFLINE.md` §5), and the
+        clean comparison. The fold only reassociates the partial sums here.
+      * `T = 64` puts `T/R = 32`, one tile row, so the *only* dim that can
+        qualify for RS+AG is the `2(S+1)` candidate axis — which qualifies on the
+        odd-`S` reads and not the even ones. The folded layout has no such dim
+        and is always composite, so at this shape the fold **switches
+        algorithms** rather than just reassociating.
+
+    Both layouts must clear the same relative gate at both shapes. 186 chained
+    reads is where a reduction that is merely close would show up."""
+    hidden_size = 7168
     hidden_states, q_pre, q_post, q_out, weights = _make_stack(num_tokens, hidden_size, NUM_LAYERS)
 
     reference, _ = _walk_torch(hidden_states, weights, q_pre, q_post, q_out, torch.float32)
     analog, _ = _walk_torch(hidden_states, weights, q_pre, q_post, q_out, torch.bfloat16)
 
-    op = TtAttnRes(mesh_device, hidden_size=hidden_size, eps=EPS)
+    op = TtAttnRes(mesh_device, hidden_size=hidden_size, eps=EPS, fold_stats=fold_stats)
     sealed_after = []
     device, _ = _walk_device(
         mesh_device,
@@ -251,7 +271,10 @@ def test_tp_depth_walk(mesh_device):
 
     device_pcc, analog_pcc = _pcc(device, reference), _pcc(analog, reference)
     norm_ratio = (device.double().norm() / reference.double().norm()).item()
-    logger.info(f"{MESH} depth: device PCC {device_pcc:.7f}, torch-bf16 {analog_pcc:.7f}, norm ratio {norm_ratio:.6f}")
+    logger.info(
+        f"{MESH} depth T={num_tokens} fold={fold_stats}: device PCC {device_pcc:.7f}, "
+        f"torch-bf16 {analog_pcc:.7f}, norm ratio {norm_ratio:.6f}"
+    )
     assert abs(norm_ratio - 1.0) <= 2e-2, f"output norm ratio {norm_ratio:.6f} — gross scale error"
     assert (
         device_pcc >= analog_pcc - DEPTH_PCC_SLACK

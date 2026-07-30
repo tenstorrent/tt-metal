@@ -333,3 +333,45 @@ def test_perf_block_split_vs_direct(mesh_device):
 
     for tensor in (tt_prefix, tt_block, tt_query):
         ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [((2, 4), FABRIC)], indirect=["mesh_device", "device_params"], ids=["mesh-2x4"]
+)
+@pytest.mark.parametrize("num_sealed", [1, 8])
+@pytest.mark.parametrize("num_links", [1, 2], ids=["links-1", "links-2"])
+@pytest.mark.parametrize("fold_stats", [False, True], ids=["unfolded", "folded"])
+def test_perf_read_by_stats_layout(mesh_device, num_sealed, num_links, fold_stats):
+    """P6: the fold P4 priced, in the op rather than in isolation, traced.
+
+    P4 measured a standalone `all_reduce` 7.4x faster on the folded layout and
+    `num_links = 2` worth 1.48x only at the padded payload — which predicts that
+    the two are alternatives and that folding makes the second link pointless.
+    This sweeps both together against a whole read, where the fold also pays for
+    two `ttnn.permute` calls that P4 never charged it for.
+
+    `S = 1` is here because the schedule's mean is 5.39, not 8: the folded payload
+    is constant in `S` while the padded one is not, so the fold should widen its
+    lead as `S` falls even though the absolute saving shrinks.
+    """
+    prefix_sum, block_residual, query = _make_case(PRODUCTION_TOKENS, HIDDEN_SIZE, num_sealed)
+
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, num_links=num_links, fold_stats=fold_stats)
+    tt_prefix, tt_block, tt_query = _place(op, prefix_sum, block_residual, query)
+
+    ttnn.deallocate(op.forward(tt_prefix, tt_block, tt_query))
+    ttnn.synchronize_device(mesh_device)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = op.forward(tt_prefix, tt_block, tt_query)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    enqueue_us, total_us = _bench(
+        mesh_device, lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    )
+    layout = "folded" if fold_stats else "unfolded"
+    _report(f"S={num_sealed} links={num_links} {layout} traced", enqueue_us, total_us)
+
+    ttnn.release_trace(mesh_device, trace_id)
+    for tensor in (out, tt_prefix, tt_block, tt_query):
+        ttnn.deallocate(tensor)
