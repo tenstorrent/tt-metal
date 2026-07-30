@@ -355,13 +355,14 @@ class ChatEngine:
     def step(self, user: "UserSession", token_id: int, pos: int) -> int:
         """Feed ``token_id`` at absolute position ``pos`` of ``user``'s conversation;
         return the argmax of the resulting single-token logits (the device sync happens
-        in ``to_torch``)."""
+        when the logits are read back)."""
         user.activate()
         if self.traced:
-            logits_tt = self.model.decode_traced(token_id, pos)  # [1, 1, vocab], lm_head in-trace
+            # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
+            logits_host = self.model.decode_traced(token_id, pos)
         else:
-            logits_tt = self.lm_head(self.model.decode(token_id, pos, self.rope))
-        logits = ttnn.to_torch(logits_tt).reshape(1, -1).float()
+            logits_host = ttnn.to_torch(self.lm_head(self.model.decode(token_id, pos, self.rope)))
+        logits = logits_host.reshape(1, -1).float()
         return int(logits[0].argmax().item())
 
     def warmup(self) -> None:
