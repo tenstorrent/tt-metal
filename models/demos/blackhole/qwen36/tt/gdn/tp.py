@@ -8,10 +8,6 @@ Reuses `recurrent_gated_delta_rule_decode_ttnn`; weights interleaved. GDN norm u
 """
 import os
 
-# --- TEMP: env-guarded per-phase decode timing (GDN_PHASE_TIMING=1). Localizes the bucketed
-# width-8 cost (conv vs recurrence vs writeback vs out). Zero overhead when off. Remove after use.
-import time as _time
-
 import torch
 
 import ttnn
@@ -25,19 +21,6 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.tt_transformers.tt.ccl import tt_all_reduce
-
-_GDN_PT = os.environ.get("GDN_PHASE_TIMING") == "1"
-_PHASE_MS = {}
-_PHASE_N = {}
-
-
-def _pt_reset():
-    _PHASE_MS.clear()
-    _PHASE_N.clear()
-
-
-def _pt_report():
-    return {k: (_PHASE_MS[k], _PHASE_N[k]) for k in _PHASE_MS}
 
 
 def _softplus_add(a, bias):
@@ -1048,23 +1031,7 @@ class TPGatedDeltaNet:
         # works at any width. The B==Bmax path is byte-identical to before.
         B = x.shape[-2]
 
-        if _GDN_PT:
-            _last = [_time.perf_counter()]
-
-            def _mark(lbl):
-                ttnn.synchronize_device(self.mesh)
-                now = _time.perf_counter()
-                _PHASE_MS[lbl] = _PHASE_MS.get(lbl, 0.0) + (now - _last[0]) * 1000.0
-                _PHASE_N[lbl] = _PHASE_N.get(lbl, 0) + 1
-                _last[0] = now
-
-        else:
-
-            def _mark(lbl):
-                return None
-
         qkv, z, a, b = self._project_qkvzab(x, B, out_mc=_L1)
-        _mark("proj")
 
         # Conv1d shift-register + weighted sum + SiLU
         st = self.conv_states
@@ -1092,7 +1059,6 @@ class TPGatedDeltaNet:
         k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
         v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
         ttnn.deallocate(conv)
-        _mark("conv")
 
         # GQA expand Q/K Nk→Nv; recurrence L2-norms + scales internally
         rf = Nv // Nk
@@ -1126,7 +1092,6 @@ class TPGatedDeltaNet:
         )
         if init_state is not self.rec_state:
             ttnn.deallocate(init_state)
-        _mark("recur")
         if self._stable_state:
             # In-place update preserves rec_state address for decode trace replay
             if B == Bmax:
@@ -1136,7 +1101,6 @@ class TPGatedDeltaNet:
                 self._write_recurrent_state_prefix(new_rec, B)
         else:
             self.rec_state = new_rec
-        _mark("writeback")
 
         out_r = ttnn.reshape(o, (B, Nv, Dv))
         out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
@@ -1159,5 +1123,4 @@ class TPGatedDeltaNet:
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        _mark("out")
         return out

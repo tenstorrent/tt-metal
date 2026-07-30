@@ -2,17 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Verification for the qwen36 decode-batch bucketing fix (branch atupe/qwen36-bucketing-fix).
 
-Three questions, each answered by measurement rather than by reading the comments:
-
-1. ``test_bucket_selection`` (no device): does the bucket-picking arithmetic in
-   ``qwen36_vllm.decode_forward`` choose the right width for the padded batches the
-   vLLM runner actually produces?
-2. ``test_bucketed_decode_matches_full_width`` (device): is a width-B decode
-   numerically equivalent to row 0 of a width-Bmax decode? Bucketing is only a
-   valid optimization if it is.
-3. ``test_decode_width_scaling`` (device): how much step time does narrowing the
-   width actually save at 8k, and which layer type does the saving come from?
-   This is the one that explains the residual gap.
+1. ``test_bucket_selection`` (no device): bucket-picking arithmetic for padded vLLM batches.
+2. ``test_bucketed_decode_matches_full_width`` (device): width-B matches full-width rows.
+3. ``test_decode_width_scaling_traced`` (device): traced step time vs decode width.
 """
 import os
 import statistics
@@ -27,13 +19,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
-# n_layers=8 of the real checkpoint = layer_types[:8] = 6 linear_attention + 2 full_attention.
 N_LAYERS = 8
-N_GDN_IN_SLICE = 6
-N_ATTN_IN_SLICE = 2
-# Full Qwen3.6-27B: 64 layers, full_attention_interval=4 -> 48 GDN + 16 full attention.
-FULL_GDN = 48
-FULL_ATTN = 16
 
 BLOCK = 64
 # ISL under test. Override with QWEN36_BUCKET_TEST_CTX to compare against a server run at a
@@ -126,62 +112,6 @@ def test_bucketed_decode_matches_full_width(mesh_device, reset_seeds, ensure_gc)
         logger.info(f"width-{width} vs width-8 rows [0:{width}] logits PCC = {pcc}")
         assert float(pcc) >= 0.99, f"bucketed width-{width} does not match full-width rows [0:{width}]: PCC {pcc}"
     logger.info("PASSED: bucket widths 1, 2, and 4 are numerically equivalent to full width")
-
-
-@torch.no_grad()
-@parametrize_mesh_tp()
-def test_decode_width_scaling(mesh_device, reset_seeds, ensure_gc):
-    """Measure step time vs decode width at 8k, and attribute the delta to GDN vs the rest.
-
-    Uses the branch's own GDN_PHASE_TIMING hooks for the GDN share. Reports a projection
-    to the full 64-layer model so the numbers can be compared to the served tok/s.
-    """
-    os.environ["GDN_PHASE_TIMING"] = "1"
-    import models.demos.blackhole.qwen36.tt.gdn.tp as gdn_tp
-
-    BMAX = 8
-    ITERS = 20
-    model, page_table = _build(mesh_device, BMAX)
-
-    results = {}
-    for width in (1, 2, 4, 8):
-        model.reset_tp()
-        tokens = torch.tensor([[100 + u] for u in range(width)], dtype=torch.int32)
-        positions = torch.full((width,), CTX - 64, dtype=torch.int32)
-        pt = page_table[:width]
-
-        # warm: first call compiles programs for this width
-        _decode_once(model, tokens, positions, pt)
-        ttnn.synchronize_device(mesh_device)
-
-        gdn_tp._pt_reset()
-        t0 = time.perf_counter()
-        for _ in range(ITERS):
-            _decode_once(model, tokens, positions, pt)
-        ttnn.synchronize_device(mesh_device)
-        step_ms = (time.perf_counter() - t0) * 1000.0 / ITERS
-
-        phases = gdn_tp._pt_report()
-        gdn_ms = sum(v[0] for v in phases.values()) / ITERS
-        results[width] = (step_ms, gdn_ms, {k: v[0] / ITERS for k, v in phases.items()})
-        logger.info(f"width={width}: step={step_ms:.2f} ms  gdn={gdn_ms:.2f} ms  phases={results[width][2]}")
-
-    logger.info("=== per-step time for an 8-layer slice (6 GDN + 2 attn) ===")
-    for w, (step, gdn, _) in results.items():
-        logger.info(f"  width={w}: total={step:.2f} ms   gdn={gdn:.2f} ms   non-gdn={step - gdn:.2f} ms")
-
-    s8, g8, _ = results[8]
-    s1, g1, _ = results[1]
-    d_total, d_gdn = s8 - s1, g8 - g1
-    d_other = d_total - d_gdn
-    logger.info(f"8-layer slice: width8-width1 delta total={d_total:.2f} ms (gdn={d_gdn:.2f}, other={d_other:.2f})")
-    # Project the per-layer-type deltas onto the real 64-layer model.
-    proj = d_gdn / N_GDN_IN_SLICE * FULL_GDN + d_other / N_ATTN_IN_SLICE * FULL_ATTN
-    logger.info(
-        f"PROJECTED full-64-layer width8->width1 saving = {proj:.1f} ms/step "
-        f"(gdn {d_gdn / N_GDN_IN_SLICE * FULL_GDN:.1f} ms, attn+other {d_other / N_ATTN_IN_SLICE * FULL_ATTN:.1f} ms)"
-    )
-    assert results[1][0] > 0
 
 
 def _parametrize_traced(max_tp=4, trace_bytes=1073741824):
@@ -326,14 +256,7 @@ def test_gdn_prefix_write_trace(mesh_device, reset_seeds, ensure_gc):
 @_parametrize_traced()
 @pytest.mark.parametrize("n_layers", [None], ids=["all64"])
 def test_decode_width_scaling_traced(mesh_device, n_layers, reset_seeds, ensure_gc):
-    """DEVICE time vs decode width, on the traced path the server actually runs.
-
-    The eager measurement in test_decode_width_scaling is host-dispatch bound, which can
-    mask a device-side width effect. Trace replay removes host dispatch, so this isolates
-    device time. Run at the FULL layer count so ms/step is directly comparable to the
-    served tok/s.
-    """
-    os.environ.pop("GDN_PHASE_TIMING", None)
+    """DEVICE time vs decode width on the traced path. Full layer count for served tok/s compare."""
     from models.tt_transformers.tt.common import copy_host_to_device
 
     BMAX = 8
