@@ -393,8 +393,8 @@ models:
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
     bh_sc1: 437
-    # blaze_models_prefill_tests.yaml sum of bh_sc1_high_power timeouts (SDPA 23 + Kimi 40 + GLM 45 + MiniMax perf 60)
-    bh_sc1_high_power: 168
+    # blaze_models_prefill_tests.yaml sum of bh_sc1_high_power timeouts (SDPA 23 + Kimi 40 + GLM 45 + MiniMax perf 120)
+    bh_sc1_high_power: 228
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

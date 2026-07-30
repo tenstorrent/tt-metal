@@ -244,10 +244,8 @@ def main():
             f"[prefill-pcc] expert_dtype={expert_dtype} (EXPERT_DTYPE={os.getenv('EXPERT_DTYPE', 'bf4')})", flush=True
         )
         force_load = os.getenv("M3_FORCE_LOAD_WEIGHTS") == "1"
-        cache_only = not force_load and (
-            os.getenv("M3_WEIGHTS_FROM_CACHE") == "1"
-            or weight_cache_is_complete(cache_path, hf_config, num_layers, expert_dtype)
-        )
+        cache_complete = weight_cache_is_complete(cache_path, hf_config, num_layers, expert_dtype)
+        cache_only = not force_load and (os.getenv("M3_WEIGHTS_FROM_CACHE") == "1" or cache_complete)
         if cache_only:
             print(
                 "[prefill-pcc] tilized weight cache complete -> loading from cache, "
@@ -256,6 +254,18 @@ def main():
             )
             state_dict = {}
         else:
+            bang = "!" * 80
+            print(
+                f"\n{bang}\n"
+                f"[prefill-pcc] WARNING: warm tilized weight cache NOT available at\n"
+                f"  {cache_path}\n"
+                f"  (complete={cache_complete}, M3_FORCE_LOAD_WEIGHTS={force_load}).\n"
+                f"  Falling back to the ~869GB bf16 source read + cache build — expect multi-hour\n"
+                f"  wall time; CI timeouts (even 2h) will usually fire. Prefill tensor_cache_bfp8_*\n"
+                f"  under HF_MODEL / TT_CACHE_PATH on this host before relying on this job.\n"
+                f"{bang}\n",
+                flush=True,
+            )
             print("[prefill-pcc] loading real bf16 weights + EP placement (slow: bf16 source read) ...", flush=True)
             state_dict = ModelArgs.load_state_dict(model_args.weights_path)
         cfg = TtPrefillRuntimeConfig(
