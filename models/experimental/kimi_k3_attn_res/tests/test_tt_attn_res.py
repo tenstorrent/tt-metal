@@ -16,6 +16,7 @@ from models.experimental.kimi_k3_attn_res.torch_functional.attn_res import (
     EPS,
     attn_res,
     attn_res_inter_block,
+    attn_res_scores,
 )
 from models.experimental.kimi_k3_attn_res.tt.attn_res import TtAttnRes
 
@@ -26,6 +27,12 @@ PROJ_STD = 0.02
 # and the softmax carry that to a measured 7e-3 on the `inter_block` statistics.
 # An algebra error is O(1), so this gate still fails one by orders of magnitude.
 STAT_REL_TOL = 2e-2
+
+# `PCC_GATE` is calibrated for scores of order 1, which is where the folded query
+# puts them. The saturated-score test drives them to 120 on purpose and gates
+# relatively instead: the device trails torch-bf16 by ~1.3e-4 there versus ~1.5e-5
+# at order-1 scores, so an absolute gate would be measuring bf16, not our kernels.
+SATURATED_PCC_SLACK = 1e-3
 
 SHAPES = [(64, 256), (64, 7168)]
 SEALED = [0, 1, 4, 8]
@@ -187,6 +194,42 @@ def test_hand_rolled_softmax_beats_fused(mesh_device):
     assert (
         rolled <= fused
     ), f"ttnn.softmax(dim=1) is now more accurate ({fused:.3e} vs {rolled:.3e}) — reconsider the fused path"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("num_tokens, hidden_size", SHAPES)
+def test_saturated_scores_do_not_overflow(mesh_device, num_tokens, hidden_size):
+    """Gate the max-subtraction in `_softmax_over_candidates`.
+
+    Every other test here runs at scores of order 1, where dropping the shift
+    changes nothing — `exp` simply does not overflow. The query is rescaled to put
+    `max|score|` near 120, past `exp`'s finite range in both bf16 and fp32, so an
+    unshifted softmax yields `inf/inf = nan` instead of a slightly worse number.
+
+    Accuracy is gated against a torch-bf16 arm, not the absolute `PCC_GATE`. At
+    `|score| = 120` bf16's mantissa step is 0.5, so candidate score *differences*
+    quantize to 0.5 and `exp(-delta)` shifts by 1.65x. The device pays that on the
+    bf16 `v*q` product while the torch reference computes scores in fp32 from bf16
+    storage, and closing the gap would mean an fp32 `[1, C, N, d]` intermediate —
+    a 2x cost on the op's largest tensor for a regime the folded query
+    (`|score| ~ 5`) never enters."""
+    target_score = 120.0
+    prefix_sum, block_residual, query = _make_case(num_tokens, hidden_size, 8)
+    query = query * (target_score / attn_res_scores(block_residual.float(), query.float(), EPS).abs().max())
+    op = TtAttnRes(mesh_device, hidden_size=hidden_size)
+
+    tt_prefix, tt_block, tt_query = _to_device(mesh_device, prefix_sum, block_residual, query)
+    got = ttnn.to_torch(op.forward(tt_prefix, tt_block, tt_query)).reshape(num_tokens, hidden_size)
+
+    assert torch.isfinite(got).all(), f"d={hidden_size}: saturated scores overflowed the softmax"
+
+    want = attn_res(prefix_sum.float(), block_residual.float(), query.float(), EPS)
+    analog = attn_res(prefix_sum.bfloat16(), block_residual.bfloat16(), query.bfloat16(), EPS).float()
+    pcc, analog_pcc = _pcc(got, want), _pcc(analog, want)
+    assert pcc >= analog_pcc - SATURATED_PCC_SLACK, (
+        f"d={hidden_size}: saturated PCC {pcc:.7f} trails torch-bf16 {analog_pcc:.7f} "
+        f"by more than {SATURATED_PCC_SLACK}"
+    )
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
