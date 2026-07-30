@@ -298,18 +298,28 @@ Arm-driven HW-TX (`doca_eth_txq`, ~198 G) remains an option but is Arm-in-the-lo
   confirmed off the B1 Arm-CPU bridge and off the drainer pool *separately* — never off the P-GW1 path that
   reaches p0. This is the true open correctness gap (task #13). 6-step mismatch decision tree in the plan.
 - **Bandwidth (BW_PLAN):**
-  1. **d.1 async-ring fault fix** = a HOST-SETUP bisect (the 0x2 fault is in the trigger `post_recv`, which runs
-     *before* the async loop → the async loop is ruled out first-order). Leading hypothesis: the **fixed 64 B DBR
-     umem + the CQ umem don't scale with depth** (matches the earlier "256 bump broke recv-post"). Bisect the 4
-     deltas (RQ 4→64, RC CQ 4→128, 1→1024 landing ring, 1→1024 header ring) against the *synchronous* kernel;
-     ring-shrink fallback `TT_RING = 2×inflight`. Expected → ~0.95 Mpps single-EU.
+  1. **d.1 depth-bump bisect — DONE (2026-07-29), root cause CONFIRMED; the cheap one-line path is CLOSED.**
+     Bisected against the *synchronous* known-good kernel (RQ=4/CQ=4, validated 0.38 Mpps, byte-exact):
+     - **RQ 4→64 + CQ 4→128:** target starts clean (NO 0x2 at startup) but on the run the **recv-post RPC fails**:
+       `[DPA] Flexio RPC failed → RPC failed to post receive: DOCA Driver call failure` → 0 frames egress →
+       requester `transport retry counter exceeded wr_id=173`.
+     - **RQ 4 + CQ 4→128 (isolate):** *also* fails the recv-post RPC (`wr_id=64`, same DOCA Driver call failure).
+     - **Restore RQ=4/CQ=4:** regression PASSES (50000/50000, exactly-once, byte-exact).
+     → **Both the RQ and the RC-CQ naive host-side depth bumps independently break the recv-post `__dpa_rpc__`.**
+     It's not just umem *bytes* (the QP umem via `calc_qp_external_umem_size` does scale, DBR 64 B is ample) —
+     the **recv-post RPC / DPA-side ring bookkeeping is hard-tied to depth 4** and must be reworked to post/track
+     a deeper RQ. So deep-pipelining is **not** a host-only tweak; it needs a DPA kernel+RPC change that scales the
+     recv-post, which **converges with d.2b** (the async/N-EU kernel). The standalone "~0.95 Mpps via depth bump"
+     shortcut is dead; fold throughput into d.2b.
   2. **d.2b N-EU DPA-Verbs ETH-SQ fan-out** (multi-QP/SRQ), landing in **DPA-private DDR** (host-MR gather caps
      ~42 G; DPA-heap scales ~134 G). Frame-size napkin: DPA-issue hits a ~4.4 Mpps aggregate wall (~145 G @4 KB),
      so **≥~5.7 KB is needed for 200 G → target 8 KB + ~4 EUs, Arm-off, latency preserved.**
 
 ### Ordering
-Stage-1 byte-exact FIRST (validates the gateway is correct before scaling). Then d.1 async ring (→ ~0.95 Mpps),
-then d.2b N-EU fan-out @8 KB (→ ~150–200 G). Destination routing (B2), Case-1 GPUDirect, Case-2 two-link, and
+Stage-1 byte-exact **DONE** (§10 (e): validated on silicon). d.1 depth-bump bisect **DONE** (root cause
+confirmed — the cheap deep-pipeline shortcut is closed; §11.1). Throughput now goes straight to **d.2b** — the
+N-EU DPA-Verbs ETH-SQ kernel that scales the recv-post + fans out (@8 KB → ~150–200 G); d.1's depth needs land
+inside that kernel, not as a host bump. Destination routing (B2), Case-1 GPUDirect, Case-2 two-link, and
 interop (perftest/NCCL) proceed per E2E_TEST_PLAN Stages 2–7. Latency (~3.4 µs) must not regress at any step.
 
 ---
