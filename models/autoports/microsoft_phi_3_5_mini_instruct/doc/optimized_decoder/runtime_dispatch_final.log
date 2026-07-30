@@ -1,0 +1,23 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 6 items / 5 deselected / 1 selected
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_runtime_dispatch_contract PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+0.21s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_runtime_dispatch_contract
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_runtime_dispatch_contract
+======================= 1 passed, 5 deselected in 0.89s ========================

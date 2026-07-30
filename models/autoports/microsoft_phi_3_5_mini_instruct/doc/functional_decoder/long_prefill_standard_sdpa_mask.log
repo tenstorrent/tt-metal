@@ -1,0 +1,199 @@
+2026-07-28 17:07:43.562 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_functional_decoder.py::test_paged_prefill_crosses_nonchunked_sdpa_limit[blackhole-mesh_device0] 2026-07-28 17:07:45.033 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-28 17:07:45.033 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-28 17:07:45.033 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-28 17:07:45.033 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-28 17:07:45.034 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-28 17:07:45.034 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-28 17:07:45.038 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-28 17:07:45.265 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-28 17:07:45.265 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-28 17:07:45.265 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-28 17:07:45.265 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-28 17:07:45.266 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-28 17:07:45.566 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-28 17:07:45.695 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-28 17:07:45.695 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-28 17:07:45.695 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-28 17:07:45.695 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-28 17:07:45.695 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-28 17:07:45.695 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-28 17:07:45.695 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-28 17:07:45.695 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-28 17:07:45.695 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-28 17:07:45.695 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-28 17:07:45.695 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-28 17:07:45.695 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-28 17:07:45.695 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-28 17:07:45.695 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-28 17:07:45.701 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-28 17:07:45.701 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-28 17:07:45.701 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-28 17:07:45.701 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-28 17:07:45.729 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-28 17:07:45.767 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-28 17:07:46.345 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349975 GHz, device_time_at_sync=394691967234322 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-28 17:07:46.360 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+[transformers] This model config has set a `rope_parameters['original_max_position_embeddings']` field, to be used together with `max_position_embeddings` to determine a scaling factor. Please set the `factor` field of `rope_parameters`with this ratio instead -- we recommend the use of this field over `original_max_position_embeddings`, as it is compatible with most model architectures.
+2026-07-28 17:07:47.118 | critical |          Always | TT_FATAL: Causal SDPA requires Q and K to have the same sequence length. Got Q: 32768, K: 32769 (assert.hpp:104)
+FAILED2026-07-28 17:07:47.791 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+___ test_paged_prefill_crosses_nonchunked_sdpa_limit[blackhole-mesh_device0] ___
+
+mesh_device = MeshDevice(1x1 grid, 1 devices)
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    def test_paged_prefill_crosses_nonchunked_sdpa_limit(mesh_device):
+        """Exercise the first non-aligned length requiring paged chunked SDPA."""
+        config = _config()
+        state = _zero_state(config)
+        seq_len = 32_769
+        decoder = FunctionalDecoder.from_state_dict(
+            state, hf_config=config, layer_idx=LAYER_IDX, mesh_device=mesh_device, max_context=seq_len
+        )
+        hidden = torch.zeros(1, seq_len, config.hidden_size, dtype=torch.bfloat16)
+        key_cache, value_cache = decoder.create_paged_kv_cache()
+>       actual = decoder.prefill_forward(
+            _to_tt_prefill(hidden, mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=_page_table(1, seq_len, mesh_device, permute=True),
+        )
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_functional_decoder.py:295: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+models/autoports/microsoft_phi_3_5_mini_instruct/tt/functional_decoder.py:321: in prefill_forward
+    output_chunk = ttnn.transformer.scaled_dot_product_attention(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = FastOperation(python_fully_qualified_name='ttnn.transformer.scaled_dot_product_attention', function=<ttnn._ttnn.operat...uts=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (ttnn.Tensor([[[[ 0.0000,  0.0000,  ...,  0.0000,  0.0000],
+               [ 0.0000,  0.0000,  ...,  0.0000,  0.0000],...,  0.0000,  ...,  0.0000,  0.0000]]]], shape=Shape([1, 32, 32769, 96]), dtype=DataType::BFLOAT16, layout=Layout::TILE))
+function_kwargs = {'is_causal': True, 'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), 'scale': 0.10206207261596575}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+    
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+    
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation.cpp:120: Sq == Sk
+E               info:
+E               Causal SDPA requires Q and K to have the same sequence length. Got Q: 32768, K: 32769
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d14f1) [0x73bc85bd14f1]
+E                --- ttnn::prim::SDPAOperation::validate_on_program_cache_miss(ttnn::prim::SDPAParams const&, ttnn::prim::SDPAInputs const&)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim13SDPAOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x194) [0x73bc85534124]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim13SDPAOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2db) [0x73bc85526a1b]
+E                --- ttnn::prim::sdpa(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, bool, std::optional<float>, std::optional<unsigned int>, std::optional<long>, std::optional<tt::tt_metal::Tensor> const&, bool, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&, std::optional<ttnn::operations::transformer::SDPAProgramConfig>, ttnn::ComputeKernelConfig)
+E                --- ttnn::transformer::scaled_dot_product_attention(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, bool, std::optional<float>, std::optional<unsigned int>, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::operations::transformer::SDPAProgramConfig>, std::optional<ttnn::ComputeKernelConfig>, std::optional<tt::tt_metal::Tensor> const&)
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x451131) [0x73bc85c51131]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x450d72) [0x73bc85c50d72]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x73bc85b15575]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x73bccc4601ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x73bccc46028b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/decorators.py:473: RuntimeError
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+1.53s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_functional_decoder.py::test_paged_prefill_crosses_nonchunked_sdpa_limit[blackhole-mesh_device0]
+0.76s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_functional_decoder.py::test_paged_prefill_crosses_nonchunked_sdpa_limit[blackhole-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_functional_decoder.py::test_paged_prefill_crosses_nonchunked_sdpa_limit[blackhole-mesh_device0]
+=========================== short test summary info ============================
+FAILED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_functional_decoder.py::test_paged_prefill_crosses_nonchunked_sdpa_limit[blackhole-mesh_device0]
+============================== 1 failed in 3.49s ===============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x73bc38578108 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x73bc38d0a088 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "create_submesh"
+ - leaked function ""
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "get_dtype"
+ - leaked function ""
+ - leaked function "create_submeshes"
+ - leaked function "clear_loaded_sub_device_manager"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-28 17:07:49.812 | info     |    BuildKernels | JIT cache stats: 124/124 hits (100.0%) [124 cached, 11 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-28 17:07:49.812 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-28 17:07:49.823 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-28 17:07:49.823 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-28 17:07:50.320 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-28 17:07:50.320 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-28 17:07:50.320 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
