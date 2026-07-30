@@ -13,11 +13,10 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 void kernel_main() {
+    constexpr auto in1_mcast_args = dataflow_kernel_lib::McastArgs<4, 0>();
+
     // READER
-    uint32_t rt_args_idx = 0;
-    // in1 mcast args
-    const uint32_t in1_mcast_sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in1_mcast_sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t rt_args_idx = in1_mcast_args.next_runtime_args_offset();
 
     // WRITER
     // out tensor args
@@ -49,37 +48,36 @@ void kernel_main() {
     constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(2);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(3);
-    // in1 mcast args
     // batch args
-    constexpr uint32_t batch = get_compile_time_arg_val(6);
+    constexpr uint32_t batch = get_compile_time_arg_val(in1_mcast_args.next_compile_time_args_offset());
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(7);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(8);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(10);
-    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(12);
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(10);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(11);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(12);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(13);
+    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(14);
+    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(15);
 
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(13);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(14);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(15);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(16);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(17);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(18);
 
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(16);  // if 0
+    constexpr uint32_t MtNt = get_compile_time_arg_val(19);  // if 0
     // Don't need batch; same as batch from READER args
 
 #ifdef FUSE_BIAS
     // in3 block args
-    constexpr uint32_t in3_block_w = get_compile_time_arg_val(17);
+    constexpr uint32_t in3_block_w = get_compile_time_arg_val(20);
 
     constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
 #endif
-    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(18);
+    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(21);
 
-    constexpr auto out_args = TensorAccessorArgs<19>();
+    constexpr auto out_args = TensorAccessorArgs<22>();
     OpSignaler op_signaler;
     if constexpr (fuse_op_reduce_scatter) {
         op_signaler = OpSignaler(rt_args_idx);
@@ -103,12 +101,7 @@ void kernel_main() {
     DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
 
-    const uint32_t in1_sender_coords[2] = {in1_mcast_sender_noc_x, in1_mcast_sender_noc_y};
-    dataflow_kernel_lib::ReceiverPipe<
-        get_compile_time_arg_val(5),
-        /*PRE_HANDSHAKE=*/true,
-        get_compile_time_arg_val(4)>
-        in1_pipe(noc, in1_sender_coords);
+    auto in1_pipe = in1_mcast_args.receiver(noc);
 
     // WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);

@@ -16,16 +16,20 @@
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 void kernel_main() {
+#ifdef MCAST_ARGS
+    constexpr auto in1_mcast_args = dataflow_kernel_lib::McastArgs<10, 2>();
+    constexpr uint32_t in1_post_mcast_ct_offset = in1_mcast_args.next_compile_time_args_offset();
+#else
+    constexpr uint32_t in1_post_mcast_ct_offset = 14;
+#endif
+
     // READER
     uint32_t rt_args_idx = 0;
     // in1 tensor args
     const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
-    // in1 mcast args
-    const uint32_t in1_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in1_mcast_dest_noc_start_y = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in1_mcast_dest_noc_end_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in1_mcast_dest_noc_end_y = get_arg_val<uint32_t>(rt_args_idx++);
+    // The mcast wire occupies four runtime words in both the legacy SKIP_MCAST ABI and McastArgs ABI.
+    rt_args_idx += 4;
 
     // sparsity args
     const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -63,31 +67,28 @@ void kernel_main() {
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(9);
 
-    // in1 mcast args
-    constexpr uint32_t in1_mcast_num_dests = get_compile_time_arg_val(12);
-    constexpr uint32_t in1_mcast_num_cores = get_compile_time_arg_val(13);
     // batch args
-    constexpr uint32_t KtNt = get_compile_time_arg_val(14);
-    constexpr uint32_t batch = get_compile_time_arg_val(15);
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(16);
+    constexpr uint32_t KtNt = get_compile_time_arg_val(in1_post_mcast_ct_offset);
+    constexpr uint32_t batch = get_compile_time_arg_val(in1_post_mcast_ct_offset + 1);
+    constexpr uint32_t bcast_B = get_compile_time_arg_val(in1_post_mcast_ct_offset + 2);
     // sparsity args
-    constexpr uint32_t batchB = get_compile_time_arg_val(17);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(18);
+    constexpr uint32_t batchB = get_compile_time_arg_val(in1_post_mcast_ct_offset + 3);
+    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(in1_post_mcast_ct_offset + 4);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(19);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(20);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(21);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(22);
-    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(23);
-    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(24);
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(in1_post_mcast_ct_offset + 5);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(in1_post_mcast_ct_offset + 6);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(in1_post_mcast_ct_offset + 7);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(in1_post_mcast_ct_offset + 8);
+    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(in1_post_mcast_ct_offset + 9);
+    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(in1_post_mcast_ct_offset + 10);
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(25);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(26);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(27);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(in1_post_mcast_ct_offset + 11);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(in1_post_mcast_ct_offset + 12);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(in1_post_mcast_ct_offset + 13);
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(28);  // if 0
+    constexpr uint32_t MtNt = get_compile_time_arg_val(in1_post_mcast_ct_offset + 14);  // if 0
     // Don't need batch; same as batch from READER args
 
     // When sparsity is disabled, we just loop once
@@ -98,7 +99,7 @@ void kernel_main() {
     const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
-    constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
+    constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(in1_post_mcast_ct_offset + 15);
 
     constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
     // Use the CB page size (padded to the DRAM alignment by the factory) for DRAM reads
@@ -124,8 +125,8 @@ void kernel_main() {
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
 #endif  // OUT_SHARDED
 
-    constexpr bool fuse_op_all_gather = (bool)get_compile_time_arg_val(30);
-    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(31);
+    constexpr bool fuse_op_all_gather = (bool)get_compile_time_arg_val(in1_post_mcast_ct_offset + 16);
+    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(in1_post_mcast_ct_offset + 17);
 
     MatmulOpReceiver fused_op_receiver;
     OpSignaler op_signaler;
@@ -140,7 +141,7 @@ void kernel_main() {
         op_signaler = OpSignaler(rt_args_idx);
     }
 
-    constexpr auto in1_args = TensorAccessorArgs<32>();
+    constexpr auto in1_args = TensorAccessorArgs<in1_post_mcast_ct_offset + 18>();
     constexpr auto sparsity_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<sparsity_args.next_compile_time_args_offset()>();
 #ifdef FUSE_BIAS
@@ -228,19 +229,7 @@ void kernel_main() {
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
-    dataflow_kernel_lib::SenderPipe<
-        noc_index,
-        get_compile_time_arg_val(11),
-        /*PRE_HANDSHAKE=*/true,
-        get_compile_time_arg_val(10)>
-        in1_pipe(
-            noc,
-            dataflow_kernel_lib::McastRect<>{
-                in1_mcast_dest_noc_start_x,
-                in1_mcast_dest_noc_start_y,
-                in1_mcast_dest_noc_end_x,
-                in1_mcast_dest_noc_end_y},
-            in1_mcast_num_dests);
+    auto in1_pipe = in1_mcast_args.sender(noc);
 
 #ifdef IN1_SHARDED
     uint64_t in1_start_address = dfb_in1.get_write_ptr();
