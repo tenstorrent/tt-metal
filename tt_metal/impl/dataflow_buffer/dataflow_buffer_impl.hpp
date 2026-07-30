@@ -146,16 +146,17 @@ private:
     std::unordered_map<CoreCoord, uint8_t> next_index_;
 };
 
-// Allocates hardware transaction IDs. Valid range: [1, 31].
-// Txn id 0 is reserved for NoC transactions that do not stamp an explicit txn id.
-// DFBs must not assign it.
+// Allocates DFB implicit-sync transaction IDs from the runtime pool
+// [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], top-down.
+// Txn id 0 is reserved (NOC_V2_TRID_STATIC). User kernels may use [0, USER_TXN_ID_MAX].
 class TxnIdAllocator {
 public:
     std::vector<uint8_t> allocate(uint8_t count);
-    void reset() { next_id_ = 1; }
+    void reset() { next_id_ = HW_TXN_ID_MAX; }
 
 private:
-    uint8_t next_id_ = 1;
+    // Next highest ID available to allocate (descending within the DFB pool).
+    uint8_t next_id_ = HW_TXN_ID_MAX;
 };
 
 // Allocates Remapper clientTypes for ALL consumer mode.

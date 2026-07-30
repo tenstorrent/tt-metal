@@ -6,12 +6,12 @@ from dataclasses import dataclass
 
 import pytest
 from conftest import skip_for_coverage
+from helpers.device_io import read_words_from_device
 from helpers.param_config import parametrize
 from helpers.perf import PerfConfig
 from helpers.profiler import EntryType, Profiler
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import TemplateParameter
-from ttexalens.tt_exalens_lib import read_words_from_device
 
 
 @dataclass

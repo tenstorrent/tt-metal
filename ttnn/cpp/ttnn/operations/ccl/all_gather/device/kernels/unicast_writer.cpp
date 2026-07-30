@@ -71,6 +71,8 @@ void kernel_main() {
     const uint8_t data_valid_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (data_valid_sem target)
     const uint8_t data_valid_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_granular_sends = get_arg_val<uint32_t>(arg_idx++);  // leading sends the downstream relays
+    const uint16_t neighbor_chip_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint16_t neighbor_mesh_id = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] size_t arg_for_fab = arg_idx;  // fabric connection args start here (non-mux path)
 
     // A direction with no neighbor (a line endpoint) relays nothing; no fabric/mux connection was appended.
@@ -139,29 +141,17 @@ void kernel_main() {
     SenderT* sender = &fabric_connection.get(0).sender;
 #endif
 
-    FabricWriter<output_chunk_size, packet_size, SenderT> fabric(noc, sender);
-
-    // One 1-hop atomic-inc header for both the "alive" barrier inc and the data_valid signals; destination and
-    // value (chunks) are set per send. Flush keeps a data_valid inc ordered after the payload it announces.
-    auto sem_packet_header = PacketHeaderPool::allocate_header(1);
-    fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        sem_packet_header, /*num_hops=*/1, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
-    auto atomic_inc = [&](uint64_t addr, uint32_t val) {
-        fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
-            UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
-            sender, sem_packet_header, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{addr, val});
-    };
+    FabricWriter<output_chunk_size, packet_size, SenderT> fabric(noc, sender, neighbor_chip_id, neighbor_mesh_id);
 
     // Init handshake (send only): tell the neighbor's opposite-direction reader we're alive, so it lets its
     // paired writer start writing into our output. Our own reader does the matching wait.
     if constexpr (do_init_barrier) {
-        atomic_inc(safe_get_noc_addr(barrier_sem_noc_x, barrier_sem_noc_y, barrier_sem, 0), 1);
+        fabric.atomic_inc(safe_get_noc_addr(barrier_sem_noc_x, barrier_sem_noc_y, barrier_sem, 0), 1);
     }
 
     const uint64_t downstream_data_valid_addr =
         safe_get_noc_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem, 0);
-    auto signal = [&](uint32_t chunks) { atomic_inc(downstream_data_valid_addr, chunks); };
+    auto signal = [&](uint32_t chunks) { fabric.atomic_inc(downstream_data_valid_addr, chunks); };
 
     ///////////////////////////////////////////////////
     // MAIN

@@ -186,10 +186,11 @@ For example, to perform matrix multiplication:
 
 .. code-block:: c++
 
-    // Configure (un)packer and FPU for matmul mode.
-    // The unpacker is configured based on cb_in0 and cb_in1.
-    // The packer is configured based on cb_out.
-    mm_init(CBIndex::c_0, CBIndex::c_1, CBIndex::c_16);
+    // One-time hardware setup: the unpacker is configured based on cb_in0 and cb_in1, and the
+    // packer based on cb_out. Matmul maps in0 -> SrcB and in1 -> SrcA, so it uses SrcOrder::Reverse.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(CBIndex::c_0, CBIndex::c_1, CBIndex::c_16);
+    // Configure the (un)packer and FPU for matmul mode.
+    matmul_init(CBIndex::c_0, CBIndex::c_1);
 
     // Repeated computation can be performed without re-initialization.
     for(int i=0; i < 8; i++) {
@@ -226,7 +227,7 @@ For example, to perform matrix multiplication:
     }
 
 .. warning::
-    The same input circular buffers (e.g., ``cb_in0`` and ``cb_in1``) must be specified in both ``mm_init`` and ``matmul_tiles``. Using different circular buffers between these calls results in undefined behavior, as the unpacker may interpret the data incorrectly or read from invalid memory.
+    The same input circular buffers (e.g., ``cb_in0`` and ``cb_in1``) must be specified in both ``matmul_init`` and ``matmul_tiles``. Using different circular buffers between these calls results in undefined behavior, as the unpacker may interpret the data incorrectly or read from invalid memory.
 
 The configuration information for the unpacker and packer is derived from the circular buffer metadata. In the example above, circular buffers 0 and 1 are used to configure the unpacker to place their data into ``SrcA`` and ``SrcB``, respectively. The packer is configured to pack data into the format expected by circular buffer 16.
 
