@@ -122,9 +122,9 @@ Additionally, where they apply, raise these at 🟢 SUGGESTION — never block o
   for callers.
 - **Perf/accuracy numbers** — before/after figures for a PR categorised Performance
   or claiming an accuracy improvement.
-- **Issue link** — an issue link is *not* required. Raise it only when the diff itself
-  cites an issue number (in a test name, comment, or docstring) that the body does not
-  link, and then just name that number.
+- **Issue link** — ask the author to link the issue this fixes or relates to, if there
+  is one. When the diff itself cites an issue number (in a test name, comment, or
+  docstring) that the body does not link, name that number.
 
 Do not attempt to write the Summary for the author; state what is missing and why a
 reviewer needs it.
