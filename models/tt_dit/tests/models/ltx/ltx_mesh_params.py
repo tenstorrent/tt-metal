@@ -78,6 +78,19 @@ def _override_base_device_params(base, device_params, *, id=None):
     return pytest.param(*v[:4], device_params, *v[5:], marks=base.marks, id=id or base.id)
 
 
+# One-stage (Pro) AV needs the L1_SMALL pool for the audio-vocoder conv1d taps. The base pipeline
+# params leave l1_small_size=0, which OOMs the vocoder on the 4x8 galaxy ("L1_SMALL ... bank size is
+# 0 B" in bank_manager). Reserve 32 KB L1_SMALL on the BH 4x8 configs (untraced -> no trace region),
+# matching the distilled AV configs. Other geometries (deselected by the CI -k) pass through unchanged.
+_LTX_ONE_STAGE_L1SMALL_IDS = {"4x8sp1tp0nl2_ring_is_fsdp0", "4x8sp1tp0nl2_line_is_fsdp0"}
+LTX_ONE_STAGE_MESH_PARAMS_DL = [
+    _override_base_device_params(p, {**p.values[4], "l1_small_size": 32768}, id=p.id)
+    if p.id in _LTX_ONE_STAGE_L1SMALL_IDS
+    else p
+    for p in LTX_PIPELINE_MESH_PARAMS_DL
+]
+
+
 # ---------------------------------------------------------------------------
 # Distilled AV pipeline mesh params. Same geometry as the pipeline configs, but the audio
 # decode chain needs bigger device pools on a few configs, and the WH 4x8 ring config runs
