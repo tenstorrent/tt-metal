@@ -111,7 +111,7 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::RowInvariant::cre
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
-    KernelDescriptor::CompileTimeArgs writer_ct = {kCbId, aligned_stick_bytes};
+    KernelDescriptor::CompileTimeArgs writer_ct = {kCbId, raw_stick_bytes};
     TensorAccessorArgs(*output_buffer).append_to(writer_ct);
     writer_ct.push_back(kRmWriteBatch);
     writer_ct.push_back(rank);
