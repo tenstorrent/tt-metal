@@ -31,6 +31,7 @@
 #include "ttnn/metal_v2_artifacts.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "ttnn/operation_concepts.hpp"
+#include "ttnn/program_hash.hpp"
 #include "ttnn/operation.hpp"
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -247,14 +248,31 @@ public:
         return DeviceOperation::create_output_tensors(attrs, tensor_args);
     }
 
+    static_assert(
+        !(HasSpecProgramFactory<DeviceOperation> && HasLegacyProgramHash<DeviceOperation>),
+        "A Metal 2.0 spec-path operation must not define compute_program_hash(attrs, tensor_args). Express the "
+        "cache key as tensor_args_relaxations() and attributes_excluded_from_key instead, or drop the custom "
+        "hash and let the framework reflect.");
+
+    static_assert(
+        !HasSpecProgramFactory<DeviceOperation> ||
+            !ttsl::reflection::detail::supports_to_hash_v<operation_attributes_t>,
+        "operation_attributes_t::to_hash() silently replaces the whole attribute hash. A Metal 2.0 operation "
+        "declares nothing, or names the fields the key ignores in attributes_excluded_from_key.");
+    static_assert(
+        !HasSpecProgramFactory<DeviceOperation> || !std::is_aggregate_v<operation_attributes_t> ||
+            !HasAttributeNames<operation_attributes_t>,
+        "attribute_names is a hand-maintained copy of the struct: leave a field out and it silently leaves the "
+        "cache key. Delete it -- reflection names and keys every field -- and name the fields the key ignores "
+        "in attributes_excluded_from_key.");
+    static_assert(
+        !HasSpecProgramFactory<DeviceOperation> || excluded_attributes_are_members<operation_attributes_t>(),
+        "attributes_excluded_from_key names something that is not a field of operation_attributes_t, so it "
+        "excludes nothing -- a typo or a renamed field silently puts it back in the key.");
+
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            return DeviceOperation::compute_program_hash(attrs, tensor_args);
-        } else {
-            return ttsl::hash::hash_objects_with_default_seed(
-                ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
-        }
+        return detail::compute_op_hash<DeviceOperation>(attrs, tensor_args);
     }
 
     // An adapter for creating a factory that abides to `MeshWorkloadFactoryConcept` out of `ProgramFactoryConcept`
@@ -977,14 +995,7 @@ public:
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        ttsl::hash::hash_t hash;
-
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            hash = DeviceOperation::compute_program_hash(attrs, tensor_args);
-        } else {
-            hash =
-                ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
-        }
+        ttsl::hash::hash_t hash = detail::compute_op_hash<DeviceOperation>(attrs, tensor_args);
 
         // Combine with the mesh coordinates the workload is targeting.
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
@@ -999,20 +1010,25 @@ public:
     //
     // The key is prefixed with op_type_name (the DeviceOperation's type name) so distinct ops can
     // never alias on a hash collision.
-    // For ops with a custom compute_program_hash we can't infer which fields it keyed on (it may
-    // deliberately exclude some, e.g. an RNG seed), so we return only the op-identity prefix --
-    // opting that op out of attribute-level collision resolution. The default reflection-hash
-    // path is mirrored exactly.
+    // A freeform compute_program_hash keys on fields we cannot enumerate, so those ops get only the
+    // op-identity prefix. Declared keying IS enumerable: the encoding below skips exactly the excluded
+    // attributes, so exact collision resolution survives.
     static std::string compute_mesh_workload_canonical_key(
         [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
         std::string_view op_type_name,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
         std::string key{op_type_name};
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            return key;  // custom hash -> opt out beyond the op-identity prefix
+        if constexpr (HasLegacyProgramHash<DeviceOperation>) {
+            return key;  // freeform hash -> nothing to mirror
+        } else if constexpr (HasTensorArgsRelaxations<DeviceOperation>) {
+            // A relaxation-aware encoding must come from the same place as the relaxation-aware hash;
+            // until Metal 2.0 exposes one, an op that relaxes a tensor opts out beyond the prefix.
+            key += detail::canonical_declared_attributes(attrs);
+            return key;
         } else {
-            key += ttsl::hash::canonical_key(attrs, tensor_args);
+            key += detail::canonical_declared_attributes(attrs);
+            key += ttsl::hash::canonical_key(tensor_args);
             for (const auto& coord :
                  mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
                 key += ttsl::hash::canonical_key(coord);

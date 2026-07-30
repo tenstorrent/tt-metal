@@ -56,48 +56,9 @@ struct BinaryNgDeviceOperation {
         Layout input_layout_b = Layout::TILE;
         Layout output_layout = Layout::TILE;
 
-        static constexpr auto attribute_names = std::forward_as_tuple(
-            "binary_op_type",
-            "lhs_activations",
-            "rhs_activations",
-            "post_activations",
-            "memory_config",
-            "dtype",
-            "compute_kernel_config",
-            "sub_core_grids",
-            "subtile_broadcast_type",
-            "is_sfpu",
-            "is_quant_op",
-            "is_where_op",
-            "input_layout_a",
-            "input_layout_b",
-            "output_layout",
-            "equal_nan",
-            "scalar",
-            "rtol",
-            "atol");
-        auto attribute_values() const {
-            return std::make_tuple(
-                binary_op_type,
-                lhs_activations,
-                rhs_activations,
-                (is_where_op || is_quant_op) ? ttsl::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
-                memory_config,
-                get_dtype(),
-                compute_kernel_config,
-                sub_core_grids,
-                subtile_broadcast_type,
-                is_sfpu,
-                is_quant_op,
-                is_where_op,
-                input_layout_a,
-                input_layout_b,
-                output_layout,
-                equal_nan,
-                scalar,
-                rtol,
-                atol);
-        }
+        // input_dtype is the input tensor's own dtype, already keyed through tensor_args.
+        static constexpr auto attributes_excluded_from_key = std::forward_as_tuple("input_dtype");
+
         DataType get_dtype() const;
     };
 

@@ -46,38 +46,6 @@ struct MatmulParams {
     // distinguishes pure vs bias_relu) is here; program_config (a variant) is encoded by its
     // active index + alternative. Bias PRESENCE lives in tensor_args (MatmulInputs), not here --
     // it is keyed by the same canonical-key traversal of tensor_args (see MatmulInputs).
-    static constexpr auto attribute_names = std::forward_as_tuple(
-        "program_config",
-        "bcast_batch",
-        "output_mem_config",
-        "output_dtype",
-        "compute_kernel_config",
-        "untilize_out",
-        "user_core_coord",
-        "user_fused_activation",
-        "user_run_batched",
-        "transpose_a",
-        "transpose_b",
-        "output_tile",
-        "global_cb",
-        "sub_device_id");
-    auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->program_config),
-            std::cref(this->bcast_batch),
-            std::cref(this->output_mem_config),
-            std::cref(this->output_dtype),
-            std::cref(this->compute_kernel_config),
-            this->untilize_out,
-            std::cref(this->user_core_coord),
-            std::cref(this->user_fused_activation),
-            this->user_run_batched,
-            this->transpose_a,
-            this->transpose_b,
-            std::cref(this->output_tile),
-            std::cref(this->global_cb),
-            std::cref(this->sub_device_id));
-    }
 };
 
 struct MatmulInputs {

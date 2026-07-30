@@ -17,6 +17,9 @@ struct ReshapeViewParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     bool recreate_mapping_tensor;
     std::optional<CoreRangeSet> sub_core_grid;
+
+    // Both factories ignore it: the mapping tensor depends only on the keyed shapes.
+    static constexpr auto attributes_excluded_from_key = std::forward_as_tuple("recreate_mapping_tensor");
 };
 
 struct ReshapeViewInputs {

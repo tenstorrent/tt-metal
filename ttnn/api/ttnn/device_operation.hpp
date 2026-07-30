@@ -55,18 +55,12 @@ template <typename... Ts>
     return table[i];
 }
 
+// Used by layernorm's nanobind hook to report an op's cache key from Python.
 template <typename device_operation_t>
 auto compute_program_hash(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    if constexpr (DeviceOperationWithCustomProgramCacheConcept<device_operation_t>) {
-        ZoneScopedN("Compute custom program hash");
-        return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
-    } else {
-        ZoneScopedN("Compute default program hash");
-        return ttsl::hash::hash_objects_with_default_seed(
-            ttsl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
-    }
+    return compute_op_hash<device_operation_t>(operation_attributes, tensor_args);
 }
 
 // Helper to create a mesh workload from a WorkloadFactory that may or may not

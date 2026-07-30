@@ -27,6 +27,7 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/type_name.hpp>
+#include "ttnn/program_hash.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 // Forward declarations — avoid pulling in heavy headers for 1000+ TU include chain.
@@ -279,20 +280,8 @@ template <typename device_operation_t>
 inline auto compute_program_hash(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    if constexpr (requires(
-                      const typename device_operation_t::operation_attributes_t& operation_attributes,
-                      const typename device_operation_t::tensor_args_t& tensor_args) {
-                      {
-                          device_operation_t::compute_program_hash(operation_attributes, tensor_args)
-                      } -> std::convertible_to<ttsl::hash::hash_t>;
-                  }) {
-        ZoneScopedN("Op profiler Compute custom program hash");
-        return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
-    } else {
-        ZoneScopedN("Op profiler Compute default program hash");
-        return ttsl::hash::hash_objects_with_default_seed(
-            ttsl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
-    }
+    ZoneScopedN("Op profiler Compute program hash");
+    return ttnn::device_operation::detail::compute_op_hash<device_operation_t>(operation_attributes, tensor_args);
 }
 
 // ---------------------------------------------------------------------------
