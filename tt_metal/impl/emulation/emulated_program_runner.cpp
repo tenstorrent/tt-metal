@@ -847,8 +847,8 @@ static void emit_metal2_namespaces(
         f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
     }
     if (!s.sem_accessors.empty()) {
-        // SemAccessor<Id, SemScope> token header (pulls in SemScope); see genfiles.cpp.
-        f << "#include \"api/dataflow/semaphore_token.h\"\n";
+        // SemaphoreBindingToken<Id, SemScope> token header (pulls in SemScope); see genfiles.cpp.
+        f << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
     }
     if (!s.ta_accessors.empty()) {
         f << "#include \"api/tensor/tensor_binding_token.h\"\n";
@@ -898,11 +898,23 @@ static void emit_metal2_namespaces(
         f << "}  // namespace dfb\n";
     }
     if (!s.sem_accessors.empty()) {
-        // Emit each bound semaphore as a SemAccessor<id, baked-scope> token (see genfiles.cpp):
+        // emule does not model the DM_LOCAL_CACHED tier: this emitter bakes the host-resolved scope but,
+        // unlike genfiles, emits no sem::init_dm_cached() and injects no entry wrapper, and emule seeds
+        // only the ring slot -- never MEM_DM_CACHED_SEM_BASE. A cached semaphore would therefore read an
+        // unseeded pool word. Refuse it loudly here rather than emit something that cannot work.
+        for (const auto& [name, h] : s.sem_accessors) {
+            TT_FATAL(
+                h.scope != SemScope::DM_LOCAL_CACHED,
+                "Semaphore '{}' resolved to DM_LOCAL_CACHED, which the emule backend does not model (it "
+                "emits no pool seeder and seeds only the kernel_config ring). Force SemaphoreScope::EXTERNAL "
+                "or LOCAL_NONATOMIC for this semaphore when running under emule.",
+                name);
+        }
+        // Emit each bound semaphore as a SemaphoreBindingToken<id, baked-scope> token (see genfiles.cpp):
         // the kernel's Semaphore ctor deduces the host-resolved mechanism via CTAD.
         f << "namespace sem {\n";
         for (const auto& [name, h] : s.sem_accessors) {
-            f << "constexpr ::SemAccessor<" << h.id << "u, static_cast<::SemScope>("
+            f << "constexpr ::SemaphoreBindingToken<" << h.id << "u, static_cast<::SemScope>("
               << static_cast<int>(h.scope) << ")> " << name << "{};\n";
         }
         f << "}  // namespace sem\n";

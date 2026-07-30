@@ -8,7 +8,7 @@
 // DECISION rather than merely that the resulting counts happen to be right (every correct mechanism
 // produces the same counts, so a behaviour-only test cannot tell them apart -- it would silently
 // pass even if AUTO picked the wrong path). The scope is a compile-time constant carried by the
-// emitted SemAccessor token, so reading it costs nothing and cannot drift from what the kernel
+// emitted SemaphoreBindingToken token, so reading it costs nothing and cannot drift from what the kernel
 // actually executes.
 //
 // Also exercises the chosen mechanism: every thread increments `counter` increment_times, then the
@@ -47,7 +47,7 @@ void kernel_main() {
 
     if (is_reporter != 0 && get_my_thread_id() == 0u) {
         volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
-        // The baked scope: a static constexpr on the emitted SemAccessor token.
+        // The baked scope: a static constexpr on the emitted SemaphoreBindingToken token.
         report[0] = static_cast<uint32_t>(sem::counter.scope);
         report[1] = counter.value();
 #if defined(ARCH_QUASAR)

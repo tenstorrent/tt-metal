@@ -2881,7 +2881,7 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
             semaphore_binding.semaphore_spec_name,
             id);
         // The host-resolved physical scope (ResolveSemaphoreScope) is baked into the kernel via the
-        // emitted SemAccessor<id, scope> token, so the kernel picks the mechanism through CTAD.
+        // emitted SemaphoreBindingToken<id, scope> token, so the kernel picks the mechanism through CTAD.
         const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
         out.emplace(semaphore_binding.accessor_name, tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope});
     }
