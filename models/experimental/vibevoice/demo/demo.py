@@ -392,7 +392,6 @@ def main() -> int:
             print("[vibevoice_demo] warmup done; starting timed generate", flush=True)
 
         speech_parts: list[torch.Tensor] = []
-        _stream_base = os.environ.get("VV_STREAM_AUDIO", "")
         for chunk_idx, chunk_script in enumerate(scripts):
             if chunk_idx > 0:
                 # Fresh prefill for this chunk.  generate() builds its own generator (and so its
@@ -411,12 +410,6 @@ def main() -> int:
                     f"[vibevoice_demo] --- chunk {chunk_idx + 1}/{len(scripts)}: " f"prefill={prefill_len} tokens ---",
                     flush=True,
                 )
-                # generate() opens VV_STREAM_AUDIO with "wb", so every chunk would truncate the
-                # previous one's samples.  The concatenated .wav below is unaffected (each chunk's
-                # audio is read back before the next call), but give each chunk its own .partN file
-                # so the on-disk stream stays complete and crash-safe.
-                if _stream_base:
-                    os.environ["VV_STREAM_AUDIO"] = f"{_stream_base}.part{chunk_idx}"
             torch.manual_seed(args.seed)
             _t_gen0 = _time.perf_counter()
             tt_out = tt_model.generate(**generate_kwargs)
@@ -442,10 +435,6 @@ def main() -> int:
                 f"[vibevoice_demo] concatenated {len(speech_parts)} chunks → " f"{tt_speech.numel() / SR / 60:.2f} min",
                 flush=True,
             )
-            if _stream_base:
-                # Also materialise the joined stream at the requested path; the per-chunk .partN
-                # files stay as the crash-safe copies.
-                tt_speech.numpy().tofile(_stream_base)
     finally:
         ttnn.close_device(mesh)
 
