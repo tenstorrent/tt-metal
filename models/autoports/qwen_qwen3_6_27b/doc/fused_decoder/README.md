@@ -34,9 +34,11 @@ All final acceptance runs set `throw_exception_on_fallback=true`; superseded
 candidate logs are retained only as optimization history. The final fused page-routing test
 performs sequence-65 prefill followed by position-65 decode using page table
 `[[1,0]]`; PCC is 0.999905286 and physical key/value assertions distinguish
-the two pages. Ten repeated trace replays retain deterministic input/position
-updates and row-distinct batch-32 behavior. Watcher-10 runs for both layer kinds
-at batch 32 are clean.
+the two pages. Two sequential numerical trace replays validate changing inputs,
+positions, and mutable state; an additional restore-and-replay check proves
+bit-exact determinism from identical starting cache/state. Ten timed replays
+provide stress coverage, and batch-32 rows remain distinct. Watcher-10 runs for
+both layer kinds at batch 32 are clean.
 
 ## Performance
 
@@ -57,6 +59,12 @@ cover ten trace replays and are divided by ten.
 The final packed path beats every correct traced-decode and warmed-prefill
 baseline. It supersedes the earlier SiLU-only candidate, including its noisy
 short linear-prefill b1 result.
+
+An independent review required a trial of two-way MLP gate/up packing. The
+AutoFix candidate was PCC-clean but regressed the decisive full-attention
+batch-32 traced decode from 2386.759 to 2388.755 us/replay in `tt-perf-report`
+(host median likewise regressed from 2.559 to 2.572 ms), so it was reverted.
+The retained report is under `tracy/candidate_mlp_pack_full_b32/`.
 
 ## Artifacts
 

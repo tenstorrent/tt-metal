@@ -163,6 +163,23 @@ def run(kind, batch, decoder_kind="functional", perf_iterations=10):
                 message,
             )
             assert passed, message
+
+        # Determinism requires identical outputs from identical starting
+        # mutable state, not merely that repeated stateful execution survives.
+        deterministic_cache = {
+            name: ttnn.to_torch(ttnn.get_device_tensors(decoder.caches[name])[0]) for name in cache_names
+        }
+        ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+        deterministic_first = ttnn.to_torch(ttnn.get_device_tensors(trace_output)[0])
+        for name in cache_names:
+            cache_dtype = ttnn.float32 if name == "recurrent" else ttnn.bfloat16
+            _copy_host(deterministic_cache[name], decoder.caches[name], dtype=cache_dtype)
+        ttnn.synchronize_device(mesh)
+        ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+        deterministic_second = ttnn.to_torch(ttnn.get_device_tensors(trace_output)[0])
+        assert torch.equal(deterministic_first, deterministic_second), "trace replay is nondeterministic"
+        print(f"{kind.upper()}_TRACED_DETERMINISM", f"batch={batch}", "exact=True")
+
         perf_times = []
         signpost("PERF_DECODE")
         for _ in range(perf_iterations):

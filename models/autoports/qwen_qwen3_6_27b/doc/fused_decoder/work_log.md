@@ -79,3 +79,40 @@ python .../traced_synthetic_pcc.py --decoder fused --kind {full,linear} \
 - Fresh independent rereview: `clean-pass`, no required work; recorded in
   `stage_review.md`.
 - Scoped local commit SHA: pending.
+
+## 2026-07-30 — fresh review and AutoFix
+
+A fresh independent review returned `more-work-needed` because the original
+topology audit rejected two-way MLP gate/up packing from the illustrative
+three-peer threshold without an experiment. `AUTODEBUG.md` confirmed this was
+an exhaustion-evidence gap and specified the exact setup-time packed RHS,
+17,408-wide slices, and SiLU input ordering.
+
+The candidate replaced the two gate/up linears with one 34,816-wide linear and
+two exact slices. Static fused-path tests passed, and full-attention traced PCC
+was unchanged at batch 1 and 32. It was rejected on performance:
+
+| Full-attention traced decode, batch 32 | us/replay |
+|---|---:|
+| retained fused winner | 2386.759 |
+| packed MLP gate/up | 2388.755 |
+
+The candidate profiler artifact is
+`tracy/candidate_mlp_pack_full_b32/perf_report.csv`; the host median also
+regressed from 2.559 to 2.572 ms. The candidate implementation was reverted,
+so the final graph remains the faster prior packed-QKV/packed-linear-input/
+SiLU-on-multiply path.
+
+The trace regression now snapshots mutable KV or linear-attention state,
+executes once, restores the identical state, executes again, and requires
+bit-exact output equality. Final fused batch-32 checks pass for both layer
+kinds (`FULL_TRACED_DETERMINISM exact=True` and
+`LINEAR_TRACED_DETERMINISM exact=True`) while preserving sequential PCC,
+row-distinction, fallback-hard-failure, and ten-replay stress coverage.
+
+A new independent `$stage-review` then returned `clean-pass` with no required
+work. It independently recomputed all eight final before/after profiler totals,
+confirmed the rejected candidate CSV contains the adapted 34,816-wide MLP
+matmul plus exact slices, verified the candidate was absent from final source,
+and inspected the determinism restore/replay logic. The verdict is recorded in
+`stage_review.md`.
