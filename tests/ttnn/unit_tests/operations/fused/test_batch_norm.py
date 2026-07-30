@@ -24,7 +24,8 @@ pytestmark = pytest.mark.use_module_device
         torch.Size([5, 8, 32, 32]),
         torch.Size([7, 3, 23, 23]),
         torch.Size([3, 5, 64, 120]),
-        # C=129: past CB depth (2) on WH n150 (64 cores) so mean-only/var-only drain hangs are covered
+        # C=129: past CB depth (2) on WH (64 cores); BH drain coverage comes from
+        # test_batch_norm_running_statistics_drain which derives C from the device grid.
         torch.Size([1, 129, 14, 14]),
         torch.Size([1, 8, 24, 42]),
     ],
@@ -1109,8 +1110,8 @@ def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mea
         assert_numeric_metrics(
             ref_mean.view(1, channels, 1, 1),
             tt_updated_mean,
-            rtol=0.1,
-            atol=4.0,
+            rtol=0.05,
+            atol=0.5,
             frobenius_threshold=0.25,
             check_pcc=False,
         )
@@ -1119,8 +1120,8 @@ def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mea
         assert_numeric_metrics(
             ref_var.view(1, channels, 1, 1),
             tt_updated_var,
-            rtol=0.1,
-            atol=4.0,
+            rtol=0.05,
+            atol=0.5,
             frobenius_threshold=0.25,
             check_pcc=False,
         )
@@ -1211,8 +1212,8 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
         assert_numeric_metrics(
             ref_mean.view(1, channels, 1, 1),
             tt_updated_mean,
-            rtol=0.1,
-            atol=4.0,
+            rtol=0.05,
+            atol=0.5,
             frobenius_threshold=frobenius_threshold,
             check_pcc=False,
         )
@@ -1221,8 +1222,8 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
         assert_numeric_metrics(
             ref_var.view(1, channels, 1, 1),
             tt_updated_var,
-            rtol=0.1,
-            atol=4.0,
+            rtol=0.05,
+            atol=0.5,
             frobenius_threshold=frobenius_threshold,
             check_pcc=False,
         )
