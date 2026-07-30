@@ -502,6 +502,73 @@ def _descendant_pids(root_pid: int) -> list[int]:
     return out
 
 
+def _pgroup_members(pgid) -> list:
+    """Live PIDs whose process group is `pgid`, from /proc. Best-effort; [] on any error."""
+    out = []
+    try:
+        target = int(pgid)
+    except (TypeError, ValueError):
+        return out
+    if target <= 0:
+        return out
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return out
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat") as fh:
+                data = fh.read()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        rp = data.rfind(")")
+        if rp == -1:
+            continue
+        fields = data[rp + 2 :].split()
+        # after comm: state(0) ppid(1) pgrp(2)
+        if len(fields) > 2 and fields[2] == str(target):
+            out.append(int(entry))
+    return out
+
+
+def _reap_process_group(pgid) -> list:
+    """Kill anything still alive in `pgid` after its leader has exited. Returns the PIDs killed.
+
+    _execute deliberately starts the profiled run in its OWN session so the group can be killed --
+    the docstring says the group kill exists "so orphaned capture-release daemons die too". But the
+    group was only killed on the stall/backstop paths; the normal `return proc.wait(...)` reaped the
+    leader and nothing else. tools/tracy/__main__.py launches tracy-capture and serve_wasm.py as
+    children, and a daemon outliving its parent is RE-PARENTED, not killed -- so a run that SUCCEEDS
+    left them behind (7 tracy-capture + 2 serve_wasm observed on llama3_1_8b_p150), holding the
+    device so the next run could not open it.
+
+    Refuses to touch our own group: the profiled run gets a fresh session, so a pgid equal to ours
+    means the caller passed something wrong, and killing it would take out the optimize run itself.
+    """
+    import signal
+
+    try:
+        target = int(pgid)
+    except (TypeError, ValueError):
+        return []
+    if target <= 0 or target == os.getpgid(0):
+        return []
+    victims = [p for p in _pgroup_members(target) if p != os.getpid()]
+    if not victims:
+        return []
+    try:
+        os.killpg(target, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        for p in victims:
+            try:
+                os.kill(p, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+    return victims
+
+
 def _kill_tree(root_pid: int) -> None:
     import signal
 
@@ -736,7 +803,19 @@ def _execute(
         poll = 5.0
         while True:
             try:
-                return proc.wait(timeout=poll)
+                rc = proc.wait(timeout=poll)
+                # A CLEAN EXIT MUST LEAVE NOTHING BEHIND. The leader is gone, so anything still in
+                # its group is a daemon it spawned and did not reap -- tracy-capture, serve_wasm --
+                # and those hold the device against the next run. Does not touch rc.
+                _orphans = _reap_process_group(pgid)
+                if _orphans:
+                    print(
+                        f"  [probes] reaped {len(_orphans)} orphaned profiler process(es) after the run "
+                        f"exited: {_orphans}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                return rc
             except subprocess.TimeoutExpired:
                 pass
             now = time.monotonic()
@@ -774,6 +853,19 @@ def _validate_csv(path: Path, log_path: Path) -> None:
             raise TracyRunError(f"ops CSV has a header but NO op rows: {path}; log: {log_path}")
 
 
+_NODE_ID_RE = re.compile(r"^[\w./\-]+\.py::[\w:\[\]\-.]+$")
+
+
+def _dr_is_dead_board(line: str) -> bool:
+    """device_recovery's own dead-board test, imported lazily so probes keeps working under a bare
+    sys.path (the MCP client launches this package without the repo root on it)."""
+    try:
+        from .device_recovery import is_dead_board
+    except Exception:  # noqa: BLE001
+        return "0xffffffff" in line.lower() or "board should be reset" in line.lower()
+    return is_dead_board(line)
+
+
 def collect_cases(
     tt_metal_root: str | os.PathLike[str],
     perf_test: str,
@@ -790,8 +882,22 @@ def collect_cases(
     proc = runner(
         cmd, cwd=Path(tt_metal_root), env=env or dict(os.environ), capture_output=True, text=True, timeout=120
     )
-    ids = [ln.strip() for ln in (proc.stdout or "").splitlines() if "::" in ln and not ln.startswith("=")]
-    tail = "\n".join(((proc.stdout or "") + (proc.stderr or "")).splitlines()[-6:])
+    # A node id is `<file>.py::<test>[...]` and NOTHING else. "any line containing ::" also matched
+    # the C++ stack frames pytest prints when COLLECTION ITSELF fails on a wedged device
+    # (`E  1. tt::umd::TTDevice::is_pcie_hung(unsigned int, ...)`), and that frame then became the
+    # "node id" -- tracy joins its argv into a /bin/sh string, so the parens died as
+    # `Syntax error: "(" unexpected` and the whole run mis-reported as "profiler crashed".
+    ids = [ln.strip() for ln in (proc.stdout or "").splitlines() if _NODE_ID_RE.match(ln.strip()) and "(" not in ln]
+    # HOIST the dead-board line. When collection dies on a wedged board, `Read 0xffffffff over PCIe
+    # ID N: the board should be reset` sits ~30 lines up -- above the C++ frames and the pydantic
+    # warnings -- so both a positional tail and _salient_tail's last-N dropped the ONE string
+    # device_recovery.is_dead_board/dead_chip_from_error look for. Without it recovery cannot see
+    # that the card died, nor which chip died, so it guesses the target from `--devices` intent.
+    out = (proc.stdout or "") + (proc.stderr or "")
+    tail = _salient_tail(out, n=6)
+    dead = next((ln.strip() for ln in out.splitlines() if _dr_is_dead_board(ln)), None)
+    if dead and dead not in tail:
+        tail = dead + "\n" + tail
     return ids, tail
 
 
