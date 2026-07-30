@@ -32,6 +32,7 @@ import torch
 import ttnn
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_maxpool_hang(mesh_device):
     device = mesh_device
