@@ -1,11 +1,24 @@
 #!/bin/bash
 # Install curl from the official release source tarball.
-# Usage: CURL_VERSION=8.21.0 CURL_SHA256=... INSTALL_PREFIX=/install ./install-curl.sh
+# Usage: CURL_VERSION=8.21.0 CURL_SHA256=... \
+#        OPENSSL_VERSION=4.0.1 OPENSSL_SHA256=... \
+#        INSTALL_PREFIX=/install ./install-curl.sh
 #
-# Built with OpenSSL + zlib + nghttp2 + libpsl against whatever dev
-# headers/libs are present in the builder stage, and installed to
-# INSTALL_PREFIX/bin/curl. Placed ahead of apt's /usr/bin/curl on PATH in
-# the final image so it's a drop-in replacement, not an addition.
+# Built with a statically-linked OpenSSL (built from source below) + dynamic
+# zlib/libpsl against whatever dev headers/libs are present in the builder
+# stage, and installed to INSTALL_PREFIX/bin/curl. Placed ahead of apt's
+# /usr/bin/curl on PATH in the final image so it's a drop-in replacement,
+# not an addition.
+#
+# Why OpenSSL is statically linked while zlib/libpsl aren't: this tool image
+# is built once (in a manylinux/AlmaLinux 9 builder, for ABI consistency with
+# the rest of the from-source tools) and copied into BOTH the ubuntu-22.04
+# and ubuntu-24.04 final images. OpenSSL uses versioned symbols per minor
+# release (e.g. OPENSSL_3.2.0) and AlmaLinux 9 has shipped OpenSSL 3.2.x
+# since 9.4, newer than either Ubuntu's 3.0.x - a curl dynamically linked
+# against the builder's libssl.so crashed on both destinations with
+# "version `OPENSSL_3.2.0' not found". zlib and libpsl don't have this
+# versioned-symbol problem, so they stay dynamic as before.
 #
 # Why this exists: curl's --aws-sigv4 only started sending the
 # X-Amz-Content-Sha256 header in curl 8.x. Garage (our S3-compatible CI
@@ -23,56 +36,93 @@ CURL_VERSION="${CURL_VERSION:?CURL_VERSION is required}"
 # trust model already used here for gdb/doxygen; see compute-hashes.sh).
 CURL_SHA256="${CURL_SHA256:?CURL_SHA256 is required}"
 
+OPENSSL_VERSION="${OPENSSL_VERSION:?OPENSSL_VERSION is required}"
+# SHA256 for openssl-${OPENSSL_VERSION}.tar.gz from the official GitHub release
+# (openssl/openssl), computed directly from a downloaded release archive.
+OPENSSL_SHA256="${OPENSSL_SHA256:?OPENSSL_SHA256 is required}"
+
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local}"
-DOWNLOAD_URL="https://curl.se/download/curl-${CURL_VERSION}.tar.gz"
-TMPDIR="/tmp/curl-build"
+OPENSSL_URL="https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+CURL_URL="https://curl.se/download/curl-${CURL_VERSION}.tar.gz"
+OPENSSL_TMPDIR="/tmp/openssl-build"
+OPENSSL_STATIC_PREFIX="/tmp/openssl-static"
+CURL_TMPDIR="/tmp/curl-build"
 
-echo "Installing curl ${CURL_VERSION}..."
+fetch() {
+    # fetch <url> <output-path>
+    if command -v wget &> /dev/null; then
+        wget -q -O "$2" "$1"
+    else
+        curl -fsSL -o "$2" "$1"
+    fi
+}
 
-# Create temp directory
-mkdir -p "${TMPDIR}"
+# ---------------------------------------------------------------------------
+# Step 1: build a static OpenSSL. Curl links against this instead of the
+# builder's system OpenSSL so the resulting binary has zero runtime
+# dependency on whatever OpenSSL happens to be installed wherever it ends up.
+# ---------------------------------------------------------------------------
+echo "Building static OpenSSL ${OPENSSL_VERSION}..."
+mkdir -p "${OPENSSL_TMPDIR}"
+fetch "${OPENSSL_URL}" "${OPENSSL_TMPDIR}/openssl.tar.gz"
 
-# Download (use curl if wget not available)
-if command -v wget &> /dev/null; then
-    wget -q -O "${TMPDIR}/curl.tar.gz" "${DOWNLOAD_URL}"
-else
-    curl -fsSL -o "${TMPDIR}/curl.tar.gz" "${DOWNLOAD_URL}"
+if ! echo "${OPENSSL_SHA256}  ${OPENSSL_TMPDIR}/openssl.tar.gz" | sha256sum -c - ; then
+    echo "[ERROR] SHA256 checksum verification failed for openssl.tar.gz. Aborting." >&2
+    exit 1
 fi
 
-# Verify hash
-if ! echo "${CURL_SHA256}  ${TMPDIR}/curl.tar.gz" | sha256sum -c - ; then
+tar -xf "${OPENSSL_TMPDIR}/openssl.tar.gz" -C "${OPENSSL_TMPDIR}" --strip-components=1
+cd "${OPENSSL_TMPDIR}"
+./Configure no-shared no-tests --prefix="${OPENSSL_STATIC_PREFIX}" --openssldir="${OPENSSL_STATIC_PREFIX}/ssl"
+make -j"$(nproc)"
+make install_sw install_ssldirs
+cd /
+rm -rf "${OPENSSL_TMPDIR}"
+
+# ---------------------------------------------------------------------------
+# Step 2: build curl against the static OpenSSL above.
+# ---------------------------------------------------------------------------
+echo "Installing curl ${CURL_VERSION}..."
+mkdir -p "${CURL_TMPDIR}"
+fetch "${CURL_URL}" "${CURL_TMPDIR}/curl.tar.gz"
+
+if ! echo "${CURL_SHA256}  ${CURL_TMPDIR}/curl.tar.gz" | sha256sum -c - ; then
     echo "[ERROR] SHA256 checksum verification failed for curl.tar.gz. Aborting." >&2
     exit 1
 fi
 
-# Extract
-tar -xf "${TMPDIR}/curl.tar.gz" -C "${TMPDIR}" --strip-components=1
+tar -xf "${CURL_TMPDIR}/curl.tar.gz" -C "${CURL_TMPDIR}" --strip-components=1
 
-# Create install prefix directory
 mkdir -p "${INSTALL_PREFIX}"
 
-# Configure, build, and install.
-# OpenSSL (TLS), zlib (compression), and libpsl (Public Suffix List - used to
-# scope cookie-jar cookies to their real registrable domain) are all required
-# here: configure fails outright if any of them isn't found, rather than
-# silently building without it. This binary globally replaces /usr/bin/curl
-# in the final image (see Dockerfile), so silently dropping libpsl would
-# quietly weaken cookie-domain isolation for every curl consumer in the
-# image, not just the Garage/SigV4 use case this tool exists for - keep the
-# build failing loudly if the builder stage's libpsl-devel goes missing
-# rather than reintroducing that regression silently.
-# nghttp2 (HTTP/2) is the one optional extra: picked up automatically if the
-# builder stage installed its dev package, but not required to succeed.
-cd "${TMPDIR}"
+# zlib (compression) and libpsl (Public Suffix List - scopes cookie-jar
+# cookies to their real registrable domain) are required here: configure
+# fails outright if either isn't found, rather than silently building
+# without it. This binary globally replaces /usr/bin/curl in the final image
+# (see Dockerfile), so silently dropping libpsl would quietly weaken
+# cookie-domain isolation for every curl consumer in the image, not just the
+# Garage/SigV4 use case this tool exists for - keep the build failing loudly
+# if the builder stage's libpsl-devel goes missing rather than reintroducing
+# that regression silently.
+# --with-openssl points at the static build from Step 1 (not the system
+# copy); nghttp2 (HTTP/2) is the one true optional extra, picked up
+# automatically if the builder stage installed its dev package.
+cd "${CURL_TMPDIR}"
 ./configure \
     --prefix="${INSTALL_PREFIX}" \
-    --with-openssl
+    --with-openssl="${OPENSSL_STATIC_PREFIX}"
 make -j"$(nproc)"
 make install
+cd /
+rm -rf "${CURL_TMPDIR}" "${OPENSSL_STATIC_PREFIX}"
 
-# Cleanup
-rm -rf "${TMPDIR}"
-
-# Verify installation
+# Verify installation, and specifically that OpenSSL got linked in
+# statically (no libssl.so.* dependency) - this is the property the whole
+# static-OpenSSL build exists for, so catch a regression here at build time
+# rather than downstream in some consumer image at runtime.
 "${INSTALL_PREFIX}/bin/curl" --version
-echo "curl ${CURL_VERSION} installed successfully"
+if ldd "${INSTALL_PREFIX}/bin/curl" 2>/dev/null | grep -qi 'libssl\.so'; then
+    echo "[ERROR] curl is dynamically linked against libssl.so - OpenSSL should be statically linked. Aborting." >&2
+    exit 1
+fi
+echo "curl ${CURL_VERSION} installed successfully (OpenSSL statically linked)"

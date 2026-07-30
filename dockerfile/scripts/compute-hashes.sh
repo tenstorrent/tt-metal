@@ -86,6 +86,14 @@ curl -fsSL -o "$TMPDIR/curl.tar.gz" \
 echo "CURL_SHA256=$($SHA_CMD "$TMPDIR/curl.tar.gz" | cut -d' ' -f1)"
 echo ""
 
+# OpenSSL - built from source and statically linked into curl (see install-curl.sh)
+OPENSSL_VERSION="${OPENSSL_VERSION:-4.0.1}"
+echo "Downloading OpenSSL ${OPENSSL_VERSION}..."
+curl -fsSL -o "$TMPDIR/openssl.tar.gz" \
+    "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+echo "OPENSSL_SHA256=$($SHA_CMD "$TMPDIR/openssl.tar.gz" | cut -d' ' -f1)"
+echo ""
+
 # OpenMPI — integrity is verified by git commit SHA, not tarball hash.
 # The OMPI_COMMIT_SHA in Dockerfile.tools is the dereferenced commit for the tag.
 # To update: git ls-remote --refs https://github.com/open-mpi/ompi.git <new-tag>
