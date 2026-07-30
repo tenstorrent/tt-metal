@@ -12,6 +12,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -90,7 +91,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     reader.dfb_bindings = {
         DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}};
     reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "in"}};
-    reader.hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER};
+    reader.hw_config = ttnn::create_reader_datamovement_config(device->arch());
 
     KernelSpec writer;
     writer.unique_id = WRITER;
@@ -98,7 +99,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     writer.dfb_bindings = {
         DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::CONSUMER}};
     writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "out"}};
-    writer.hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER};
+    writer.hw_config = ttnn::create_writer_datamovement_config(device->arch());
 
     const auto& slice_start = args.slice_start;
     const auto& slice_end = args.slice_end;
@@ -170,8 +171,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     }
 
     // --- Per-core runtime args ---
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     uint32_t base_rows_per_core = total_output_rows / num_cores;
     uint32_t extra_rows = total_output_rows % num_cores;
@@ -186,52 +187,64 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
         }
 
         if (using_4d_kernels) {
-            reader_node_args.push_back(
-                {.node = core,
-                 .args = {
-                     {"tensor_rank", tensor_rank},
-                     {"input_w", input_shape[-1]},
-                     {"input_h", input_shape[-2]},
-                     {"input_d", input_shape[-3]},
-                     {"input_n", input_shape[-4]},
-                     {"output_w", output_shape[-1]},
-                     {"output_h", output_shape[-2]},
-                     {"output_d", output_shape[-3]},
-                     {"output_n", output_shape[-4]},
-                     {"slice_start_w", slice_start[-1]},
-                     {"slice_end_w", slice_end[-1]},
-                     {"slice_step_w", slice_step[-1]},
-                     {"slice_start_h", slice_start[-2]},
-                     {"slice_end_h", slice_end[-2]},
-                     {"slice_step_h", slice_step[-2]},
-                     {"slice_start_d", slice_start[-3]},
-                     {"slice_end_d", slice_end[-3]},
-                     {"slice_step_d", slice_step[-3]},
-                     {"slice_start_n", slice_start[-4]},
-                     {"slice_end_n", slice_end[-4]},
-                     {"slice_step_n", slice_step[-4]},
-                     {"element_size", element_size},
-                     {"num_rows_for_this_core", rows_for_this_core},
-                     {"start_row_for_this_core", row_start_id}}});
+            AddRuntimeArgsForNode(
+                reader_node_args,
+                core,
+                {
+                    {"tensor_rank", tensor_rank},
+                    {"input_w", input_shape[-1]},
+                    {"input_h", input_shape[-2]},
+                    {"input_d", input_shape[-3]},
+                    {"input_n", input_shape[-4]},
+                    {"output_w", output_shape[-1]},
+                    {"output_h", output_shape[-2]},
+                    {"output_d", output_shape[-3]},
+                    {"output_n", output_shape[-4]},
+                    {"slice_start_w", slice_start[-1]},
+                    {"slice_end_w", slice_end[-1]},
+                    {"slice_step_w", slice_step[-1]},
+                    {"slice_start_h", slice_start[-2]},
+                    {"slice_end_h", slice_end[-2]},
+                    {"slice_step_h", slice_step[-2]},
+                    {"slice_start_d", slice_start[-3]},
+                    {"slice_end_d", slice_end[-3]},
+                    {"slice_step_d", slice_step[-3]},
+                    {"slice_start_n", slice_start[-4]},
+                    {"slice_end_n", slice_end[-4]},
+                    {"slice_step_n", slice_step[-4]},
+                    {"element_size", element_size},
+                    {"num_rows_for_this_core", rows_for_this_core},
+                    {"start_row_for_this_core", row_start_id},
+                });
 
-            writer_node_args.push_back(
-                {.node = core,
-                 .args = {
-                     {"tensor_rank", tensor_rank},
-                     {"output_w", output_shape[-1]},
-                     {"output_h", output_shape[-2]},
-                     {"output_d", output_shape[-3]},
-                     {"output_n", output_shape[-4]},
-                     {"element_size", element_size},
-                     {"num_rows_for_this_core", rows_for_this_core},
-                     {"start_row_for_this_core", row_start_id}}});
+            AddRuntimeArgsForNode(
+                writer_node_args,
+                core,
+                {
+                    {"tensor_rank", tensor_rank},
+                    {"output_w", output_shape[-1]},
+                    {"output_h", output_shape[-2]},
+                    {"output_d", output_shape[-3]},
+                    {"output_n", output_shape[-4]},
+                    {"element_size", element_size},
+                    {"num_rows_for_this_core", rows_for_this_core},
+                    {"start_row_for_this_core", row_start_id},
+                });
         } else {
-            reader_node_args.push_back(
-                {.node = core,
-                 .args = {{"num_rows_for_this_core", rows_for_this_core}, {"start_row_for_this_core", row_start_id}}});
-            writer_node_args.push_back(
-                {.node = core,
-                 .args = {{"num_rows_for_this_core", rows_for_this_core}, {"start_row_for_this_core", row_start_id}}});
+            AddRuntimeArgsForNode(
+                reader_node_args,
+                core,
+                {
+                    {"num_rows_for_this_core", rows_for_this_core},
+                    {"start_row_for_this_core", row_start_id},
+                });
+            AddRuntimeArgsForNode(
+                writer_node_args,
+                core,
+                {
+                    {"num_rows_for_this_core", rows_for_this_core},
+                    {"start_row_for_this_core", row_start_id},
+                });
         }
 
         row_start_id += rows_for_this_core;

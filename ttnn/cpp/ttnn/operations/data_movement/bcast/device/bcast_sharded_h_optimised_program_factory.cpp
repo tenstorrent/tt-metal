@@ -90,7 +90,16 @@ tt::tt_metal::ProgramDescriptor BcastShardedHOptimisedProgramFactory::create_des
     const uint32_t output_cb_index = tt::CBIndex::c_16;
 
     const uint32_t h_blk = std::min(Ht, 8u);
-    const uint32_t w_blk = std::min(Wt, 8u);
+    // w_blk must divide Wt. The reader streams b tiles through the small c_1 ring buffer
+    // (num_input_tiles = w_blk) in fixed w_blk chunks, writing each chunk contiguously from
+    // get_write_ptr(). If w_blk does not divide Wt, the per-batch push count (Wt) misaligns
+    // the ring across batches and a chunk's contiguous write wraps past the buffer end,
+    // corrupting b tiles (and over-reading src1 / deadlocking when batch_b > 1). Pick the
+    // largest divisor of Wt that is <= 8; this is unchanged (== min(Wt, 8)) for all Wt <= 8.
+    uint32_t w_blk = std::min(Wt, 8u);
+    while (Wt % w_blk != 0) {
+        w_blk--;
+    }
 
     const uint32_t num_input_tiles = w_blk;
     const uint32_t src1_cb_index = tt::CBIndex::c_1;
@@ -190,16 +199,16 @@ tt::tt_metal::ProgramDescriptor BcastShardedHOptimisedProgramFactory::create_des
             }
         }
         const uint32_t tile_offset = Wt * ncores;  // used in multi batch weight for block sharded
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                b.buffer()->address(),  // (0) src1_addr
-                Ht,                     // (1) Ht
-                Wt,                     // (2) Wt
-                offset,                 // (3) read offset in1
-                tile_offset,            // (4) in1 offset between batches
-                w_blk,                  // (5) block size in w
-                batch_b,                // (6) in1 batch size
+            {
+                b.buffer(),   // (0) src1_addr
+                Ht,           // (1) Ht
+                Wt,           // (2) Wt
+                offset,       // (3) read offset in1
+                tile_offset,  // (4) in1 offset between batches
+                w_blk,        // (5) block size in w
+                batch_b,      // (6) in1 batch size
             });
 
         compute_desc.runtime_args.emplace_back(

@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 
 // Tile is assumed to have 16-bit elements
 // Scaler is assumed to be a 16-bit value double packed into a u32
-FORCE_INLINE void generate_mm_scaler(CircularBuffer cb, const uint32_t scaler) {
+FORCE_INLINE void generate_mm_scaler(DataflowBuffer cb, const uint32_t scaler) {
     cb.reserve_back(1);
 
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());

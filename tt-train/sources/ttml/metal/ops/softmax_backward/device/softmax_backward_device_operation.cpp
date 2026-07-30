@@ -48,7 +48,7 @@ SoftmaxBackwardDeviceOperation::spec_return_value_t SoftmaxBackwardDeviceOperati
 SoftmaxBackwardDeviceOperation::tensor_return_value_t SoftmaxBackwardDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.softmax_output.device());
+    return ttnn::create_device_tensor(output_spec, tensor_args.softmax_output.device());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SoftmaxBackwardDeviceOperation::tensor_return_value_t>

@@ -290,23 +290,21 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
             single_sub_block_size_row_arg = single_sub_block_size;
         }
 
-        //  writer runtime args
-        std::vector<uint32_t> writer_rt_args = {
-            dst_buffer->address(),
-            TILE_WIDTH * el_size * single_block_size_row_arg,
-            start_row_id,
-            start_column_id,
-            single_block_size_row_arg,
-            single_block_size_col_arg,
-            TILE_WIDTH * el_size * single_sub_block_size_row_arg,
-            single_sub_block_size_row_arg};
-
         // reader runtime args
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
+            core, {src0_buffer, tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
+
+        //  writer runtime args
+        writer_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                src0_buffer->address(), tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_rt_args));
+            {dst_buffer,
+             TILE_WIDTH * el_size * single_block_size_row_arg,
+             start_row_id,
+             start_column_id,
+             single_block_size_row_arg,
+             single_block_size_col_arg,
+             TILE_WIDTH * el_size * single_sub_block_size_row_arg,
+             single_sub_block_size_row_arg});
 
         uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * el_size);
         start_column_id = end_column_id % padded_row_size_bytes;

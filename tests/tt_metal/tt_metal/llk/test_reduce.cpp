@@ -374,6 +374,13 @@ void run_single_core_reduce_program(
         reader_runtime_arg_names = {"num_tiles", "scaler"};
     }
 
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source = reader_kernel_path,
@@ -395,15 +402,16 @@ void run_single_core_reduce_program(
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_args = reader_cta_bindings,
         .runtime_arg_schema = {.runtime_arg_names = reader_runtime_arg_names},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = reader_hw_config,
     };
 
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
@@ -413,15 +421,24 @@ void run_single_core_reduce_program(
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = writer_hw_config,
     };
 
+    experimental::ComputeHardwareConfig compute_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        compute_hw_config = experimental::ComputeGen2Config{
+            .fpu_math_fidelity = test_config.math_fidelity,
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .enable_2x_src_register = test_config.enable_2x_src_format,
+        };
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{
+            .fpu_math_fidelity = test_config.math_fidelity,
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+        };
+    }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = get_compute_kernel_name(test_config.reduce_dim),
@@ -447,13 +464,7 @@ void run_single_core_reduce_program(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .math_fidelity = test_config.math_fidelity,
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .enable_2x_src_format = test_config.enable_2x_src_format,
-            },
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{
@@ -483,13 +494,25 @@ void run_single_core_reduce_program(
     auto& program_run = workload.get_programs().at(device_range);
 
     // Reader/writer RTAs depend on reduce_dim
-    std::unordered_map<std::string, uint32_t> reader_named_rtas;
+    experimental::KernelRunArgs::RuntimeArgValues reader_named_rtas;
     uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
-        reader_named_rtas = {{"N", dims.N}, {"Ht", dims.Ht}, {"Wt", dims.Wt}, {"HtWt", dims.Ht * dims.Wt}};
+        reader_named_rtas = experimental::MakeRuntimeArgsForSingleNode(
+            node,
+            {
+                {"N", dims.N},
+                {"Ht", dims.Ht},
+                {"Wt", dims.Wt},
+                {"HtWt", dims.Ht * dims.Wt},
+            });
         writer_num_tiles = dims.num_tensor_tiles / dims.Ht;
     } else {
-        reader_named_rtas = {{"num_tiles", dims.num_tensor_tiles}, {"scaler", *reinterpret_cast<uint32_t*>(&scaler)}};
+        reader_named_rtas = experimental::MakeRuntimeArgsForSingleNode(
+            node,
+            {
+                {"num_tiles", dims.num_tensor_tiles},
+                {"scaler", *reinterpret_cast<uint32_t*>(&scaler)},
+            });
         writer_num_tiles = test_config.reduce_dim == ReduceDim::W ? (dims.num_tensor_tiles / dims.Wt)
                                                                   : (dims.num_tensor_tiles / (dims.Wt * dims.Ht));
     }
@@ -498,12 +521,11 @@ void run_single_core_reduce_program(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node, experimental::ProgramRunArgs::KernelRunArgs::RuntimeArgValues(reader_named_rtas)}},
+            .runtime_arg_values = std::move(reader_named_rtas),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"num_tiles", writer_num_tiles}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", writer_num_tiles}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

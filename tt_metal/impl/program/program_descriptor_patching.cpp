@@ -23,6 +23,8 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include "impl/buffers/circular_buffer.hpp"
+#include "program_impl.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt_stl/assert.hpp>
@@ -40,7 +42,8 @@ ResolvedBindings resolve_bindings(
     Program& program,
     const ProgramDescriptor& desc,
     std::span<Buffer* const> tensor_buffers,
-    size_t num_input_buffers) {
+    size_t num_input_buffers,
+    bool allow_inplace_output_tensor_alias) {
     ResolvedBindings result;
 
     // If the same Buffer* appears more than once, every binding for that buffer maps to the
@@ -58,8 +61,27 @@ ResolvedBindings resolve_bindings(
     //
     // tensor_buffers is ordered inputs-first; the first num_input_buffers entries are inputs.
     {
+        // Buffers in the output/workload region.  When the op opts in via
+        // allow_inplace_output_tensor_alias, an input-region entry that also appears here is the op's
+        // own output carried inside tensor_args (e.g. an in-place op's optional output_tensor aliasing
+        // an input) — a same-buffer-by-construction alias, NOT the ambiguous matmul(X, X) case — so it
+        // must not bail.  This is UNSAFE unless the op re-applies every cache-hit-varying runtime arg
+        // itself: otherwise the shared cached program is reused for a differently-shaped/-allocated
+        // in-place call with stale args (SDXL in-place silu, MorehAdamW → PCC garbage; see #48928 /
+        // #49573).  So it is OPT-IN: default false ⇒ such a duplicate bails to the safe slow-path
+        // rebuild.  binary_ng opts in (#48928: in-place residual add; its get_dynamic re-derives all
+        // per-core args).  When false, output_region stays empty and every in-place duplicate bails.
+        std::unordered_set<Buffer*> output_region;
+        if (allow_inplace_output_tensor_alias) {
+            for (size_t i = num_input_buffers; i < tensor_buffers.size(); ++i) {
+                if (tensor_buffers[i]) {
+                    output_region.insert(tensor_buffers[i]);
+                }
+            }
+        }
         std::unordered_set<Buffer*> input_buffers;   // buffers seen in the input region
         std::unordered_set<Buffer*> output_buffers;  // buffers seen in the output/workload region
+        std::unordered_set<Buffer*> inplace_alias_used;  // output buffers already granted one input-region skip
         for (size_t i = 0; i < tensor_buffers.size(); ++i) {
             Buffer* buf = tensor_buffers[i];
             if (!buf) {
@@ -68,6 +90,14 @@ ResolvedBindings resolve_bindings(
             const bool is_input = i < num_input_buffers;
             // An output/workload buffer that aliases an input is the safe in-place case — skip it.
             if (!is_input && input_buffers.contains(buf)) {
+                continue;
+            }
+            // An output buffer carried in the input region (the op's output_tensor) is an in-place
+            // alias, not a distinct input — skip it ONCE (opt-in only; output_region is empty
+            // otherwise).  A second input-region occurrence means the buffer genuinely repeats across
+            // input positions (e.g. op(X, X, out=X)); fall through so it still bails, else a later
+            // same-shape op(X, Y, out=X) hit would patch input-b to X.
+            if (is_input && output_region.contains(buf) && inplace_alias_used.insert(buf).second) {
                 continue;
             }
             // Otherwise a repeat is ambiguous (matmul(X, X), or a repeated output) — bail to slow path.
@@ -234,6 +264,87 @@ void apply_resolved_bindings(
     for (const auto& cb : bindings.cbs) {
         UpdateDynamicCircularBufferAddress(
             program, cb.cb_id, *current_buffers[cb.tensor_buffer_idx], cb.address_offset);
+    }
+}
+
+void assert_fastpath_parity(
+    const Program& fast, const Program& rebuilt, const ProgramDescriptor& desc, std::string_view op_name) {
+    // Per-core and common runtime args, enumerated from the descriptor (same kernel push order in
+    // both programs, so the kernel index doubles as the KernelHandle here).
+    for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
+        for (const auto& core_rt : desc.kernels[k].runtime_args) {
+            const CoreCoord& core = core_rt.first;
+            const auto& f = GetRuntimeArgs(fast, k, core);
+            const auto& r = GetRuntimeArgs(rebuilt, k, core);
+            TT_FATAL(
+                f.size() == r.size(),
+                "descriptor fast-path parity FAILED for op {}: kernel {} core ({},{}) has {} runtime args "
+                "on the cache-hit fast path but {} on a fresh rebuild.",
+                op_name,
+                k,
+                core.x,
+                core.y,
+                f.size(),
+                r.size());
+            for (uint32_t i = 0; i < static_cast<uint32_t>(f.size()); ++i) {
+                TT_FATAL(
+                    f[i] == r[i],
+                    "descriptor fast-path parity FAILED for op {}: kernel {} core ({},{}) arg[{}] "
+                    "fast=0x{:x} rebuild=0x{:x}. The cache-hit fast path did not reproduce a full rebuild — "
+                    "resolved_bindings + get_dynamic_runtime_args re-application is incomplete for this op "
+                    "(stale runtime arg on a differently-aliased/-allocated hit).",
+                    op_name,
+                    k,
+                    core.x,
+                    core.y,
+                    i,
+                    f[i],
+                    r[i]);
+            }
+        }
+        if (!desc.kernels[k].common_runtime_args.empty()) {
+            const auto& f = GetCommonRuntimeArgs(fast, k);
+            const auto& r = GetCommonRuntimeArgs(rebuilt, k);
+            for (uint32_t i = 0; i < static_cast<uint32_t>(std::min(f.size(), r.size())); ++i) {
+                TT_FATAL(
+                    f[i] == r[i],
+                    "descriptor fast-path parity FAILED for op {}: kernel {} common arg[{}] fast=0x{:x} "
+                    "rebuild=0x{:x}. Fast-path common runtime arg is stale on a cache hit.",
+                    op_name,
+                    k,
+                    i,
+                    f[i],
+                    r[i]);
+            }
+        }
+    }
+
+    // Circular-buffer base addresses — the axis get_dynamic_runtime_args cannot reach (it re-applies
+    // runtime args only). For sharded ops the tensor buffer address rides on the CB, so a mis-resolved
+    // in-place alias leaves a stale CB address here with nothing to correct it (SDXL silu).
+    const auto fast_cbs = fast.impl().circular_buffers();
+    const auto rebuilt_cbs = rebuilt.impl().circular_buffers();
+    TT_FATAL(
+        fast_cbs.size() == rebuilt_cbs.size(),
+        "descriptor fast-path parity FAILED for op {}: {} circular buffers on the fast path vs {} on rebuild.",
+        op_name,
+        fast_cbs.size(),
+        rebuilt_cbs.size());
+    for (size_t i = 0; i < fast_cbs.size(); ++i) {
+        // Only globally-allocated (tensor-pinned) CBs carry a buffer address that must be re-patched on
+        // a cache hit; locally-allocated scratch CBs are per-program and not comparable across builds.
+        if (!fast_cbs[i]->globally_allocated()) {
+            continue;
+        }
+        TT_FATAL(
+            fast_cbs[i]->address() == rebuilt_cbs[i]->address(),
+            "descriptor fast-path parity FAILED for op {}: circular buffer #{} base address fast=0x{:x} "
+            "rebuild=0x{:x}. CB address is stale on the cache hit — get_dynamic_runtime_args cannot patch "
+            "CBs, and resolved_bindings.cbs mis-resolved the in-place alias (SDXL sharded in-place case).",
+            op_name,
+            i,
+            fast_cbs[i]->address(),
+            rebuilt_cbs[i]->address());
     }
 }
 

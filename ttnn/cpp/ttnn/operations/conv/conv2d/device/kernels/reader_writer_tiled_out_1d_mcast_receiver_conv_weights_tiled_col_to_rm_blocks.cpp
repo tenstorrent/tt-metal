@@ -60,7 +60,7 @@ void kernel_main() {
 
     if constexpr (split_reader_enabled) {
         if constexpr (needs_act_block_zero_out) {
-            zero_out_tiles<cb_id_act_second_reader>(noc, experimental::CB(cb_id_act_second_reader));
+            zero_out_tiles<cb_id_act_second_reader>(noc, DataflowBuffer(cb_id_act_second_reader));
         }
     }
 
@@ -69,11 +69,11 @@ void kernel_main() {
     const uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(i++);
     Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
     Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
-    experimental::CB cb_weight_obj(cb_id_weight);
-    experimental::CB cb_bias_obj(bias_cb_id);
-    experimental::CB cb_act_second_obj(cb_id_act_second_reader);
-    experimental::CB cb_reader_indices_obj(cb_reader_indices);
-    experimental::CB cb_sharded_act_obj(cb_id_sharded_act);
+    DataflowBuffer dfb_weight_obj(cb_id_weight);
+    DataflowBuffer dfb_bias_obj(bias_cb_id);
+    DataflowBuffer dfb_act_second_obj(cb_id_act_second_reader);
+    DataflowBuffer dfb_reader_indices_obj(cb_reader_indices);
+    DataflowBuffer dfb_sharded_act_obj(cb_id_sharded_act);
 
     const uint32_t remaining_tiles_to_push =
         split_reader_enabled && activation_reuse_enabled ? get_arg_val<uint32_t>(i++) : 0;
@@ -81,21 +81,21 @@ void kernel_main() {
     // Split reader configuration
     if constexpr (split_reader_enabled) {
 #ifdef CONFIG_TENSOR_IN_DRAM
-        cb_reader_indices_obj.wait_front(1);
+        dfb_reader_indices_obj.wait_front(1);
 #endif
     }
     constexpr uint32_t window_outer_offset = conv_act_size_w_padded * conv_act_c_read_bytes * dilation_h;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        split_reader_enabled ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_indices_obj.get_write_ptr())
+        split_reader_enabled ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_reader_indices_obj.get_write_ptr())
                              : nullptr;
     uint32_t reader_idx = 0;
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     constexpr uint32_t coalesced_read_bytes =
         ((dilation_w == 1) ? weight_size_w * conv_act_c_read_bytes : conv_act_c_read_bytes);
-    const uint32_t act_l1_read_addr = split_reader_enabled ? cb_sharded_act_obj.get_read_ptr() : 0;
+    const uint32_t act_l1_read_addr = split_reader_enabled ? dfb_sharded_act_obj.get_read_ptr() : 0;
     uint32_t start_reader_idx =
         split_reader_enabled ? (uint32_t)(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1 : 0;
-    const uint32_t cb_start_addr = split_reader_enabled ? cb_act_second_obj.get_write_ptr() : 0;
+    const uint32_t cb_start_addr = split_reader_enabled ? dfb_act_second_obj.get_write_ptr() : 0;
 
     // read in bias if enabled (done only once for all batches)
     bool load_bias = true;
@@ -121,8 +121,8 @@ void kernel_main() {
                 reader_idx = start_reader_idx;
 
                 if constexpr (!activation_reuse_enabled) {
-                    cb_act_second_obj.reserve_back(act_block_num_tiles);
-                    l1_write_addr_act = cb_act_second_obj.get_write_ptr();
+                    dfb_act_second_obj.reserve_back(act_block_num_tiles);
+                    l1_write_addr_act = dfb_act_second_obj.get_write_ptr();
                     read_sticks<
                         dilation_w,
                         coalesced_read_bytes,
@@ -132,7 +132,7 @@ void kernel_main() {
                         weight_size_w,
                         stride_w>(noc, packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
                     noc.async_read_barrier();
-                    cb_act_second_obj.push_back(act_block_num_tiles);
+                    dfb_act_second_obj.push_back(act_block_num_tiles);
 
                     reader_offset += window_outer_offset;
                 } else {
@@ -153,7 +153,7 @@ void kernel_main() {
                         window_reuse_offset,
                         single_core_processes_multiple_batches>(
                         noc,
-                        cb_act_second_obj,
+                        dfb_act_second_obj,
                         packed_reader_indices_ptr,
                         act_l1_read_addr,
                         l1_write_addr_act,
@@ -165,14 +165,14 @@ void kernel_main() {
                             // Last core sometimes has less work to do, but we still need to push the same number of
                             // tiles to avoid blocking compute kernels
                             push_remaining_tiles<cb_id_act_second_reader, act_block_w_tiles, image_width_tiles>(
-                                cb_act_second_obj, remaining_tiles_to_push, cb_start_addr);
+                                dfb_act_second_obj, remaining_tiles_to_push, cb_start_addr);
                         }
                     }
                 }
             }
 
             // Receive weights
-            cb_weight_obj.reserve_back(weight_block_num_tiles);
+            dfb_weight_obj.reserve_back(weight_block_num_tiles);
             if (bh == 0) {
                 // Set weights semaphore value to INVALID
                 weights_mcast_receiver_sem.set(INVALID);
@@ -185,12 +185,12 @@ void kernel_main() {
                 weights_mcast_receiver_sem.wait(VALID);
             }
 
-            cb_weight_obj.push_back(weight_block_num_tiles);
+            dfb_weight_obj.push_back(weight_block_num_tiles);
         }
 
         if constexpr (fuse_bias) {
             if (load_bias) {
-                cb_bias_obj.reserve_back(bias_ntiles);
+                dfb_bias_obj.reserve_back(bias_ntiles);
 
                 // Set weights semaphore value to INVALID
                 weights_mcast_receiver_sem.set(INVALID);
@@ -201,7 +201,7 @@ void kernel_main() {
                 // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
                 weights_mcast_receiver_sem.wait(VALID);
 
-                cb_bias_obj.push_back(bias_ntiles);
+                dfb_bias_obj.push_back(bias_ntiles);
                 load_bias = false;
             }
         }

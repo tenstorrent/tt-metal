@@ -7,7 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "../zero_padded_kv_cache_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/device/kernels/zero_padded_kv_cache_common.hpp"
 
 // Writes this chip's share of the pad window back to the cache: the masked partial tile (from the
 // compute out CB) goes back to the boundary seq-tile, and every fully-pad seq-tile is zeroed in

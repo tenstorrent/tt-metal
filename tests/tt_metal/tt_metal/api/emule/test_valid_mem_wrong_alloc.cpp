@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Object_Intent_*"
+// To run (from the tt-metal repo root, after an emule build):
+//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Object_Intent_*"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -96,51 +96,6 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
         ".*Object Intent Violation: Attempted to modify memory belonging to an adjacent object context.*");
 }
 
-// Positive control: when the kernel resolves BOTH buffers via __emule_local_l1_to_ptr
-// and writes only within their own bounds, both buffers end up in the per-core
-// "resolved set". The post-launch comparison should skip them and the program
-// should complete normally. If the sanitizer false-positives (e.g. compares
-// against a stale snapshot, or fails to record a resolution), this test will
-// crash and fail. It guards the well-behaved path from being broken by future
-// changes to the resolved-set tracking or snapshot logic.
-TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
-    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
-
-    auto* device = this->devices_.at(0)->get_devices()[0];
-    CoreCoord logical_core = {0, 0};
-    Program program = CreateProgram();
-
-    uint32_t buf_size = 1024;
-    auto buffer_b = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-
-    // Resolve both buffers, write only within bounds of each — the
-    // "intended write set" covers every buffer whose bytes change.
-    std::string kernel_src = R"(
-        #include "api/dataflow/dataflow_api.h"
-        void kernel_main() {
-            uint32_t base_a = get_arg_val<uint32_t>(0);
-            uint32_t base_b = get_arg_val<uint32_t>(1);
-            volatile uint32_t* ptr_a = (volatile uint32_t*)__emule_local_l1_to_ptr(base_a);
-            volatile uint32_t* ptr_b = (volatile uint32_t*)__emule_local_l1_to_ptr(base_b);
-            ptr_a[0] = 0xAAAAAAAA;
-            ptr_b[0] = 0xBBBBBBBB;
-        }
-    )";
-
-    auto kernel = CreateKernelFromString(
-        program,
-        kernel_src,
-        logical_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    SetRuntimeArgs(program, kernel, logical_core, {buffer_a->address(), buffer_b->address()});
-
-    // Must NOT abort. If the sanitizer is over-eager, LaunchProgram will SIGABRT
-    // and the test harness will mark this as failed.
-    detail::LaunchProgram(device, program);
-    SUCCEED();
-}
-
 // Non-adjacent stomp: three buffers laid out in L1, and the kernel
 // resolves only the lowest one (A) but overshoots two slots upward into the
 // highest one (C), skipping the middle buffer (B) entirely. This proves the
@@ -148,6 +103,12 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
 // neighbor of the resolved buffer — which is the entire point of the
 // "provenance" framing (the violating address can be arbitrarily far from
 // the intended object as long as it lands inside *some* allocated buffer).
+//
+// ORDERING: this death test is kept with the other death test above, before
+// every non-death control below. A prior non-death LaunchProgram leaves the emule
+// fiber worker pool alive in the parent; a later EXPECT_DEATH fork()s and the
+// child inherits that pool's locked state without its threads, hanging until the
+// watchdog aborts (~124 s). Death-first keeps each fork clean.
 TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
@@ -201,6 +162,52 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
         ".*Object Intent Violation: Attempted to modify memory belonging to an adjacent object context.*");
 }
 
+// Positive control: when the kernel resolves BOTH buffers via __emule_local_l1_to_ptr
+// and writes only within their own bounds, both buffers end up in the per-core
+// "resolved set". The post-launch comparison should skip them and the program
+// should complete normally. If the sanitizer false-positives (e.g. compares
+// against a stale snapshot, or fails to record a resolution), this test will
+// crash and fail. It guards the well-behaved path from being broken by future
+// changes to the resolved-set tracking or snapshot logic. (Placed after the death
+// tests above: see the fork/worker-pool ordering note on the NonAdjacent test.)
+TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    uint32_t buf_size = 1024;
+    auto buffer_b = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+
+    // Resolve both buffers, write only within bounds of each — the
+    // "intended write set" covers every buffer whose bytes change.
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            uint32_t base_a = get_arg_val<uint32_t>(0);
+            uint32_t base_b = get_arg_val<uint32_t>(1);
+            volatile uint32_t* ptr_a = (volatile uint32_t*)__emule_local_l1_to_ptr(base_a);
+            volatile uint32_t* ptr_b = (volatile uint32_t*)__emule_local_l1_to_ptr(base_b);
+            ptr_a[0] = 0xAAAAAAAA;
+            ptr_b[0] = 0xBBBBBBBB;
+        }
+    )";
+
+    auto kernel = CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(program, kernel, logical_core, {buffer_a->address(), buffer_b->address()});
+
+    // Must NOT abort. If the sanitizer is over-eager, LaunchProgram will SIGABRT
+    // and the test harness will mark this as failed.
+    detail::LaunchProgram(device, program);
+    SUCCEED();
+}
+
 // Positive control for the I/O-tensor exemption. This is the mirror of the
 // Violation test: the kernel again resolves only Buffer A and overshoots into
 // Buffer B — but here Buffer B's ABSOLUTE address IS passed as a runtime arg.
@@ -246,6 +253,125 @@ TEST_F(MeshDeviceFixture, Object_Intent_IOArg_Exempt_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {addr_a, addr_b});
 
     // Must NOT abort — B was handed to the kernel as a runtime arg.
+    detail::LaunchProgram(device, program);
+    SUCCEED();
+
+    ::unsetenv("TT_METAL_EMULE_ASAN");
+}
+
+// Positive control for the globally-allocated-CB exemption. Object Intent never
+// snapshots a globally-allocated CB backing buffer (the CB *is* the tensor, so
+// the kernel owns it), so a kernel writing across that CB — without ever
+// resolving a tensor pointer into it — must NOT be flagged. A separate untouched
+// buffer (buffer_a) is present purely so the check is ARMED (snapshots_ is
+// non-empty); it is not modified, so it never flags. If the globally-allocated
+// exemption regresses, the CB backing would be snapshotted, seen modified, and
+// (never resolved) flagged as a violation — this pins that exemption.
+TEST_F(MeshDeviceFixture, Object_Intent_GloballyAllocatedCB_Exempt_NoViolation) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    // Non-exempt L1 buffer, left untouched — makes Object Intent active (snapshots_
+    // non-empty) without itself changing (so it never flags).
+    uint32_t buf_size = 1024;
+    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    (void)buffer_a;
+
+    // Globally-allocated CB backing — exempt from the Object Intent snapshot.
+    constexpr uint32_t cb_id = 0;
+    constexpr uint32_t page_size = 1024;
+    constexpr uint32_t num_pages = 2;
+    // Single-bank backing (bank size == CB total_size), required for a
+    // globally-allocated CB.
+    auto backing = Buffer::create(device, num_pages * page_size, num_pages * page_size, BufferType::L1);
+    CircularBufferConfig cb_config = CircularBufferConfig(num_pages * page_size, {{cb_id, tt::DataFormat::Float16_b}})
+                                         .set_page_size(cb_id, page_size)
+                                         .set_globally_allocated_address(*backing);
+    CreateCircularBuffer(program, logical_core, cb_config);
+
+    // Kernel writes into the globally-allocated CB backing WITHOUT resolving it as
+    // a tensor. The CB is exempt, so this must not be flagged as a provenance
+    // violation. buffer_a is never touched.
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            cb_reserve_back(0, 1);
+            uint32_t cb_addr = get_write_ptr(0);
+            volatile uint32_t* ptr_cb = (volatile uint32_t*)__emule_local_l1_to_ptr(cb_addr);
+            ptr_cb[0] = 0xCBCBCBCB;
+            cb_push_back(0, 1);
+        }
+    )";
+
+    CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    // Must NOT abort — writing a globally-allocated CB the kernel owns is legitimate.
+    detail::LaunchProgram(device, program);
+    SUCCEED();
+
+    ::unsetenv("TT_METAL_EMULE_ASAN");
+}
+
+// Multi-kernel concurrency gate. Object Intent does exact per-buffer attribution
+// only when a core runs exactly ONE kernel; the pre-launch snapshot bails when
+// num_kernels != 1 (and the resolved-set append is gated on a non-empty snapshot).
+// This program puts TWO data-movement kernels on the same core, each writing only
+// its OWN buffer in-bounds. With the gate in force, Object Intent cleanly no-ops
+// on this core — no false positive, no unsynchronized resolved-log append. If the
+// gate regressed, per-kernel attribution would run on a multi-kernel core: each
+// kernel would see the OTHER kernel's (unresolved) buffer as modified and abort —
+// or corrupt the shared resolved-log vector via concurrent appends.
+TEST_F(MeshDeviceFixture, Object_Intent_MultiKernel_Core_NoViolation) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    uint32_t buf_size = 1024;
+    auto buffer_1 = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto buffer_2 = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+
+    // Two kernels on the same core (RISCV_0 + RISCV_1), each resolving and writing
+    // only its own buffer within bounds.
+    std::string kernel_src_0 = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            uint32_t base = get_arg_val<uint32_t>(0);
+            volatile uint32_t* p = (volatile uint32_t*)__emule_local_l1_to_ptr(base);
+            p[0] = 0x11111111;
+        }
+    )";
+    std::string kernel_src_1 = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            uint32_t base = get_arg_val<uint32_t>(0);
+            volatile uint32_t* p = (volatile uint32_t*)__emule_local_l1_to_ptr(base);
+            p[0] = 0x22222222;
+        }
+    )";
+
+    auto kernel_0 = CreateKernelFromString(
+        program,
+        kernel_src_0,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    auto kernel_1 = CreateKernelFromString(
+        program,
+        kernel_src_1,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    SetRuntimeArgs(program, kernel_0, logical_core, {buffer_1->address()});
+    SetRuntimeArgs(program, kernel_1, logical_core, {buffer_2->address()});
+
+    // Must NOT abort — Object Intent no-ops on multi-kernel cores.
     detail::LaunchProgram(device, program);
     SUCCEED();
 

@@ -20,7 +20,7 @@ inline Tensor mean_NHW(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
-    ttnn::SmallVector<int> dims = {2, 3};
+    ttsl::SmallVector<int> dims = {2, 3};
     Tensor mean_hw = ttnn::mean(input_tensor, dims, true, output_mem_config, compute_kernel_config);
     return ttnn::mean(mean_hw, 0, true, output_mem_config, compute_kernel_config);
 }

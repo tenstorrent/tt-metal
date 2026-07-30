@@ -6,9 +6,9 @@ from typing import Dict, List
 
 import pandas as pd
 from loguru import logger
-from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .device_io import read_words_from_device, write_words_to_device
 from .test_config import TestConfig
 
 # Constants and Configuration (derived from TestConfig).

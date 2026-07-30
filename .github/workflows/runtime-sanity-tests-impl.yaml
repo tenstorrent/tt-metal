@@ -24,7 +24,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
       has-sim: ${{ steps.detect-sim.outputs.has-sim }}
@@ -153,11 +153,37 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
       - name: ${{ matrix.test-group.name }}
+        if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
           echo "${{ matrix.test-group.cmd }}"
           ${{ matrix.test-group.cmd }}
+      - name: ${{ matrix.test-group.name }} (simulator)
+        if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          mkdir -p generated/test_reports
+          echo "${{ matrix.test-group.cmd }}"
+          cat > /tmp/sim_cmd.sh <<'SIM_CMD_EOF'
+          ${{ matrix.test-group.cmd }}
+          SIM_CMD_EOF
+          .github/scripts/utils/host-load-sidecar.sh \
+            --interval 1 \
+            --label "${{ matrix.test-group.name }} (simulator)" \
+            --output /work/mem_report.json \
+            -- bash --noprofile --norc -eo pipefail /tmp/sim_cmd.sh
+      - name: Upload mem report
+        if: ${{ !cancelled() && startsWith(matrix.test-group.sku, 'sim_') }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mem-report-${{ matrix.test-group.name }}
+          # /docker-job/ is the host-side mount of the container's /work/. The host-load sidecar
+          # writes its CPU/memory/disk/network report to --output /work/mem_report.json; this
+          # host path is what upload-artifact reads.
+          path: ${{ github.workspace }}/docker-job/mem_report.json
+          if-no-files-found: warn
+          retention-days: 30
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

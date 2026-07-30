@@ -1,7 +1,7 @@
 # tt-run rank binding for a 1-rank REAL-model de-risk on ONE BH galaxy.
 #
 # Single rank, full galaxy: is_first == is_last == True, so the runner builds the WHOLE
-# 61-layer model (embedding + all layers + norm + LM head) and runs it with NO cross-rank
+# model (embedding + all layers + norm + LM head) and runs it with NO cross-rank
 # transport. Confirms, in isolation from the 2-host path, that:
 #   * per-galaxy FABRIC_1D trains with the [LINE, RING] 8x4 torus dim_types,
 #   * the model builds from the shared TTNN weight cache, and
@@ -11,12 +11,11 @@
 # Uses the in-tree known-good single-galaxy descriptor (8x4, [LINE, RING]); our 2-galaxy
 # descriptor's two meshes are copies of it.
 #
-# Launch:
-#   python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
-#     --tcp-interface ens5f0np0 \
-#     --rank-binding models/demos/deepseek_v3_d_p/tt/runners/pipeline_prefill_real_1galaxy_1rank.yaml \
-#     --mpi-args "--host bh-glx-d03u02:1 --map-by slot --bind-to none --tag-output --allow-run-as-root" \
-#     python3 -m models.demos.common.prefill.runners.prefill_runner
+# Launch (model chosen via PREFILL_MANIFEST):
+#   PREFILL_MANIFEST=models/demos/deepseek_v3_d_p/tt/runners/manifests/deepseek_v3.json \
+#     ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_real_1galaxy_1rank.yaml \
+#     bh-glx-d03u02:1
 
 rank_bindings:
   - rank: 0
@@ -26,11 +25,6 @@ rank_bindings:
 
 mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_graph_descriptor.textproto
 
+# Topology + transport only — model and run-profile (PCC, chunk count, model knobs) come from PREFILL_MANIFEST.
 global_env:
-  PREFILL_STANDALONE: "1"   # merged runner: standalone (bring-up/pipeline) mode, not the production request loop
-  # Per-rank KV-cache PCC gate against the golden trace.
-  PREFILL_STANDALONE_PCC: "1"
-  # 11 chunks (56320 tokens = full golden trace); single-rank baseline. max_seq_len auto-derives.
-
-  PREFILL_STANDALONE_NCHUNKS: "11"
-  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+  PREFILL_STANDALONE: "1"   # standalone (bring-up/pipeline) mode, not the production request loop

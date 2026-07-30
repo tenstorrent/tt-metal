@@ -350,17 +350,21 @@ GraphLayoutResult resolve_graph_layout(
         size_t curr_sub = node_to_sub.at(stage_order[i]);
 
         // Find the resolved entry edge for this stage (non-loopback, dst == stage_order[i]).
-        uint32_t entry_row = UINT32_MAX, entry_col = UINT32_MAX;
-        for (const auto& re : resolved_edges) {
+        // Keep the edge itself: in a FORK graph the topological stage_order interleaves the
+        // branches, so stage_order[i-1] is NOT this stage's predecessor — the entry edge's
+        // own source is (that's what the connection lookup below must use).
+        ResolvedEdge* entry_re = nullptr;
+        for (auto& re : resolved_edges) {
             if (!re.is_loopback && re.dst == stage_order[i]) {
-                entry_row = re.entry_row;
-                entry_col = re.entry_col;
+                entry_re = &re;
                 break;
             }
         }
-        if (entry_row == UINT32_MAX) {
+        if (entry_re == nullptr) {
             continue;  // stage 0 — no entry edge
         }
+        uint32_t entry_row = entry_re->entry_row;
+        uint32_t entry_col = entry_re->entry_col;
 
         // Find the resolved exit edge for this stage (src == stage_order[i], any kind).
         ResolvedEdge* exit_re = nullptr;
@@ -390,16 +394,11 @@ GraphLayoutResult resolve_graph_layout(
                 }
             }
             if (!resolved) {
-                // No alternative exit link — try changing the entry edge instead.
-                size_t prev_sub = node_to_sub.at(stage_order[i - 1]);
+                // No alternative exit link — try changing the entry edge instead. Use the
+                // entry edge's ACTUAL source submesh (not stage_order[i-1], which is the
+                // wrong branch in an interleaved fork topological order).
+                size_t prev_sub = node_to_sub.at(entry_re->src);
                 const auto& entry_links = connections.at({prev_sub, curr_sub}).links;
-                ResolvedEdge* entry_re = nullptr;
-                for (auto& re : resolved_edges) {
-                    if (!re.is_loopback && re.dst == stage_order[i]) {
-                        entry_re = &re;
-                        break;
-                    }
-                }
                 for (const auto& lp : entry_links) {
                     if (lp.entry_row != exit_re->exit_row || lp.entry_col != exit_re->exit_col) {
                         entry_re->exit_row = lp.exit_row;

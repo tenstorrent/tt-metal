@@ -18,7 +18,7 @@ Two layers:
     DeepSeek-V3 family ships a shared ``MLAPrefillAdapter`` base (MLA attention +
     MoE) with thin ``DeepSeekV3Adapter`` / ``KimiK26Adapter`` subclasses; a
     different architecture subclasses ``PrefillModelAdapter`` directly with its own
-    KV layout. See ``runners/ADDING_A_PREFILL_MODEL.md``.
+    KV layout. See ``docs/ADDING_A_PREFILL_MODEL.md``.
 
 Import-safety: this module and every concrete adapter must stay light enough to
 import in the serving process — NO reference-modeling / safetensors imports at
@@ -69,6 +69,9 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
+    # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
+    sparse_kv_cache_format: Optional[object] = None
 
     @property
     def sp_factor(self) -> int:
@@ -77,6 +80,15 @@ class PrefillRunParams:
     @property
     def tp_factor(self) -> int:
         return self.mesh_shape[self.tp_axis]
+
+
+class KvCaches(ABC):
+    """Opaque handle for a model's on-device KV cache(s), returned by ``allocate_kv_cache``. The engine
+    never introspects it: it allocates it once, OWNS its lifetime, passes it back into every runtime call
+    that touches it (compile / prefill_chunk / build_kv_chunk_table / kv_cache_pcc_check / read_slot_kv),
+    and frees it with the mesh at shutdown. Each model returns its own concrete subclass shaped however
+    fits its cache (a named struct of one or more device tensors), so the engine imposes no structure and
+    growing/renaming a model's caches never touches it."""
 
 
 class PrefillModelAdapter(ABC):
@@ -103,18 +115,35 @@ class PrefillModelAdapter(ABC):
     # Route the MoE routing all-gather's global semaphores to L1_SMALL instead of
     # pinning the main-L1 floor. Requires l1_small_size > 0.
     routing_use_l1_small_for_semaphores: bool = False
+    # Emb-axis sharding of the cross-rank D2D hidden state (seq is always SP-sharded). True (default):
+    # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
+    # Must match the layout the model's decoder layer consumes/produces.
+    pipeline_activation_emb_tp_sharded: bool = True
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
     # where this model's config / weights live and how to build its runtime. All
     # operational behavior (running a chunk, the KV layout, the migration table,
     # PCC) lives on the runtime that build_runtime returns — see the runtime
-    # contract in runners/ADDING_A_PREFILL_MODEL.md. The engine owns all comms.
+    # contract in docs/ADDING_A_PREFILL_MODEL.md. The engine owns all comms.
     # =====================================================================
     @abstractmethod
     def load_hf_config(self) -> "PretrainedConfig":
         """Load (and normalize) the HF config from PREFILL_HF_MODEL (falling back
         to ``hf_model_default``). The runner sets ``max_seq_len`` on the result."""
+
+    @property
+    def default_sparse_kv_cache_format(self) -> Optional[object]:
+        """Semantic primary-cache format used when the runner builds ``PrefillRunParams``.
+
+        Models with a format choice override this property. Direct module users can instead put
+        an explicit format in ``PrefillRunParams.sparse_kv_cache_format``.
+        """
+        return None
+
+    def resolve_sparse_kv_cache_format(self, requested: Optional[object]) -> Optional[object]:
+        """Return an explicit request, otherwise this adapter's model default."""
+        return self.default_sparse_kv_cache_format if requested is None else requested
 
     @abstractmethod
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
@@ -122,21 +151,27 @@ class PrefillModelAdapter(ABC):
         the cache-populate run wrote. None only if the cache is explicitly empty."""
 
     @abstractmethod
-    def allocate_kv_cache(
-        self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams
-    ) -> "ttnn.Tensor":
-        """Allocate (and zero) this model's KV cache on device and return it. This is
-        the single place a model's KV layout is defined. The engine OWNS the returned
-        cache's lifetime: it allocates it once, passes it into every runtime call that
-        touches it (compile / prefill_chunk / build_kv_chunk_table / kv_cache_pcc_check),
-        and frees it with the mesh at shutdown. ``params`` carries the per-rank knobs
-        (max_seq_len, mesh_shape, this rank's num_layers, num_users, …)."""
+    def allocate_kv_cache(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams) -> KvCaches:
+        """Allocate (and zero) this model's KV cache(s) on device and return them as a ``KvCaches`` — your
+        model's own concrete subclass (a named struct of one or more device tensors). This is the single
+        place a model's KV layout is defined; the engine OWNS the returned handle's lifetime (see
+        ``KvCaches``). ``params`` carries the per-rank knobs (max_seq_len, mesh_shape, this rank's
+        num_layers, num_users, …)."""
+
+    def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
+        """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
+        these). ``None`` => unconstrained (dense models — any split is fine). A DSA cross-layer-reuse
+        model returns its ``full`` layer indices: each rank must begin on a layer that seeds that rank's
+        indexer-reuse chain (a rank starting on a ``shared`` layer has no prior top-k — see
+        ``tt_prefill_transformer``). The runner (``compute_layer_split``) snaps the default even split
+        onto these and rejects any split whose rank starts fall off them."""
+        return None
 
     @abstractmethod
     def build_runtime(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return a runtime handle. The runtime
-        is stateless w.r.t. the KV cache — it receives the engine-owned cache as an
-        argument on each call. The engine then calls ``.compile(kv_cache)`` and drives
+        is stateless w.r.t. the KV cache — it receives the engine-owned ``KvCaches`` as an
+        argument on each call. The engine then calls ``.compile(kv_caches)`` and drives
         it (make_chunk_input, prefill_chunk, and — when enabled — build_kv_chunk_table /
         kv_cache_pcc_check / set_layer_ack_channel). ``params`` carries the per-rank knobs."""
 
@@ -159,6 +194,15 @@ class PrefillModelAdapter(ABC):
     moe_pcc_threshold: float = 0.999
     mla_pcc_threshold: float = 0.999
     supports_pretrained: bool = True
+    # Whether the tokenizer needs trust_remote_code=True (custom tokenizer code shipped in the repo,
+    # e.g. Kimi's tiktoken-backed BBPE). DeepSeek-V3 uses a stock fast tokenizer, so it turns this off
+    # to avoid the flat-config trust_remote_code import path that otherwise breaks its load.
+    tokenizer_trust_remote_code: bool = True
+    # Whether config/tokenizer resolution must copy the HF snapshot into a flat dir of real files.
+    # Only needed when loading with trust_remote_code=True (transformers resolves the remote module to
+    # its blobs/ realpath and then can't find relative-import siblings by name). Variants that load
+    # stock config/tokenizers (trust_remote_code=False) use the snapshot dir directly and set this off.
+    needs_flat_config_dir: bool = True
     # Hand-built HF-attribute config factory (zero-arg callable) for models whose
     # ``model_type`` transformers can't load via AutoConfig (unregistered, e.g. DeepSeek-V3.2's
     # ``deepseek_v32`` / GLM's ``glm_moe_dsa``). None → resolve the config the normal way
@@ -202,15 +246,19 @@ class PrefillModelAdapter(ABC):
 # model is one line here (plus the adapter class in that model's package). Keeping
 # these as strings means importing this common module never imports a model's
 # device/runtime stack — only the selected model is imported, at get_adapter time.
-DEFAULT_MODEL = "deepseek_v3_d_p"
+DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
-    "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
-    # Sparse-attention (DSA) variants — test-only today (config + sparse-MLA reference parity;
-    # no prefill serving runtime wired). See adapters/sparse_mla.py.
+    # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
-    "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:GLM51Adapter",
+    # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
+    "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
+    "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
+    "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
+    # Kimi-K2.7: same architecture as K2.6, new checkpoint (adapters/kimi_k2_7.py).
+    "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
+    "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

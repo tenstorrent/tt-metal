@@ -82,4 +82,9 @@ uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_siz
 
 uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id);
 
+/// @brief Check if the command queue address type is shared across CQs co-located on the same dispatch core
+/// @param addr_type CommandQueueDeviceAddrType address type to check
+/// @return bool true if the address type is shared, false otherwise
+bool is_cq_shared(CommandQueueDeviceAddrType addr_type);
+
 }  // namespace tt::tt_metal

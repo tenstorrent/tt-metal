@@ -16,6 +16,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_expm1.h"
 #include "ckernel_sfpu_trigonometry.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -97,7 +98,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // (5.876733921468257904052734375e-3))))));
     sfpi::vFloat result = PolynomialEvaluator::eval(
         val,
-        sfpi::vConst0,
+        0.0f,
         0.999004364013671875,
         3.0897438526153564453125e-2,
         -0.4890659749507904052734375,
@@ -135,34 +136,33 @@ inline void calculate_tanh() {
         l_reg[sfpi::LRegs::LReg1] = l1;
         l_reg[sfpi::LRegs::LReg2] = l2;
     } else {  // APPROXIMATION_MODE is false
-
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat val = sfpi::dst_reg[0];
-
-            sfpi::vFloat result;
-
-            if constexpr (is_fp32_dest_acc_en) {
-                result = _sfpu_tanh_fp32_accurate_(val);
-            } else {
-                result = _sfpu_tanh_polynomial_(val);
-                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        if constexpr (is_fp32_dest_acc_en) {
+            for (int d = 0; d < ITERATIONS; d++) {
+                sfpi::vFloat val = sfpi::dst_reg[0];
+                sfpi::vFloat result = _sfpu_tanh_fp32_accurate_(val);
+                sfpi::dst_reg[0] = result;
+                sfpi::dst_reg++;
             }
-
-            sfpi::dst_reg[0] = result;
-            sfpi::dst_reg++;
+        } else {
+#pragma GCC unroll 8
+            for (int d = 0; d < ITERATIONS; d++) {
+                sfpi::vFloat val = sfpi::dst_reg[0];
+                sfpi::vFloat result = _sfpu_tanh_polynomial_(val);
+                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+                sfpi::dst_reg[0] = result;
+                sfpi::dst_reg++;
+            }
         }
     }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
-        std::uint32_t imm0 = 0x1DFF;  // 0.90625*x
-        std::uint32_t imm1 = 0x481A;  // 0.09375*x + 0.8125
-        std::uint32_t imm2 = 0xFF00;  // 1
-        _sfpu_load_imm16_(0, imm0);
-        _sfpu_load_imm16_(1, imm1);
-        _sfpu_load_imm16_(2, imm2);
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1DFF);  // 0.90625*x
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x481A);  // 0.09375*x + 0.8125
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0xFF00);  // 1
     } else {
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;      // 2 * log2(e) == 2 / ln(2)

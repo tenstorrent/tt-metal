@@ -177,5 +177,11 @@ void kernel_main() {
     if (send_signal) {
         // send signal to receiver core that we are done using the input CB
         Semaphore<>(receiver_sem_id).up(noc, send_core_x, send_core_y, 1);
+        // Drain the non-posted atomic before kernel_main returns. .up() lowers to a non-posted
+        // noc_semaphore_inc tracked by a separate atomic counter that noc.async_write_barrier() does
+        // NOT drain, so without this the kernel exits with the readiness atomic still in flight -- an
+        // inter-kernel NOC race (Watcher NOC-idle assert). Mirrors the tiled fused writer and the
+        // legacy sibling writer_update_cache_interleaved_start_id.cpp.
+        noc.async_atomic_barrier();
     }
 }

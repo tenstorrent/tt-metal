@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -28,6 +29,12 @@ inline Vec compute_unary_bitwise(Vec v, Vec scalar) {
         return v ^ scalar;
     }
 }
+
+inline void bitwise_and_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+
+inline void bitwise_or_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+
+inline void bitwise_xor_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <
     bool APPROXIMATION_MODE,

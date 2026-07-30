@@ -63,13 +63,6 @@ def windowed_mask(seq_len, cu_window_seqlens):
 def test_windowed_sdpa_smoke(
     device, dtype, pcc_threshold, num_heads, seq_len, chunk, cu_window_seqlens, fp32_dest_acc_en
 ):
-    # fp32_dest_acc_en=True takes the STANDARD compute path, whose reduce issues a MOVD2B with
-    # (use_dst32b=0, dest_32b_lo=1). Real Blackhole tolerates this; ttsim correctly rejects it as
-    # UndefinedBehavior (tenstorrent#47164). fp32_dest_acc_en=False (the Blackhole default, and what
-    # Qwen2.5-VL uses) takes the streaming path and is clean on the simulator, so only skip the
-    # standard-path variant under ttsim.
-    if fp32_dest_acc_en and os.environ.get("TT_METAL_SIMULATOR"):
-        pytest.skip("STANDARD-path MOVD2B is HW-tolerated UB rejected by ttsim (#47164); streaming path covers sim")
     torch.manual_seed(42)
     b, dh = 1, 128
     scale = dh**-0.5

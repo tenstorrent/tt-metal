@@ -176,12 +176,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    // Int32 max/min use the SFPU reduce path (GMPOOL has no Int32 support).
-    // The host already lowers reduce_min to math_op=MAX + negate=true (see reduce_op.cpp::reduce_min),
-    // so this single check covers both MAX and MIN.
-    const bool use_sfpu_reduce_path = a.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
-    const bool use_fpu_negate = operation_attributes.negate && !use_sfpu_reduce_path;
-
     std::vector<uint32_t> reader_compile_time_args;
     if (rm_path) {
         reader_compile_time_args =
@@ -197,32 +191,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     } else {
         writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
         TensorAccessorArgs(output).append_to(writer_compile_time_args);
-    }
-
-    if (use_fpu_negate) {
-        uint32_t acc_cb_index = tt::CBIndex::c_4;
-        uint32_t num_acc_tiles = 1;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = num_acc_tiles * dst_single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(acc_cb_index),
-                .data_format = dst_cb_data_format,
-                .page_size = dst_single_tile_size,
-            }}},
-        });
-
-        uint32_t inv_cb_index = tt::CBIndex::c_5;
-        uint32_t num_inv_tiles = 1;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = num_inv_tiles * dst_single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(inv_cb_index),
-                .data_format = dst_cb_data_format,
-                .page_size = dst_single_tile_size,
-            }}},
-        });
     }
 
     std::map<std::string, std::string> reduce_defines =
@@ -265,7 +233,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
                 : num_rows_per_core_group_2;
 
     // reduce_rm.cpp expects {Ht, Wt, nc_per_reduce, post_mul_bits, wt_chunk, ht_chunk};
-    // reduce.cpp / reduce_w_neg.cpp expect {Ht, Wt, NC, post_mul_bits}.
+    // reduce.cpp expects {Ht, Wt, NC, post_mul_bits}.
     std::vector<uint32_t> compute_kernel_args_group_1;
     if (rm_path) {
         compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, ht_per_core_group_1, post_mul_scaler_bits);
@@ -278,14 +246,14 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         };
     }
 
-    // MIN on Int32 uses -MAX(-x) in reduce_w_neg.
+    // MIN (negate) and INT32 reduce are rejected in validate() on Quasar (negative_tile / sfpu_reduce
+    // are unported), so only the plain MAX/SUM reduce.cpp compute kernel is selected here.
     const std::string compute_kernel =
         rm_path
             ? std::string(
                   "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/kernels/compute/reduce_rm.cpp")
             : std::string(
-                  "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/kernels/compute/reduce") +
-                  (operation_attributes.negate ? "_w_neg" : "") + ".cpp";
+                  "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/kernels/compute/reduce.cpp");
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel;

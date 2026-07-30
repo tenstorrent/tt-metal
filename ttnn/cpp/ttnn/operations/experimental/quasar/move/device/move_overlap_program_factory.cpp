@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
@@ -26,6 +27,7 @@ using namespace tt::tt_metal;
 namespace m2 = tt::tt_metal::experimental;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
     TT_ASSERT(!all_cores.ranges().empty() and all_cores.ranges().size() <= 2);
@@ -73,12 +75,14 @@ const m2::SemaphoreSpecName SEM{"sem"};
 const m2::TensorParamName INPUT{"input"};
 const m2::TensorParamName OUTPUT{"output"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_program_artifacts(
     const MoveOperationAttributes& /*operation_attributes*/,
     const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     using namespace tt::constants;
 
     const Tensor& input = tensor_args.input_tensor;
@@ -165,7 +169,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             {
                 m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
             },
-        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
     // Named CTA: the stick-layout kernel needs the (unaligned) page size at compile time.
@@ -208,7 +212,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             {
                 m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
-        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     // The stick-layout writer needs the (unaligned) page size at compile time, like its reader.
@@ -260,6 +264,8 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
     m2::KernelRunArgs writer_run_args;
     writer_run_args.kernel = WRITER;
 
+    m2::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
+    m2::KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run_args.runtime_arg_values;
     for (uint32_t i = 0, pages_handled_per_core = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_pages_per_core = 0;
@@ -273,46 +279,47 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
 
         const bool is_controller = (i == 0);
 
-        m2::KernelRunArgs::RuntimeArgValues vals = {
-            {"start_id", pages_handled_per_core},
-            {"num_pages", num_pages_per_core},
-            {"control_value", num_cores - 1},
-            {"controller_noc_x", static_cast<uint32_t>(noc_controller.x)},
-            {"controller_noc_y", static_cast<uint32_t>(noc_controller.y)},
-            {"is_controller", static_cast<uint32_t>(is_controller)},
-            {"range_0_start_noc_x", static_cast<uint32_t>(range_0_noc.start_coord.x)},
-            {"range_0_start_noc_y", static_cast<uint32_t>(range_0_noc.start_coord.y)},
-            {"range_0_end_noc_x", static_cast<uint32_t>(range_0_noc.end_coord.x)},
-            {"range_0_end_noc_y", static_cast<uint32_t>(range_0_noc.end_coord.y)},
-            {"range_0_size", static_cast<uint32_t>(logical_multicast_regions[0].size())},
-            {"range_1_start_noc_x", static_cast<uint32_t>(range_1_noc.start_coord.x)},
-            {"range_1_start_noc_y", static_cast<uint32_t>(range_1_noc.start_coord.y)},
-            {"range_1_end_noc_x", static_cast<uint32_t>(range_1_noc.end_coord.x)},
-            {"range_1_end_noc_y", static_cast<uint32_t>(range_1_noc.end_coord.y)},
-            {"range_1_size", static_cast<uint32_t>(logical_multicast_regions[1].size())},
-            {"range_2_start_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.x)},
-            {"range_2_start_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.y)},
-            {"range_2_end_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.x)},
-            {"range_2_end_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.y)},
-            {"range_2_size", static_cast<uint32_t>(logical_multicast_regions.back().size())},
-            {"do_third_multicast", static_cast<uint32_t>(do_third_multicast)},
-        };
+        m2::AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"start_id", pages_handled_per_core},
+                {"num_pages", num_pages_per_core},
+                {"control_value", num_cores - 1},
+                {"controller_noc_x", static_cast<uint32_t>(noc_controller.x)},
+                {"controller_noc_y", static_cast<uint32_t>(noc_controller.y)},
+                {"is_controller", static_cast<uint32_t>(is_controller)},
+                {"range_0_start_noc_x", static_cast<uint32_t>(range_0_noc.start_coord.x)},
+                {"range_0_start_noc_y", static_cast<uint32_t>(range_0_noc.start_coord.y)},
+                {"range_0_end_noc_x", static_cast<uint32_t>(range_0_noc.end_coord.x)},
+                {"range_0_end_noc_y", static_cast<uint32_t>(range_0_noc.end_coord.y)},
+                {"range_0_size", static_cast<uint32_t>(logical_multicast_regions[0].size())},
+                {"range_1_start_noc_x", static_cast<uint32_t>(range_1_noc.start_coord.x)},
+                {"range_1_start_noc_y", static_cast<uint32_t>(range_1_noc.start_coord.y)},
+                {"range_1_end_noc_x", static_cast<uint32_t>(range_1_noc.end_coord.x)},
+                {"range_1_end_noc_y", static_cast<uint32_t>(range_1_noc.end_coord.y)},
+                {"range_1_size", static_cast<uint32_t>(logical_multicast_regions[1].size())},
+                {"range_2_start_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.x)},
+                {"range_2_start_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.y)},
+                {"range_2_end_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.x)},
+                {"range_2_end_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.y)},
+                {"range_2_size", static_cast<uint32_t>(logical_multicast_regions.back().size())},
+                {"do_third_multicast", static_cast<uint32_t>(do_third_multicast)},
+            });
         if (!tilized) {
-            vals.insert({"aligned_page_size", aligned_page_size});
+            reader_rtas["aligned_page_size"][core] = aligned_page_size;
         }
 
-        reader_run_args.runtime_arg_values.push_back(
-            m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(vals)});
-
-        m2::KernelRunArgs::RuntimeArgValues writer_vals = {
-            {"start_id", pages_handled_per_core},
-            {"num_pages", num_pages_per_core},
-        };
+        m2::AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"start_id", pages_handled_per_core},
+                {"num_pages", num_pages_per_core},
+            });
         if (!tilized) {
-            writer_vals.insert({"aligned_page_size", aligned_page_size});
+            writer_rtas["aligned_page_size"][core] = aligned_page_size;
         }
-        writer_run_args.runtime_arg_values.push_back(
-            m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(writer_vals)});
 
         pages_handled_per_core += num_pages_per_core;
     }

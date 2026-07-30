@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -18,6 +19,7 @@ using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 // Metal 2.0 named resource ids for this factory.
 const KernelSpecName READER{"reader"};
 const KernelSpecName WRITER{"writer"};
@@ -26,10 +28,12 @@ const DFBSpecName PAD{"pad"};    // c_1: writer-only scratch (fake CB -> self-lo
 const TensorParamName INPUT{"input"};
 const TensorParamName OUTPUT{"output"};
 const std::string WU{"wu"};
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_program_artifacts(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids below
     const auto& a = tensor_args.input;
     Tensor& output = tensor_return_value;
     const auto& pad_value = operation_attributes.pad_value;
@@ -118,7 +122,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
                 TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     // -------- Writer KernelSpec (consumes SRC0, fills PAD scratch, writes output) --------
@@ -162,7 +166,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
                   "num_padded_Yt",
                   "num_unpadded_Xt",
                   "num_padded_Xt"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     ProgramSpec spec{
@@ -178,21 +182,21 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
     run_args.kernel_run_args = {
         KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {{.node = core, .args = {{"num_pages", num_unpadded_tiles}, {"start_id", 0u}}}},
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(core, {{"num_pages", num_unpadded_tiles}, {"start_id", 0u}}),
         },
         KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{.node = core,
-                  .args =
-                      {{"num_unpadded_W", num_unpadded_W},
-                       {"num_padded_Wt", num_padded_Wt},
-                       {"num_unpadded_Z", num_unpadded_Z},
-                       {"num_padded_Zt", num_padded_Zt},
-                       {"num_unpadded_Yt", num_unpadded_Yt},
-                       {"num_padded_Yt", num_padded_Yt},
-                       {"num_unpadded_Xt", num_unpadded_Xt},
-                       {"num_padded_Xt", num_padded_Xt}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                core,
+                {{"num_unpadded_W", num_unpadded_W},
+                 {"num_padded_Wt", num_padded_Wt},
+                 {"num_unpadded_Z", num_unpadded_Z},
+                 {"num_padded_Zt", num_padded_Zt},
+                 {"num_unpadded_Yt", num_unpadded_Yt},
+                 {"num_padded_Yt", num_padded_Yt},
+                 {"num_unpadded_Xt", num_unpadded_Xt},
+                 {"num_padded_Xt", num_padded_Xt}}),
         },
     };
     run_args.tensor_args.emplace(INPUT, input_mesh_tensor);
