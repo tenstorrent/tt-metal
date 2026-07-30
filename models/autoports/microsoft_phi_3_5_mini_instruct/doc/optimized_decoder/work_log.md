@@ -231,4 +231,7 @@ Post-advisor final-default validation:
 
 Current-pass evidence logs are under `logs/current_pass_*`,
 `watcher_current_pass*`, and `tracy/final/*_current_pass*`. The fresh
-independent review and final checkpoint SHA are appended after review.
+independent review is recorded in `stage_review_current_pass.md`; its verdict
+is `clean-pass` with no required work. The current-pass implementation and
+hardware-evidence checkpoint is `58af598354e`. The review report is committed
+in the immediately following stage-owned commit. Push was not performed.
