@@ -86,9 +86,16 @@ PRESETS: dict[str, list[tuple[str, dict[str, object]]]] = {
     "reader-mode": [
         ("reader0-push1", {}),
         ("reader1-batch", {"--reader-batch-push": True}),
+        # Mode 2 reads every page into one fixed L1 address (dummy payload; it only measures
+        # NoC read BW), so the output is intentionally garbage -- skip output validation.
         (
             "reader2-dbuf",
-            {"--reader-dbuf-trid": True, "--reader-trid-in-flight": "4", "--input-cb-depth-tiles": "16"},
+            {
+                "--reader-dbuf-trid": True,
+                "--reader-trid-in-flight": "4",
+                "--input-cb-depth-tiles": "16",
+                "--skip-output-validation": True,
+            },
         ),
     ],
     "writer-barrier": [
@@ -109,10 +116,34 @@ PRESETS: dict[str, list[tuple[str, dict[str, object]]]] = {
         ("readwrite", {}),
         ("readonly", {"--read-only": True, "--skip-output-validation": True}),
     ],
+    # Multi-tile DRAM pages require the per-trid reader (mode 2): the host rejects
+    # --page-size-tiles > 1 on modes 0/1. Mode 2 needs input depth >= 2*trid_in_flight*page
+    # and output depth >= page, and reads dummy payload (skip output validation). page1tile
+    # stays on the mode-0 CI baseline (real output, validated).
     "page-size": [
         ("page1tile", {"--page-size-tiles": "1"}),
-        ("page2tile", {"--page-size-tiles": "2"}),
-        ("page4tile", {"--page-size-tiles": "4"}),
+        (
+            "page2tile",
+            {
+                "--page-size-tiles": "2",
+                "--reader-dbuf-trid": True,
+                "--reader-trid-in-flight": "4",
+                "--input-cb-depth-tiles": "16",
+                "--output-cb-depth-tiles": "4",
+                "--skip-output-validation": True,
+            },
+        ),
+        (
+            "page4tile",
+            {
+                "--page-size-tiles": "4",
+                "--reader-dbuf-trid": True,
+                "--reader-trid-in-flight": "4",
+                "--input-cb-depth-tiles": "32",
+                "--output-cb-depth-tiles": "4",
+                "--skip-output-validation": True,
+            },
+        ),
     ],
     # Kernel-unroll: repeat the whole op N times in ONE program with no barrier between reps.
     # Delta vs num-programs isolates the op-to-op barrier cost.
@@ -130,6 +161,8 @@ PRESETS: dict[str, list[tuple[str, dict[str, object]]]] = {
     ],
     # Cheap-read override (reader_mode 2 only): NoC-read only N bytes/page (dummy payload) to
     # force the output-bound regime. Each entry carries the mode-2 base it requires.
+    # All entries are reader_mode 2 (dummy payload into a fixed L1 address), so output
+    # validation is skipped like the other mode-2 presets.
     "reader-read-bytes": [
         (
             "readfull",
@@ -138,6 +171,7 @@ PRESETS: dict[str, list[tuple[str, dict[str, object]]]] = {
                 "--reader-trid-in-flight": "4",
                 "--input-cb-depth-tiles": "16",
                 "--reader-read-bytes": "0",
+                "--skip-output-validation": True,
             },
         ),
         (
@@ -147,6 +181,7 @@ PRESETS: dict[str, list[tuple[str, dict[str, object]]]] = {
                 "--reader-trid-in-flight": "4",
                 "--input-cb-depth-tiles": "16",
                 "--reader-read-bytes": "64",
+                "--skip-output-validation": True,
             },
         ),
         (
@@ -156,6 +191,7 @@ PRESETS: dict[str, list[tuple[str, dict[str, object]]]] = {
                 "--reader-trid-in-flight": "4",
                 "--input-cb-depth-tiles": "16",
                 "--reader-read-bytes": "2048",
+                "--skip-output-validation": True,
             },
         ),
     ],

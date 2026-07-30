@@ -424,7 +424,13 @@ def gate_against_golden(metrics: dict, golden_path: Path, gate_metrics, toleranc
 
     failed = False
     for key in keys:
-        golden_value = golden_block.get(key)
+        if key not in golden_block:
+            # An explicit --gate-metric that isn't in the golden block (e.g. a typo) must
+            # not be silently treated as record mode; fail loudly instead.
+            print(f"ERROR: gate metric '{key}' is not defined in {golden_path.name}", file=sys.stderr)
+            failed = True
+            continue
+        golden_value = golden_block[key]
         measured = metrics.get(key)
         if golden_value is None:
             print(
