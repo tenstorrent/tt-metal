@@ -199,7 +199,7 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
         // seed/from/to are DYNAMIC (excluded from compute_program_hash): baked here for the
         // cache-miss build, re-applied on every cache hit by override_runtime_arguments().
         compute_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{seed, f2u_from, f2u_to, tile_offset, units_per_core});
+            core, KernelDescriptor::CoreRuntimeArgs{seed, f2u_from, f2u_to, units_per_core});
 
         writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
     }
@@ -236,8 +236,7 @@ void UniformDeviceOperation::override_runtime_arguments(
         compute_args[0] = uniform_seed_for_core(operation_attributes, i);
         compute_args[1] = f2u_from;
         compute_args[2] = f2u_to;
-        compute_args[3] = tile_offset;
-        compute_args[4] = units_per_core;
+        compute_args[3] = units_per_core;
 
         auto& writer_args = GetRuntimeArgs(program, writer_kernel_idx, core);
         writer_args[0] = out_addr;
