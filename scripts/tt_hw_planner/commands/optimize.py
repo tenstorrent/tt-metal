@@ -284,6 +284,58 @@ def _optimize_chip_count(args):
     return len(ids) or None
 
 
+def _derive_mesh_device_env(args) -> None:
+    """Resolve MESH_DEVICE from --box/--mesh, as bring-up already does.
+
+    MESH_DEVICE is tt-metal's OWN convention, not the planner's (227 files under models/, renamed
+    from FAKE_DEVICE "for consistency with vLLM"): it tells the MODEL which board profile to load.
+
+    Deliberately does NOT set TT_MESH_GRAPH_DESC_PATH. That variable OVERRIDES tt-metal's topology
+    auto-discovery, and emit_e2e.py:1660 says plainly not to set it. Measured on a 4-chip p300c:
+    both llama3_1_8b_p150 (PCC 0.996046) and gemma-3-12b-it (PCC 0.989811) pass with it UNSET, at
+    the same speed -- the fabric timeout it was once used for came from invoking a demo node
+    directly, without the harness's device params, not from anything optimize does.
+
+    --box already carries the board and --mesh the shape, so the operator was restating the same
+    hardware in the environment. bring-up resolves it (bringup.py:456) via
+    find_box(name).arch -> mesh_device_for(arch, shape); this calls that SAME function rather than
+    copying the table, so the two paths cannot drift.
+
+    Never overrides an explicitly exported value -- the operator's choice is not silently replaced.
+    Best-effort: an unknown box, an unparseable mesh, or an unlabelled shape leaves the environment
+    exactly as it is today.
+    """
+    box_name = getattr(args, "box", None)
+    if not box_name:
+        return
+    try:
+        from ..bringup import mesh_device_for
+        from ..hardware import HARDWARE, find_box
+
+        # find_box is CASE-SENSITIVE ('p150' raises, 'P150' works) while the CLI help suggests
+        # lowercase ("e.g. p300c, T3K, Galaxy"), so match case-insensitively before looking up.
+        canon = next((b.name for b in HARDWARE if b.name.lower() == str(box_name).lower()), box_name)
+        box = find_box(canon)
+    except Exception:  # noqa: BLE001
+        return
+    shape = (1, 1)
+    raw = getattr(args, "mesh", None)
+    if raw:
+        try:
+            r, c = str(raw).lower().split("x")
+            shape = (int(r), int(c))
+        except (ValueError, AttributeError):
+            return
+    if "MESH_DEVICE" not in os.environ:
+        try:
+            label, _note = mesh_device_for(box.arch, shape)
+        except Exception:  # noqa: BLE001
+            label = None
+        if label:
+            os.environ["MESH_DEVICE"] = label
+            print(f"  mesh device : --box {box_name} + mesh {shape[0]}x{shape[1]} -> MESH_DEVICE={label}")
+
+
 def _derive_topology_env(args, model_dir):
     """Reshape topology from --devices/--mesh the SAME way emit-e2e does: chip count -> shared
     plan_parallelism (kernel-viable TP x DP) -> export TT_PERF_MESH_ROWS/COLS the model's open + the
@@ -532,6 +584,7 @@ def cmd_optimize(args) -> int:
     print(f"  engine   : {engine} · devices {args.devices} · mesh {args.mesh or '-'} · metric {args.metric}")
     if pcc_test:
         print(f"  pcc gate : {pcc_test} (perf test auto-generated from it)")
+    _derive_mesh_device_env(args)
     _derive_topology_env(args, model_dir)
     if getattr(args, "target_band", False):
         os.environ["PERF_MCP_TARGET_BAND"] = "1"
