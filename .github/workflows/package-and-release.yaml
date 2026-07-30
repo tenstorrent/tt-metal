@@ -245,6 +245,12 @@ jobs:
           configuration: infra/release-changelog-config.json
           fromTag: ${{ steps.get-previous-tag.outputs.previous-tag }}
           toTag: ${{ needs.create-tag.outputs.version }}
+          # Resolve each commit in the range to its PR via the commits API instead
+          # of matching PR merge_commit_sha within a merge-date window. Our release
+          # branch re-creates commits (new SHAs) and lands PRs later than they
+          # merged to main, so the default matching only associated a handful of
+          # PRs (e.g. v0.74.0 listed 8 of ~600). One API call per commit.
+          fetchViaCommits: true
           failOnError: true
           outputFile: CHANGELOG.txt
       - name: Create empty changelog for dry run
