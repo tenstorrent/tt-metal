@@ -290,6 +290,14 @@ class TTVibeVoiceGenerator:
         # across seeds, mean -0.004..-0.040, vs torch's steady std~1.000).  Judge by listening.
         self._sf_ttnn_randn = os.environ.get("VV_TTNN_RANDN", "0") == "1"
         self._ttnn_randn_draws = 0  # draw counter, so successive device draws use distinct seeds
+        # VV_DEV_ENC_LAT=1 keeps the voice-clone encode latents ON DEVICE: the chunk capture
+        # scatters its latent row into an accumulator (see _enc_scatter), so the per-chunk D2H and
+        # the host torch.cat/scale/bias all go away and the connector reads a device tensor.
+        self._enc_dev_lat = os.environ.get("VV_DEV_ENC_LAT", "0") == "1"
+        self._enc_lat_buf: Optional[ttnn.Tensor] = None
+        self._enc_lat_idx: Optional[ttnn.Tensor] = None
+        self._enc_lat_shard_mc = None
+        self._enc_lat_stage: Optional[ttnn.Tensor] = None
         self._sf_noise_table: Optional[ttnn.Tensor] = None
         self._sf_noise_idx: Optional[ttnn.Tensor] = None
         self._sf_t_tensors: Optional[list] = None
@@ -480,17 +488,82 @@ class TTVibeVoiceGenerator:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         self.acoustic_tok._encoder_tt.reset_cache()
-        for _final in (False, False, True, True):
-            self.acoustic_tok.encode(self._enc_input(chunk), use_cache=True, is_final_chunk=_final)
+        # First warmup encode also supplies vae_dim for the accumulator, which must be allocated
+        # before the REMAINING warmups so the scatter's programs land in the program cache too —
+        # a capture cannot load new binaries.  Index overrun during warmup+capture is why the
+        # accumulator's floor (8) exceeds the audio table's (4): 4 warmup + 2 capture writes.
+        _warm = self.acoustic_tok.encode(self._enc_input(chunk), use_cache=True, is_final_chunk=False)
+        if self._enc_dev_lat and n_rows:
+            self._enc_lat_alloc(dev, max(n_rows, 8), int(_warm.shape[-1]), _warm.dtype)
+            self._enc_scatter(_warm)
+        for _final in (False, True, True):
+            _warm = self.acoustic_tok.encode(self._enc_input(chunk), use_cache=True, is_final_chunk=_final)
+            self._enc_scatter(_warm)
         ts = ttnn.begin_trace_capture(dev, cq_id=0)
         out_s = self.acoustic_tok.encode(self._enc_input(chunk), use_cache=True, is_final_chunk=False)
+        self._enc_scatter(out_s)
         ttnn.end_trace_capture(dev, ts, cq_id=0)
         tf = ttnn.begin_trace_capture(dev, cq_id=0)
         out_f = self.acoustic_tok.encode(self._enc_input(chunk), use_cache=True, is_final_chunk=True)
+        self._enc_scatter(out_f)
         ttnn.end_trace_capture(dev, tf, cq_id=0)
         self._enc_step, self._enc_final = (ts, out_s), (tf, out_f)
         _vv_debug(f"acoustic encode: captured chunk trace (chunk={chunk})")
         return True
+
+    def _enc_lat_alloc(self, dev, max_chunks: int, vae_dim: int, dtype) -> None:
+        """Allocate the in-capture latent accumulator: a [1, 1, max_chunks, vae_dim] buffer written
+        one row per chunk, plus its self-advancing write index.
+
+        ``dtype`` follows the encoder's own output — hardcoding bf16 here would round the latents
+        that the host path carried at full width, which shifts the prefill embeds and diverges the
+        token stream."""
+        self._enc_lat_buf = ttnn.zeros(
+            [1, 1, max_chunks, vae_dim],
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._enc_lat_idx = ttnn.zeros(
+            [1], dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        _shard_grid = ttnn.num_cores_to_corerangeset(1, dev.compute_with_storage_grid_size(), True)
+        self._enc_lat_shard_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_shard_grid, [32, vae_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        # PERSISTENT sharded staging row.  paged_update_cache only accepts a height-sharded L1
+        # input, and converting inside the capture would allocate L1 per replay — the two chunk
+        # graphs would each bake their own address and race whatever else lands there, which is what
+        # corrupted the earlier rows (sparse NaN, last row clean).  Allocate once, copy into it.
+        self._enc_lat_stage = ttnn.to_memory_config(
+            ttnn.zeros([1, 1, 1, vae_dim], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=dev),
+            self._enc_lat_shard_mc,
+        )
+
+    def _enc_scatter(self, out: ttnn.Tensor) -> None:
+        """Write this chunk's last latent row into the accumulator at the device index and advance
+        it — called from INSIDE the chunk capture, so on replay it costs no host dispatch.
+
+        This is what makes keeping the latents on device a win: host-dispatched accumulation is a
+        REGRESSION (measured over 663 chunks: paged_update_cache 887 ms, device concat 2287 ms, vs
+        199 ms for the per-chunk D2H it replaces).  In-capture the write is free, so the 663 D2Hs
+        and the host torch.cat both disappear.  No-op when the accumulator is not allocated, so the
+        captured graph is byte-for-byte the old one with VV_DEV_ENC_LAT=0."""
+        if self._enc_lat_buf is None:
+            return
+        t, d = int(out.shape[2]), int(out.shape[-1])
+        row = ttnn.slice(out, [0, 0, t - 1, 0], [1, 1, t, d], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.copy(input_a=row, input_b=self._enc_lat_stage)  # into the fixed-address sharded row
+        ttnn.experimental.paged_update_cache(
+            self._enc_lat_buf,
+            self._enc_lat_stage,
+            update_idxs_tensor=self._enc_lat_idx,
+            page_table=None,
+        )
+        ttnn.plus_one(self._enc_lat_idx)
 
     def _enc_input(self, chunk: int) -> ttnn.Tensor:
         """The chunk graph's audio input: this chunk's row gathered on device from the pre-uploaded
@@ -530,6 +603,7 @@ class TTVibeVoiceGenerator:
         ttnn.release_trace(self.device, self._enc_final[0])
         self._enc_step = self._enc_final = None
         self._enc_in = self._enc_table = self._enc_idx = None
+        self._enc_lat_buf = self._enc_lat_idx = self._enc_lat_stage = None
         # Free the fixed-address streaming caches too: nothing references their addresses now, and
         # the decode path allocates its own.
         self.acoustic_tok._encoder_tt.reset_cache()
@@ -570,10 +644,21 @@ class TTVibeVoiceGenerator:
                 # Zero the streaming caches IN PLACE (the fresh-alloc state is ttnn.zeros, so this
                 # is exactly equivalent) — reset_cache() would free them out from under the trace.
                 self.acoustic_tok._encoder_tt.reset_cache_inplace()
+                if self._enc_lat_buf is not None:
+                    # Drain the PREVIOUS row's replays before rewinding either index.  The per-chunk
+                    # D2H used to force this sync implicitly every chunk; without it the trace
+                    # replays are in flight (execute_trace is non-blocking) and a host index write
+                    # can land mid-row, so chunks scatter to the wrong slots.
+                    ttnn.synchronize_device(self.device)
                 if self._enc_table is not None:
                     self._enc_upload_row(wav, chunk, n_chunks)
+                if self._enc_lat_buf is not None:
+                    # Rewind the accumulator's write index (the warmup/capture encodes advanced it),
+                    # so this row's chunks land at 0..n_chunks-1.
+                    self._sf_write_int(self._enc_lat_idx, 0)
             else:
                 self.acoustic_tok._encoder_tt.reset_cache()
+            dev_lat = traced and self._enc_lat_buf is not None
             frames: List[torch.Tensor] = []
             pos = 0
             while pos < total_samples:
@@ -603,16 +688,43 @@ class TTVibeVoiceGenerator:
                         use_cache=True,
                         is_final_chunk=is_final,
                     )
-                out = self._latents_from_encode_output(lat_tt)
-                frames.append(out[-1:])
+                if not dev_lat:
+                    out = self._latents_from_encode_output(lat_tt)
+                    frames.append(out[-1:])
+                # else: the replay scattered this chunk's row into the accumulator in-capture
                 pos += n
-            lat = torch.cat(frames, dim=0)
+            if dev_lat:
+                # Drain this row's replays before READING the accumulator (execute_trace is
+                # non-blocking).
+                ttnn.synchronize_device(self.device)
+                # ONE read per voice row, replacing the per-chunk D2H + host torch.cat (663 -> 4
+                # transfers).  Verified bit-identical to the host path on every row.
+                #
+                # The latents come back to host here rather than staying on device for the jitter
+                # and scale/bias: that device variant produced deterministically corrupt noise
+                # (FLT_MAX / NaN on every row but the last) which survived every lifetime, sync and
+                # dtype fix tried, and is not understood.  Reading once per row keeps the whole
+                # transfer win and reuses the proven host arithmetic.
+                lat = (
+                    ttnn.to_torch(
+                        ttnn.slice(
+                            self._enc_lat_buf,
+                            [0, 0, 0, 0],
+                            [1, 1, n_chunks, int(self._enc_lat_buf.shape[-1])],
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                    )
+                    .to(torch.float32)
+                    .reshape(n_chunks, -1)
+                )
+            else:
+                lat = torch.cat(frames, dim=0)
 
         if self.acoustic_fix_std:
             if self._sf_ttnn_randn:
-                # VV_TTNN_RANDN=1: draw the fix-std jitter on device.  ``lat`` is already a host
-                # tensor here (the encode output is D2H'd per chunk), so this adds one D2H per
-                # voice row — the point is to move the RANDOMNESS off torch, not to save time.
+                # VV_TTNN_RANDN=1: draw the fix-std jitter on device.  ``lat`` is a host tensor here,
+                # so this adds one D2H per voice row — the point is to move the RANDOMNESS off
+                # torch, not to save time.
                 jitter = ttnn.to_torch(
                     ttnn.randn(
                         list(lat.shape),
