@@ -271,10 +271,11 @@ side is `✓*` for both directions.
   the A2D unpack-to-dest path, which isn't implemented on Quasar. bf16 only for now.
 - `reconfigure_unary_bcast` (mid-program bcast-type/format switch) is `#ifndef ARCH_QUASAR`-only; Quasar
   re-`init`s per broadcast type instead.
-- No sim/LLK bug surfaced while certifying SCALAR/ROW/COL through the op — all 112 broadcast cases in
-  `test_binary_ng_bcast.py` pass on the QSR sim alongside the 88-case no-bcast regression suite. The one
-  race that DID surface is in the mixed `ROW_A_COL_B` composition (`llk_post` as binary srcA), not in any
-  single-operand dimension above; see the mixed-type note under Table 3.
+- No sim/LLK bug surfaced while certifying SCALAR/ROW/COL through the op — all 130 broadcast cases in
+  `test_binary_ng_bcast.py` pass on the QSR sim (0 skipped) alongside the 88-case no-bcast regression suite.
+  The one race that DID surface was in the mixed `ROW_A_COL_B` composition and was a **simulator**
+  credit-attribution bug (fixed by craq-sim #218), never an LLK or op defect — no single-operand dimension
+  above was implicated; see the mixed-type note under Table 3.
 
 ## Priorities (by model impact)
 
@@ -288,7 +289,8 @@ side is `✓*` for both directions.
 — all sim-certified — plus the arithmetic/`where`/compare-to-zero core (bf16/fp32 add/sub/mul/div now
 sim-certified through both `binary_ng`'s tensor-tensor no-broadcast path AND its tensor-scalar path, the
 latter via a writer-filled RHS tile) and subtile broadcast `unary_bcast` SCALAR/ROW/COL — single-operand
-plus the mixed `ROW_B_COL_A` composition (Table 3) — sim-certified through `binary_ng` itself.
+plus BOTH mixed compositions, `ROW_B_COL_A` and `ROW_A_COL_B` (Table 3) — sim-certified through
+`binary_ng` itself.
 
 ## Closing a gap — the pattern
 

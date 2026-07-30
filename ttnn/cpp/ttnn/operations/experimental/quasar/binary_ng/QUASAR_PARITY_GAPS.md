@@ -2,7 +2,7 @@
 
 Scope: the TILE binary op in `ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/` — tensor-tensor
 `SubtileBroadcastType::NONE`, the single-operand subtile broadcast types (`SCALAR_A/B`, `ROW_A/B`,
-`COL_A/B`), the mixed type `ROW_B_COL_A` (§6), and tensor-scalar (§7). "Gap" = works on Wormhole but does
+`COL_A/B`), both mixed types (`ROW_B_COL_A`, `ROW_A_COL_B`) (§6), and tensor-scalar (§7). "Gap" = works on Wormhole but does
 **not** (yet) work / is not validated on **Quasar**. Branch `dchen/next_bcast_quasar`.
 
 This is the **op-author's view** (gate / structural / arch / test-coverage). For **which LLK primitive
@@ -151,15 +151,15 @@ stride path) · interleaved program-cache-hit. (Uneven height/block shards ARE c
 
 ## 6. Subtile broadcast (`unary_bcast`) — validated on Quasar
 
-Single-operand subtile broadcast (`SCALAR_A/B`, `ROW_A/B`, `COL_A/B`) **and** the mixed type `ROW_B_COL_A`
-are wired through the DFB factory and sim-certified **through the op itself**
+Single-operand subtile broadcast (`SCALAR_A/B`, `ROW_A/B`, `COL_A/B`) **and** both mixed types
+(`ROW_B_COL_A`, `ROW_A_COL_B`) are wired through the DFB factory and sim-certified **through the op itself**
 (`test_binary_ng_bcast.py`), not just the standalone LLK test — see
 `qualification/QUASAR_LLK_GAPS.md` Table 3 for the primitive-level (`unary_bcast`) status.
 
 - **Mechanism (single-operand):** `unary_bcast<BroadcastType::{ROW,COL,SCALAR}>` all lower to the MOVB2D
   srcB→dest datacopy, differentiated only by broadcast constants (`dst_lo`/`bcast0`/`srcb_col_inc`); there
   is no `ELWADD` on the `unary_bcast` path.
-- **Mechanism (mixed `ROW_B_COL_A`):** a HYBRID, deliberately NOT a third `unary_bcast` pass. The ROW
+- **Mechanism (mixed, both directions):** a HYBRID, deliberately NOT a third `unary_bcast` pass. The ROW
   operand goes through compute `unary_bcast<ROW>`; the COL operand is software-filled by the reader
   (`FILL_TILE_WITH_FIRST_COLUMN`, `reader_row_col_mixed_bcast_dfb.cpp`), delivered once per tile-row and
   reused across the row — a reader/compute load-balance that keeps compute at 2 LLK passes. The reader fill
@@ -176,8 +176,8 @@ are wired through the DFB factory and sim-certified **through the op itself**
   independence.
 - **Activation fusion:** lhs/rhs/post × `relu`/`gelu`/`tanh`/`sigmoid` compose with broadcast (`relu` uses
   the SFPU post chain; the PACK_RELU fast path is disabled under subtile broadcast).
-- **Validation:** 112 broadcast cases green on the QSR sim (`test_binary_ng_bcast.py`); 88 no-bcast
-  regression cases green (`test_binary_ng_no_bcast.py`).
+- **Validation:** 130 broadcast cases green on the QSR sim, 0 skipped (`test_binary_ng_bcast.py`); 88
+  no-bcast regression cases green (`test_binary_ng_no_bcast.py`).
 - **Two facts that make this work:** the `bcast.h` Quasar `unary_bcast` branch does not reference
   `DataFormat::UInt32` (Quasar has no uint32 device format — its 32-bit formats are `Float32`/`Int32`; the
   enum slot WH/BH use for `UInt32` is `MxFp4_2x_B` on Quasar) · the Quasar bcast compute inserts
