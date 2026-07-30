@@ -540,6 +540,80 @@ def _normalise_rung(rung) -> str:
     return (str(rung or "").strip().lower().split(":")[-1] or "knob").strip()
 
 
+_MATMUL_SHAPE_PAT = r"(\d+)\s*x\s*(\d+)\s*x\s*(\d+)"
+
+
+def _warm_start_for(model_root, op_code: str):
+    """The pre-pass's PCC-verified (fidelity, dtype) for this op's shape, or None.
+
+    `--matmul-sweep` writes matmul_sweep.json: a table of the best fidelity x dtype per matmul
+    shape, each entry already PCC-gated on device. The optimize loop was told to use it only by
+    prose in run.py::_PROMPT ("Glob for it once ... look up next_target's shape"). Nothing made that
+    happen and nothing recorded whether it did, so a table the agent never opened looked exactly
+    like a table with no matching shape -- the pre-pass could be paid for and silently wasted.
+
+    Resolving it HERE makes the recommendation data on next_target instead of a file the agent has
+    to remember to read. Deliberately narrow: no file, no entries, or no matching shape returns None
+    and the caller behaves exactly as it does today.
+    """
+    import re as _re  # perf_mcp does not import re at module scope
+
+    if not op_code or "matmul" not in str(op_code).lower():
+        return None
+    m = _re.search(_MATMUL_SHAPE_PAT, str(op_code))
+    if not m:
+        return None
+    want = tuple(int(g) for g in m.groups())
+    try:
+        data = json.loads((Path(model_root) / "matmul_sweep.json").read_text())
+    except Exception:  # noqa: BLE001
+        return None
+    entries = data.get("entries") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return None
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        try:
+            if (int(e["m"]), int(e["k"]), int(e["n"])) != want:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        out = {}
+        for k in ("fidelity", "dtype"):
+            if e.get(k):
+                out[k] = e[k]
+        return out or None
+    return None
+
+
+def _warm_start_applied(profile, op_code: str, warm_start):
+    """Did the op ACTUALLY run at the recommended fidelity? True / False / None (unknown).
+
+    Ground truth, not self-report: tracy records MATH FIDELITY per op (tracy_tool.py:487), so the
+    profile says what ran regardless of what anyone claims. record_kernel_attempt takes the agent's
+    word for the config, which is exactly the kind of claim this replaces.
+
+    Returns None -- never False -- when the answer is genuinely unknown: the op is absent from the
+    profile, or the recommendation is dtype-only. Per-op DTYPE is not captured (roofline.py:232
+    reads weight_dtype, which nothing populates), so a dtype recommendation is delivered but cannot
+    be verified this way. Absent evidence must not render as "the agent ignored it".
+    """
+    if not isinstance(profile, dict) or not isinstance(warm_start, dict):
+        return None
+    want = warm_start.get("fidelity")
+    if not want:
+        return None
+    for o in profile.get("top_ops") or []:
+        if not isinstance(o, dict) or o.get("op_code") != op_code:
+            continue
+        got = o.get("fidelity")
+        if not got:
+            return None
+        return str(got).strip().lower() == str(want).strip().lower()
+    return None
+
+
 def _persist_target(t) -> None:
     _LAST_TARGET.clear()
     if isinstance(t, dict):
@@ -3687,6 +3761,17 @@ def termination_check() -> dict:
         if blocking
         else None
     )
+    if next_target:
+        # DELIVER the pre-pass recommendation as data. Only when matmul_sweep.json exists AND holds
+        # this exact shape; otherwise the key is simply absent and nothing downstream changes.
+        _ws = _warm_start_for(_MODEL_ROOT, next_target.get("op"))
+        if _ws:
+            next_target["warm_start"] = _ws
+            next_target["warm_start_note"] = (
+                "matmul-sweep measured this shape EAGER and PCC-gated it: apply %s FIRST on the "
+                "knob:fidelity/knob:dtype rung, then check_pcc + measure_candidate and commit/revert "
+                "as usual -- it is a starting guess, not a verdict." % _ws
+            )
     _persist_target(next_target)
     return {
         "can_stop": can_stop,
