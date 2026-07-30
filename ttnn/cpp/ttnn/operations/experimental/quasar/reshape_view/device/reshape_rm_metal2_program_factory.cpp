@@ -46,7 +46,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMMetalV2ProgramFactory::cre
     uint32_t num_cores_total = total_cores.num_cores();
 
     const auto input_log_shape = input.logical_shape();
-    const auto output_log_shape = output.logical_shape();
+    const auto& output_log_shape = output.logical_shape();
 
     const uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
     const uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
