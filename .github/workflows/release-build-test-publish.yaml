@@ -222,7 +222,7 @@ jobs:
   # have no ordering between them) - it needs its own job gated on the whole
   # matrix. It rebuilds nothing: the release image supplies tt-metal, and the
   # dev image is only a throwaway toolchain for compiling tt-llm-engine's
-  # migration client. Requires the TENSTORRENT_ORG_READ_TOKEN secret to have
+  # migration client. Requires the VLLM_TT_PLUGIN_READ_TOKEN secret to have
   # contents read on the private tenstorrent/tt-llm-engine repo; the job
   # precheck verifies that up front.
   create-prefill-worker-image:

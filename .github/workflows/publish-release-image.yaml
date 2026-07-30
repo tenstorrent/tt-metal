@@ -114,13 +114,13 @@ jobs:
         # read on a private repo - so probe the actual clone permission.
         if: ${{ inputs.image == 'prefill-worker' && !inputs.dry-run }}
         env:
-          GH_TOKEN: ${{ secrets.TENSTORRENT_ORG_READ_TOKEN }}
+          GH_TOKEN: ${{ secrets.VLLM_TT_PLUGIN_READ_TOKEN }}
           IMAGE: ${{ inputs.image }}
         run: |
           set -uo pipefail
           ENGINE_REPO="tenstorrent/tt-llm-engine"
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::Secret TENSTORRENT_ORG_READ_TOKEN is empty or not set." \
+            echo "::error::Secret VLLM_TT_PLUGIN_READ_TOKEN is empty or not set." \
               "The ${IMAGE} image clones the private ${ENGINE_REPO} and" \
               "cannot be built without a read token."
             exit 1
@@ -128,7 +128,7 @@ jobs:
           if ! git ls-remote --exit-code -h \
                 "https://x-access-token:${GH_TOKEN}@github.com/${ENGINE_REPO}.git" HEAD \
                 > /dev/null 2>&1; then
-            echo "::error::TENSTORRENT_ORG_READ_TOKEN cannot read ${ENGINE_REPO}." \
+            echo "::error::VLLM_TT_PLUGIN_READ_TOKEN cannot read ${ENGINE_REPO}." \
               "It is set, so this is a SCOPE problem: the token needs contents read" \
               "on that private repo (classic PAT 'repo', or a fine-grained PAT with" \
               "Contents: Read granted for ${ENGINE_REPO}) - read:org alone is not" \
@@ -248,7 +248,7 @@ jobs:
           # Consumed only by targets declaring a gh_token BuildKit secret
           # (prefill-worker clones the private tenstorrent/tt-llm-engine);
           # empty and unused for every other image.
-          gh-token: ${{ secrets.TENSTORRENT_ORG_READ_TOKEN }}
+          gh-token: ${{ secrets.VLLM_TT_PLUGIN_READ_TOKEN }}
           # Cheap insurance against transient blips - the actual fix for the
           # timeouts we hit is the proxy env forwarded above.
           retries: "2"

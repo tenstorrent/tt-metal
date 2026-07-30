@@ -95,23 +95,71 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify the token can read tt-llm-engine
+      # Which org secret can actually clone the private engine repo is not
+      # discoverable without running a job (secret VALUES are never readable, and
+      # read:org - what the org-read PATs carry - does not imply contents read).
+      # Probe every plausible candidate in ONE run and print a verdict table, so
+      # picking the right secret costs one run rather than one run per guess.
+      # SELECTED_SECRET is the one the build below (and the release job) uses; only
+      # that one failing is fatal.
+      - name: Probe candidate secrets for tt-llm-engine read access
         env:
-          GH_TOKEN: ${{ secrets.TENSTORRENT_ORG_READ_TOKEN }}
+          SELECTED_SECRET: VLLM_TT_PLUGIN_READ_TOKEN
+          VLLM_TT_PLUGIN_READ_TOKEN: ${{ secrets.VLLM_TT_PLUGIN_READ_TOKEN }}
+          TENSTORRENT_ORG_READ_TOKEN: ${{ secrets.TENSTORRENT_ORG_READ_TOKEN }}
+          ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
+          AI_GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
+          TT_METAL_RELEASE_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
+          LLK_UPLIFT_PAT: ${{ secrets.LLK_UPLIFT_PAT }}
+          CODEOWNERS_GROUP_ANALYSIS_PAT: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          RETRY_WORKFLOW_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
         run: |
           set -uo pipefail
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::TENSTORRENT_ORG_READ_TOKEN is empty or not set."
-            exit 1
+          ENGINE_REPO="tenstorrent/tt-llm-engine"
+          CANDIDATES=(
+            VLLM_TT_PLUGIN_READ_TOKEN
+            TENSTORRENT_ORG_READ_TOKEN
+            ORG_READ_GITHUB_TOKEN
+            AI_GH_TOKEN
+            TT_METAL_RELEASE_TOKEN
+            LLK_UPLIFT_PAT
+            CODEOWNERS_GROUP_ANALYSIS_PAT
+            RETRY_WORKFLOW_TOKEN
+          )
+          echo "Read access to ${ENGINE_REPO} by secret:"
+          WORKING=()
+          for name in "${CANDIDATES[@]}"; do
+            value="${!name:-}"
+            if [ -z "$value" ]; then
+              printf '  %-32s EMPTY / not set\n' "$name"
+            elif git ls-remote --exit-code -h \
+                   "https://x-access-token:${value}@github.com/${ENGINE_REPO}.git" HEAD \
+                   > /dev/null 2>&1; then
+              printf '  %-32s CAN READ\n' "$name"
+              WORKING+=("$name")
+            else
+              printf '  %-32s set, but CANNOT read (scope)\n' "$name"
+            fi
+          done
+          echo ""
+          if [ "${#WORKING[@]}" -gt 0 ]; then
+            echo "Secrets that work: ${WORKING[*]}"
+          else
+            echo "::warning::No candidate secret can read ${ENGINE_REPO}. A new token" \
+              "with contents read on that repo has to be provisioned."
           fi
-          if ! git ls-remote --exit-code -h \
-                "https://x-access-token:${GH_TOKEN}@github.com/tenstorrent/tt-llm-engine.git" HEAD \
-                > /dev/null 2>&1; then
-            echo "::error::TENSTORRENT_ORG_READ_TOKEN is set but cannot read" \
-              "tenstorrent/tt-llm-engine - it needs contents read on that private repo."
-            exit 1
-          fi
-          echo "Token can read tenstorrent/tt-llm-engine."
+          # Only the secret the build actually uses is fatal.
+          for name in "${WORKING[@]}"; do
+            if [ "$name" = "$SELECTED_SECRET" ]; then
+              echo "Selected secret ${SELECTED_SECRET} can read ${ENGINE_REPO} - proceeding."
+              exit 0
+            fi
+          done
+          echo "::error::Selected secret ${SELECTED_SECRET} cannot read ${ENGINE_REPO}." \
+            "Point gh-token at one of the working secrets listed above (in" \
+            ".github/workflows/publish-release-image.yaml and this file), or provision" \
+            "a token with contents read on ${ENGINE_REPO}."
+          exit 1
 
       - name: Verify the release-models base exists
         run: |
@@ -155,6 +203,6 @@ jobs:
         with:
           targets: prefill-worker
           set-lines: ${{ steps.bake.outputs.set }}
-          gh-token: ${{ secrets.TENSTORRENT_ORG_READ_TOKEN }}
+          gh-token: ${{ secrets.VLLM_TT_PLUGIN_READ_TOKEN }}
           retries: "2"
           retry-delay-seconds: "15"
