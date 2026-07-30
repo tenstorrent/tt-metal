@@ -75,6 +75,7 @@ def build_and_serialize_kv_chunk_table(
     chunk_size_global,
     path,
     index_kv_cache=None,
+    tp_axis=None,
 ) -> str:
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
@@ -90,7 +91,12 @@ def build_and_serialize_kv_chunk_table(
 
     ``index_kv_cache`` (sparse/DSA models only): when given, a single MERGED table describes BOTH
     caches — config 0 = the KVPE cache, config 1 = the index-key cache — sharing one device-group
-    side table. None (dense models) → the usual single-config table over the KVPE cache alone."""
+    side table. None (dense models) → the usual single-config table over the KVPE cache alone.
+
+    ``tp_axis`` (GLM-5.2 KV dedup): None (default) describes the TP-REPLICATED cache — one device group
+    per SP row. When set, the caches are additionally sharded across TP, so the table addresses each
+    (row, col) device individually (singleton groups, 1/tp-sized per-chunk ranges). It MUST agree with
+    the tp_axis the caches were allocated with and the write op wrote, or every address is wrong."""
     assert chunk_size_global == PREFILL_CHUNK_OUTPUT_TOKENS, (
         f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
         f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but chunk_size_global={chunk_size_global}. "
@@ -107,9 +113,17 @@ def build_and_serialize_kv_chunk_table(
             num_layers=num_layers,
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
+            tp_axis=tp_axis,
             num_users=num_users,
             path=path,
         )
+
+    # Only the sparse (DSA) path TP-shards its KV (ttMLA asserts tp_shard_kv off on the dense path), so a
+    # single-config (dense) table with tp_axis set would be a caller mismatch, not a layout to support.
+    assert tp_axis is None, (
+        "tp_axis is only supported on the merged sparse/DSA table (index_kv_cache given); "
+        f"got tp_axis={tp_axis} with a single-config dense KVPE cache."
+    )
 
     def _builder(*, config, chunk_size_bytes, num_users):
         return create_kv_chunk_address_table_kimi(
@@ -135,7 +149,7 @@ def build_and_serialize_kv_chunk_table(
 
 
 def _build_and_serialize_merged_kv_chunk_table(
-    *, mesh_device, caches, seq_len, num_layers, mesh_shape, sp_axis, num_users, path
+    *, mesh_device, caches, seq_len, num_layers, mesh_shape, sp_axis, num_users, path, tp_axis=None
 ) -> str:
     """Sparse (DSA) path: build ONE KvChunkAddressTable holding BOTH caches instead of two tables —
     config 0 = the KVPE cache, config 1 = the index-key cache. Each config carries its own
@@ -172,6 +186,9 @@ def _build_and_serialize_merged_kv_chunk_table(
             chunk_size_bytes=cfg.chunk_size_bytes,
             num_users=num_users,
             config_id=config_id,
+            # Both caches are allocated with the same tp_axis, so both configs get the same 32 singleton
+            # device groups (add_device_group dedups, so they are registered once and shared).
+            tp_axis=tp_axis,
         )
 
     return serialize_prebuilt_kv_chunk_table(table=table, path=path)
