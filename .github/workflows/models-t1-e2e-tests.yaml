@@ -44,7 +44,6 @@ on:
           - "bh_p300 (P300)"
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
-          - "bh_sc4 (BH Supercluster 4)"
           - "bh_sc4-mgd (BH Supercluster 4 / MGD)"
       platform:
         required: false

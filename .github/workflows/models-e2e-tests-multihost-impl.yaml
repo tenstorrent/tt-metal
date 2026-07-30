@@ -1,6 +1,6 @@
 name: "[internal] Models end-to-end tests multihost (exabox) impl"
 
-# Multihost (exabox) model-unit tests. Modeled on the multihost job in
+# Multihost (exabox) e2e tests. Modeled on the multihost job in
 # demo-sp-multihost-impl.yaml: instead of running inside a single-host container, each leg
 # provisions an exabox cluster via the ttop composite actions, fans the build/wheel out to every
 # host with `mpirun --pernode`, resets + validates the cluster, runs the test (typically via
