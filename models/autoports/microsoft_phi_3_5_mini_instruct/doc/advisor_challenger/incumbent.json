@@ -1,0 +1,57 @@
+{
+  "cell_tag": "microsoft_phi_3_5_mini_instruct-optimized_decoder-noadvise",
+  "commit": "81826e4f3b70c477a738b3b43f8a7a02d5635b9b",
+  "harness": "models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-1-mesh_device0]",
+  "harness_environment": {
+    "PHI35_REAL_WEIGHTS": "1"
+  },
+  "decode_batch": 1,
+  "context": 128,
+  "trace_replays_per_repeat": 10,
+  "metric": "PERF_RESULT mean_ms",
+  "repeats_ms": [
+    0.466496,
+    0.468089,
+    0.466404
+  ],
+  "incumbent_ms": 0.466404,
+  "noise_floor_ms": 0.001685,
+  "oracle": {
+    "kind": "real_weight_recorded_activation_and_matching_nonzero_prefix_cache",
+    "threshold_pcc": 0.995,
+    "repeat_pcc": [
+      0.9992643136975439,
+      0.9992643136975439,
+      0.9992643136975439
+    ],
+    "passed": true
+  },
+  "shipped_policy_source": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/optimized_decoder/tracy_final/decode_b1_perf_report.csv, corroborated by incumbent_runs/run_{1,2,3}.log OPT_POLICY execution records",
+  "shipped_policy": {
+    "projection_precision": "BFP4",
+    "attention_math_fidelity": "LoFi",
+    "mlp_math_fidelity": "LoFi",
+    "kv_cache_dtype": "BFLOAT8_B",
+    "decode_core_grid": [
+      8,
+      1
+    ],
+    "qkv_in0_block_w": 12,
+    "o_proj_in0_block_w": 12,
+    "gate_up_in0_block_w": 6,
+    "down_in0_block_w": 16,
+    "projection_weights_dram_sharded": true,
+    "residual_layout": "L1_WIDTH_SHARDED",
+    "packed_qkv": true,
+    "packed_gate_up": true,
+    "fused_paged_cache_update": true,
+    "explicit_decode_sdpa": false,
+    "fused_rope": false
+  },
+  "shipped_weight_dtypes": {
+    "qkv": "BFLOAT4_B",
+    "o_proj": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B"
+  }
+}
