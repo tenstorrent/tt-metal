@@ -109,21 +109,19 @@ bool EventQuery(const MeshEvent& event);
 MeshTraceId BeginTraceCapture(MeshCommandQueue& mesh_cq);
 
 void Synchronize(
-    MeshDevice* device,
+    MeshDevice& device,
     ttsl::optional_reference<MeshCommandQueue> mesh_cq,
     ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 [[deprecated("Use BeginTraceCapture(MeshCommandQueue&) instead. Pass the command queue object, not a raw id.")]]
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
-// Intentionally a function template so the non-template optional_reference<MeshCommandQueue> overload above wins
-// overload resolution for Synchronize(device, std::nullopt, ...) instead of being ambiguous with it. A raw
-// std::optional<uint8_t>/uint8_t argument still selects this deprecated overload (and warns). Defined in
-// distributed.cpp, where MeshDevice is complete, and explicitly instantiated there for both values.
-template <bool deprioritize_selection = true>
+// Takes the device by pointer, so the reference-taking overload above is the only candidate for a MeshDevice lvalue
+// and this one the only candidate for a MeshDevice*. That keeps Synchronize(device, std::nullopt, ...) unambiguous
+// without any tie-breaking machinery.
 [[deprecated(
-    "Use Synchronize(MeshDevice*, ttsl::optional_reference<MeshCommandQueue>, ...) instead. Pass the command queue "
-    "object (or std::nullopt for all queues), not a raw id.")]]
+    "Use Synchronize(MeshDevice&, ttsl::optional_reference<MeshCommandQueue>, ...) instead. Pass the device by "
+    "reference and the command queue object (or std::nullopt for all queues), not a raw id.")]]
 void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids = {});

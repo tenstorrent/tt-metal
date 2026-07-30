@@ -159,39 +159,31 @@ MeshTraceId BeginTraceCapture(MeshCommandQueue& mesh_cq) {
 }
 
 void Synchronize(
-    MeshDevice* device,
+    MeshDevice& device,
     ttsl::optional_reference<MeshCommandQueue> mesh_cq,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    if (!device->is_initialized()) {
+    if (!device.is_initialized()) {
         return;
     }
     if (mesh_cq.has_value()) {
         mesh_cq.value().finish(sub_device_ids);
     } else {
-        for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-            device->mesh_command_queue(cq_id).finish(sub_device_ids);
+        for (uint8_t cq_id = 0; cq_id < device.num_hw_cqs(); ++cq_id) {
+            device.mesh_command_queue(cq_id).finish(sub_device_ids);
         }
     }
 }
 
-template <bool deprioritize_selection>
 void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (!device->is_initialized()) {
         return;
     }
     if (cq_id.has_value()) {
-        device->mesh_command_queue(cq_id).finish(sub_device_ids);
+        Synchronize(*device, device->mesh_command_queue(cq_id), sub_device_ids);
     } else {
-        for (uint8_t id = 0; id < device->num_hw_cqs(); ++id) {
-            device->mesh_command_queue(id).finish(sub_device_ids);
-        }
+        Synchronize(*device, std::nullopt, sub_device_ids);
     }
 }
-
-// The template parameter exists only to deprioritize this overload against the optional_reference one in overload
-// resolution; both of its values are instantiated here.
-template void Synchronize<true>(MeshDevice*, std::optional<uint8_t>, ttsl::Span<const SubDeviceId>);
-template void Synchronize<false>(MeshDevice*, std::optional<uint8_t>, ttsl::Span<const SubDeviceId>);
 
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
     auto trace_id = MeshTrace::next_id();
