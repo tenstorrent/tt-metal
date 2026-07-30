@@ -340,6 +340,8 @@ The equivalent prefill command uses batch 32, sequence 128, and
   `b495df82d00623fac85d585123cd7a1568fc03ed`.
 - Provenance-clarification commit:
   `446a47cf5bf1a9b9cd9956a13b366d0ad124cb98`.
-- Post-review evidence-log commit: recorded by the following finalization
-  commit because a commit cannot contain its own SHA.
+- Post-review evidence-log commit:
+  `f8b538e1f34b7c839e76d4035136a2018fb4276c`.
+- SHA-recording finalization commit: this document's HEAD, reported in the
+  stage handoff because a commit cannot contain its own SHA.
 - Push: never performed.
