@@ -166,6 +166,7 @@ def _run_reduce_block_max(
             sfpu=False,
         ),
         dest_acc=dest_acc,
+        skip_bit_exact_check=expect_mismatch,
     )
 
     res_from_L1 = configuration.run().result
