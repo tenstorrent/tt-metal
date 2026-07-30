@@ -111,6 +111,92 @@ def _merge_bounded_boundary_fill(tt_x, valid_seq_len, modulo):
     return out
 
 
+def _left_pad_kv_to_hist(tt_k, tt_v, hist, head_dim, *, deallocate_inputs=False):
+    """Left-pad K/V with zeros to ``hist`` rows (causal window right-aligned).
+
+    ``ttnn.pad`` cannot front-pad TILE tensors on device. Used by the sliding
+    SDPA consumer when a prior short stash is narrower than ``hist``. Avoid
+    calling mid-trace-capture (``ttnn.zeros`` host write). When already
+    ``>= hist``, returns the last ``hist`` rows (cloned if truncated).
+    """
+    if tt_k is None or tt_v is None or hist is None or hist <= 0:
+        return tt_k, tt_v
+    kseq = int(tt_k.shape[-2])
+    nkv = int(tt_k.shape[1])
+    if kseq == hist:
+        return tt_k, tt_v
+    if kseq > hist:
+        start = kseq - hist
+        k_s = ttnn.slice(tt_k, [0, 0, start, 0], [1, nkv, kseq, head_dim])
+        v_s = ttnn.slice(tt_v, [0, 0, start, 0], [1, nkv, kseq, head_dim])
+        k_out = ttnn.clone(k_s, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v_out = ttnn.clone(v_s, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k_s.deallocate(True)
+        v_s.deallocate(True)
+        if deallocate_inputs:
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+        return k_out, v_out
+    pad = hist - kseq
+    zero_shape = [1, nkv, pad, head_dim]
+    k_zeros = ttnn.zeros(
+        zero_shape,
+        dtype=tt_k.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=tt_k.device(),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    v_zeros = ttnn.zeros(
+        zero_shape,
+        dtype=tt_v.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=tt_v.device(),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    k_out = ttnn.concat([k_zeros, tt_k], dim=2)
+    v_out = ttnn.concat([v_zeros, tt_v], dim=2)
+    k_zeros.deallocate(True)
+    v_zeros.deallocate(True)
+    if deallocate_inputs:
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+    return k_out, v_out
+
+
+def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, *, allow_short_pad=True):
+    """Clone the last up-to-``hist`` K/V rows for the next sliding prefill chunk.
+
+    vLLM APC / token-chunked prefill often delivers a first scheduler grant
+    shorter than ``sliding_window`` (e.g. ``chunk_start`` remnant 128/384 with
+    ``hist=1024``). Skipping the stash when ``kseq < hist`` leaves the next
+    continuation without ``sliding_tail_in`` (shield QB2 hang / #51186).
+
+    Always clone at least the available rows (safe mid-trace-capture). Eager
+    paths may left-pad to ``hist`` here; traced short buckets keep a short
+    clone and the consumer pads via ``_left_pad_kv_to_hist``.
+    """
+    if tt_k is None or tt_v is None or hist is None or hist <= 0:
+        return None
+    kseq = int(tt_k.shape[-2])
+    if valid_seq_len is not None:
+        kseq = min(kseq, max(0, int(valid_seq_len)))
+    if kseq <= 0:
+        return None
+    nkv = int(tt_k.shape[1])
+    take = min(kseq, hist)
+    tail_start = kseq - take
+    k_part = ttnn.slice(tt_k, [0, 0, tail_start, 0], [1, nkv, kseq, head_dim])
+    v_part = ttnn.slice(tt_v, [0, 0, tail_start, 0], [1, nkv, kseq, head_dim])
+    if take < hist and allow_short_pad:
+        # Eager only: traced capture forbids ttnn.zeros (host write).
+        k_part, v_part = _left_pad_kv_to_hist(k_part, v_part, hist, head_dim, deallocate_inputs=True)
+    k_out = ttnn.clone(k_part, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    v_out = ttnn.clone(v_part, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    k_part.deallocate(True)
+    v_part.deallocate(True)
+    return (k_out, v_out)
+
+
 def flush_deferred_bounded_fills(layers):
     """Merge + ``paged_fill_cache`` for stashed bounded ring fills.
 
@@ -442,9 +528,34 @@ def _prefill_forward_single(
         use_persistent_tail = isinstance(chunk_start_idx, ttnn.Tensor)
         if sliding_tail_in is not None:
             k_tail, v_tail = sliding_tail_in
-            nqh = tt_q.shape[1]
-            # Filler Q rows (outputs discarded); reuse the chunk's leading rows.
-            q_pad = ttnn.slice(tt_q, [0, 0, 0, 0], [1, nqh, hist, config.head_dim])
+            # Traced short first-buckets stash an unpadded tail (< hist); pad
+            # here so concat stays square. Eager APC often already padded.
+            if int(k_tail.shape[-2]) != hist:
+                k_tail, v_tail = _left_pad_kv_to_hist(
+                    k_tail,
+                    v_tail,
+                    hist,
+                    config.head_dim,
+                    # Never free persistent ring buffers; eager stashes are owned here.
+                    deallocate_inputs=not use_persistent_tail,
+                )
+            nqh = int(tt_q.shape[1])
+            # Filler Q rows (outputs discarded). Prefer the chunk's leading
+            # rows when ``seq_len >= hist``; APC remnant chunks can be shorter
+            # than ``hist`` (e.g. 128/384), so left-pad with zeros instead of
+            # slicing past ``tt_q`` (TT_FATAL Ends hist > tensor seq).
+            if seq_len >= hist:
+                q_pad = ttnn.slice(tt_q, [0, 0, 0, 0], [1, nqh, hist, config.head_dim])
+            else:
+                q_zeros = ttnn.zeros(
+                    [1, nqh, hist - seq_len, config.head_dim],
+                    dtype=tt_q.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=tt_q.device(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                q_pad = ttnn.concat([q_zeros, tt_q], dim=2)
+                q_zeros.deallocate(True)
             q_cat = ttnn.concat([q_pad, tt_q], dim=2)
             k_cat = ttnn.concat([k_tail, tt_k], dim=2)
             v_cat = ttnn.concat([v_tail, tt_v], dim=2)
@@ -494,20 +605,23 @@ def _prefill_forward_single(
                 compute_kernel_config=sdpa_ckc,
             )
         # Save this chunk's last ``hist`` K/V tokens as the next chunk's tail.
-        # Slices may be views of tt_k/tt_v; clone so the tail outlives parent
-        # dealloc across vLLM cross-call chunked prefill (#51041).
-        kseq = tt_k.shape[-2]
-        nkv = tt_k.shape[1]
-        tail_start = max(0, kseq - hist)
-        k_tail_out = ttnn.clone(
-            ttnn.slice(tt_k, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim]),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # Slices may be views of tt_k/tt_v; clone (+ left-pad if short) so the
+        # tail outlives parent dealloc across vLLM cross-call chunked prefill
+        # (#51041) and APC short-first-grant continuations.
+        sliding_tail_stash = _clone_sliding_prefill_tail(
+            tt_k,
+            tt_v,
+            hist,
+            config.head_dim,
+            valid_seq_len=valid_seq_len,
+            # Tensor chunk_start_idx ⇒ traced multi-chunk; skip short-pad alloc.
+            allow_short_pad=not use_persistent_tail,
         )
-        v_tail_out = ttnn.clone(
-            ttnn.slice(tt_v, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim]),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        if use_persistent_tail:
+        if sliding_tail_stash is None:
+            k_tail_out = v_tail_out = None
+        else:
+            k_tail_out, v_tail_out = sliding_tail_stash
+        if use_persistent_tail and k_tail_out is not None:
             # Bind fixed DRAM addresses into the graph so middle-chunk replay
             # sees the previous chunk's window without re-running Python.
             # Prefer the capture-time buffers stashed on config so replay copies
@@ -532,7 +646,7 @@ def _prefill_forward_single(
                 # First persistent alloc: clones above already own independent DRAM.
                 config.sliding_prefill_tail_persistent = (k_tail_out, v_tail_out)
                 sliding_tail_out = (k_tail_out, v_tail_out)
-        else:
+        elif k_tail_out is not None:
             sliding_tail_out = (k_tail_out, v_tail_out)
     elif need_cross_chunk:
         # Full-attention chunk N>0: attend the full prefix already filled in the
@@ -594,12 +708,13 @@ def _prefill_forward_single(
     # generator-level ``sliding_chunked``. vLLM token-chunked prefill
     # (``enable_chunked_prefill``) often runs the first scheduler chunk through
     # the single-chunk path (no ``chunk_page_table``); without this stash the
-    # next call's sliding SDPA has no prior-window K/V. When that next chunk is
-    # shorter than ``sliding_window`` (remnant after ``max_num_batched_tokens``),
-    # decode collapses — LB 12B ~9k cliff (#51186). Clone so the tail outlives
-    # tt_k/tt_v dealloc (#51041). Default prefill-trace buckets omit 4096 so
-    # the common vLLM chunk size stays eager and this Python-side stash stays
-    # live (see ``_DEFAULT_TRACE_PREFILL_SEQ_LENS``).
+    # next call's sliding SDPA has no prior-window K/V — including when the
+    # first grant is shorter than ``sliding_window`` (APC remnant / short
+    # ``max_num_batched_tokens`` slice). Left-pad short tails to ``hist`` so
+    # the continuation concat stays square (#51186). Clone so the tail
+    # outlives tt_k/tt_v dealloc (#51041). Default prefill-trace buckets omit
+    # 4096 so the common vLLM chunk size stays eager and this Python-side
+    # stash stays live (see ``_DEFAULT_TRACE_PREFILL_SEQ_LENS``).
     if (
         sliding_tail_out is None
         and config.is_sliding
@@ -608,22 +723,19 @@ def _prefill_forward_single(
         and shared_kv is None
     ):
         hist = ((sliding_window + 31) // 32) * 32
-        kseq = int(tt_k.shape[-2])
-        if valid_seq_len is not None:
-            kseq = min(kseq, max(0, int(valid_seq_len)))
-        if kseq >= hist:
-            nkv = tt_k.shape[1]
-            tail_start = kseq - hist
-            sliding_tail_out = (
-                ttnn.clone(
-                    ttnn.slice(tt_k, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim]),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                ),
-                ttnn.clone(
-                    ttnn.slice(tt_v, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim]),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                ),
-            )
+        # Short-pad uses ttnn.zeros (host write) — illegal mid-trace-capture.
+        # Cold traced single-chunk prepares chunk_start_idx=None; eager APC /
+        # token-chunked prefill passes a host int (incl. 0). Device-tensor
+        # offsets are traced multi-chunk (chunk sizes ≥ hist; no short-pad).
+        allow_short_pad = chunk_start_idx is not None and not isinstance(chunk_start_idx, ttnn.Tensor)
+        sliding_tail_out = _clone_sliding_prefill_tail(
+            tt_k,
+            tt_v,
+            hist,
+            config.head_dim,
+            valid_seq_len=valid_seq_len,
+            allow_short_pad=allow_short_pad,
+        )
     tt_q.deallocate(True)
     kept_kv = None
     if shared_kv is None and not keep_kv:
