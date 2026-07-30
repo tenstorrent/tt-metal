@@ -22,7 +22,7 @@ steady-state tok/s), not just isolated-op timing.
 
 | lever | flag | isolated micro | **traced e2e @48** | landed |
 |---|---|---|---|---|
-| **HIGH-4 full-canvas RMSNorm** | `DG_NORM_FULLCANVAS` | **9.8× / norm**, PCC 0.999998 | **17.86 → 20.68 t/s (+15.8%)** | **flip gate FAILED; ineligible for decision-preserving default** (see `norm_fullcanvas_flip_gate.md`) |
+| **HIGH-4 full-canvas RMSNorm** | `DG_NORM_FULLCANVAS` | **9.8× / norm**, ~~PCC 0.999998~~ **see below — the real per-element delta is up to 2.24e-2 (5.73 bf16 ULP), measured 2026-07-30** | **17.86 → 20.68 t/s (+15.8%)** | **flip gate FAILED; ineligible for decision-preserving default** (see `norm_fullcanvas_flip_gate.md`) |
 | HIGH-1 gather + HIGH-2 down L1 | `DG_MOE_L1` | MoE fwd −3.2% (gather −57%), bit-identical | 18.13→18.02 (−0.6%), 53.2→53.4 @12 (wash) | opt-in, default off |
 | MED-5 gate/up L1 | `DG_MOE_L1=chain` | `batched_experts` flat | no-op by construction | no |
 | HIGH-3 residual-stream L1 | — | coupled (every consumer takes DRAM) | not measured standalone | no |
@@ -60,6 +60,33 @@ same traced RUN-first argmax path (run-to-run block latency varies ~1.5%; the no
 | @12 | 49.8–53.2 | 4.81–5.14 | `24393ba7aad6077c` | worklog `traced_tuned_s12` |
 
 ## HIGH-4 — full-canvas RMSNorm (`tt/denoise_forward.py`, `DG_NORM_FULLCANVAS`) — the win
+
+> **CORRECTION 2026-07-30 — the "PCC 0.999998 / ~2e-6 reduction-order" figure in this section is
+> wrong by about four orders of magnitude, and it never had a measurement behind it.**
+> `bench_norm_fullcanvas.py` computes PCC as an fp32 dot product and reports values ABOVE 1.0
+> elsewhere in its own table (1.000015, 1.000050) — impossible for a Pearson correlation, so its
+> resolution floor is ~5e-5, 25x coarser than the number it was cited for. Measured directly on QB2
+> at the shipped shape ([1,1,256,2816] bf16) by
+> `tests/test_device_norm_fullcanvas.py`:
+>
+> | arm | rows differing | elements | rel p99 | rel max | bf16 ULP max |
+> |---|---|---|---|---|---|
+> | weighted, `block_h=8` vs 8x `block_h=1` (same 88-core grid) | 61/256 | 19.43% | 1.14e-2 | **2.24e-2** | **5.73** |
+> | scaleless, 8-core/`block_w=11` vs 88-core/`block_w=1` | 79/256 | 24.80% | 1.06e-2 | 1.56e-2 | 4.00 |
+>
+> The `block_h` mechanism named here IS real (a static reading of the kernel predicts bit-identity
+> and is wrong), and a few-ULP perturbation in every weighted norm compounding over 30 layers x
+> 16-48 steps is a sufficient mechanism for the ~85% committed-token divergence in
+> `norm_fullcanvas_flip_gate.md`. That gate's CONCLUSION (keep opt-in) is better supported by this
+> measurement than by the number it quoted — but note the gate itself ran on the token-gather MoE
+> that was deleted in `7417bd7d69d`, so its 0.145 committed-match must be re-measured before it is
+> cited again either way.
+>
+> Separately fixed 2026-07-30: `_chunked_norm_forward` tested `with_scale is False` AFTER attempting
+> the full-canvas path, so with the flag on the MoE router's weightless norm was re-sharded from
+> 8 cores/`block_w=11` to 88 cores/`block_w=1`. That was never intended, but as the table shows it is
+> the SMALLER of the two deltas — correcting it does not make the flag bit-identical.
+
 
 **Mechanism.** DiffusionGemma chunks the 256-row canvas into 8× 32-row slices
 (`_chunked_norm_forward`/`_rms_norm_dram`) **specifically so each slice hits gemma4 RMSNorm's

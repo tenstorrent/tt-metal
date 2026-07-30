@@ -302,6 +302,53 @@ def test_chunked_norm_forward_uses_sharded_scaleless_norm(monkeypatch):
     assert calls == [([1, 1, 96, 2816], 1e-6, 32)]
 
 
+def test_fullcanvas_must_not_capture_the_scaleless_router_norm(monkeypatch):
+    """DG_NORM_FULLCANVAS must leave the weightless MoE-router norm on its own path.
+
+    The scaleless test used to sit BELOW the full-canvas attempt, so with the flag on the router norm
+    was routed into _fullcanvas_norm and never reached _rms_norm_dram -- silently swapping its
+    reduction topology from 8 cores / block_w=11 / single-stage to 88 cores / block_w=1 / two-stage.
+    A flag named "full canvas" re-sharding an unrelated norm by ordering alone is the bug; this pins
+    the ordering. The previous test does not catch it because it never sets the flag.
+    """
+    monkeypatch.setenv("DG_NORM_FULLCANVAS", "1")
+    calls = []
+
+    def fake_rms_norm_dram(tensor, *, epsilon, chunk_size):
+        calls.append((tensor.shape, epsilon, chunk_size))
+        return _FakeTensor(tensor.shape)
+
+    def fail_fullcanvas(norm, hidden_states):
+        raise AssertionError("a scaleless norm must not reach _fullcanvas_norm")
+
+    monkeypatch.setattr(DF, "_rms_norm_dram", fake_rms_norm_dram)
+    monkeypatch.setattr(DF, "_fullcanvas_norm", fail_fullcanvas)
+    norm = SimpleNamespace(with_scale=False, tt_weight=None, eps=1e-6)
+
+    out = _chunked_norm_forward(norm, _FakeTensor([1, 1, 256, 2816]))
+
+    assert out.shape == [1, 1, 256, 2816]
+    assert calls == [([1, 1, 256, 2816], 1e-6, 32)]
+
+
+def test_fullcanvas_still_takes_weighted_norms(monkeypatch):
+    """The other half of the ordering: a WEIGHTED norm must still reach the full-canvas path."""
+    monkeypatch.setenv("DG_NORM_FULLCANVAS", "1")
+    seen = []
+
+    def fake_fullcanvas(norm, hidden_states):
+        seen.append(hidden_states.shape)
+        return _FakeTensor(hidden_states.shape)
+
+    monkeypatch.setattr(DF, "_fullcanvas_norm", fake_fullcanvas)
+    norm = SimpleNamespace(with_scale=True, tt_weight=object(), eps=1e-6)
+
+    out = _chunked_norm_forward(norm, _FakeTensor([1, 1, 256, 2816]))
+
+    assert out.shape == [1, 1, 256, 2816]
+    assert seen == [[1, 1, 256, 2816]]
+
+
 def test_denoise_hidden_forward_reads_and_deallocates_lazy_prompt_sources(monkeypatch):
     calls = []
     prompt_sources = [

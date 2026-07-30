@@ -28,6 +28,29 @@ the two sensitive metrics (entropy PCC, accept IoU) full-canvas is statistically
 from the already-rejected bfp8 experts lever** (0.659/0.504 vs 0.631/0.501). So the decisions do NOT
 hold within the #48291 bar vs the chunked default → **keep opt-in.**
 
+> **TWO CORRECTIONS 2026-07-30 — read before citing this gate.**
+>
+> 1. **The magnitude below is wrong.** "PCC 0.999998 / a ~2e-6 bf16 reduction-ORDER difference" came
+>    from `bench_norm_fullcanvas.py`, which reports PCC > 1.0 elsewhere in its own table and so never
+>    had that resolution. Measured directly at the shipped shape
+>    (`tests/test_device_norm_fullcanvas.py`, QB2): the weighted norms differ on 19.43% of elements,
+>    rel p99 1.14e-2, **max 2.24e-2 = 5.73 bf16 ULP**. Four orders of magnitude larger. The
+>    `block_h` mechanism named below is nonetheless REAL; the amplification story still holds, it
+>    just starts from a few ULPs rather than from 2e-6.
+> 2. **This gate's own premise is void.** It ran with `DG_SPARSE_MOE=1, DG_SPARSE_MOE_TUNED=1`, i.e.
+>    on the token-gather denoise MoE deleted in `7417bd7d69d` because it does not let the trajectory
+>    converge at all (entropy plateaus ~0.46 against a 0.005 halt threshold). Both arms sat on that
+>    baseline — which is exactly why both trajectories here are described as
+>    "coherent-then-degenerate". The same mistake voided the pad-fix revert. **`committed_match =
+>    0.145` cannot be cited for or against the flag until it is re-measured on the current path**,
+>    where early halt fires (100% halted, mean 16.1 steps) — the very condition this document names
+>    as the one that would make the flip safe.
+>
+> What has NOT changed: the flag is still default OFF, and the burden of proof is still on it. A
+> 71-question GPQA prefix (2026-07-29: score 76.06% -> 78.87%, guard 2 -> 1, degenerate 2 -> 1,
+> drift-any 3 -> 4 with 1 fixed / 2 new) is neither of the two things this document says a flip
+> requires, and on the project's own >2% non-English gating metric it moves 0/71 -> 1/71.
+
 ## Why a 2e-6/norm change flips 85% of committed tokens
 
 This is #48291 chaos-amplification, not a full-canvas bug. Per-norm PCC is 0.999998 (a ~2e-6 bf16

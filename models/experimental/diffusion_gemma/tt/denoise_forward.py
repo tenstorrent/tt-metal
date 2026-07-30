@@ -556,12 +556,20 @@ def _fullcanvas_norm(norm, hidden_states):
 
 
 def _chunked_norm_forward(norm, hidden_states, *, chunk_size: int = 32):
+    # A SCALELESS norm keeps its own path, and this test has to come FIRST. It used to sit below the
+    # full-canvas attempt, so with DG_NORM_FULLCANVAS on the MoE router's weightless norm was captured
+    # by _fullcanvas_norm and never reached _rms_norm_dram -- silently swapping its reduction topology
+    # from 8 cores / block_w=11 / single-stage (_width_sharded_rms_norm) to 88 cores / block_w=1 /
+    # two-stage. That is a structurally different summation tree, not the block_h difference the flag
+    # is documented as making, and nothing asked for it: _fullcanvas_norm was written for the WEIGHTED
+    # norms and swallowed this one by ordering alone. Whether or not it explains the flag's output
+    # delta, a flag named "full canvas" must not also re-shard an unrelated norm.
+    if getattr(norm, "with_scale", True) is False and getattr(norm, "tt_weight", None) is None:
+        return _rms_norm_dram(hidden_states, epsilon=norm.eps, chunk_size=chunk_size)
     if _norm_fullcanvas_enabled() and hidden_states.shape[-2] > chunk_size:
         out = _fullcanvas_norm(norm, hidden_states)
         if out is not None:
             return out
-    if getattr(norm, "with_scale", True) is False and getattr(norm, "tt_weight", None) is None:
-        return _rms_norm_dram(hidden_states, epsilon=norm.eps, chunk_size=chunk_size)
     seq_len = hidden_states.shape[-2]
     if seq_len <= chunk_size:
         return norm.forward(hidden_states)
