@@ -59,6 +59,7 @@ bool pick_plan(
     uint32_t Sm,
     uint32_t kb,
     uint32_t nsb,
+    const plan::FusionInputs& fu,
     PickGeo& g) {
     // Share the planner's bank-interval feasibility so config=None never selects a shape build_plan()
     // will later reject (picker/planner parity). This constraint is a function of Nt only.
@@ -85,10 +86,10 @@ bool pick_plan(
     if (g.wasteN > 0.20) {
         return false;
     }
-    const uint32_t cb0 = g.Ktl * g.Mblk * kTileBytesBf16, cb1 = 4u * kb * nsb * kTileBytesBf16,
-                   cb2 = 2u * g.Mblk * nsb * kTileBytesBf16, cb3 = g.Mblk * nsb * kTileBytesFp32,
-                   cb7 = 2u * g.Mblk * nsb * kTileBytesBf16;
-    return (cb0 + cb1 + cb2 + cb3 + cb7) <= kL1BudgetBytes;
+    // L1 via the shared authoritative sizer (plan::compute_cb_sizes), so the picker can never select a config
+    // that build_plan() then rejects: it accounts for the chain's c_7 OR the reduce-scatter ring's c_8..c_10
+    // (whichever the gate selects) plus any fused operand CBs c_4..c_6.
+    return plan::compute_cb_sizes(Pk, Kt, g.Mblk, g.Ktl, nsb, kb, fu).l1_bytes <= kL1BudgetBytes;
 }
 
 double pick_cost(uint32_t Kt, uint32_t Nt, uint32_t kb, uint32_t nsb, const PickGeo& g) {
@@ -109,9 +110,48 @@ double pick_cost_v3(uint32_t Kt, uint32_t Nt, uint32_t Pk, uint32_t kb, uint32_t
     return pick_cost(Kt, Nt, kb, nsb, g) + reduce;
 }
 
+// Min reduction-aware-cost config over Sm>1. Writes `best` and returns its cost, or infinity when no Sm>1
+// config is feasible. Shared by the narrow-N hysteresis (choosing M-split over a feasible Sm=1 anchor) and by
+// the large-Mt rescue (where NO Sm=1 config fits), so both rank candidates identically.
+double best_msplit_config(
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t Nt,
+    uint32_t Nband,
+    const plan::FusionInputs& fu,
+    RegimeAMatmulConfig& best) {
+    double best_cost = std::numeric_limits<double>::infinity();
+    for (uint32_t Pk = 1; Pk <= 12u; ++Pk) {
+        for (uint32_t Ns = 1; Ns <= 6u; ++Ns) {
+            const uint32_t Nown = cdiv(Nband, Ns);
+            for (uint32_t Sm = 2; Sm <= Mt; ++Sm) {
+                for (uint32_t kb : {1u, 2u, 4u, 8u}) {
+                    for (uint32_t nsb = 1; nsb <= Nown; ++nsb) {
+                        PickGeo g{};
+                        if (!pick_plan(Mt, Kt, Nt, Ns, Pk, Sm, kb, nsb, fu, g)) {
+                            continue;
+                        }
+                        const double c = pick_cost_v3(Kt, Nt, Pk, kb, nsb, g);
+                        if (c < best_cost) {
+                            best_cost = c;
+                            best = RegimeAMatmulConfig{
+                                .k_slices = Pk,
+                                .n_slices = Ns,
+                                .m_slices = Sm,
+                                .k_block_tiles = kb,
+                                .n_subblock_tiles = nsb};
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return best_cost;
+}
+
 }  // namespace
 
-RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
+RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, const plan::FusionInputs& fu) {
     // Oracle lookup table (100% on the 20 FLUX/LTX production shapes), keyed by TILE dims (Mt,Kt,Nt).
     // value = {k_slices(Pk), n_slices(Ns), m_slices(Sm), k_block_tiles(kb), n_subblock_tiles(nsb)}.
     static const std::map<std::tuple<uint32_t, uint32_t, uint32_t>, RegimeAMatmulConfig> kTable = {
@@ -171,7 +211,22 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
         {{8, 192, 144}, {6, 1, 2, 4, 2}},  // 256x6144x4608 +3%
     };
     if (auto it = kTable.find({Mt, Kt, Nt}); it != kTable.end()) {
-        return it->second;
+        // Every table entry is a MEASURED unfused winner, so an unfused lookup is returned unconditionally --
+        // byte-identical to before. Fused operands (c_4..c_6, c_10) add L1 that the measurements never paid
+        // for, so when fusing we check the entry still fits and otherwise fall through to the cost model.
+        // Falling through yields a slower-but-valid config instead of a planner TT_FATAL.
+        const bool fusing = fu.has_bias || fu.has_ternary || fu.has_activation;
+        if (!fusing) {
+            return it->second;
+        }
+        const RegimeAMatmulConfig& t = it->second;
+        const uint32_t t_Ns = t.n_slices ? t.n_slices : 1u;
+        const uint32_t t_nsb = t.n_subblock_tiles ? t.n_subblock_tiles : cdiv(cdiv(Nt, kNumBanks), t_Ns);
+        PickGeo tg{};
+        if (pick_plan(Mt, Kt, Nt, t_Ns, t.k_slices ? t.k_slices : 1u, t.m_slices ? t.m_slices : 1u,
+                      t.k_block_tiles ? t.k_block_tiles : 1u, t_nsb, fu, tg)) {
+            return t;
+        }
     }
 
     // Cost-model fallback. Step 1: the deployed Sm=1 ANCHOR (min deployed cost) -- unchanged behaviour.
@@ -185,7 +240,7 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
             for (uint32_t kb : {1u, 2u, 4u, 8u}) {
                 for (uint32_t nsb = 1; nsb <= Nown; ++nsb) {
                     PickGeo g{};
-                    if (!pick_plan(Mt, Kt, Nt, Ns, Pk, 1u, kb, nsb, g)) {
+                    if (!pick_plan(Mt, Kt, Nt, Ns, Pk, 1u, kb, nsb, fu, g)) {
                         continue;
                     }
                     const double c = pick_cost(Kt, Nt, kb, nsb, g);
@@ -203,12 +258,25 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
             }
         }
     }
-    TT_FATAL(
-        anchor_cost != std::numeric_limits<double>::infinity(),
-        "regime_a_matmul auto-select found no feasible config for Mt={} Kt={} Nt={}",
-        Mt,
-        Kt,
-        Nt);
+    // Step 1b: RESCUE where NO Sm=1 config is feasible. On large-Mt deep-K shapes the in0 k-slice-resident CB
+    // is M_block * K_slice tiles, and at Sm=1 (M_block == Mt) that single buffer can exceed L1 for every
+    // (Pk, Ns, kb, nsb) -- e.g. 512x15360x768 (Mt=16, Kt=480) needs >= 1.28 MB of a 1.41 MB budget for cb0
+    // alone. M-split fixes exactly that by dividing M_block, so search Sm>1 rather than failing the op.
+    // This is deliberately NOT behind the narrow-N gate below: that gate decides whether M-split is
+    // PREFERABLE to a feasible Sm=1 pick, which is a different question from whether anything fits at all.
+    // Behaviour is unchanged whenever an Sm=1 anchor exists, so no deployed pick moves.
+    if (anchor_cost == std::numeric_limits<double>::infinity()) {
+        RegimeAMatmulConfig rescue{};
+        const double rescue_cost = best_msplit_config(Mt, Kt, Nt, Nband, fu, rescue);
+        TT_FATAL(
+            rescue_cost != std::numeric_limits<double>::infinity(),
+            "regime_a_matmul auto-select found no feasible config for Mt={} Kt={} Nt={} (no Sm=1 config fits "
+            "L1 and no M-split config is feasible either)",
+            Mt,
+            Kt,
+            Nt);
+        return rescue;
+    }
 
     // Step 2: NARROW-N M-split hysteresis. Only where N-split cannot supply parallelism (Nband<=kNbandMax)
     // do we consider Sm>1, and only adopt it when its reduction-aware cost beats the anchor's by the margin.
@@ -217,32 +285,7 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
         return anchor;
     }
     RegimeAMatmulConfig bestG{};
-    double bestG_cost = std::numeric_limits<double>::infinity();
-    for (uint32_t Pk = 1; Pk <= 12u; ++Pk) {
-        for (uint32_t Ns = 1; Ns <= 6u; ++Ns) {
-            const uint32_t Nown = cdiv(Nband, Ns);
-            for (uint32_t Sm = 2; Sm <= Mt; ++Sm) {
-                for (uint32_t kb : {1u, 2u, 4u, 8u}) {
-                    for (uint32_t nsb = 1; nsb <= Nown; ++nsb) {
-                        PickGeo g{};
-                        if (!pick_plan(Mt, Kt, Nt, Ns, Pk, Sm, kb, nsb, g)) {
-                            continue;
-                        }
-                        const double c = pick_cost_v3(Kt, Nt, Pk, kb, nsb, g);
-                        if (c < bestG_cost) {
-                            bestG_cost = c;
-                            bestG = RegimeAMatmulConfig{
-                                .k_slices = Pk,
-                                .n_slices = Ns,
-                                .m_slices = Sm,
-                                .k_block_tiles = kb,
-                                .n_subblock_tiles = nsb};
-                        }
-                    }
-                }
-            }
-        }
-    }
+    const double bestG_cost = best_msplit_config(Mt, Kt, Nt, Nband, fu, bestG);
     const double anchor_cost_v3 =
         pick_cost_v3(Kt, Nt, anchor.k_slices, anchor.k_block_tiles, anchor.n_subblock_tiles, anchor_g);
     if (bestG_cost < std::numeric_limits<double>::infinity() && bestG_cost < anchor_cost_v3 * (1.0 - kMSplitMargin)) {
@@ -252,7 +295,11 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
 }
 
 plan::PlanResult make_and_build_plan(
-    IDevice* device, const Tensor& in0, const Tensor& in1, const std::optional<RegimeAMatmulConfig>& cfg_opt) {
+    IDevice* device,
+    const Tensor& in0,
+    const Tensor& in1,
+    const std::optional<RegimeAMatmulConfig>& cfg_opt,
+    const plan::FusionInputs& fusion) {
     // Tile counts from logical shapes (tile = 32).
     const auto& a_shape = in0.logical_shape();
     const auto& w_shape = in1.logical_shape();
@@ -262,7 +309,7 @@ plan::PlanResult make_and_build_plan(
 
     // config=None -> auto-select (deterministic in (Mt,Kt,Nt), so program-cache-safe: the cache key is
     // (nullopt config + tensor shapes) and the same shapes always resolve to the same config).
-    const RegimeAMatmulConfig cfg = cfg_opt.value_or(auto_select_config(Mt, Kt, Nt));
+    const RegimeAMatmulConfig cfg = cfg_opt.value_or(auto_select_config(Mt, Kt, Nt, fusion));
 
     const CoreCoord grid = device->compute_with_storage_grid_size();
 
@@ -298,6 +345,7 @@ plan::PlanResult make_and_build_plan(
     in.opt0 = opt0;
     in.opt1 = opt1;
     in.holes = {};  // v1: no explicit grid holes; find_near just walks to the next free logical core.
+    in.fusion = fusion;  // fused operand CBs are real L1 -> the feasibility check must see them
     // BH usable L1 ~1440 KB; matches the validated prototype/sweep budget used by the picker.
     in.l1_budget_bytes = kL1BudgetBytes;
     in.tb = kTileBytesBf16;  // bf16 tile bytes

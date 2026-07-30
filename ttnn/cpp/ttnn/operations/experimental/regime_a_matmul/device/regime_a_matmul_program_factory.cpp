@@ -314,8 +314,29 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t Nt_r = (static_cast<uint32_t>(in1.logical_shape()[-1]) + 31u) / 32u;
     const RegimeAMatmulConfig cfg = operation_attributes.config.value_or(auto_select_config(Mt_r, Kt_r, Nt_r));
 
+    // ---- Fused epilogue detection (all off => byte-identical no-fusion path). ----
+    // Detected BEFORE planning: the fused operand CBs (c_4..c_6) and the reduce-scatter epilogue scratch
+    // (c_10) are real L1, so the planner's feasibility check needs them to be authoritative.
+    const bool has_bias = tensor_args.bias_tensor.has_value();
+    const bool has_ternary = operation_attributes.fused_ternary_scalar.has_value();
+    const bool has_activation = operation_attributes.fused_activation.has_value();
+    const bool gate_is_fp32 = has_ternary && tensor_args.fused_ternary_input_b->dtype() == DataType::FLOAT32;
+    // gate broadcast [1,N] vs full [M,N]. Decide from LOGICAL M, not padded: a full per-row gate with
+    // M_logical in 2..32 pads to a single tile row, so padded_shape()/TILE_HEIGHT==1 cannot tell it apart
+    // from a real [1,N] broadcast and would silently broadcast row 0 across all M rows. logical M==1 is the
+    // only broadcast case, matching validate()'s tb_l[-2]==1 || tb_l[-2]==M check.
+    const uint32_t broadcast_gate =
+        has_ternary ? (tensor_args.fused_ternary_input_b->logical_shape()[-2] == 1u ? 1u : 0u) : 1u;
+    const plan::FusionInputs fusion{
+        .has_bias = has_bias,
+        .has_ternary = has_ternary,
+        .has_activation = has_activation,
+        // broadcast_gate defaults to 1 when there is no ternary; only meaningful when has_ternary.
+        .broadcast_gate = has_ternary && broadcast_gate != 0u,
+        .gate_is_fp32 = gate_is_fp32};
+
     // ---- Run the pure host planner ----
-    auto planres = make_and_build_plan(device, in0, in1, cfg);
+    auto planres = make_and_build_plan(device, in0, in1, cfg, fusion);
     TT_FATAL(planres.ok(), "regime_a_matmul planner rejected config: {}", planres.error);
     plan::ExecutionPlan& P = *planres.plan;  // mutable: the ring-order diag overrides ring_pos/next/prev below
     const plan::Geometry& geo = P.geo;
@@ -327,19 +348,12 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // `use_reduce` doubles as the reduction-CB DEPTH: 0 when Pk==1 (no chain), else the number of cb7 slots.
     // The kernel takes its slot modulus from this same value, so the CB size and the remote write offset can
     // never disagree - the failure mode that produced a PCC 0.38 bug in earlier reduction work.
-    const uint32_t use_reduce = (Pk > 1u) ? (cb.cb7_tiles / (geo.M_block_capacity * geo.N_sub)) : 0u;
+    // It is deliberately NOT derived from cb.cb7_tiles: that is 0 under reduce-scatter (which allocates
+    // c_8/c_9 instead), and a 0 here reads to the kernels as "Pk == 1, no reduction at all", so the writer
+    // takes the no-reduce exit while compute still waits for ring partials -> hang.
+    const uint32_t use_reduce = (Pk > 1u) ? plan::kCb7Depth : 0u;
 
-    // ---- Fused epilogue + output-split detection (all off => byte-identical no-fusion path). ----
-    const bool has_bias = tensor_args.bias_tensor.has_value();
-    const bool has_ternary = operation_attributes.fused_ternary_scalar.has_value();
-    const bool has_activation = operation_attributes.fused_activation.has_value();
-    const bool gate_is_fp32 = has_ternary && tensor_args.fused_ternary_input_b->dtype() == DataType::FLOAT32;
-    // gate broadcast [1,N] vs full [M,N]. Decide from LOGICAL M, not padded: a full per-row gate with
-    // M_logical in 2..32 pads to a single tile row, so padded_shape()/TILE_HEIGHT==1 cannot tell it apart
-    // from a real [1,N] broadcast and would silently broadcast row 0 across all M rows. logical M==1 is the
-    // only broadcast case, matching validate()'s tb_l[-2]==1 || tb_l[-2]==M check.
-    const uint32_t broadcast_gate =
-        has_ternary ? (tensor_args.fused_ternary_input_b->logical_shape()[-2] == 1u ? 1u : 0u) : 1u;
+    // ---- Output-split detection ----
     const int32_t chunks = operation_attributes.chunks < 1 ? 1 : operation_attributes.chunks;
     const uint32_t n_chunks = static_cast<uint32_t>(chunks);
     const uint32_t out_ntc = Nt_r / n_chunks;  // per-chunk N tiles (validated divisible + tile-aligned)
@@ -376,7 +390,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // structural requirement is rs_T >= Pk (every core must own at least one tile to write). Requiring
     // divisibility locked out 41 of the 62 corpus shapes for no reason.
     const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;  // tiles per output sub-block
-    const bool rs_feasible = (Pk > 1u) && (rs_T >= Pk);
     // No N-WIDTH requirement. The original gate also demanded Nt>=32; measuring the declined shapes with bit23
     // showed that was wrong - 128x2048x512 (Nt=16) is 8.9% FASTER with reduce-scatter. Every shallow-K Pk>=4
     // shape with N_sub>=2 won (6/6, 5.5-14.7%) regardless of N width, and N_sub==1 was neutral (+0.4%).
@@ -392,10 +405,15 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // Together these separate all 13 measured deep-K shapes exactly: the 6 satisfying both won (-1.3% to -3.8%)
     // and all 5 losses are excluded. Shallow K still wins with single-tile chunks (compute has far more slack
     // there - 30-40% of the wall vs 47-77%), so the chunk-size floor is deep-K only.
-    const uint32_t rs_max_chunk_gate = (rs_T + Pk - 1u) / Pk;
-    const bool rs_deep_ok = (Pk <= 6u) && (rs_max_chunk_gate >= 2u);
-    const bool rs_gate = rs_feasible && (Pk >= 4u) && (geo.N_sub >= 2u) && ((Kt_r <= 64u) || rs_deep_ok);
-    const bool rscatter = rs_gate;
+    // The gate itself lives in plan::rscatter_selected() so that the L1 accounting charges for exactly the
+    // buffers this decision allocates. cb.rscatter is that same call, made during planning; assert they agree
+    // rather than trusting it, since a divergence would silently under-charge L1.
+    const bool rscatter = plan::rscatter_selected(Pk, Kt_r, geo.M_block_capacity, geo.N_sub);
+    TT_FATAL(
+        rscatter == cb.rscatter,
+        "internal: reduction strategy disagrees with the L1 accounting (factory={}, planner={})",
+        rscatter,
+        cb.rscatter);
     if (rscatter) {
         wdefs["RSCATTER"] = "1";
         cdefs_extra["RSCATTER"] = "1";
@@ -588,38 +606,36 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     mkcb(program, all_cores, 3, cb.cb3_tiles, tt::DataFormat::Float32, kTileBytesFp32);    // fp32 intermediate
     // cb7 is the CHAIN's running-sum buffer. Reduce-scatter never touches it (its partials travel through the
     // c_4/c_5 chunk CBs instead), so don't spend the L1 on it there.
-    if (cb.cb7_tiles > 0u && !rscatter) {
+    // cb7_tiles is already 0 under reduce-scatter (the sizer decides that), so this one test covers both
+    // "Pk == 1, no chain" and "reduce-scatter, partials travel via c_8/c_9 instead".
+    if (cb.cb7_tiles > 0u) {
         mkcb(program, all_cores, 7, cb.cb7_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // reduce (Pk>1)
     }
     // Fused-epilogue operand CBs (only when the matching fusion is active). c_4 bias [1,N_sub], c_5 residual
     // [M,N] block, c_6 gate [1,N_sub] (broadcast) or [M,N] block. Sized to hold a full sub-block so the
     // writer can stream all M rows while compute consumes them (matches minimal_matmul's ternary CB sizing).
-    const uint32_t out_blk_tiles = geo.M_block_capacity * geo.N_sub;
-    // Under reduce-scatter the writer feeds an owner its OWN SLICE (up to ceil(rs_T/Pk) tiles) instead of a
-    // sub-block row, so each operand CB must be at least one slice deep as well.
-    const uint32_t rs_slice = rscatter ? ((out_blk_tiles + Pk - 1u) / Pk) : 0u;
+    // Sizes come from the planner's CbSizes (plan::compute_cb_sizes), never recomputed here: what feasibility
+    // charged and what we allocate are then the same numbers by construction.
     if (has_bias) {
-        mkcb(program, all_cores, 4, std::max(geo.N_sub, rs_slice), tt::DataFormat::Float16_b, kTileBytesBf16);
+        mkcb(program, all_cores, 4, cb.cb4_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
     }
     if (has_ternary) {
-        mkcb(program, all_cores, 5, std::max(out_blk_tiles, rs_slice), tt::DataFormat::Float16_b, kTileBytesBf16);
+        mkcb(program, all_cores, 5, cb.cb5_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
         const tt::DataFormat gfmt = gate_is_fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         const uint32_t gtsz = gate_is_fp32 ? kTileBytesFp32 : kTileBytesBf16;
-        const uint32_t gate_tiles = broadcast_gate ? geo.N_sub : out_blk_tiles;
-        mkcb(program, all_cores, 6, std::max(gate_tiles, rs_slice), gfmt, gtsz);
+        mkcb(program, all_cores, 6, cb.cb6_tiles, gfmt, gtsz);
     }
     // REDUCE-SCATTER ring CBs at c_8/c_9 -- deliberately NOT c_4/c_5, which are fusion operands, so the ring
     // and the fused epilogue coexist. EXACTLY 2 slots each, sized to the LARGEST slice
     // (chunks differ by at most one tile when Pk does not divide the sub-block): the kernel's slot index is the
     // global epoch mod 2 and every CB operation moves a whole max-size slot, so the FIFO period and the remote
     // write stride are the same value by construction.
-    const uint32_t rs_max_chunk = rscatter ? ((out_blk_tiles + Pk - 1u) / Pk) : 0u;
     if (rscatter) {
-        mkcb(program, all_cores, 8, 2u * rs_max_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
-        mkcb(program, all_cores, 9, 2u * rs_max_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
-        if (has_bias || has_ternary || has_activation) {
+        mkcb(program, all_cores, 8, cb.cb8_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
+        mkcb(program, all_cores, 9, cb.cb9_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
+        if (cb.cb10_tiles > 0u) {
             // c_10: scratch for the reduced slice while the fused epilogue is applied to it in place.
-            mkcb(program, all_cores, 10, rs_max_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
+            mkcb(program, all_cores, 10, cb.cb10_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);
         }
     }
 
