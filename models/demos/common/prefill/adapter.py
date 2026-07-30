@@ -69,6 +69,11 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # GLM-5.2 KV dedup (PREFILL_TP_SHARD_KV). False (default): the KV/index caches are sequence-sharded
+    # across the SP axis only and REPLICATED across TP. True: they are additionally sharded across TP, so
+    # each of the sp*tp devices holds a distinct 1/(sp*tp) slice — pure storage dedup (bit-identical), which
+    # cuts per-device KV tp-fold. Sparse (DSA) path only; the dense and KV-only paths assert against it.
+    tp_shard_kv: bool = False
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
@@ -125,6 +130,11 @@ class PrefillModelAdapter(ABC):
     # Route the MoE routing all-gather's global semaphores to L1_SMALL instead of
     # pinning the main-L1 floor. Requires l1_small_size > 0.
     routing_use_l1_small_for_semaphores: bool = False
+    # Whether this model supports GLM-5.2 KV dedup (PREFILL_TP_SHARD_KV / params.tp_shard_kv). Opting in
+    # is a promise that ``allocate_kv_cache`` honors ``params.tp_shard_kv`` (passes tp_axis to every cache
+    # allocator) — otherwise the model would be built TP-sharded while its caches and migration table stay
+    # TP-replicated, which corrupts silently instead of failing. Default off: the runner rejects the knob.
+    supports_tp_shard_kv: bool = False
     # Emb-axis sharding of the cross-rank D2D hidden state (seq is always SP-sharded). True (default):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
