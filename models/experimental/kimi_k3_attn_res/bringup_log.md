@@ -852,6 +852,189 @@ turns on a sub-percent difference and one sample cannot tell that from noise:
 
 ---
 
+## Phase 10 — the fused mixture
+
+Nine phases of composed measurement to earn one kernel. The mandate is narrow and P8 wrote
+it: of the split form's 26 passes over the sealed set per block, **24 are the mixture**, 96%
+of that half's traffic, and it is the one contraction composed primitives provably cannot
+batch — its contracted axis is the candidate axis, and reaching it with a matmul costs more
+in padding than the arithmetic saves (P8: 1.09× measured, all of a 3.2× win spent on
+conversions). So Phase 10 is **not** the whole-op fused kernel §7 of `ROOFLINE.md` sketched.
+It is one op: a weighted sum that MACs into its accumulator instead of materializing a
+product.
+
+### The op
+
+`ttnn.experimental.fast_weighted_reduce_nc` —
+`out[b][0][h][w] = Σ_c input[b][c][h][w] · weight[b][c][h][0]`, at
+`ttnn/cpp/ttnn/operations/experimental/reduction/fast_weighted_reduce_nc/`. Built as a
+sibling of `fast_reduce_nc` rather than an AttnRes-specific kernel: nothing in it knows about
+attention residuals, which is why it could be gated against torch instead of against our own
+reference.
+
+The technique is `deepseek_moe_fast_reduce_nc_fused`'s, which P8 identified as the in-tree
+existence proof. `init_bcast<ELWMUL, BroadcastType::COL>` configures PACK and UNPACK, then
+MATH is re-initialized behind its back:
+
+```cpp
+MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
+    cb0, cb1, 1 /*acc_to_dest*/)));
+```
+
+so every `mul_tiles_bcast_cols` performs `dst0 += act·weight` in one pass. `tile_regs_acquire`
+zero-initializes `dst0`, so candidate 0 seeds the accumulator with no special case, and
+because the running sum lives in a dst register rather than an intermediate CB, **`C` is
+unbounded** — there is no dst-register budget being consumed per candidate.
+
+Five things were decided against the analog rather than copied from it:
+
+1. **`BroadcastType::COL` is free at our layout, and this is why the op is 300 lines and not
+   700.** A `[B, C, H, 1]` TILE tensor is physically `[B, C, H, 32]` tiles with the value in
+   column 0 — *exactly* what COL broadcast consumes. The MoE op needs an extra ROW_MAJOR
+   staging CB and face-offset arithmetic only because its scores arrive ROW_MAJOR from the
+   routing convention. Ours arrive already correct at zero cost. The weight is the score
+   chain's `[1, C, N, 1]` output, unchanged.
+2. **Contiguous work split, not `fast_reduce_nc`'s round-robin.** `fast_reduce_nc` hands core
+   `i` tiles `i, i+num_cores, ...`. That is fine when there is one input, and wrong here: the
+   weight set is keyed by the *token row*, so striding by `num_cores` scatters the row and
+   forces a weight refetch on nearly every output tile. Contiguous ranges give each core
+   ~`num_tiles/Wt` distinct rows, so the weight is read about once — ~3% over the input read
+   instead of a second 79 MiB.
+3. **No semaphore between reader and compute.** `i % Wt == 0` is exactly the token-row
+   boundary, because `inner_tile_size = Ht·Wt` is a whole number of rows. Reader and compute
+   derive it from the same formula over the same `start_id`, so they agree by construction.
+   The weight CB is `2·C` pages deep and the worst case is two outstanding sets, which is
+   capacity; compute always holds enough pushed input to reach the next boundary and free one.
+4. **Granularity divisibility is a correctness requirement, not a tuning preference.** The
+   granule is the largest factor of `C` at most 8 (`C = 9` → 3). Compute derives a candidate's
+   weight index as `j·granularity + k`, which is only the right index when the granule tiles a
+   whole reduction.
+5. **`Wt` and the strides are compile-time args.** RISC-V has no divide instruction; passing
+   them as runtime args puts a libcall on the per-tile path instead of a multiply-shift.
+
+Two deliberate asymmetries in the contract. The **input is bf16 only** — the acc-into-dst
+path is the one numeric configuration gated against a reference, and widening it here would
+ship an untested path. The **weight also takes fp32**, because `_scores` runs its whole chain
+in fp32 on purpose (P-series: fp32 stats buy back rounding the single-device path also takes)
+and requiring bf16 would make the call site pay a typecast to throw that away. The CBs are
+sized from each tensor's own dtype, so the mixed pair costs the program factory nothing.
+
+Defaults are HiFi4 + `fp32_dest_acc_en`, matching `deepseek_moe_fast_reduce_nc_fused` — the
+other op that MACs into dst. Two reasons, and the second is the one that matters: the
+accumulator is read and written once per candidate, so a bf16 dest would round the running
+sum `C` times; and matching `fast_reduce_nc`'s HiFi4 default keeps the A/B below a
+measurement of the *fusion* rather than of the fidelity.
+
+**One inherited defect not reproduced.** `fast_reduce_nc` builds its output spec from
+`padded_shape`, which hands a caller with 100 tokens an output claiming 128 *logical* rows —
+the 28 rows of tile padding become part of the tensor and whatever the input's padding held
+is readable data. This op takes `logical_shape`. Found by the `[1, 9, 100, 128]` test failing
+against a 100-row reference, which is the only failure the suite produced.
+
+### P10 — the isolated row
+
+Same methodology as P9: traced, `(2, 4)`, one 79 MiB `[1, 9, 2560, 1792]` input, two runs.
+
+| form | run 1 | run 2 | mean | ×floor |
+|---|---|---|---|---|
+| **floor**: `fast_reduce_nc(v, dim=1)` | 229.1 | 228.3 | 228.7 | 1.00 |
+| **floor**: `fast_reduce_nc` +fp32 acc | 228.1 | 228.2 | 228.2 | 1.00 |
+| **fused**: `fast_weighted_reduce_nc` | 257.4 | 257.2 | **257.3** | **1.13** |
+| **fused**: fp32 weight | 267.9 | 265.8 | 266.9 | 1.17 |
+| composed: `mul` + `sum` (P9's baseline) | 686.7 | 687.4 | 687.1 | 3.01 |
+
+1. **2.67× on the mixture** — 687.1 → 257.3 µs. The composed form moves 3V to perform a
+   reduction whose floor is ~1.13V, and the op removes exactly that: read `v`, MAC, write
+   `V/C`.
+2. **The weighting costs 29 µs, and that is the interesting number.** The fused op sits 13%
+   above an *unweighted* reduce over the same bytes. Everything above the floor is the
+   per-candidate multiply and the weight fetch; there is no third pass hiding in it. This is
+   the row that says the kernel is done rather than merely faster.
+3. **fp32 weight costs 3.7%** (266.9 against 257.3), against a predicted ~3% from doubling
+   traffic that is 3% of the read. So the accuracy the call site keeps is priced, small, and
+   the arithmetic explains it.
+4. P9's baseline reproduced to 0.06% seven iterations later, on a different binary. The
+   harness is stable enough that 3.7% is a signal.
+
+### P10 — the whole block, both read forms
+
+The isolated row is one op on one tensor. What the model pays is a block of 24 read sites,
+where the mixture is one pass among many, so the `fused_mix` axis was added to P5's
+block-level test rather than measured on a new one. Traced, `(2, 4)`, per read site, two runs
+— every row reproduced within 0.1%, so the means are given alone:
+
+| S | C at `_mix` | form | composed | fused | ratio |
+|---|---|---|---|---|---|
+| 1 | 1 | split | 710.9 | 704.6 | 1.01 |
+| 4 | 4 | split | 971.0 | 780.3 | 1.24 |
+| 8 | 8 | split | 1 386.3 | **991.2** | **1.40** |
+| 1 | 2 | direct | 649.7 | 552.9 | 1.18 |
+| 4 | 5 | direct | 1 356.8 | 1 105.2 | 1.23 |
+| 8 | 9 | direct | 2 231.8 | 1 800.0 | 1.24 |
+
+1. **The isolated row predicts the block saving to 3%.** Scale P10's 429.8 µs saving by the
+   candidate count the split form's mixture actually runs — `C = S`, not `S+1`, because
+   `merge` has no candidate axis — and it predicts 191.0 µs at `S = 4` against 190.7
+   measured, 382.0 at `S = 8` against 395.1. The fusion is additive and nothing else moved:
+   this is one op getting faster, not a schedule reshuffling.
+2. **The split form gains nothing at `S = 1` (1.01×), and that is the same fact.** Its only
+   `_mix` is `inter_block`'s over the sealed set, at `C = S`, so `S = 1` is the degenerate
+   one-candidate reduction — `mul` then `sum` over a 1-deep axis is already a single pass with
+   no intermediate worth removing. The direct form at the same `S` runs `C = 2` and gets
+   1.18×. Predicted 47.8 µs of saving there, measured 6.3; the 0.13 ratio is the only place
+   the model above breaks, and it breaks exactly where `C = 1` makes the fusion vacuous.
+3. **`merge` never called `_mix`.** It folds two `[1, 1, N, d]` tensors with online-softmax
+   scalars — an `add` of two `mul`s, not a candidate reduction. Worth recording because the
+   obvious reading of "24 of 26 passes are the mixture" is that the mixture is everywhere in
+   the split form, and it is in exactly one place.
+4. **Per forward, using P8's fit method** (`186a + 1002b`, which reproduces P8's 191.2 ms
+   exactly from its own coefficients): the direct form goes **265.0 → 216.2 ms** on a fit whose
+   intercept moves 209.5 → 203.8, i.e. barely, which is what a mixture-only change should do.
+   The split form's fit is degenerate — its intercept *rises* 506.0 → 603.6 while the slope
+   halves, which cannot be physical — so its forward is taken from the measured ratio at the
+   schedule's mean `C` of 5.39 instead: **191.2 → 153.6 ms, 1.24×**. The bad fit agrees at
+   153.9 ms, which is why the number is quoted at all.
+
+### What this does to §7's ~3.8×
+
+`ROOFLINE.md` §7 put Phase 10's realizable win at ~3.8× against the split form's 191.2 ms.
+The mixture-only kernel delivers **1.24× of it**, and there is no contradiction: fusing the
+mixture removes the composed form's *extra* pass, not the pass itself. 3V → 1.13V on one op
+out of a read that still runs a stats pass, a collective, a softmax chain and a divide. The
+remaining ~3× is the rest of §7's kernel — the two `d`-reductions and the cross-candidate
+softmax folded into the same pass over `v` — and it is a materially harder op, because it
+owns the collective and the numerics that P7 spent four iterations getting right in composed
+form.
+
+That is the honest read of a 10.8× floor-to-floor estimate meeting a real kernel: **the
+cheapest 1.24× of it cost one op with a 300-line program factory and no numerics risk**,
+because it is the one piece that is a pure traffic problem.
+
+### Correctness
+
+`tests/ttnn/unit_tests/operations/reduce/test_fast_weighted_reduce_nc.py` — **19 passed**,
+14.7 s, gated at PCC 0.9999 against torch in fp32. bf16 in and out means one rounding at the
+pack; anything looser would hide a defect.
+
+Coverage is by kernel path, not by shape variety: `C ∈ {1, 5, 8, 9, 12, 13}` to take the
+granularity cap (8), a clean factor (6), two primes that fall back to granularity 1, and the
+degenerate `C = 1`; `Wt = 1` so the weight set turns over on *every* output tile, and `Ht = 1`
+so it never does; `B = 2` for the batch stride in both index chains; a token count of 100 for
+the padding path; the fp32-weight pair; the full `[1, 9, 2560, 1792]` production shape. Plus a
+program-cache test that holds both tensors past the assertion so a stale buffer binding cannot
+pass, an equivalence check against `mul` + `sum` at matched precision, and five rejection
+cases pinning the contract (`dim ≠ 1`, wide weight, mismatched leading dims, rank 3, fp32
+input).
+
+The module suite gates the wired call site: **161 passed** with `fused_mix=True` as the
+default, so every PCC threshold in Phases 5–8 now holds through the fused path.
+
+*Verdict:* **kept.** 2.67× on the op, 1.40× on the block at the peak shape, 1.24× on the
+forward, at 13% above an unweighted reduce over the same bytes. The composed form stays as
+the knob's `False` branch because it is the oracle the op is gated against.
+
+---
+
 ## Learnings
 
 ### Phase 0 — environment
@@ -1434,6 +1617,48 @@ to one of them is worse than no A/B, because it reads as mechanism.*
 
 ---
 
+### Phase 10 — a fused op is a traffic argument, and the traffic argument has a ceiling
+
+Phase 5 built a fused op that was *slower* than its parts and a gate too weak to see it.
+Phase 10 built one that is 2.67× its parts on the first device run, with no numerics iteration
+at all. The difference is not skill and it is not luck — it is that this op was specified by
+subtraction rather than by ambition:
+
+| | Phase 5's fused op | Phase 10's |
+|---|---|---|
+| what it fused | several steps that looked adjacent | one pass that P8 *proved* composed ops cannot batch |
+| justified against | the composed form's existence | 687.1 µs measured, against a 228.2 µs floor measured four ways |
+| what it owned | numerics, layout and reduction at once | traffic only — same arithmetic, one fewer DRAM round-trip |
+| result | slower than its parts | 2.67×, landing 13% above the floor |
+
+The generalizable part is the shape of the claim. "Fuse the mixture" is a *bytes* claim: the
+composed form moves 3V to do a reduction whose floor is 1.13V, and the op's whole job is to
+delete the 1.87V. That is checkable before writing a line of C++ and it is checkable again
+afterwards — the 29 µs the op sits above an unweighted reduce over the same bytes is the
+entire remaining budget, and it is accounted for (per-candidate multiply plus a weight fetch
+that is 3% of the read). Nothing about the numerics had to be right for the estimate to hold;
+the numerics only had to not be *wrong*, which a torch gate settles in 15 seconds.
+
+Contrast the ~3× still on the table. That one owns two `d`-reductions, a cross-candidate
+softmax, a collective and a divide — it is a *numerics and scheduling* claim wearing a traffic
+claim's clothes, and P7 spent four iterations getting those numerics right in composed form
+where they were easy to inspect. Same 10.8× roofline, two completely different risk profiles
+inside it.
+
+Two smaller things worth carrying forward. **Reading the analog is not the same as copying
+it**: `fast_reduce_nc`'s round-robin work split is correct for one input and actively wrong for
+two, because the second operand is keyed by a row the stride scatters — a copied split would
+have added a silent second 79 MiB read and still passed every PCC gate. And **an inherited
+output-spec bug is still a bug**: building the spec from `padded_shape` publishes tile padding
+as logical data, which one 100-row test catches and which the op it was copied from still does.
+
+*Lesson: price a fused op in bytes before writing it, and check the residual in bytes after.
+An op whose entire justification is "one fewer pass over V" can be estimated, gated and
+believed in an afternoon. An op that also owns numerics cannot, and the roofline that lumps
+them together will read as one number when it is two projects.*
+
+---
+
 ## Backlog
 
 - [x] Phase 1 — infra map with `file:line` citations and inherited thresholds. Back-filled
@@ -1496,17 +1721,19 @@ to one of them is worse than no A/B, because it reads as mechanism.*
       behind `one_pass_stats`, 1.37× on the read at the schedule's mean shape (~367 → 267 ms
       per forward). The squares land 1.4% off a one-pass floor; the matvec is still 1.97×
       off it, and *two* reads of `v` is the composed-op floor either way.
-- [ ] `_mix` is the same three-pass shape with no one-op form — **688.3 µs against a
+- [x] `_mix` is the same three-pass shape with no one-op form — **688.3 µs against a
       228.7 µs floor, 3.01×** (P9 corrected P7's 791.1/3.45×, which had measured the wrong
       broadcast) — and it reduces over the candidate axis, so reaching the floor needs a
       `[1, N, C, d/tp]` layout where the mix is a batched matmul. P8 priced that layout and
-      it loses: the two permutes over the sealed set give back all but 1.09×. What is left
-      is Phase 10.
+      it loses: the two permutes over the sealed set give back all but 1.09×.
+      **P10 wrote the op instead**: 687.1 → **257.3 µs**, 2.67×, landing 1.13× off the
+      floor. The `[1, N, C, d/tp]` layout was never needed — a `[1, C, N, 1]` weight is
+      already what `BroadcastType::COL` consumes.
 - [x] A/B `ttnn.experimental.fast_reduce_nc` against `ttnn.sum` on the mixture's dim-1
       reduce — surfaced by Phase 2's delta table, not by the profiler. **Refuted:** 687.8
       against 688.3 µs, 0.08% on the mean of two runs, against a band reaching 0.35%. The
       reduce half runs at the floor, which four kernels now confirm at ~229 µs.
-- [ ] Phase 10 — fused C++ op, only on measured evidence. `ROOFLINE.md` §7 puts the
+- [x] Phase 10 — fused C++ op, only on measured evidence. `ROOFLINE.md` §7 puts the
       ceiling at 10.8× DRAM (215.5 ms → 20 ms per forward) with `v` resident in L1 at
       every shape that matters. Phase 9 sharpens it three times: the fused kernel is
       measured against 380 ms traced, not 622 ms untraced — after P7 against ~267 ms — and
@@ -1518,7 +1745,16 @@ to one of them is worse than no A/B, because it reads as mechanism.*
       `init_bcast<ELWMUL, COL>` with MATH's `acc_to_dest=1`, so `mul_tiles_bcast_cols`
       MACs into `dst0` in one pass — but requires an L1-resident input and gathers its
       scores through the MoE routing convention, so the technique is liftable and the op
-      is not.
+      is not. **Done, for the mixture only** — `ttnn.experimental.fast_weighted_reduce_nc`,
+      19/19 gated at PCC 0.9999, 2.67× on the op and 1.24× on the forward. The remaining
+      ~3× of §7 is the two `d`-reductions plus the softmax in the same pass, which is a
+      different project: it owns the collective and P7's numerics, not just traffic.
+- [ ] The rest of §7's kernel — fold the two `d`-reductions and the cross-candidate softmax
+      into the mixture's pass over `v`. ~3× still on the table against P10's 153.6 ms. Not
+      started, and it is deliberately not a continuation of P10: that op is 300 lines with
+      no numerics risk because it changes no arithmetic, while this one owns an all-reduce
+      inside a kernel and the fp32 stats chain P7 spent four iterations on. Price it before
+      writing it, per §Learnings Phase 10.
 - [ ] Phase 11 — `PIPELINE.md` + socket round-trip.
 - [ ] Fold `rms_inv` at seal time (needs the batched form first).
 - [ ] Decode path (`T=1`).
@@ -1868,3 +2104,31 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
 
   **UNCHANGED:** every timing conclusion. The compute config is free on these bandwidth-bound
   reductions either way, and ~229 µs is still the one-pass floor.
+
+- **2026-07-30** — Phase 10 **PASS**: `ttnn.experimental.fast_weighted_reduce_nc` at
+  `ttnn/cpp/ttnn/operations/experimental/reduction/fast_weighted_reduce_nc/`, wired into
+  `_mix` behind `fused_mix` (default on). **19/19** in the op's own unit suite, 14.7 s;
+  **161/161** in the module suite through the fused path.
+  **Commands:** `PYTHONPATH=$TT_METAL_HOME python_env/bin/python -m pytest
+  tests/ttnn/unit_tests/operations/reduce/test_fast_weighted_reduce_nc.py -q` and
+  `... models/experimental/kimi_k3_attn_res/tests/ -q`
+
+  **VALIDATED:** `Σ_c input[b][c][h][w] · weight[b][c][h][0]` against torch in fp32 at PCC
+  0.9999, over `C ∈ {1,5,8,9,12,13}` (every granularity path including both primes and the
+  degenerate `C = 1`), `Wt = 1` and `Ht = 1` (weight set turning over on every output tile and
+  on none), `B = 2`, an unaligned 100-row token count, a bf16×fp32 operand pair, and the full
+  `[1, 9, 2560, 1792]` production shape. Program-cache reuse with both tensors held past the
+  assertion. Equivalence with `mul` + `sum` at matched precision. Five rejection cases.
+
+  **MEASURED (traced, `(2,4)`, two runs each, all rows within 0.1%):** the mixture
+  **687.1 → 257.3 µs, 2.67×**, sitting **1.13×** above an unweighted reduce over the same
+  bytes; fp32 weight +3.7%. Per read site over a whole 12-layer block: split form
+  1 386.3 → 991.2 µs at `S = 8` (**1.40×**), 1.24× at `S = 4`, **1.01× at `S = 1`** where the
+  sealed mixture is one candidate and there is nothing to fuse. Per forward
+  **191.2 → 153.6 ms, 1.24×** on the split form; 265.0 → 216.2 ms on the direct form. The
+  isolated 79 MiB row predicts the block-level saving to 3% once scaled by `C = S`.
+
+  **NOT VALIDATED:** the remaining ~3× of `ROOFLINE.md` §7 — the two `d`-reductions and the
+  cross-candidate softmax in the same pass — is not started. `dim = 0` is rejected rather than
+  implemented. Non-bf16 *input* is rejected, so the op has no fp32 or bfp8 path. Nothing here
+  is measured on `(8,4)`, in decode, or on real K3 weights.
