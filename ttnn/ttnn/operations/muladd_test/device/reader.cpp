@@ -6,7 +6,8 @@ void kernel_main() {
     uint32_t a_addr = get_arg_val<uint32_t>(0);
     uint32_t b_addr = get_arg_val<uint32_t>(1);
     uint32_t c_addr = get_arg_val<uint32_t>(2);
-    uint32_t num_tiles = get_arg_val<uint32_t>(3);
+    uint32_t first_tile_offset = get_arg_val<uint32_t>(3);
+    uint32_t num_tiles = get_arg_val<uint32_t>(4);
 
     constexpr auto a_args = TensorAccessorArgs<0>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
@@ -22,7 +23,7 @@ void kernel_main() {
     const auto accessor_a = TensorAccessor(a_args, a_addr, tile_bytes_a);
     const auto accessor_b = TensorAccessor(b_args, b_addr, tile_bytes_b);
     const auto accessor_c = TensorAccessor(c_args, c_addr, tile_bytes_c);
-    for (uint32_t t = 0; t < num_tiles; t++) {
+    for (uint32_t t = first_tile_offset; t < first_tile_offset + num_tiles; t++) {
         cb_reserve_back(cb_a, 1);
         uint32_t l1_write_addr_a = get_write_ptr(cb_a);
         noc_async_read_tile(t, accessor_a, l1_write_addr_a);

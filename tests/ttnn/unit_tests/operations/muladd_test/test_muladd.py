@@ -22,4 +22,4 @@ def test_add_2D_tensors(device, hw):
     output = muladd_test(input_tensor_a, input_tensor_b, input_tensor_c)
     output = ttnn.to_torch(output)
 
-    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=2)

@@ -8,7 +8,8 @@
 #include "api/debug/dprint.h"
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t first_tile_offset = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg_val<uint32_t>(1);
 
     binary_op_init_common(0, 1, 16);
 
@@ -30,8 +31,8 @@ void kernel_main() {
     cb_push_back(cb_zero, 1);
     cb_wait_front(cb_zero, 1);
 
-    for (uint32_t t = 0; t < num_tiles; t++) {
-        if (t > 0) {
+    for (uint32_t t = first_tile_offset; t < first_tile_offset + num_tiles; t++) {
+        if (t > first_tile_offset) {
             cb_wait_front(cb_a, 1);
         }
         cb_wait_front(cb_b, 1);
