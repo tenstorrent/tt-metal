@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <tt_stl/assert.hpp>
@@ -28,6 +29,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 
 namespace ttnn::prim {
 
@@ -769,6 +771,30 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         }
     }
 
+    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const tt::tt_metal::NOC reader_noc =
+        writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+
+    // The height-sharded/default weights channel is one sender at (0,0) broadcasting to the full
+    // rectangular grid. Some rectangle members are noop cores, so only active receivers acknowledge.
+    // Adopt the factory-owned semaphore ids; the helper owns the shared host/device wire and geometry.
+    std::optional<ttnn::kernel_lib::host::Mcast2D> weights_mcast;
+    if (!block_sharded) {
+        weights_mcast.emplace(
+            device,
+            all_cores,
+            top_left_core,
+            ttnn::kernel_lib::host::McastConfig{
+                .noc = writer_mcast_noc,
+                .sem_ids =
+                    std::vector<uint32_t>{weights_mcast_receiver_semaphore_id, weights_mcast_sender_semaphore_id}},
+            total_active_num_cores - 1);
+    }
+
+    // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
+    const bool partials_cb_uses_output =
+        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
+    log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
     std::string reader_kernel;
     std::string compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
     std::string writer_mcast_sender_kernel =
@@ -1031,11 +1057,17 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
-    // The multicast pipe owns the weights/bias channel semaphores, so their
-    // program-uniform ids are template arguments. Append them after both
-    // TensorAccessorArgs blocks to preserve every existing compile-time index.
-    writer_compile_time_args.push_back(weights_mcast_sender_semaphore_id);
-    writer_compile_time_args.push_back(weights_mcast_receiver_semaphore_id);
+    if (block_sharded) {
+        // The separate fixed-line weights kernels retain their existing two-word semaphore ABI.
+        writer_compile_time_args.push_back(weights_mcast_sender_semaphore_id);
+        writer_compile_time_args.push_back(weights_mcast_receiver_semaphore_id);
+    } else {
+        const auto weights_mcast_compile_time_args = weights_mcast->compile_time_args();
+        writer_compile_time_args.insert(
+            writer_compile_time_args.end(),
+            weights_mcast_compile_time_args.begin(),
+            weights_mcast_compile_time_args.end());
+    }
 
     const bool check_skip_compute = input_cores != output_cores;
 
@@ -1121,10 +1153,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         }
         compute_kernel_args.push_back(static_cast<uint32_t>(split_reader_cb_shared));
     }
-
-    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    const tt::tt_metal::NOC reader_noc =
-        writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     // Build the writer_mcast_sender kernel descriptor (placed on mcast_sender_cores).
     // We build runtime_args below after kernel placement is fixed.
@@ -1351,16 +1379,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 }
             } else {
                 // 1D multicast setup
-                std::vector<uint32_t> mcast_coords = setup_mcast_args(
-                    writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                    top_left_core_physical.x,
-                    top_left_core_physical.y,
-                    bottom_right_core_physical.x,
-                    bottom_right_core_physical.y);
-
-                sender_rt_args.append(mcast_coords);
-                // Only active cores acknowledge; McastRect derives the full rectangle fan-out.
-                sender_rt_args.push_back(total_active_num_cores - 1);
+                sender_rt_args.append(weights_mcast->runtime_args(core));
                 if (enable_activation_reuse) {
                     uint32_t writer_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
@@ -1400,8 +1419,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                     receiver_args.push_back(static_cast<uint32_t>(is_sender_core));
                 } else {
                     bool is_no_op_core = !input_cores.contains(core);
-                    receiver_args = std::vector<uint32_t>{
-                        static_cast<uint32_t>(is_no_op_core), top_left_core_physical.x, top_left_core_physical.y};
+                    receiver_args.push_back(static_cast<uint32_t>(is_no_op_core));
+                    const auto weights_mcast_runtime_args = weights_mcast->runtime_args(core);
+                    receiver_args.insert(
+                        receiver_args.end(), weights_mcast_runtime_args.begin(), weights_mcast_runtime_args.end());
                     if (enable_activation_reuse) {
                         uint32_t writer_remaining_tiles_to_push = 0;
                         if (activation_reuse_config.has_partial_core &&

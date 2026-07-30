@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v9 status is reconciled through commit 307951cc8dc from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
+  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 75b977e1a04ee7a14df5d8039393c7844f33fdae. Remaining status is reconciled through commit 307951cc8dc from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
   "host_bindings": [
     {
       "id": "weights-mcast:conv2d-sharded:single-sender-rect",
@@ -15,16 +15,23 @@
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp"
       ],
       "migration_unit": "conv2d-weights-single-sender-rect",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "75b977e1a04ee7a14df5d8039393c7844f33fdae",
       "validation_set": [
-        "CONV-HEIGHT",
-        "test_conv_dram"
+        "build_metal.sh: passed",
+        "exact CONV-HEIGHT compile-focused --dev node: passed; sender JIT 7585446677319138702, receiver JIT 15099792235267128693",
+        "CONV-HEIGHT: 49 passed, 16 expected skips",
+        "test_conv_dram: 14 passed",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": null,
-      "flags": []
+      "last_verified": "2026-07-30",
+      "flags": [
+        "tier:1",
+        "fully-end-to-end"
+      ]
     },
     {
       "id": "weights-mcast:conv2d-sharded:fixed-line",
@@ -434,17 +441,21 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "fad21b929d1ce1da74b3647dce90382cc8e738cc",
+      "commit": "75b977e1a04ee7a14df5d8039393c7844f33fdae",
       "validation_set": [
+        "build_metal.sh: passed",
+        "exact CONV-HEIGHT compile-focused --dev node: passed; JIT 7585446677319138702",
         "CONV-HEIGHT: 49 passed, 16 expected skips",
         "test_conv_dram: 14 passed",
-        "fresh JIT path verified under isolated TT_METAL_CACHE"
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "V9 migrated; runtime consumer_ack_count is total_active_num_cores-1 while McastRect derives full fan-out including noop cores. Weights and optional-bias handshakes are pipe-owned.",
+      "last_verified": "2026-07-30",
+      "census_note": "Fully end-to-end at v9. Host Mcast2D owns the full-rectangle geometry and CT/RT wire while num_active remains total_active_num_cores-1; McastArgs decodes the sender face. Weights and optional-bias handshakes are pipe-owned.",
       "flags": [
-        "tier:1"
+        "tier:1",
+        "fully-end-to-end"
       ],
       "migration_unit": "conv2d-weights-single-sender-rect"
     },
@@ -455,16 +466,22 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "fad21b929d1ce1da74b3647dce90382cc8e738cc",
+      "commit": "75b977e1a04ee7a14df5d8039393c7844f33fdae",
       "validation_set": [
+        "build_metal.sh: passed",
+        "exact CONV-HEIGHT compile-focused --dev node: passed; JIT 15099792235267128693",
         "CONV-HEIGHT: 49 passed, 16 expected skips",
         "test_conv_dram: 14 passed",
-        "JIT artifact 2407920035465003760"
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "V9 migrated; weights and bias receive handshakes are pipe-owned.",
-      "flags": [],
+      "last_verified": "2026-07-30",
+      "census_note": "Fully end-to-end at v9. Host Mcast2D emits the receiver sender-coordinate RT block and McastArgs decodes the receiver face; weights and bias receive handshakes are pipe-owned.",
+      "flags": [
+        "tier:1",
+        "fully-end-to-end"
+      ],
       "migration_unit": "conv2d-weights-single-sender-rect"
     },
     {
