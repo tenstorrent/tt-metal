@@ -38,10 +38,13 @@ $cut
 done <<<"$failed_jobs"
 
 # --- build the identical prompt and run the agent ---------------------------
-read -r rsha rurl < <(gh api "repos/$REPO/actions/runs/$RID" --jq '"\(.head_sha) \(.html_url)"')
+# Pass run_number (not the run id) as "Run: #N" so the rendered header matches
+# what watch.sh produces for the same run instead of showing a 11-digit id.
+read -r rnum rsha rurl < <(gh api "repos/$REPO/actions/runs/$RID" \
+                           --jq '"\(.run_number) \(.head_sha) \(.html_url)"')
 ctx="Pipeline display name: $display
 Workflow file: $workflow
-Run: #$RID  conclusion=failure  sha=$rsha
+Run: #$rnum  conclusion=failure  sha=$rsha
 URL: $rurl
 Test focus hint: $test_hint
 
