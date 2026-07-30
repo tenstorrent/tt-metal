@@ -191,6 +191,38 @@ struct RowMajorHostBuffer {
     ttnn::DataType data_type = ttnn::DataType::INVALID;
 };
 
+HostBuffer unpack_block_float_tiles_to_float(const HostBuffer& buffer, const TensorSpec& tensor_spec) {
+    const auto tt_dtype = tensor_spec.data_type();
+    TT_FATAL(is_block_float(tt_dtype), "Expected block-float dtype, got {}", tt_dtype);
+
+    const auto& tile = tensor_spec.tile();
+    ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
+    auto float_unpacked_data =
+        tt_dtype == DataType::BFLOAT8_B
+            ? unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
+            : unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    return HostBuffer(std::move(float_unpacked_data));
+}
+
+// Unpacks BFLOAT8_B / BFLOAT4_B tiles to float, then untilizes / strips padding to logical RM.
+// Kept separate from the generic path: HostTensor::to_vector would re-unpack if the TensorSpec
+// still reported a block-float dtype over a float buffer.
+RowMajorHostBuffer convert_block_float_to_logical_row_major(const HostBuffer& buffer, const TensorSpec& tensor_spec) {
+    // Buffer is float tiles; TensorSpec must match so to_vector only untilizes / strips padding.
+    TensorSpec decode_spec(
+        tensor_spec.logical_shape(),
+        TensorLayout::fromPaddedShape(
+            DataType::FLOAT32,
+            tensor_spec.page_config(),
+            MemoryConfig{},
+            tensor_spec.logical_shape(),
+            tensor_spec.padded_shape()));
+    auto logical_data =
+        HostTensor::from_buffer(unpack_block_float_tiles_to_float(buffer, tensor_spec), decode_spec)
+            .to_vector<float>();
+    return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
+}
+
 // Converts a TT tensor to a RowMajorHostBuffer.
 //
 // If `padded_output` is true, the returned buffer will be padded to the tile size.
@@ -204,7 +236,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
 
     const auto& tensor_spec = tt_tensor.tensor_spec();
 
-    // Performs logical data conversion on the concrete data type.
+    // Performs data conversion on the concrete data type (padded untilize, or logical via to_vector).
     auto dispatch_to_concrete = [&tensor_spec, padded_output]<typename T>(HostBuffer host_buffer) {
         if (padded_output) {
             if (tensor_spec.layout() == Layout::TILE) {
@@ -225,27 +257,13 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
 
         // Previous impl only copied if data needed transformation. Instead *always* copy
         // because the HostBuffer will be returned directly to the other python frameworks
-        // wrapped in an ndarray.
-
-        // BFP paths stage unpacked float into host_buffer while tensor_spec remains BFP; rebuild
-        // a matching FLOAT32 spec so HostTensor::to_vector does not re-unpack.
-        TensorSpec decode_spec = tensor_spec;
-        if (tensor_spec.data_type() != convert_to_data_type<T>()) {
-            decode_spec = TensorSpec(
-                tensor_spec.logical_shape(),
-                TensorLayout::fromPaddedShape(
-                    convert_to_data_type<T>(),
-                    tensor_spec.page_config(),
-                    MemoryConfig{},
-                    tensor_spec.logical_shape(),
-                    tensor_spec.padded_shape()));
-        }
+        // wrapped in an ndarray
         auto logical_data =
-            HostTensor::from_buffer(std::move(host_buffer), decode_spec).to_vector<T>();
+            HostTensor::from_buffer(std::move(host_buffer), tensor_spec).to_vector<T>();
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
     };
 
-    auto convert_to_logical = [&tensor_spec, &dispatch_to_concrete](const HostBuffer& buffer) {
+    auto convert_to_logical = [&tensor_spec, &dispatch_to_concrete, padded_output](const HostBuffer& buffer) {
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
             case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(buffer);
@@ -257,15 +275,12 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(buffer);
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B: {
-                const auto& tile = tensor_spec.tile();
-                ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
-                auto float_unpacked_data = tt_dtype == DataType::BFLOAT8_B
-                                               ? unpack_bfp8_tiles_into_float_vec(
-                                                     uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                                               : unpack_bfp4_tiles_into_float_vec(
-                                                     uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                auto input_float_buffer = tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
-                return dispatch_to_concrete.template operator()<float>(input_float_buffer);
+                if (!padded_output) {
+                    return convert_block_float_to_logical_row_major(buffer, tensor_spec);
+                }
+                // Padded path: unpack to float tiles, then untilize without stripping pad.
+                return dispatch_to_concrete.template operator()<float>(
+                    unpack_block_float_tiles_to_float(buffer, tensor_spec));
             }
             case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_dtype);
         }
