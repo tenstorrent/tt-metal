@@ -12,7 +12,6 @@
 #include "cmath_common.h"
 #include "llk_defs.h"
 #include "llk_math_common.h"
-#include "llk_operands.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;

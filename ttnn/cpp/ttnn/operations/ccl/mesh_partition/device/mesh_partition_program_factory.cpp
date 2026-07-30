@@ -148,17 +148,24 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
         auto [slice_attrs, slice_tensor_args] =
             compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
 
-        // Re-build the descriptor for this coord and let the framework copy
-        // its per-core / common runtime args (and patch dynamic CB addresses)
-        // onto the cached Program — same scheme as the legacy
-        // override_runtime_args path, but driven by ProgramDescriptor.  CB
-        // total_size/page_size are not re-applied on cache hit, so any sizing
-        // that varies across calls must be folded into compute_program_hash().
+        // Re-apply this coord's per-dispatch state to the cached Program. CB total_size/page_size are
+        // not re-applied on a hit, so any sizing that varies across calls must be in compute_program_hash().
         std::visit(
             [&](auto&& program_factory) {
                 using Factory = std::decay_t<decltype(program_factory)>;
-                auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
-                tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
+                // Height-sharded RM is CB-bound: only the two sharded CB addresses change on a hit (per-core
+                // reader args are cache-keyed), so patch just those in O(1) rather than re-running the
+                // O(num_cores) per-core arg walk. Mirrors the SliceDeviceOperation fix (this op drives the
+                // factory directly). CB order matches create_descriptor: src0 (input), c_16 (output).
+                if constexpr (std::is_same_v<Factory, ttnn::prim::SliceRmShardedProgramFactory>) {
+                    tt::tt_metal::ProgramDescriptor cb_addr_only;
+                    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = slice_tensor_args.input.buffer()});
+                    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_return_value.buffer()});
+                    tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);
+                } else {
+                    auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
+                    tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
+                }
             },
             shared_variables.slice_program_factory);
     }

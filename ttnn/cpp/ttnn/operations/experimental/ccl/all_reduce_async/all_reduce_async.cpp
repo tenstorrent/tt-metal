@@ -19,6 +19,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
@@ -34,22 +35,30 @@ uint32_t finding_scatter_dim(const ttnn::Tensor& input_tensor, size_t num_worker
 
     const auto& padded_shape = input_tensor.padded_shape();
     const auto layout = input_tensor.layout();
-    const auto rank = padded_shape.rank();
+    const auto logical_rank = input_tensor.logical_shape().rank();
 
-    TT_FATAL(rank >= 2, "Expected input tensor to be of at least rank 2");
+    TT_FATAL(logical_rank >= 1, "Expected input tensor to be of at least rank 1");
+    TT_FATAL(
+        padded_shape.rank() >= logical_rank,
+        "Padded shape rank {} is smaller than logical shape rank {}",
+        padded_shape.rank(),
+        logical_rank);
 
-    ttsl::SmallVector<uint32_t> shape_vec(padded_shape.cbegin(), padded_shape.cend());
+    ttsl::SmallVector<uint32_t> shape_vec(
+        padded_shape.cend() - static_cast<std::ptrdiff_t>(logical_rank), padded_shape.cend());
     if (layout == Layout::TILE) {
         const auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
         auto tile_shape_it = tile_shape.crbegin();
-        std::for_each(
-            shape_vec.rbegin(), shape_vec.rbegin() + 2, [&tile_shape_it](auto& x) { x /= *(tile_shape_it++); });
+        const auto num_tiled_dims = static_cast<std::ptrdiff_t>(std::min<size_t>(2, shape_vec.size()));
+        std::for_each(shape_vec.rbegin(), shape_vec.rbegin() + num_tiled_dims, [&tile_shape_it](auto& x) {
+            x /= *(tile_shape_it++);
+        });
     }
     auto dim_it = std::find_if(
         shape_vec.crbegin(), shape_vec.crend(), [num_workers](const auto& x) { return x % num_workers == 0; });
 
     auto end_it = shape_vec.crend();
-    return (dim_it == end_it) ? rank : end_it - dim_it - 1;  // forward index
+    return static_cast<uint32_t>((dim_it == end_it) ? static_cast<std::ptrdiff_t>(logical_rank) : end_it - dim_it - 1);
 }
 }  // namespace detail
 
@@ -152,11 +161,28 @@ ttnn::Tensor all_reduce_async(
     const std::vector<GlobalSemaphore>& barrier_semaphores,
     const std::vector<GlobalSemaphore>& rs_global_semaphores,
     const std::vector<GlobalSemaphore>& ag_global_semaphores,
-    reduction_common::ReduceType /*math_op*/,
+    reduction_common::ReduceType math_op,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
+    // Run rank < 2 inputs as [1, N] and restore the shape on the way out
+    if (input_tensor.logical_shape().rank() < 2) {
+        const auto& logical_shape = input_tensor.logical_shape();
+        auto output_tensor = all_reduce_async(
+            ttnn::unsqueeze(input_tensor, 0),
+            num_devices,
+            barrier_semaphores,
+            rs_global_semaphores,
+            ag_global_semaphores,
+            math_op,
+            memory_config,
+            topology,
+            num_preferred_links,
+            worker_subdevice_id_opt);
+        return ttnn::reshape(output_tensor, logical_shape);
+    }
+
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     auto* mesh_device_ptr = input_tensor.device();
     TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_reduce_async operation");
@@ -168,7 +194,7 @@ ttnn::Tensor all_reduce_async(
         input_tensor, ttnn::ccl::get_active_physical_devices(input_tensor).size());
 
     const auto& initial_shape = input_tensor.logical_shape();
-    auto composite_dim = (dim == input_tensor.padded_shape().size()) ? 0 : dim;
+    auto composite_dim = (dim == initial_shape.rank()) ? 0 : dim;
     bool composite_all_gather = composite_common::use_composite_all_gather(input_tensor, composite_dim);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, std::nullopt);
@@ -201,10 +227,13 @@ ttnn::Tensor all_reduce_async(
 
         // AllGather (1, B, C, H, W) -> (num_devices, B, C, H, W)
         composite_dim = 0;
+        // TODO(#30798): pass topology=nullopt for best perf (there's multiple places in this file).
+        // Needs to be verified.
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
             resolved_num_links,
+            ttnn::ccl::Topology::Linear,
             out_memory_config,
             worker_subdevice_id_opt,
             std::nullopt);
@@ -277,11 +306,29 @@ ttnn::Tensor all_reduce_async(
     const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
     const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
     const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
-    reduction_common::ReduceType /*math_op*/,
+    reduction_common::ReduceType math_op,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
+    // Run rank < 2 inputs as [1, N] and restore the shape on the way out
+    if (input_tensor.logical_shape().rank() < 2) {
+        const auto& logical_shape = input_tensor.logical_shape();
+        auto output_tensor = all_reduce_async(
+            ttnn::unsqueeze(input_tensor, 0),
+            cluster_axis,
+            mesh_device,
+            barrier_semaphores,
+            rs_global_semaphores,
+            ag_global_semaphores,
+            math_op,
+            memory_config,
+            topology,
+            num_preferred_links,
+            worker_subdevice_id_opt);
+        return ttnn::reshape(output_tensor, logical_shape);
+    }
+
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     uint32_t resolved_num_links =
         num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
@@ -305,7 +352,7 @@ ttnn::Tensor all_reduce_async(
         interleaved_input_tensor.has_value() ? interleaved_input_tensor.value() : input_tensor;
 
     // Logic for taking the AG+local reduce code path
-    auto composite_dim = (dim == input_tensor.padded_shape().size()) ? 0 : dim;
+    auto composite_dim = (dim == initial_shape.rank()) ? 0 : dim;
     bool composite_all_gather = composite_common::use_composite_all_gather(input_tensor, composite_dim);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, cluster_axis);
@@ -328,6 +375,7 @@ ttnn::Tensor all_reduce_async(
             reshaped_tensor,
             composite_dim,
             resolved_num_links,
+            ttnn::ccl::Topology::Linear,
             change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             worker_subdevice_id_opt,
             cluster_axis);
@@ -455,7 +503,8 @@ ttnn::Tensor all_reduce_async(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
-    bool use_optimal_ccl_for_llama) {
+    bool use_optimal_ccl_for_llama,
+    bool fp32_dest_acc) {
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
@@ -472,7 +521,8 @@ ttnn::Tensor all_reduce_async(
         num_preferred_links,
         worker_subdevice_id_opt,
         use_noc1_only,
-        use_optimal_ccl_for_llama);
+        use_optimal_ccl_for_llama,
+        fp32_dest_acc);
 }
 
 std::vector<ttnn::Tensor> all_reduce_async(

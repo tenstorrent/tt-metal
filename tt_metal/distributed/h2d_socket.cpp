@@ -15,6 +15,9 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
+#endif
 #include <tt-metalium/tt_align.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -27,12 +30,20 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
+// Drive the device forward one step from a host socket credit-wait loop. Simulator co-steps the umd
+// clock; emule pumps the parked fiber scheduler so a kernel blocked on this host-fed socket resumes.
 void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoordinate& device_coord) {
     if (mesh_device == nullptr) {
         return;
     }
 
     const auto& cluster = MetalContext::instance().get_cluster();
+#ifdef TT_METAL_USE_EMULE
+    if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
+        tt::tt_metal::emule::pump_device();
+        return;
+    }
+#endif
     if (cluster.get_target_device_type() != tt::TargetDevice::Simulator) {
         return;
     }
@@ -248,19 +259,12 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
-    // MockChip has no TLB manager (get_tlb_manager() == nullptr), so skip TLB window
-    // setup entirely: pcie_writer stays unset. Safe under Mock because the runtime I/O
-    // paths that use pcie_writer -- write() (HOST_PUSH) and notify_receiver() -- never
-    // execute for mock devices (mock only exercises socket construction / JIT).
-    //
-    // TODO(emule): this over-skips for Emule. SWEmuleChip also lacks a TLB manager but has
-    // real memory-backed I/O, so it should skip only the TLB-window path and still install
-    // the cluster.write_core() fallback for pcie_writer. As written, pcie_writer is left
-    // null, so enabling H2D socket runtime I/O under emule would null-deref in
-    // notify_receiver() / write().
-    if (cluster.is_mock_or_emulated()) {
-        return;
-    }
+    // Mock/emulated chips have no TLB manager (get_tlb_manager() == nullptr), so they can't take the
+    // static-TLB path: the target_in_static_tlb guard below excludes them (which also keeps
+    // is_tlb_mapped() from dereferencing the null manager), and they fall through to the
+    // cluster.write_core() dynamic writer. SWEmuleChip backs that with real memory-backed I/O;
+    // MockChip never invokes pcie_writer at runtime (only socket construction / JIT), so the
+    // installed writer is harmless there.
 
     // Receiver core type is recorded explicitly at construction (the DRAM-recv
     // ctor sets Dram, every other path is Tensix). Used only to resolve the
@@ -296,7 +300,8 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // need a per-write driver reconfig.
     const tt_xy_pair tlb_core(recv_virtual_core.x, recv_virtual_core.y);
     const bool target_in_static_tlb =
-        mesh_device && MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
+        mesh_device && !cluster.is_mock_or_emulated() &&
+        MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
         cluster.get_driver()
             ->get_chip(recv_device_id)
             ->get_tlb_manager()

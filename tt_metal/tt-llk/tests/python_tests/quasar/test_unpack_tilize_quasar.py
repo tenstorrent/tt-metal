@@ -16,6 +16,7 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
+    PerfRunType,
     UnpackerEngine,
     format_dict,
 )
@@ -25,6 +26,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import BootMode, TestConfig
@@ -32,9 +34,11 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -56,6 +60,8 @@ UNPACK_TILIZE_TILE_SIZES = [
 
 def generate_unpack_tilize_combinations(
     formats_list: List[FormatConfig],
+    *,
+    is_perf=False,
 ):
     """
     Generate unpack_tilize combinations.
@@ -69,6 +75,9 @@ def generate_unpack_tilize_combinations(
              tile_dimensions) tuples
     """
     combinations = []
+
+    perf_dimensions = [32, 32]
+    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
@@ -90,8 +99,26 @@ def generate_unpack_tilize_combinations(
             else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
         )
 
+        if is_perf:
+            if in_fmt.is_32_bit():
+                continue
+            for dest_acc in dest_acc_modes:
+                for dest_sync in dest_sync_modes:
+                    for unpacker_sel in (UnpackerEngine.UnpA,):
+                        combinations.append(
+                            (
+                                fmt,
+                                dest_acc,
+                                dest_sync,
+                                unpacker_sel,
+                                runtime(perf_dimensions),
+                                runtime((32, 32)),
+                            )
+                        )
+            continue
+
         for dest_acc in dest_acc_modes:
-            for dest_sync in (DestSync.Half, DestSync.Full):
+            for dest_sync in dest_sync_modes:
                 for unpacker_sel in unpacker_engines:
                     # Dest accumulation (32-bit dest) is only supported on SrcA
                     # (UNP_A); see the static_assert in
@@ -144,15 +171,30 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
 ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
     UNPACK_TILIZE_FORMATS
 )
+PERF_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
+    UNPACK_TILIZE_FORMATS,
+    is_perf=True,
+)
 
 
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_sync_unpack_sel_dimensions_tile_dims=ALL_UNPACK_TILIZE_COMBINATIONS,
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
 )
 def test_unpack_tilize_quasar(
-    formats_dest_acc_sync_unpack_sel_dimensions_tile_dims, boot_mode=BootMode.DEFAULT
+    formats_dest_acc_sync_unpack_sel_dimensions_tile_dims,
+    run_types,
+    loop_factor,
+    boot_mode=BootMode.DEFAULT,
+    *,
+    is_perf=False,
+    perf_report=None,
 ):
+    combination = formats_dest_acc_sync_unpack_sel_dimensions_tile_dims
+    if len(combination) == 1 and isinstance(combination[0], tuple):
+        combination = combination[0]
     (
         formats,
         dest_acc,
@@ -160,7 +202,7 @@ def test_unpack_tilize_quasar(
         unpacker_sel,
         input_dimensions,
         tile_dimensions,
-    ) = formats_dest_acc_sync_unpack_sel_dimensions_tile_dims[0]
+    ) = combination
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
@@ -189,10 +231,13 @@ def test_unpack_tilize_quasar(
         tile_dimensions=tile_dimensions,
     )
 
-    configuration = TestConfig(
-        "sources/quasar/unpack_tilize_quasar_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/unpack_tilize_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             generate_input_dim(
                 input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
             ),
@@ -205,14 +250,15 @@ def test_unpack_tilize_quasar(
             ),
             DEST_SYNC(dest_sync_mode),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES(num_faces),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -226,15 +272,26 @@ def test_unpack_tilize_quasar(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        unpack_to_dest=(
+        "unpack_to_dest": (
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
-        dest_acc=dest_acc,
-        boot_mode=boot_mode,
-        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
-        disable_format_inference=(formats.input_format.is_mx_format()),
-    )
+        "dest_acc": dest_acc,
+        "disable_format_inference": formats.input_format.is_mx_format(),
+    }
 
+    if is_perf:
+        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
+        configuration.run(perf_report)
+        return
+
+    configuration = TestConfig(
+        boot_mode=boot_mode,
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        },
+    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

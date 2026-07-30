@@ -51,6 +51,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary, render_table
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
     gather_cache_tp0,
@@ -106,12 +108,21 @@ _PADDED_FULL_55K = [
 ]  # sum == 55 * 1024
 assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(v % 32 == 0 and 0 < v <= CHUNK for v in _PADDED_FULL_55K)
 
+# 15k (15360) CI-sized variant of the above. Cost here tracks the CHUNK count, not the token count --
+# every chunk is a full CHUNK-wide padded tile regardless of its isl -- so 6 chunks runs ~3x faster
+# than full55k's 18 while keeping the properties that make the rotated path fail:
+#   * cumulative starts 0, 2592, 4160, 9280, 10080, 13440 -- only chunk 0 is slab-aligned, so 5 of 6
+#     chunks have the rotation actually active (it degenerates to the identity when slab-aligned);
+#   * starts land in 3 different slabs (<5120, 5120-10239, >=10240), so the rotation's slab-step term
+#     is exercised, not just the within-slab offset;
+#   * 2592 / 1568 / 800 / 3360 / 1920 are non-1024-aligned -> mid-tile rotation offsets;
+#   * 5120 keeps one exactly-full (unpadded) chunk in the mix.
+_PADDED_MID_15K = [2592, 1568, 5120, 800, 3360, 1920]  # sum == 15 * 1024
+assert sum(_PADDED_MID_15K) == 15 * 1024 and all(v % 32 == 0 and 0 < v <= CHUNK for v in _PADDED_MID_15K)
+
 # Per-chunk per-layer threshold; error accumulates with depth, so this matches the single-shot
 # transformer's device-gate trace bar (TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88). Calibrate + tighten.
 LAYER_PCC_THRESHOLD = 0.88
-# Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
-# accumulation headroom is pinned.
-GATED_LAYER_DEPTH = 10
 # Floors for the deep KV / indexer-K cache PCC. Set at the observed L78 minimum (not below it) so a
 # future regression fails the test. KVPE nope bottoms ~0.86 (glm_5_2 @L75); indexer-K nope 0.952
 # (glm_5_1 @L52; glm_5_1 captures all 78 layers, glm_5_2's 0-2+every-4th subsample only reaches 0.980).
@@ -497,11 +508,11 @@ def run_chunked_transformer_padded(
             ref = _ref_layer_slice(trace_dir, layout, i, kv_actual, valid_end)
             _, pcc = comp_pcc(ref, natural)
             layer_min_pcc[i] = min(layer_min_pcc[i], pcc)
-            # Record-only mode: log every per-layer/per-chunk PCC, do not assert (deep-layer
-            # accumulation profiling). Flag sub-threshold values as warnings instead of failing.
+            # Log every per-layer/per-chunk PCC so a failure localises to the first bad (chunk, layer);
+            # the run-wide minimum is asserted after the loop.
             logger.info(f"  chunk {c} (kv_actual={kv_actual} isl={isl}) layer {i} PCC: {pcc:.6f}")
             if pcc < LAYER_PCC_THRESHOLD:
-                logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD} (not asserted)")
+                logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}")
         logger.info(f"  chunk {c} done (kv_actual={kv_actual} isl={isl}, {num_layers} layers)")
     profiler.end("tt_forward")
 
@@ -509,11 +520,10 @@ def run_chunked_transformer_padded(
     for i in range(num_layers):
         logger.info(f"  layer {i}: {layer_min_pcc[i]:.6f}")
 
-    # Gate the shallow configs (measured >=0.99) so a real regression fails CI; the full-depth run's
-    # accumulation headroom is not yet pinned, so it stays record-only.
+    # Asserted at every depth, full-depth included: a routing/layout regression here (e.g. a wrong
+    # per-chip real-token split under rotation) collapses PCC, and a record-only run would go green.
     overall_min = min(layer_min_pcc.values())
-    if num_layers <= GATED_LAYER_DEPTH:
-        assert overall_min >= LAYER_PCC_THRESHOLD, f"min per-layer PCC {overall_min:.6f} < {LAYER_PCC_THRESHOLD}"
+    assert overall_min >= LAYER_PCC_THRESHOLD, f"min per-layer PCC {overall_min:.6f} < {LAYER_PCC_THRESHOLD}"
 
     _record_kv_cache_pcc(
         trace_dir,
@@ -946,7 +956,7 @@ def test_kimi_prefill_transformer_chunked(
     )
 
 
-@pytest.mark.parametrize("splits", [_PADDED_FULL_55K], ids=["full55k"])
+@pytest.mark.parametrize("splits", [_PADDED_MID_15K, _PADDED_FULL_55K], ids=["mid15k", "full55k"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -966,6 +976,22 @@ def test_kimi_prefill_transformer_chunked(
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                # FABRIC_2D + Topology.Linear: the transport this config ships on, and what the Blaze
+                # "Chunked Kimi Padded Accuracy" job runs. RELAXED_INIT is required for FABRIC_2D
+                # bring-up on BH Galaxy. L1_SMALL as in the 1D param above.
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": 512,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-mesh-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1109,15 +1135,16 @@ def run_chunked_transformer_no_pcc(
     def format_duration(seconds: float) -> str:
         return f"{seconds:7.3f}s"
 
-    def print_duration_table(iteration_chunk_times: list[list[float]]) -> list[str]:
+    def print_duration_table(iteration_chunk_times: list[list[float]]) -> tuple[list[str], list[str]]:
         """Log the per-chunk median/stddev table (and, when a baseline is set, the tolerance band +
-        PASS/FAIL). Returns the list of human-readable failure messages (empty if all chunks pass or if
-        there is no baseline) so the caller can assert after the table has been printed."""
+        PASS/FAIL). Returns (failures, table_lines): failures are the human-readable out-of-band messages
+        (empty if all chunks pass or there is no baseline) so the caller can assert after the table is
+        printed; table_lines is the rendered table for the caller to emit as a summary."""
         # Iteration 0 includes compile/JIT effects; exclude it from perf stats.
         samples = iteration_chunk_times[1:]
         if not samples:
             logger.warning("No post-warmup iterations available for chunk timing stats (need num_iters >= 2)")
-            return []
+            return [], []
 
         gated = baseline_chunk_times_s is not None
         if gated and len(baseline_chunk_times_s) != n_chunks:
@@ -1154,25 +1181,9 @@ def run_chunked_transformer_no_pcc(
                     )
             rows.append(row)
 
-        widths = [len(header) for header in headers]
-        for row in rows:
-            for idx, cell in enumerate(row):
-                widths[idx] = max(widths[idx], len(cell))
-
-        def render_row(values: list[str]) -> str:
-            return "| " + " | ".join(value.ljust(widths[idx]) for idx, value in enumerate(values)) + " |"
-
-        separator = "+-" + "-+-".join("-" * width for width in widths) + "-+"
-
         margin_note = f", baseline gate +/- {margin * 100:.1f}%" if gated else ", record-only (no baseline)"
         logger.info(f"chunk timing stats computed over {len(samples)} iterations (iter 0 omitted){margin_note}")
-        logger.info("\n" + separator)
-        logger.info(render_row(headers))
-        logger.info(separator)
-        for row in rows:
-            logger.info(render_row(row))
-        logger.info(separator)
-        return failures
+        return failures, render_table(headers, rows)
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -1419,9 +1430,17 @@ def run_chunked_transformer_no_pcc(
     logger.success(
         f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, " f"num_iters={num_iters})"
     )
-    perf_failures = print_duration_table(iteration_chunk_times)
-    for key in profiler.times:
-        logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
+    perf_failures, perf_table_lines = print_duration_table(iteration_chunk_times)
+    timing_lines = [f"  {key}: {profiler.get(key) * 1000:.2f} ms" for key in profiler.times]
+    if perf_table_lines:
+        emit_summary(
+            "perf",
+            f"{variant.name}_L{num_layers}_c{n_chunks}_i{num_iters}_p{preload_isl}",
+            f"Chunk timing — {variant.name} (L{num_layers}, {n_chunks} chunks, {num_iters} iters, preload {preload_isl})",
+            perf_table_lines + ["", "phase timings:"] + timing_lines,
+        )
+    for line in timing_lines:
+        logger.info(line)
 
     # Rough per-layer MLA-vs-FFN split (TT_PREFILL_BLOCK_TIMING=1): host wall-clock, sync-bracketed, so
     # absolutes inflate (syncs serialize) — read the RATIO and per-layer shape, not the totals. Mean +/- std
@@ -1536,6 +1555,10 @@ def run_chunked_transformer_no_pcc(
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.skipif(
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+)
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_no_pcc(
     variant,
@@ -1689,6 +1712,10 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 )
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.skipif(
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+)
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer_chunked_no_pcc(
     variant,

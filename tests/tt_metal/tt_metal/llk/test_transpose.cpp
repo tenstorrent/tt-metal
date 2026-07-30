@@ -64,6 +64,7 @@ struct TransposeConfig {
     TransposeType transpose_type;
     tt::DataFormat data_format = tt::DataFormat::Float16_b;
     bool dst_full_sync_en = false;
+    bool unpack_to_dest = false;
 };
 
 // Tiled dimensions derived from a 4-D NCHW tensor shape, with shared validation.
@@ -252,7 +253,7 @@ void run_single_core_transpose(
         (test_config.data_format == tt::DataFormat::Float32 || test_config.data_format == tt::DataFormat::Int32);
     experimental::ComputeHardwareConfig compute_hw_config;
     experimental::ComputeUnpackModes unpack_modes{};
-    if (fp32_dest_acc_en) {
+    if (test_config.unpack_to_dest) {
         unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
@@ -260,7 +261,6 @@ void run_single_core_transpose(
             .enable_32_bit_dest = fp32_dest_acc_en,
             .double_buffer_dest = !test_config.dst_full_sync_en,
             .unpack_modes = unpack_modes,
-            .unpack_to_dest_en = fp32_dest_acc_en,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
@@ -417,6 +417,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
             .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
             .data_format = tt::DataFormat::Float32,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest = true,
         };
         unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
     }
@@ -435,6 +436,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat16b) {
             .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
             .data_format = tt::DataFormat::Float16_b,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest = true,
         };
         unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
     }

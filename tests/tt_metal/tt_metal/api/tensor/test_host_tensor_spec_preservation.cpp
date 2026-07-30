@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
@@ -60,18 +61,18 @@ TEST(HostTensorSpecPreservation, ToLayoutInterleavedRmTileRoundTrip) {
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto tile_source = HostTensor::from_vector<float>(data, tile_source_spec);
 
-    auto rm = to_layout(tile_source, Layout::ROW_MAJOR);
     auto expected_rm_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+    auto rm = to_tensor_spec<float>(tile_source, expected_rm_spec);
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(rm.tensor_spec(), expected_rm_spec));
     EXPECT_EQ(rm.memory_config().buffer_type(), BufferType::DRAM);
     EXPECT_EQ(rm.tensor_topology(), tile_source.tensor_topology());
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(rm);
 
     // RM PageConfig does not carry a non-default tile; restore TILE with explicit tile.
-    auto tiled_back = to_tile_layout(rm, tile);
     auto expected_tile_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto tiled_back = to_tensor_spec<float>(rm, expected_tile_spec);
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(tiled_back.tensor_spec(), expected_tile_spec));
     EXPECT_EQ(tiled_back.memory_config().buffer_type(), BufferType::DRAM);
     EXPECT_EQ(tiled_back.tensor_topology(), tile_source.tensor_topology());
@@ -110,10 +111,9 @@ TEST(HostTensorSpecPreservation, ToLayoutShardedPreservesShardSpecAndPackedSizes
         distributed::MeshCoordinate(0, 1), [&]() { return HostBuffer(std::vector<float>(data_1)); });
     auto source = HostTensor::from_buffer(std::move(distributed_buffer), source_spec, topology);
 
-    auto result = to_layout(source, Layout::ROW_MAJOR);
-
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+    auto result = to_tensor_spec<float>(source, expected_spec);
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_TRUE(result.memory_config().shard_spec().has_value());
     EXPECT_EQ(result.memory_config().shard_spec(), memory_config.shard_spec());

@@ -788,6 +788,13 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC transaction overflows a circular buffer).";
             break;
+        case dev_msgs::DebugSanitizeNocInvalidTxnId:
+            error_msg = fmt::format(
+                "{} used invalid NoC transaction id {} (exceeds max {}).",
+                get_riscv_name(reader_.env.get_hal(), programmable_core_type_, san.which_risc()),
+                san.l1_addr(),
+                san.len());
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",

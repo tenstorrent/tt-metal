@@ -43,20 +43,17 @@ namespace tt::tt_metal::experimental::tt_fabric {
 // o o o o
 // o o o o
 // * o o * < Corners pinned with *
-std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
-    MeshId mesh_id,
-    const tt::tt_metal::distributed::MeshShape& mesh_shape,
-    bool hard_pin_node_0,
-    bool nw_corner_only) {
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
+    MeshId mesh_id, const tt::tt_metal::distributed::MeshShape& mesh_shape, bool hard_pin_node_0, bool nw_corner_only) {
+    std::vector<PinningConstraint> pinning_groups;
 
     // Sub-galaxy slices: pin only the NW corner (node 0) to any tray-corner ASIC (asic_location==1 on
     // trays 1..4). The host-rank partition may land on any tray, so tray 1 alone is unsatisfiable.
     if (nw_corner_only) {
-        fixed_asic_position_pinnings.emplace_back(
-            FabricNodeId{mesh_id, 0},
-            std::vector<AsicPosition>{AsicPosition{1, 1}, AsicPosition{2, 1}, AsicPosition{3, 1}, AsicPosition{4, 1}});
-        return fixed_asic_position_pinnings;
+        pinning_groups.push_back(
+            {{FabricNodeId{mesh_id, 0}},
+             {AsicPosition{1, 1}, AsicPosition{2, 1}, AsicPosition{3, 1}, AsicPosition{4, 1}}});
+        return pinning_groups;
     }
 
     // Get all 4 possible corner ASIC positions
@@ -73,20 +70,81 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
     corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
 
-    fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
+    pinning_groups.reserve(corner_fabric_node_ids.size());
     for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
         // Special case: Hard pin NW corner (fabric node id 0) to asic 1 tray 1 if requested.
         if (corner_fabric_node_id == FabricNodeId{mesh_id, 0} && hard_pin_node_0) {
-            fixed_asic_position_pinnings.emplace_back(
-                corner_fabric_node_id, std::vector<AsicPosition>{AsicPosition{1, 1}});
+            pinning_groups.push_back({{corner_fabric_node_id}, {AsicPosition{1, 1}}});
             continue;
         }
 
-        fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
+        pinning_groups.push_back({{corner_fabric_node_id}, corner_asic_positions});
     }
 
-    return fixed_asic_position_pinnings;
+    return pinning_groups;
 }
+
+namespace {
+
+// Apply many-to-many pinning groups as a single required constraint per group. Each group is applied
+// independently, filtered down to what exists here: fabric nodes belonging to another logical mesh are
+// dropped, as are ASIC positions absent from this physical mesh. A group left with nothing to say is
+// skipped, so a group naming positions that only exist on some meshes constrains just those meshes. When
+// `require_present_positions` is true (map_mesh_to_physical), a group whose positions are ALL absent is an
+// error rather than a silent skip.
+std::optional<std::string> apply_pinning_groups(
+    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
+    const std::vector<PinningConstraint>& pinning_groups,
+    MeshId logical_mesh_id,
+    const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids,
+    bool require_present_positions) {
+    for (const auto& group : pinning_groups) {
+        std::set<FabricNodeId> fabric_nodes;
+        for (const auto& fabric_node : group.fabric_nodes) {
+            if (fabric_node.mesh_id != logical_mesh_id) {
+                continue;
+            }
+            fabric_nodes.insert(fabric_node);
+        }
+        if (fabric_nodes.empty()) {
+            continue;
+        }
+
+        std::set<tt::tt_metal::AsicID> asic_ids;
+        for (const auto& position : group.asic_positions) {
+            auto it = asic_positions_to_asic_ids.find(position);
+            if (it == asic_positions_to_asic_ids.end()) {
+                log_trace(
+                    tt::LogFabric,
+                    "Pinned ASIC position (tray_id: {}, asic_location: {}) not found in physical topology; skipping",
+                    position.first.get(),
+                    position.second.get());
+                continue;
+            }
+            asic_ids.insert(it->second.begin(), it->second.end());
+        }
+
+        if (asic_ids.empty()) {
+            if (require_present_positions) {
+                return fmt::format(
+                    "Pinned ASIC positions of a pinning group were not found among physical ASICs participating in "
+                    "mesh {}",
+                    logical_mesh_id.get());
+            }
+            continue;
+        }
+
+        if (!intra_mesh_constraints.add_required_constraint(fabric_nodes, asic_ids)) {
+            return fmt::format(
+                "fabric nodes in a pinning group have pinned ASIC positions present in the physical mesh but none "
+                "lie in each node's host-rank partition (conflicts with rank bindings)");
+        }
+    }
+
+    return std::nullopt;
+}
+
+}  // namespace
 
 TopologyMappingResult map_mesh_to_physical(
     MeshId mesh_id,
@@ -113,124 +171,56 @@ TopologyMappingResult map_mesh_to_physical(
         return result;
     }
 
-    // Add pinning constraints if any
-    // Build position trait maps for pinning constraints
+    // Add many-to-many pinning groups if any
     if (!config.pinnings.empty()) {
-        std::map<FabricNodeId, AsicPosition> fabric_node_to_position;
-        std::map<tt::tt_metal::AsicID, AsicPosition> asic_to_position;
-
-        // Build fabric node to position map from pinnings
-        for (const auto& [pos, fabric_node] : config.pinnings) {
-            if (fabric_node.mesh_id != mesh_id) {
-                continue;  // pin for another mesh
-            }
-
-            // Validate that the fabric node exists in logical adjacency
-            bool found = logical_adjacency.contains(fabric_node);
-            if (!found) {
-                result.success = false;
-                result.error_message =
-                    fmt::format("Pinned fabric node {} not found in logical mesh {}", fabric_node, mesh_id.get());
-                return result;
-            }
-
-            // Check for duplicate pinnings
-            auto [it, inserted] = fabric_node_to_position.try_emplace(fabric_node, pos);
-            if (!inserted) {
-                const auto& prev_pos = it->second;
-                result.success = false;
-                result.error_message = fmt::format(
-                    "Fabric node {} in mesh {} is pinned to multiple ASIC positions: (tray {}, loc {}) and (tray {}, "
-                    "loc {})",
-                    fabric_node,
-                    mesh_id.get(),
-                    *prev_pos.first,
-                    *prev_pos.second,
-                    *pos.first,
-                    *pos.second);
-                return result;
-            }
-        }
-
-        // Build ASIC to position map from config.asic_positions
         std::unordered_set<tt::tt_metal::AsicID> physical_node_set;
         for (const auto& [asic_id, _] : physical_adjacency) {
             physical_node_set.insert(asic_id);
         }
+
+        std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> asic_positions_to_asic_ids;
         for (const auto& [asic_id, pos] : config.asic_positions) {
-            // Only include ASICs that are in the physical adjacency graph
             if (physical_node_set.contains(asic_id)) {
-                asic_to_position[asic_id] = pos;
+                asic_positions_to_asic_ids[pos].insert(asic_id);
             }
         }
 
-        // Validate that all pinned positions exist
-        for (const auto& [fabric_node, pos] : fabric_node_to_position) {
-            bool found = false;
-            for (const auto& [asic_id, asic_pos] : asic_to_position) {
-                if (asic_pos.first == pos.first && asic_pos.second == pos.second) {
-                    found = true;
-                    break;
+        for (const auto& group : config.pinnings) {
+            for (const auto& fabric_node : group.fabric_nodes) {
+                if (fabric_node.mesh_id != mesh_id) {
+                    continue;
                 }
-            }
-            if (!found) {
-                result.success = false;
-                result.error_message = fmt::format(
-                    "Pinned ASIC position (tray {}, loc {}) not found among physical ASICs participating in mesh {}",
-                    *pos.first,
-                    *pos.second,
-                    mesh_id.get());
-                return result;
+                if (!logical_adjacency.contains(fabric_node)) {
+                    result.success = false;
+                    result.error_message =
+                        fmt::format("Pinned fabric node {} not found in logical mesh {}", fabric_node, mesh_id.get());
+                    return result;
+                }
             }
         }
 
-        // Add position-based trait constraint
-        if (!fabric_node_to_position.empty() && !asic_to_position.empty()) {
-            // Convert AsicPosition to a comparable type for trait constraint
-            // We'll use a string representation as the trait value
-            std::map<FabricNodeId, std::string> fabric_node_traits;
-            std::map<tt::tt_metal::AsicID, std::string> asic_traits;
+        if (auto pinning_error =
+                apply_pinning_groups(constraints, config.pinnings, mesh_id, asic_positions_to_asic_ids, true)) {
+            result.success = false;
+            result.error_message = *pinning_error;
+            return result;
+        }
 
-            for (const auto& [fabric_node, pos] : fabric_node_to_position) {
-                std::string trait = fmt::format("tray_{}_loc_{}", *pos.first, *pos.second);
-                fabric_node_traits[fabric_node] = trait;
-            }
-
-            for (const auto& [asic_id, pos] : asic_to_position) {
-                std::string trait = fmt::format("tray_{}_loc_{}", *pos.first, *pos.second);
-                asic_traits[asic_id] = trait;
-            }
-
-            // Add required trait constraint for pinning
-            if (!constraints.add_required_trait_constraint(fabric_node_traits, asic_traits)) {
-                result.success = false;
-                result.error_message = fmt::format(
-                    "Failed to add required trait constraint for pinned ASIC positions in mesh {}", mesh_id.get());
-                return result;
-            }
-
-            // Log pinnings
-            std::string pinnings_str;
-            bool first = true;
-            for (const auto& [fabric_node, pos] : fabric_node_to_position) {
-                if (!first) {
-                    pinnings_str += ", ";
+        std::size_t pinned_node_count = 0;
+        for (const auto& group : config.pinnings) {
+            for (const auto& fabric_node : group.fabric_nodes) {
+                if (fabric_node.mesh_id == mesh_id) {
+                    ++pinned_node_count;
                 }
-                first = false;
-                pinnings_str += fmt::format(
-                    "fabric_node={} (mesh_id={}, chip_id={}) -> ASIC position (tray={}, loc={})",
-                    fabric_node,
-                    fabric_node.mesh_id.get(),
-                    fabric_node.chip_id,
-                    *pos.first,
-                    *pos.second);
             }
+        }
+        if (pinned_node_count > 0) {
             log_info(
                 tt::LogFabric,
-                "TopologyMapper: Using {} pinning(s) for mesh {}: [{}]",
-                fabric_node_to_position.size(),
-                mesh_id.get(),
-                pinnings_str);
+                "TopologyMapper: Using {} pinning group(s) covering {} fabric node(s) for mesh {}",
+                config.pinnings.size(),
+                pinned_node_count,
+                mesh_id.get());
         }
     }
 
@@ -1735,11 +1725,15 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
 
     std::map<MeshId, std::set<MeshId>> mesh_level_pinnings;
-    for (const auto& [pos, fabric_node] : config.pinnings) {
-        for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
-            auto asic_position_map = build_asic_positions_map(physical_mesh_graph, config);
-            if (asic_position_map.contains(pos)) {
-                mesh_level_pinnings[fabric_node.mesh_id].insert(physical_mesh_id);
+    for (const auto& group : config.pinnings) {
+        for (const auto& fabric_node : group.fabric_nodes) {
+            for (const auto& pos : group.asic_positions) {
+                for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
+                    auto asic_position_map = build_asic_positions_map(physical_mesh_graph, config);
+                    if (asic_position_map.contains(pos)) {
+                        mesh_level_pinnings[fabric_node.mesh_id].insert(physical_mesh_id);
+                    }
+                }
             }
         }
     }
@@ -1985,50 +1979,8 @@ std::optional<std::string> add_pinning_constraints(
     const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids,
     const TopologyMappingConfig& config,
     MeshId logical_mesh_id) {
-    // Build the pinning constraints from config.pinnings
-    // Group pinnings by fabric_node (since config.pinnings is position -> fabric_node)
-    std::map<FabricNodeId, std::vector<AsicPosition>> fabric_node_to_positions;
-    for (const auto& [position, fabric_node] : config.pinnings) {
-        // Only check the pinnings for the current mesh
-        if (fabric_node.mesh_id != logical_mesh_id) {
-            continue;
-        }
-        fabric_node_to_positions[fabric_node].push_back(position);
-    }
-
-    // Apply pinning constraints that exist on this physical grouping
-    for (const auto& [fabric_node, positions] : fabric_node_to_positions) {
-        std::set<tt::tt_metal::AsicID> asic_ids;
-
-        // Convert the ASIC positions to ASIC IDs; skip positions absent from the physical mesh
-        for (const auto& position : positions) {
-            auto it = asic_positions_to_asic_ids.find(position);
-            if (it == asic_positions_to_asic_ids.end()) {
-                log_trace(
-                    tt::LogFabric,
-                    "Pinned ASIC position (tray_id: {}, asic_location: {}) to fabric node id (mesh_id: {}, chip_id: "
-                    "{}) from MGD not found in physical topology; skipping",
-                    position.first.get(),
-                    position.second.get(),
-                    fabric_node.mesh_id.get(),
-                    fabric_node.chip_id);
-                continue;
-            }
-            asic_ids.insert(it->second.begin(), it->second.end());
-        }
-
-        if (!asic_ids.empty()) {
-            if (!intra_mesh_constraints.add_required_constraint(fabric_node, asic_ids)) {
-                return fmt::format(
-                    "fabric node (mesh={}, chip={}) has pinned ASIC positions present in the physical mesh but none "
-                    "lie in the node's host-rank partition (conflicts with rank bindings)",
-                    fabric_node.mesh_id.get(),
-                    fabric_node.chip_id);
-            }
-        }
-    }
-
-    return std::nullopt;
+    return apply_pinning_groups(
+        intra_mesh_constraints, config.pinnings, logical_mesh_id, asic_positions_to_asic_ids, false);
 }
 
 // Add the PGD-derived layout as PREFERRED (soft) intra-mesh constraints. Must be called AFTER the hard

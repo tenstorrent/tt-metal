@@ -8,6 +8,7 @@ import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 from models.common.utility_functions import skip_for_blackhole
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
@@ -19,44 +20,58 @@ def is_unsupported_case(
     dim,
     mem_config,
     num_devices,
-    num_links,
     input_dtype,
     layout,
     tile,
     num_l1_banks=64,
     mem_config_input=None,
 ):
-    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
-        return True, "Row-major layout with bfloat8_b datatype is an invalid combination"
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        return True, "Row-major layout with block-float datatype is an invalid combination"
+    if layout == ttnn.TILE_LAYOUT and input_dtype == ttnn.fp8_e4m3:
+        return True, "Tile layout with fp8_e4m3 datatype is an invalid combination"
 
     if output_shape[dim] % num_devices != 0:
         return True, f"Output shape {output_shape} dim{dim} must be a multiple of num devices {num_devices}"
     if tile != (32, 32) and input_dtype != ttnn.bfloat16:
         return True, "Tiny tile only supports bfloat16"
 
+    if layout == ttnn.TILE_LAYOUT:
+        # Average elem size, since block float tiles pack a shared exponent per tile
+        elem_size = ttnn.Tile(tile).get_tile_size(input_dtype) / (tile[0] * tile[1])
+    else:
+        elem_size = ttnn.element_size(input_dtype)
+
+    def tensor_size_bytes(shape):
+        padded = list(shape)
+        if layout == ttnn.TILE_LAYOUT:
+            padded[-2] = math.ceil(padded[-2] / tile[0]) * tile[0]
+            padded[-1] = math.ceil(padded[-1] / tile[1]) * tile[1]
+        return math.prod(padded) * elem_size
+
     ## Check that we can readback results
-    fast_dispatch_page_size_limit = 55 * 1024
-    elem_size_map = {
-        ttnn.uint32: 4,
-        ttnn.bfloat16: 2,
-        ttnn.bfloat8_b: 1,
-    }
-    elem_size = elem_size_map.get(input_dtype, 4)
-    if layout == ttnn.ROW_MAJOR_LAYOUT and (output_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        if mem_config.shard_spec is not None and mem_config.memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            page_width = mem_config.shard_spec.shape[-1]
+        elif mem_config.nd_shard_spec is not None:
+            page_width = mem_config.nd_shard_spec.shard_shape[-1]
+        else:
+            page_width = output_shape[-1]
         # Fast dispatch currently can't breakup readback of large pages into multiple smaller pages and is
-        # limited to ~55K pages.
-        return True, "Fast dispatch can't support reading back this page size in one shot"
+        # limited to ~55K pages. Reference: BufferReadDispatchParams in tt_metal/impl/buffers/dispatch.hpp,
+        # and calculate_max_prefetch_data_size_bytes().
+        fast_dispatch_page_size_limit = 55 * 1024
+        if page_width * elem_size > fast_dispatch_page_size_limit:
+            return True, "Fast dispatch can't support reading back this page size in one shot"
 
     # Check that we can fit in L1 (if L1 config)
-    tensor_size_bytes = elem_size
-    for i in output_shape:
-        tensor_size_bytes *= i
     L1_util = 0
     if mem_config.buffer_type == ttnn.BufferType.L1:
-        L1_util = L1_util + tensor_size_bytes
-    if mem_config_input is not None:
-        if mem_config_input.buffer_type == ttnn.BufferType.L1:
-            L1_util += tensor_size_bytes / num_devices
+        L1_util += tensor_size_bytes(output_shape)
+    if mem_config_input is not None and mem_config_input.buffer_type == ttnn.BufferType.L1:
+        input_shape = list(output_shape)
+        input_shape[dim] //= num_devices
+        L1_util += tensor_size_bytes(input_shape)
 
     if L1_util > num_l1_banks * 1536 * 1024:
         return True, "Test_Infrastructure_Skip L1 test requires more memory than the total available in the device"
@@ -67,14 +82,6 @@ def is_unsupported_case(
             True,
             f"Output shape {output_shape} incompatible with {num_devices} on dim {dim} because some chips will have no tensor",
         )
-
-    if (
-        output_shape == [8, 8, 256, 384]
-        and dim == 1
-        and layout == ttnn.TILE_LAYOUT
-        and (input_dtype == ttnn.bfloat8_b or tile != (32, 32))
-    ):
-        return True, "Known failure"
 
     return False, ""
 
@@ -109,7 +116,7 @@ def run_all_gather_impl(
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
-    allowed_pcc=1,
+    allowed_pcc=1.0,
     skip_check=False,
     num_l1_banks=64,
     all_gather_function=None,
@@ -117,10 +124,10 @@ def run_all_gather_impl(
     use_broadcast=False,
     use_explicit_subdevice_id=True,
 ):
-    use_sub_devices = False
     torch.manual_seed(0)
-
+    torch_dtype = tt_dtype_to_torch_dtype[ag_input_dtype]
     tile = (32, 32)
+    use_sub_devices = False
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = tuple(mesh_device.shape)
@@ -132,7 +139,6 @@ def run_all_gather_impl(
         dim,
         mem_config_ag,
         replicate,
-        num_links,
         ag_input_dtype,
         layout,
         tile,
@@ -211,7 +217,14 @@ def run_all_gather_impl(
     ag_output_tensor_goldens_list = []
 
     for i in range(num_iters):
-        ag_output_tensor = torch.rand(ag_output_shape).bfloat16()
+        if torch_dtype in (torch.bfloat16, torch.float32):
+            torch_input = torch.randn(ag_output_shape, dtype=torch_dtype)
+        else:
+            torch_input = torch.randint(0, 100, ag_output_shape, dtype=torch_dtype)
+
+        # torch -> ttnn dtype conversion may be lossy, so exclude that to isolate if CCL is lossy
+        # (i.e. by converting golden to ttnn dtype we can expect pcc==1.0 for any dtype)
+        ag_output_tensor = ttnn.to_torch(ttnn.from_torch(torch_input, dtype=ag_input_dtype, layout=layout))
         ag_output_tensor_goldens_list.append(ag_output_tensor)
 
         if cluster_axis is None:
@@ -221,7 +234,7 @@ def run_all_gather_impl(
             mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape)
 
         input_tensor_mesh = ttnn.from_torch(
-            ag_output_tensor,
+            torch_input,
             device=mesh_device,
             layout=layout,
             dtype=ag_input_dtype,
@@ -364,23 +377,24 @@ def run_all_gather_impl(
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_persistent_buffers, pcc_threshold",
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_persistent_buffers",
     [
-        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
-        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check
-        ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
-        ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, False, 1, True, 0.9999),  # check, bf8
-        ([8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, False, 1.0),  # check
-        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
-        ([1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
-        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check
-        ([1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, padded
-        ([1, 1, 1024, 1024], -2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
-        ([1, 1, 48, 1024], -1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, padded
+        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf
+        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check
+        ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf
+        ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, False, 1, True),  # check, bf8
+        ([8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, False),  # check
+        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf
+        ([1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf
+        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check
+        ([1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, padded
+        ([1, 1, 1024, 1024], -2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf
+        ([1, 1, 48, 1024], -1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, padded
+        ([256], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, rank 1
         # composite (RM last-dim unaligned pages)
-        ([1, 1, 32, 136], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf, composite
+        ([1, 1, 32, 136], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf, composite
         # composite (tile padding on gather dim)
-        ([1, 1, 48, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, composite
+        ([1, 1, 48, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, composite
     ],
     ids=[
         "dit_shape-perf",
@@ -394,6 +408,7 @@ def run_all_gather_impl(
         "gather_dim_3_padded_dim_2-check",
         "gather_dim_negative_2-perf",
         "gather_dim_negative_1_padded_dim_2-check",
+        "rank1_persistent_buffer-check",
         "composite_ag_test_one-perf",
         "composite_ag_test_two-check",
     ],
@@ -433,7 +448,6 @@ def test_all_gather(
     enable_trace,
     num_iters,
     use_persistent_buffers,
-    pcc_threshold,
     mem_config_input,
     mem_config_ag,
 ):
@@ -448,7 +462,73 @@ def test_all_gather(
         enable_trace=enable_trace,
         num_iters=num_iters,
         use_persistent_buffers=use_persistent_buffers,
-        allowed_pcc=pcc_threshold,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "ag_output_shape, dim",
+    [
+        ([1, 1, 1024, 5120], 3),
+    ],
+)
+@pytest.mark.parametrize(
+    "ag_input_dtype, layout",
+    [
+        (ttnn.float32, ttnn.TILE_LAYOUT),
+        # (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT),  # no WH support (Issue #43909)
+        (ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat4_b, ttnn.TILE_LAYOUT),
+        (ttnn.uint32, ttnn.TILE_LAYOUT),
+        (ttnn.uint16, ttnn.TILE_LAYOUT),
+        (ttnn.uint8, ttnn.TILE_LAYOUT),
+        (ttnn.int32, ttnn.TILE_LAYOUT),
+    ],
+    ids=[
+        "float32_tile",
+        # "fp8_e4m3_rm",
+        "bfloat16_tile",
+        "bfloat16_rm",
+        "bfloat8_b_tile",
+        "bfloat4_b_tile",
+        "uint32_tile",
+        "uint16_tile",
+        "uint8_tile",
+        "int32_tile",
+    ],
+)
+@pytest.mark.parametrize("mem_config_input, mem_config_ag", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+    ],
+    indirect=True,
+    ids=["fabric_ring"],
+)
+def test_all_gather_dtype(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+):
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape,
+        dim,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=False,
+        num_iters=1,
+        use_persistent_buffers=True,
     )
 
 
@@ -973,6 +1053,9 @@ def _dram_width_sharded(shard_height, shard_width, num_cores):
         ([1, 1, 256, 64], 2, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
         # split, padded output (m=1,s=2,k=1): DRAM shard content 16B pads to 32B, so split uses content.
         ([8, 1, 32, 16], 0, _dram_width_sharded(32, 16, 1), _dram_width_sharded(256, 8, 2)),
+        # matched, padded, sharded -> interleaved, non-last-dim (m=1,s=1,k=1): a full-row DRAM shard
+        # (content 136*2=272B, padded to the 32B DRAM page) gathered on the height dim into interleaved output.
+        ([1, 1, 256, 136], 2, _dram_width_sharded(32, 136, 1), ttnn.DRAM_MEMORY_CONFIG),
     ],
     ids=[
         "matched",
@@ -987,6 +1070,7 @@ def _dram_width_sharded(shard_height, shard_width, num_cores):
         "rm_interleaved_last_dim",
         "non_last_dim_interleaved",
         "split_padded_output",
+        "matched_sharded_to_interleaved_padded",
     ],
 )
 @pytest.mark.parametrize(
@@ -1015,7 +1099,6 @@ def test_all_gather_page_indexing(
         enable_trace=False,
         num_iters=1,
         use_persistent_buffers=False,
-        allowed_pcc=1.0,
     )
 
 
