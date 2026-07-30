@@ -110,11 +110,31 @@ cd /data/nmilicevic/tt-metal && source python_env/bin/activate && export TT_META
 
 Full suite: drop the `-k`. The 18 CCL tests are the slow half and pass on the bad box too.
 
+## fw 19.12 / KMD 2.10 on a fresh box — clean (2026-07-30)
+
+Host `bh-glx-110-c10u08`, fw `19.12.0.0`, KMD `2.10.0` — the newer pair. Same repo, same test
+file (identical to the pushed branch tip). Matmul-compute subset, **8 passed in 5:37**:
+
+```
+all 120 cores bit-exact across 10 iterations and all 32 chips   # test_matmul_core_sweep
+local matmul1 seq=3200 / matmul2 seq=3200 / matmul1 seq=640 / matmul2 seq=640  -> bit-exact
+matmul 3200x4608 / 3200x2304 / 1600x4608 (core_locality)                       -> bit-exact
+```
+
+The sweep names no core. Core (6,8) is bit-exact here, and so is the seq640 chunked shape —
+the smallest signal, the one a PCC gate would miss first. Log: `/data/nmilicevic/c10u08_matmul_fw1912.log`.
+
+The firmware correlation now has two boxes on each side: **fail on 19.8.1 / KMD 2.8** (b06u02
+and the other reported box), **pass on 19.12 / KMD 2.10** (b07u08, c10u08). It is still a
+correlation across *different silicon* — a fresh healthy box passes whether the fix is the
+firmware or the silicon lottery, so this does not yet establish cause. The one experiment that
+separates them is unchanged: bring b06u02 itself to the newer pair and rerun.
+
 ## Caveat and open items
 
 - **Firmware/KMD is the leading candidate for the *cause*, and it is uncontrolled.** b06u02 is
-  on fw `19.8.1.0` / KMD `2.8.0`, b07u08 on `19.12.0` / `2.10.0`, and the two reported-failing
-  boxes are both on the older pair. Firmware owns AICLK, VDD, DVFS and harvesting, so a core
+  on fw `19.8.1.0` / KMD `2.8.0`, the passing boxes b07u08 and c10u08 on `19.12.0` / `2.10.0`,
+  and the two reported-failing boxes are both on the older pair. Firmware owns AICLK, VDD, DVFS and harvesting, so a core
   that is marginal at 19.8.1's operating point and fine at 19.12.0's produces exactly this
   signature. These tests establish *where* the fault manifests, not why. Three constraints:
   a uniform firmware cannot select 1 chip of 32 by itself (all 32 report `fw_bundle 19.8.1.0`,
