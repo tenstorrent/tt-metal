@@ -175,7 +175,7 @@ struct DropoutCoreWork {
 // override_runtime_arguments so the per-core layout the cache-hit patch writes cannot drift from the
 // one the cache-miss build baked.
 template <typename Fn>
-void for_each_dropout_core(const DropoutCoreSplit& split, Fn&& fn) {
+void for_each_dropout_core(const DropoutCoreSplit& split, const Fn& fn) {
     for (uint32_t i = 0, num_tiles_written = 0; i < split.num_cores; i++) {
         const tt::tt_metal::CoreCoord core = {i / split.num_cores_y, i % split.num_cores_y};
         const bool in_group_1 = split.core_group_1.contains(core);
