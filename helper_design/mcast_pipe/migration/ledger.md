@@ -12,22 +12,23 @@ senders, producing the current 22-row production candidate set.
 ## Host-helper re-entry state
 
 The paired `mcast_host` helper and `McastArgs` decoder are materialized and
-their intake tests are green. Phase 1 found ten required bindings. The Conv2d
-single-sender rectangle binding is now fully current at API v9; nine bindings
-remain pending:
+their intake tests are green. Phase 1 found ten required bindings. Both Conv2d
+weights bindings are now fully current at API v9; eight bindings remain
+pending:
 
 | Unit | Required bindings | Status | Kernel rows | Validation |
 |---|---:|---|---:|---|
 | `conv2d-weights-single-sender-rect` | 1 | fully end-to-end migrated @ v9 | 2 | `CONV-HEIGHT`: 49 passed, 16 expected skips; shared DRAM: 14 passed |
-| `conv2d-weights-fixed-line` | 1 | pending | 2 | `CONV-BLOCK`, shared DRAM slice |
+| `conv2d-weights-fixed-line` | 1 | fully end-to-end migrated @ v9 | 2 | `CONV-BLOCK`: 49 passed, 16 expected skips; shared DRAM: 14 passed |
 | `matmul-in1-mcast-padding-host` | 4 | pending | 2 | `MM-IN1-ALL`, `MM-IN1-RECEIVER-2D` |
 | `groupnorm-sharded-v2-mcast-host` | 4 | pending | 4 | legacy + Welford `GN-SHARDED-PARAMETERIZED` |
 
 The exact binding/dispatch map is in `test_map.json`; the easier-first atomic
 order and risk gates are in `tiers.md`. Until a unit's required bindings are
 migrated at API v9, its kernel rows are kernel-current but not fully
-end-to-end current. The completed Conv2d unit uses code commit
-`75b977e1a04ee7a14df5d8039393c7844f33fdae`.
+end-to-end current. The completed Conv2d units use code commits
+`75b977e1a04ee7a14df5d8039393c7844f33fdae` and
+`261e322ed2284175e3b4b7b80f98e947b569fe10`.
 
 ## Current migrations under API v9 (10)
 
@@ -37,8 +38,8 @@ end-to-end current. The completed Conv2d unit uses code commit
 | matmul | receiver | `reader_bmm_tile_layout_in1_receiver_writer_padding.cpp` | `MM-IN1-ALL` / receiver subset and exact JIT evidence |
 | Conv | sender | `reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v9; `CONV-HEIGHT`: 49 passed, 16 expected skips; 14 DRAM regressions; exact JIT path |
 | Conv | receiver | `reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v9; `CONV-HEIGHT`: 49 passed, 16 expected skips; 14 DRAM regressions; exact JIT path |
-| Conv | sender | `writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` | `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions |
-| Conv | receiver | `writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp` | `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions |
+| Conv | sender | `writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v9; `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions; exact PerRow/PerColumn paths |
+| Conv | receiver | `writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v9; `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions; exact PerRow/PerColumn paths |
 | normalization | receiver | `reader_mcast_receiver_unary_sharded_gn_v2.cpp` | legacy inventory: 124 passed, 8 expected skips |
 | normalization | sender | `reader_mcast_sender_unary_sharded_gn_v2.cpp` | legacy inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
 | normalization | receiver | `welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp` | Welford inventory: 116 passed, 8 expected skips |
@@ -64,8 +65,8 @@ migrations.
 The copied July census still contains 92 entries:
 
 - 10 current production migrations at API v9;
-- 1 required host binding current and 9 pending across 4 atomic units;
-- 2 fully end-to-end current kernels in the Conv2d single-sender rectangle unit;
+- 2 required host bindings current and 8 pending across 4 atomic units;
+- 4 fully end-to-end current kernels across the two Conv2d weights units;
 - 12 production candidates deferred with `v9-port-blocked` and a concrete
   design-gap flag;
 - 70 pre-existing deferred candidates from the July census;
