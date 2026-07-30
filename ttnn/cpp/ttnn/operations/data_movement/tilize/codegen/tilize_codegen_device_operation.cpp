@@ -39,15 +39,6 @@ TilizeCodegenDeviceOperation::tensor_return_value_t TilizeCodegenDeviceOperation
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-void TilizeCodegenDeviceOperation::override_runtime_arguments(
-    tt::tt_metal::Program& /*program*/,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*tensor_return_value*/,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    TT_THROW("TilizeCodegenDeviceOperation::override_runtime_arguments is not yet implemented");
-}
-
 Tensor tilize_codegen(const Tensor& input_tensor, const TilizeCodegenParams& params) {
     return ttnn::device_operation::launch<TilizeCodegenDeviceOperation>(params, TilizeCodegenInputs{input_tensor});
 }
