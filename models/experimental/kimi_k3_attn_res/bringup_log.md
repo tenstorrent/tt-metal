@@ -248,6 +248,14 @@ that batched matmul beats 24 broadcast passes, which is a Phase-9 measurement. T
 strengthens the Phase-10 case: a fused kernel can hold `e` in L1 and contract over `s`
 without ever paying tile padding.
 
+**Phase 7 measures 1.50×, above that estimate.** Wall clock, warm, `T=5120`, `S=8`,
+24 read sites, single device: direct 516.2 ms (21.5 ms/read) versus split 343.4 ms
+(14.3 ms/read). The 1.3× estimate undercounted because the split form also drops the
+`concat` entirely — it never materializes `v` — and its mixture pass covers 8 candidates
+plus a 1-candidate merge instead of 9. Not a Phase-9 result: wall clock, no profiler, one
+shape, and the live stream is held constant across the 24 merges (timing-neutral, since
+`merge` recomputes from `prefix_sum` every call, but not a realistic value pattern).
+
 A sealed snapshot's RMS never changes after sealing, so fold `rms_inv` for sealed
 candidates at **seal time**: the per-block pass then needs only dot products, and the
 live stream's statistics are the only per-read reduction.
@@ -328,6 +336,11 @@ tests use `assert_with_pcc(expected, actual, pcc=0.9999)`
 | `test_sharded_stream_is_rejected` | last dim ≠ `hidden_size` | raises, via the repo's `expect_error` fixture |
 | `test_depth_fidelity` | 93 layers, random module outputs | **relative** gate, below, **plus** norm ratio within 2e-2 |
 | `test_device_lifecycle_matches_torch` | 93-layer device walk, `Bk=12` | 186 reads; seals at `{0,12,…,84}`; `S` ramps 0→8 monotonically |
+| `test_production_forward_matches_torch` | `T = 5120`, `S ∈ {0,8}` | PCC ≥ 0.9999 **and** rel err ≤ 2e-2 |
+| `test_production_split_matches_forward` | `T = 5120`, `S = 8`, 24 read sites | PCC ≥ 0.9999 against the direct form |
+| `test_ragged_token_count_matches_torch` | `T ∈ {1000, 5119}`, `S = 8` | PCC ≥ 0.9999 **and** rel err ≤ 2e-2 across a tile-padded `T` |
+| `test_token_axis_is_pure_batch` | `T ∈ {64, 1000, 5120}`, `S = 8` | `max\|Δ\| == 0` on the shared token slice |
+| `test_production_depth_walk` | 93 layers at `T = 5120` | `max\|Δ\| == 0` vs the `T = 64` walk; seal schedule; finite |
 | `test_attn_res_dist_tp` | `(2,4)`, `S ∈ {4,8}` | PCC ≥ 0.9999 |
 | `test_attn_res_perf` | `T ∈ {640, 5120}`, `(8,1)` and `(2,4)` | no assertion; numbers transcribed here |
 | `test_pp_roundtrip` | 2 submeshes, `S=4` | bit-exact through the socket |
@@ -519,6 +532,50 @@ carries an explicit `borrowed` flag instead of an unconditional `free`.
 do not make ownership uniform. The reference path can afford to be sloppy about who frees
 what; the device path cannot, and the shared walk has to encode the difference.*
 
+### Phase 7 — a bit-exact gate that needs no reference at all
+
+**`T` is a pure batch axis, and that buys a sharper instrument than PCC.** Every
+reduction in the op is over `d` or over the candidate axis; none is over `T`. So the same
+read at `T = 64` and at `T = 5120`, sharing token rows, must agree **bit for bit** on the
+shared slice. Measured: `max|Δ| = 0` over 458 752 elements for a single read, and still
+`max|Δ| = 0` after the full 186-read 93-layer walk. That gate costs one extra device run
+instead of a ~10-minute fp32 host walk at production shape, and it fails on exactly the
+class of bug production shape introduces — a padding leak, a reduction on the wrong axis,
+a `T`-dependent work split. Equality gates are usually a mistake on device; here the
+invariant genuinely is exact, so the gate can be exact too.
+
+**Do not use `ttnn.CONFIG.throw_exception_on_fallback` as a no-host-fallback gate.** It
+reads like one. It is declared at `ttnn/api/ttnn/config.hpp:29` and **nothing in the tree
+reads it** — the only consumers are Python setters in three model tests. Four in-tree
+models set it to `True` and are getting no guarantee from it.
+
+**What does establish device-residency is bandwidth arithmetic.** One production read at
+`T = 5120, d = 7168, S = 8` moves a counted **7.33 GB** of DRAM traffic (concat 1.32,
+squares 1.32, its reduction 0.66, the `v ⊙ q` product 1.32, its reduction 0.66, the
+weighted product 1.32, its reduction 0.73) in a warm 21.6 ms → **~339 GB/s effective**.
+PCIe on this box cannot sustain a tenth of that, so nothing round-trips to host. The
+percentage-of-peak claim waits for Phase 8, where the constant has to be cited. Source
+inspection agrees: the only `from_torch` in `tt/` is the load-time `to_query`, and there
+is no `to_torch` at all.
+
+`ttnn.graph` was the wrong tool for this. `extract_calltrace` returns buffer-lifecycle
+nodes (`create_device_tensor`, `Tensor::deallocate`), not op names, so it cannot verify
+D10's "~12 launches per read" claim — that is a Phase-9 profiler measurement. Worse, the
+capture only populates with `enable_fast_runtime_mode = False`, and *that* mode's
+decorator layer introduces its own `Tensor::cpu` calls which do not exist on the
+production path. A tool that changes the thing it measures is not evidence.
+
+**The split form's memory cost shows up only at production shape.** `inter_block` returns
+all 24 partials before any `merge` runs, so 24 × `[1, 1, T, d]` = **1.7 GiB** coexists on
+top of the 560 MiB of snapshots. Invisible at `T = 64` (21 MiB). It fits on Blackhole and
+the 1.50× is real, but the group size is now a memory knob as well as a traffic knob,
+and under TP the partials shard with `d` while the peak does not move.
+
+*Lesson: look for an invariant the op satisfies exactly before reaching for a tolerance.
+An exact invariant gives a gate with no threshold to calibrate and no reference to
+compute — and it is the only kind of gate that gets sharper, not blunter, as the shape
+grows.*
+
 ---
 
 ## Backlog
@@ -531,7 +588,9 @@ what; the device path cannot, and the shared walk has to encode the difference.*
 - [ ] Measure the `N`-batched matmul `[N,R,S] × [N,S,d]` against 24 broadcast passes;
       decides whether the split form's remaining ~1.9× is reachable in composed ops.
 - [x] Phase 6 — device correctness + 93-layer depth harness.
-- [ ] Phase 7 — remove host fallbacks; `T=5120`.
+- [x] Phase 7 — remove host fallbacks; `T=5120`.
+- [ ] Verify D10's launch count (~12 ops/read, not ~90) with the Phase-9 profiler —
+      `ttnn.graph` cannot see op names, only buffer lifecycle.
 - [ ] Phase 8 — `DISTRIBUTION.md`, TP on `(2,4)`, `ROOFLINE.md`.
 - [ ] Phase 9 — perf harness + numbered perf loop.
 - [ ] Phase 10 — fused C++ op, only on measured evidence.
@@ -633,10 +692,33 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
   saturated case at `max|score| = 120`; removing the shift makes the output non-finite in
   both configs, which the test catches.
 
-  **NOT VALIDATED:** Scale defects *at depth* — mutation testing shows the depth gate
+  **NOT VALIDATED (Phase 6):** Scale defects *at depth* — mutation testing shows the depth gate
   passes both `ttnn.softmax(dim=1)` and an unshifted softmax; the op-level D13 gate is the
   detector for that class. Production `T` — still `N = 64` everywhere. Real module
   outputs: `apply_module` is an elementwise `h ⊙ w`, which exercises the residual
   bookkeeping but not KDA/MLA/MoE traffic patterns. Memory headroom at production shape —
   `block_residual` reaches `[1, 8, T, d]` and nothing has measured that against DRAM at
   `T = 5120`. Any performance claim. Distribution, real K3 weights, decode.
+- **2026-07-30** — Phase 7 **PASS**: `tests/test_tt_attn_res_production.py`. **79/79**
+  across the module, ~87 s.
+  **Command:** `PYTHONPATH=$TT_METAL_HOME python_env/bin/python -m pytest
+  models/experimental/kimi_k3_attn_res/tests/ -q`
+
+  **VALIDATED:** Production prefill shape runs on one Blackhole device — `T = 5120`,
+  `d = 7168`, `S = 8`, `block_residual` 560 MiB, 660 MiB of concatenated candidates.
+  `forward` holds PCC 0.9999804 / rel err 1.54e-2 at `S = 8` and 0.9999986 / 2.80e-3 at
+  `S = 0`; the split form reproduces it for all 24 read sites with 1.7 GiB of partials
+  co-resident. `T` is confirmed a pure batch axis: the shared token slice is
+  **bit-identical** between `T = 64` and `T = 5120` both for a single read and after the
+  full 93-layer, 186-read walk, with the seal schedule intact at production shape. No host
+  fallback — the only `from_torch` in `tt/` is the load-time `to_query`, there is no
+  `to_torch`, and one warm read moves a counted 7.33 GB in 21.6 ms (~339 GB/s), which
+  PCIe cannot do. Token counts that are not multiples of 32 hold too — `T = 1000`
+  (pads to 1024) at PCC 0.9999801 and `T = 5119` (pads to 5120) at 0.9999804, with the
+  slice equality intact across the padded boundary. First warm timing of the split form at
+  production shape: **1.50×** (516.2 → 343.4 ms per 24-read block).
+
+  **NOT VALIDATED (Phase 7):** That 1.50× as a *perf* result — wall clock, no profiler, one
+  shape, constant live stream; Phase 9 owns it. D10's op-launch count, which `ttnn.graph`
+  cannot see. `T` beyond 5120. Multi-device anything — every run above is `(1, 1)`. Real
+  module outputs, real K3 weights, decode.
