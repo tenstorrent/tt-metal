@@ -124,13 +124,25 @@ the backpressure loop deadlocks → requester stalls. Two candidate causes, **no
    egresses 50000) was botched** — `git stash` didn't move the *untracked* kernels_dev.c, so that test actually
    ran Stage-2 + the wrong requester. REDO it first next session.
 
-**Next session (in order):** (a) reconstruct/redeploy the Stage-1 sync kernel + single-slot requester, confirm
-SF→p0 egresses 50000 post-reboot (isolates bench-vs-code); (b) if bench is fine, **warm the steering flow** (send
-warm-up frames or a `skip_sw` tc filter, §9) and re-test — cold-flow backpressure is the leading suspect; (c) if
-still stalling, fix the async eth-completion reap (try blocking-drain-one like the sync kernel, or
-`request_notification` re-arm; load the `doca-verbs`/`doca-dpa` skill for ETH-SQ completion semantics). The
-Stage-2 source is backed up in the session scratchpad `stage2_backup/`. Note: gw/dpa_rehead_verbs/*.c were
-**untracked** in git before this — the Stage-2 commit adds `kernels_dev.c`+`common_defs.h` to tracking.
+**★ REFINED ISOLATION (2026-07-30, decisive): NOT steering, NOT the reboot.** With IPs restored + steering flow
+present, a run gives **ovs `n_packets` +1** (frames do NOT reach the eswitch) and **p0 tx +2** — so the frames are
+stuck in the **SF ETH SQ**, not dropped by a cold eswitch flow. DPA log: **frame 0 (slot 0) transmits fine
+(eth_done 0→1); frames 1+ (slots 1+) never transmit.** ⇒ the bug is the **per-slot ring gather for slot>0**, not
+the eth-completion reap and not the bench. Prime suspects, in order:
+1. **Header-ring gather addressing/coverage for slot>0** — `gsge[0].addr = hdr_base + slot*tt_frame_hdr` with
+   `lkey = tt_hdr_mkey` (the DPA-heap ring mmap). If the mmap/mkey only validly covers slot 0, or the per-slot
+   `h2d_memcpy` fill didn't take, slot>0 gathers bad memory → the ETH send errors/drops → no transmit.
+2. **Landing-ring gather for slot>0** — `gsge[1].addr = land_base + slot*tt_plen`, `lkey = tt_pay_mkey`.
+
+**Next session (focused):** (a) pinpoint gather-vs-else: temporarily gather from **slot 0 always** (both SGEs) +
+single-slot requester, keep the async no-wait — if it then transmits many, the per-slot ring gather is the bug
+(fix the header/landing ring mmap/mkey coverage or addressing); if it still stalls at 1, it's the async
+eth-completion/no-wait. (b) Check the ETH send **CQE status** for slot>0 (log `ce` error bits — `DOCA_DPA_DEV_COMP_
+SEND_ERR`) to see if slot>0 sends error vs silently don't transmit. (c) Verify the DPA-heap header-ring mmap
+(`tt_hdr_dpa_mmap`, `memrange_len=TT_RING*TT_FRAME_HDR`) and the per-slot `h2d_memcpy` loop actually populated all
+slots (d2h read-back a couple slots). Load the `doca-verbs`/`doca-dpa` skill for ETH-SQ gather + completion
+semantics. Stage-2 source backed up in scratchpad `stage2_backup/`; gw/dpa_rehead_verbs/*.c were **untracked**
+before — the Stage-2 commit added `kernels_dev.c`+`common_defs.h` to tracking.
 
 ## Stage 2 implementation plan (scoped 2026-07-30 — port the async-ring onto the DBR-fixed base)
 
