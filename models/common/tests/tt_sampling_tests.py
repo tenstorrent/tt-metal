@@ -41,6 +41,16 @@ FAST_NUM_STEPS = 5
 MULTI_DEVICE_MESHES = [1, (4, 8)]
 RING_FABRIC_DEVICE_PARAMS = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}]
 
+# Lane positions used to sweep the "odd lane out" tests below. The sampling
+# writer kernel reads each user's candidates out of a 32x32 tile where users
+# 0-15 live in tile faces 0/1 and users 16-31 in faces 2/3, so cover both sides
+# of that boundary as well as the first and last lane.
+ODD_LANE_INDICES = [0, 15, 16, BATCH_SIZE - 1]
+# The face-boundary lanes exercise per-core writer arithmetic that does not
+# depend on the mesh, so multi-device runs only sweep the endpoints.
+ODD_LANE_INDICES_MULTI_DEVICE = [0, BATCH_SIZE - 1]
+BAND_TOKENS_PER_USER = 8
+
 
 # Lightweight args container expected by TTSampling/SamplingGenerator in tests.
 @dataclass
@@ -234,6 +244,30 @@ def build_hot_logits(
     return logits
 
 
+def build_disjoint_band_logits(
+    args: _SamplingArgs,
+    *,
+    base_token: int,
+    tokens_per_user: int = BAND_TOKENS_PER_USER,
+    batch_size: int = BATCH_SIZE,
+    **kwargs,
+) -> tuple[torch.Tensor, list[list[int]]]:
+    """Give every user its own contiguous, non-overlapping hot-token band.
+
+    Disjoint bands make cross-user leakage directly observable: a token returned
+    for user i can only have come from user i's own logits row, so a single
+    equality check localises the failure to one lane.
+
+    Returns (logits, bands) where bands[i][0] is user i's max-logit token.
+    """
+    bands = [
+        [base_token + user_idx * tokens_per_user + rank for rank in range(tokens_per_user)]
+        for user_idx in range(batch_size)
+    ]
+    logits = build_hot_logits(args, per_user_hot_tokens=bands, batch_size=batch_size, **kwargs)
+    return logits, bands
+
+
 def build_penalty_logits(
     args: _SamplingArgs,
     *,
@@ -260,7 +294,17 @@ def run_ttsampling_once(
     temperature,
     batch_size: int | None = None,
 ) -> list[int]:
-    """Run one direct TTSampling forward and return host token IDs."""
+    """Run one direct TTSampling forward and return host token IDs.
+
+    NOTE: this bypasses 'format_sampling_params', so 'top_k'/'top_p'/'temperature'
+    are the raw *device-side* values. In particular 'temperature' is the inverse
+    temperature (1/T) that the kernel multiplies the logits by — it is not the
+    user-facing temperature, and 0.0 is not "greedy" here. For greedy, pass
+    'top_k=1' with 'temperature=1.0'.
+    """
+    assert all(
+        t > 0 for t in broadcast(temperature)
+    ), f"temperature is the device-side inverse temperature (1/T) and must be > 0, got {temperature}"
     effective_batch_size = infer_effective_batch_size(torch_logits, batch_size, max_batch_size=BATCH_SIZE)
     padded_logits = pad_logits_to_max_batch(torch_logits, max_batch_size=BATCH_SIZE)
 
@@ -321,7 +365,6 @@ def run_sampling_generator(
     padded_logits = pad_logits_to_max_batch(torch_logits, max_batch_size=BATCH_SIZE)
     sg = None
     tt_input = None
-    tt_logits = None
     tt_tokens = None
     tt_log_probs = None
     outputs = []
@@ -349,13 +392,18 @@ def run_sampling_generator(
                 raise ValueError("write_seed_values_to_device=True requires seed_values")
             sg.seed_manager.write_device_seed_values(seed_values)
 
-        tt_logits = padded_logits
-        tt_input = make_sharded_logits(tt_logits, mesh_device, args)
-
         for _ in range(num_steps):
             # SamplingGenerator keeps per-user RNG state in SeedManager.
             if advance_seeds:
                 sg.seed_manager.get_new_values()
+
+            # TTPenalties.apply() rewrites the logits tensor in place, so upload a
+            # pristine copy every step. Reusing one device tensor would compound
+            # each step's penalties onto the previous step's already-penalised
+            # logits, whereas real decode gets fresh logits from the LM head.
+            if tt_input is not None:
+                ttnn.deallocate(tt_input)
+            tt_input = make_sharded_logits(padded_logits, mesh_device, args)
 
             tt_tokens, tt_log_probs = sg.sample(tt_input, enable_trace=False)
             outputs.append(extract_tokens(tt_tokens, effective_batch_size, device_idx=device_idx))
@@ -370,9 +418,6 @@ def run_sampling_generator(
 
         if tt_input is not None:
             del tt_input
-
-        if tt_logits is not None:
-            del tt_logits
 
         if sg is not None:
             del sg
@@ -405,7 +450,10 @@ class TestPrefillWithDifferentParams:
         hot_tokens = [100, 101, 102, 103, 104, 105, 106, 107]
         hot_token_set = set(hot_tokens)
         logits = build_hot_logits(args, hot_tokens=hot_tokens)
-        params = SamplingParams(temperature=2.0, top_k=8, top_p=1.0)
+        # Every lane gets a different temperature, including greedy lanes (0.0).
+        temperature = ([0.0, 0.5, 1.0, 2.0] * (BATCH_SIZE // 4))[:BATCH_SIZE]
+        greedy_lanes = [i for i, t in enumerate(temperature) if t == 0.0]
+        params = SamplingParams(temperature=temperature, top_k=8, top_p=1.0)
         seeds = [3100 + i for i in range(BATCH_SIZE)]
         out1 = run_sampling_generator(
             mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds
@@ -417,6 +465,11 @@ class TestPrefillWithDifferentParams:
         assert_tokens_in_vocab(out1, args.vocab_size)
         unexpected = [tok for tok in out1 if tok not in hot_token_set]
         assert not unexpected, f"Sampled tokens outside expected hot set: {unexpected}, out={out1}"
+        for lane in greedy_lanes:
+            assert out1[lane] == hot_tokens[0], (
+                f"temperature=0.0 lane {lane} must be greedy on the max-logit token "
+                f"{hot_tokens[0]}, got {out1[lane]}. out={out1}"
+            )
 
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
     def test_prefill_temperature_varied_between_batches(self, mesh_device):
@@ -479,25 +532,30 @@ class TestPrefillWithDifferentParams:
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
     def test_prefill_topk_1_is_greedy(self, mesh_device):
         args = make_sampling_args(mesh_device)
-        logits = build_hot_logits(args, hot_tokens=[180, 181, 182, 183])
-        greedy_tokens = run_ttsampling_once(
-            mesh_device, args, logits, top_k=1, top_p=1.0, temperature=1.0
-        )  # Use top_p=1.0 (disabled) to keep this test portable across top-p conventions.
-        topk1_tokens = run_ttsampling_once(mesh_device, args, logits, top_k=1, top_p=1.0, temperature=5.0)
-        assert greedy_tokens == topk1_tokens, "top_k=1 should match greedy behavior"
+        hot_tokens = [180, 181, 182, 183]
+        logits = build_hot_logits(args, hot_tokens=hot_tokens)
+        # top_k=1 collapses to argmax whatever the temperature scaling is, so the
+        # max-logit token must come back for every inverse temperature.
+        # top_p=1.0 (disabled) keeps this portable across top-p conventions.
+        for inverse_temperature in (0.25, 1.0, 4.0):
+            tokens = run_ttsampling_once(mesh_device, args, logits, top_k=1, top_p=1.0, temperature=inverse_temperature)
+            assert all(tok == hot_tokens[0] for tok in tokens), (
+                f"top_k=1 should be greedy at inverse temperature {inverse_temperature}, "
+                f"expected all {hot_tokens[0]}, got {tokens}"
+            )
 
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
     def test_greedy_picks_max_logit(self, mesh_device):
         args = make_sampling_args(mesh_device)
         logits = build_hot_logits(args, hot_tokens=[42, 43, 44])  # 42 has highest logit
-        tokens = run_ttsampling_once(mesh_device, args, logits, top_k=1, top_p=1.0, temperature=0.0)
+        tokens = run_ttsampling_once(mesh_device, args, logits, top_k=1, top_p=1.0, temperature=1.0)
         assert all(tok == 42 for tok in tokens), "Greedy should always pick the max logit token"
 
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
     def test_run_ttsampling_once_respects_logits_batch_size(self, mesh_device):
         args = make_sampling_args(mesh_device)
         logits = build_hot_logits(args, batch_size=2, hot_tokens=[60, 61, 62])
-        tokens = run_ttsampling_once(mesh_device, args, logits, top_k=1, top_p=1.0, temperature=0.0)
+        tokens = run_ttsampling_once(mesh_device, args, logits, top_k=1, top_p=1.0, temperature=1.0)
         assert len(tokens) == 2, f"Expected 2 tokens for batch_size=2 logits, got {len(tokens)}"
         assert_tokens_in_vocab(tokens, args.vocab_size)
         assert all(tok == 60 for tok in tokens), f"Greedy should pick the max-logit token 60, got {tokens}"
@@ -1335,3 +1393,336 @@ class TestMixedParameterBatches:
         assert out1 == out2, "Mixed parameter batch should replay deterministically with fixed seeds"
         assert_tokens_in_vocab(out1, args.vocab_size)
         assert len(set(out1)) >= 2, "Mixed parameter batch should produce non-trivial diversity"
+
+
+# --- Test: a single odd lane out (1 greedy vs 31 stochastic, and the mirror) ---
+
+
+class TestSingleGreedyLaneInStochasticBatch:
+    """One greedy user in an otherwise stochastic batch, and the mirror case.
+
+    This is the configuration that stresses per-user sampling hardest, and it is
+    not covered by uniformly-greedy or uniformly-stochastic batches:
+
+    * The force-argmax fast path cannot fire, so the top-k pipeline has to honour
+      a k=1 lane sitting next to 31 lanes that each draw from their own RNG
+      stream. Every k/p/temp value is indexed per core, and the k=1 lane takes
+      the ``k <= FACE_WIDTH`` branch of the writer kernel's candidate walk while
+      its neighbours do not.
+    * A batch that is *nearly* uniform is exactly where an "any lane" predicate
+      passes for a "all lanes" rule -- see
+      ``test_force_argmax_needs_every_lane_greedy``.
+
+    Every user gets its own disjoint hot-token band so cross-lane leakage shows
+    up as a concrete per-user failure rather than a diversity statistic.
+    """
+
+    BASE_TOKEN = 4000
+
+    def _band_params(self, odd_lane, *, base_top_k, base_temperature, odd_top_k, odd_temperature, **overrides):
+        """Uniform params for every lane, overridden on ``odd_lane`` only."""
+        temperature = [base_temperature] * BATCH_SIZE
+        top_k = [base_top_k] * BATCH_SIZE
+        if odd_lane is not None:
+            temperature[odd_lane] = odd_temperature
+            top_k[odd_lane] = odd_top_k
+        return SamplingParams(temperature=temperature, top_k=top_k, top_p=[1.0] * BATCH_SIZE, **overrides)
+
+    def _greedy_lane_params(self, greedy_lane, *, temperature=1.0):
+        """31 stochastic lanes plus (optionally) one greedy lane."""
+        return self._band_params(
+            greedy_lane,
+            base_top_k=BAND_TOKENS_PER_USER,
+            base_temperature=temperature,
+            odd_top_k=1,
+            odd_temperature=0.0,
+        )
+
+    def _assert_no_band_leakage(self, tokens, bands, *, context=""):
+        for user, tok in enumerate(tokens):
+            assert tok in set(bands[user]), (
+                f"User {user} sampled token {tok} outside its own band "
+                f"[{bands[user][0]}..{bands[user][-1]}]{context}. tokens={tokens}"
+            )
+
+    @pytest.mark.parametrize("mesh_device", MULTI_DEVICE_MESHES, indirect=True)
+    @pytest.mark.parametrize(
+        "device_params",
+        RING_FABRIC_DEVICE_PARAMS,
+        indirect=True,
+    )
+    @pytest.mark.parametrize("greedy_lane", ODD_LANE_INDICES_MULTI_DEVICE)
+    def test_one_greedy_lane_rest_stochastic(self, mesh_device, device_params, greedy_lane):
+        args = make_sampling_args(mesh_device)
+        logits, bands = build_disjoint_band_logits(args, base_token=self.BASE_TOKEN)
+        params = self._greedy_lane_params(greedy_lane)
+        seeds = [40000 + i for i in range(BATCH_SIZE)]
+
+        outputs = run_sampling_generator(
+            mesh_device,
+            args,
+            logits,
+            params,
+            num_steps=FAST_NUM_STEPS,
+            advance_seeds=True,
+            seed_values=seeds,
+        )
+
+        expected_greedy = bands[greedy_lane][0]
+        for step, tokens in enumerate(outputs):
+            assert_tokens_in_vocab(tokens, args.vocab_size)
+            self._assert_no_band_leakage(tokens, bands, context=f" at step {step}")
+            assert tokens[greedy_lane] == expected_greedy, (
+                f"Greedy lane {greedy_lane} must pick its max-logit token {expected_greedy} "
+                f"at every step, got {tokens[greedy_lane]} at step {step}. tokens={tokens}"
+            )
+
+        # The 31 stochastic lanes must still be sampling. If the k=1 lane dragged
+        # the batch into argmax, every lane would return its own band rank 0.
+        off_top_picks = sum(
+            1 for tokens in outputs for user, tok in enumerate(tokens) if user != greedy_lane and tok != bands[user][0]
+        )
+        assert off_top_picks > 0, (
+            f"Stochastic lanes never left their band's top token; the greedy lane "
+            f"{greedy_lane} appears to have forced argmax on the whole batch. outputs={outputs}"
+        )
+
+        # Same seeds must replay bit-exactly, and every device view must agree.
+        replay = run_sampling_generator(
+            mesh_device,
+            args,
+            logits,
+            params,
+            num_steps=FAST_NUM_STEPS,
+            advance_seeds=True,
+            seed_values=seeds,
+        )
+        assert replay == outputs, "Mixed greedy/stochastic batch must replay exactly for fixed seeds"
+
+        for device_idx in representative_device_indices(mesh_device)[1:]:
+            out_device = run_sampling_generator(
+                mesh_device,
+                args,
+                logits,
+                params,
+                num_steps=FAST_NUM_STEPS,
+                advance_seeds=True,
+                seed_values=seeds,
+                device_idx=device_idx,
+            )
+            assert out_device == outputs, f"Device view mismatch for device_idx={device_idx}"
+
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    @pytest.mark.parametrize("greedy_lane", ODD_LANE_INDICES)
+    def test_greedy_lane_ignores_seeds(self, mesh_device, greedy_lane):
+        """The greedy lane must be seed-independent while its neighbours are not."""
+        args = make_sampling_args(mesh_device)
+        logits, bands = build_disjoint_band_logits(args, base_token=self.BASE_TOKEN)
+        params = self._greedy_lane_params(greedy_lane)
+
+        seeds_a = [41000 + i for i in range(BATCH_SIZE)]
+        seeds_b = [s + 987654 for s in seeds_a]
+        out_a = run_sampling_generator(
+            mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds_a
+        )[0]
+        out_b = run_sampling_generator(
+            mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds_b
+        )[0]
+
+        expected_greedy = bands[greedy_lane][0]
+        for label, tokens in (("seeds_a", out_a), ("seeds_b", out_b)):
+            self._assert_no_band_leakage(tokens, bands, context=f" ({label})")
+            assert tokens[greedy_lane] == expected_greedy, (
+                f"Greedy lane {greedy_lane} changed with the seed vector ({label}): "
+                f"expected {expected_greedy}, got {tokens[greedy_lane]}"
+            )
+
+        changed = [i for i in range(BATCH_SIZE) if i != greedy_lane and out_a[i] != out_b[i]]
+        assert len(changed) >= 2, (
+            "Shifting the seed vector should move several stochastic lanes; only "
+            f"{changed} changed. out_a={out_a}, out_b={out_b}"
+        )
+
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    @pytest.mark.parametrize("greedy_lane", ODD_LANE_INDICES)
+    def test_greedy_lane_does_not_perturb_other_lanes(self, mesh_device, greedy_lane):
+        """Flipping one lane to k=1 must leave every other lane's token untouched.
+
+        Each user is sampled on its own core with its own k/p/temp and its own
+        rand tile, so lane ``greedy_lane`` going greedy is invisible to the other
+        31 lanes. Any difference means per-user state is being shared.
+        """
+        args = make_sampling_args(mesh_device)
+        logits, bands = build_disjoint_band_logits(args, base_token=self.BASE_TOKEN)
+        seeds = [42000 + i for i in range(BATCH_SIZE)]
+
+        # Only k differs between the two runs: temperature=0.0 is normalised to an
+        # inverse temperature of 1.0, which is what temperature=1.0 maps to too.
+        all_stochastic = self._greedy_lane_params(None)
+        one_greedy = self._greedy_lane_params(greedy_lane)
+
+        out_reference = run_sampling_generator(
+            mesh_device, args, logits, all_stochastic, num_steps=1, advance_seeds=True, seed_values=seeds
+        )[0]
+        out_mixed = run_sampling_generator(
+            mesh_device, args, logits, one_greedy, num_steps=1, advance_seeds=True, seed_values=seeds
+        )[0]
+
+        self._assert_no_band_leakage(out_reference, bands, context=" (all stochastic)")
+        self._assert_no_band_leakage(out_mixed, bands, context=" (one greedy)")
+
+        perturbed = [
+            (user, out_reference[user], out_mixed[user])
+            for user in range(BATCH_SIZE)
+            if user != greedy_lane and out_reference[user] != out_mixed[user]
+        ]
+        assert not perturbed, (
+            f"Making lane {greedy_lane} greedy changed other lanes (user, expected, got): {perturbed}. "
+            f"reference={out_reference}, mixed={out_mixed}"
+        )
+        assert (
+            out_mixed[greedy_lane] == bands[greedy_lane][0]
+        ), f"Greedy lane {greedy_lane} should pick {bands[greedy_lane][0]}, got {out_mixed[greedy_lane]}"
+
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    @pytest.mark.parametrize("stochastic_lane", ODD_LANE_INDICES)
+    def test_one_stochastic_lane_rest_greedy(self, mesh_device, stochastic_lane):
+        """Mirror case: 31 greedy lanes must not silence the one sampling lane."""
+        args = make_sampling_args(mesh_device)
+        logits, bands = build_disjoint_band_logits(args, base_token=self.BASE_TOKEN)
+        params = self._band_params(
+            stochastic_lane,
+            base_top_k=1,
+            base_temperature=0.0,
+            odd_top_k=BAND_TOKENS_PER_USER,
+            odd_temperature=1.0,
+        )
+        # Enough steps that a genuinely stochastic lane repeating one token is
+        # far less likely than any other cause of failure.
+        num_steps = 2 * FAST_NUM_TRIES
+        seeds = [43000 + i for i in range(BATCH_SIZE)]
+
+        outputs = run_sampling_generator(
+            mesh_device, args, logits, params, num_steps=num_steps, advance_seeds=True, seed_values=seeds
+        )
+
+        for step, tokens in enumerate(outputs):
+            assert_tokens_in_vocab(tokens, args.vocab_size)
+            self._assert_no_band_leakage(tokens, bands, context=f" at step {step}")
+            for user in range(BATCH_SIZE):
+                if user == stochastic_lane:
+                    continue
+                assert tokens[user] == bands[user][0], (
+                    f"Greedy lane {user} must pick {bands[user][0]} at every step, "
+                    f"got {tokens[user]} at step {step}"
+                )
+
+        sampled = [step[stochastic_lane] for step in outputs]
+        assert len(set(sampled)) >= 2, (
+            f"Lane {stochastic_lane} was the only stochastic lane and never varied over "
+            f"{num_steps} steps; the greedy majority appears to have forced it to argmax. "
+            f"sampled={sampled}"
+        )
+
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    @pytest.mark.parametrize("greedy_lane", ODD_LANE_INDICES)
+    def test_one_greedy_lane_with_penalties(self, mesh_device, greedy_lane):
+        """A penalty on the greedy lane must retarget only that lane.
+
+        The greedy lane's top band token is penalised below its runner-up, so the
+        expected token is exact; the other 31 lanes carry no penalty and must be
+        untouched by the penalty state written for their neighbour.
+        """
+        args = make_sampling_args(mesh_device)
+        logits, bands = build_disjoint_band_logits(args, base_token=self.BASE_TOKEN)
+
+        # top_logit=10.0 with step=0.25: dividing rank 0 by 4.0 gives 2.5, well
+        # below rank 1 at 9.75, so the greedy pick moves by exactly one rank.
+        repetition = [1.0] * BATCH_SIZE
+        repetition[greedy_lane] = 4.0
+        params = self._band_params(
+            greedy_lane,
+            base_top_k=BAND_TOKENS_PER_USER,
+            base_temperature=1.0,
+            odd_top_k=1,
+            odd_temperature=0.0,
+            repetition_penalty=repetition,
+        )
+
+        def _state_setup(sg):
+            # -1 marks "no token seen", so only the greedy lane carries history.
+            seen = torch.full((BATCH_SIZE, 1), -1, dtype=torch.int64)
+            seen[greedy_lane, 0] = bands[greedy_lane][0]
+            sg.reset_output_state(tokens=seen)
+
+        seeds = [44000 + i for i in range(BATCH_SIZE)]
+        tokens = run_sampling_generator(
+            mesh_device,
+            args,
+            logits,
+            params,
+            num_steps=1,
+            advance_seeds=True,
+            seed_values=seeds,
+            state_setup=_state_setup,
+        )[0]
+
+        assert_tokens_in_vocab(tokens, args.vocab_size)
+        self._assert_no_band_leakage(tokens, bands)
+        assert tokens[greedy_lane] == bands[greedy_lane][1], (
+            f"Penalised greedy lane {greedy_lane} should fall back to its runner-up "
+            f"{bands[greedy_lane][1]}, got {tokens[greedy_lane]}. tokens={tokens}"
+        )
+
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    @pytest.mark.parametrize("odd_lane", ODD_LANE_INDICES)
+    def test_force_argmax_needs_every_lane_greedy(self, mesh_device, odd_lane):
+        """One non-greedy lane must keep the whole batch off the argmax fast path.
+
+        ``TTSampling._is_force_argmax_sampling`` is an all-lanes predicate. If it
+        ever degraded to "any lane", a single greedy user would silently force
+        argmax on the 31 users who asked to sample -- and because the fast path
+        skips the top-k/top-p/RNG pipeline entirely, nothing downstream would
+        notice. This asserts the predicate directly, with the fast path enabled
+        in ``model_config`` (the other tests leave it off).
+        """
+        args = make_sampling_args(mesh_device)
+        args.model_config = {
+            "SAMPLING_AG_CONFIG": {
+                "allow_force_argmax": True,
+                "num_links": 1,
+                "topology": ttnn.Topology.Linear,
+            }
+        }
+        logits, _ = build_disjoint_band_logits(args, base_token=self.BASE_TOKEN)
+
+        observed = {}
+
+        def _probe(label):
+            def _record(sg):
+                observed[label] = sg.tt_sampling.force_argmax_sampling
+
+            return _record
+
+        # num_steps=0 runs the host-side param plumbing without any sampling.
+        all_greedy = self._band_params(None, base_top_k=1, base_temperature=0.0, odd_top_k=1, odd_temperature=0.0)
+        run_sampling_generator(mesh_device, args, logits, all_greedy, num_steps=0, state_setup=_probe("all_greedy"))
+
+        # temperature=1.0 also normalises to an inverse temperature of 1.0, so
+        # only top_k distinguishes this lane -- the k branch of the predicate.
+        one_stochastic = self._band_params(
+            odd_lane,
+            base_top_k=1,
+            base_temperature=0.0,
+            odd_top_k=BAND_TOKENS_PER_USER,
+            odd_temperature=1.0,
+        )
+        run_sampling_generator(
+            mesh_device, args, logits, one_stochastic, num_steps=0, state_setup=_probe("one_stochastic")
+        )
+
+        assert observed["all_greedy"] is True, "A fully greedy batch should take the force-argmax fast path"
+        assert observed["one_stochastic"] is False, (
+            f"Lane {odd_lane} requested top_k={BAND_TOKENS_PER_USER} but the batch still took the "
+            "force-argmax fast path, which skips top-k/top-p/RNG entirely"
+        )
