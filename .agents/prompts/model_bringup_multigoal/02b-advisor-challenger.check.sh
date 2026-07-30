@@ -10,10 +10,24 @@
 # Usage: 02b-advisor-challenger.check.sh <model_dir>
 set -uo pipefail
 
-MD=${1:?model_dir}
-# The stage prompt's MODEL_DIR placeholder expands to `models/autoports/<md>`, while callers on the
-# command line pass the bare `<md>`. Accept both rather than silently building
-# models/autoports/models/autoports/<md> and then reporting "stage produced nothing".
+# The runner invokes `<prompt>.check.sh` with NO ARGUMENTS and scopes it through the MODEL_DIR
+# environment variable (that is what 02-optimized-decoder.check.sh does). Requiring $1 made this gate die
+# at line 1 with "model_dir" on every in-stage check, twice per cell -- so the agent never received a
+# single actionable gate message and could not self-correct during its own remediation loop, and the
+# stage's check came back "advisory-fail" for a reason that had nothing to do with the evidence.
+# Resolution order: explicit argument, then MODEL_DIR, then derive from HF_MODEL.
+MD=${1:-${MODEL_DIR:-}}
+if [ -z "$MD" ] && [ -n "${HF_MODEL:-}" ]; then
+  MD=$(echo "$HF_MODEL" | tr 'A-Z/.-' 'a-z___')
+fi
+if [ -z "$MD" ]; then
+  echo "CRITICAL: no model dir. Pass it as \$1, or set MODEL_DIR=models/autoports/<model_dir> (the" >&2
+  echo "  runner does this via --replace MODEL_DIR=...), or set HF_MODEL." >&2
+  exit 1
+fi
+# The MODEL_DIR placeholder expands to `models/autoports/<md>`, while command-line callers pass the bare
+# `<md>`. Accept both rather than silently building models/autoports/models/autoports/<md> and then
+# reporting "stage produced nothing".
 MD=${MD#models/autoports/}
 MD=${MD%/}
 ROOT=${TT_METAL_HOME:-$(pwd)}
