@@ -17,6 +17,7 @@
 #   docker buildx bake ci-build         # Build CI build image
 #   docker buildx bake basic-dev        # Build basic dev image
 #   docker buildx bake manylinux        # Build manylinux image
+#   GH_TOKEN=<pat> docker buildx bake prefill-worker  # Needs a tt-llm-engine read token
 #   docker buildx bake tools            # Build just the tool images
 #   docker buildx bake venvs            # Build just the venv images
 #   docker buildx bake all              # Build everything
@@ -68,6 +69,13 @@ variable "TT_SMI_VERSION" {
   # ARG TT_SMI_VERSION default in dockerfile/Dockerfile (used only for standalone
   # `docker build` without Bake). Keep the two in sync.
   default = "5.2.0"
+}
+
+variable "TT_LLM_ENGINE_REF" {
+  # Git ref of tenstorrent/tt-llm-engine that the prefill-worker target compiles
+  # _migration_client from. FIXME: floating `main` makes a release
+  # non-reproducible - to be pinned to a SHA as a follow-up.
+  default = "main"
 }
 
 variable "UV_IMAGE" {
@@ -404,6 +412,34 @@ target "evaluation" {
     ccache-layer = "target:ccache"
     sfpi-layer   = "target:sfpi"
   }
+}
+
+# =============================================================================
+# Prefill worker target (from Dockerfile.prefill-worker)
+#
+# A thin layer on top of release-models: adds tt-llm-engine's _migration_client
+# and nothing else, so tt-metal is never rebuilt here. Both bases arrive as named
+# contexts, resolved to local targets here and overridden to docker-image:// refs
+# in CI (.github/workflows/publish-release-image.yaml) so the worker layers on the
+# exact release image that was just published rather than rebuilding it.
+#
+# Cloning the private tenstorrent/tt-llm-engine needs a token, taken from
+# $GH_TOKEN as a BuildKit secret - never a build arg, which would persist in the
+# image history. An empty/unset GH_TOKEN fails the clone inside the build.
+# =============================================================================
+
+target "prefill-worker" {
+  context    = "."
+  dockerfile = "dockerfile/Dockerfile.prefill-worker"
+  tags       = ["tt-metalium-prefill-worker:local"]
+  args = {
+    TT_LLM_ENGINE_REF = TT_LLM_ENGINE_REF
+  }
+  contexts = {
+    release-base   = "target:release-models"
+    llm-build-base = "target:dev"
+  }
+  secret = ["type=env,id=gh_token,env=GH_TOKEN"]
 }
 
 # =============================================================================
