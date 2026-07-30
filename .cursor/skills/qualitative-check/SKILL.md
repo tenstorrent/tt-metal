@@ -9,7 +9,7 @@ description: Run and review qualitative or prompt-based evaluation checks for Hu
 
 Load `diffusion-gemma` first.
 - The generation path is text DIFFUSION, so add diffusion failure modes to the degeneracy checks: leftover random-noise canvas positions, non-converged canvas cells, block-boundary artifacts, premature entropy-budget acceptance — alongside (not instead of) the usual repetition/gibberish checks.
-- Add diffusion causes to the worse-than-control list: entropy-budget/acceptance schedule, Gumbel-noise handling, denoise-step count, canvas masking. Early on, the HF-vs-torch reference is the primary control (a vLLM `/v1/completions` endpoint may not exist yet). RUN-first: degenerate output may be expected until #48291.
+- Add diffusion causes to the worse-than-control list: entropy-budget/acceptance schedule, Gumbel-noise handling, denoise-step count, canvas masking. Early on, the HF-vs-torch reference is the primary control (a vLLM `/v1/completions` endpoint may not exist yet). The July-15 fp32/bf16 control shows TT produces coherent prompt-correct output at the intrinsic bf16 diffusion floor, so persistent garbage or degraded output is a configuration or serving regression to investigate, not an expected consequence of #48291 (plan.md:146-148). #48291 is DECIDED -- TT is at the intrinsic bf16 floor and the strict 0.95 gate is mis-specified, production pass/fail unchanged pending owner sign-off -- and it does not license degenerate output.
 
 ## Purpose
 

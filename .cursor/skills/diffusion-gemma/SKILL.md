@@ -105,10 +105,16 @@ These are the reasons the generic autoregressive skills need overriding. When an
    sensitive to small-probability mass — top-1/top-5 explicitly is not.
 4. **Data-dependent control flow vs Metal Trace.** Entropy-budget acceptance stays inside each
    captured trace as a fixed-shape tensor cutoff (sort → cumsum → scatter/inverse-permutation).
-   The shipping default replays a fixed 48-step trace. The landed opt-in early-halt controller
-   replays one-step/window traces and reads one halt scalar between replays; it never branches
-   inside capture. Under #48291 it currently halts 0/5 prompts and remains default OFF. Keep
-   scatter/gather indices device-resident and warm exact-shape programs.
+   There is exactly **one** Metal denoise trace path: model-lifetime up-front capture of 48
+   one-step traces at startup (`UPFRONT_DENOISE_STEPS`, `tt/traced_denoise.py`), on-device Gumbel
+   refreshed between replays, and a window-1 halt scalar read after **every** replayed step. Early
+   halt is intrinsic -- it has no selector flag and never branches inside capture. 48 is a step
+   **cap**, not a step count: on the shipped concat MoE the halt fires in **8-27 steps**
+   (`tt/concat_moe.py`, 2026-07-29). `DG_UPFRONT_CAPTURE=0` (eager) is the only fallback and the
+   only path yielding per-step trajectory records. To disable halting for an A/B use
+   `serving_smoke --entropy-stop-threshold -1`; there is no env flag, and `DG_DENOISE_EARLY_HALT`
+   has zero readers anywhere in the repo. Keep scatter/gather indices device-resident and warm
+   exact-shape programs.
 5. **Serving is block-granular through the tenstorrent/vllm TT plugin (a fork, not upstream).**
    The whole denoise loop lives **inside** the tt-metal model's `prefill_forward`/`decode_forward`,
    which emits a **256-token block per step**, not one token. Speculative decoding is **hard-blocked**
@@ -139,6 +145,16 @@ Under `models/experimental/diffusion_gemma/`:
   — on-device canvas sampling; `tt/commit_decode.py` — DiffusionGemma-local commit-append (keeps
   the backbone untouched); `tt/generate.py` — prompt→text entry (`generate_text`,
   `generate_text_from_checkpoint_state`, multi-block commit loop).
+- MoE: `tt/concat_moe.py` — the **only** denoise MoE (concat-experts; also owns the expert
+  precision policy); `tt/sparse_moe.py` — prefill only (ragged zero-drop top-8);
+  `tt/prefill_moe.py`; `tt/expert_operations.py`. The token-gather/dense-128 denoise path and its
+  `DG_MOE_CONCAT`/`DG_SPARSE_MOE`/`DG_ALLOW_DENSE_MOE` flags were DELETED 2026-07-29 for not
+  converging — they do nothing.
+- Trace + serving: `tt/traced_denoise.py` — the sole trace path (up-front capture, window-1 halt);
+  `tt/generator_vllm.py` — the vLLM plugin entry; `tt/serving.py`; `tt/chunked_prefill.py`;
+  `tt/commit_batched.py` — the live commit path (the `DG_COMMIT_BATCHED` override was deleted
+  2026-07-28); `tt/degeneracy.py` — the degeneracy guard; `tt/attention_merge.py`;
+  `tt/precision_build.py`.
 - `reference/` — torch/HF reference: `hf_reference.py`, `denoise_loop.py`, `generate.py`,
   `sampling.py`, `self_conditioning.py`, `attention_mask.py`, `_upstream.py`. Use as the PCC and
   decision oracle; replay hooks live here.
@@ -159,7 +175,8 @@ Under `models/experimental/diffusion_gemma/`:
   fidelity gated by #48291) · #47472 on-device sampling ✅ · #47557 batched decode · #47464
   functional e2e (**RUN done**) · #47465 perf · #47466 vLLM · #47488 vLLM block-granular
   runner/scheduler (upstream tenstorrent/vllm `dev`)
-- Correctness: **#48291** decision-fidelity bar (bf16/MoE/TP=4 argmax ≈50% vs HF; diffusion commits
+- Correctness: **#48291** decision-fidelity bar (bf16/MoE/TP=4 causal-prefill argmax ≈50% vs HF -- a
+  backbone diagnostic **superseded 2026-07-15** as a predictor of trajectory fidelity; diffusion commits
   the clean argmax so there is no temperature cushion). RUN-first: defer #48291, but decide it
   **before shipping** usable output.
 - Later: #47467 multimodal · #47475 quant · #47489 CI
@@ -178,9 +195,13 @@ Under `models/experimental/diffusion_gemma/`:
   any DiffusionGemma-owned shared delta is a gate failure.
 - **Do not skip device tests by default.** Run the relevant QB2 device test whenever hardware/env
   is available; only skip when genuinely inapplicable or blocked, and record the reason.
-- **RUN-first vs correctness:** the current priority is a reproducible prompt→text device run at
-  small scale; degenerate/EOS-heavy output is acceptable for the RUN milestone. Fidelity (#48291,
-  R0.5/R0.6 replay) is a separate, deferred track — do not let it block a run.
+- **RUN-first vs correctness (the RUN milestone CLOSED 2026-07-02; this licence is withdrawn).**
+  Degenerate/EOS-heavy output was acceptable for that milestone only. The July-15 fp32/bf16 control
+  shows TT produces coherent prompt-correct output at the intrinsic bf16 diffusion floor, so
+  persistent garbage or degraded output is now a configuration or serving regression to investigate,
+  not an expected consequence of #48291 (`plan.md:146-148`). #48291 is DECIDED -- TT is at the
+  intrinsic bf16 floor and the strict 0.95 gate is mis-specified, production pass/fail unchanged
+  pending owner sign-off -- and it does not license degenerate output.
 - Stage evidence goes under `models/experimental/diffusion_gemma/doc/<stage>/` (README.md +
   work_log.md + artifacts); the context contract is
   `models/experimental/diffusion_gemma/doc/context_contract.json`. This `doc/` tree already exists

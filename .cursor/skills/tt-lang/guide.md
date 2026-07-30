@@ -1,6 +1,6 @@
 # TT-Lang Practical Guide
 
-This guide preserves the imported practical TT-Lang workflow material. Use [SKILL.md](SKILL.md) as the Cursor Agent entrypoint and [TTLangSpecification.md](TTLangSpecification.md) as the API source of truth when details conflict.
+This guide preserves the imported practical TT-Lang workflow material. Use [SKILL.md](SKILL.md) as the Claude Code entrypoint and [TTLangSpecification.md](TTLangSpecification.md) as the API source of truth when details conflict.
 
 ## External Resources
 
@@ -456,7 +456,11 @@ From `examples/tutorial/multicore_grid_auto.py`. Key patterns: `grid="auto"`, dy
 
 ## Pipes (Core-to-Core Communication)
 
-Pipes are fully implemented in both the simulator and compiler. They enable core-to-core communication for patterns like gather, scatter, and ring exchanges. Get your kernel working without pipes first, then add them when needed for inter-core communication.
+Pipes are implemented in both the simulator and compiler **as of the version this guide was
+written against**. `TTLangSpecification.md` Appendix D is the API source of truth when details
+conflict, and it marks several pipe, reduction and matmul entries `N/S` at 0.1.7 -- check the
+appendix for your toolchain version before relying on one. (This checkout has no tt-lang
+toolchain, so neither claim can be verified here.) They enable core-to-core communication for patterns like gather, scatter, and ring exchanges. Get your kernel working without pipes first, then add them when needed for inter-core communication.
 
 ### Pipe API
 
@@ -827,7 +831,10 @@ NOTE: it is possible that the sim and hw diverge which may require you to either
 
 ### Debug Strategy: Isolate and Print
 
-You cannot print or assert inside kernels. Instead:
+You cannot `assert` inside kernels, and host `print` does not work there. There IS a device-side
+debug print -- see [Debug Printing (dprint)](#debug-printing-dprint) below and
+[TTLangSpecification.md, Section 10.2](TTLangSpecification.md#102-debug-printing). Prefer the
+host-side workflow first; reach for dprint when you must see intermediate device state:
 
 1. **Test ops in isolation** - Write a minimal kernel with just one op
 2. **Print tensors before/after** - Use `print(ttnn.to_torch(tensor))` after the kernel runs

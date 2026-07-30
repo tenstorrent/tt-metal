@@ -24,5 +24,6 @@ After the subagent finishes:
 3. Act on the report: implement the fix, ask for clarification, or explain why
    the report is inconclusive.
 
-If the problem implies stage sequencing, run the stage slash-commands under
-`commands/` in order (each stage is a `/dg-NN-...` command).
+For DiffusionGemma stage sequencing, read the applicable
+`models/experimental/diffusion_gemma/.agent/commands/dg-NN-*.md` command and load the
+`diffusion-gemma` skill first; each stage is a `/dg-NN-...` command and they run in order.

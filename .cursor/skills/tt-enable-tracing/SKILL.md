@@ -10,7 +10,11 @@ description: "Enable or debug TTNN trace capture and replay for models, decoders
 Load `diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
 
 - **The central conflict.** The entropy-budget cutoff may not change a captured operation sequence or shape. Keep it as an on-device tensor mask with tensor-valued indices.
-- **Two landed replay schemes.** The shipping default replays a fixed 48-step trace. The opt-in `DG_DENOISE_EARLY_HALT` controller replays one-step/window traces and reads one halt scalar between replays; it never branches inside capture. Under #48291 it currently halts 0/5 prompts and remains default OFF.
+- **One Metal denoise trace path.** Capture the reveal-masked controller once during model startup,
+  retain it for the model lifetime, use the materialized on-device Gumbel (`device`, the only
+  materialized mode since `host` was deleted 2026-07-28) with K=48, and replay one-step/window early
+  halt. Eager is the only fallback. Fixed-budget, grouped/multistep, frozen-prefix, per-request, and
+  argmax traces are legacy evidence, not selectable variants.
 - **Warm the program cache for the new ops** — sort, cumsum, scatter, gather/permute, entropy — at the EXACT fixed canvas shape and argument values used in capture. Verify cumsum/sort over the 256 axis do not internally trigger reads / host-sync / dynamic-shape misses during capture (a likely first failure; bisect with the flushed-marker technique).
 - **Replace token-feedback with CANVAS-feedback.** Instead of canonical split-sampling / `tt_out_tok`, the accepted canvas written on device inside capture becomes the next step's persistent trace input. Add a canvas-feedback correctness test: step N's accepted canvas is what step N+1 reads, with no host reconstruction of accepted tokens or the cutoff.
 - **Device-side state advance is the canvas + a step-index counter**, not KV position / `plus_one` / RoPE increment. Symptom analogue: "stale token → doubled tokens" becomes "stale canvas / stale accept mask → outputs unchanged across steps."
@@ -127,7 +131,13 @@ For vocab-sharded logits, split greedy usually should not mean a physical `top_k
 
 If `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampling op dominates greedy token-out decode, the LM-head/sampling boundary is still wrong. Fix that before chasing lower-level decoder optimizations or marking tracing complete.
 
-For DiffusionGemma vLLM serving, bind the persistent canvas, denoise state, frozen-prefix KV, and block position before capture. Reuse one traced denoise controller across blocks; do not recapture per block. Keep `supports_async_decode=False` until a per-block async contract is independently tested. Sampling remains on device and full logits never return to host.
+For DiffusionGemma vLLM serving, capture during `warmup_model_prefill`, after compiling every aligned
+prefill length in `DG_UPFRONT_PREFILL_WARMUP_LENS`. Bind the persistent canvas, denoise state,
+fixed-span reveal adapter, and block position; rebind that controller in place for each request and
+release it only at model teardown. `DG_DENOISE_REVEAL_PMAX` bounds the visible prompt+generated
+span. An unseen prefill shape must fail rather than compile while traces are resident. Keep
+`supports_async_decode=False` until a per-block async contract is independently tested. Sampling
+remains on device and full logits never return to host.
 
 Do not collect Tracy, `tt-perf-report`, or `TT_METAL_DEVICE_PROFILER` metrics from a live server. Use direct-server/block-harness evidence from `models/experimental/diffusion_gemma/doc/vllm_integration/`: trace replay succeeds, committed output is unchanged, multi-block requests pass, and per-block TTFT/latency improves. Use non-serving profiles for low-level device context.
 

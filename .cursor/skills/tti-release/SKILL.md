@@ -10,7 +10,7 @@ description: Run the tt-inference-server model release workflow for the complete
 Load `diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
 
 - Evaluate the `models/experimental/diffusion_gemma` implementation served through the tenstorrent/vllm TT plugin — NOT stock `models/tt_transformers` or `models/demos`. Stock-impl detection keys off those paths and won't recognize the `experimental/` layout, so verify the run spec's `code_path` points at `models/experimental/diffusion_gemma`.
-- `meta_ifeval` / `meta_gpqa_cot` are autoregressive instruct-LLM gates — do NOT treat them as mandatory unless a diffusion-appropriate rationale exists; substitute or supplement with a diffusion-decision / qualitative bar and record the choice. Under RUN-first, degraded output may be expected until #48291 — record the current fidelity state rather than forcing a passing eval.
+- `meta_ifeval` / `meta_gpqa_cot` are autoregressive instruct-LLM gates — do NOT treat them as mandatory unless a diffusion-appropriate rationale exists; substitute or supplement with a diffusion-decision / qualitative bar and record the choice. The July-15 fp32/bf16 control shows TT produces coherent prompt-correct output at the intrinsic bf16 diffusion floor, so persistent garbage or degraded output is a configuration or serving regression to investigate, not an expected consequence of #48291 (plan.md:146-148). #48291 is DECIDED -- TT is at the intrinsic bf16 floor and the strict 0.95 gate is mis-specified, production pass/fail unchanged pending owner sign-off -- and it does not license degenerate output. Record the current fidelity state rather than forcing a passing eval.
 - Benchmark metrics are block-granular (per-block latency, tokens-per-block, prefill TTFT), not per-token TPOT. The intrinsic 256-token OUTPUT block granularity is not an input-alignment failure — carve it out of the "block-alignment failure = model bug, never waive" rule.
 - Author a custom TTI model spec (`inference_engine=vLLM`) pointing at the experimental path and targeting the fork-plugin server (with the block-emitting runner/scheduler from the vLLM stage). Preserve the 256K context contract; never cap it to hide a bug.
 - NEVER edit `models/demos/gemma4/`. Copy-back artifacts under `models/experimental/diffusion_gemma/doc/tti_release/`.
@@ -170,24 +170,34 @@ Known TTI issue: older `tt-inference-server` checkouts accept a custom `--runtim
 
 Do not start with the full release workflow. First prove the topology with a small smoke that cannot run for hours.
 
-1. Start the DiffusionGemma server with the exact tenstorrent/vLLM command proven by dg-09. This checkout does not contain `models.common.readiness_check`; use the direct OpenAI server entry point:
+1. Start the DiffusionGemma server. This checkout does not contain `models.common.readiness_check`; use the direct OpenAI server entry point. All four flags below are load-bearing -- see `doc/vllm_integration/README.md:151-163`, which is canonical:
 
 ```bash
 cd "$TT_METAL_HOME"
 source python_env/bin/activate
-MODEL_DIR=models/experimental/diffusion_gemma
-MAX_MODEL_LEN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_model_len"])' "$MODEL_DIR/doc/context_contract.json")
 export PYTHONPATH="$TT_METAL_HOME:$VLLM_CHECKOUT:${PYTHONPATH:-}"
 export DG_CKPT="$HF_MODEL_OR_LOCAL_WEIGHTS"
+# Up-front trace capture is default ON and rejects the deterministic `argmax` sampler
+# (it needs a materialized full-tensor Gumbel source), so this smoke opts out explicitly.
+export DG_UPFRONT_CAPTURE=0
 export DG_VLLM_GUMBEL_MODE=argmax
 python -m vllm.entrypoints.openai.api_server \
   --model "$HF_MODEL_OR_LOCAL_WEIGHTS" \
   --served-model-name "$HF_MODEL" \
+  --generation-config vllm \
+  --max-model-len 16384 \
+  --max-num-batched-tokens 16384 \
   --max-num-seqs 1 \
-  --max-model-len "$MAX_MODEL_LEN"
+  --block-size 64
 ```
 
-Match the optimized-vLLM stage's actual command where it differs. The important points are: the server imports the generated autoport, preserves the context contract, and serves the HF model name that TTI will request.
+Why each flag, so none of them gets dropped as boilerplate:
+- `--block-size 64` -- **the server cannot start without it.** `tt/generator_vllm.py:475` reads `cache_config.block_size` with no fallback and vLLM leaves it `None` for this arch, so KV-cache init dies with `TypeError: unsupported operand type(s) for *: 'NoneType' and 'int'`.
+- `--generation-config vllm` -- without it the checkpoint overrides `max_tokens` to 256, so a 1024-token request emits block 0 only and never calls `decode_forward`.
+- `--max-num-batched-tokens` at least the largest whole prompt -- TT has no chunked-prefill admission, so an oversized prompt parks in `Waiting` forever.
+- `--max-model-len 16384` -- do **not** derive this from `doc/context_contract.json`'s `max_model_len`. That field is 262144, and the same artifact says so explicitly: "current live vLLM serving is not validated end-to-end at 262144; do not advertise a live served ceiling from allocation evidence alone." 262144 is the HF-advertised prompt+generated capacity with standalone fit evidence, not a serving value. QB2 runs at 16384 (`doc/optimize_perf/run_upfront_gpqa.sh`).
+
+The important points are: the server imports the generated autoport, respects the context contract's *serving* caveat rather than its capacity number, and serves the HF model name that TTI will request.
 
 2. Verify the server before invoking TTI:
 

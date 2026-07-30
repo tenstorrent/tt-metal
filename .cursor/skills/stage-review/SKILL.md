@@ -11,7 +11,7 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
 
 - Review the DIFFUSION capability contract: `canvas_length` (256), denoise-step budget (≤48), block granularity, three-phase KV semantics, bidirectional/sliding mask geometry, and 256K `prompt + generated` context — NOT autoregressive `max_model_len` / page / prefill-divisibility framing.
 - Drop the autoregressive quality gates: `meta_ifeval` / `meta_gpqa_cot` are not mandatory here, and the generation triggers ("prompt echo", token feedback, paged-cache decode, doubled/repeated tokens) do not apply. Review instead the diffusion decisions (entropy, Gumbel-max argmax agreement, accept/renoise agreement vs the injected-noise reference), canvas convergence, and RUN outcome via `DG_TEXT_DEMO_SUCCESS` / `DG_TEXT_DEMO_FAILURE`.
-- RUN-first: degenerate output is acceptable for the RUN milestone; #48291 fidelity is a separate track.
+- The July-15 fp32/bf16 control shows TT produces coherent prompt-correct output at the intrinsic bf16 diffusion floor, so persistent garbage or degraded output is a configuration or serving regression to investigate, not an expected consequence of #48291 (plan.md:146-148). #48291 is DECIDED -- TT is at the intrinsic bf16 floor and the strict 0.95 gate is mis-specified, production pass/fail unchanged pending owner sign-off -- and it does not license degenerate output.
 - Hard review gate: run
   `DG_BASE_REF=<actual-branch-base> bash models/experimental/diffusion_gemma/.agent/scripts/check_no_shared_gemma4_edits.sh`.
   Do not use a stale local `main`. Any DiffusionGemma-owned shared-directory
@@ -58,11 +58,12 @@ were spawned with this skill plus a concrete stage contract and artifact paths,
 perform the review directly. Do not spawn another reviewer. In this mode your
 verdict can be `clean-pass` or `more-work-needed`.
 
-If the Cursor Subagent tool is unavailable, do a serial review and mark
-`review_mode: serial-cursor`. It may return `clean-pass` only when every
-required artifact and gate is directly checked and no required work remains;
-otherwise return `more-work-needed`. Never pretend the serial review is
-independent.
+If the Cursor Subagent tool is unavailable, do a serial review only as a
+temporary fallback and mark the result `not-independent`
+(`review_mode: serial-cursor`). This means the review did not satisfy the
+fresh-subagent requirement. It is **not** a reviewer verdict and never counts as
+a pass for autonomous bringup -- it cannot return `clean-pass` and cannot unlock
+commit+push. Never pretend the serial review is independent.
 
 The reviewer is read-only unless explicitly asked to write a report file. It may
 run local read-only commands and small analysis scripts over artifacts. It must
@@ -378,10 +379,12 @@ Verdict: clean-pass | more-work-needed
 - ...
 ```
 
-Only `clean-pass` with no required work satisfies this skill. Record
+Only `clean-pass` with no required work satisfies this skill, and only an
+independent subagent review can produce one. Record
 `review_mode: independent-subagent` or `review_mode: serial-cursor` in
-`Scope Inspected`; a serial fallback must explicitly disclose that it was not
-independent.
+`Scope Inspected`. If the main agent could not obtain an independent review,
+report `not-independent` as a fallback status outside the reviewer verdict. Do
+not use it to complete the stage.
 
 ## Main-Agent Follow-Up
 

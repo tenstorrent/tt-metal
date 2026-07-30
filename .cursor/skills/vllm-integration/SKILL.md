@@ -31,6 +31,46 @@ Do not advertise async decode or vLLM APC until their block-granular contracts
 are implemented and tested. The local `DG_PREFIX_CACHE` prototype is not vLLM
 APC.
 
+## Current launch contract (2026-07-22)
+
+Never benchmark or judge quality from an implicit launch:
+
+- There is exactly one Metal denoise trace path: model-lifetime up-front capture with reveal
+  masking, on-device Gumbel, K=48, and one-step/window early halt. Eager is the only fallback.
+- `DG_UPFRONT_CAPTURE` defaults to `1`; up-front capture is the default serving path and no longer
+  needs setting. `DG_UPFRONT_CAPTURE=0` is the documented eager opt-out, required when you need
+  per-step trajectory records, which replayed traces do not produce.
+- Still required and fail-loud: `DG_UPFRONT_PREFILL_WARMUP_LENS` for every admitted aligned prompt
+  length (the shape list cannot be derived), and validated positive `DG_TRACE_REGION_SIZE` (the
+  reserved region cannot be read back from the device, so defaulting it would silence the guard
+  without reserving anything, and a trace-region overflow poisons the device).
+- `DG_DENOISE_REVEAL_PMAX` is now optional: when unset the span is derived from `max_model_len`
+  rounded DOWN to a tile and logged (rounding up would exceed the unpadded KV span and abort
+  startup). An explicit positive tile-aligned value still wins.
+- `DG_VLLM_GUMBEL_MODE` is `device`, the only materialized Gumbel source and therefore the only
+  mode up-front capture accepts (`argmax`/`chunked` are not materialized and are rejected
+  loudly). It was reverted to the old `host` mode once for corrupting text and restored after
+  the ttnn.rand kernel fix it depends on; the residual RNG correlation is pinned by
+  tests/ttnn/.../test_rand_independence.py. **`host` was DELETED on 2026-07-28** after being
+  measured NOT to be the language-drift cause: it drifts on exactly the same prompts as `device`,
+  repairs 0, and costs 1.40x per request. The real cause was the canvas attending prefill pad
+  keys, fixed in `d0936d4da4f`.
+  There is no IID reference arm to fall back to: judge quality against the A100 CUDA GPQA
+  reference, not against a host arm.
+- Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. Do not set
+  legacy selector flags.
+- Every admitted prefill shape must compile before capture. Reject unseen runtime shapes rather
+  than compiling while traces are resident.
+- Pass `--generation-config vllm`; otherwise checkpoint config caps output at one 256-token block.
+- Pass `--max-num-batched-tokens >= largest whole prompt`; TT chunked prefill is not scheduler
+  admission and oversized prompts otherwise remain waiting.
+- Model-side `DG_PREFILL_RAGGED_LONG` defaults on and slices prompts above 4096 through the ragged
+  top-8 MoE path. For pure-prefill numbers, use
+  `context_window_prefill_only_chunkedlong_20260713_msl65536.json`; the artifact without
+  `chunkedlong` is the superseded dense-fallback control.
+- Do not use `ignore_eos=true` for qualitative judgment; it exposes the post-EOS physical canvas.
+- HTTP temperature/top-p/top-k/seed are not wired into the denoise loop.
+
 ## Block contract
 
 - `prefill_forward` writes prompt KV, creates the stateful denoise adapter, and
@@ -109,7 +149,10 @@ For a real server, use the project-matching tenstorrent/vllm environment and:
 python -m vllm.entrypoints.openai.api_server \
   --model <checkpoint> \
   --served-model-name diffusiongemma-26B-A4B-it \
-  --max-model-len 262144 \
+  --generation-config vllm \
+  --max-model-len <validated-served-limit> \
+  --max-num-batched-tokens <largest-whole-prompt> \
+  --block-size 64 \
   --max-num-seqs 1
 ```
 
@@ -126,14 +169,22 @@ skill.
   `prompt_len → +256 → +512`.
 - Verify EOS/length trimming without corrupting physical whole-block commit.
 - Compare served output with the same full-model RUN-path control.
-- Use `qualitative-check`; RUN-first coherent-or-degenerate behavior must be
-  classified against #48291 rather than mistaken for an adapter regression.
-- Preserve non-aligned prompt lengths and the 262144 context contract.
+- Use `qualitative-check`. The July-15 control demonstrates coherent TT output at the intrinsic
+  bf16 diffusion floor, so persistent garbage is required work unless the same prompt/config
+  control reproduces it. Check EOS-tail exposure, argmax-vs-chunked mode, K, and prompt formatting.
+- Preserve non-aligned prompt lengths and the HF 262144 prompt+generated contract, but distinguish
+  standalone allocation evidence from the exact live-vLLM `--max-model-len` actually validated.
 
 ## Trace and performance
 
-Serving reuses the generator's traced denoise controller. Verify one capture is
-replayed across blocks and is not recaptured per request step.
+Serving uses the startup-captured model-lifetime reveal controller. Verify one capture at startup,
+safe in-place rebind across requests, no request-time capture/compilation, and idempotent release at
+model teardown. The fixed reveal span is bounded by `DG_DENOISE_REVEAL_PMAX`; never substitute a
+prompt-only/frozen-prefix trace.
+
+Fixed-budget, grouped/multistep, frozen-prefix, per-request, argmax, and growing-prefix recapture
+results under `doc/` are historical evidence only. Their executable drivers and selector knobs are
+not part of the current contract.
 
 Report:
 
@@ -149,6 +200,10 @@ Do not derive a headline from vLLM per-token TPOT/ITL or
 those fields, retain them only as raw transport diagnostics and label them
 non-semantic for DiffusionGemma.
 
+Also do not use API-visible `completion_tokens / wall_time` as a device rate: EOS trimming changes
+the numerator and `max_num_seqs=1` queueing changes the denominator. Use `DG_VLLM_METRIC` block
+latency and `256 / block_latency`.
+
 Do not run Tracy, `tt-perf-report`, or live-server device profiling in this
 stage. Use same-harness before/after serving metrics and earlier non-serving
 device profiles.
@@ -160,7 +215,7 @@ Maintain:
 - `doc/vllm_integration/README.md` and `work_log.md`;
 - `serving_test_suite.json` and `live_vllm_serving.json`;
 - reduced and full-depth `serving_smoke_*.json`;
-- traced-serving artifacts;
+- up-front traced-serving artifacts (legacy traced-serving artifacts remain historical);
 - plugin registration/model-runner/scheduler patches;
 - exact fork revision and server command.
 

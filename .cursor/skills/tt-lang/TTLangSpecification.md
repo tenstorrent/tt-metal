@@ -1085,6 +1085,13 @@ def matmul_read():
 
 ## Appendix D. Functionality matrix
 
+> **Version-scoped.** This matrix is pinned to the toolchain versions in its columns (0.1.7 at
+> time of writing). `guide.md` describes some of these features as available; where the two
+> disagree, that is a VERSION difference, not an error in either -- check the version you are
+> actually building against. This checkout ships no tt-lang toolchain, so neither can be
+> verified from here.
+
+
 | Functionality | Simulator | Compiler |
 | :---- | :---- | :---- |
 | 2D grid `ttl.grid_size` and `ttl.node` with `dims=2`| 0.1.7 | 0.1.7 |

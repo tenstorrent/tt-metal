@@ -68,8 +68,10 @@ and renoise tokens. Record:
 - canvas agreement;
 - final committed-token agreement.
 
-Teacher-forcing top-k and AIME24 are not full-model gates. RUN-first evidence
-may accept EOS-heavy or degenerate text, but a release-quality claim must
+Teacher-forcing top-k and AIME24 are not full-model gates. The RUN milestone
+closed 2026-07-02 and its licence to accept EOS-heavy or degenerate text is
+withdrawn: The July-15 fp32/bf16 control shows TT produces coherent prompt-correct output at the intrinsic bf16 diffusion floor, so persistent garbage or degraded output is a configuration or serving regression to investigate, not an expected consequence of #48291 (plan.md:146-148). #48291 is DECIDED -- TT is at the intrinsic bf16 floor and the strict 0.95 gate is mis-specified, production pass/fail unchanged pending owner sign-off -- and it does not license degenerate output.
+A release-quality claim must
 resolve or explicitly disposition #48291.
 
 ## Trace and control flow

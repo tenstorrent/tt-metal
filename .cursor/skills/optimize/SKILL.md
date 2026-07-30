@@ -12,9 +12,49 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
 - The optimization unit is the **denoise step** over the 256-token canvas (≤48 steps/block) plus the commit — NOT per-token autoregressive decode. Map every "per token" metric (roofline, ms/token, gen_len, t/s/u) onto per-step / per-block; report tokens-per-block / blocks-per-second, never `1000/mean_tpot_ms`. `perf_summary.json` needs new fields (`ms_per_denoise_step`, `steps_per_block`, `ms_per_block`, canvas size); the profile is not `single_user_decode`.
 - Replace the entire LM-Head / greedy-argmax / split-sampling / `tt_out_tok` apparatus: the terminal path is **entropy-budget acceptance** (sort → cumsum → scatter/inverse-permutation over the canvas). These ops have no generic guidance here — add a candidate table (program configs, sharding, DRAM-vs-L1 placement, tile-friendly widths for the 256 axis) for sort/cumsum/scatter/gather/entropy.
 - Roofline changes fundamentally: there is **no incremental single-token KV read**; each of the ≤48 steps re-reads weights and recomputes over the full 256 canvas against the frozen prefix. Reconcile measured device time against per-step-weight-traffic × steps.
-- Keep every captured trace **shape- and operation-static** (on-device cutoff mask, tensor-valued scatter indices, warmed program cache). The shipping default replays a fixed 48-step trace. The landed opt-in `DG_DENOISE_EARLY_HALT` path shortens execution by replaying a one-step/window trace and reading one halt scalar between replays; it does not branch inside a captured trace. Under #48291 it currently halts 0/5 prompts and adds ~2% no-halt overhead, so it remains default OFF. Token-feedback tests become **canvas-feedback tests**.
+- Keep every captured trace **shape- and operation-static** (on-device cutoff mask, tensor-valued scatter indices, warmed program cache). There is exactly one Metal denoise trace path: model-lifetime up-front reveal capture with on-device Gumbel, K=48, and one-step/window early halt; eager is the only fallback. Token-feedback tests become **canvas-feedback tests**.
 - **NEVER edit `models/demos/gemma4/`**; validate with the shared-directory gate using the actual `DG_BASE_REF`, not a stale local `main`. Optimize DiffusionGemma-local code and drive the backbone through existing knobs. Evidence goes under `models/experimental/diffusion_gemma/doc/<stage>/`.
-- **Read the `DiffusionGemma denoise-step optimization playbook` below before tuning any knob.** The shipping default is true-sparse+tuned MoE at ~18 t/s @48. The full-canvas RMSNorm (**+15.8%**) SHIPPED as the only path 2026-07-30 and `DG_NORM_FULLCANVAS` was deleted; `DG_MOE_L1` is an end-to-end wash. Current evidence starts with `models/experimental/diffusion_gemma/doc/optimize_perf/perf_campaign_worklog.md`, `l1_residency.md`, `early_halt.md`, and `norm_fullcanvas_flip_gate.md`. `path_to_100tps.md` is a roadmap whose starting-line numbers predate several landed optimizations.
+- **Read the `DiffusionGemma denoise-step optimization playbook` below before tuning any knob.**
+  The July-10 **18.844 t/s @48** row is historical warmed same-shape argmax trace replay with a
+  prompt-only prefix; it is not current first-request vLLM TTFT or correct growing-prefix
+  multi-block throughput. Current serving benchmarks must record explicit flags and use the
+  `plan.md` Part-0 execution contract. Start with `README.md`, `perf_campaign_worklog.md`,
+  `traced_serving.md`, and the newest dated evidence rather than selecting a headline by value.
+  The older full-canvas L1 study is historical/ineligible default evidence:
+  the full-canvas RMSNorm reached **20.68 t/s (+15.8%)** and **SHIPPED as the only path 2026-07-30; `DG_NORM_FULLCANVAS` DELETED.** Both reasons it was held back were measurement errors: the "not bit-identical / ~2e-6" figure came from a bench that reports PCC > 1.0 elsewhere (real delta 5.73 bf16 ULP, caused by ttnn's rmsnorm defaulting to bf16 partial accumulation -- with fp32 accumulation the shapes are bit-identical, 0 of 69,206,016 elements), and its failed flip gate ran on the token-gather MoE that was later deleted for not converging. Full 198-question run: **71.21% vs 66.67%** for the previous full run, -20.4%/block. (was: OFF because not
+  bit-identical, and `DG_MOE_L1` was a wash.
+
+### Current benchmark guardrails (2026-07-22)
+
+- The traced vLLM profile is now the default: `DG_UPFRONT_CAPTURE` defaults to `1` and
+  `DG_VLLM_GUMBEL_MODE` is `device`, the ONLY materialized Gumbel source and therefore the only
+  mode valid under up-front capture (it depends on the Blackhole ttnn.rand kernel fix — see
+  doc/decision_fidelity/degenerate_output_fix.md). Set `DG_UPFRONT_CAPTURE=0` only to fall back to eager,
+  which is what you need for per-step trajectory records that replayed traces do not produce. Device
+  Gumbel is a distribution change, not bit-exact against the torch IID Gumbel the old `host` mode
+  drew. **`host` was DELETED on 2026-07-28** after being measured NOT to be the language-drift
+  cause: it drifts on exactly the same prompts as `device`, repairs 0, and costs 1.40x per request.
+  The real cause was the canvas attending prefill pad keys, fixed in `d0936d4da4f`.
+  There is no IID reference arm any more and the owed sub-40 @3072 re-gate has no second arm to
+  run: judge quality against the A100 CUDA GPQA reference. Still record the mode with every
+  benchmark. `argmax` and `chunked` are not materialized and stay rejected under up-front capture.
+- Still required and fail-loud: every admitted aligned length in `DG_UPFRONT_PREFILL_WARMUP_LENS`
+  and positive `DG_TRACE_REGION_SIZE` (the reserved region cannot be read back from the device, and
+  a trace-region overflow poisons the device). `DG_DENOISE_REVEAL_PMAX` is now optional — unset
+  means the span is derived from `max_model_len` rounded DOWN to a tile and logged; an explicit
+  tile-aligned value still wins. The 48-step schedule is the only one the up-front capture accepts.
+- Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. There are no
+  fixed-budget, grouped/multistep, frozen-prefix, per-request, or argmax trace choices.
+- For vLLM, split queue time, pure prefill, denoise, commit, trace capture, and replay. API-visible
+  tokens/s is not the block rate.
+- Pure prefill and serving prefill are different measurements. The current 64K-build pure-prefill
+  artifact is `context_window_prefill_only_chunkedlong_20260713_msl65536.json`.
+- `DG_PREFILL_RAGGED_LONG` defaults on: every multi-token prefill uses ragged top-8 experts and
+  sequences above 4096 are processed in 4096-token slices. The 4K→16K dense-MoE cliff in the
+  similarly named artifact without `chunkedlong` is a superseded pre-fix control. Set the flag to
+  `0` only when intentionally reproducing that fallback.
+- The July-15 quality decision supersedes blanket “expected garbage” language. Compare any
+  serving garbage against prompt-correct fp32/HF and current TT controls.
 
 This skill assumes you have runnable TTNN code with passing correctness tests. If not, first use the appropriate bringup or debugging skill. This guide is written for autoregressive LLMs with prefill and decode phases. If the target model differs, map each requirement to the nearest equivalent path and record that mapping; do not drop correctness or performance evidence.
 
@@ -206,7 +246,7 @@ The denoise path has moved through three states; anchor on the latest:
 
 **The single most important reframing: the expert matmul is ALREADY ~roofline-optimal (weight-bound at M=1 tile, ~92% of the 256 GB/s roofline when tuned) — so more MoE/dtype tuning does not help. To beat the current model-faithful ~18 t/s @48, target the ~66% NON-MoE surface, not the experts.** Two durable architectural facts behind this: (a) at S=256 with top-8 routing the canvas activates ~all 128 experts (coupon-collector `E[distinct] ≈ 128`), so the weight floor is the **all-128** bank (12.58 GB/chip/step) and top-8 sparsity buys compute/data-movement, never weight bytes; (b) bf16 expert precision is not the lever — bf8 was tried and rejected (below).
 
-The device-backed L1 pass corrected one earlier conclusion: **de-chunking the 256-canvas RMSNorm is fresh headroom** after MoE tuning. It saves ~41 ms/step and is the largest remaining DG-local measured win, although it stays opt-in for output-identity policy. The same pass closed the other placement ideas: MoE activation L1 is overlap-hidden, residual-stream L1 requires a whole-layer contract rewrite, attention L1 is blocked by the flash-SDPA CB clash, and mask placement is immaterial.
+The device-backed L1 pass corrected one earlier conclusion: **de-chunking the 256-canvas RMSNorm is fresh headroom** after MoE tuning. It saves ~41 ms/step, and it SHIPPED as the only path on 2026-07-30 (`DG_NORM_FULLCANVAS` deleted) -- it is no longer an outstanding lever. The same pass closed the other placement ideas: MoE activation L1 is overlap-hidden, residual-stream L1 requires a whole-layer contract rewrite, attention L1 is blocked by the flash-SDPA CB clash, and mask placement is immaterial.
 
 ### Already landed — do NOT re-grind
 
@@ -214,38 +254,39 @@ These are done or measured to closure; redoing them without new evidence wastes 
 
 - **True-sparse token-gather MoE** (`tt/sparse_moe.py`): retired the dense-128 all-ones `sparse_matmul` + its ~87 ms expert-major `Permute`; 137.6 → 10.54 ms/layer (13×). **Itself retired 2026-07-29** — it does not converge; `tt/concat_moe.py` replaced it as the only denoise MoE and computes every expert as three wide matmuls, so "compute fewer experts" is settled in the other direction: at S=256 top-8 activates ~all 128 experts anyway, and the dispatch was pure overhead (+89% MACs at capacity 256).
 - **OPT-004 matmul-geometry tuning** (`DG_SPARSE_MOE_TUNED=1`, `9c5c999`): tuned MoE ≈ 2.90 ms/layer (3.47×, PCC 0.99967); the expert matmul ran ~92% of the 256 GB/s roofline (weight-bound at M=1 tile — no utilization headroom left). **Deleted 2026-07-29 with the token-gather MoE it tuned**, along with its benches (`bench_opt004_matmul_geometry.py`, `verify_opt004_fullmoe.py`, `bench_moe_decomp.py`, `verify_sparse_moe.py`, `verify_dispatch_fused.py`). The weight-bound conclusion still holds — it is a property of the all-128 weight bank, not of the dispatch.
-- **Batched commit** (default since 2026-07-04, `3d71dee`): the old 256-sequential single-token decode-append commit (~31 s/block) is NOT the live path; `DG_COMMIT_BATCHED=0` only to disable.
-- **Traced denoise loop** (`d25626f`): 2.72× traced-vs-eager; model-faithful @48 = **17.92 t/s** (58.29 @12, 33.28 @24; 100 t/s "cleared" @4 = 104 is benchmark-only, not quality-faithful).
+- **Batched commit** (default since 2026-07-04, `3d71dee`; the `DG_COMMIT_BATCHED` override was DELETED 2026-07-28 in `13bd1b34efc` and has no reader -- setting it does nothing): the old 256-sequential single-token decode-append commit (~31 s/block) is not the live path and there is no way back to it.
+- **Historical traced denoise loops** (`d25626f` + 2026-07-13): the RUN-first argmax @48 anchor was **17.92 t/s**, but it held the denoise prefix at the initial prompt. The later growing-prefix K=48 result was **1.42 output t/s** including recapture (`doc/vllm_integration/traced_chunked_gumbel_20260713.json`). Both are retained performance provenance, not current executable-path guidance.
 - **Terminal trim / `DG_DEDUP_ARGMAX`**: the RUN-first path dedups the 2nd full-vocab argmax over 262144 (argmax is scale-invariant when `gumbel_noise=None`). ROW_MAJOR multi-core argmax (`tt/sampling.py:43`, 86× vs single-core TILE, bit-identical) is already wired.
-- **Multi-step trace batching** (opt-in `DG_DENOISE_TRACED_MULTISTEP`, `8ce1904`): measured `+0.3%` @48 — a no-op because the step is compute-bound there. Not default; do not expect a win from it @48.
+- **Historical multi-step trace batching** (`8ce1904`): measured `+0.3%` @48. The executable and selector were removed.
 - **bf8 experts — TESTED and REJECTED** (`5df3175`): the DG-local `DG_EXPERTS_BFP8` knob fails the diffusion-decision gate (argmax agreement 0.60, committed match 0.23 → repetition) and is only ~9% faster (denoise is not weight-bound). Do NOT re-try expert precision as a speed lever.
-- **Full-canvas RMSNorm — SHIPPED AS THE ONLY PATH** (2026-07-30, `DG_NORM_FULLCANVAS` deleted): +15.8% @48 / +23.3% @12, and -20.4%/block on the full 198-question GPQA run at 71.21% vs 66.67%. There is no flag and no chunked arm left to select.
-- **MoE activation L1 — MEASURED WASH** (`DG_MOE_L1`): isolated MoE improves 3.2%, but traced end-to-end is noise. Keep default OFF.
-- **Traced early-halt mechanism — LANDED OPT-IN** (`DG_DENOISE_EARLY_HALT`): correct one-scalar/window control flow, but 0/5 prompts halt under #48291 and no-halt overhead is ~2%; keep default OFF until the entropy floor changes.
+- **Self-conditioning embedding prechunk + logits/denominator L1 — LANDED DEFAULT ON** (`DG_SELFCOND_PRECHUNK_EMBED`, diagnostic opt-out `0`; `DG_SELFCOND_LOGITS_L1`, diagnostic control `off`): prechunking removes 32 repeated embedding slices/step; the L1 chain retains each dynamic logits slice, subtract/exp, denominator reduction, and ordered denominator accumulator in L1 while numerator matmuls/accumulation stay DRAM. The final reviewed unset-default reproduction is **18.844 t/s @48**, **257.575 ms/warmed traced step**, with exact 48-step RUN-first argmax and production chunked-Gumbel decisions. Current evidence: `doc/optimize_perf/selfcond_logits_l1_e2e.json`.
+- **Full-canvas RMSNorm — SHIPPED, flag deleted**: +15.8% @48 / +23.3% @12, -20.4%/block on the full 198. Its old flip gate (commit agreement 0.145) is void -- it ran on the token-gather MoE that was deleted for not converging, and the "not bit-identical" magnitude behind it was never measured. It is bit-identical under fp32 partial accumulation.
+- **MoE activation L1 — MEASURED WASH, flag deleted** (`DG_MOE_L1` has zero readers; setting it does nothing): isolated MoE improves 3.2%, but traced end-to-end is noise. There is no default left to keep.
+- **Historical opt-in early-halt prototype:** correct one-scalar/window control flow but 0/5 prompts halted in its original control. Window-1 early halt is now intrinsic to the sole up-front trace path; the old selector was removed.
 
 ### Where the remaining headroom is (and why in-repo is largely exhausted)
 
 At the tuned default the step is **~66% NON-MoE**. The L1 pass recovered one material part of that surface through full-canvas RMSNorm. Beyond that opt-in win, the remaining concrete non-MoE lever is blocked in-repo:
 
-- **Sharded terminal — VALIDATED in concept, BLOCKED in-repo.** The replicated full-vocab terminal does 4× redundant argmax/entropy work. A per-chip `[256,65536]` terminal measured an estimated ~7% block win, but the traced on-device cross-shard combine needs an exact 18-bit token index; Blackhole fp32 TILE reduction loses low index bits. The fix is an int32 reduction or custom terminal kernel. See `nonmoe_roofline/README.md` and the sharded-terminal entries in `perf_campaign_worklog.md`.
+- **Sharded terminal — WITHDRAWN, do not re-grind.** The whole 560-line apparatus was DELETED 2026-07-28 (`032fdd9b581`); `prepare_shard*` has no call site anywhere. Its "~7% block win" has no in-tree provenance -- the number survives only in this skill and the harness it would have come from never had a caller in committed history. Treat it as unmeasured, not as a blocked lever. The underlying observation (a replicated full-vocab terminal does 4x redundant argmax/entropy work) is still true; the int32-reduction framing is not a validated route to a measured win.
 - **DRAM-sharded expert weights are no longer a current Python-level recommendation.** That roadmap item predates OPT-004. The tuned expert matmul already reaches ~235 GB/s/chip (~92% of practical DRAM roofline), while a second sharded expert copy would conflict with the 256K budget (only ~2.16 GiB/chip free). Revisit only with a loader-native non-duplicated layout and a batched-matmul contract that can consume it.
-- **Current verdict:** shipping default @48 is ~18 t/s; the available full-canvas-norm opt-in reaches ~20.7 t/s. Reaching 60–100 t/s still requires a faithful ≤16–20-step regime, which is blocked by #48291, plus upstream structural work.
+- **Current verdict:** the 18.844 t/s argmax row, 20.7 t/s full-canvas-norm row, and 1.42 output t/s growing-prefix recapture row are historical comparisons. Current trace optimization must use the model-lifetime up-front reveal+device-Gumbel+window1 K=48 path; use eager only as its fallback/control.
 
 ### When the in-repo levers are exhausted: the ceiling
 
 These are genuinely not fixable DiffusionGemma-locally or are hard device/kernel limits. Do not re-investigate them as DG-local Python knobs; use the in-repo evidence named above.
 
-1. **At 48 faithful steps, the shipping default is ~18 t/s and the measured opt-in ceiling is ~20.7 t/s.** 100 t/s at 48 steps remains arithmetically impossible. The landed early-halt controller currently fires for 0/5 prompts because #48291 keeps the entropy/stability condition from converging, so the favorable ≤16–20-step regime is not yet model-faithful.
-2. **#48291 decision fidelity (correctness, and it gates the step count).** The bf16 / MoE / TP=4 backbone argmax-agrees with HF only ~50% and diffusion commits the clean argmax with no cushion. Decomposition (2026-07-07): the gap is the backbone hidden, and **attention is the #1 lever** — full-fp32 attention alone lifts logits PCC to ≥0.92. Config precision knobs are DEAD (`sparse_matmul` + flash SDPA ignore `fp32_dest_acc_en`; HiFi4 is worse). The clean fix is a **C++ flash-SDPA kernel change** (fp32 softmax/PV accumulation) + fp32 qkv/o projections — scoped shared/upstream kernel work, NOT a DG-local Python knob. `ttnn.topk` is bf16-only (TT_FATAL on FLOAT32); fp32 experts exceed QB2 DRAM.
+1. **Historical fixed/argmax rows measured ~18.8–20.7 t/s at 48 steps.** They are not the current serving path. At K=48, 100 t/s remains arithmetically impossible; current measurements must use up-front reveal+device-Gumbel+window1.
+2. **#48291 decision fidelity (correctness, and it gates the step count).** The bf16 / MoE / TP=4 backbone argmax-agrees with HF only ~50% on CAUSAL PREFILL and diffusion commits the clean argmax with no cushion -- but that proxy was superseded 2026-07-15 and did not predict real diffusion-trajectory fidelity (plan.md:287). Decomposition (2026-07-07): the gap is the backbone hidden, and **attention is the #1 lever** — full-fp32 attention alone lifts logits PCC to ≥0.92. Config precision knobs are DEAD (`sparse_matmul` + flash SDPA ignore `fp32_dest_acc_en`; HiFi4 is worse). The clean fix is a **C++ flash-SDPA kernel change** (fp32 softmax/PV accumulation) + fp32 qkv/o projections — scoped shared/upstream kernel work, NOT a DG-local Python knob. `ttnn.topk` is bf16-only (TT_FATAL on FLOAT32); fp32 experts exceed QB2 DRAM.
 3. **The MoE is already ~roofline-optimal; the remaining MoE gap is a fused kernel (upstream).** At the tuned state the expert matmul reads the weight bank at ~92% of the 256 GB/s roofline (weight-bound at M=1 tile). The ~3.6 ms/layer of dispatch + gather/combine + all-reduce overhead this used to carry is **gone as of 2026-07-29**: the token-gather dispatch was deleted and `tt/concat_moe.py` runs the experts as three wide matmuls with the routing folded into the GeGLU output, so there is no gather/combine to fuse and the "fused gather-experts-combine kernel (upstream ttnn)" ask is moot. What remains is the all-reduce and the weight-bound expert matmuls themselves. At S=256, top-8 activates ~all 128 experts, so the weight floor is all-128 (12.58 GB/chip/step) — sparsity never buys weight bytes.
 4. **The commit still rides the ungated shared-gemma4 decode footprint.** Batched commit is the live default (landed, above), but a fully DG-local **sparse causal 256-token commit** (`path_to_100tps.md` lever 7) or reverting the ungated decode-footprint edits (RoPE-per-user, SDPA 1×1 grid k=32) touches shared gemma4 → needs a gate/rebaseline or copy-into-DG (plan.md R0.4 / R-new / line 149).
-5. **Hard device limits (mitigated, not on the critical path).** Full-vocab on-device MATERIALIZED Gumbel `[1,256,262144]` fp32 does not fit DRAM — mitigated by chunked Gumbel (`sampling.py:165`) + RUN-first argmax (`gumbel_noise=None`). The sharded-terminal ~7% lever is blocked by the on-device 18-bit-index fp32-reduction wall (above) — needs ttnn int32 reduction or a custom kernel.
+5. **Hard device limits (mitigated, not on the critical path).** Full-vocab on-device MATERIALIZED Gumbel `[1,256,262144]` fp32 does not fit DRAM — mitigated by chunked Gumbel (`sampling.py:165`) + RUN-first argmax (`gumbel_noise=None`). The sharded terminal is withdrawn, not blocked (above): its apparatus was deleted and its ~7% figure has no provenance.
 
 Any of the above requires a SCOPED, separately-owned shared-backbone/upstream change — never an in-place `models/demos/gemma4/` edit (hard rule #1) — or a product decision on #48291. Do not present them as DG-local Python work still to be done.
 
 ### Profiling without Tracy
 
-The build has `ENABLE_TRACY=OFF` (`build_Release/CMakeCache.txt: ENABLE_TRACY:BOOL=OFF`, confirmed). So `TT_METAL_DEVICE_PROFILER=1`, `python -m tracy`, and `tt-perf-report` op-level CSV all raise `TT_FATAL: ... requires a Tracy-enabled build`. Enabling requires a full ttnn rebuild that would replace the shared venv's `_ttnn` bindings on a shared QB2 — an environment limit, not in-repo fixable. **Do NOT attempt that rebuild to satisfy the generic `tt-perf-report` paragraph.** For this stage the op-CSV requirement is *substituted*, not skipped, and the substitute is a legitimate measured path:
+The shared `build_Release` has `ENABLE_TRACY=OFF` (`build_Release/CMakeCache.txt: ENABLE_TRACY:BOOL=OFF`, confirmed). So `TT_METAL_DEVICE_PROFILER=1`, `python -m tracy`, and `tt-perf-report` op-level CSV all raise `TT_FATAL: ... requires a Tracy-enabled build`. Enabling it requires a Tracy-enabled ttnn build. Building one *in place* would replace the shared venv's `_ttnn` bindings on a shared QB2, which is why the default answer is no -- but that is a property of this shared checkout, not a law: a separate Tracy-enabled build directory is possible if someone owns the box. **Do not attempt the in-place rebuild to satisfy the generic `tt-perf-report` paragraph**; if you need op-CSV, ask for a dedicated build rather than treating it as impossible. For this stage the op-CSV requirement is *substituted*, not skipped, and the substitute is a legitimate measured path:
 
 - Metal TRACE capture/replay itself WORKS — so the per-step, per-block, and full-generation numbers ARE from a traced measured path (not eager). Only the Tracy op-attribution CSV is unavailable.
 - Substitute the op-CSV with: **synchronized per-op device-time tables** (`time.perf_counter` + `ttnn.synchronize_device` around each op; work_log 2a/2b/2e), the **reduced-layer per-layer sweep** (work_log 3a/3c), and the **traced e2e terminal microbench** (work_log 2d). Together these give the same "which ops dominate + before/after" signal a `tt-perf-report` table would.
@@ -259,7 +300,7 @@ Read before acting; reproduce before trusting. All under `models/experimental/di
 
 Current authoritative record:
 - `perf_campaign_worklog.md` — read newest entries first; it records the dense→sparse→tuned evolution, early-halt, and the L1 pass.
-- `l1_residency.md` / `l1_residency_summary.json` — old default ~18 t/s, full-canvas norm 20.68 t/s @48 (now the only path), and `DG_MOE_L1` wash. Read its 2026-07-30 correction block before quoting the ~2e-6 figure.
+- `l1_residency.md` / `l1_residency_summary.json` — old default ~18 t/s, full-canvas norm 20.68 t/s @48 (now the only path), and the `DG_MOE_L1` wash (that flag was deleted and has no reader). Read its 2026-07-30 correction block before quoting the ~2e-6 figure.
 - `norm_fullcanvas_flip_gate.md` — why the norm win remains opt-in despite one-prompt absolute HF neutrality.
 - `early_halt.md` — landed controller, ~2% no-halt overhead, and 0/5 halts under #48291.
 - `path_to_100tps.md` — roadmap arithmetic and historical lever inventory only; its starting-line state is stale.
@@ -268,7 +309,9 @@ Current authoritative record:
 
 Earlier dg-08 **dense-MoE snapshot (SUPERSEDED — do not quote as current):**
 - `perf_summary.json` / `work_log.md` — the dense ≈4176 ms/step, 137.55 ms/layer state before true-sparse MoE. Useful only for the diffusion-shaped `perf_summary.json` FIELD shape (`profile: block_diffusion_denoise_step`), not for its numbers.
-- `prof_denoise_step.py`, `bench_sampling_step.py`, `diag_sampling_ops.py` / `diag_argmax_alt.py` / `verify_trace_safe_loop.py` — the reduced-layer fit + terminal/op-diagnosis + trace-safety harnesses.
+- `prof_denoise_step.py`, `bench_sampling_step.py`, `diag_sampling_ops.py`, and
+  `diag_argmax_alt.py` — retained reduced-layer and terminal diagnostics. The obsolete fixed-step
+  trace-safety executable was removed; its recorded result remains historical.
 
 ## Evidence To Leave
 
