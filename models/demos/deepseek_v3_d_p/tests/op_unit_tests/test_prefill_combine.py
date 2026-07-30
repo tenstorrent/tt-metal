@@ -657,41 +657,67 @@ def _cmbf2d_bwinfo_path():
     return f"generated/cmbf2d/bwinfo_{CMBF2D_TAG}.txt" if CMBF2D_TAG else CMBF2D_BWINFO_PATH
 
 
-def _cmbf2d_plan_movements(mesh_device, axis, num_links, tokens):
-    """Every data movement in the run: one per cable per device, `num_links` to each axis-neighbour.
+def _cmbf2d_slots_per_device(mesh_device, axis, num_links):
+    """How many `tokens`-sized slots each device's input and output region is cut into.
 
-    Input regions are keyed by the movement's index on its own device. Output regions are keyed by the
-    slot the DESTINATION sees, which is what keeps them collision-free: a device's arrivals are the
-    `num_links` from its backward neighbour (which sent forward) and the `num_links` from its forward one,
-    so keying on (direction, link) gives each its own range. The op rejects the list if that is wrong.
+    Every device sends to every OTHER device on `axis`, once per link: (axis_extent - 1) * num_links. The
+    two regions are the same size because the traffic pattern is ring-symmetric — a device sends
+    num_links * tokens to each of the other axis_extent-1 devices, and receives exactly that much from
+    each of them.
+    """
+    return (tuple(mesh_device.shape)[axis] - 1) * num_links
+
+
+def _cmbf2d_plan_movements(mesh_device, axis, num_links, tokens):
+    """Every data movement in the run: every device sends `tokens` tokens to EVERY other device on
+    `axis`, once per link.
+
+    Slot scheme. Both regions are cut into `(axis_extent - 1) * num_links` slots of `tokens` tokens each,
+    and a slot is named by the pair (ring offset `delta`, `link`):
+
+        slot(delta, link) = (delta - 1) * num_links + link,   delta in 1 .. axis_extent-1
+
+    Chip C's INPUT slot (delta, link) goes to chip C+delta's OUTPUT slot (delta, link). That one rule
+    makes both sides collision-free with no ordering convention to remember:
+      * input  — each (delta, link) is used exactly once per source chip;
+      * output — chip D's slot (delta, link) can only be written by chip D-delta, so exactly one
+                 movement claims it.
+
+    So every slot on every chip is both read once and written once. The op's validation re-derives that
+    property from the list alone (no destination claimed twice, input coverage gap-free from 0) rather
+    than trusting this docstring.
+
+    NOTE this says nothing about HOW the traffic gets there. Destinations more than one hop away are the
+    op's problem, not the test's: the descriptor names a chip, and the op decides the route.
     """
     mesh_shape = tuple(mesh_device.shape)
-    assert mesh_shape[axis] >= 3, f"axis {axis} extent {mesh_shape[axis]}: need 3+ for two distinct neighbours"
+    extent = mesh_shape[axis]
+    assert extent >= 3, f"axis {axis} extent {extent}: need 3+ for two distinct neighbours"
 
-    def _neighbour(coord, delta):
+    def _at_offset(coord, delta):
         nbr = list(coord)
-        nbr[axis] = (nbr[axis] + delta) % mesh_shape[axis]
+        nbr[axis] = (nbr[axis] + delta) % extent
         return nbr
 
     movements = []
     for coord in itertools.product(*(range(n) for n in mesh_shape)):
-        for direction, delta in enumerate((1, -1)):
+        for delta in range(1, extent):
             for link in range(num_links):
-                idx = direction * num_links + link
+                slot = (delta - 1) * num_links + link
                 movements.append(
                     ttnn._ttnn.operations.experimental.CombineFabric2dMovement(
                         src=list(coord),
-                        in_base_token=idx * tokens,
-                        dst=_neighbour(coord, delta),
-                        out_base_token=idx * tokens,
+                        in_base_token=slot * tokens,
+                        dst=_at_offset(coord, delta),
+                        out_base_token=slot * tokens,
                     )
                 )
     return movements
 
 
-def _cmbf2d_make_regions(mesh_device, tokens, token_size_bytes, num_links):
-    """The op's two DRAM regions, sized for `2 * num_links` movements per device: random input, zeroed
-    output (so an unwritten token fails the check instead of passing on leftover garbage).
+def _cmbf2d_make_regions(mesh_device, axis, tokens, token_size_bytes, num_links):
+    """The op's two DRAM regions, sized for one slot per (destination, link) per device: random input,
+    zeroed output (so an unwritten token fails the check instead of passing on leftover garbage).
 
     Returns `(host_input, dev_input, dev_output)`. The host tensor is retained deliberately: it, and not
     a readback of `dev_input`, is the reference the accuracy check compares against — see
@@ -701,7 +727,8 @@ def _cmbf2d_make_regions(mesh_device, tokens, token_size_bytes, num_links):
     holds which block" needs no ordering convention.
     """
     rows, cols = tuple(mesh_device.shape)
-    shape = (rows * 2 * num_links * tokens, cols * token_size_bytes // 4)
+    slots = _cmbf2d_slots_per_device(mesh_device, axis, num_links)
+    shape = (rows * slots * tokens, cols * token_size_bytes // 4)
     gen = torch.Generator().manual_seed(0xF2D5)
     # Capped at 2**31 - 1 so the int32 -> uint32 (device) -> int32 (readback) round-trip is value-exact
     # and the host reference can be compared against the readback without a bitcast.
@@ -935,10 +962,20 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
 
     tokens = CMBF2D_TOKENS
     token_size_bytes = CMBF2D_TOKEN_BYTES
+    # The op halves the movement to the diametrically-opposite chip between its two producers (that chip
+    # is reachable equally far in either direction), so an odd count would not split evenly.
+    assert tokens % 2 == 0, f"CMBF2D_TOKENS must be even (the +N/2 movement is split in half), got {tokens}"
 
     # What we want moved, stated up front and independently of how the op will do it.
     movements = _cmbf2d_plan_movements(mesh_device, CMBF2D_AXIS, num_links, tokens)
-    host_input, dev_input, dev_output = _cmbf2d_make_regions(mesh_device, tokens, token_size_bytes, num_links)
+    host_input, dev_input, dev_output = _cmbf2d_make_regions(
+        mesh_device, CMBF2D_AXIS, tokens, token_size_bytes, num_links
+    )
+    slots = _cmbf2d_slots_per_device(mesh_device, CMBF2D_AXIS, num_links)
+    logger.info(
+        f"combine_fabric2d plan: {len(movements)} movements, {slots} slots/device of {tokens} tokens "
+        f"({slots * tokens} tokens per region per device)"
+    )
 
     signpost(f"combine_fabric2d start num_links={num_links} tokens={tokens}")
     output = ttnn.experimental.deepseek_prefill.combine_fabric2d(
@@ -972,10 +1009,18 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
 
     # ---- Bandwidth telemetry. Writes the report and asserts it is internally sound (clock, payload,
     # every producer accounted for) — see _dump_combine_fabric2d_bwinfo. The numbers themselves live in
-    # the file, not in the console: one movement per producer means 128 rows here, and a console summary
-    # is only ever a lossy copy of what the file already says.
+    # the file, not in the console: there are 128 producer rows here, and a console summary is only ever
+    # a lossy copy of what the file already says.
+    #
+    # One telemetry record per PRODUCER CORE, not per movement: a device has 2 * num_links producers (one
+    # per link per direction) and each now serves several movements, so these two counts diverged the
+    # moment destinations went beyond the immediate neighbours.
     bwinfo_path = _cmbf2d_bwinfo_path()
     _dump_combine_fabric2d_bwinfo(
-        mesh_device, num_links, axis=CMBF2D_AXIS, expected_workers=len(movements), path=bwinfo_path
+        mesh_device,
+        num_links,
+        axis=CMBF2D_AXIS,
+        expected_workers=num_devices * 2 * num_links,
+        path=bwinfo_path,
     )
     logger.info(f"combine_fabric2d telemetry -> {bwinfo_path}")
