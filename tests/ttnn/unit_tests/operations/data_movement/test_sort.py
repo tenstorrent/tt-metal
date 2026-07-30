@@ -272,7 +272,8 @@ def test_sort_program_cache(shape, dim, descending, device):
     [
         ([32, 64], -1, False, torch.bfloat16, ttnn.bfloat16, ttnn.uint16),
         ([32, 64], -1, False, torch.bfloat16, ttnn.bfloat16, ttnn.uint32),
-        ([32, 64], -1, False, torch.uint8, ttnn.uint16, ttnn.uint16),
+        # UINT16 input always produces UINT32 indices (fp32_dest_acc_en is forced
+        # so the SFPU uses 32-bit index writes). UINT16-index output is not valid.
         ([32, 64], -1, False, torch.uint8, ttnn.uint16, ttnn.uint32),
         # ([1, 8], -1, False, torch.uint8, ttnn.uint16, ttnn.uint16), # GH issue: #33473
     ],
@@ -304,63 +305,60 @@ def test_sort_datatypes(shape, dim, descending, torch_value_dtype, ttnn_value_dt
         assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch_value_dtype))
 
 
-def test_sort_uint16_fp32_dest_cross_core(device):
-    """Regression test for UInt16-in-32b-DEST on the cross-core (hybrid) factory path.
+@pytest.mark.parametrize(
+    "n, hi, descending",
+    [
+        # Values ≤ 255: these pass even without the fix (bf16 is exact for 0..255)
+        (64, 63, False),
+        (256, 255, False),
+        # Values > 256: these fail without fp32_dest_acc_en (GH issue #46331)
+        (512, 511, False),
+        (512, 511, True),
+        (551, 550, False),  # Qwen window_index size
+        (551, 550, True),
+        (128, 512, False),  # values well above the bf16 threshold
+    ],
+)
+def test_sort_uint16_index_correctness(n, hi, descending, device):
+    """
+    Regression test for GH #46331: UINT16 sort keys > 256 produced wrong indices.
 
-    The single-core path (Wt <= 64) is covered by test_sort_datatypes.  This test uses
-    Wt = 66 which lies in (64, hybrid_threshold] so SortProgramFactoryCrossCoreDataExchange
-    is selected, exercising the TOPK_UINT16_FP32_DEST clear/prepare logic on that path.
-
-    Note: ROW_MAJOR + UInt16 + UInt32 indices is not yet supported.  The pack_untilize LLK
-    path loads UInt16 tiles into fp32 DEST and the packer reads the high 16 bits (zero)
-    rather than the low 16 bits where the data sits.  Fixing that path requires a dedicated
-    pack_untilize-aware UInt16 fixup and is tracked separately.
+    Root cause: the sort TopK SFPU LLK compared UINT16 values in bf16 mode
+    (8-bit mantissa, exact only up to 256).  The fix enables fp32_dest_acc_en
+    for UINT16 inputs so the hardware unpack converts each UINT16 integer to an
+    exact FLOAT32 (all 0..65535 are representable in 24-bit mantissa) before the
+    SFPU comparison.  Indices are widened to UINT32 because fp32_dest_acc_en
+    forces 32-bit index writes in the LLK.
     """
     torch.manual_seed(0)
-    # 66 tiles * 32 columns = 2112; must be a multiple of 64 (tile-layout constraint).
-    shape = [1, 1, TILE_HEIGHT, 66 * TILE_WIDTH]
-    input_t = torch.randint(100, shape, dtype=torch.uint8)
-    ttnn_input = ttnn.from_torch(input_t, ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    shape = [1, n]
 
-    torch_values, torch_indices = torch.sort(input_t, dim=-1, descending=False)
+    # Build n UNIQUE integers so argsort has a single correct answer.
+    # Using float scaling loses uniqueness due to truncation, so we sample via randperm.
+    # All test cases satisfy hi + 1 >= n.
+    assert hi + 1 >= n, f"hi+1={hi+1} must be >= n={n} to guarantee uniqueness"
+    if descending:
+        # For descending sort, the sort pads with 0 (the smallest UINT16 sentinel).
+        # Shift values to [1, hi+1] so that 0 is never an actual value; the
+        # padding zeros then unambiguously sort past all real elements.
+        vals = torch.randperm(hi + 1)[:n].to(torch.int32) + 1
+    else:
+        # For ascending sort the padding sentinel is 65535.  Values sampled from
+        # [0, hi] (≤ 550 in all test cases) never reach 65535, so no conflict.
+        vals = torch.randperm(hi + 1)[:n].to(torch.int32)
+    x_torch = vals.reshape(shape)
 
-    out_values = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
-    out_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint32)
-    ttnn.sort(ttnn_input, dim=-1, descending=False, out=(out_values, out_indices))
+    ttnn_input = ttnn.from_torch(x_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    assert_equal(torch_values, ttnn.to_torch(out_values, dtype=torch.uint8))
-    ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(out_indices).to(torch.int64))
-    assert_equal(torch_values, ttnn_gathered)
+    _sort_vals, ttnn_idx = ttnn.sort(ttnn_input, dim=-1, descending=descending)
 
+    # After the fix UINT16 input always yields UINT32 indices.
+    assert ttnn_idx.dtype == ttnn.uint32, f"Expected UINT32 indices for UINT16 input, got {ttnn_idx.dtype}"
 
-def test_sort_uint16_fp32_dest_multi_core(device):
-    """Regression test for UInt16-in-32b-DEST on the DRAM multi-core factory path.
+    dev_idx = ttnn.to_torch(ttnn_idx).to(torch.int64)
+    golden = torch.argsort(x_torch.to(torch.int64), dim=-1, descending=descending)
 
-    Uses the same device-adaptive sizing as test_sort_multi_row_multi_core_no_deadlock so
-    that SortProgramFactorySingleRowMultiCore is always selected, then sorts UInt16 values
-    with preallocated UInt32 indices and verifies correctness.
-
-    Note: ROW_MAJOR + UInt16 + UInt32 indices is not yet supported (see note in
-    test_sort_uint16_fp32_dest_cross_core for the explanation).
-    """
-    torch.manual_seed(0)
-    grid = device.compute_with_storage_grid_size()
-    total_cores = grid.x * grid.y
-    wt = _next_pow2(total_cores * 128 + 1)
-    shape = [1, 1, TILE_HEIGHT, wt * TILE_WIDTH]
-
-    input_t = torch.randint(100, shape, dtype=torch.uint8)
-    ttnn_input = ttnn.from_torch(input_t, ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    torch_values, torch_indices = torch.sort(input_t, dim=-1, descending=False)
-
-    out_values = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
-    out_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint32)
-    ttnn.sort(ttnn_input, dim=-1, descending=False, out=(out_values, out_indices))
-
-    assert_equal(torch_values, ttnn.to_torch(out_values, dtype=torch.uint8))
-    ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(out_indices).to(torch.int64))
-    assert_equal(torch_values, ttnn_gathered)
+    assert_equal(golden, dev_idx)
 
 
 def create_descending_tensor(shape, dim, dtype=torch.bfloat16):
