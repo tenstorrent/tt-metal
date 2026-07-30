@@ -13,6 +13,8 @@
 #include "api/debug/dprint.h"  // [DIAG avgpool x1.15] remove after
 
 void kernel_main() {
+    compute_kernel_hw_startup(dfb::in, dfb::scaler, dfb::out);
+
     uint32_t Ht = get_arg(args::Ht);
     uint32_t Wt = get_arg(args::Wt);
     uint32_t NC = get_arg(args::NC);
@@ -27,8 +29,6 @@ void kernel_main() {
 #else
     UNPACK(DPRINT("RPM_OFF\n"));
 #endif
-
-    compute_kernel_hw_startup(dfb::in, dfb::scaler, dfb::out);
 
     compute_kernel_lib::reduce<
         REDUCE_OP,
