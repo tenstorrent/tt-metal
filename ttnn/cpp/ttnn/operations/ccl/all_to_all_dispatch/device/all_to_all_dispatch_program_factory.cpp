@@ -432,7 +432,7 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
         reader_rt_args.push_back(mapping_tensor.buffer());
         reader_rt_args.push_back(output_tensor.buffer());
         reader_rt_args.push_back(metadata_tensor.buffer());
-        reader_rt_args.push_back((uint32_t)cross_device_semaphore.address());
+        reader_rt_args.push_back((uint32_t)cross_device_semaphore.address());  // smuggled-rta-ok
         reader_rt_args.push_back(token_range_start);
         reader_rt_args.push_back(token_range_end);
         desc.kernels[ternary_reader_kernel_id].emplace_runtime_args(sender_core, reader_rt_args);
