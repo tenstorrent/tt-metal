@@ -1,0 +1,193 @@
+{
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "optimized_stage_provenance": {
+    "checkout_git_sha": "bae72d8aa452c8bcdf2d8d70216de58a1fb32c25",
+    "exact_command": "pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_paged_prefill_logical_boundary_lengths[blackhole-sliding_attention-device_params0-mesh_device0]",
+    "hardware": {
+      "arch": "Blackhole P300C",
+      "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+    },
+    "optimized_decoder_sha256": "c3097938ef5162426d3f8684a9de9fdc3bccdbe0db51aa583aaeb4a9067fc37c",
+    "optimized_test_sha256": "1b60098494fe482f7e06b6d83992b8b82ca214bfb1a643815c2d99af455b1013",
+    "resolved_policy": {
+      "constructor_defaults": {
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi4",
+        "attention_weight_dtype": "None",
+        "dense_decode_dram_sharded": "False",
+        "dram_in0_block_w": "None",
+        "dram_sharded_roles": "()",
+        "expert_decode_input_l1": "True",
+        "expert_down_in0_block_w": "11",
+        "expert_down_out_subblock_w": "None",
+        "expert_down_per_core_n": "2",
+        "expert_gate_in0_block_w": "11",
+        "expert_gate_math_fidelity": "MathFidelity.LoFi",
+        "expert_gate_out_subblock_w": "None",
+        "expert_gate_per_core_n": "2",
+        "expert_math_fidelity": "MathFidelity.LoFi",
+        "expert_weight_dtype": "DataType.BFLOAT8_B",
+        "full_attention_math_fidelity": "MathFidelity.LoFi",
+        "mlp_down_weight_dtype": "None",
+        "mlp_math_fidelity": "MathFidelity.LoFi",
+        "mlp_weight_dtype": "DataType.BFLOAT8_B",
+        "packed_dense_gate_up": "True",
+        "prefill_expert_chunk_size": "32",
+        "prefill_expert_down_in0_block_w": "11",
+        "prefill_expert_gate_in0_block_w": "44",
+        "prefill_expert_per_core_n": "2",
+        "prefill_expert_tail_in0_block_w": "1",
+        "prefill_expert_tail_per_core_n": "11",
+        "prefill_expert_weight_dtype": "DataType.BFLOAT8_B",
+        "prefill_routed_active": "True",
+        "residual_shard_cores": "0",
+        "tensor_cache_path": "None",
+        "weight_dtype": "DataType.BFLOAT16"
+      },
+      "environment_overrides": {
+        "GEMMA4_OPT_CANDIDATE_ID": "final_v2_suite"
+      }
+    }
+  },
+  "results": [
+    {
+      "logical_sequence_length": 1,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9972179918317206,
+      "physical_sequence_length": 32,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 31,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9967323954368503,
+      "physical_sequence_length": 32,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 32,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9972760213726363,
+      "physical_sequence_length": 32,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 33,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.997989123185658,
+      "physical_sequence_length": 64,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 63,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9983191178346544,
+      "physical_sequence_length": 64,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 64,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9983904513778218,
+      "physical_sequence_length": 64,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 65,
+      "page_table": [
+        1,
+        0
+      ],
+      "pcc": 0.9981591378803355,
+      "physical_sequence_length": 96,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 1023,
+      "page_table": [
+        15,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14
+      ],
+      "pcc": 0.9952806553670712,
+      "physical_sequence_length": 1024,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 1024,
+      "page_table": [
+        15,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14
+      ],
+      "pcc": 0.996624239045613,
+      "physical_sequence_length": 1024,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 1025,
+      "page_table": [
+        16,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "pcc": 0.9962333845739818,
+      "physical_sequence_length": 1056,
+      "threshold": 0.995
+    }
+  ]
+}
