@@ -1,0 +1,37 @@
+{
+  "config_id": "c005_inner_mlp_bf4_edges_bf8",
+  "description": "Default optimized policy, but restore first and last layer decode MLP weights from BF4 to BF8.",
+  "weight_groups": {
+    "embedding": {"dtype": "bfloat16"},
+    "attention.qkv": {"decode_dtype": "bfloat8_b", "prefill_dtype": "bfloat8_b"},
+    "attention.o": {"decode_dtype": "bfloat8_b", "prefill_dtype": "bfloat8_b"},
+    "mlp.gate_up": {"decode_dtype": "bfloat4_b", "prefill_dtype": "bfloat8_b"},
+    "mlp.down": {"decode_dtype": "bfloat4_b", "prefill_dtype": "bfloat8_b"},
+    "norm": {"dtype": "bfloat16"},
+    "lm_head": {"decode_dtype": "bfloat16", "prefill_dtype": "bfloat16"}
+  },
+  "layer_exceptions": [
+    {
+      "layers": [0, 31],
+      "weight_groups": {
+        "mlp.gate_up": {"decode_dtype": "bfloat8_b", "prefill_dtype": "bfloat8_b"},
+        "mlp.down": {"decode_dtype": "bfloat8_b", "prefill_dtype": "bfloat8_b"}
+      }
+    }
+  ],
+  "activation_dtype": "bfloat16",
+  "residual_dtype": "bfloat16",
+  "ccl": {"policy": "sync_all_reduce", "decode_dtype": "bfloat8_b", "prefill_dtype": "bfloat16"},
+  "kv_cache_dtype": "bfloat8_b",
+  "compute_fidelity": {
+    "decode_matmul": "lofi",
+    "prefill_matmul": "hifi2",
+    "norm": "hifi4",
+    "lm_head_decode": "lofi",
+    "lm_head_prefill": "hifi2",
+    "sdpa_decode": "lofi",
+    "sdpa_prefill": "hifi4"
+  },
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32"
+}

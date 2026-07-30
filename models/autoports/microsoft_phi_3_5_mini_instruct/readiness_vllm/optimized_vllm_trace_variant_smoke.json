@@ -1,0 +1,31 @@
+{
+  "status": "pass",
+  "ttft_ms": 203.22193499305286,
+  "decode_tokens": [
+    0,
+    0,
+    0
+  ],
+  "logprob_mode_token": 0,
+  "trace_replay_blocking": false,
+  "readback": false,
+  "capture_sampling": true,
+  "counters": {
+    "model_trace_captures": 2,
+    "model_trace_replays": 4,
+    "sampling_trace_captures": 0,
+    "token_setup_refreshes": 6,
+    "token_teacher_forcing_refreshes": 0,
+    "position_setup_refreshes": 6,
+    "position_steady_state_refreshes": 0,
+    "page_table_setup_refreshes": 3,
+    "page_table_changed_refreshes": 0,
+    "sampled_token_readbacks": 0,
+    "no_readback_decode_steps": 4,
+    "full_logits_decode_readbacks": 0,
+    "device_position_advances": 4,
+    "device_token_feedbacks": 4,
+    "synchronizations": 4,
+    "sampling_trace_variant_precompiles": 0
+  }
+}

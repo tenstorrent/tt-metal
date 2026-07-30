@@ -1,0 +1,29 @@
+{
+  "config_id": "c001_safe_bf16",
+  "description": "Canonical high-accuracy BF16 policy for weights, KV cache, decode CCL, residual, logits, and sampling logits.",
+  "weight_groups": {
+    "embedding": {"dtype": "bfloat16"},
+    "attention.qkv": {"decode_dtype": "bfloat16", "prefill_dtype": "bfloat16"},
+    "attention.o": {"decode_dtype": "bfloat16", "prefill_dtype": "bfloat16"},
+    "mlp.gate_up": {"decode_dtype": "bfloat16", "prefill_dtype": "bfloat16"},
+    "mlp.down": {"decode_dtype": "bfloat16", "prefill_dtype": "bfloat16"},
+    "norm": {"dtype": "bfloat16"},
+    "lm_head": {"decode_dtype": "bfloat16", "prefill_dtype": "bfloat16"}
+  },
+  "layer_exceptions": [],
+  "activation_dtype": "bfloat16",
+  "residual_dtype": "bfloat16",
+  "ccl": {"policy": "sync_all_reduce", "decode_dtype": "bfloat16", "prefill_dtype": "bfloat16"},
+  "kv_cache_dtype": "bfloat16",
+  "compute_fidelity": {
+    "decode_matmul": "hifi2",
+    "prefill_matmul": "hifi2",
+    "norm": "hifi4",
+    "lm_head_decode": "hifi2",
+    "lm_head_prefill": "hifi2",
+    "sdpa_decode": "hifi2",
+    "sdpa_prefill": "hifi4"
+  },
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32"
+}

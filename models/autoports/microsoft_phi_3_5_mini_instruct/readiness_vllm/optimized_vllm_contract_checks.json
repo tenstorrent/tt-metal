@@ -1,0 +1,17 @@
+{
+  "status": "pass",
+  "failures": [],
+  "checks": {
+    "supports_async_decode": true,
+    "tt_async_decode_allows_overlap": false,
+    "supports_sample_on_device": true,
+    "decode_returns_device_output_when_split": true,
+    "nonblocking_execute_trace": true,
+    "vllm_requests_token_out_trace": true,
+    "captured_device_sampled_output": true,
+    "token_out_trace_captures_sampling": true,
+    "sampling_mode_recapture": true,
+    "unchanged_page_table_no_copy": true,
+    "adapter_rejects_host_sampling": true
+  }
+}

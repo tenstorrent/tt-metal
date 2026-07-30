@@ -1,0 +1,80 @@
+{
+  "config_id": "c004_default_weights_bf16_ccl",
+  "description": "Current optimized weights and BF8 KV cache with BF16 decode CCL.",
+  "weight_groups": {
+    "embedding": {
+      "dtype": "bfloat16"
+    },
+    "attention.qkv": {
+      "decode_dtype": "bfloat8_b",
+      "prefill_dtype": "bfloat8_b"
+    },
+    "attention.o": {
+      "decode_dtype": "bfloat8_b",
+      "prefill_dtype": "bfloat8_b"
+    },
+    "mlp.gate_up": {
+      "decode_dtype": "bfloat4_b",
+      "prefill_dtype": "bfloat8_b"
+    },
+    "mlp.down": {
+      "decode_dtype": "bfloat4_b",
+      "prefill_dtype": "bfloat8_b"
+    },
+    "norm": {
+      "dtype": "bfloat16"
+    },
+    "lm_head": {
+      "decode_dtype": "bfloat16",
+      "prefill_dtype": "bfloat16"
+    }
+  },
+  "layer_exceptions": [],
+  "activation_dtype": "bfloat16",
+  "residual_dtype": "bfloat16",
+  "ccl": {
+    "policy": "sync_all_reduce",
+    "decode_dtype": "bfloat16",
+    "prefill_dtype": "bfloat16"
+  },
+  "kv_cache_dtype": "bfloat8_b",
+  "compute_fidelity": {
+    "decode_matmul": "lofi",
+    "prefill_matmul": "hifi2",
+    "norm": "hifi4",
+    "lm_head_decode": "lofi",
+    "lm_head_prefill": "hifi2",
+    "sdpa_decode": "lofi",
+    "sdpa_prefill": "hifi4"
+  },
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32",
+  "selection": {
+    "selected_on": "2026-06-15",
+    "selected_by": "fastest evaluated config satisfying full-model top-1/top-5 gate using traced teacher-forcing decode t/s/u",
+    "thresholds": {
+      "top1_min": 0.9,
+      "top5_min": 0.98,
+      "top100_expectation": 1.0
+    },
+    "teacher_forcing_result": {
+      "top1": 0.91,
+      "matches_top1": 91,
+      "top5": 1.0,
+      "matches_top5": 100,
+      "top100": 1.0,
+      "matches_top100": 100,
+      "total": 100,
+      "ttft_ms": 226.88,
+      "decode_t_s_u": 40.34,
+      "measurement_regime": "AIME24 chat-template readiness reference, 100 generated tokens, traced teacher forcing",
+      "log": "logs/c004_teacher.log"
+    },
+    "default_consumption": {
+      "build_generator": "Phi35MiniGenerator -> Phi35MiniForCausalLMTT.from_hf loads model_dir/doc/datatype_sweep/selected_precision_config.json by default",
+      "full_model": "Phi35MiniForCausalLMTT.from_hf passes the resolved policy into every MultichipDecoder layer and KV-cache allocation",
+      "future_vllm_adapter": "vLLM integration is intentionally not started in this goal; later adapter construction should use the same build_generator/full-model path or load_precision_policy helper",
+      "override_to_builtin_default": "PHI35_PRECISION_CONFIG=default"
+    }
+  }
+}

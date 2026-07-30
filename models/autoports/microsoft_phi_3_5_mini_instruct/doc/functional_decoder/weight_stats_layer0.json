@@ -1,0 +1,72 @@
+{
+  "model_id": "microsoft/Phi-3.5-mini-instruct",
+  "snapshot": "2fe192450127e6a83f7441aef6e3ca586c338b77",
+  "layer_idx": 0,
+  "source": "/home/moconnor/.cache/huggingface/hub/models--microsoft--Phi-3.5-mini-instruct/snapshots/2fe192450127e6a83f7441aef6e3ca586c338b77",
+  "tensors": {
+    "self_attn.qkv_proj.weight": {
+      "name": "self_attn.qkv_proj.weight",
+      "checkpoint_key": "model.layers.0.self_attn.qkv_proj.weight",
+      "shape": [
+        9216,
+        3072
+      ],
+      "dtype": "bfloat16",
+      "mean": 2.6249390430166386e-06,
+      "std": 0.02379714511334896
+    },
+    "self_attn.o_proj.weight": {
+      "name": "self_attn.o_proj.weight",
+      "checkpoint_key": "model.layers.0.self_attn.o_proj.weight",
+      "shape": [
+        3072,
+        3072
+      ],
+      "dtype": "bfloat16",
+      "mean": -8.12695759577764e-07,
+      "std": 0.017512701451778412
+    },
+    "mlp.gate_up_proj.weight": {
+      "name": "mlp.gate_up_proj.weight",
+      "checkpoint_key": "model.layers.0.mlp.gate_up_proj.weight",
+      "shape": [
+        16384,
+        3072
+      ],
+      "dtype": "bfloat16",
+      "mean": -1.4009485312271863e-05,
+      "std": 0.03248469904065132
+    },
+    "mlp.down_proj.weight": {
+      "name": "mlp.down_proj.weight",
+      "checkpoint_key": "model.layers.0.mlp.down_proj.weight",
+      "shape": [
+        3072,
+        8192
+      ],
+      "dtype": "bfloat16",
+      "mean": 2.750549583652173e-06,
+      "std": 0.036035843193531036
+    },
+    "input_layernorm.weight": {
+      "name": "input_layernorm.weight",
+      "checkpoint_key": "model.layers.0.input_layernorm.weight",
+      "shape": [
+        3072
+      ],
+      "dtype": "bfloat16",
+      "mean": 0.00829244963824749,
+      "std": 0.022951222956180573
+    },
+    "post_attention_layernorm.weight": {
+      "name": "post_attention_layernorm.weight",
+      "checkpoint_key": "model.layers.0.post_attention_layernorm.weight",
+      "shape": [
+        3072
+      ],
+      "dtype": "bfloat16",
+      "mean": 0.03923744335770607,
+      "std": 0.009454299695789814
+    }
+  }
+}

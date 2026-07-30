@@ -1,0 +1,771 @@
+{
+  "branch": "agentic-research/experiment-17-phi35-mini",
+  "commit": "3f9459fb070",
+  "date": "2026-06-15",
+  "hardware": "8-device T3K/N300 Wormhole mesh; TT-KMD 2.4.1; tt-smi 5.2.0; fw bundle 18.12.1.0",
+  "mesh": "T3K 1x8 ring, fabric FABRIC_1D_RING",
+  "model": "microsoft/Phi-3.5-mini-instruct",
+  "post_selection_token_out_no_readback": {
+    "construction_path": "build_generator default path, no PHI35_PRECISION_CONFIG override",
+    "counters": {
+      "device_position_advances": 135,
+      "device_token_feedbacks": 135,
+      "full_logits_decode_readbacks": 0,
+      "model_trace_captures": 1,
+      "model_trace_replays": 135,
+      "no_readback_decode_steps": 135,
+      "page_table_changed_refreshes": 0,
+      "page_table_setup_refreshes": 1,
+      "position_setup_refreshes": 3,
+      "position_steady_state_refreshes": 0,
+      "sampled_token_readbacks": 0,
+      "sampling_trace_captures": 1,
+      "synchronizations": 5,
+      "token_setup_refreshes": 3,
+      "token_teacher_forcing_refreshes": 0
+    },
+    "decode_elapsed_s": 2.2529190870118327,
+    "decode_t/s/u": 56.371309885099734,
+    "decode_tokens": 127.0,
+    "e2e_t/s/u": 39.78529017748413,
+    "elapsed_s": 3.21726948399737,
+    "mesh": "T3K 1x8 ring",
+    "readback": false,
+    "reference": "models/autoports/microsoft_phi_3_5_mini_instruct/readiness_aime24_chat_100.refpt",
+    "sampling_pad_to_power_of_2": false,
+    "selected_precision_config": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/selected_precision_config.json",
+    "trace_replay_blocking": false,
+    "ttft_ms": 214.10314399690833,
+    "warmup_decode_steps": 8,
+    "workload": {
+      "max_new_tokens": 128,
+      "prompt_tokens": 128,
+      "warmup_decode_steps": 8
+    }
+  },
+  "reference": {
+    "path": "models/autoports/microsoft_phi_3_5_mini_instruct/readiness_aime24_chat_100.refpt",
+    "provenance": "AIME24 prompt source, chat template, gen_len=100, top_k=100, one entry with prompt length 161"
+  },
+  "results": [
+    {
+      "baseline_prefill": {
+        "matches_top1": 96,
+        "matches_top100": 100,
+        "matches_top5": 100,
+        "top1": 0.96,
+        "top100": 1.0,
+        "top5": 1.0,
+        "total": 100
+      },
+      "branch": "agentic-research/experiment-17-phi35-mini",
+      "command": "PHI35_PRECISION_CONFIG=models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c000_default_optimized.json /localdev/moconnor/tt-metal/python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/microsoft_phi_3_5_mini_instruct --reference models/autoports/microsoft_phi_3_5_mini_instruct/readiness_aime24_chat_100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "commit": "3f9459fb070",
+      "config_id": "c000_default_optimized",
+      "description": "Current optimized full-model default: BF8 attention, BF4 decode MLP, BF8 prefill MLP, BF8 KV cache, BF8 decode CCL, BF16 residual/logits.",
+      "dtype_policy": {
+        "activation_dtype": "bfloat16",
+        "ccl": {
+          "decode_dtype": "bfloat8_b",
+          "policy": "sync_all_reduce",
+          "prefill_dtype": "bfloat16"
+        },
+        "compute_fidelity": {
+          "decode_matmul": "lofi",
+          "lm_head_decode": "lofi",
+          "lm_head_prefill": "hifi2",
+          "norm": "hifi4",
+          "prefill_matmul": "hifi2",
+          "sdpa_decode": "lofi",
+          "sdpa_prefill": "hifi4"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "layer_exceptions": [],
+        "logits_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32",
+        "weight_groups": {
+          "attention.o": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "attention.qkv": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "lm_head": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "mlp.down": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "mlp.gate_up": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "norm": {
+            "dtype": "bfloat16"
+          }
+        }
+      },
+      "e2e_t_s_u": 36.72,
+      "hardware": "8-device T3K/N300 Wormhole mesh; TT-KMD 2.4.1; tt-smi 5.2.0; fw bundle 18.12.1.0",
+      "matches_top1": 91,
+      "matches_top100": 100,
+      "matches_top5": 100,
+      "measurement_regime": "full-model AIME24 chat-template readiness reference; 100 generated tokens; traced teacher-forcing decode; batch 1; T3K 1x8 ring",
+      "mesh": "T3K 1x8 ring, fabric FABRIC_1D_RING",
+      "passed": true,
+      "precision_config_path": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c000_default_optimized.json",
+      "prefill_log": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/logs/c000_prefill.log",
+      "status": "pass",
+      "teacher_forcing_decode_t_s_u": 40.17,
+      "teacher_forcing_log": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/logs/c000_teacher.log",
+      "top1": 0.91,
+      "top100": 1.0,
+      "top5": 1.0,
+      "total": 100,
+      "trace_evidence": "run_teacher_forcing called generate(enable_trace=True); log contains sampling trace reset with MeshTraceId",
+      "trace_verified": true,
+      "ttft_ms": 258.55
+    },
+    {
+      "branch": "agentic-research/experiment-17-phi35-mini",
+      "command": "PHI35_PRECISION_CONFIG=models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c001_safe_bf16.json /localdev/moconnor/tt-metal/python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/microsoft_phi_3_5_mini_instruct --reference models/autoports/microsoft_phi_3_5_mini_instruct/readiness_aime24_chat_100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "commit": "3f9459fb070",
+      "config_id": "c001_safe_bf16",
+      "description": "Canonical high-accuracy BF16 policy for weights, KV cache, decode CCL, residual, logits, and sampling logits.",
+      "dtype_policy": {
+        "activation_dtype": "bfloat16",
+        "ccl": {
+          "decode_dtype": "bfloat16",
+          "policy": "sync_all_reduce",
+          "prefill_dtype": "bfloat16"
+        },
+        "compute_fidelity": {
+          "decode_matmul": "hifi2",
+          "lm_head_decode": "hifi2",
+          "lm_head_prefill": "hifi2",
+          "norm": "hifi4",
+          "prefill_matmul": "hifi2",
+          "sdpa_decode": "hifi2",
+          "sdpa_prefill": "hifi4"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "layer_exceptions": [],
+        "logits_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32",
+        "weight_groups": {
+          "attention.o": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "attention.qkv": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "lm_head": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "mlp.down": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "mlp.gate_up": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "norm": {
+            "dtype": "bfloat16"
+          }
+        }
+      },
+      "e2e_t_s_u": 9.02,
+      "hardware": "8-device T3K/N300 Wormhole mesh; TT-KMD 2.4.1; tt-smi 5.2.0; fw bundle 18.12.1.0",
+      "matches_top1": 93,
+      "matches_top100": 100,
+      "matches_top5": 100,
+      "measurement_regime": "full-model AIME24 chat-template readiness reference; 100 generated tokens; traced teacher-forcing decode; batch 1; T3K 1x8 ring",
+      "mesh": "T3K 1x8 ring, fabric FABRIC_1D_RING",
+      "passed": true,
+      "precision_config_path": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c001_safe_bf16.json",
+      "status": "pass",
+      "teacher_forcing_decode_t_s_u": 12.66,
+      "teacher_forcing_log": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/logs/c001_teacher.log",
+      "top1": 0.93,
+      "top100": 1.0,
+      "top5": 1.0,
+      "total": 100,
+      "trace_evidence": "run_teacher_forcing called generate(enable_trace=True); log contains sampling trace reset with MeshTraceId",
+      "trace_verified": true,
+      "ttft_ms": 3272.85
+    },
+    {
+      "branch": "agentic-research/experiment-17-phi35-mini",
+      "command": "PHI35_PRECISION_CONFIG=models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c002_bf8_weights_kv_ccl.json /localdev/moconnor/tt-metal/python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/microsoft_phi_3_5_mini_instruct --reference models/autoports/microsoft_phi_3_5_mini_instruct/readiness_aime24_chat_100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "commit": "3f9459fb070",
+      "config_id": "c002_bf8_weights_kv_ccl",
+      "description": "Canonical BF8 performance policy: BF8 attention and MLP weights, BF8 KV cache, BF8 decode CCL, BF16 residual/logits.",
+      "dtype_policy": {
+        "activation_dtype": "bfloat16",
+        "ccl": {
+          "decode_dtype": "bfloat8_b",
+          "policy": "sync_all_reduce",
+          "prefill_dtype": "bfloat16"
+        },
+        "compute_fidelity": {
+          "decode_matmul": "lofi",
+          "lm_head_decode": "lofi",
+          "lm_head_prefill": "hifi2",
+          "norm": "hifi4",
+          "prefill_matmul": "hifi2",
+          "sdpa_decode": "lofi",
+          "sdpa_prefill": "hifi4"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "layer_exceptions": [],
+        "logits_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32",
+        "weight_groups": {
+          "attention.o": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "attention.qkv": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "lm_head": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "mlp.down": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "mlp.gate_up": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "norm": {
+            "dtype": "bfloat16"
+          }
+        }
+      },
+      "e2e_t_s_u": 24.75,
+      "hardware": "8-device T3K/N300 Wormhole mesh; TT-KMD 2.4.1; tt-smi 5.2.0; fw bundle 18.12.1.0",
+      "matches_top1": 93,
+      "matches_top100": 100,
+      "matches_top5": 100,
+      "measurement_regime": "full-model AIME24 chat-template readiness reference; 100 generated tokens; traced teacher-forcing decode; batch 1; T3K 1x8 ring",
+      "mesh": "T3K 1x8 ring, fabric FABRIC_1D_RING",
+      "passed": true,
+      "precision_config_path": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c002_bf8_weights_kv_ccl.json",
+      "status": "pass",
+      "teacher_forcing_decode_t_s_u": 26.17,
+      "teacher_forcing_log": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/logs/c002_teacher.log",
+      "top1": 0.93,
+      "top100": 1.0,
+      "top5": 1.0,
+      "total": 100,
+      "trace_evidence": "run_teacher_forcing called generate(enable_trace=True); log contains sampling trace reset with MeshTraceId",
+      "trace_verified": true,
+      "ttft_ms": 257.25
+    },
+    {
+      "branch": "agentic-research/experiment-17-phi35-mini",
+      "command": "PHI35_PRECISION_CONFIG=models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c003_default_weights_bf16_kv.json /localdev/moconnor/tt-metal/python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/microsoft_phi_3_5_mini_instruct --reference models/autoports/microsoft_phi_3_5_mini_instruct/readiness_aime24_chat_100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "commit": "3f9459fb070",
+      "config_id": "c003_default_weights_bf16_kv",
+      "description": "Current optimized weights and CCL with BF16 paged KV cache.",
+      "dtype_policy": {
+        "activation_dtype": "bfloat16",
+        "ccl": {
+          "decode_dtype": "bfloat8_b",
+          "policy": "sync_all_reduce",
+          "prefill_dtype": "bfloat16"
+        },
+        "compute_fidelity": {
+          "decode_matmul": "lofi",
+          "lm_head_decode": "lofi",
+          "lm_head_prefill": "hifi2",
+          "norm": "hifi4",
+          "prefill_matmul": "hifi2",
+          "sdpa_decode": "lofi",
+          "sdpa_prefill": "hifi4"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "layer_exceptions": [],
+        "logits_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32",
+        "weight_groups": {
+          "attention.o": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "attention.qkv": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "lm_head": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "mlp.down": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "mlp.gate_up": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "norm": {
+            "dtype": "bfloat16"
+          }
+        }
+      },
+      "e2e_t_s_u": 25.11,
+      "hardware": "8-device T3K/N300 Wormhole mesh; TT-KMD 2.4.1; tt-smi 5.2.0; fw bundle 18.12.1.0",
+      "matches_top1": 92,
+      "matches_top100": 100,
+      "matches_top5": 100,
+      "measurement_regime": "full-model AIME24 chat-template readiness reference; 100 generated tokens; traced teacher-forcing decode; batch 1; T3K 1x8 ring",
+      "mesh": "T3K 1x8 ring, fabric FABRIC_1D_RING",
+      "passed": true,
+      "precision_config_path": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c003_default_weights_bf16_kv.json",
+      "status": "pass",
+      "teacher_forcing_decode_t_s_u": 26.31,
+      "teacher_forcing_log": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/logs/c003_teacher.log",
+      "top1": 0.92,
+      "top100": 1.0,
+      "top5": 1.0,
+      "total": 100,
+      "trace_evidence": "run_teacher_forcing called generate(enable_trace=True); log contains sampling trace reset with MeshTraceId",
+      "trace_verified": true,
+      "ttft_ms": 220.16
+    },
+    {
+      "branch": "agentic-research/experiment-17-phi35-mini",
+      "command": "PHI35_PRECISION_CONFIG=models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c004_default_weights_bf16_ccl.json /localdev/moconnor/tt-metal/python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/microsoft_phi_3_5_mini_instruct --reference models/autoports/microsoft_phi_3_5_mini_instruct/readiness_aime24_chat_100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "commit": "3f9459fb070",
+      "config_id": "c004_default_weights_bf16_ccl",
+      "description": "Current optimized weights and BF8 KV cache with BF16 decode CCL.",
+      "dtype_policy": {
+        "activation_dtype": "bfloat16",
+        "ccl": {
+          "decode_dtype": "bfloat16",
+          "policy": "sync_all_reduce",
+          "prefill_dtype": "bfloat16"
+        },
+        "compute_fidelity": {
+          "decode_matmul": "lofi",
+          "lm_head_decode": "lofi",
+          "lm_head_prefill": "hifi2",
+          "norm": "hifi4",
+          "prefill_matmul": "hifi2",
+          "sdpa_decode": "lofi",
+          "sdpa_prefill": "hifi4"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "layer_exceptions": [],
+        "logits_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32",
+        "weight_groups": {
+          "attention.o": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "attention.qkv": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "lm_head": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "mlp.down": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "mlp.gate_up": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "norm": {
+            "dtype": "bfloat16"
+          }
+        }
+      },
+      "e2e_t_s_u": 37.3,
+      "hardware": "8-device T3K/N300 Wormhole mesh; TT-KMD 2.4.1; tt-smi 5.2.0; fw bundle 18.12.1.0",
+      "matches_top1": 91,
+      "matches_top100": 100,
+      "matches_top5": 100,
+      "measurement_regime": "full-model AIME24 chat-template readiness reference; 100 generated tokens; traced teacher-forcing decode; batch 1; T3K 1x8 ring",
+      "mesh": "T3K 1x8 ring, fabric FABRIC_1D_RING",
+      "passed": true,
+      "precision_config_path": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c004_default_weights_bf16_ccl.json",
+      "status": "pass",
+      "teacher_forcing_decode_t_s_u": 40.34,
+      "teacher_forcing_log": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/logs/c004_teacher.log",
+      "top1": 0.91,
+      "top100": 1.0,
+      "top5": 1.0,
+      "total": 100,
+      "trace_evidence": "run_teacher_forcing called generate(enable_trace=True); log contains sampling trace reset with MeshTraceId",
+      "trace_verified": true,
+      "ttft_ms": 226.88
+    },
+    {
+      "branch": "agentic-research/experiment-17-phi35-mini",
+      "command": "PHI35_PRECISION_CONFIG=models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c005_inner_mlp_bf4_edges_bf8.json /localdev/moconnor/tt-metal/python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/microsoft_phi_3_5_mini_instruct --reference models/autoports/microsoft_phi_3_5_mini_instruct/readiness_aime24_chat_100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "commit": "3f9459fb070",
+      "config_id": "c005_inner_mlp_bf4_edges_bf8",
+      "description": "Default optimized policy, but restore first and last layer decode MLP weights from BF4 to BF8.",
+      "dtype_policy": {
+        "activation_dtype": "bfloat16",
+        "ccl": {
+          "decode_dtype": "bfloat8_b",
+          "policy": "sync_all_reduce",
+          "prefill_dtype": "bfloat16"
+        },
+        "compute_fidelity": {
+          "decode_matmul": "lofi",
+          "lm_head_decode": "lofi",
+          "lm_head_prefill": "hifi2",
+          "norm": "hifi4",
+          "prefill_matmul": "hifi2",
+          "sdpa_decode": "lofi",
+          "sdpa_prefill": "hifi4"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "layer_exceptions": [
+          {
+            "layers": [
+              0,
+              31
+            ],
+            "weight_groups": {
+              "mlp.down": {
+                "decode_dtype": "bfloat8_b",
+                "prefill_dtype": "bfloat8_b"
+              },
+              "mlp.gate_up": {
+                "decode_dtype": "bfloat8_b",
+                "prefill_dtype": "bfloat8_b"
+              }
+            }
+          }
+        ],
+        "logits_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32",
+        "weight_groups": {
+          "attention.o": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "attention.qkv": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "lm_head": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "mlp.down": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "mlp.gate_up": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "norm": {
+            "dtype": "bfloat16"
+          }
+        }
+      },
+      "e2e_t_s_u": 36.92,
+      "hardware": "8-device T3K/N300 Wormhole mesh; TT-KMD 2.4.1; tt-smi 5.2.0; fw bundle 18.12.1.0",
+      "matches_top1": 90,
+      "matches_top100": 100,
+      "matches_top5": 100,
+      "measurement_regime": "full-model AIME24 chat-template readiness reference; 100 generated tokens; traced teacher-forcing decode; batch 1; T3K 1x8 ring",
+      "mesh": "T3K 1x8 ring, fabric FABRIC_1D_RING",
+      "passed": true,
+      "precision_config_path": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c005_inner_mlp_bf4_edges_bf8.json",
+      "status": "pass",
+      "teacher_forcing_decode_t_s_u": 40.23,
+      "teacher_forcing_log": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/logs/c005_teacher.log",
+      "top1": 0.9,
+      "top100": 1.0,
+      "top5": 1.0,
+      "total": 100,
+      "trace_evidence": "run_teacher_forcing called generate(enable_trace=True); log contains sampling trace reset with MeshTraceId",
+      "trace_verified": true,
+      "ttft_ms": 248.23
+    },
+    {
+      "branch": "agentic-research/experiment-17-phi35-mini",
+      "command": "PHI35_PRECISION_CONFIG=models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c006_attention_bf4_all.json /localdev/moconnor/tt-metal/python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/microsoft_phi_3_5_mini_instruct --reference models/autoports/microsoft_phi_3_5_mini_instruct/readiness_aime24_chat_100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "commit": "3f9459fb070",
+      "config_id": "c006_attention_bf4_all",
+      "description": "Likely lower-precision win trial: BF4 decode attention and BF4 decode MLP, BF8 prefill weights, BF8 KV and CCL.",
+      "dtype_policy": {
+        "activation_dtype": "bfloat16",
+        "ccl": {
+          "decode_dtype": "bfloat8_b",
+          "policy": "sync_all_reduce",
+          "prefill_dtype": "bfloat16"
+        },
+        "compute_fidelity": {
+          "decode_matmul": "lofi",
+          "lm_head_decode": "lofi",
+          "lm_head_prefill": "hifi2",
+          "norm": "hifi4",
+          "prefill_matmul": "hifi2",
+          "sdpa_decode": "lofi",
+          "sdpa_prefill": "hifi4"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "layer_exceptions": [],
+        "logits_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32",
+        "weight_groups": {
+          "attention.o": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "attention.qkv": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "lm_head": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "mlp.down": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "mlp.gate_up": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "norm": {
+            "dtype": "bfloat16"
+          }
+        }
+      },
+      "e2e_t_s_u": 25.34,
+      "hardware": "8-device T3K/N300 Wormhole mesh; TT-KMD 2.4.1; tt-smi 5.2.0; fw bundle 18.12.1.0",
+      "matches_top1": 90,
+      "matches_top100": 100,
+      "matches_top5": 100,
+      "measurement_regime": "full-model AIME24 chat-template readiness reference; 100 generated tokens; traced teacher-forcing decode; batch 1; T3K 1x8 ring",
+      "mesh": "T3K 1x8 ring, fabric FABRIC_1D_RING",
+      "passed": true,
+      "precision_config_path": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c006_attention_bf4_all.json",
+      "status": "pass",
+      "teacher_forcing_decode_t_s_u": 26.61,
+      "teacher_forcing_log": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/logs/c006_teacher.log",
+      "top1": 0.9,
+      "top100": 1.0,
+      "top5": 1.0,
+      "total": 100,
+      "trace_evidence": "run_teacher_forcing called generate(enable_trace=True); log contains sampling trace reset with MeshTraceId",
+      "trace_verified": true,
+      "ttft_ms": 225.76
+    },
+    {
+      "branch": "agentic-research/experiment-17-phi35-mini",
+      "command": "PHI35_PRECISION_CONFIG=models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c007_activation_bf8.json /localdev/moconnor/tt-metal/python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/microsoft_phi_3_5_mini_instruct --reference models/autoports/microsoft_phi_3_5_mini_instruct/readiness_aime24_chat_100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "commit": "3f9459fb070",
+      "config_id": "c007_activation_bf8",
+      "description": "Likely lower-precision activation trial: default optimized weights with BF8 residual/activation outputs, BF8 KV and CCL.",
+      "dtype_policy": {
+        "activation_dtype": "bfloat8_b",
+        "ccl": {
+          "decode_dtype": "bfloat8_b",
+          "policy": "sync_all_reduce",
+          "prefill_dtype": "bfloat16"
+        },
+        "compute_fidelity": {
+          "decode_matmul": "lofi",
+          "lm_head_decode": "lofi",
+          "lm_head_prefill": "hifi2",
+          "norm": "hifi4",
+          "prefill_matmul": "hifi2",
+          "sdpa_decode": "lofi",
+          "sdpa_prefill": "hifi4"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "layer_exceptions": [],
+        "logits_dtype": "bfloat16",
+        "residual_dtype": "bfloat8_b",
+        "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32",
+        "weight_groups": {
+          "attention.o": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "attention.qkv": {
+            "decode_dtype": "bfloat8_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "embedding": {
+            "dtype": "bfloat16"
+          },
+          "lm_head": {
+            "decode_dtype": "bfloat16",
+            "prefill_dtype": "bfloat16"
+          },
+          "mlp.down": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "mlp.gate_up": {
+            "decode_dtype": "bfloat4_b",
+            "prefill_dtype": "bfloat8_b"
+          },
+          "norm": {
+            "dtype": "bfloat16"
+          }
+        }
+      },
+      "e2e_t_s_u": 4.39,
+      "hardware": "8-device T3K/N300 Wormhole mesh; TT-KMD 2.4.1; tt-smi 5.2.0; fw bundle 18.12.1.0",
+      "matches_top1": 87,
+      "matches_top100": 100,
+      "matches_top5": 100,
+      "measurement_regime": "full-model AIME24 chat-template readiness reference; 100 generated tokens; traced teacher-forcing decode; batch 1; T3K 1x8 ring",
+      "mesh": "T3K 1x8 ring, fabric FABRIC_1D_RING",
+      "passed": false,
+      "precision_config_path": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c007_activation_bf8.json",
+      "status": "fail_accuracy",
+      "teacher_forcing_decode_t_s_u": 9.03,
+      "teacher_forcing_log": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/logs/c007_teacher.log",
+      "top1": 0.87,
+      "top100": 1.0,
+      "top5": 1.0,
+      "total": 100,
+      "trace_evidence": "run_teacher_forcing called generate(enable_trace=True); log contains sampling trace reset with MeshTraceId",
+      "trace_verified": true,
+      "ttft_ms": 11833.38
+    }
+  ],
+  "selected_config_id": "c004_default_weights_bf16_ccl",
+  "selected_precision_config": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/selected_precision_config.json",
+  "selected_result": {
+    "branch": "agentic-research/experiment-17-phi35-mini",
+    "command": "PHI35_PRECISION_CONFIG=models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c004_default_weights_bf16_ccl.json /localdev/moconnor/tt-metal/python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/microsoft_phi_3_5_mini_instruct --reference models/autoports/microsoft_phi_3_5_mini_instruct/readiness_aime24_chat_100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+    "commit": "3f9459fb070",
+    "config_id": "c004_default_weights_bf16_ccl",
+    "description": "Current optimized weights and BF8 KV cache with BF16 decode CCL.",
+    "dtype_policy": {
+      "activation_dtype": "bfloat16",
+      "ccl": {
+        "decode_dtype": "bfloat16",
+        "policy": "sync_all_reduce",
+        "prefill_dtype": "bfloat16"
+      },
+      "compute_fidelity": {
+        "decode_matmul": "lofi",
+        "lm_head_decode": "lofi",
+        "lm_head_prefill": "hifi2",
+        "norm": "hifi4",
+        "prefill_matmul": "hifi2",
+        "sdpa_decode": "lofi",
+        "sdpa_prefill": "hifi4"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "layer_exceptions": [],
+      "logits_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32",
+      "weight_groups": {
+        "attention.o": {
+          "decode_dtype": "bfloat8_b",
+          "prefill_dtype": "bfloat8_b"
+        },
+        "attention.qkv": {
+          "decode_dtype": "bfloat8_b",
+          "prefill_dtype": "bfloat8_b"
+        },
+        "embedding": {
+          "dtype": "bfloat16"
+        },
+        "lm_head": {
+          "decode_dtype": "bfloat16",
+          "prefill_dtype": "bfloat16"
+        },
+        "mlp.down": {
+          "decode_dtype": "bfloat4_b",
+          "prefill_dtype": "bfloat8_b"
+        },
+        "mlp.gate_up": {
+          "decode_dtype": "bfloat4_b",
+          "prefill_dtype": "bfloat8_b"
+        },
+        "norm": {
+          "dtype": "bfloat16"
+        }
+      }
+    },
+    "e2e_t_s_u": 37.3,
+    "hardware": "8-device T3K/N300 Wormhole mesh; TT-KMD 2.4.1; tt-smi 5.2.0; fw bundle 18.12.1.0",
+    "matches_top1": 91,
+    "matches_top100": 100,
+    "matches_top5": 100,
+    "measurement_regime": "full-model AIME24 chat-template readiness reference; 100 generated tokens; traced teacher-forcing decode; batch 1; T3K 1x8 ring",
+    "mesh": "T3K 1x8 ring, fabric FABRIC_1D_RING",
+    "passed": true,
+    "precision_config_path": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/configs/c004_default_weights_bf16_ccl.json",
+    "status": "pass",
+    "teacher_forcing_decode_t_s_u": 40.34,
+    "teacher_forcing_log": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/logs/c004_teacher.log",
+    "top1": 0.91,
+    "top100": 1.0,
+    "top5": 1.0,
+    "total": 100,
+    "trace_evidence": "run_teacher_forcing called generate(enable_trace=True); log contains sampling trace reset with MeshTraceId",
+    "trace_verified": true,
+    "ttft_ms": 226.88
+  },
+  "selection_metric": "highest trace-verified teacher-forcing decode_t/s/u among configs satisfying top1>=0.90 and top5>=0.98",
+  "thresholds": {
+    "top100_expectation": 1.0,
+    "top1_min": 0.9,
+    "top5_min": 0.98
+  }
+}
