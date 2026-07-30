@@ -132,11 +132,11 @@ class SFPU_INT_OP(TemplateParameter):
     falls through to its default (add_int) path.
     """
 
-    op: str = ""
+    int_op: str = ""
 
     def convert_to_cpp(self) -> str:
-        if self.op:
-            return f"#define SFPU_INT_OP_{self.op.upper()}"
+        if self.int_op:
+            return f"#define SFPU_INT_OP_{self.int_op.upper()}"
         return ""
 
 
@@ -220,14 +220,14 @@ class SFPU_TERNARY_OP(TemplateParameter):
     """Select the ternary SFPU op at compile time.
 
     Emits ``constexpr auto SFPU_TERNARY_OPERATION = SfpuType::<op>;`` consumed by
-    ``sfpu_operations.h``. ``mathop.cpp_enum_value`` must match the
+    ``sfpu_operations.h``. ``ternary_mathop.cpp_enum_value`` must match the
     ``SfpuType`` enumerator name (e.g. ``addcmul``/``addcdiv``).
     """
 
-    mathop: MathOperation = None
+    ternary_mathop: MathOperation = None
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.mathop.cpp_enum_value};"
+        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.ternary_mathop.cpp_enum_value};"
 
 
 @dataclass
@@ -238,10 +238,10 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
     the SFPU. Emit the bit pattern so the C++ and torch golden agree exactly.
     """
 
-    value_bits: int = 0x40000000  # 2.0f
+    ternary_scalar_bits: int = 0x40000000  # 2.0f
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t SFPU_TERNARY_SCALAR = {self.value_bits}u;"
+        return f"constexpr std::uint32_t SFPU_TERNARY_SCALAR = {self.ternary_scalar_bits}u;"
 
 
 @dataclass
@@ -256,12 +256,10 @@ class SFPU_BINOP_MODE(TemplateParameter):
     # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
     _MODE = {"ADD": 0, "SUB": 1, "MUL": 2, "DIV": 3, "RSUB": 4}
 
-    mathop: MathOperation = None
+    binop_mathop: MathOperation = None
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr int SFPU_BINOP_MODE = {self._MODE[self.mathop.cpp_enum_value]};"
-        )
+        return f"constexpr int SFPU_BINOP_MODE = {self._MODE[self.binop_mathop.cpp_enum_value]};"
 
 
 @dataclass
@@ -779,19 +777,6 @@ class REDUCE_TO_ONE(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "bool IS_REDUCE_TO_ONE;", "?"
-
-
-@dataclass
-class NUM_TILES_IN_BLOCK(RuntimeParameter):
-    num_tiles_in_block: int = 0
-
-    def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr std::uint32_t NUM_TILES_IN_BLOCK = {self.num_tiles_in_block};"
-        )
-
-    def convert_to_struct_fields(self) -> tuple[str, str]:
-        return "std::uint32_t NUM_TILES_IN_BLOCK;", "I"
 
 
 @dataclass
