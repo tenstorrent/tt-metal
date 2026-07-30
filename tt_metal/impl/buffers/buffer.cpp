@@ -20,7 +20,6 @@
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 #include "context/context_types.hpp"
 #include "fmt/base.h"
@@ -101,8 +100,8 @@ void validate_buffer_parameters(
             "Buffer was specified as sharded but does not have shard_spec or buffer_distribution_spec specified");
 
         // DRAM banks are 1D: bank_id is a core's logical x-coordinate and the grid is a single row.
-        // A shard core off row 0, or a repeated x, aliases shards onto the same bank and corrupts
-        // data. Applies to both the ND (BufferDistributionSpec) and legacy (ShardSpecBuffer) paths.
+        // A shard core off row 0 aliases onto an existing bank and corrupts data. Applies to both the
+        // ND (BufferDistributionSpec) and legacy (ShardSpecBuffer) paths.
         if (buffer_type == BufferType::DRAM) {
             std::vector<CoreCoord> shard_cores;
             if (buffer_distribution_spec.has_value()) {
@@ -110,8 +109,6 @@ void validate_buffer_parameters(
             } else if (shard_spec.has_value()) {
                 shard_cores = corerange_to_cores(shard_spec->grid());
             }
-            std::unordered_set<uint32_t> seen_x;
-            seen_x.reserve(shard_cores.size());
             for (const auto& core : shard_cores) {
                 TT_FATAL(
                     core.y == 0,
@@ -119,12 +116,6 @@ void validate_buffer_parameters(
                     "(bank_id == logical x-coordinate), so every shard core must have y == 0.",
                     core.x,
                     core.y);
-                TT_FATAL(
-                    seen_x.insert(core.x).second,
-                    "Invalid DRAM shard grid: x-coordinate {} is used by more than one shard core. DRAM "
-                    "banks are 1D (bank_id == logical x-coordinate), so a duplicate x aliases multiple "
-                    "shards onto the same bank and corrupts data.",
-                    core.x);
             }
         }
     } else {

@@ -129,7 +129,7 @@ def test_nd_shardspec_construction_across_tensor_ranks(device, torch_tensor, sha
 
 
 # DRAM banks are 1D: bank_id is a core's logical x-coordinate and the grid is a single row. A shard
-# core off row 0, or a repeated x, aliases banks and corrupts data, so allocation must be rejected.
+# core off row 0 aliases onto an existing bank and corrupts data, so allocation must be rejected.
 @pytest.mark.parametrize(
     "grid",
     [
@@ -151,7 +151,7 @@ def test_reject_dram_nd_shard_bank_aliasing(device, expect_error, grid):
 
 
 def test_accept_dram_nd_shard_single_row(device):
-    """A DRAM NdShardSpec on a single row of distinct banks (y == 0, unique x) round-trips correctly."""
+    """A DRAM NdShardSpec on a single row of banks (y == 0) round-trips correctly."""
     num_banks = device.dram_grid_size().x
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_banks - 1, 0))])
     mem_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, ttnn.NdShardSpec(ttnn.Shape([1, 1, 32, 64]), grid))
