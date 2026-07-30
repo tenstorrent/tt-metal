@@ -96,10 +96,18 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     DEC_TF_BLOCKS,
     DEC_TF_LENGTHS,
     DEFAULT_CKPT,
+    NUM_CODEBOOKS,
     PATCH_PROJ_KERNEL,
     PATCH_SIZE,
     SEMANTIC_DIM,
 )
+
+# Quantizer output width: one semantic embedding plus one scalar per acoustic codebook.
+LATENT_DIM = SEMANTIC_DIM + (NUM_CODEBOOKS - 1)  # 256 + 36 = 292
+# Total length gain across the three stride-2 transposed convs (12.5 Hz frames -> 100 Hz).
+UPSAMPLE = 1
+for _s in DEC_CONV_STRIDES:
+    UPSAMPLE *= _s  # 1 * 2 * 2 * 2 = 8
 
 DTYPE = ttnn.float32
 SCALE = CODEC_HEAD_DIM**-0.5
@@ -230,8 +238,7 @@ class TtVoxtralCodecDecoder:
         key = (name, L)
         if key in self._prep_cache:
             return self._prep_cache[key]
-        f = self._prep_conv_t if transpose else self._prep_conv
-        w = f(self.conv_host[name], in_c, out_c, kernel, stride, L)
+        w = self._prep_weight(self.conv_host[name], in_c, out_c, kernel, stride, L, transpose)
         digest = (name, hashlib.sha1(ttnn.to_torch(w).float().numpy().tobytes()).hexdigest())
         shared = self._layouts.get(digest)
         if shared is None:
@@ -252,33 +259,23 @@ class TtVoxtralCodecDecoder:
             mb += n * (4 if t.get_dtype() == ttnn.float32 else 2) / 1e6
         return len(self._prep_cache), len(self._layouts), mb
 
-    def _prep_conv(self, w_host, in_c, out_c, kernel, stride, L):
-        return ttnn.prepare_conv_weights(
-            weight_tensor=w_host, input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.TILE_LAYOUT, weights_format="OIHW",
-            in_channels=in_c, out_channels=out_c, batch_size=1,
-            input_height=1, input_width=L, kernel_size=(1, kernel),
-            stride=(1, stride), padding=(0, 0), dilation=(1, 1), has_bias=False, groups=1,
-            # input_dtype is the ACTIVATION dtype (always fp32 here), NOT the weight dtype --
-            # passing weight_dtype prepared a layout for bf16 activations while the real
-            # activations are fp32, which silently produced PCC 0.008.
-            device=self.device, input_dtype=DTYPE, compute_config=COMPUTE_CONFIG,
-            conv_config=self.conv_cfg,
-        )
+    def _prep_weight(self, w_host, in_c, out_c, kernel, stride, L, transpose):
+        """One wrapper for both prepare_conv_weights and prepare_conv_transpose2d_weights: the two
+        take an identical kwarg set and differ only in the weight layout they expect
+        (ConvTranspose1d's [in,out,k] is IOHW; Conv1d's [out,in,k] is OIHW).
 
-    def _prep_conv_t(self, w_host, in_c, out_c, kernel, stride, L):
-        # transpose weights are IOHW (in, out, kh, kw) -- ConvTranspose1d's [in,out,k] unsqueezed
-        return ttnn.prepare_conv_transpose2d_weights(
+        `input_dtype` is the ACTIVATION dtype (always fp32 here), NOT the weight dtype. Passing
+        weight_dtype prepared a layout for bf16 activations while the real activations were fp32,
+        which silently produced PCC 0.008."""
+        fn = ttnn.prepare_conv_transpose2d_weights if transpose else ttnn.prepare_conv_weights
+        return fn(
             weight_tensor=w_host, input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.TILE_LAYOUT, weights_format="IOHW",
+            input_layout=ttnn.TILE_LAYOUT, weights_format="IOHW" if transpose else "OIHW",
             in_channels=in_c, out_channels=out_c, batch_size=1,
             input_height=1, input_width=L, kernel_size=(1, kernel),
             stride=(1, stride), padding=(0, 0), dilation=(1, 1), has_bias=False, groups=1,
-            # input_dtype is the ACTIVATION dtype (always fp32 here), NOT the weight dtype --
-            # passing weight_dtype prepared a layout for bf16 activations while the real
-            # activations are fp32, which silently produced PCC 0.008.
             device=self.device, input_dtype=DTYPE, compute_config=COMPUTE_CONFIG,
-            conv_config=self.convt_cfg,
+            conv_config=self.convt_cfg if transpose else self.conv_cfg,
         )
 
     # ----------------------------------------------------------------------------------
@@ -355,15 +352,41 @@ class TtVoxtralCodecDecoder:
     def _attention_slab(self, q, k, v, bias):
         """Attention with an additive pre-softmax bias, in `attn_dtype`. [1,H,S,d] -> [1,H,S,d].
 
-        Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention for two reasons.
-        First, sdpa has no ALiBi support and the tensor-free workaround (folding it into an extra k
-        column) needs magnitudes up to 42438 where bf16's spacing is 256 while the whole ALiBi
-        signal spans 192 -- it is unrepresentable. Second, doing it by hand keeps
-        `numeric_stable=True` on the softmax; XTTS-v2 Block 1 found the default leaves a
-        structured, dominant-aligned error that downstream layers amplify.
+        Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention. sdpa is FASTER --
+        1.44-2.27x when dropped into this chunk loop with the same slab bias (25.1 -> 17.0 ms per
+        decoder pass), because the fused kernel never materialises the [slab,slab] scores in DRAM
+        where this path writes them four times. It is rejected purely on ACCURACY. Against an exact
+        fp64 answer at S=512:
 
-        Note this runs in bf16 by DEFAULT (attn_dtype), which the sweep in the module docstring
-        showed is both more accurate and faster here. Activations elsewhere stay fp32."""
+            path                 PCC vs exact   max abs err   mean abs err
+            hand-rolled (this)   0.99999559     5.85e-03      3.98e-04
+            sdpa                 0.99985772     1.95e-02      2.35e-03   <- 3.3x worse worst-case
+
+        Adopting it failed 11 tests, including the real-speech fixture's "worst sample within 2% of
+        peak" -- the one gate that guards what is audible -- and per-stage PCC 0.916 after a single
+        2-layer stage. The per-slab PCC was a healthy 0.9998, so this is trap #9 (PCC hides
+        outliers) plus the XTTS-v2 Block 1 finding (a structured softmax error that later layers
+        amplify) reproducing exactly.
+
+        DO NOT RE-LITIGATE without new information; the search space is exhausted. Every lever
+        below leaves max abs err at exactly 1.951e-02:
+          * chunk geometry -- 1 vs 4 k-blocks, and chunked vs unchunked full mask
+          * `exp_approx_mode=False`; `fp32_dest_acc_en=True`; HiFi4 (`use_high_precision_compute`)
+          * fp32 q/k/v -- rejected outright, sdpa is bf16/bfp8/bfp4 only
+          * patching sdpa_program_factory.cpp so im_df/stats_df are Float32 and REBUILDING. Verified
+            live via a marker (im_df=Float32, fp32_dest_acc_en=true) -- error unchanged. So the loss
+            is in the compute kernel's arithmetic, not the buffer formats, and issue #13364 (closed,
+            "Enable FP32 Accumulate in Flash Attention") is a red herring here.
+        Reaching it would mean editing kernels/compute/sdpa.cpp. Re-test only if that changes.
+
+        Separately, sdpa forbids `attn_mask` together with `is_causal` or `sliding_window_size`
+        (explicit TT_FATALs), so its native block-skipping is unreachable. That costs almost nothing:
+        its windowed path measured only 1.22x faster than this chunking and cannot express ALiBi at
+        all (PCC 0.64 without it).
+
+        Hand-rolling also keeps `numeric_stable=True` on the softmax. Runs in bf16 by DEFAULT
+        (attn_dtype), which the module docstring's sweep showed is both more accurate and faster
+        here; activations elsewhere stay fp32."""
         if self.attn_dtype != DTYPE:
             c = lambda t: ttnn.typecast(t, self.attn_dtype)
             q, k, v = c(q), c(k), c(v)  # the BIAS is already cached in attn_dtype -- never cast the
@@ -406,7 +429,6 @@ class TtVoxtralCodecDecoder:
             return self._attention_slab(q, k, v, self._attn_bias(S, window))
         H, d = q.shape[1], q.shape[3]
         slab = self.slab
-        C = slab - window
         bias = self._attn_bias(slab, window)  # the ONE tensor, reused by every chunk
         outs, a = [], 0
         while a < S:
@@ -460,7 +482,7 @@ class TtVoxtralCodecDecoder:
         sem = self.semantic_host[codes[:, 0, :].reshape(-1).long()].reshape(1, T, SEMANTIC_DIM)
         ac = codes[:, 1:, :].to(torch.float32) * 2.0 / (ACOUSTIC_CODEBOOK_SIZE - 1) - 1.0
         lat = torch.cat([sem, ac.permute(0, 2, 1)], dim=2)
-        return lat.reshape(1, 1, T, SEMANTIC_DIM + 36).contiguous()
+        return lat.reshape(1, 1, T, LATENT_DIM).contiguous()
 
     def quantizer_decode(self, codes):
         """Host quantizer + upload, as one step (the eager path and the tests use this)."""
@@ -472,7 +494,7 @@ class TtVoxtralCodecDecoder:
     # ----------------------------------------------------------------------------------
     def _graph(self, x, stages=None):
         """latents [1,1,T,292] on device -> [1,1,T',240] on device."""
-        x = self._conv1d(x, "in", SEMANTIC_DIM + 36, CODEC_DIM,
+        x = self._conv1d(x, "in", LATENT_DIM, CODEC_DIM,
                          DEC_CONV_KERNELS[0], DEC_CONV_STRIDES[0], "replicate")
         if stages is not None:
             stages["after_input_conv"] = self._chw(x)
@@ -506,10 +528,8 @@ class TtVoxtralCodecDecoder:
                 # audio to the causal convs instead of a hard edge. It is trimmed off either way,
                 # but the transposed convs overlap, so a pathological tail is worth avoiding.
                 codes = torch.cat([codes, codes[:, :, -1:].repeat(1, 1, padded - T)], dim=2)
-                out = self._decode(codes, return_stages)
-                wav, stages = out if return_stages else (out, {})
-                wav = wav[:, :, : T * PATCH_SIZE * 8]
-                return (wav, stages) if return_stages else wav
+                # return_stages is False in this branch, so _decode returns the waveform alone.
+                return self._decode(codes)[:, :, : T * PATCH_SIZE * UPSAMPLE]
         return self._decode(codes, return_stages)
 
     @torch.no_grad()
