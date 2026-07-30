@@ -118,6 +118,8 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
                 d["t_first_send"] = w.t_first_send;
                 d["t_last_send"] = w.t_last_send;
                 d["t_drained"] = w.t_drained;
+                d["t_kernel_start"] = w.t_kernel_start;
+                d["t_kernel_end"] = w.t_kernel_end;
                 d["edm_slots"] = w.edm_slots;
                 d["drain_packets"] = w.drain_packets;
                 d["out_base_page"] = w.out_base_page;
