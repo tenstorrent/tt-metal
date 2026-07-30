@@ -54,7 +54,29 @@ DTYPE_BYTES = {
 }
 
 BASE_COLS = ["OP CODE", "OP TYPE", "DEVICE ID", DURATION_COL, "CORE COUNT"]
-OPTIONAL_COLS = ["DRAM BW UTIL (%)", "NOC UTIL (%)", "NPE CONG IMPACT (%)", "PM IDEAL [ns]", "MATH FIDELITY"]
+OPTIONAL_COLS = [
+    "DRAM BW UTIL (%)",
+    "NOC UTIL (%)",
+    "NPE CONG IMPACT (%)",
+    "PM IDEAL [ns]",
+    "MATH FIDELITY",
+    "HOST DURATION [ns]",
+]
+
+# Ops that did NOT run as a device kernel: anything here inside the forward means the host is doing
+# work (or a fallback ran on CPU) in the middle of what should be a pure device pipeline.
+DEVICE_OP_TYPE = "tt_dnn_device"
+
+# Child-call columns tracy adds per op when --child-functions is passed. A non-zero read/write_buffer
+# inside the profiled chunk is literal host<->device data movement mid-forward; CompileProgram means a
+# program cache miss (i.e. the warmup did not cover this shape).
+HOST_MOVEMENT_COLS = {
+    "HWCommandQueue_write_buffer_TT_HOST_FUNC [ns]": "H2D write_buffer",
+    "HWCommandQueue_read_buffer_TT_HOST_FUNC [ns]": "D2H read_buffer",
+    "EnqueueReadBuffer_TT_HOST_FUNC [ns]": "D2H EnqueueReadBuffer",
+    "EnqueueWriteBuffer_TT_HOST_FUNC [ns]": "H2D EnqueueWriteBuffer",
+    "CompileProgram_TT_HOST_FUNC [ns]": "CompileProgram (cache miss)",
+}
 
 
 def _shape_val(v):
@@ -133,6 +155,18 @@ class ZoneAccumulator:
         self.op_detail = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
         self.unmatched_ends = 0
         self.rows_in_root = 0
+        # Host/device-movement audit, all keyed on the layer-relative zone path:
+        #   host_ops[zone][op_code] = {"count", "ns"}   ops that did NOT run as a device kernel
+        #   movement[zone][label]   = ns                read/write_buffer + CompileProgram child calls
+        self.host_ops = defaultdict(lambda: defaultdict(lambda: {"count": 0, "ns": 0.0}))
+        self.movement = defaultdict(lambda: defaultdict(float))
+        # Whether the CSV even carries the child-call columns. Without them "no movement" means
+        # "not measured", not "none happened" — the report must not conflate the two.
+        self.movement_cols_present = False
+        # Per-op timeline (execution order). Collected for every device; the writer keeps one device,
+        # because interleaving 32 chips' copies of the same op destroys the sequential reading.
+        self.timeline = []
+        self.collect_timeline = False
 
     @property
     def path(self):
@@ -160,6 +194,32 @@ class ZoneAccumulator:
 
         if not self.stack or self.stack[0] != ROOT_ZONE:
             return  # warmup / prefix-fill op, or an op outside any zone
+
+        rel = relative_path(self.path)
+
+        # Host/device-movement audit. Runs BEFORE the device-duration filter, because the ops we most
+        # want to catch — CPU fallbacks, host ops, buffer transfers — are exactly the ones with no
+        # DEVICE KERNEL DURATION. A clean device-only forward produces nothing here.
+        if isinstance(op_type, str) and op_type != DEVICE_OP_TYPE:
+            host_ns = row.get("HOST DURATION [ns]")
+            try:
+                host_ns = float(host_ns) if host_ns is not None and not pd.isna(host_ns) else 0.0
+            except (TypeError, ValueError):
+                host_ns = 0.0
+            e = self.host_ops[rel][f"{code} [{op_type}]"]
+            e["count"] += 1
+            e["ns"] += host_ns
+        for col, label in HOST_MOVEMENT_COLS.items():
+            v = row.get(col)
+            if v is None or pd.isna(v):
+                continue
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                self.movement[rel][label] += v
+
         dur = row.get(DURATION_COL)
         if dur is None or pd.isna(dur):
             return
@@ -190,6 +250,8 @@ class ZoneAccumulator:
             if noc is not None and not pd.isna(noc):
                 s["noc"].append(float(noc))
         self.op_detail[relative_path(self.path)][str(code)][dev] += dur
+        if self.collect_timeline:
+            self.timeline.append({"dev": dev, "code": str(code), "zone": self.path, "ns": dur, "bytes": nbytes})
 
 
 def summarize(acc):
@@ -330,6 +392,39 @@ def print_report(summary, by_class, acc, top=0):
                 f"{s['mib']:>9.1f} {s['gbs']:>8.1f} {du:>7}"
             )
 
+    # --- host / device-movement audit -------------------------------------------------------
+    print()
+    print("--- host work & device<->host movement inside the profiled chunk ---")
+    if not acc.host_ops and not acc.movement:
+        print("  No non-device ops: every op in the profiled chunk ran as a device kernel (OP TYPE ==")
+        print("  tt_dnn_device) — no CPU fallbacks, no host ops.")
+        if not acc.movement_cols_present:
+            print("  NOT MEASURED: buffer transfers / program-cache misses. Those are child calls, and this")
+            print("  CSV has no *_TT_HOST_FUNC columns, so H2D/D2H copies cannot be ruled out from it.")
+            print("  Re-run `python -m tracy` with:")
+            print("    --child-functions HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,CompileProgram")
+        else:
+            print("  Also zero buffer transfers and zero CompileProgram calls (both measured).")
+    else:
+        if acc.host_ops:
+            print(f"  {'zone':<40} {'op [type]':<44} {'count':>6} {'host ms':>9}")
+            print(f"  {'-'*40} {'-'*44} {'-'*6} {'-'*9}")
+            rows = [(z, o, e) for z, ops in acc.host_ops.items() for o, e in ops.items()]
+            for z, o, e in sorted(rows, key=lambda r: -r[2]["ns"])[:25]:
+                print(f"  {z:<40} {o:<44} {e['count']:>6} {e['ns']/1e6:>9.3f}")
+        if acc.movement:
+            print()
+            print(f"  {'zone':<40} {'movement':<32} {'ms':>9}")
+            print(f"  {'-'*40} {'-'*32} {'-'*9}")
+            rows = [(z, lbl, ns) for z, m in acc.movement.items() for lbl, ns in m.items()]
+            for z, lbl, ns in sorted(rows, key=lambda r: -r[2])[:25]:
+                print(f"  {z:<40} {lbl:<32} {ns/1e6:>9.3f}")
+        else:
+            print()
+            print("  (no read/write_buffer or CompileProgram child calls recorded — pass")
+            print("   --child-functions HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,CompileProgram")
+            print("   to `python -m tracy` to measure buffer transfers explicitly)")
+
     if top:
         # Per zone (layer index collapsed), the ops that cost the most on the WORST device — summed over
         # every layer of that class, so this is "total ms this op contributed to the profiled chunk".
@@ -409,6 +504,21 @@ def main():
     ap.add_argument("--html", help="write an HTML report here")
     ap.add_argument("--json", help="write the raw per-zone summary here")
     ap.add_argument("--top", type=int, default=0, help="also list the top N ops per zone")
+    ap.add_argument(
+        "--timeline",
+        help="write a per-op execution-order timeline (JSON) for one device: every op in the profiled "
+        "chunk with its zone and device-kernel duration",
+    )
+    ap.add_argument(
+        "--per-device",
+        help="write per-(zone, device) device-kernel ms (JSON) — the basis for the per-chip imbalance view",
+    )
+    ap.add_argument(
+        "--timeline-device",
+        type=int,
+        default=None,
+        help="device id for --timeline (default: the device with the largest total device-kernel time)",
+    )
     ap.add_argument("--chunksize", type=int, default=200_000, help="CSV streaming chunk size")
     args = ap.parse_args()
 
@@ -418,9 +528,12 @@ def main():
         sys.exit(f"ERROR: {args.csv} is missing expected column(s): {missing}")
     byte_cols = io_byte_columns(header)
     usecols = BASE_COLS + [c for c in OPTIONAL_COLS if c in header]
+    usecols += [c for c in HOST_MOVEMENT_COLS if c in header]
     usecols += sorted({c for cols in byte_cols.values() for c in cols.values()})
 
     acc = ZoneAccumulator()
+    acc.collect_timeline = bool(args.timeline)
+    acc.movement_cols_present = any(c in header for c in HOST_MOVEMENT_COLS)
     nrows = 0
     for chunk in pd.read_csv(args.csv, usecols=usecols, chunksize=args.chunksize, low_memory=False):
         for row in chunk.to_dict("records"):
@@ -437,6 +550,42 @@ def main():
         with open(args.json, "w") as f:
             json.dump({"meta": meta, "zones": summary, "by_class": by_class}, f, indent=2, default=str)
         print(f"\n[parse] json -> {args.json}")
+    if args.per_device:
+        # zone -> {device -> ms}, restricted to zones inside a layer so the view is per-layer-class.
+        out = {}
+        for (zone, dev), st in acc.stats.items():
+            if not zone.startswith(ROOT_ZONE + "/"):
+                continue
+            out.setdefault(zone, {})[str(dev)] = round(st["ns"] / 1e6, 5)
+        with open(args.per_device, "w") as f:
+            json.dump(out, f, separators=(",", ":"))
+        print(f"[parse] per-device ({len(out)} zones) -> {args.per_device}")
+
+    if args.timeline:
+        dev = args.timeline_device
+        if dev is None:
+            root = summary.get(ROOT_ZONE)
+            dev = root["worst_device"] if root else (acc.timeline[0]["dev"] if acc.timeline else 0)
+        ops, cum = [], 0.0
+        for r in acc.timeline:
+            if r["dev"] != dev:
+                continue
+            ms = r["ns"] / 1e6
+            ops.append(
+                {
+                    "i": len(ops),
+                    "code": r["code"],
+                    "zone": r["zone"].split("/", 1)[1] if "/" in r["zone"] else r["zone"],
+                    "ms": round(ms, 6),
+                    "start_ms": round(cum, 6),
+                    "mib": round(r["bytes"] / 2**20, 3),
+                }
+            )
+            cum += ms
+        with open(args.timeline, "w") as f:
+            json.dump({"device": dev, "total_ms": round(cum, 4), "ops": ops}, f)
+        print(f"[parse] timeline ({len(ops)} ops on device {dev}, {cum:.2f} ms) -> {args.timeline}")
+
     if args.html:
         with open(args.html, "w") as f:
             f.write(_html(summary, by_class, meta))

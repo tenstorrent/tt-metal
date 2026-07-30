@@ -7,14 +7,26 @@
 # harness warms up (runtime.compile), fills the cache to PROFILE_CACHE tokens un-profiled, then runs
 # ONE final chunk with zone signposts on and a ttnn.ReadDeviceProfiler after every layer.
 #
-# Output per run: generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv
-# The script then rolls each CSV up per zone with tests/perf/parse_zone_perf.py and writes an HTML report.
+# Output per run: generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv, whose path
+# is printed at the end. Rendering is a separate step (visualize_zones.py) so one capture can be
+# re-rendered without paying for it again.
 #
-# Usage:  ./run_prefill_profile.sh                     # both 25k and 55k, bf4 experts
-#         PROFILE_CACHE=25600 ./run_prefill_profile.sh # one depth only
-#         EXPERT_DTYPE=bf8 ./run_prefill_profile.sh
-#         NOC_TRACES=1 ./run_prefill_profile.sh        # + tt-npe DRAM/NOC util per op (needs tt-npe)
-#         PROFILE_NUM_LAYERS=6 ./run_prefill_profile.sh # fast bring-up: 3 dense + 3 sparse layers
+# Usage:  LEVEL=1 LAYERS=8 CACHE=25600 ./run_prefill_profile.sh
+#
+# Flags (all optional, all env vars):
+#   LEVEL=1|2|3     zone detail. 1 = attn vs mlp only (~3 zones/layer), 2 = every block that costs
+#                   real time (~20), 3 = everything incl. norms and sub-splits (~35).   [default 2]
+#   LAYERS=N        build/run only the first N layers. Layers 0-2 are dense and 3+ sparse, so N>=4
+#                   covers both classes; 8 gives 5 sparse samples for the per-chip view. [default all 60]
+#   CACHE=N         tokens already cached before the profiled chunk (rounded down to a
+#                   whole number of chunks). Unset runs both 25600 and 56320.
+#   CHUNK=N         tokens in the profiled chunk.                                     [default 5120]
+#   EXPERT_DTYPE=bf4|bf8   MoE routed-expert weight dtype.                            [default bf4]
+#   NOC_TRACES=1    + tt-npe DRAM/NOC utilization per op (needs tt-npe installed).
+#   SKIP_PREFIX=1   skip the cache prefill and attend a zeroed cache. Fast, but MoE routing is then
+#                   unrepresentative — bring-up only.
+#
+# Then visualize:  python3 models/demos/minimax_m3/tests/perf/visualize_zones.py <csv printed below>
 set -uo pipefail
 
 # --- config (override via env) ---
@@ -24,16 +36,27 @@ export HF_MODEL="${HF_MODEL:-/mnt/models/MiniMaxAI/MiniMax-M3-ref}"
 export EXPERT_DTYPE="${EXPERT_DTYPE:-bf4}"
 export LOGURU_LEVEL=INFO       # suppress python DEBUG logs at the source
 export M3_PROFILE_ZONES=1      # arm the zone markers (utils/profiler_utils.py reads this at import)
+# Device-side profiler DRAM buffer, in programs. The default is 1000
+# (tt_metal/impl/profiler/profiler_state_manager.cpp) and the profiled chunk alone is ~72 ops x
+# num_layers, so the default leaves almost no margin now that we do NOT drain inside the chunk.
+# Cost is 48 B per program per RISC: 20000 is ~600 MB/chip, where tt-train's 100000 would be ~3 GB —
+# too much next to M3's weights.
+export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT="${TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT:-20000}"
 
 GOLDEN="${GOLDEN_DIR:-/data/philei/models/minimax-m3-prefill-cache/golden}"
 HARNESS="models/demos/minimax_m3/tests/perf/profile_prefill.py"
-PARSER="models/demos/minimax_m3/tests/perf/parse_zone_perf.py"
+VISUALIZE="models/demos/minimax_m3/tests/perf/visualize_zones.py"
+CSVS=()
 WORKDIR="${PERF_WORKDIR:-/tmp/m3_prefill_perf_traces}"
 LOGDIR="${LOGDIR:-$TT_METAL_HOME/prefill_profile_logs}"
 REPORTS="${REPORTS:-$TT_METAL_HOME/generated/profiler/reports}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 LOG="$LOGDIR/prefill_profile_${EXPERT_DTYPE}_${STAMP}.log"
-CHUNK="${PROFILE_CHUNK:-5120}"
+CHUNK="${CHUNK:-${PROFILE_CHUNK:-5120}}"
+export M3_PROFILE_LEVEL="${LEVEL:-${M3_PROFILE_LEVEL:-2}}"
+[ -n "${LAYERS:-}" ] && export PROFILE_NUM_LAYERS="$LAYERS"
+[ -n "${CACHE:-}" ] && PROFILE_CACHE="$CACHE"
+[ -n "${SKIP_PREFIX:-}" ] && export PROFILE_SKIP_PREFIX="$SKIP_PREFIX"
 
 cd "$TT_METAL_HOME"
 # shellcheck disable=SC1091
@@ -64,6 +87,9 @@ PY
 DEBUG_FILTER='\| *DEBUG *\|'
 
 TRACY_OPTS=(-v -r -p)
+# Child calls: makes H2D/D2H buffer copies and program-cache misses show up as per-op columns, which
+# is the only way to tell "no host<->device movement" from "movement not measured".
+TRACY_OPTS+=(--child-functions "HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,CompileProgram")
 [ "${NOC_TRACES:-0}" = "1" ] && TRACY_OPTS+=(--collect-noc-traces)
 
 run_cfg () {  # $1=label  $2=cache_tokens
@@ -89,13 +115,13 @@ run_cfg () {  # $1=label  $2=cache_tokens
   local rc=${PIPESTATUS[0]}
   echo "# [$label] exit=$rc" | tee -a "$LOG"
 
-  # roll the freshest ops CSV up per zone
-  local csv; csv="$(find "$REPORTS" -name 'ops_perf_results_*.csv' -newermt '-30 minutes' 2>/dev/null | sort | tail -1)"
+  # Report where the CSV landed. Visualization is a separate step on purpose: the capture is the
+  # expensive part, and you will want to re-render it more than once.
+  local csv; csv="$(find "$REPORTS" -name 'ops_perf_results_*.csv' -newermt '-6 hours' 2>/dev/null | sort | tail -1)"
   if [ -n "$csv" ]; then
-    local out="$LOGDIR/zones_${label// /_}_${STAMP}"
-    echo "# [$label] parsing $csv" | tee -a "$LOG"
-    python3 "$PARSER" "$csv" --html "${out}.html" --json "${out}.json" 2>&1 | tee -a "$LOG"
-    echo "# [$label] report: ${out}.html" | tee -a "$LOG"
+    { echo "# [$label] CSV: $csv"
+      echo "# [$label] visualize: python3 $VISUALIZE $csv"; } | tee -a "$LOG"
+    CSVS+=("$csv")
   else
     echo "# [$label] WARNING: no ops_perf_results CSV found under $REPORTS" | tee -a "$LOG"
   fi
@@ -105,7 +131,7 @@ echo "logging to $LOG"
 {
   echo "MiniMax-M3 prefill zone profile"
   echo "  HF_MODEL=$HF_MODEL  EXPERT_DTYPE=$EXPERT_DTYPE  CHUNK=$CHUNK  NOC_TRACES=${NOC_TRACES:-0}"
-  echo "  PROFILE_NUM_LAYERS=${PROFILE_NUM_LAYERS:-all}  PROFILE_READ_EVERY=${PROFILE_READ_EVERY:-1}"
+  echo "  LAYERS=${PROFILE_NUM_LAYERS:-all}  ZONE LEVEL=$M3_PROFILE_LEVEL  SKIP_PREFIX=${PROFILE_SKIP_PREFIX:-0}"
 } | tee "$LOG"
 
 if [ -n "${PROFILE_CACHE:-}" ]; then
@@ -122,4 +148,6 @@ fi
 } | tee -a "$LOG"
 echo ""
 echo "full log: $LOG"
-echo "zone reports: $LOGDIR/zones_*_${STAMP}.html"
+echo ""
+echo "=================== NEXT STEP ==================="
+for c in "${CSVS[@]}"; do echo "  python3 $VISUALIZE $c"; done

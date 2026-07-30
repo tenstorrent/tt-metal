@@ -3,7 +3,7 @@
 
 
 import ttnn
-from models.demos.minimax_m3.utils.profiler_utils import zone
+from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
@@ -97,7 +97,7 @@ def attention_forward(
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
 
-    with zone("split_heads"):
+    with zone("split_heads", FINE):
         tt_q, tt_k, tt_v = split_qkv_heads_prefill(xqkv_fused, num_local_heads, num_local_kv_heads)
     xqkv_fused.deallocate(True)
 
@@ -105,7 +105,7 @@ def attention_forward(
     # ([1, n_heads, S, head_dim]), applied BEFORE RoPE, on Q and K only. The gemma (1+w)
     # fold is baked into the gain at load (weights.py); local per head (no TP reduction).
     if config.use_qk_norm and weights.q_norm is not None:
-        with zone("qk_norm"):
+        with zone("qk_norm", FINE):
             tt_q_pre, tt_k_pre = tt_q, tt_k
             tt_q = apply_qk_norm_per_head(tt_q, weights.q_norm, config.rms_norm_eps)
             tt_k = apply_qk_norm_per_head(tt_k, weights.k_norm, config.rms_norm_eps)
@@ -124,7 +124,7 @@ def attention_forward(
         rope_mats_sliced = rope_mats
     tt_q_orig = tt_q
     tt_k_orig = tt_k
-    with zone("rope"):
+    with zone("rope", FINE):
         tt_q = apply_rope(
             tt_q,
             rope_mats_sliced,
@@ -148,7 +148,7 @@ def attention_forward(
     # (cached_len). Single write point for ALL layer types and ALL chunks (the MSA index_k write is in
     # the is_sparse branch below); the cache-read attention paths below then read the accumulated prefix.
     if kv_cache is not None:
-        with zone("kv_write"):
+        with zone("kv_write", FINE):
             write_kv_chunk(
                 kv_cache,
                 tt_k,
@@ -183,7 +183,7 @@ def attention_forward(
         # MSA-only: cache the post-norm/post-RoPE index_k (single shared head, TP-replicated) at this
         # chunk's offset, so a later chunk's cache-read can score against the accumulated context.
         if kv_cache is not None:
-            with zone("index_k_write"):
+            with zone("index_k_write", FINE):
                 write_index_k_chunk(
                     kv_cache,
                     tt_ik,
@@ -213,11 +213,11 @@ def attention_forward(
             # The `cache_read/deshard` zone measures exactly that cost; `cache_read/slice` is the
             # per-slot slice that follows.
             with zone("cache_read"):
-                with zone("deshard"):
+                with zone("deshard", FINE):
                     k_int = ttnn.to_memory_config(kv_cache.k, ttnn.DRAM_MEMORY_CONFIG)
                     v_int = ttnn.to_memory_config(kv_cache.v, ttnn.DRAM_MEMORY_CONFIG)
                     ik_int = ttnn.to_memory_config(kv_cache.index_k, ttnn.DRAM_MEMORY_CONFIG)
-                with zone("slice"):
+                with zone("slice", FINE):
                     k_acc = ttnn.slice(k_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
                     v_acc = ttnn.slice(v_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
                     ik_acc = ttnn.slice(ik_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
@@ -335,7 +335,7 @@ def attention_forward(
 
     # Concat heads and apply output projection
     tt_sdpa_out_pre_concat = tt_sdpa_out
-    with zone("concat_heads"):
+    with zone("concat_heads", FINE):
         tt_sdpa_out = concat_heads(tt_sdpa_out)
     tt_sdpa_out_pre_concat.deallocate(True)
 

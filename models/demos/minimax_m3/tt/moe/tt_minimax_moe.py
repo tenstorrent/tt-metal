@@ -28,7 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
-from models.demos.minimax_m3.utils.profiler_utils import zone
+from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
 
 class TtMiniMaxMoE(LightweightModule):
@@ -179,12 +179,12 @@ class TtMiniMaxMoE(LightweightModule):
            gate runs (standalone test path; expects TP-sharded emb).
         """
         if topk_indices is None:
-            with zone("gate"):
+            with zone("gate", FINE):
                 scores, indices, gate_logits = self.gate(ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])))
                 ttnn.deallocate(gate_logits)
         else:
             indices, scores = topk_indices, topk_weights
-        with zone("routing_setup"):
+        with zone("routing_setup", FINE):
             tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
                 ttnn_top_k_experts_indices=indices,
                 num_routed_experts=self.num_routed_experts,
@@ -230,8 +230,11 @@ class TtMiniMaxMoE(LightweightModule):
             combined_output = self.combine_module(
                 expert_outputs, metadata, tt_expert_token_counts, tt_expert_region_offsets
             )
-        # Fused weighted-sum over topk + reduce-scatter across TP
-        with zone("reduce_ws_rs"):
+        # Fused weighted-sum over topk, then a TP reduce-scatter. Two device ops with very different
+        # behaviour: PostCombineReduce is a steady ~0.15 ms, the ReduceScatter is a collective whose
+        # cost swings with cross-chip skew (0.15-3.3 ms observed). The zone report's op breakdown
+        # separates them — see tests/perf/README_profiling.md.
+        with zone("moe_reduce"):
             routed_output = self.reduce_module(
                 combined_output, weights=scores, indices=indices, expert_dispatch_table=self.tt_expert_dispatch_table
             )

@@ -11,7 +11,7 @@ expert backends were removed in the prefill cleanup; this mirrors deepseek_v3_d_
 
 import ttnn
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
-from models.demos.minimax_m3.utils.profiler_utils import zone
+from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
 from .dense_mlp import DenseMLP
@@ -191,7 +191,7 @@ class MLP:
                         out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
                     )
         if shared_out is not None:
-            with zone("add_shared"):
+            with zone("add_shared", FINE):
                 out = ttnn.add(out, shared_out)
             shared_out.deallocate(True)
         return out

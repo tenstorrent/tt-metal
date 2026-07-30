@@ -4,7 +4,7 @@
 
 import ttnn
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
-from models.demos.minimax_m3.utils.profiler_utils import zone
+from models.demos.minimax_m3.utils.profiler_utils import COARSE, FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
 from .attention import Attention, AttentionConfig
@@ -168,14 +168,14 @@ class DecoderLayer:
 
         # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
-        with zone(self.zone_name):
+        with zone(self.zone_name, COARSE):
             residual = hidden_states
-            with zone("input_norm"):
+            with zone("input_norm", FINE):
                 hidden_states_post_norm = self.input_layernorm(hidden_states)
 
             # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
             # hidden_states_post_norm: [1, 1, tokens/num_rows, hidden_size]
-            with zone("attn"):
+            with zone("attn", COARSE):
                 hidden_states = self.self_attn(
                     hidden_states_post_norm,
                     rope_mats=position_embeddings,
@@ -189,20 +189,20 @@ class DecoderLayer:
             hidden_states_post_norm.deallocate(True)
 
             # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
-            with zone("residual_attn"):
+            with zone("residual_attn", FINE):
                 hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
             residual.deallocate(True)
             residual = hidden_states
-            with zone("post_attn_norm"):
+            with zone("post_attn_norm", FINE):
                 hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
             # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
 
-            with zone("mlp"):
+            with zone("mlp", COARSE):
                 hidden_states = self.mlp(hidden_states_post_norm)
             hidden_states_post_norm.deallocate(True)
 
             # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
-            with zone("residual_mlp"):
+            with zone("residual_mlp", FINE):
                 hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
             residual.deallocate(True)
 

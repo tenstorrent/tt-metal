@@ -246,22 +246,30 @@ def main():
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))
     print(f"[zone-prof] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:
-        from models.demos.minimax_m3.utils.profiler_utils import ZONES_ENABLED, read_profiler, zone
+        from models.demos.minimax_m3.utils.profiler_utils import COARSE, ZONES_ENABLED, read_profiler, zone
 
         runtime, kv_cache, hf_config, num_layers = build_runtime(mesh, chunk, total, num_layers_override)
         cache_traffic_note(hf_config, num_layers, total)
 
-        # Per-layer ReadDeviceProfiler, armed for EVERY phase (warmup + prefix + profiled chunk). The
-        # device profiler buffer holds ~1000 ops per device and one chunk enqueues far more (~50-60 ops
-        # x num_layers), so a phase that runs un-drained overflows the buffer and the NEXT phase's data
-        # is dropped too — the profiled chunk would come back empty. Draining costs host wall-clock in
-        # the un-profiled phases, which we do not measure, so it is free where it matters.
-        layer_reads = {"n": 0}
+        # Per-layer ReadDeviceProfiler for the UN-profiled phases only (warmup + prefix). The device
+        # profiler buffer must be drained or it overflows and the next phase's data is dropped — but a
+        # drain is a blocking device sync + PCIe pull, and it lands in the trace as a multi-second
+        # OP TO OP LATENCY on the next op. Draining inside the profiled chunk therefore destroys the
+        # one measurement that explains where wall-clock goes (kernel time is unaffected, the gaps are
+        # not). So: drain freely before the chunk, go silent during it, flush once after.
+        #
+        # That means the profiled chunk's ops must all fit in the buffer at once
+        # (num_layers x ~72 ops). Size it with TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT — the default is
+        # only 1000 (tt_metal/impl/profiler/profiler_state_manager.cpp).
+        read_in_chunk = os.getenv("PROFILE_READ_IN_CHUNK", "0") == "1"
+        state = {"reads": 0, "in_chunk": False}
 
         def on_layer_complete(layer_idx):
+            if state["in_chunk"] and not read_in_chunk:
+                return
             if read_every > 0 and (layer_idx + 1) % read_every == 0:
                 read_profiler(mesh)
-                layer_reads["n"] += 1
+                state["reads"] += 1
 
         runtime._on_layer_complete = on_layer_complete
 
@@ -302,24 +310,31 @@ def main():
 
         # --- 3. the profiled chunk, bracketed by the `profiled_chunk` zone. Everything the parser
         # reports is nested under it, which is what separates this chunk from warmup + prefix.
+        read_note = (
+            "per-layer reads INSIDE the chunk — op-to-op latency will be meaningless"
+            if read_in_chunk
+            else "no reads inside the chunk — op-to-op latency is clean"
+        )
         print(
             f"[zone-prof] profiling the final chunk: {chunk} tok @ {cache} cache "
-            f"(zones {'ON' if ZONES_ENABLED else 'OFF'}, profiler read every {read_every} layer(s)) ...",
+            f"(zones {'ON' if ZONES_ENABLED else 'OFF'}, {read_note}) ...",
             flush=True,
         )
-        reads_before = layer_reads["n"]
+        prefix_reads = state["reads"]
+        state["in_chunk"] = True
         t0 = time.perf_counter()
-        with zone("profiled_chunk"):
+        with zone("profiled_chunk", COARSE):
             prefill_chunk(n_chunks - 1)
             ttnn.synchronize_device(mesh)
         wall = time.perf_counter() - t0
-        read_profiler(mesh)  # final flush: the tail after the last per-layer read
-        layer_reads["n"] -= reads_before
+        state["in_chunk"] = False
+        read_profiler(mesh)  # single flush of the whole profiled chunk
+        chunk_reads = state["reads"] - prefix_reads
 
         print(
             f"\n[zone-prof] PROFILED CHUNK: {chunk} tok @ {cache} cache, {num_layers} layers\n"
-            f"  wall-clock: {wall*1e3:.1f} ms  ({layer_reads['n']} mid-run profiler reads — wall-clock is\n"
-            f"  INFLATED by the reads; use galaxy_prefill_kv_pcc.py for the real latency number)\n"
+            f"  wall-clock: {wall*1e3:.1f} ms  ({chunk_reads} profiler reads inside the chunk, "
+            f"{prefix_reads} before it)\n"
             f"  device-kernel time per zone: parse the ops CSV with\n"
             f"    python3 models/demos/minimax_m3/tests/perf/parse_zone_perf.py "
             f"<generated/profiler/reports/*/ops_perf_results_*.csv> --html zones.html",

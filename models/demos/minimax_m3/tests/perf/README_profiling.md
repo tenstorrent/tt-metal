@@ -4,19 +4,50 @@ Per-zone device-kernel time for one prefill chunk attending an existing KV cache
 "5k attended to 25k / 55k" case — split into the parts we care about: `ring_joint_sdpa` and the dense
 MLP on the dense layers (0-2), and the full MSA + MoE breakdown on the sparse layers (3-59).
 
-## Run it
+## Two steps
+
+**1. Capture** — prints the CSV path when it finishes.
 
 ```bash
-./run_prefill_profile.sh                        # both 5k@25k and 5k@55k, bf4 experts
-PROFILE_CACHE=25600 ./run_prefill_profile.sh    # one depth only
-PROFILE_NUM_LAYERS=6 ./run_prefill_profile.sh   # fast bring-up: 3 dense + 3 sparse layers
-NOC_TRACES=1 ./run_prefill_profile.sh           # + measured DRAM/NOC util per op (needs tt-npe)
-EXPERT_DTYPE=bf8 ./run_prefill_profile.sh
+LEVEL=1 LAYERS=8 CACHE=25600 ./run_prefill_profile.sh
 ```
 
-The wrapper follows the same conventions as `run_prefill_perf.sh`: venv activate, `tt-smi -glx_reset`
-per run, real tokens tiled out of a long golden trace, `LOGURU_LEVEL=INFO` + a DEBUG grep filter, logs
-under `prefill_profile_logs/`. It then parses each run's CSV and writes `zones_*.html`.
+**2. Render** — table on stdout, self-contained HTML on disk.
+
+```bash
+python3 models/demos/minimax_m3/tests/perf/visualize_zones.py <that csv> -o report.html
+```
+
+Rendering is separate because the capture is the expensive part (~20 min) and you will want to look at
+it more than once.
+
+### Capture flags
+
+| flag | meaning | default |
+|---|---|---|
+| `LEVEL=1\|2\|3` | zone detail — see below | 2 |
+| `LAYERS=N` | build only the first N layers. 0-2 are dense, 3+ sparse, so N≥4 covers both; N=8 gives 5 sparse samples for the per-chip view | all 60 |
+| `CACHE=N` | tokens already cached before the profiled chunk | runs both 25600 and 56320 |
+| `CHUNK=N` | tokens in the profiled chunk | 5120 |
+| `EXPERT_DTYPE=bf4\|bf8` | MoE routed-expert weight dtype | bf4 |
+| `NOC_TRACES=1` | + tt-npe DRAM/NOC utilization per op | off |
+| `SKIP_PREFIX=1` | skip the prefill, attend a zeroed cache — fast but MoE routing is unrepresentative | off |
+
+### Detail levels
+
+| level | zones/layer | what you get |
+|---|---|---|
+| **1** coarse | ~3 | `attn` vs `mlp` per layer. Start here — it answers "which block". |
+| **2** medium | ~20 | every block that costs real time: sdpa, the CCLs, `cache_read`, `indexer`, and the MoE stages (`dispatch` / `experts_mm` / `combine` / `moe_reduce`). The default. |
+| **3** fine | ~35 | + norms, residuals, rope, head splits, and sub-splits (`deshard` vs `slice`). |
+
+Suppressing a zone never loses time — its ops are charged to the nearest enclosing zone, so every
+level accounts for 100% of the chunk, just in fewer buckets. Levels also buy headroom against Tracy's
+32K source-location cap on long captures.
+
+The wrapper follows `run_prefill_perf.sh` conventions: venv activate, `tt-smi -glx_reset` per run, real
+tokens tiled from a long golden trace, `LOGURU_LEVEL=INFO` + DEBUG filter, logs in
+`prefill_profile_logs/`.
 
 ## How it works
 
@@ -24,7 +55,8 @@ under `prefill_profile_logs/`. It then parses each run's CSV and writes `zones_*
 |---|---|
 | [utils/profiler_utils.py](../../utils/profiler_utils.py) | `zone(name)` context manager: emits `M3_ZONE_START/END <name>` Tracy signposts (+ a host Tracy zone). No-op unless `M3_PROFILE_ZONES=1`. |
 | [profile_prefill.py](profile_prefill.py) | warmup → fill cache to N tokens (un-profiled) → run ONE chunk inside a `profiled_chunk` zone, reading the device profiler after every layer. |
-| [parse_zone_perf.py](parse_zone_perf.py) | streams the ops CSV, rebuilds the zone hierarchy from the signpost rows, rolls up ns / ops / bytes / GB/s per zone per device. |
+| [parse_zone_perf.py](parse_zone_perf.py) | streams the ops CSV, rebuilds the zone hierarchy from the signpost rows, rolls up ns / ops / bytes / GB/s per zone per device. Also a library. |
+| [visualize_zones.py](visualize_zones.py) | the render step: text table + standalone HTML with the per-layer breakdown, per-chip spread, op-level detail and device-busy accounting. |
 
 Attribution: CSV rows are in host-enqueue order, so the ops between a zone's START and END signposts
 are exactly the ops that zone enqueued. Each op is charged to the innermost open zone and every
@@ -48,11 +80,23 @@ Same mechanism deepseek_v3_d_p uses (`forward_layer_{i}_start` in `tt/tt_prefill
 
 ## Two gotchas that will bite
 
-**The 1000-op profiler buffer.** Only ~1000 ops per device are buffered; one M3 chunk enqueues
-~50-60 ops × 60 layers. `profile_prefill.py` therefore calls `ttnn.ReadDeviceProfiler` after every
-layer (via the model's `on_layer_complete` seam) in *every* phase — warmup and prefix included, because
-an un-drained phase overflows the buffer and the profiled chunk then comes back empty. This inflates
-host wall-clock; take latency numbers from `run_prefill_perf.sh`, not from here.
+**The device profiler buffer.** It holds `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT` programs (default
+**1000**, which the runner raises to 20000) and one M3 chunk enqueues ~72 ops × num_layers. The harness
+drains it via `ttnn.ReadDeviceProfiler` after every layer during warmup and the prefix fill, but goes
+**silent during the profiled chunk** and flushes once at the end — a drain is a blocking sync that
+lands in the trace as a multi-second `OP TO OP LATENCY` on the next op, which would destroy the gap
+measurement. So the chunk's ops must all fit in the buffer at once; that is what the raised count buys.
+
+**Wall-clock here is meaningless.** Even with no drains inside the chunk, tracy's per-op host work
+means the device idles waiting for dispatch — an 8-layer chunk measured 5 061 ms against ~180 ms
+unprofiled. `DEVICE KERNEL DURATION` and `DEVICE FW DURATION` are on-device and unaffected;
+`OP TO OP LATENCY` is not, and the report excludes it. Latency numbers come from
+`run_prefill_perf.sh`.
+
+**Tracy caps a trace at 32K source locations.** Each zone entry allocates one, as does each ttnn op.
+A long capture will hit it and silently start dropping zones — use a lower `LEVEL`, fewer `LAYERS`, or
+`M3_PROFILE_HOST_ZONES=0` (which drops the host-side Tracy zones; signposts, which the parser reads,
+cost no source locations).
 
 **`PROFILE_SKIP_PREFIX=1` is approximate.** It skips the prefix fill and attends a zeroed cache. Op
 shapes and therefore costs are identical, but the attention outputs are garbage, so the hidden states

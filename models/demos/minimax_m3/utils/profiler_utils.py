@@ -67,8 +67,22 @@ def _signpost(header: str) -> None:
 ZONE_START_PREFIX = "M3_ZONE_START"
 ZONE_END_PREFIX = "M3_ZONE_END"
 
-# Read once at import: the flag is set by the profiling harness before the model is built.
+# Zone detail levels. A zone is emitted only when its level <= M3_PROFILE_LEVEL, so one set of call
+# sites serves every depth of investigation:
+#
+#   1 COARSE  per layer: attn vs mlp. ~3 zones/layer — start here, it answers "which block".
+#   2 MEDIUM  + every block that costs real time: sdpa, the CCLs, cache_read, indexer, and the MoE
+#             stages (dispatch / experts_mm / combine / reduce). ~20 zones/layer. The default.
+#   3 FINE    + norms, residuals, rope, head splits, and the sub-splits of the medium zones
+#             (deshard vs slice, weighted-sum vs reduce-scatter). ~35 zones/layer.
+#
+# Levels are not just presentation: each zone is two Tracy signposts, and Tracy caps a trace at 32K
+# source locations, so a coarse level also buys headroom on long captures.
+COARSE, MEDIUM, FINE = 1, 2, 3
+
+# Read once at import: the harness sets these before the model is built.
 ZONES_ENABLED = os.getenv("M3_PROFILE_ZONES", "0") == "1"
+LEVEL = int(os.getenv("M3_PROFILE_LEVEL", str(MEDIUM)))
 
 # Reused singleton for the disabled path — nullcontext carries no per-use state, so one
 # instance is safe to enter/exit repeatedly (and re-entrantly).
@@ -98,13 +112,18 @@ def _zone(name: str):
         _signpost(f"{ZONE_END_PREFIX} {name}")
 
 
-def zone(name: str):
-    """Context manager marking ``name`` as a profiling zone. No-op unless M3_PROFILE_ZONES=1.
+def zone(name: str, level: int = MEDIUM):
+    """Context manager marking ``name`` as a profiling zone.
 
-    Zones nest; use ``/``-separated names for the hierarchy (e.g. ``"msa/ag_kv"``). The same
-    name may be entered many times (once per layer) — the parser accumulates by name.
+    No-op unless M3_PROFILE_ZONES=1 and ``level <= M3_PROFILE_LEVEL`` (see COARSE/MEDIUM/FINE above).
+    Suppressing a zone does not lose its ops: they are charged to the nearest enclosing zone that is
+    still open, so a coarse run still accounts for 100% of the time, just in fewer buckets.
+
+    Zones nest by call site — the parser builds the full path from the nesting, so names here are
+    local (``"indexer"``, not ``"attn/indexer"``). The same name is entered once per layer and the
+    parser accumulates across layers.
     """
-    if not ZONES_ENABLED:
+    if not ZONES_ENABLED or level > LEVEL:
         return _NULL_ZONE
     return _zone(name)
 
