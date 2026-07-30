@@ -140,7 +140,9 @@ class TtXttsGenerator:
             preds.append(self._argmax(logits))
         return preds, ttnn.concat(latents, dim=1)
 
-    def generate_ondevice_traced(self, prompt_len, max_new_tokens, temperature, top_k, top_p, repetition_penalty):
+    def generate_ondevice_traced(
+        self, prompt_len, max_new_tokens, temperature, top_k, top_p, repetition_penalty, min_new_tokens=0
+    ):
         """FULLY on-device, end-to-end traceable decode: one captured step — decode_on_device +
         on-device Gumbel-max sampling (``TtSampler.pick_dev`` over PRE-DRAWN host noise, no
         ``ttnn.rand``) + in-place token feedback (``ttnn.copy``) + on-device latent/code accumulation
@@ -152,7 +154,16 @@ class TtXttsGenerator:
         This is the clean pre->device->post shape: noise is drawn on host up front (preprocessing),
         the decode runs entirely on device, and STOP self-termination becomes a post-loop trim. The
         sampling now matches the host path in distribution (true uniform Gumbel draw); the only
-        residual difference from host self-termination is the fixed step budget + trailing-drone trim."""
+        residual difference from host self-termination is the fixed step budget + trailing-drone trim.
+
+        ``min_new_tokens`` suppresses STOP below that many codes, as the eager :meth:`generate`
+        does — without it a long prompt self-terminates mid-sentence. The eager path can branch per
+        step on the host; a captured trace cannot, so instead the STOP logit gets a persistent
+        ``[1, V]`` additive bias buffer that the replay loop rewrites ONCE, at step
+        ``min_new_tokens``. Same mechanism as the pre-drawn Gumbel rows: the buffer is written
+        between replays, never inside the capture, so the captured program stays static and every
+        op stays on device. The buffer (and the extra add) only exist when the floor is on, so a
+        run with ``min_new_tokens=0`` captures exactly the program it captured before."""
         m = self.model
         dev = m.device
         N = int(max_new_tokens)
@@ -174,6 +185,14 @@ class TtXttsGenerator:
             u = torch.rand(N, NUM_AUDIO_TOKENS).clamp_(1e-4, 1.0 - 1e-3)
             gumbel_all = -torch.log(-torch.log(u))  # [N, V] Gumbel(0,1)
         noise_buf = f32(torch.zeros(1, NUM_AUDIO_TOKENS)) if sampled else None  # [1, V] fp32, refreshed per step
+        # STOP-suppression floor. The mask is built on host once, before capture — a constant, not a
+        # function of anything on device, so it is preprocessing like the Gumbel rows above.
+        floor = min(int(min_new_tokens), N)
+        stop_bias_buf = None
+        if floor > 0:
+            _m = torch.zeros(1, NUM_AUDIO_TOKENS)
+            _m[0, STOP_AUDIO_TOKEN] = -1e30
+            stop_bias_buf = f32(_m)  # [1, V] fp32, zeroed at step `floor` to release the floor
         arange_row = f32(torch.arange(N, dtype=torch.float32).reshape(1, N, 1))  # latent-slot selector base
         slot_row = f32(torch.zeros(1, N, 1))
         arange_col = f32(torch.arange(N, dtype=torch.float32).reshape(1, N))  # code-slot selector base
@@ -183,7 +202,7 @@ class TtXttsGenerator:
 
         def step_ops():
             logits, latent = m.decode_on_device(tok_buf, mp_buf, cpos_buf, m._static_kv)  # kv updated in place
-            tok = sampler.pick_dev(logits, noise_buf)  # [1,1] uint32 sampled on device (pre-drawn noise)
+            tok = sampler.pick_dev(logits, noise_buf, stop_bias_buf)  # [1,1] uint32, sampled on device
             ttnn.copy(tok, tok_buf)  # on-device token feedback -> next step's embedding
             oh_r = ttnn.typecast(ttnn.eq(arange_row, slot_row), ttnn.bfloat16)  # [1,N,1] one-hot at step
             ttnn.multiply(latents_buf, ttnn.add(ttnn.multiply(oh_r, -1.0), 1.0), output_tensor=latents_buf)
@@ -221,6 +240,9 @@ class TtXttsGenerator:
                 ttnn.copy_host_to_device_tensor(
                     ttnn.from_torch(gumbel_all[i : i + 1].contiguous(), dtype=ttnn.float32, layout=T32), noise_buf
                 )
+            if stop_bias_buf is not None and i == floor:
+                # Floor reached: release STOP. One write, between replays (never inside the capture).
+                ttnn.copy_host_to_device_tensor(h32((1, NUM_AUDIO_TOKENS), 0.0), stop_bias_buf)
             ttnn.copy_host_to_device_tensor(h32((1, N, 1), i), slot_row)
             ttnn.copy_host_to_device_tensor(h32((1, N), i), slot_col)
             ttnn.execute_trace(dev, tid, blocking=True)

@@ -166,15 +166,27 @@ def main():
         default="reference.wav",
         help="local WAV path or HF sample name (e.g. en_sample.wav) that sets the voice.",
     )
+    ap.add_argument(
+        "--min-tokens",
+        type=int,
+        default=0,
+        help="STOP-suppression floor in audio codes. 0 (default) = disabled, matches HF. "
+        "-1 = auto (~2x the wrapped text length). Raise it if a LONG prompt is only partly "
+        "spoken; leave it at 0 for short prompts, where a floor makes the model ramble.",
+    )
     args = ap.parse_args()
 
-    # ONLY --text and --ref-audio are exposed; everything else is fixed to the tuned XTTS-v2
-    # defaults so the demo runs full-model-traced with no other knobs.
+    # Only --text / --ref-audio / --min-tokens are exposed; everything else is fixed to the tuned
+    # XTTS-v2 defaults so the demo runs full-model-traced with no other knobs.
     args.lang = "en"
     args.ref_seconds = 30  # conditioning window (coqui gpt_cond_len)
     args.spk_seconds = 8  # speaker-embedding window (device mel frontend caps long audio)
     args.max_tokens = 400  # cap on audio codes (sampling usually stops earlier)
-    args.min_tokens = 0  # STOP-suppression floor (0 = disabled, matches HF)
+    # args.min_tokens comes from --min-tokens. It stays 0 by default because a floor is only right
+    # for *long* prompts. Greedy, on this reference text (96 wrapped tokens, needs ~196 codes):
+    # 0 stops at 152 codes and transcribes at CER 0.151, cut after "remarkable accuracy"; -1
+    # (floor 192) reaches 181 codes at CER 0.000. On a short prompt it inverts -- "Hello from
+    # Tenstorrent." goes CER 0.273 -> 0.591, the floor forcing 12 extra codes of invented tail.
     args.num_outputs = 1  # single take (coqui num_gpt_outputs=1)
     args.temperature = 0.65  # sampling temperature (0 = greedy); 0.65 = cleanest single take
     args.top_k = 50
