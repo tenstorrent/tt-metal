@@ -331,8 +331,12 @@ Arm-driven HW-TX (`doca_eth_txq`, ~198 G) remains an option but is Arm-in-the-lo
      **CRITICAL REORDER:** the true go/no-go is **E3, a bandwidth-wall kill-switch needing NO code change** —
      re-run the DPA-heap 2-SGE gather blast at **8 KB** (N4/N6): if it stays ~146 G (byte-bandwidth-bound), 200 G
      is unreachable on the DPA path → **pivot to Arm-HW-TX** (`doca_ttblast` 198 G, proven, latency cost); if it
-     scales past ~180 G, the DPA rewrite is justified. **Run E3 before any Stage-1 recv-post work.** The
-     ~0.95 Mpps/EU target is unmeasured (real 0.30) — the whole N-EU 200 G math rests on it.
+     scales past ~180 G, the DPA rewrite is justified. The ~0.95 Mpps/EU target is unmeasured (real 0.30).
+     **★ E3 RUN — GREEN, GO (silicon 2026-07-29):** 4 KB N6 = 144 G (reproduces the plateau); **8 KB N4 = 197.9 G,
+     8 KB N2 = 186.7 G, 8 KB N6 = 197.8 G, 0 dropped.** The 144 G plateau is the ~4.4 Mpps **pps wall, NOT a
+     byte-bandwidth wall** — 8 KB reaches **200 G line rate with just 4 EUs.** DPA rewrite JUSTIFIED; no Arm-HW-TX
+     pivot. Caveat: this is the pure-egress prefill-blast ceiling — the loaded gateway (recv-drain + re-head on the
+     same EUs) is measured in Stage 2/3. Next: Stage 1 depth-parametric recv-post (`gw/D2B_RESEARCH_PLAN.md`).
 
 ### Ordering
 Stage-1 byte-exact **DONE** (§10 (e): validated on silicon). d.1 depth-bump bisect **DONE** (root cause

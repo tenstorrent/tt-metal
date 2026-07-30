@@ -53,7 +53,29 @@ recv-post path. Remaining live fixes: **(a) separate recv-only completion sized 
   and do completions land per-QP-CQ (spread preserved) or one SRQ-CQ (spread collapses)? Decides Stage-1 pivot +
   Stage-3 architecture in one run.
 
-## Staged rewrite (ONLY if E3 passes)
+## ★ E3 RESULT — GREEN, GO (silicon, 2026-07-29)
+
+DPA-heap 2-SGE gather blast (ZC=1, NOCRC, prefill, dmac→p0→BH), 3M frames:
+
+| frame | EUs | Mpps | Gbps |
+|---|---|---|---|
+| 4 KB (4080) | 6 | 4.36 | 144.0 (reproduces the A5 ~146 G plateau) |
+| 8 KB (8192) | 2 | 2.83 | **186.7** |
+| 8 KB (8192) | 4 | 3.00 | **197.9** |
+| 8 KB (8192) | 6 | 3.00 | 197.8 |
+
+**Conclusion: the 144 G@4 KB plateau is the ~4.4 Mpps PPS wall, NOT a byte-bandwidth wall.** At 8 KB the same
+DPA gather reaches **~198 G (200 G line rate) with just 4 EUs** (2 EUs already 187 G) — 0 dropped, 8238 B jumbo
+egresses fine on p0 (the "BH 4 KB payload cap" worry does not apply to the p0 uplink). **The DPA egress path CAN
+drive line rate ⇒ the d.2b DPA rewrite is JUSTIFIED; do NOT pivot to Arm-HW-TX.** E7 (RC-cap read) + E2/E4/E5/E6
+still pending but the go/no-go is decided.
+
+**Caveat (honest):** this is the pure **egress** ceiling from a prefill blast (no concurrent RC-recv drain, no
+per-frame re-head from a real RoCE arrival, no depth-4 recv-post on the same EUs). The FULL gateway
+(recv-drain + seq-patch + gather-egress on the same EUs) will run below this; Stage 2/3 must measure the loaded
+per-EU rate. But the fundamental question — "can the DPA reach 200 G at 8 KB at all" — is now **YES**.
+
+## Staged rewrite (E3 PASSED — proceed)
 
 - **Stage 1 — depth-parametric recv-post.** Separate recv-only completion sized `==rq_wr` (`:539/:545/:1447`);
   RC `sq_wr=0` (E4-gated); batch pre-post `rq_wr` recvs + single `commit_recv` in
