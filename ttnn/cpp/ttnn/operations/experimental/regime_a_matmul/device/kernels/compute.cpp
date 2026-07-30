@@ -571,11 +571,6 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     // split-K plan B: 1 if this is the bottom K-band (no incoming running sum), else 0. Always present.
     [[maybe_unused]] const uint32_t is_reduce_bottom = get_arg_val<uint32_t>(argidx++);
-#if defined(REDUCE_MEET)
-    // Number of incoming partials for this core: 0 at a chain end, 1 normally, 2 at the meet root. The root
-    // adds them one at a time in channel order, which matches the order the writer pushes them.
-    const uint32_t red_nrecv = get_arg_val<uint32_t>(argidx++);
-#endif
 #ifdef RSCATTER
     // Ring reduce-scatter: this core's cycle position, the cycle size P=Pk, and chunk_tiles (tiles per chunk =
     // M_block*N_block / Pk). Follow is_reduce_bottom; unfused only, so they cannot collide with is_reduce_top.
@@ -676,7 +671,6 @@ void kernel_main() {
                 }
                 cb_wait_front(in1_cb, in1_block_num_tiles);
 
-#if !defined(SKIP_COMPUTE)
                 matmul_blocks(
                     in0_cb,
                     in1_cb,
@@ -688,12 +682,6 @@ void kernel_main() {
                     current_subblock_h,
                     current_subblock_w,
                     k_block * in0_block_num_tiles);  // block-major offset into the resident k-slice
-#else
-                // Diagnostic: skip the matmul MATH. in0/in1 CBs are still waited + popped (below) so the
-                // dataflow protocol is unchanged; the accumulation buffer keeps its stale/uninitialised
-                // contents and the minimal output pack (copy_block below) still produces the out_cb shape.
-                (void)k_block;
-#endif
 
                 cb_pop_front(in1_cb, in1_block_num_tiles);
                 if (k_block == 0) {
@@ -775,26 +763,6 @@ void kernel_main() {
 #ifndef REGIME_A_FUSED
             // NO-FUSION path (byte-identical to the historical Regime-A output stage): top and non-top reduce
             // bands are identical; the writer decides forward-up vs DRAM-write.
-#if defined(SKIP_REDUCTION)
-            // Diagnostic: no cross-band accumulation. Every band packs its LOCAL partial to out_cb (no
-            // cb_reduce wait/pop); the writer (also SKIP_REDUCTION) writes each local partial directly.
-            copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
-#elif defined(REDUCE_MEET)
-            if (red_nrecv == 0u) {
-                copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
-            } else {
-                // Fold all but the last incoming partial into the accumulator in place, then fold the last one
-                // straight into out_cb. Same total arithmetic as the linear chain, just a different order, so
-                // the result is PCC-equal but not bit-identical (float addition is not associative).
-                cb_wait_front(cb_reduce, red_nrecv * out_block_num_tiles);
-                for (uint32_t c = 0; c + 1u < red_nrecv; ++c) {
-                    reduce_add_in_place(intermediate_cb, cb_reduce, M_block_tiles, N_block_tiles);
-                    cb_pop_front(cb_reduce, out_block_num_tiles);
-                }
-                reduce_add_block(intermediate_cb, cb_reduce, out_cb, M_block_tiles, N_block_tiles);
-                cb_pop_front(cb_reduce, out_block_num_tiles);
-            }
-#else
             if (is_reduce_bottom) {
                 copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
             } else {
@@ -802,7 +770,6 @@ void kernel_main() {
                 reduce_add_block(intermediate_cb, cb_reduce, out_cb, M_block_tiles, N_block_tiles);
                 cb_pop_front(cb_reduce, out_block_num_tiles);
             }
-#endif
             cb_pop_front(intermediate_cb, out_block_num_tiles);
 #else
             // FUSION-AWARE split-K: bias/activation/addcmul are applied EXACTLY ONCE at the reduction ROOT

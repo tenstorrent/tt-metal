@@ -252,11 +252,7 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
 }
 
 plan::PlanResult make_and_build_plan(
-    IDevice* device,
-    const Tensor& in0,
-    const Tensor& in1,
-    const std::optional<RegimeAMatmulConfig>& cfg_opt,
-    uint32_t cb1_depth) {
+    IDevice* device, const Tensor& in0, const Tensor& in1, const std::optional<RegimeAMatmulConfig>& cfg_opt) {
     // Tile counts from logical shapes (tile = 32).
     const auto& a_shape = in0.logical_shape();
     const auto& w_shape = in1.logical_shape();
@@ -284,14 +280,8 @@ plan::PlanResult make_and_build_plan(
     // response from a DRAM column travels -x and therefore wraps most of the way round the torus to reach a
     // worker on the column's right. So opt1 is not actually a good NOC_1 target, and measurement agrees -
     // using the true per-NoC assignment cost 0.6-3.7% on the shapes that still use these targets
-    // (the mesh-placed shapes ignore them entirely). diag bit17 restores the per-NoC targets for A/B.
-    const bool use_per_noc_targets = [] {
-        const char* e = std::getenv("TT_REGIME_A_DIAG_MASK");
-        return e != nullptr && (std::strtol(e, nullptr, 10) & 0x20000L) != 0L;
-    }();
-    const auto opt1 = use_per_noc_targets
-                          ? to_plan_xy(device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1))
-                          : opt0;
+    // (the mesh-placed shapes ignore them entirely).
+    const auto opt1 = opt0;  // per the NOTE above, opt0 is the better target for BOTH NoCs
 
     plan::PlanInputs in;
     in.Mt = Mt;
@@ -312,21 +302,6 @@ plan::PlanResult make_and_build_plan(
     in.l1_budget_bytes = kL1BudgetBytes;
     in.tb = kTileBytesBf16;  // bf16 tile bytes
     in.tf = kTileBytesFp32;  // fp32 tile bytes
-    // NOTE: cb1_depth deliberately does NOT feed auto_select_config, so the picked config is identical at
-    // every depth and a depth sweep is a clean A/B of buffering alone.
-    if (cb1_depth) {
-        in.cb1_depth = cb1_depth;
-    }
-    // diag bits 18-19 select the reduction-CB depth: 0 -> 2 (production), 1 -> 4, 2 -> 8.
-    if (const char* e = std::getenv("TT_REGIME_A_DIAG_MASK")) {
-        const long sel = (std::strtol(e, nullptr, 10) >> 18) & 0x3L;
-        if (sel == 1L) {
-            in.cb7_depth = 4u;
-        } else if (sel == 2L) {
-            in.cb7_depth = 8u;
-        }
-    }
-
     return plan::build_plan(in);
 }
 
