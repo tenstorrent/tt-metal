@@ -223,7 +223,7 @@ def test_pipeline_two_stages_i2v_smoke(
         import numpy as np
         from PIL import Image
 
-        frames = iio.imread(output_filename, index=None)  # (T, H, W, 3)
+        frames = iio.imread(output_filename, index=None, plugin="pyav")  # (T, H, W, 3), in-process
         first = frames[0].astype(np.float32) / 255.0
         cond = Image.open(image_path).convert("RGB").resize((width, height))
         cond_np = np.asarray(cond, dtype=np.float32) / 255.0

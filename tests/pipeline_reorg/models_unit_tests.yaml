@@ -1093,7 +1093,7 @@
 - name: TT-DiT LTX-2.3 Pro T2V unit tests
   cmd: |
     unset HF_HUB_OFFLINE
-    export NO_PROMPT=1 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export NO_PROMPT=1 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     # Checkpoints auto-resolve from ~/.cache/ltx-checkpoints/ (staged on the runner) and Gemma from HF;
     # see models/tt_dit/models/LTX2.md. Pro T2V = one-stage full-guidance on the 22B dev checkpoint,
     # single BH galaxy (4x8 ring).
@@ -1110,7 +1110,7 @@
 - name: TT-DiT LTX-2.3 Fast T2V unit tests
   cmd: |
     unset HF_HUB_OFFLINE
-    export NO_PROMPT=1 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export NO_PROMPT=1 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     # Fast T2V = distilled 2-stage (half-res -> upsample -> full-res) on the distilled-1.1 checkpoint,
     # single BH galaxy (4x8 ring).
     pytest --timeout 7000 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"
@@ -1126,7 +1126,7 @@
 - name: TT-DiT LTX-2.3 Pro I2V unit tests
   cmd: |
     unset HF_HUB_OFFLINE
-    export NO_PROMPT=1 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export NO_PROMPT=1 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     # Pro I2V = two-stage smoke conditioned on a committed in-repo sample image (LTX_I2V_IMAGE),
     # single BH galaxy (4x8 ring). Skips if the image or checkpoints are absent.
     export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
@@ -1143,7 +1143,7 @@
 - name: TT-DiT LTX-2.3 Fast I2V unit tests
   cmd: |
     unset HF_HUB_OFFLINE
-    export NO_PROMPT=1 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export NO_PROMPT=1 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     # Fast I2V = distilled chained t2v->i2v (self-contained: conditions on its own generated frame,
     # no external image needed), single BH galaxy (4x8 ring).
     pytest --timeout 7000 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled_i2v -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
