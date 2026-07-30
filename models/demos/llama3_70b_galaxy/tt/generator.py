@@ -189,10 +189,6 @@ def _pad_or_create_page_table(table, target_blocks: int):
 
 
 class Generator(WarmupForwardMixin):
-    # Versioned vLLM decode update contract. See
-    # plugins/vllm-tt-plugin/model_input.py in tenstorrent/vllm.
-    decode_input_update_contract = 1
-
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.

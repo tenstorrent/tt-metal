@@ -103,8 +103,7 @@ The legacy `reset_batch=` keyword remains as a compatibility alias.
 
 ## vLLM Decode Update Contract
 
-Generators that set `decode_input_update_contract = 1` accept four boolean
-commands from the vLLM TT plugin:
+The paired vLLM TT plugin sends four boolean commands on every decode:
 
 - `reload_inputs`: copy every forward trace input.
 - `reload_page_table`: copy only page-table inputs while preserving
@@ -112,10 +111,17 @@ commands from the vLLM TT plugin:
 - `reload_sampling_params`: upload sampling configuration.
 - `reset_sampling_state`: rebuild mutable penalty/RNG state for the layout.
 
-When all four are present, generators execute them without adding page-table
-comparisons, sampling-mode checks, or model-specific forced reloads. When all
-are absent, the previous generator heuristics remain available to older vLLM
-versions and demos. Supplying only a subset is an error.
+Generators execute these commands without adding page-table comparisons,
+sampling-mode checks, or model-specific forced reloads. The corresponding
+vLLM and tt-metal revisions are deployed as a pinned pair; there is no
+per-model contract version or old-vLLM compatibility path. Direct non-vLLM
+callers may omit all four commands and retain their existing local behavior.
+Supplying only a subset is an error.
+
+`model_capabilities["supports_async_decode"]` is separate from contract
+versioning. It certifies that a vLLM wrapper supports split async readback and
+device-resident sampled-token feedback; wrappers without it receive explicit
+full-input reload commands instead.
 
 ## Pitfalls
 

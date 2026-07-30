@@ -71,6 +71,27 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
     def prefill_forward(self, tokens: torch.Tensor, page_table, kv_cache, prompt_lens):
         return super().prefill_forward(tokens, 0, page_table, kv_cache, prompt_lens)
 
+    def decode_forward(
+        self,
+        *args,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        **kwargs,
+    ):
+        if (
+            not reload_inputs
+            or reload_page_table
+            or reload_sampling_params
+            or reset_sampling_state
+        ):
+            raise ValueError(
+                "T3000 Llama requires a full host-input reload and has no "
+                "device sampling state"
+            )
+        return super().decode_forward(*args, **kwargs)
+
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
         kv_tt = []

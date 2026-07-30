@@ -103,7 +103,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
-        **kwargs,
+        reload_inputs: bool | None = None,
+        reload_page_table: bool | None = None,
+        reload_sampling_params: bool | None = None,
+        reset_sampling_state: bool | None = None,
     ):
         return self._ttt_generator.decode_forward(
             tokens=tokens,
@@ -113,7 +116,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
-            **kwargs,
+            reload_inputs=reload_inputs,
+            reload_page_table=reload_page_table,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
         )
 
     def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None):

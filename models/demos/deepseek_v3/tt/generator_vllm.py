@@ -229,7 +229,18 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         read_from_device = kwargs.get("read_from_device", True)
         sampling_params = kwargs.get("sampling_params", None)
         sample_on_device = bool(sampling_params is not None)
-        reset_batch = kwargs.get("reset_batch", False)
+        reload_inputs = kwargs.pop("reload_inputs")
+        reload_page_table = kwargs.pop("reload_page_table")
+        reload_sampling_params = kwargs.pop("reload_sampling_params")
+        reset_sampling_state = kwargs.pop("reset_sampling_state")
+        if not reload_inputs or reload_page_table:
+            raise ValueError(
+                "DeepSeek vLLM decode requires a full host-input reload"
+            )
+        if reload_sampling_params != reset_sampling_state:
+            raise ValueError(
+                "DeepSeek sampling parameters and state must reload together"
+            )
         # NOTE: vLLM also passes `slot_remap` (the seed-slot reindex map from batch
         # condense) in kwargs, but deepseek does not consume it — so per-request
         # seeded determinism is not preserved across condense. Tracked by
@@ -240,7 +251,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
-        if sample_on_device and reset_batch:
+        if sample_on_device and reload_sampling_params:
             self._validate_and_initialize_sampling(
                 sampling_params,
                 sample_on_device,
