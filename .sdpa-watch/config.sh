@@ -47,6 +47,16 @@ export DISABLE_AUTOUPDATER=1
 # Self-heal PATH here (config.sh is sourced before the preflight): if `claude`
 # isn't already resolvable, splice in the newest nvm node bin dir that has it
 # (matches nvm's LTS default and survives node-version bumps).
+#
+# Same class of breakage for `gh`/`jq`: they used to be system packages in
+# /usr/bin (which cron does see), but when they are only user-installed in
+# ~/.local/bin, cron's bare PATH misses them and every tick silently degrades
+# — `gh` failures are swallowed into "null" runs, so the digest goes blank
+# rather than erroring. Prepend ~/.local/bin unconditionally so a user-local
+# install of either tool is always visible.
+if [[ -d "$HOME/.local/bin" && ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+  PATH="$HOME/.local/bin:$PATH"; export PATH
+fi
 if ! command -v claude >/dev/null 2>&1; then
   _newest_claude=""
   for _c in "$HOME"/.nvm/versions/node/*/bin/claude; do
@@ -73,6 +83,7 @@ fi
 
 PIPELINES=(
   "sanity-tests.yaml|Sanity|tests/ttnn/unit_tests/operations/sdpa (the 'ttnn sdpa group' whole-dir sweep; includes the sparse SDPA op tests test_sparse_sdpa.py and test_sparse_sdpa_msa.py — both in-scope)|ttnn sdpa group"
+  "sanity-tests-debug.yaml|Sanity Debug|In-scope = the SDPA groups in this nightly DEBUG run: 'ttnn sdpa group' on Wormhole (wh_n300_civ2) and Blackhole (bh_p150b_civ2) — tests/ttnn/unit_tests/operations/sdpa, including test_sparse_sdpa.py and test_sparse_sdpa_msa.py — plus 'sdpa nightly tests (QB2 only)' on bh_quietbox_2. IMPORTANT: this workflow has three nightly variants (plain 00:00 UTC, watcher-enabled 01:00, LLK-asserts-enabled 02:00) and each job name carries the mode plus the Ubuntu version, e.g. '(Ubuntu 24.04 with LLK asserts)'. ALWAYS state which debug mode the analyzed run used, and say so if only one of Ubuntu 22.04 / 24.04 failed: an SDPA failure that reproduces ONLY under LLK asserts or ONLY under watcher is a race / ordering / uninitialized-state signal rather than a plain functional regression, and is worth calling out as such. Out of scope: 'ttnn reduce group', blackhole deepseek per-core allocation tests, ttsim / runtime-sim sanity, and all build-artifact jobs.|sdpa"
   "tt-metal-l2-nightly.yaml|L2 Nightly|In-scope = SDPA nightly tests (tests/ttnn/nightly/unit_tests/operations/sdpa, run by the 'ttnn nightly sdpa' jobs) PLUS two experimental ops run inside the 'ttnn nightly experimental' job: tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py and test_topk_large_indices.py (both experimental). Every OTHER experimental test sharing that job (deepseek_prefill, minimal_matmul, mla_wo, moe, etc.) is OUT of scope — ignore it even though its log lives in the same job. The nightly sdpa dir-sweep also runs the sparse SDPA op tests (test_sparse_sdpa.py and test_sparse_sdpa_msa.py, plus _perf and _block_cyclic_multidevice) — all in-scope.|sdpa|experimental"
   "blackhole-sanity-tests.yaml|Blackhole Sanity|In-scope = SDPA on Blackhole, two surfaces. (a) the ttnn sdpa unit group at tests/ttnn/unit_tests/operations/sdpa (job 'ttnn sdpa group [bh_...]'). (b) the multi-card nightly suite running tests/nightly/blackhole/sdpa (ring_joint, ring_joint_sdpa, exp_ring_joint_sdpa, sparse_sdpa_multidevice, scaled_dot_product_attention_sprint), the 'ring sdpa PERF' checks, and 'indexer_score multi-device'. Out of scope: deepseek blitz, per-core allocation, ops-unit-tests, and all non-sdpa ttnn groups.|sdpa|indexer_score"
   "perf-device-models.yaml|Perf Device Models|In-scope = the INDEXER_SCORE_PERF_CHECKS=1 gated check on Blackhole: tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::test_indexer_score_math_util (renamed from test_indexer_score_perf_check). NOTE: the former SDPA_PERF_CHECKS gate and test_sdpa_perf_check were removed from this workflow. Other ops-perf-tests (conv, etc.) are OUT of scope.|P150 BH device perf"
