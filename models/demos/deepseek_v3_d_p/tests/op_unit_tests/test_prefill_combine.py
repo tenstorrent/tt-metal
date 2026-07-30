@@ -844,22 +844,26 @@ def _cmbf2d_check_accuracy(mesh_device, host_input, dev_output, movements, token
 
 
 def _cmbf2d_producer_token_budget(mesh_device, axis, num_links, tokens):
-    """`(allowed_per_producer, mesh_total)` token counts, derived from the op's split.
+    """`(allowed_per_producer, mesh_total)` PACKET counts, derived from the op's forwarding scheme.
 
-    Producers are deliberately NOT all equal. The fabric routes the diametrically-opposite chip (ring
-    offset R/2, equally far either way) one specific direction of its own choosing, and a producer can only
-    inject on its own cable — so per plane one producer serves H destinations and the other H-1, where
-    H = R/2. See assign_movements_to_producers.
+    From P9.2 a producer's packets are its own tokens PLUS everything it forwards on other chips' behalf,
+    because the op does the forwarding itself instead of the fabric. So `tokens_sent` finally equals the
+    traffic crossing its cable — the number comparable to the 25 GB/s line rate — and the derived estimate
+    P8.3 needed is retired.
 
-    The test therefore pins the numbers it CAN derive: every producer's count must be one of the two legal
-    values, and the sum over all producers must equal the mesh's total traffic. Both come from the test's
-    own plan, never from telemetry. Once a producer's reported count has been checked against this, using it
-    as that producer's bandwidth denominator is a validated value rather than a trusted one.
+    A producer serving `m` destinations (ring distances 1..m in its direction) puts on its link
+        m(m+1)/2 * tokens   payload tokens  (summing, over upstream sources, what crosses this cable)
+      + m(m-1)/2            sentinels, one per forwarding chunk it writes
+    Producers are unequal because the fabric routes the diametrically-opposite chip one single way (see
+    assign_movements_to_producers): per plane one has m = H and the other m = H - 1, where H = R/2.
     """
     extent = tuple(mesh_device.shape)[axis]
     half = extent // 2
-    allowed = {(half - 1) * tokens, half * tokens}
-    mesh_total = mesh_device.get_num_devices() * (extent - 1) * num_links * tokens
+    allowed, mesh_total = set(), 0
+    for m in (half, half - 1):
+        per_producer = m * (m + 1) // 2 * tokens + m * (m - 1) // 2
+        allowed.add(per_producer)
+        mesh_total += mesh_device.get_num_devices() * num_links * per_producer
     return allowed, mesh_total
 
 
