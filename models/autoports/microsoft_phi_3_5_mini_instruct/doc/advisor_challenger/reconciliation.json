@@ -1,0 +1,200 @@
+{
+  "layer_kind": "dense",
+  "layers_of_kind": 32,
+  "total_layers": 32,
+  "measured_window_us": 12543.861,
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, NOT per-op",
+  "dram_sharded_considered": 5,
+  "dram_sharded_advised": null,
+  "note": "Measure each material CHAIN as one unit and record its measured_ms; the gate refuses any chain left pending, and refuses a set of same-chain rows dropped while their sum clears the threshold. Advisor GEOMETRY is not evidence -- derive your own, or sweep its value in both directions.",
+  "chains": [
+    {
+      "chain": "norm_residual",
+      "ops": [
+        "rms_norm",
+        "add"
+      ],
+      "summed_window_share_pct": 2.296,
+            "verdict": "rejected",
+            "measured_ms": 0.667588,
+            "reason": "best legal block-sharded norm chain (8 cores) was 0.667588 ms versus frozen incumbent 0.656791 ms; 11 cores was 0.667707 ms; 12 cores is illegal because its reshard places a kernel on a dispatch core",
+      "op_count": 2
+    },
+    {
+      "chain": "single:concat",
+      "ops": [
+        "concat"
+      ],
+      "summed_window_share_pct": 0.0,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "reason": "0.0% of the window summed across 1 op(s), under the 1.0% threshold",
+      "op_count": 1
+    },
+    {
+      "chain": "mlp",
+      "ops": [
+        "multiply"
+      ],
+      "summed_window_share_pct": 0.0,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "reason": "0.0% of the window summed across 1 op(s), under the 1.0% threshold",
+      "op_count": 1
+    },
+    {
+      "chain": "single:neg",
+      "ops": [
+        "neg"
+      ],
+      "summed_window_share_pct": 0.0,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "reason": "0.0% of the window summed across 1 op(s), under the 1.0% threshold",
+      "op_count": 1
+    },
+    {
+      "chain": "single:to_memory_config",
+      "ops": [
+        "to_memory_config"
+      ],
+      "summed_window_share_pct": 0.0,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "reason": "0.0% of the window summed across 1 op(s), under the 1.0% threshold",
+      "op_count": 1
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "rms_norm",
+      "layer_kind": "dense",
+      "advised": {
+        "grid": "1x11",
+        "cores": 11,
+        "memory": "l1",
+        "layout": "block_sharded"
+      },
+      "shipped": {
+        "cores": 10,
+        "dram_sharded": false,
+        "device_us": 288.01,
+        "instances": 46
+      },
+      "device_us": 288.01,
+      "per_model_us": 9216.32,
+      "layers_of_kind": 32,
+      "window_share_pct": 2.296,
+            "verdict": "rejected",
+            "reason": "measured as the complete norm_residual chain; best legal result 0.667588 ms versus incumbent 0.656791 ms",
+            "measured_ms": 0.667588,
+            "chain": "norm_residual"
+    },
+    {
+      "op": "add",
+      "layer_kind": "dense",
+      "advised": {
+        "grid": "32x1",
+        "cores": 32,
+        "memory": "l1",
+        "layout": "height_sharded"
+      },
+      "shipped": null,
+      "device_us": null,
+            "window_share_pct": 0.0,
+            "verdict": "rejected",
+            "reason": "measured as the complete norm_residual chain; best legal result 0.667588 ms versus incumbent 0.656791 ms",
+            "measured_ms": 0.667588,
+            "chain": "norm_residual"
+    },
+    {
+      "op": "concat",
+      "layer_kind": "dense",
+      "advised": {
+        "grid": "32x1",
+        "cores": 32,
+        "memory": "l1",
+        "layout": "height_sharded"
+      },
+      "shipped": null,
+      "device_us": null,
+            "window_share_pct": 0.0,
+      "verdict": "below_threshold",
+      "reason": "chain single:concat is below threshold (0.0% of the window summed across 1 op(s), under the 1.0% threshold)",
+      "chain": "single:concat"
+    },
+    {
+      "op": "multiply",
+      "layer_kind": "dense",
+      "advised": {
+        "grid": "32x1",
+        "cores": 32,
+        "memory": "l1",
+        "layout": "height_sharded"
+      },
+      "shipped": null,
+      "device_us": null,
+            "window_share_pct": 0.0,
+      "verdict": "below_threshold",
+      "reason": "chain mlp is below threshold (0.0% of the window summed across 1 op(s), under the 1.0% threshold)",
+      "chain": "mlp"
+    },
+    {
+      "op": "neg",
+      "layer_kind": "dense",
+      "advised": {
+        "grid": "32x1",
+        "cores": 32,
+        "memory": "l1",
+        "layout": "height_sharded"
+      },
+      "shipped": null,
+      "device_us": null,
+            "window_share_pct": 0.0,
+      "verdict": "below_threshold",
+      "reason": "chain single:neg is below threshold (0.0% of the window summed across 1 op(s), under the 1.0% threshold)",
+      "chain": "single:neg"
+    },
+    {
+      "op": "to_memory_config",
+      "layer_kind": "dense",
+      "advised": {
+        "grid": "1x11",
+        "cores": 11,
+        "memory": "l1",
+        "layout": "block_sharded"
+      },
+      "shipped": null,
+      "device_us": null,
+            "window_share_pct": 0.0,
+      "verdict": "below_threshold",
+      "reason": "chain single:to_memory_config is below threshold (0.0% of the window summed across 1 op(s), under the 1.0% threshold)",
+      "chain": "single:to_memory_config"
+    }
+    ],
+    "screening_measurements": [
+        {
+            "set": ["norm_residual_block_8"],
+            "repeats_ms": [0.668536, 0.668677, 0.667588],
+            "measured_ms": 0.667588,
+            "oracle_run": false,
+            "oracle_passed": null,
+            "oracle": "not run: candidate was rejected by performance screening before the keep-oracle gate"
+        },
+        {
+            "set": ["norm_residual_block_11"],
+            "repeats_ms": [0.668339, 0.669732, 0.667707],
+            "measured_ms": 0.667707,
+            "oracle_run": false,
+            "oracle_passed": null,
+            "oracle": "not run: candidate was rejected by performance screening before the keep-oracle gate"
+        },
+        {
+            "set": ["norm_residual_block_12"],
+            "measured_ms": null,
+            "oracle_passed": false,
+            "reason": "not measurable: illegal reshard kernel placement on a dispatch core"
+        }
+    ]
+}

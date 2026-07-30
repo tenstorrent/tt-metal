@@ -1,0 +1,39 @@
+{
+  "changed": false,
+  "shipped_change": false,
+  "outcome": "no-change",
+  "final_ms": 0.656791,
+  "incumbent_ms": 0.656791,
+  "noise_floor_ms": 0.000966,
+  "delta_ms": 0.0,
+  "delta_pct": 0.0,
+  "best_single_ms": 0.667588,
+  "winning_config": "frozen incumbent: 16-core width-sharded norm/residual chain and DRAM-sharded BFP4 projection matmuls",
+  "oracle": "models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_real_weights_and_trace_replay[blackhole-32-mesh_device0], PCC >= 0.995",
+  "oracle_passed": true,
+  "oracle_pcc": 0.9999923310282319,
+  "combination": {
+    "best_set": ["incumbent"],
+    "measured_sets": [
+      {
+        "set": ["incumbent"],
+        "measured_ms": 0.656791,
+        "oracle_passed": true
+      }
+    ],
+    "pairwise_combinations": "not applicable: only one material advised chain survived reconciliation"
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial one-time dense-layer capture after the incumbent was frozen",
+      "capture": "shard_advise/dense/report.json",
+      "reranked_from": "tracy/incumbent_ops.csv",
+      "result": "no screened winner; stop without recapture"
+    }
+  ],
+  "uncapturable_layer_kinds": [],
+  "capture_count_by_layer_kind": {
+    "dense": 1
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "cell_tag": "challenger/phiA",
+  "commit": "4736236dc87f2e713e70222138d106a4c9c7d1ce",
+  "harness": "models/autoports/microsoft_phi_3_5_mini_instruct/tests/optimized_decoder_perf.py::test_profile_traced_decode[blackhole-32-mesh_device0]",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "repeats_ms": [
+    0.657757,
+    0.656791,
+    0.65711
+  ],
+  "incumbent_ms": 0.656791,
+  "noise_floor_ms": 0.000966,
+  "measured_at": "2026-07-30T16:52:00Z",
+  "shipped_policy": {
+    "attention_weight_dtype": "BFLOAT4_B",
+    "gate_up_weight_dtype": "BFLOAT4_B",
+    "down_weight_dtype": "BFLOAT4_B",
+    "kv_cache_dtype": "BFLOAT8_B",
+    "attention_math_fidelity": "LoFi",
+    "gate_up_math_fidelity": "LoFi",
+    "down_math_fidelity": "LoFi",
+    "decode_core_count": 16,
+    "in0_block_w_qkv": 6,
+    "in0_block_w_o": 6,
+    "in0_block_w_gate_up": 6,
+    "in0_block_w_down": 16,
+    "use_explicit_decode_sdpa": true,
+    "split_decode_qkv": false,
+    "split_decode_gate_up": true
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/candidate_results.csv:selected candidate optimized_final_split_gate_up; corroborated by doc/optimized_decoder/tracy/final/ops_perf_results.csv"
+}
