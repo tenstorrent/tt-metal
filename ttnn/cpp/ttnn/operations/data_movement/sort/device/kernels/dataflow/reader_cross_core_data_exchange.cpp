@@ -25,11 +25,12 @@ void kernel_main() {
     constexpr uint32_t W_value_slice_bytes = get_arg(args::W_value_slice_bytes);
     constexpr uint32_t W_index_slice_bytes = get_arg(args::W_index_slice_bytes);
 
-    // TILE-format tile sizes for the value and index tensors. The peer exchange moves TILE-format
-    // tiles in both configurations, but in ROW_MAJOR this kernel binds no dataflow buffer paged at
-    // those sizes, so they arrive as compile-time arguments rather than buffer metadata.
-    constexpr uint32_t value_tile_size_bytes = get_arg(args::value_tile_size_bytes);
-    constexpr uint32_t index_tile_size_bytes = get_arg(args::index_tile_size_bytes);
+    // TILE-format tile sizes for the input and index tensors. They size both the DRAM transfers on
+    // the TILE path and the peer-to-peer tile exchange, which runs in both configurations. In
+    // ROW_MAJOR this kernel binds no dataflow buffer paged at those sizes, so they arrive as
+    // compile-time arguments rather than buffer metadata.
+    constexpr uint32_t input_tensor_tile_size_bytes = get_arg(args::input_tensor_tile_size_bytes);
+    constexpr uint32_t index_tensor_tile_size_bytes = get_arg(args::index_tensor_tile_size_bytes);
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -110,7 +111,7 @@ void kernel_main() {
                 noc.async_read(
                     input_tensor_accessor,
                     input_tensor_dfb,
-                    value_tile_size_bytes,
+                    input_tensor_tile_size_bytes,
                     {.page_id = tile_offset, .offset_bytes = 0},
                     {.offset_bytes = 0});
                 noc.async_read_barrier();
@@ -163,8 +164,8 @@ void kernel_main() {
                         dfb::value_tensor_peer,
                         dfb::index_tensor_peer,
                         number_of_tiles_per_core,
-                        value_tile_size_bytes,
-                        index_tile_size_bytes,
+                        input_tensor_tile_size_bytes,
+                        index_tensor_tile_size_bytes,
                         remote_core_physical.first,
                         remote_core_physical.second);
                 }  // if !(i >= global_tile_start && i < ...
@@ -200,7 +201,7 @@ void kernel_main() {
                 noc.async_write(
                     index_output_dfb,
                     index_tensor_output_accessor,
-                    index_tile_size_bytes,
+                    index_tensor_tile_size_bytes,
                     {.offset_bytes = 0},
                     {.page_id = tile_offset, .offset_bytes = 0});
                 noc.async_write_barrier();

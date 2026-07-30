@@ -418,9 +418,9 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
 
     ComputeGen1Config compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
     if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-        // Legacy marked these buffers UnpackToDestFp32 and left every other one at Default, which
-        // Metal 2.0 expresses by omitting the entry. Only buffers this configuration actually binds
-        // may appear here.
+        // Only buffers this configuration actually binds may appear here, and an absent entry
+        // means UnpackToSrc. Float32 operands are unpacked straight to Dest so the sort keeps full
+        // precision; the index buffers stay on the default path.
         compute_hw_config.unpack_modes.insert({INPUT_TENSOR, UnpackMode::UnpackToDest});
         compute_hw_config.unpack_modes.insert({INPUT_TRANSPOSED, UnpackMode::UnpackToDest});
         if (is_row_major) {
@@ -455,8 +455,8 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     // -----------------------------------------------------------------------
     // Run args
     // -----------------------------------------------------------------------
-    // When work doesn't divide evenly, the first `residuum` cores in row-major order get one extra
-    // loop iteration to absorb the remainder, matching the legacy implementation.
+    // When the tile rows don't divide evenly across the cores, the first `residuum` cores in
+    // row-major order each take one extra loop iteration to absorb the remainder.
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
     KernelRunArgs compute_run_args{.kernel = COMPUTE};
@@ -561,8 +561,9 @@ CoreRangeSet compute_cross_core_range(
     return core_range;
 }
 
-// Mirrors the legacy create() compute of all_core_utilization_count so the lookup-table build and
-// the spec construction agree on the worker grid layout used to populate the lookup table.
+// The worker grid layout is needed twice: once to populate the physical-core lookup table and once
+// to build the spec. Both derive it from here so the table's row order always matches the core order
+// the kernels index it by.
 struct CrossCoreLayout {
     CoreRangeSet core_range;
     uint32_t all_core_utilization_count;
@@ -614,10 +615,9 @@ Tensor build_physical_core_lookup_table_tensor(const SortInputs& tensor_args, st
     auto* const device = tensor_args.input_tensor.device();
     const auto layout = compute_cross_core_layout(tensor_args, output_tensors);
 
-    // Lookup tensor data with physical core coordinates. This is the same data the legacy
-    // override_runtime_arguments() rebuilt on every dispatch; it is built once on cache miss, the
-    // framework keeps the tensor alive for cache hits, and its base address is re-bound to the
-    // reader on every dispatch.
+    // Physical core coordinates, in the order the kernels index them by. The contents depend only
+    // on the worker grid, so this is built once when the program is created; the framework keeps the
+    // tensor alive and re-binds its address to the reader on every dispatch.
     std::vector<uint32_t> physical_core_lookup_table_data;
     for (const auto& core_range : layout.core_range.ranges()) {
         for (const auto& core_coord : core_range) {
@@ -715,8 +715,9 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
     const uint32_t W_value_slice_bytes = number_of_tiles_per_core * tile_width * value_element_bytes;
     const uint32_t W_index_slice_bytes = number_of_tiles_per_core * tile_width * index_element_bytes;
 
-    // Op-owned tensor: built exactly as before, then the owning MeshTensor moves into the artifact so
-    // its device allocation outlives the cache miss at a stable address.
+    // The lookup table is a device tensor this factory allocates for itself, beyond the op's declared
+    // io. Moving the owning MeshTensor into the artifact hands its lifetime to the framework, which
+    // keeps the allocation at a stable address for as long as the program stays cached.
     Tensor lookup_build_tensor = build_physical_core_lookup_table_tensor(tensor_args, output_tensors);
     std::vector<tt::tt_metal::MeshTensor> op_owned;
     op_owned.reserve(1);
@@ -808,8 +809,10 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
             .data_format_metadata = index_tensor_cb_data_format,
         });
     }
-    // Note: legacy sized the value intermediate and value peer buffers in value-tile bytes but paged
-    // them at index_tensor_tile_size. Preserved verbatim, restated as entry size times count.
+    // The two value-carrying exchange buffers hold value tiles but are paged at the index tile size,
+    // so their entry count is the value bytes they must hold divided by that page size. The division
+    // is exact for every dtype the op accepts: value and index tiles are both either 2048 or 4096
+    // bytes, so one size is always a whole multiple of the other.
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = VALUE_INTERMEDIATE,
         .entry_size = index_tensor_tile_size,
@@ -875,8 +878,9 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
     }
 
     // -----------------------------------------------------------------------
-    // Semaphores. Three legacy CreateSemaphore calls; the middle one was unused by the kernels but
-    // still allocated to keep the next id stable, so an inert spec reserves it here too.
+    // Semaphores. SEM_UNUSED is bound by no kernel. It is declared so the program's semaphore
+    // footprint matches what the cross-core exchange has always allocated, and can be dropped once
+    // that is confirmed to be safe.
     // -----------------------------------------------------------------------
     spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_EXCHANGE, .target_nodes = core_range});
     spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_UNUSED, .target_nodes = core_range});
@@ -972,10 +976,11 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
     }
-    // The writer only ever performs one bare push_back on the lookup table, with no matching reserve
-    // and nothing downstream of it. Nothing consumes the buffer at all, so the writer takes the
-    // consumer role to give the buffer the one-producer-one-consumer pair every node needs. On Gen1
-    // the label drives no machinery either kernel invokes, so the transfers are unchanged.
+    // No kernel ever waits on or pops the lookup table: the reader fills it and then reads it back
+    // through a raw pointer, and the writer's only touch is one bare push_back with no matching
+    // reserve. Every buffer still needs one producer and one consumer on each node it lives on, so
+    // the writer takes the consumer role. On Gen1 a dataflow buffer lowers to a plain circular
+    // buffer whose counters any core can drive, so the push_back behaves the same either way.
     writer_dfb_bindings.push_back(DFBBinding{
         .dfb_spec_name = LOOKUP_TABLE,
         .accessor_name = "physical_core_lookup_table",
@@ -1123,8 +1128,8 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
                 {"W_index_slice_bytes", W_index_slice_bytes},
                 // The peer exchange moves TILE-format tiles in both configurations, but in ROW_MAJOR
                 // the reader binds no buffer paged at those sizes, so they travel as scalars.
-                {"value_tile_size_bytes", input_tensor_tile_size},
-                {"index_tile_size_bytes", index_tensor_tile_size},
+                {"input_tensor_tile_size_bytes", input_tensor_tile_size},
+                {"index_tensor_tile_size_bytes", index_tensor_tile_size},
             },
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     });
@@ -1155,9 +1160,9 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
 
     ComputeGen1Config compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
     if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-        // Legacy marked these buffers UnpackToDestFp32 and left every other one at Default, which
-        // Metal 2.0 expresses by omitting the entry. Only buffers this configuration actually binds
-        // may appear here.
+        // Only buffers this configuration actually binds may appear here, and an absent entry
+        // means UnpackToSrc. Float32 operands are unpacked straight to Dest so the sort keeps full
+        // precision; the index buffers stay on the default path.
         compute_hw_config.unpack_modes.insert({INPUT_TENSOR, UnpackMode::UnpackToDest});
         compute_hw_config.unpack_modes.insert({INPUT_TRANSPOSED, UnpackMode::UnpackToDest});
         compute_hw_config.unpack_modes.insert({VALUE_INTERMEDIATE, UnpackMode::UnpackToDest});
