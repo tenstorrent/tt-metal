@@ -803,6 +803,26 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# Model-independent sampling-module coverage (temperature / top-k / top-p / seed /
+# penalties / batch isolation), see #38316. Uses synthetic logits + on-device
+# TTSampling/SamplingGenerator, no model weights. The mesh_device fixture auto-skips
+# the (4,8) multi-device cases when the runner has fewer than 32 devices, so the same
+# command runs the [1] cases on wh_n150 and the full [1]+(4,8) set on wh_galaxy_perf.
+- name: Sampling module unit tests (common)
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    pytest --timeout 600 models/common/tests/tt_sampling_tests.py
+  model: sampling-common
+  skus:
+    wh_n150:
+      timeout: 25  # TODO: tune after first CI run
+      tier: 1
+    wh_galaxy_perf:
+      timeout: 20  # TODO: tune after first CI run
+      tier: 1
+  owner_id: U03PUAKE719 # TODO: replace with Filip Butić's Slack ID
+  team: models
+
 - name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
