@@ -98,6 +98,40 @@ pivot needed for the depth fix. Recv-post is now **depth-parametric (RQ=64 valid
 **Still 0.37 Mpps** — the kernel posts 1 recv/iteration (1-in-flight). Deep RQ is now *available*; converting it
 to throughput is Stage 2 (post N recvs + pipeline). SRQ remains the Stage-3 multi-EU buffer model.
 
+## Stage 2 implementation plan (scoped 2026-07-30 — port the async-ring onto the DBR-fixed base)
+
+The `async_ring_wip` **kernel** (`async_ring_wip_kernels_dev.c` `target_thread_kernel`) IS the pipelined design and
+is sound: landing+header rings (slot = `seq % TT_RING`), post recv → re-head into `hdr[slot]` → 2-SGE gather
+`[hdr[slot]]+[land[slot]]` → post eth SEND (SIGNALED) **without per-frame wait**, non-blocking eth-CQE drain, block
+only when `eth_posted - eth_done >= ETH_MAX_INFLIGHT (128)`. Its sole blocker (Fatal 0x2) is now fixed (the DBR).
+
+**DO NOT resurrect the WIP sample as-is — it has a latent bug + cruft:**
+1. **Header-ring not allocated (bug):** `async_ring_wip_sample.c` allocates the LANDING ring
+   (`calloc(TT_RING, plen)`, ~L1217; `reg_mr` size `TT_RING*plen`) but only a **single** header
+   (`calloc(1, TT_FRAME_HDR)` ~L1230; `doca_dpa_mem_alloc(TT_FRAME_HDR)` ~L1072) — while the kernel indexes
+   `hdr + slot*tt_frame_hdr`. → out-of-bounds header read/patch. **Fix: allocate `TT_RING*TT_FRAME_HDR` DPA-heap
+   header ring and pre-fill EVERY slot with the 46B template** (loop `h2d_memcpy`, or build the full ring on host
+   then one copy); `mmap` `memrange_len = TT_RING*TT_FRAME_HDR`.
+2. **Two-thread cruft:** drop `tt_produced_addr` / `tt_egress_notif_handle` (leftover from the abandoned
+   two-thread coupling).
+
+**Recommended: port onto the current DBR-fixed known-good `dpa_verbs_initiator_target_*` (not the WIP).** Edits:
+- `..._common_defs.h`: add `#define TT_RING` (start 256; must satisfy `TT_RING > ETH_MAX_INFLIGHT + RQ_depth`).
+- `..._sample.c` (`create_tt_rehead_resources`): landing `calloc(TT_RING, plen)` + `reg_mr TT_RING*plen` on SF
+  (advertised — this is why the single-slot MR overran the ring requester) AND PF (gather); header ring
+  `doca_dpa_mem_alloc(TT_RING*TT_FRAME_HDR)` + fill all slots + `mmap` full length; keep the DBR=4096 fix + RQ=64.
+- `..._kernels_dev.c`: replace the synchronous `target_thread_kernel` with the async-ring loop; pre-post RQ-depth
+  recvs in `target_trigger_first_iteration_rpc` (loop, not 1) so the deep RQ is actually filled.
+- Requester: use the **ring** `tt_p15_requester` (TT_RING matching the target; the single-slot variant was only for
+  the synchronous kernel). Requester slot `(i%TT_RING)` must equal kernel slot `(seq%TT_RING)` — aligned since RC
+  recvs complete in order.
+
+**Watch (critic's open Qs):** (a) `get_wqe_counter` is 16-bit → handle wrap in the `eth_posted-eth_done` math at
+line rate; (b) confirm the unattached ETH CQ doesn't need `doca_dpa_dev_completion_request_notification` re-arm
+under batched draining (else a silent hot-loop stall); (c) the RC recv CQ (completion `queue_size`) must be
+`>= RQ depth` for N-in-flight (currently tied to the macro = 64 — OK for RQ=64). Gate: single-EU sweep materially
+above 0.37 Mpps toward ~0.95 Mpps (~7.8 G@1KB, ~31 G@4KB), byte-exact, exactly-once, no RNR.
+
 ## Staged rewrite (Stage 1 DONE — Stage 2 next)
 
 - **Stage 1 — depth-parametric recv-post.** Separate recv-only completion sized `==rq_wr` (`:539/:545/:1447`);
