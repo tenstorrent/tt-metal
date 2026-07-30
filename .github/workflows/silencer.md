@@ -11,8 +11,7 @@ description: |
     - over-verbose log messages that should be demoted to debug/trace severity
   Silencer works from CI logs, greps them on disk to stay token-frugal, root-causes
   each pattern, and opens ready-for-review PRs validated through the existing
-  build-artifact.yaml CI (it cannot build tt-metal locally). Always transparent that
-  it is an automated AI assistant; never merges its own PRs.
+  build-artifact.yaml CI (it cannot build tt-metal locally). Never merges its own PRs.
 
 on:
   # Scan on a daily cadence (warnings live in *successful* runs too, so we do not
@@ -688,7 +687,6 @@ When reasoning about what your PR will be validated against, trust the current
     linked on the next Silencer run (the PR and its build do not exist until gh-aw's
     `safe_outputs` job runs after your agent turn, so no run ID is available yet). On
     later runs, update with the actual build run link and its state.
-  - A 🤖 disclosure that this PR was opened by Silencer, an automated AI assistant.
 - Follow `CONTRIBUTING.md` and match tt-metal's existing C++/Python style. **No new
   dependencies, no broad refactors, no behavior changes** — noise removal must be
   behavior-preserving (a demoted log still logs at lower severity; a removed unused variable
@@ -765,6 +763,5 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
   migrate call sites, leave shim deletion to the reaper's schedule.
 - **When in doubt, do nothing / open an issue.** A wrong or noisy PR wastes maintainer
   attention — the very thing the rule of silence protects.
-- **Always disclose** you are an automated AI assistant (🤖) on every PR, issue, and comment.
 - **Never forward firewall boilerplate** (e.g. any `⚠️ Firewall blocked … awmgmcpg` block —
   gh-aw's benign internal MCP-gateway notice) into anything you post publicly; strip it.
