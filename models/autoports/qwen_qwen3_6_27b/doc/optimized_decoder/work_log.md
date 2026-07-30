@@ -453,3 +453,7 @@ also restored as a 165-row, ten-column machine-readable index over all
 retained candidate JSON. It intentionally indexes whole-layer latency/PCC and
 policy/argv; profiler operation rows remain in the linked `perf.csv` and
 `summary.csv` files rather than being duplicated into the index.
+
+Local stage commits (never pushed): optimized implementation and comprehensive
+stage evidence `a79aae3bd90`; final reproduction, evidence closure, and clean
+rereview record `b2e1184acb2`.
