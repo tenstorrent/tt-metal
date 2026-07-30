@@ -152,23 +152,49 @@ bool EventQuery(const MeshEvent& event) {
     return event_completed;
 }
 
-MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
+MeshTraceId BeginTraceCapture(MeshCommandQueue& mesh_cq) {
     auto trace_id = MeshTrace::next_id();
-    device->begin_mesh_trace(cq_id, trace_id);
+    mesh_cq.device()->begin_mesh_trace(mesh_cq, trace_id);
     return trace_id;
 }
 
-void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids) {
+void Synchronize(
+    MeshDevice* device,
+    ttsl::optional_reference<MeshCommandQueue> mesh_cq,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
+    if (!device->is_initialized()) {
+        return;
+    }
+    if (mesh_cq.has_value()) {
+        mesh_cq.value().finish(sub_device_ids);
+    } else {
+        // No specific queue: finish all command queues on the device.
+        for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+            device->mesh_command_queue(cq_id).finish(sub_device_ids);
+        }
+    }
+}
+
+namespace detail {
+void SynchronizeByOptionalId(
+    MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (!device->is_initialized()) {
         return;
     }
     if (cq_id.has_value()) {
         device->mesh_command_queue(cq_id).finish(sub_device_ids);
     } else {
-        for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-            device->mesh_command_queue(cq_id).finish(sub_device_ids);
+        for (uint8_t id = 0; id < device->num_hw_cqs(); ++id) {
+            device->mesh_command_queue(id).finish(sub_device_ids);
         }
     }
+}
+}  // namespace detail
+
+MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
+    auto trace_id = MeshTrace::next_id();
+    device->begin_mesh_trace(device->mesh_command_queue(cq_id), trace_id);
+    return trace_id;
 }
 
 void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids) {

@@ -1838,6 +1838,18 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
     return pimpl_->get_noc_multicast_encoding(noc_index, cores);
 }
 SystemMemoryManager& MeshDevice::sysmem_manager() { return pimpl_->sysmem_manager(); }
+MeshTraceId MeshDevice::begin_mesh_trace(MeshCommandQueue& cq) {
+    return pimpl_->begin_mesh_trace(static_cast<uint8_t>(cq.id()));
+}
+void MeshDevice::begin_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id) {
+    pimpl_->begin_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id);
+}
+void MeshDevice::end_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id) {
+    pimpl_->end_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id);
+}
+void MeshDevice::replay_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id, bool blocking) {
+    pimpl_->replay_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id, blocking);
+}
 MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) { return pimpl_->begin_mesh_trace(cq_id); }
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     pimpl_->begin_mesh_trace(cq_id, trace_id);
@@ -1895,6 +1907,9 @@ void MeshDevice::load_sub_device_manager(SubDeviceManagerId sub_device_manager_i
     pimpl_->load_sub_device_manager(sub_device_manager_id);
 }
 void MeshDevice::clear_loaded_sub_device_manager() { pimpl_->clear_loaded_sub_device_manager(); }
+CoreCoord MeshDevice::virtual_program_dispatch_core(const MeshCommandQueue& cq) const {
+    return pimpl_->virtual_program_dispatch_core(static_cast<uint8_t>(cq.id()));
+}
 CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
     return pimpl_->virtual_program_dispatch_core(cq_id);
 }
