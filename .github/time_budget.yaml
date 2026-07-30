@@ -136,12 +136,12 @@ ttnn:
     # ~4h28m total; Model-Traced run 29559513509). SKU names are the existing
     # logical SKUs in sku_config.yaml. Shared SKUs cover both targets' entries.
     wh_galaxy: 480            # lead galaxy (obs ~4h28m total / 29 batches)
-    wh_n150_civ2: 480         # lead(120) + model_traced(360)
-    wh_n300_civ2: 360         # model_traced
-    wh_llmbox: 480            # model_traced t3k
-    bh_p100a_civ2_viommu: 240 # model_traced
-    bh_p150b_civ2_viommu: 240 # model_traced
-    bh_p300_viommu: 150       # model_traced
+    wh_n150_civ2: 600         # lead(120) + model_traced(480)
+    wh_n300_civ2: 480         # model_traced
+    wh_llmbox: 540            # model_traced t3k
+    bh_p100a_civ2_viommu: 360 # model_traced
+    bh_p150b_civ2_viommu: 360 # model_traced
+    bh_p300_viommu: 360       # model_traced
   sweep_validation:
     wh_n150: 120
     wh_n300: 120
