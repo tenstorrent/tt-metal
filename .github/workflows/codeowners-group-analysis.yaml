@@ -2941,25 +2941,27 @@ jobs:
             # Clean up temp file
             rm -f /tmp/slack_message.txt
 
-            # Let devs know on the PR itself when the ping hit a GitHub API rate
-            # limit while resolving names (GitHub's reactions API has no "warning"
-            # type, so a comment is the closest visible equivalent).
-            if [ "$PING_RATE_LIMITED" = "true" ] && [ "${{ github.event_name }}" = "issue_comment" ]; then
-              WARNING_JSON_FILE=$(mktemp)
-              jq -n --arg body "⚠️ CodeOwners ping hit a GitHub API rate limit while resolving names above — some may be inaccurate." '{"body": $body}' > "$WARNING_JSON_FILE"
-              curl -s -X POST \
-                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                -H "Accept: application/vnd.github.v3+json" \
-                -H "Content-Type: application/json" \
-                --data-binary @"$WARNING_JSON_FILE" \
-                "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments" > /dev/null
-              rm -f "$WARNING_JSON_FILE"
-            fi
-
           elif [ "$SEND_SLACK" = "true" ] && [ "$NO_OWNERS_AVAILABLE" = "true" ]; then
             echo "Slack notification enabled but no owners available for notification (only PR author is codeowner)"
           elif [ "$SEND_SLACK" = "true" ] && [ -z "$SELECTED_OWNERS" ] && [ -z "$SELECTED_SLACK_GROUPS" ]; then
             echo "Slack notification enabled but no pending owners or groups to notify"
           else
             echo "Slack notification disabled"
+          fi
+
+          # Let devs know directly on the GitHub PR when resolving codeowner names
+          # hit a GitHub API rate limit — this is a GitHub-side signal about GitHub
+          # API failures, unrelated to whether the Slack notification above ran or
+          # succeeded. GitHub's reactions API has no "warning" content type, so a
+          # comment is the closest visible equivalent.
+          if [ "$PING_RATE_LIMITED" = "true" ] && [ "${{ github.event_name }}" = "issue_comment" ]; then
+            WARNING_JSON_FILE=$(mktemp)
+            jq -n --arg body "⚠️ CodeOwners ping hit a GitHub API rate limit while resolving names above — some may be inaccurate." '{"body": $body}' > "$WARNING_JSON_FILE"
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              --data-binary @"$WARNING_JSON_FILE" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments" > /dev/null
+            rm -f "$WARNING_JSON_FILE"
           fi
