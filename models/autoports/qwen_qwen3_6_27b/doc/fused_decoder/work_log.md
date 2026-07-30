@@ -116,3 +116,12 @@ confirmed the rejected candidate CSV contains the adapted 34,816-wide MLP
 matmul plus exact slices, verified the candidate was absent from final source,
 and inspected the determinism restore/replay logic. The verdict is recorded in
 `stage_review.md`.
+
+Local checkpoints (never pushed):
+
+- repo: `/home/mvasiljevic/tt-metal`
+- branch: `skillexp-cell/fuse-noadvise/qwen`
+- fused implementation and primary evidence:
+  `b881fb0d60a8072097dc9b8df4cae34b4e1da077`
+- AutoFix, rejected-candidate evidence, determinism regression, and clean
+  rereview: `bae7875dc22b88ade5cab049170cb63ee9079f06`
