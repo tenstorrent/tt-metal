@@ -24,8 +24,6 @@ RUN (emulator, forced JIT):
     pytest -q models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_conv2_modelcfg.py
 """
 
-import os
-
 import pytest
 import torch
 
@@ -47,14 +45,14 @@ LAYER_CONV2 = [
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("act_block_h_override", [0, 32], ids=["abh0", "abh32"])
 @pytest.mark.parametrize("layer, in_ch, out_ch, spatial, tid", LAYER_CONV2, ids=[c[-1] for c in LAYER_CONV2])
-def test_layer_conv2_modelcfg(mesh_device, layer, in_ch, out_ch, spatial, tid, act_block_h_override):
+def test_layer_conv2_modelcfg(mesh_device, layer, in_ch, out_ch, spatial, tid, act_block_h_override, monkeypatch):
     """layer1/2 conv2 with the MODEL's conv2 config. abh0 should pass (like the standalone test); abh32 mirrors
     the model. If abh32 faults with UNPACK 0x19, act_block_h_override=32 is the trigger."""
     device = mesh_device
     torch.manual_seed(0)
 
     # Force the split for the height-sharded conv2 (same as the model command).
-    os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"
+    monkeypatch.setenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "1")  # monkeypatch auto-restores after the test
 
     batch = 1
     kernel_size = (3, 3)

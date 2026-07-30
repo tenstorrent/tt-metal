@@ -20,8 +20,6 @@ RUN (emulator, forced JIT):
     pytest -q models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer2_downsample.py
 """
 
-import os
-
 import pytest
 import torch
 
@@ -36,7 +34,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     [ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
     ids=["height", "block"],
 )
-def test_quasar_layer2_module1_downsample(mesh_device, shard):
+def test_quasar_layer2_module1_downsample(mesh_device, shard, monkeypatch):
     """layer2_module1 downsample: 1x1, in=256, out=512, stride 2, input 56x56. The output MUST be 512
     channels; if it comes back 256 the conv is dropping the channel expansion. The model uses HEIGHT here
     (input_height 56 != 28); the 'block' case tests whether BLOCK sharding gets the channel count right (if
@@ -44,7 +42,7 @@ def test_quasar_layer2_module1_downsample(mesh_device, shard):
     device = mesh_device
     torch.manual_seed(0)
 
-    os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"
+    monkeypatch.setenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "1")  # monkeypatch auto-restores after the test
 
     batch = 1
     in_ch = 256

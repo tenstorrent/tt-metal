@@ -34,8 +34,6 @@ RUN one layer (emulator, forced JIT):
     pytest -q models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_conv2.py -k layer1
 """
 
-import os
-
 import pytest
 import torch
 
@@ -56,7 +54,7 @@ LAYER_CONV2 = [
 @pytest.mark.parametrize(
     "layer, in_ch, out_ch, spatial, shard_layout, tid", LAYER_CONV2, ids=[c[-1] for c in LAYER_CONV2]
 )
-def test_quasar_layer_conv2(mesh_device, layer, in_ch, out_ch, spatial, shard_layout, tid):
+def test_quasar_layer_conv2(mesh_device, layer, in_ch, out_ch, spatial, shard_layout, tid, monkeypatch):
     """One resnet50 layer's 3x3 conv2. layer1/2 (height-sharded) take the split path and must PCC ~1.0;
     layer3/4 (block-sharded) run the original fused conv_bmm_tilize and are the LLK 0x19 repro."""
     device = mesh_device
@@ -109,10 +107,11 @@ def test_quasar_layer_conv2(mesh_device, layer, in_ch, out_ch, spatial, shard_la
     # (layer3/4): run the ORIGINAL fused block conv (conv_bmm_tilize) -- block-sharding needs cross-column
     # K-reduction, incompatible with the single-K-block split -- so DO NOT set SPLIT_PROGRAM (this is the
     # fused-conv 0x19 repro for the LLK team).
+    # monkeypatch auto-restores both branches after the test (no cross-test env leakage).
     if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"
+        monkeypatch.setenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "1")
     else:
-        os.environ.pop("TT_METAL_QSR_CONV_SPLIT_PROGRAM", None)
+        monkeypatch.delenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM", raising=False)
 
     out, [oh, ow], _wb = ttnn.experimental.quasar.conv2d(
         input_tensor=tt_input,

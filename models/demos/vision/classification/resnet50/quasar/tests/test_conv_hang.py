@@ -37,6 +37,7 @@ from models.common.utility_functions import _nearest_y, nearest_32
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.timeout(300)  # hang repro: cap it so a deadlock doesn't block the whole suite
 def test_conv_hang(mesh_device):
     # Full-grid repro (batch 16). Reproduces the stem-conv deadlock on the default 32-core descriptor.
     # OOMs on a tiny (e.g. 2-core) grid — use test_conv_hang_small_grid there.
@@ -44,6 +45,7 @@ def test_conv_hang(mesh_device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.timeout(300)  # hang repro: cap it so a deadlock doesn't block the whole suite
 def test_conv_hang_small_grid(mesh_device):
     # Small-grid repro (batch 1). Same conv op/config as test_conv_hang — only the batch is reduced so
     # the per-core output/matmul-partials DFB ring fits the uint16_t addressing limit on a 2-core grid.

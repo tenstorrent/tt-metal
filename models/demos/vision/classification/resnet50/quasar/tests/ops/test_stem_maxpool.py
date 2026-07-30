@@ -33,6 +33,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_quasar
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 PCC = 0.99
@@ -82,6 +83,11 @@ _SHAPES = [
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("input_h,input_w,sid", _SHAPES)
 def test_quasar_stem_maxpool(mesh_device, input_h, input_w, sid):
+    if not is_quasar() and (input_h, input_w) == (112, 112):
+        pytest.skip(
+            "Stem maxpool 112x112 output requires a 1,605,632 B L1 buffer, exceeding the "
+            "non Quasar per-bank size of 1,368,896 B (OOM). Real-stem path uses the host-maxpool bypass on WH."
+        )
     device = mesh_device
     torch.manual_seed(0)
 
