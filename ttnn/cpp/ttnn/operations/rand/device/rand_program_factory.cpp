@@ -202,8 +202,10 @@ ProgramDescriptor RandDeviceOperation::RandProgramFactory::create_descriptor(
 
         // seed/from/to are DYNAMIC (omitted from the cache key / attribute_names): baked here for the
         // cache-miss build, and re-applied on every cache hit via override_runtime_arguments().
+        // NOTE: the compute kernel (compute_uniform.cpp, shared with uniform) reads only
+        // {seed, from, to, num_tiles}; tile_offset is a writer-only arg (output offset).
         compute_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{seed, from_bits, to_bits, tile_offset, units_per_core});
+            core, KernelDescriptor::CoreRuntimeArgs{seed, from_bits, to_bits, units_per_core});
 
         // Register the output address as a Buffer* binding so rand takes the fast cache-hit path
         // (real program caching) with the address correctly re-patched each dispatch.
@@ -243,8 +245,7 @@ void RandDeviceOperation::RandProgramFactory::override_runtime_arguments(
         compute_args[0] = seed;
         compute_args[1] = from_bits;
         compute_args[2] = to_bits;
-        compute_args[3] = tile_offset;
-        compute_args[4] = units_per_core;
+        compute_args[3] = units_per_core;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_idx, core);
         writer_args[0] = out_addr;
