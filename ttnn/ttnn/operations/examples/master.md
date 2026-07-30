@@ -346,12 +346,22 @@ on WH) and `tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerfo
 placement levers below, the *number* of active cores must be right for **every shape regime the op
 accepts** — a single distribution scheme can be optimal in one regime and pathological in another.
 The criterion:
-- **interleaved** → `active_cores == min(grid, total_tiles, bandwidth_knee)`. The DRAM/L1 **bandwidth
-  knee is a hard ceiling, not a footnote**: once achieved bandwidth plateaus (see `dram_saturation`,
-  `sweet_spot_cores()`), extra cores add no bandwidth and only add dispatch/NoC overhead. If the knee
-  is **below** `total_tiles`, stop at the knee — do **not** fill to `total_tiles`. Filling the grid
-  because "there is work for it" is exactly the overshoot this guards against: more cores past the knee
-  can be *slower*, not just wasteful.
+- **interleaved** → `active_cores == min(grid, total_tiles, bandwidth_knee)` — **but classify the bound
+  FIRST**, because the knee only exists for a **bandwidth-bound** op:
+  - **Bandwidth-bound** (big pages / coalesced reads that actually saturate DRAM/L1 BW) → the knee is a
+    **hard ceiling**: once achieved bandwidth plateaus (see `dram_saturation`, `sweet_spot_cores()`),
+    extra cores add no bandwidth and only add dispatch/NoC overhead. If the knee is **below**
+    `total_tiles`, stop at the knee — more cores past it can be *slower*, not just wasteful.
+  - **Read/write-transaction-rate bound** (small pages — e.g. a 32-row stick at ≤128 B/page, the
+    typical layout-conversion reader) → there **is no reachable knee**: the op cannot hit DRAM
+    bandwidth at *any* core count because it is issue-rate limited, and the sync/dispatch floor scales
+    with **blocks-per-core**, so shedding cores *adds* cost. Here `bandwidth_knee = full grid` — use
+    **all** the cores. **Do not cap.** (Measured on tilize: applying a 16-core knee cap was **~2.4×
+    slower** — the knee clause was implemented, measured, and refuted precisely because the op is
+    transaction-rate bound at 64 B/page.)
+  - **How to tell:** if per-page transfers are small (≤~128 B) or the profiler shows achieved BW far
+    below the ceiling as you add cores, it is transaction-rate bound → full grid. Only cap when a core
+    sweep shows achieved BW actually plateauing.
 - **sharded input** → `active_cores == the shard's own cores` (lever A2), not a re-spread 2D grid.
 
 A **fixed split axis** — row-only, column-only, **or square-block** — is a latent bug: it fills the
