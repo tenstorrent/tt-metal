@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
+#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/channel_trimming_report.hpp"
 #include "impl/context/metal_context.hpp"
@@ -37,19 +38,33 @@ void FabricBuilderContext::compute_max_channel_counts() {
     possible_mappings.emplace_back(
         topology,
         false,  // no tensix
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         needs_vc_config ? &intermesh_vc_config_ : nullptr,
         false,
         any_mesh_uses_express);
 
-    // If Z routers exist in this fabric, add Z_ROUTER mapping
-    if (intermesh_vc_config_.router_type == IntermeshRouterType::Z_INTERMESH) {
+    // If Z-facing intermesh boundary routers exist in this fabric, enumerate both families they
+    // introduce: the boundary itself (5 VC0 / 4 VC1 by its wiring rules), and the mesh routers on
+    // the same chips, whose VC1 gains the from-Z slot (4 VC0 / 4 VC1 in the non-express case).
+    // The boundary family's 9 dominates the maximum today, but the enumeration is the contract:
+    // every family present in the fabric is represented here.
+    if (intermesh_vc_config_.has_intermesh_z_router) {
         possible_mappings.emplace_back(
             topology,
             false,  // no tensix
-            RouterVariant::Z_ROUTER,
+            RoutingDirection::Z,
+            EdgeCapability::INTERMESH,
             &intermesh_vc_config_,
             true);
+        possible_mappings.emplace_back(
+            topology,
+            false,  // no tensix
+            RoutingDirection::N,
+            EdgeCapability::INTRAMESH_CARDINAL,
+            needs_vc_config ? &intermesh_vc_config_ : nullptr,
+            true,  // has_intermesh_z_edge: mesh routers on boundary chips carry the from-Z slot
+            any_mesh_uses_express);
     }
 
     // Compute max channel counts across all router types in this fabric
@@ -304,8 +319,10 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
             config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
                                              : IntermeshVCConfig::full_mesh();
 
-            // Set router type based on detection
-            config.router_type = has_z_routers ? IntermeshRouterType::Z_INTERMESH : IntermeshRouterType::XY_INTERMESH;
+            // Record whether any intermesh edge sits on a Z direction, so the fabric-wide maximum
+            // channel counts cover the Z-facing intermesh boundary shape. Per-router shapes are
+            // derived from facing and capability downstream, not from this flag.
+            config.has_intermesh_z_router = has_z_routers;
         }
     }
 

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <set>
+#include <tuple>
 #include "tt_metal/fabric/builder/connection_registry.hpp"
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
@@ -261,14 +263,14 @@ TEST_F(RouterConnectionMappingTest, ConnectionTypeFiltering_LocalOnly) {
     int z_to_mesh_count = 0;
     int intra_mesh_count = 0;
 
-    // Check VC0 (should be empty or reserved)
-    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_vc0; ++ch) {
+    // Check VC0 (should be empty or reserved). Z-facing boundary VC0: worker + 4 non-self = 5.
+    for (uint32_t ch = 0; ch < 5; ++ch) {
         auto vc0_targets = z_mapping.get_downstream_targets(0, ch);
         EXPECT_EQ(vc0_targets.size(), 0);  // VC0 unused for Z router
     }
 
-    // Check VC1 (should have Z_TO_MESH for all mesh directions)
-    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_vc1; ++ch) {
+    // Check VC1 (should have Z_TO_MESH for all mesh directions). From-Z fanout = 4 senders.
+    for (uint32_t ch = 0; ch < 4; ++ch) {
         auto vc1_targets = z_mapping.get_downstream_targets(1, ch);
         for (const auto& target : vc1_targets) {
             if (target.type == ConnectionType::Z_TO_MESH) {
@@ -323,9 +325,10 @@ TEST_F(RouterConnectionMappingTest, MultiVC_ZRouter_VC0_and_VC1) {
 
     auto z_mapping = RouterConnectionMapping::for_z_router();
 
-    // VC0 should have no sender targets (Z receives on VC0, doesn't send)
+    // VC0 should have no sender targets (Z receives on VC0, doesn't send).
+    // Z-facing boundary VC0: worker + 4 non-self = 5 channels to check.
     bool has_vc0_targets = false;
-    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_vc0; ++ch) {
+    for (uint32_t ch = 0; ch < 5; ++ch) {
         if (z_mapping.has_targets(0, ch)) {
             has_vc0_targets = true;
             break;
@@ -333,9 +336,9 @@ TEST_F(RouterConnectionMappingTest, MultiVC_ZRouter_VC0_and_VC1) {
     }
     EXPECT_FALSE(has_vc0_targets);
 
-    // VC1 should have sender targets (Z sends on VC1)
+    // VC1 should have sender targets (Z sends on VC1). From-Z fanout = 4 channels.
     bool has_vc1_targets = false;
-    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_vc1; ++ch) {
+    for (uint32_t ch = 0; ch < 4; ++ch) {
         if (z_mapping.has_targets(1, ch)) {
             has_vc1_targets = true;
             break;
@@ -438,4 +441,105 @@ TEST_F(RouterConnectionMappingTest, Regression_1D_Topology_StillWorks) {
     auto targets = mesh_1d.get_downstream_targets(0, 0);
     EXPECT_EQ(targets.size(), 1);
     EXPECT_EQ(targets[0].type, ConnectionType::INTRA_MESH);
+}
+
+// ============================================================================
+// Test 8: Unified generator -- capability selects the template, direction the slot arithmetic
+// ============================================================================
+
+namespace {
+
+// Comparable signature of one mapping: per-VC target lists, order preserved.
+using TargetSig = std::tuple<ConnectionType, uint32_t, uint32_t, std::optional<RoutingDirection>>;
+
+std::vector<TargetSig> target_signature(const RouterConnectionMapping& mapping, uint32_t vc) {
+    std::vector<TargetSig> out;
+    for (const auto& t : mapping.get_downstream_targets(vc, 0)) {
+        out.emplace_back(t.type, t.target_vc, t.target_sender_channel, t.target_direction);
+    }
+    return out;
+}
+
+void expect_same_mapping(const RouterConnectionMapping& a, const RouterConnectionMapping& b) {
+    for (uint32_t vc : {0u, 1u}) {
+        EXPECT_EQ(target_signature(a, vc), target_signature(b, vc)) << "VC" << vc;
+    }
+}
+
+}  // namespace
+
+TEST_F(RouterConnectionMappingTest, UnifiedGenerator_ZBoundaryMatchesForZRouterAlias) {
+    // The unified entry point and the alias must produce the identical boundary template.
+    const auto via_unified = RouterConnectionMapping::for_mesh_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        /*has_z=*/false,
+        /*enable_vc1=*/true,
+        /*enable_mesh_pass_through=*/false,
+        /*express_routing_enabled=*/false,
+        EdgeCapability::INTERMESH,
+        /*has_intramesh_express=*/false);
+    const auto via_alias = RouterConnectionMapping::for_z_router();
+
+    expect_same_mapping(via_unified, via_alias);
+}
+
+TEST_F(RouterConnectionMappingTest, UnifiedGenerator_ZBoundaryTemplateContents) {
+    // The Z-facing intermesh boundary: VC1 from-boundary fanout to every mesh direction, no VC0
+    // map (its VC0 senders are fed by the mesh routers' MESH_TO_Z targets, emitted on their maps).
+    const auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Mesh, RoutingDirection::Z, false, true, false, false, EdgeCapability::INTERMESH, false);
+
+    EXPECT_FALSE(mapping.has_targets(0, 0));
+
+    const auto targets = mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(targets.size(), 4u);
+    std::set<RoutingDirection> directions;
+    for (size_t i = 0; i < targets.size(); ++i) {
+        EXPECT_EQ(targets[i].type, ConnectionType::Z_TO_MESH);
+        EXPECT_EQ(targets[i].target_vc, 1u);
+        EXPECT_EQ(targets[i].target_sender_channel, i);
+        ASSERT_TRUE(targets[i].target_direction.has_value());
+        directions.insert(*targets[i].target_direction);
+    }
+    EXPECT_EQ(
+        directions,
+        std::set<RoutingDirection>(
+            {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}));
+}
+
+TEST_F(RouterConnectionMappingTest, UnifiedGenerator_ExpressChordIsOrdinaryMeshLike) {
+    // A Z-facing router whose edge is an express chord must not inherit the boundary template:
+    // it is wired to all four cardinals as ordinary INTRA_MESH transitions, on VC0 and VC1 alike.
+    const auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Torus,
+        RoutingDirection::Z,
+        /*has_z=*/false,
+        /*enable_vc1=*/true,
+        /*enable_mesh_pass_through=*/false,
+        /*express_routing_enabled=*/true,
+        EdgeCapability::INTRAMESH_EXPRESS,
+        /*has_intramesh_express=*/true);
+
+    for (uint32_t vc : {0u, 1u}) {
+        std::set<RoutingDirection> directions;
+        for (const auto& t : mapping.get_downstream_targets(vc, 0)) {
+            EXPECT_EQ(t.type, ConnectionType::INTRA_MESH);
+            EXPECT_EQ(t.target_vc, vc);
+            ASSERT_TRUE(t.target_direction.has_value());
+            directions.insert(*t.target_direction);
+        }
+        EXPECT_EQ(
+            directions,
+            std::set<RoutingDirection>(
+                {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}))
+            << "VC" << vc;
+    }
+}
+
+TEST_F(RouterConnectionMappingTest, UnifiedGenerator_CardinalZIsRejected) {
+    // An ordinary cardinal-capability Z edge cannot exist: direction letter and capability
+    // disagree, which is a configuration error rather than a template to select.
+    EXPECT_ANY_THROW(RouterConnectionMapping::for_mesh_router(
+        Topology::Mesh, RoutingDirection::Z, false, true, false, false, EdgeCapability::INTRAMESH_CARDINAL, false));
 }

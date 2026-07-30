@@ -66,8 +66,9 @@ TEST(ExpressConnectionWiringTest, YIngressReachesCardinalTurnsAndExpress) {
 
 TEST(ExpressConnectionWiringTest, ExpressIngressReachesAllFourCardinals) {
     // Arrived over the chord: continue Y cardinally or turn onto X. Z is absent because that would
-    // return the packet over the link it arrived on.
-    const auto mapping = express_mapping(RoutingDirection::Z);
+    // return the packet over the link it arrived on. The chord router's own edge carries
+    // INTRAMESH_EXPRESS capability -- that is what makes it a Z-facing express router at all.
+    const auto mapping = express_mapping(RoutingDirection::Z, EdgeCapability::INTRAMESH_EXPRESS);
     EXPECT_EQ(
         target_directions(mapping, 0),
         std::set<RoutingDirection>({RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W}));
@@ -342,6 +343,43 @@ TEST(ExpressConnectionWiringTest, NoChordNothingWiresIntoZEgress) {
         RoutingDirection::S, EdgeCapability::INTRAMESH_CARDINAL, RoutingDirection::N, false));
     EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
         RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, RoutingDirection::S, false));
+}
+
+// --- Sender counts are the family max over facing of wired-producer arity, not constants ---
+
+TEST(ExpressConnectionWiringTest, ExpressSenderCountsAreFamilyMaxOverFacing) {
+    // E/W-facing routers wire five VC0 producers: the worker plus every Y producer (N/S/Z) and the
+    // opposite X, since the Y->X turn is legal. Dimension order leaves N/S/Z-facing routers with
+    // three: worker, opposite Y, chord.
+    const auto canonical = RouterConnectionMapping::canonical_express_endpoint_capabilities();
+    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::E, canonical), 5u);
+    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::W, canonical), 5u);
+    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::N, canonical), 3u);
+    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::S, canonical), 3u);
+    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::Z, canonical), 3u);
+
+    // The uniform family counts are the max over facing: one flat index space per family, with
+    // per-router wiring filling a subset. VC1 forwards the same producers minus the worker slot.
+    EXPECT_EQ(RouterConnectionMapping::express_mesh_vc0_sender_count(), 5u);
+    EXPECT_EQ(RouterConnectionMapping::express_mesh_vc1_sender_count(), 4u);
+}
+
+TEST(ExpressConnectionWiringTest, ArityRespectsPerChipCapabilities) {
+    // The arity is a per-chip fact, not the family constant: on a chip whose E edge is an
+    // intermesh landing, that landing producer wires into every Y egress, so a Y-facing router's
+    // arity is 4, not the canonical 3. The family max is still attained by E/W facings (5).
+    auto landing = RouterConnectionMapping::canonical_express_endpoint_capabilities();
+    landing[static_cast<size_t>(RoutingDirection::E)] = EdgeCapability::INTERMESH;
+
+    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::N, landing), 4u);
+    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::Z, landing), 4u);
+    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::W, landing), 5u);
+
+    // A leaf chip has no chord: no Z producer exists to wire, so arities drop accordingly.
+    auto leaf = RouterConnectionMapping::canonical_express_endpoint_capabilities();
+    leaf[static_cast<size_t>(RoutingDirection::Z)] = std::nullopt;
+    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::N, leaf), 2u);
+    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::E, leaf), 4u);
 }
 
 }  // namespace

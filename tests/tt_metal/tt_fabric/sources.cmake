@@ -20,6 +20,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_protected_domain_effects.cpp
     fabric_router/test_fabric_edge_capability.cpp
     fabric_router/test_protected_ring_model.cpp
+    fabric_router/test_direction_slot_bijection.cpp
     fabric_router/test_router_channel_mapping.cpp
     fabric_router/test_router_connections.cpp
     fabric_router/test_router_connection_mapping.cpp

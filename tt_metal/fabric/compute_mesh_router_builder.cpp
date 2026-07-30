@@ -172,20 +172,21 @@ RouterChannelCounts compute_router_channel_counts(
     const auto topology = fabric_context.get_fabric_topology();
     const auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     const bool downstream_is_tensix_builder = !is_dispatch_link && fabric_tensix_config == FabricTensixConfig::MUX;
-    // Only an intermesh Z edge gets the dedicated Z_ROUTER shape and the VC1 sender it implies. A
-    // same-mesh Z is an express chord, which is an ordinary mesh-like forwarding direction carrying a
-    // capability -- not a variant family of its own. discover_channels() already rejects more than one
-    // neighbor mesh per direction, so the Z direction has exactly one neighbor to classify.
-    const bool has_intermesh_z = has_intermesh_z_edge(control_plane, fabric_node_id);
-    const auto variant =
-        (direction == RoutingDirection::Z && has_intermesh_z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
+    // The channel shape follows the facing direction and the edge's capability: only a Z-facing
+    // router whose edge crosses a mesh boundary gets the intermesh boundary shape. A same-mesh Z is
+    // an express chord, which is an ordinary mesh-like forwarding direction, not a shape family.
+    // discover_channels() already rejects more than one neighbor mesh per direction, so the
+    // direction has exactly one neighbor to classify.
+    const auto edge_capability =
+        capability_in_direction(control_plane, fabric_node_id, direction).value_or(EdgeCapability::INTRAMESH_CARDINAL);
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto channel_mapping = FabricRouterChannelMapping(
         topology,
         downstream_is_tensix_builder,
-        variant,
+        direction,
+        edge_capability,
         &intermesh_config,
-        has_intermesh_z,
+        has_intermesh_z_edge(control_plane, fabric_node_id),
         control_plane.express_routing_enabled(fabric_node_id.mesh_id));
 
     RouterChannelCounts counts;
@@ -275,15 +276,14 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     auto tensix_config_for_lookup = will_create_tensix_builder ? fabric_tensix_config : FabricTensixConfig::DISABLED;
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
-    // Determine the router variant from this edge's capability rather than its direction letter. A
-    // same-mesh Z is an express chord and stays a MESH router; only a Z edge that actually crosses a
-    // mesh boundary gets the dedicated Z_ROUTER shape.
-    const auto edge_capability =
-        classify_fabric_edge(control_plane, local_node, location.remote_node, location.direction);
+    // The channel shape is derived from the facing direction and this edge's capability rather than
+    // a variant tag. A same-mesh Z is an express chord and gets the ordinary mesh-like shape; only
+    // a Z-facing router whose edge crosses a mesh boundary gets the intermesh boundary shape. The
+    // capability comes through the one derivation route (neighbor resolved from the direction), the
+    // same path the counts pass uses, so the two cannot classify the edge differently.
+    const auto edge_capability = capability_in_direction(control_plane, local_node, location.direction)
+                                     .value_or(EdgeCapability::INTRAMESH_CARDINAL);
     const bool has_intermesh_z = has_intermesh_z_edge(control_plane, local_node);
-    RouterVariant variant = (location.direction == RoutingDirection::Z && edge_capability == EdgeCapability::INTERMESH)
-                                ? RouterVariant::Z_ROUTER
-                                : RouterVariant::MESH;
 
     // Create channel mapping EARLY (needed for computing injection flags). The Z-related channel
     // shapes exist to reach an intermesh Z router, so they are gated on that rather than on the
@@ -292,37 +292,36 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     auto channel_mapping = FabricRouterChannelMapping(
         topology,
         downstream_is_tensix_builder,
-        variant,
+        location.direction,
+        edge_capability,
         &intermesh_config,
         has_intermesh_z,
         control_plane.express_routing_enabled(local_node.mesh_id));
 
-    // Create connection mapping (Phase 3)
-    RouterConnectionMapping connection_mapping;
-    if (variant == RouterVariant::Z_ROUTER) {
-        connection_mapping = RouterConnectionMapping::for_z_router();
-    } else {
-        // Enable VC1 for all routers when intermesh VC is configured
-        bool enable_vc1 = intermesh_config.requires_vc1;
-        // EXPERIMENTAL: in pass-through mode, mesh routers also forward VC1 traffic to the local Z
-        // router (MESH_TO_Z on VC1) so inter-mesh traffic can traverse intermediate meshes (A->B->C).
-        bool enable_mesh_pass_through = intermesh_config.requires_vc1_mesh_pass_through;
-        // The MESH_TO_Z connection exists to reach an intermesh Z router, so it follows the intermesh
-        // Z edge rather than the presence of any Z port. An express chord is instead wired as an
-        // ordinary same-VC cardinal/Z transition by the express path below. The Z output is only
-        // emitted when this chip actually terminates the chord: on a chip whose only Z edge crosses
-        // a mesh boundary, a Z target would resolve to the intermesh Z router and leak same-mesh
-        // traffic onto the boundary link.
-        connection_mapping = RouterConnectionMapping::for_mesh_router(
-            topology,
-            location.direction,
-            has_intermesh_z,
-            enable_vc1,
-            enable_mesh_pass_through,
-            control_plane.express_routing_enabled(local_node.mesh_id),
-            edge_capability,
-            has_intramesh_express_edge(control_plane, local_node));
-    }
+    // Create connection mapping (Phase 3): one direction-parameterized generator for every router.
+    // The edge's capability selects the template -- an intermesh Z edge gets the from-boundary
+    // fanout (the same shape family the channel mapping derives above), an express chord is wired
+    // as ordinary same-VC cardinal/Z transitions, and everything else gets the legacy map. The
+    // direction selects only the slot arithmetic.
+    bool enable_vc1 = intermesh_config.requires_vc1;
+    // EXPERIMENTAL: in pass-through mode, mesh routers also forward VC1 traffic to the local Z
+    // router (MESH_TO_Z on VC1) so inter-mesh traffic can traverse intermediate meshes (A->B->C).
+    bool enable_mesh_pass_through = intermesh_config.requires_vc1_mesh_pass_through;
+    // The MESH_TO_Z connection exists to reach an intermesh Z router, so it follows the intermesh
+    // Z edge rather than the presence of any Z port. An express chord is instead wired as an
+    // ordinary same-VC cardinal/Z transition by the express path. The Z output is only
+    // emitted when this chip actually terminates the chord: on a chip whose only Z edge crosses
+    // a mesh boundary, a Z target would resolve to the intermesh Z router and leak same-mesh
+    // traffic onto the boundary link.
+    RouterConnectionMapping connection_mapping = RouterConnectionMapping::for_mesh_router(
+        topology,
+        location.direction,
+        has_intermesh_z,
+        enable_vc1,
+        enable_mesh_pass_through,
+        control_plane.express_routing_enabled(local_node.mesh_id),
+        edge_capability,
+        has_intramesh_express_edge(control_plane, local_node));
 
     // Compute injection channel flags at router level BEFORE creating builders
     // Injection semantics are per-VC, so compute for each VC and flatten into router-level vector
@@ -496,56 +495,15 @@ uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
         return 1;  // 1D: sender channel 1 for forwarding
     }
 
-    // Sender channel 0 is always reserved for the local worker (VC0 only).
+    // Which slot on the downstream router this router (as producer) feeds. Derived from the
+    // canonical direction<->slot bijection in fabric_builder_helpers -- the same relation that
+    // get_sender_channel_direction inverts when the injection-flag derivation names a slot's
+    // producer, so placement and naming cannot drift apart.
     //
-    // VC0: Sender channels 1–4 correspond to the four upstream neighbors (E/W/N/S/Z)
-    // VC1: Sender channels 0–3 correspond to the four upstream neighbors (E/W/N/S)
-    //
-    // The mapping from receiver direction → sender channel depends on the
-    // downstream forwarding direction:
-    //
-    //   • Downstream = EAST:
-    //         WEST  → channel 1 (VC0) or 0 (VC1)
-    //         NORTH → channel 2 (VC0) or 1 (VC1)
-    //         SOUTH → channel 3 (VC0) or 2 (VC1)
-    //         Z     → channel 4 (VC0) or 3 (VC1)
-    //
-    //   • Downstream = WEST:
-    //         EAST  → channel 1 (VC0) or 0 (VC1)
-    //         NORTH → channel 2 (VC0) or 1 (VC1)
-    //         SOUTH → channel 3 (VC0) or 2 (VC1)
-    //         Z     → channel 4 (VC0) or 3 (VC1)
-    //
-    //   • Downstream = NORTH:
-    //         EAST  → channel 1 (VC0) or 0 (VC1)
-    //         WEST  → channel 2 (VC0) or 1 (VC1)
-    //         SOUTH → channel 3 (VC0) or 2 (VC1)
-    //         Z     → channel 4 (VC0) or 3 (VC1)
-    //
-    //   • Downstream = SOUTH:
-    //         EAST  → channel 1 (VC0) or 0 (VC1)
-    //         WEST  → channel 2 (VC0) or 1 (VC1)
-    //         NORTH → channel 3 (VC0) or 2 (VC1)
-    //         Z     → channel 4 (VC0) or 3 (VC1)
-
-    size_t downstream_compact_index_for_upstream;
-    if (downstream_direction == eth_chan_directions::EAST) {
-        // EAST downstream: WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
-        downstream_compact_index_for_upstream = this->get_eth_direction() - 1;
-    } else {
-        // For other downstream directions: if upstream < downstream, use as-is; else subtract 1
-        downstream_compact_index_for_upstream = (this->get_eth_direction() < downstream_direction)
-                                                    ? this->get_eth_direction()
-                                                    : (this->get_eth_direction() - 1);
-    }
-
-    // Compute sender channel based on VC
-    // VC0: 1 + compact_index (channels 1-4 for normal mesh, can go up to 4 for Z connections)
-    // VC1: compact_index (channels 0-3, no local worker channel)
-    uint32_t sender_channel =
-        (vc == 0) ? (1 + downstream_compact_index_for_upstream) : downstream_compact_index_for_upstream;
-
-    return sender_channel;
+    // VC0: sender channels 1-4 correspond to the four upstream neighbors (channel 0 is the worker)
+    // VC1: sender channels 0-3 (no local worker channel)
+    const size_t compact = builder::direction_compact_index(this->get_eth_direction(), downstream_direction);
+    return (vc == 0) ? static_cast<uint32_t>(1 + compact) : static_cast<uint32_t>(compact);
 }
 
 eth_chan_directions ComputeMeshRouterBuilder::get_eth_direction() const { return erisc_builder_->get_direction(); }

@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
+#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <hostdevcommon/fabric_common.h>
@@ -14,7 +15,7 @@ namespace tt::tt_fabric {
  * Test fixture for FabricRouterChannelMapping
  *
  * These tests validate channel mapping functionality:
- * - RouterVariant enum support (MESH vs Z_ROUTER)
+ * - Direction+capability family selection (mesh vs Z-facing intermesh boundary)
  * - VC1 channel mapping for Z routers
  * - VC1 channel mapping for standard mesh routers
  * - Correct virtual channel counts
@@ -90,7 +91,8 @@ TEST_F(RouterChannelMappingTest, MeshRouter_1D_Linear_VC0Only) {
     FabricRouterChannelMapping mapping(
         Topology::Linear,
         false,  // no tensix
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         nullptr);  // no intermesh config
 
     // 1D routers only have VC0
@@ -116,7 +118,8 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_Mesh_VC0Only) {
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
         false,  // no tensix
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         nullptr);  // no intermesh config
 
     // 2D mesh routers currently only expose VC0 (VC1 not fully enabled yet)
@@ -137,7 +140,8 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_Torus_VC0Only) {
     FabricRouterChannelMapping mapping(
         Topology::Torus,
         false,  // no tensix
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         nullptr);  // no intermesh config
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 1);
@@ -150,8 +154,9 @@ TEST_F(RouterChannelMappingTest, ZRouter_Has2VirtualChannels) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
     FabricRouterChannelMapping mapping(
         Topology::Mesh,  // Z routers use 2D topology
-        false,  // no tensix
-        RouterVariant::Z_ROUTER,
+        false,           // no tensix
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
         &intermesh_config);  // Z routers require intermesh config
 
     // Z routers have both VC0 and VC1
@@ -163,7 +168,8 @@ TEST_F(RouterChannelMappingTest, ZRouter_VC0_Has5SenderChannels) {
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
         false,
-        RouterVariant::Z_ROUTER,
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
         &intermesh_config);  // Z routers require intermesh config
 
     // VC0 should have 5 sender channels (0=Worker, 1-4=E/W/N/S)
@@ -182,7 +188,8 @@ TEST_F(RouterChannelMappingTest, ZRouter_VC1_Has4SenderChannels) {
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
         false,
-        RouterVariant::Z_ROUTER,
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
         &intermesh_config);  // Z routers require intermesh config
 
     // VC1 should have 4 sender channels (Z→mesh, one per direction)
@@ -194,7 +201,8 @@ TEST_F(RouterChannelMappingTest, ZRouter_VC1_SenderChannels_MapToErisc4Through7)
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
         false,
-        RouterVariant::Z_ROUTER,
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
         &intermesh_config);  // Z routers require intermesh config
 
     // VC1 sender channels 0-3 should map to erisc internal channels 5-8
@@ -211,9 +219,9 @@ TEST_F(RouterChannelMappingTest, ZRouterNoTensix_VC0_VC1_ReceiverChannel_MapsToE
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
         false,
-        RouterVariant::Z_ROUTER,
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
         &intermesh_config);  // Z routers require intermesh config
-
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 2);
     EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), 5);
@@ -234,7 +242,8 @@ TEST_F(RouterChannelMappingTest, MeshRouter_WithTensix_VC0_MapsToTensix) {
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
         true,  // has tensix
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         nullptr);  // no intermesh config
 
     // With tensix extension, VC0 channels should map to TENSIX builder
@@ -256,7 +265,8 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithoutIntermesh) {
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
         false,
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         nullptr);  // No intermesh config
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 1);  // Only VC0
@@ -267,10 +277,7 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithIntermeshEdgeOnly) {
     // With intermesh config (edge only), VC1 should be created
     auto intermesh_config = IntermeshVCConfig::edge_only();
     FabricRouterChannelMapping mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::MESH,
-        &intermesh_config);
+        Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, &intermesh_config);
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 2);  // VC0 + VC1
     EXPECT_EQ(mapping.get_num_sender_channels_for_vc(1), 3);  // VC1 created
@@ -285,10 +292,7 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithIntermeshFullMesh) {
     // With intermesh config (full mesh), VC1 should be created
     auto intermesh_config = IntermeshVCConfig::full_mesh();
     FabricRouterChannelMapping mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::MESH,
-        &intermesh_config);
+        Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, &intermesh_config);
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 2);  // VC0 + VC1
     EXPECT_EQ(mapping.get_num_sender_channels_for_vc(1), 3);  // VC1 created
@@ -298,10 +302,7 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithIntermeshFullMeshPassThro
     // With intermesh config (full mesh with pass-through), VC1 should be created
     auto intermesh_config = IntermeshVCConfig::full_mesh_with_pass_through();
     FabricRouterChannelMapping mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::MESH,
-        &intermesh_config);
+        Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, &intermesh_config);
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 2);  // VC0 + VC1
     EXPECT_EQ(mapping.get_num_sender_channels_for_vc(1), 3);  // VC1 created
@@ -316,9 +317,10 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_ExpressRouting_Has4SenderChan
     FabricRouterChannelMapping mapping(
         Topology::Torus,
         false,
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         &intermesh_config,
-        false,  // has_z_on_device = false
+        false,  // has_intermesh_z_edge = false
         true);  // express_routing_enabled = true
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 2);
@@ -333,7 +335,8 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_ExpressRouting_VC1BaseAfterWi
     FabricRouterChannelMapping mapping(
         Topology::Torus,
         false,
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         &intermesh_config,
         false,
         true);  // express_routing_enabled = true
@@ -353,9 +356,10 @@ TEST_F(RouterChannelMappingTest, VC2_ExpressMesh_SenderAtFlatIndex9) {
     FabricRouterChannelMapping mapping(
         Topology::Torus,
         false,
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         &config,
-        false,  // has_z_on_device = false
+        false,  // has_intermesh_z_edge = false
         true);  // express_routing_enabled = true
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 3);
@@ -418,10 +422,7 @@ TEST_F(RouterChannelMappingTest, IntermeshVCConfig_AllModesCreateVC1WhenRequired
 
     for (const auto& config : configs) {
         FabricRouterChannelMapping mapping(
-            Topology::Mesh,
-            false,
-            RouterVariant::MESH,
-            &config);
+            Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, &config);
 
         EXPECT_EQ(mapping.get_num_virtual_channels(), 2)
             << "Mode " << static_cast<int>(config.mode) << " should enable VC1";
@@ -486,10 +487,7 @@ TEST_F(RouterChannelMappingTest, IntermeshVCConfig_ModeProgression) {
 
 TEST_F(RouterChannelMappingTest, InvalidVC_ThrowsError) {
     FabricRouterChannelMapping mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::MESH,
-        nullptr);
+        Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, nullptr);
 
     // Accessing invalid VC should throw
     EXPECT_THROW(mapping.get_sender_mapping(5, 0), std::exception);
@@ -497,10 +495,7 @@ TEST_F(RouterChannelMappingTest, InvalidVC_ThrowsError) {
 
 TEST_F(RouterChannelMappingTest, InvalidSenderChannel_ThrowsError) {
     FabricRouterChannelMapping mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::MESH,
-        nullptr);
+        Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, nullptr);
 
     // Accessing out-of-range sender channel should throw
     EXPECT_THROW(mapping.get_sender_mapping(0, 10), std::exception);
@@ -509,10 +504,7 @@ TEST_F(RouterChannelMappingTest, InvalidSenderChannel_ThrowsError) {
 TEST_F(RouterChannelMappingTest, InvalidReceiverChannel_ThrowsError) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
     FabricRouterChannelMapping mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::Z_ROUTER,
-        &intermesh_config);
+        Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &intermesh_config);
 
     // Accessing invalid receiver channel should throw
     EXPECT_THROW(mapping.get_receiver_mapping(1, 5), std::exception);
@@ -523,10 +515,7 @@ TEST_F(RouterChannelMappingTest, InvalidReceiverChannel_ThrowsError) {
 TEST_F(RouterChannelMappingTest, ZRouter_CompleteChannelLayout) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
     FabricRouterChannelMapping mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::Z_ROUTER,
-        &intermesh_config);
+        Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &intermesh_config);
 
     // Verify complete channel layout for Z router
 
@@ -564,10 +553,7 @@ TEST_F(RouterChannelMappingTest, ZRouter_CompleteChannelLayout) {
 
 TEST_F(RouterChannelMappingTest, GetAllSenderMappings_MeshRouter) {
     FabricRouterChannelMapping mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::MESH,
-        nullptr);
+        Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, nullptr);
 
     auto all_mappings = mapping.get_all_sender_mappings();
 
@@ -584,10 +570,7 @@ TEST_F(RouterChannelMappingTest, GetAllSenderMappings_MeshRouter) {
 TEST_F(RouterChannelMappingTest, GetAllSenderMappings_ZRouter) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
     FabricRouterChannelMapping mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::Z_ROUTER,
-        &intermesh_config);
+        Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &intermesh_config);
 
     auto all_mappings = mapping.get_all_sender_mappings();
 
@@ -615,9 +598,10 @@ TEST_F(RouterChannelMappingTest, VC2_NonZMesh_NoZOnDevice_HasThreeVCs) {
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
         false,  // no tensix
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         &config,
-        false);  // has_z_on_device = false
+        false);  // has_intermesh_z_edge = false
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 3);
     EXPECT_EQ(mapping.get_num_sender_channels_for_vc(2), 1);
@@ -629,9 +613,10 @@ TEST_F(RouterChannelMappingTest, VC2_NonZMesh_NoZOnDevice_SenderAtLastFlatIndex)
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
         false,
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         &config,
-        false);  // has_z_on_device = false
+        false);  // has_intermesh_z_edge = false
 
     // VC2 sender should be at flat index 7 (VC0:4 + VC1:3 = 7)
     auto vc2_sender = mapping.get_sender_mapping(2, 0);
@@ -642,7 +627,8 @@ TEST_F(RouterChannelMappingTest, VC2_NonZMesh_NoZOnDevice_SenderAtLastFlatIndex)
 TEST_F(RouterChannelMappingTest, VC2_NonZMesh_NoZOnDevice_ReceiverAtIndex2) {
     auto config = IntermeshVCConfig::full_mesh();
     config.requires_vc2 = true;
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH, &config, false);
+    FabricRouterChannelMapping mapping(
+        Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, &config, false);
 
     // VC2 receiver at index 2 (after VC0=0, VC1=1)
     auto vc2_receiver = mapping.get_receiver_mapping(2, 0);
@@ -656,9 +642,10 @@ TEST_F(RouterChannelMappingTest, VC2_NonZMesh_WithZOnDevice_SenderAtLastFlatInde
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
         false,
-        RouterVariant::MESH,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
         &config,
-        true);  // has_z_on_device = true
+        true);  // has_intermesh_z_edge = true
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 3);
 
@@ -671,7 +658,7 @@ TEST_F(RouterChannelMappingTest, VC2_NonZMesh_WithZOnDevice_SenderAtLastFlatInde
 TEST_F(RouterChannelMappingTest, VC2_ZRouter_SenderAtLastFlatIndex) {
     auto config = IntermeshVCConfig::full_mesh();
     config.requires_vc2 = true;
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::Z_ROUTER, &config);
+    FabricRouterChannelMapping mapping(Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &config);
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 3);
     EXPECT_EQ(mapping.get_num_sender_channels_for_vc(2), 1);
@@ -685,7 +672,7 @@ TEST_F(RouterChannelMappingTest, VC2_ZRouter_SenderAtLastFlatIndex) {
 TEST_F(RouterChannelMappingTest, VC2_ZRouter_NoReceiver) {
     auto config = IntermeshVCConfig::full_mesh();
     config.requires_vc2 = true;
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::Z_ROUTER, &config);
+    FabricRouterChannelMapping mapping(Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &config);
 
     // Z router VC2 has no receiver -- should throw
     EXPECT_THROW(mapping.get_receiver_mapping(2, 0), std::exception);
@@ -694,8 +681,13 @@ TEST_F(RouterChannelMappingTest, VC2_ZRouter_NoReceiver) {
 TEST_F(RouterChannelMappingTest, VC2_GetAllSenderMappings_IncludesVC2Last) {
     auto config = IntermeshVCConfig::full_mesh();
     config.requires_vc2 = true;
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH, &config,
-                                       false);  // no Z on device
+    FabricRouterChannelMapping mapping(
+        Topology::Mesh,
+        false,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        &config,
+        false);  // no Z on device
 
     auto all_mappings = mapping.get_all_sender_mappings();
 
@@ -710,7 +702,7 @@ TEST_F(RouterChannelMappingTest, VC2_GetAllSenderMappings_IncludesVC2Last) {
 TEST_F(RouterChannelMappingTest, VC2_GetAllSenderMappings_ZRouter_IncludesVC2Last) {
     auto config = IntermeshVCConfig::full_mesh();
     config.requires_vc2 = true;
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::Z_ROUTER, &config);
+    FabricRouterChannelMapping mapping(Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &config);
 
     auto all_mappings = mapping.get_all_sender_mappings();
 
@@ -725,7 +717,8 @@ TEST_F(RouterChannelMappingTest, VC2_GetAllSenderMappings_ZRouter_IncludesVC2Las
 TEST_F(RouterChannelMappingTest, VC2_Disabled_NoVC2Channels) {
     // full_mesh() does NOT set requires_vc2 by default
     auto config = IntermeshVCConfig::full_mesh();
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH, &config);
+    FabricRouterChannelMapping mapping(
+        Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, &config);
 
     EXPECT_EQ(mapping.get_num_virtual_channels(), 2);  // Only VC0 + VC1
     EXPECT_EQ(mapping.get_num_sender_channels_for_vc(2), 0);
@@ -734,8 +727,13 @@ TEST_F(RouterChannelMappingTest, VC2_Disabled_NoVC2Channels) {
 TEST_F(RouterChannelMappingTest, VC2_NonZMesh_ExistingVC0VC1Unchanged) {
     auto config = IntermeshVCConfig::full_mesh();
     config.requires_vc2 = true;
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH, &config,
-                                       false);  // no Z on device
+    FabricRouterChannelMapping mapping(
+        Topology::Mesh,
+        false,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        &config,
+        false);  // no Z on device
 
     // VC0: 4 senders at indices 0-3
     EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), 4);
@@ -763,7 +761,7 @@ TEST_F(RouterChannelMappingTest, VC2_NonZMesh_ExistingVC0VC1Unchanged) {
 TEST_F(RouterChannelMappingTest, VC2_ZRouter_ExistingVC0VC1Unchanged) {
     auto config = IntermeshVCConfig::full_mesh();
     config.requires_vc2 = true;
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::Z_ROUTER, &config);
+    FabricRouterChannelMapping mapping(Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &config);
 
     // VC0: 5 senders at indices 0-4
     EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), 5);

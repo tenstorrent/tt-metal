@@ -116,6 +116,60 @@ bool RouterConnectionMapping::is_express_producer_wired(
     return std::find(outbound.begin(), outbound.end(), egress_direction) != outbound.end();
 }
 
+RouterConnectionMapping::PerDirectionCapabilities RouterConnectionMapping::canonical_express_endpoint_capabilities() {
+    PerDirectionCapabilities caps;
+    for (size_t i = 0; i < caps.size() - 1; ++i) {
+        caps[i] = EdgeCapability::INTRAMESH_CARDINAL;
+    }
+    caps[static_cast<size_t>(RoutingDirection::Z)] = EdgeCapability::INTRAMESH_EXPRESS;
+    return caps;
+}
+
+uint32_t RouterConnectionMapping::express_vc0_producer_arity(
+    RoutingDirection direction, const PerDirectionCapabilities& caps) {
+    static constexpr std::array<RoutingDirection, 5> k_all_directions = {
+        RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z};
+
+    // The chord state the wiring rule consults is this chip's own Z-edge capability, not a global.
+    const bool has_chord = caps[static_cast<size_t>(RoutingDirection::Z)] == EdgeCapability::INTRAMESH_EXPRESS;
+
+    uint32_t count = 1;  // sender channel 0 is the local worker
+    for (const auto producer : k_all_directions) {
+        if (producer == direction) {
+            continue;
+        }
+        const auto& capability = caps[static_cast<size_t>(producer)];
+        if (!capability.has_value()) {
+            continue;  // direction absent on this chip: no producer to wire
+        }
+        if (is_express_producer_wired(producer, *capability, direction, has_chord)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+uint32_t RouterConnectionMapping::express_mesh_vc0_sender_count() {
+    static constexpr std::array<RoutingDirection, 5> k_all_directions = {
+        RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z};
+
+    // The canonical endpoint chip attains the structural ceiling: every Y and X producer wires
+    // into an E/W facing under any capability assignment, so no per-chip set produces a wider one.
+    const auto caps = canonical_express_endpoint_capabilities();
+    uint32_t count = 0;
+    for (const auto direction : k_all_directions) {
+        count = std::max(count, express_vc0_producer_arity(direction, caps));
+    }
+    return count;
+}
+
+uint32_t RouterConnectionMapping::express_mesh_vc1_sender_count() {
+    // VC1 forwards the same wired producer set as VC0 on every facing, minus the worker slot, so
+    // vc1_arity(f) == vc0_arity(f) - 1 for every facing f. The family max therefore commutes with
+    // the subtraction: max_f(vc0_arity(f)) - 1 == max_f(vc0_arity(f) - 1).
+    return express_mesh_vc0_sender_count() - 1;
+}
+
 RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
     Topology topology,
     RoutingDirection direction,
@@ -126,6 +180,26 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
     EdgeCapability ingress_capability,
     bool has_intramesh_express) {
     RouterConnectionMapping mapping;
+
+    // One direction-parameterized generator for every router. The edge's capability selects the
+    // template; the direction selects the slot arithmetic. A Z-facing router is therefore not a
+    // variant of its own: an intermesh Z edge gets the from-boundary fanout, and an express chord
+    // is an ordinary mesh-like forwarding direction handled by the express path below.
+    if (direction == RoutingDirection::Z) {
+        if (ingress_capability == EdgeCapability::INTERMESH) {
+            return z_intermesh_boundary_fanout();
+        }
+        TT_FATAL(
+            ingress_capability == EdgeCapability::INTRAMESH_EXPRESS,
+            "A same-mesh Z edge is an express chord and must carry INTRAMESH_EXPRESS capability, got {}. "
+            "An ordinary cardinal-capability Z edge cannot exist.",
+            to_string(ingress_capability));
+        TT_FATAL(
+            express_routing_enabled && (topology == Topology::Mesh || topology == Topology::Torus),
+            "An express (Z) chord requires 2D Mesh/Torus routing with express routing enabled");
+        // INTRAMESH_EXPRESS: fall through to the express path below, where the chord router is
+        // wired to all four cardinals like any express-facing router.
+    }
 
     // Express routing changes which local transitions are legal, so it gets its own construction.
     // Without it the wiring below is left exactly as it was: today's 2D routing is already
@@ -329,16 +403,19 @@ void RouterConnectionMapping::add_mesh_to_z_targets(
     }
 }
 
-RouterConnectionMapping RouterConnectionMapping::for_z_router() {
+RouterConnectionMapping RouterConnectionMapping::z_intermesh_boundary_fanout() {
     RouterConnectionMapping mapping;
 
+    // The boundary's VC1 receiver landing from the remote mesh fans out to every mesh direction.
+    // Its VC0 senders are fed by the mesh routers' MESH_TO_Z targets (emitted on their maps), so
+    // there is no VC0 map here. Constructed without inputs so no caller can pass a fact this
+    // template ignores.
     std::vector<RoutingDirection> vc1_outbound_directions = {
-        RoutingDirection::E,  // Forward to EAST mesh router
-        RoutingDirection::W,  // Forward to WEST mesh router
-        RoutingDirection::N,  // Forward to NORTH mesh router
-        RoutingDirection::S   // Forward to SOUTH mesh router
+        RoutingDirection::E,
+        RoutingDirection::W,
+        RoutingDirection::N,
+        RoutingDirection::S,
     };
-
     for (size_t i = 0; i < vc1_outbound_directions.size(); ++i) {
         mapping.add_target(
             1,  // VC1
@@ -349,8 +426,13 @@ RouterConnectionMapping RouterConnectionMapping::for_z_router() {
                 i,  // Target sender channel on mesh router (0-3, no worker)
                 vc1_outbound_directions[i]));
     }
-
     return mapping;
+}
+
+RouterConnectionMapping RouterConnectionMapping::for_z_router() {
+    // Alias kept for existing callers: the same construction the unified generator's capability
+    // dispatch reaches for (Z, INTERMESH).
+    return z_intermesh_boundary_fanout();
 }
 
 }  // namespace tt::tt_fabric

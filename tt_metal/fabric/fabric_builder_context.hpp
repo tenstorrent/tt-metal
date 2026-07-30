@@ -32,19 +32,6 @@ class FabricContext;
 };
 
 /**
- * IntermeshRouterType - Distinguishes types of intermesh routers
- *
- * Different intermesh router types have different channel requirements:
- * - Z_INTERMESH: Vertical device stacking, requires 4 VC1 sender channels (3 mesh + Z)
- * - XY_INTERMESH: Horizontal inter-mesh, requires 3 VC1 sender channels (mesh only)
- */
-enum class IntermeshRouterType : uint8_t {
-    NONE,          // No intermesh connectivity
-    Z_INTERMESH,   // Z routers (vertical device stacking)
-    XY_INTERMESH   // XY intermesh routers (horizontal inter-mesh)
-};
-
-/**
  * IntermeshVCConfig - System-level intermesh VC configuration
  *
  * Determined during FabricContext initialization based on:
@@ -60,7 +47,11 @@ enum class IntermeshRouterType : uint8_t {
  */
 struct IntermeshVCConfig {
     IntermeshVCMode mode = IntermeshVCMode::DISABLED;
-    IntermeshRouterType router_type = IntermeshRouterType::NONE;  // Type of intermesh router (Z vs XY)
+    // True when some intermesh edge sits on a Z direction, meaning Z-facing intermesh boundary
+    // routers exist in this fabric and the fabric-wide maximum channel counts must cover their
+    // (direction,capability)-derived 5/4 shape. Informational only -- per-router shapes are derived
+    // from facing and capability, not from this flag.
+    bool has_intermesh_z_router = false;
     bool requires_vc1 = false;                      // True if VC1 needed for intermesh
     bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through

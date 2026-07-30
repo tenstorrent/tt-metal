@@ -749,8 +749,9 @@ TEST_F(ConnectionRegistryTest, Phase2_ZRouter_VC1_FourTargets) {
     // Create connection mapping for Z router
     auto mapping = RouterConnectionMapping::for_z_router();
 
-    // Verify mapping: receiver channel 0 on VC1 has 4 downstream targets
-    constexpr uint32_t num_z_targets = builder_config::num_sender_channels_z_router_vc1;
+    // Verify mapping: receiver channel 0 on VC1 has 4 downstream targets (from-Z fanout to every
+    // mesh direction)
+    constexpr uint32_t num_z_targets = 4;
 
     auto targets = mapping.get_downstream_targets(1, 0);  // VC1, receiver channel 0
     ASSERT_EQ(targets.size(), num_z_targets);

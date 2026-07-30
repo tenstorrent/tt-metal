@@ -112,12 +112,16 @@ TEST_F(RouterConnectionsTest, MeshToMesh_VC0_Connection) {
     FabricRouterChannelMapping router0_mapping(
         Topology::Mesh,
         false,  // no tensix
-        RouterVariant::MESH, nullptr);
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        nullptr);
 
     FabricRouterChannelMapping router1_mapping(
         Topology::Mesh,
         false,  // no tensix
-        RouterVariant::MESH, nullptr);
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        nullptr);
 
     // Verify both routers have VC0 only
     EXPECT_EQ(router0_mapping.get_num_virtual_channels(), 1);
@@ -220,15 +224,11 @@ TEST_F(RouterConnectionsTest, MeshToZ_VC0_Connection) {
 
     // Mesh router (North direction)
     FabricRouterChannelMapping mesh_mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::MESH, nullptr);
+        Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, nullptr);
 
     // Z router
     FabricRouterChannelMapping z_mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::Z_ROUTER, &intermesh_config);
+        Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &intermesh_config);
 
     // Verify Z router has 2 VCs
     EXPECT_EQ(z_mapping.get_num_virtual_channels(), 2);
@@ -316,15 +316,11 @@ TEST_F(RouterConnectionsTest, ZToMesh_VC1_Connection) {
 
     // Z router
     FabricRouterChannelMapping z_mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::Z_ROUTER, &intermesh_config);
+        Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &intermesh_config);
 
     // Mesh router
     FabricRouterChannelMapping mesh_mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::MESH, nullptr);
+        Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, nullptr);
 
     // Verify Z router VC1 has 4 sender channels
     EXPECT_EQ(z_mapping.get_num_sender_channels_for_vc(1), 4);
@@ -547,9 +543,7 @@ TEST_F(RouterConnectionsTest, Phase1_5_ZRouter_MultiTargetReceiver_Validation) {
 
     // Z router channel mapping
     FabricRouterChannelMapping z_mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::Z_ROUTER, &intermesh_config);
+        Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &intermesh_config);
 
     // Verify Z router has correct VC1 layout
     EXPECT_EQ(z_mapping.get_num_virtual_channels(), 2);
@@ -568,9 +562,7 @@ TEST_F(RouterConnectionsTest, Phase1_5_ZRouter_MultiTargetReceiver_Validation) {
     for (size_t i = 0; i < 4; ++i) {
         // Create mesh router mapping
         FabricRouterChannelMapping mesh_mapping(
-            Topology::Mesh,
-            false,
-            RouterVariant::MESH, nullptr);
+            Topology::Mesh, false, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, nullptr);
 
         // Verify mesh router VC0 sender channel 2 exists
         EXPECT_GE(mesh_mapping.get_num_sender_channels_for_vc(0), 3);
@@ -1055,9 +1047,7 @@ TEST_F(RouterConnectionsTest, Phase2_ChannelMapping_And_ConnectionMapping_Consis
     // Create Z router channel mapping
     auto intermesh_config = IntermeshVCConfig::full_mesh();
     FabricRouterChannelMapping z_channel_mapping(
-        Topology::Mesh,
-        false,
-        RouterVariant::Z_ROUTER,         &intermesh_config);
+        Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &intermesh_config);
 
     // Create Z router connection mapping
     auto z_conn_mapping = RouterConnectionMapping::for_z_router();

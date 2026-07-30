@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <numeric>
@@ -98,8 +99,10 @@ public:
      * @param express_routing_enabled When set, build the express transition set instead: cardinal and
      *        express Z outputs on every carrier VC, with an ordinary X ingress unwired from intramesh
      *        Y egress so dimension order holds. Non-express wiring is left byte-for-byte as it was.
-     * @param ingress_capability Capability of this router's own edge. Only consulted under express
-     *        routing, where an INTERMESH landing on an E/W port stays eligible to begin Y.
+     * @param ingress_capability Capability of this router's own edge. Consulted under express
+     *        routing, where an INTERMESH landing on an E/W port stays eligible to begin Y, and for
+     *        a Z-facing router, where it selects the template: INTERMESH yields the from-boundary
+     *        fanout (the Z_ROUTER shape), INTRAMESH_EXPRESS the express chord wiring.
      * @param has_intramesh_express Whether this chip terminates a same-mesh express chord. Only
      *        consulted under express routing: a Z output is emitted only when the chord exists. On a
      *        chip whose only Z edge crosses a mesh boundary, a Z target would resolve to the
@@ -155,16 +158,65 @@ public:
         bool has_intramesh_express);
 
     /**
-     * @brief Factory method for Z router connection mapping
+     * Per-direction capability set of one chip: each direction's edge capability, indexed by
+     * RoutingDirection enum value (E=0, W=1, N=2, S=3, Z=4); nullopt where the direction is absent.
+     */
+    using PerDirectionCapabilities = std::array<std::optional<EdgeCapability>, 5>;
+
+    /**
+     * @brief The canonical express-endpoint chip: every cardinal intramesh, Z is the chord
      *
-     * Creates a mapping for a Z router with:
-     * - VC0: Standard mesh forwarding (if applicable)
-     * - VC1: Multi-target Z_TO_MESH connections (N/E/S/W intent)
+     * This is the capability set the express family-max count is evaluated against. It attains
+     * the structural ceiling: every Y and X producer wires into an E/W facing under any capability
+     * assignment, so no per-chip set produces a wider router.
+     */
+    static PerDirectionCapabilities canonical_express_endpoint_capabilities();
+
+    /**
+     * @brief VC0 sender slots a router facing `direction` needs on a chip with these capabilities
+     *
+     * The local worker plus the producers the connection map wires into it. Arity depends on
+     * facing: an E/W-facing router is fed by every Y producer (the Y->X turn is legal), while
+     * dimension order leaves N/S/Z-facing routers with only their Y producers. INTERMESH
+     * (landing-capable) directions widen their non-self set, so per-chip callers must pass the
+     * actual chip's capabilities; the canonical endpoint set is only the family-max input.
+     */
+    static uint32_t express_vc0_producer_arity(RoutingDirection direction, const PerDirectionCapabilities& caps);
+
+    /**
+     * @brief Uniform VC0/VC1 sender counts for the express mesh family
+     *
+     * The family max over facing directions of wired-producer arity on the canonical endpoint
+     * chip: one flat index space per family, with per-router wiring filling a subset and
+     * per-direction channel trimming as the separate L1 lever for narrowing (which evaluates
+     * arity against the actual per-chip capability set, not the canonical one).
+     */
+    static uint32_t express_mesh_vc0_sender_count();
+    static uint32_t express_mesh_vc1_sender_count();
+
+    /**
+     * @brief The Z-facing intermesh boundary template
+     *
+     * The VC1 from-boundary fanout to every mesh direction, constructed without inputs: the
+     * boundary's VC1 receiver landing from the remote mesh fans out to every non-self direction
+     * (all four, since Z has no self among the mesh directions). Reached by for_mesh_router's
+     * capability dispatch for (Z, INTERMESH) and by the for_z_router() alias, so the two cannot
+     * produce different shapes.
      *
      * Note: Mapping specifies all 4 directions as intent. FabricBuilder
      * will skip non-existent directions based on device position (2-4 mesh routers).
      *
-     * @return Configured RouterConnectionMapping for Z router
+     * @return Configured RouterConnectionMapping for the Z-facing intermesh boundary router
+     */
+    static RouterConnectionMapping z_intermesh_boundary_fanout();
+
+    /**
+     * @brief Alias for the Z-facing intermesh boundary template
+     *
+     * Equivalent to for_mesh_router(direction == Z, ingress_capability == INTERMESH): both
+     * forward to z_intermesh_boundary_fanout(). Kept for existing callers and tests.
+     *
+     * @return Configured RouterConnectionMapping for the Z-facing intermesh boundary router
      */
     static RouterConnectionMapping for_z_router();
 

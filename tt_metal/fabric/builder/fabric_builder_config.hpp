@@ -50,28 +50,15 @@ static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 static constexpr std::size_t num_sender_channels_1d_neighbor_exchange = 1;
 static constexpr std::size_t num_sender_channels_1d_linear = 2;
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
-// Express routing adds a fifth VC0 sender: a mesh router's producers become three cardinal ingresses
-// plus the express chord, alongside the local worker. Applied uniformly to express mesh routers rather
-// than per direction, matching how these counts already work -- a router whose legal transitions do
-// not fill all five simply leaves the extra unserviced, which is an existing concept here.
-static constexpr std::size_t num_sender_channels_2d_mesh_express = 5;
 
-// Z router channel counts
-// VC0: 5 sender channels (mesh→Z: 0=Worker, 1-4=E/W/N/S mesh directions) + 1 receiver
-// VC1: 4 sender channels (Z→mesh, one per direction: 0=E, 1=W, 2=N, 3=S) + 0 receiver (skipped)
-static constexpr std::size_t num_sender_channels_z_router_vc0 = 5;
-static constexpr std::size_t num_sender_channels_z_router_vc1 = 4;
+// Per-family sender counts beyond the legacy 2D mesh width are no longer independent constants:
+// they are derived from the wiring rules as the family max over facing of wired-producer arity
+// (see RouterConnectionMapping for the express family, and the intermesh_z_boundary_* accessors
+// below for the Z-facing intermesh boundary family -- both are 5 VC0 / 4 VC1 by their rules).
+
 // VC2: 1 sender channel (worker-type, neighbour exchange) + 1 receiver (non-Z only)
 static constexpr std::size_t num_sender_channels_vc2 = 1;
 static constexpr std::size_t num_receiver_channels_vc2 = 1;
-static constexpr std::size_t num_sender_channels_z_router_vc2 = 1;
-// Aggregate without VC2 — VC2 channels are added dynamically by channel mapping when requires_vc2 is true
-static constexpr std::size_t num_sender_channels_z_router =
-    num_sender_channels_z_router_vc0 + num_sender_channels_z_router_vc1;
-// Max including VC2 — used only for array sizing
-static constexpr std::size_t num_sender_channels_z_router_with_vc2 =
-    num_sender_channels_z_router + num_sender_channels_z_router_vc2;
-static constexpr std::size_t num_receiver_channels_z_router = 2;  // 1 for VC0, 1 for VC1
 
 static constexpr std::size_t num_sender_channels_1d = 2;
 // VC0: Worker + 3 of [N/E/S/W], plus the express chord when express routing is on = 4 or 5 channels
@@ -82,18 +69,19 @@ static constexpr std::size_t num_sender_channels_1d = 2;
 //
 // Sized for the widest 2D shape so the flat index space is the same whether or not express routing is
 // enabled. num_max_sender_channels is unchanged at 10: express with VC2 reaches it exactly (5+4+1),
-// matching the capacity analysis in GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md section 3.6.
+// matching the capacity analysis in GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md section 3.6. The
+// Z-facing intermesh boundary family is also 5+4(+1), so the ceilings below cover it as well.
 static constexpr std::size_t num_sender_channels_2d = 9;
 // Max including VC2 — used only for array sizing
 static constexpr std::size_t num_sender_channels_2d_with_vc2 = num_sender_channels_2d + num_sender_channels_vc2;
 // Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
 static constexpr std::size_t num_max_sender_channels_without_vc2 =
-    std::max({num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router});
-// = max(2, 8, 9) = 9
+    std::max({num_sender_channels_1d, num_sender_channels_2d});
+// = max(2, 9) = 9
 // Absolute maximum — used for host-side array sizing (always big enough for any config)
 static constexpr std::size_t num_max_sender_channels =
-    std::max({num_sender_channels_1d, num_sender_channels_2d_with_vc2, num_sender_channels_z_router_with_vc2});
-// = max(2, 9, 10) = 10
+    std::max({num_sender_channels_1d, num_sender_channels_2d_with_vc2});
+// = max(2, 10) = 10
 static constexpr std::size_t num_receiver_channels_1d = 1;
 // Without VC2 — VC2 receiver added dynamically
 static constexpr std::size_t num_receiver_channels_2d = 2;  // VC0(1) + VC1(1)
@@ -101,12 +89,12 @@ static constexpr std::size_t num_receiver_channels_2d = 2;  // VC0(1) + VC1(1)
 static constexpr std::size_t num_receiver_channels_2d_with_vc2 = num_receiver_channels_2d + num_receiver_channels_vc2;
 // Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
 static constexpr std::size_t num_max_receiver_channels_without_vc2 =
-    std::max({num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router});
-// = max(1, 2, 2) = 2
+    std::max({num_receiver_channels_1d, num_receiver_channels_2d});
+// = max(1, 2) = 2
 // Absolute maximum — used for host-side array sizing (always big enough for any config)
 static constexpr std::size_t num_max_receiver_channels =
-    std::max({num_receiver_channels_1d, num_receiver_channels_2d_with_vc2, num_receiver_channels_z_router});
-// = max(1, 3, 2) = 3
+    std::max({num_receiver_channels_1d, num_receiver_channels_2d_with_vc2});
+// = max(1, 3) = 3
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
@@ -123,6 +111,15 @@ static constexpr std::size_t max_downstream_edms = 8;
 
 // 2D mesh directions (N, E, S, W)
 static constexpr uint32_t num_mesh_directions_2d = 4;
+
+// The Z-facing intermesh boundary family's channel counts, by its own wiring rules -- not
+// arithmetic on the cardinal count, though they coincide because a Z-facing router has no self
+// among the mesh directions:
+//   VC0: the boundary egress is fed by every non-self producer (all four mesh-direction routers
+//        via MESH_TO_Z) plus the local worker.
+//   VC1: the boundary's VC1 receiver fans out to every mesh direction.
+static constexpr uint32_t num_sender_channels_intermesh_z_boundary_vc0 = 1 + num_mesh_directions_2d;
+static constexpr uint32_t num_sender_channels_intermesh_z_boundary_vc1 = num_mesh_directions_2d;
 
 // Slots an injection channel's downstream receiver must have for bubble flow control to work: it only
 // sends when it sees this many free, so a smaller receiver stalls it permanently.

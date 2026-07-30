@@ -72,13 +72,10 @@ protected:
             .channel_mapping = FabricRouterChannelMapping(
                 Topology::Mesh,
                 false,  // No tensix
-                RouterVariant::MESH,
-                nullptr),  // No intermesh config for mock
-            .connection_mapping = RouterConnectionMapping::for_mesh_router(
-                Topology::Mesh,
                 dir,
-                has_z)
-        };
+                EdgeCapability::INTRAMESH_CARDINAL,
+                nullptr),  // No intermesh config for mock
+            .connection_mapping = RouterConnectionMapping::for_mesh_router(Topology::Mesh, dir, has_z)};
     }
 
     MockRouter create_mock_z_router(uint32_t router_id) {
@@ -89,10 +86,10 @@ protected:
             .channel_mapping = FabricRouterChannelMapping(
                 Topology::Mesh,
                 false,
-                RouterVariant::Z_ROUTER,
+                RoutingDirection::Z,
+                EdgeCapability::INTERMESH,
                 &intermesh_config),  // Z routers require intermesh config
-            .connection_mapping = RouterConnectionMapping::for_z_router()
-        };
+            .connection_mapping = RouterConnectionMapping::for_z_router()};
     }
 
     // Helper to simulate local connection establishment

@@ -32,8 +32,13 @@ namespace {
 std::pair<uint32_t, uint32_t> get_expected_channels(
     Topology topology, const std::string& direction, bool has_vc1) {
     if (direction == "Z") {
-        // Z routers always have both VCs
-        return {builder_config::num_sender_channels_z_router, builder_config::num_receiver_channels_z_router};
+        // Z-facing intermesh boundary routers always have both VCs. Counts come from the boundary
+        // family's derived accessors: boundary VC0 (worker + every non-self producer) plus
+        // boundary VC1 (from-Z fanout) = 9, with one receiver per carrier VC.
+        return {
+            builder_config::num_sender_channels_intermesh_z_boundary_vc0 +
+                builder_config::num_sender_channels_intermesh_z_boundary_vc1,
+            builder_config::num_receiver_channels_2d};
     }
     if (is_2D_topology(topology)) {
         if (has_vc1) {

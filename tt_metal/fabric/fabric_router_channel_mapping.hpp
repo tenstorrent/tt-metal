@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <map>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
 #include <vector>
@@ -15,21 +16,11 @@ namespace tt::tt_fabric {
 
 // Forward declaration
 struct IntermeshVCConfig;
+enum class EdgeCapability : uint8_t;
 
 enum class BuilderType : uint8_t {
     ERISC = 0,
     TENSIX = 1,
-};
-
-/**
- * RouterVariant - Distinguishes between mesh and Z routers
- *
- * MESH: Standard mesh router (N/E/S/W directions)
- * Z_ROUTER: Vertical Z router for inter-device connectivity
- */
-enum class RouterVariant : uint8_t {
-    MESH = 0,
-    Z_ROUTER = 1,
 };
 
 struct LogicalSenderChannelKey {
@@ -70,22 +61,26 @@ struct InternalReceiverChannelMapping {
  * FabricRouterChannelMapping
  *
  * Defines the mapping from logical channels (VC + relative channel index within VC) to internal builder channels.
- * This mapping is computed based on topology, direction, router variant, and tensix extension mode.
+ * This mapping is computed based on topology, the router's facing direction and its edge's
+ * capability, and tensix extension mode. There is no router variant: the Z-facing intermesh
+ * boundary family is exactly the (direction == Z, capability == INTERMESH) case, and every other
+ * router is a mesh-like router whose shape comes from the wiring rules.
  *
  * Channel indices are relative to each VC:
  * - VC0 (1D): [0] = local worker, [1] = forwarding from upstream
  * - VC0 (2D): [0] = local worker, [1-3] = forwarding from upstream routers
  * - VC1 (2D): [0-2] = intermesh channels (standard 2D)
- * - VC1 (Z router): [0-3] = Z→mesh channels (4 sender channels mapping to 2-4 mesh routers)
+ * - VC1 (Z boundary): [0-3] = Z→mesh channels (4 sender channels mapping to 2-4 mesh routers)
  */
 class FabricRouterChannelMapping {
 public:
     FabricRouterChannelMapping(
         Topology topology,
         bool downstream_is_tensix_builder,
-        RouterVariant variant,
+        RoutingDirection direction,
+        EdgeCapability edge_capability,
         const IntermeshVCConfig* intermesh_config,
-        bool has_z_on_device = false,
+        bool has_intermesh_z_edge = false,
         bool express_routing_enabled = false);
 
     /**
@@ -111,21 +106,20 @@ public:
     std::vector<InternalSenderChannelMapping> get_all_sender_mappings() const;
 
     /**
-     * Check if this is a Z router
+     * Check if this is the Z-facing intermesh boundary family (direction == Z and the edge
+     * crosses a mesh boundary): the 5/4 channel shape with the from-Z VC1 fanout.
      */
-    bool is_z_router() const;
-
-    /**
-     * Check if this is a standard mesh router
-     */
-    bool is_mesh_router() const;
+    bool is_intermesh_z_boundary() const;
 
 private:
     Topology topology_;
     bool downstream_is_tensix_builder_;
-    RouterVariant variant_;
+    RoutingDirection direction_;
+    EdgeCapability edge_capability_;
     const IntermeshVCConfig* intermesh_vc_config_ = nullptr;
-    bool has_z_on_device_ = false;
+    // This chip terminates a Z edge that crosses a mesh boundary: its mesh routers gain a from-Z
+    // VC1 slot for the boundary's fanout.
+    bool has_intermesh_z_edge_ = false;
     // This mesh has express chords, so a mesh router's VC0 gains a fifth sender for the express
     // producer alongside the worker and its cardinal ingresses.
     bool express_routing_enabled_ = false;

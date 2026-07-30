@@ -124,10 +124,10 @@ TEST_F(BuilderConnectionMappingTest, MeshRouter_ChannelAndConnectionMapping_Cons
     RoutingDirection routing_dir = RoutingDirection::N;
     bool has_tensix = false;
     bool has_z = true;
-    RouterVariant variant = RouterVariant::MESH;
 
     // Phase 1: Channel mapping
-    FabricRouterChannelMapping channel_mapping(topology, has_tensix, variant, nullptr);
+    FabricRouterChannelMapping channel_mapping(
+        topology, has_tensix, routing_dir, EdgeCapability::INTRAMESH_CARDINAL, nullptr);
 
     // Phase 2: Connection mapping
     RouterConnectionMapping conn_mapping = RouterConnectionMapping::for_mesh_router(topology, routing_dir, has_z);
@@ -153,11 +153,11 @@ TEST_F(BuilderConnectionMappingTest, ZRouter_ChannelAndConnectionMapping_Consist
     // Create both mappings as build() would for Z router
     Topology topology = Topology::Mesh;
     bool has_tensix = false;
-    RouterVariant variant = RouterVariant::Z_ROUTER;
     auto intermesh_config = IntermeshVCConfig::full_mesh();
 
     // Phase 1: Channel mapping
-    FabricRouterChannelMapping channel_mapping(topology, has_tensix, variant, &intermesh_config);
+    FabricRouterChannelMapping channel_mapping(
+        topology, has_tensix, RoutingDirection::Z, EdgeCapability::INTERMESH, &intermesh_config);
 
     // Phase 2: Connection mapping
     RouterConnectionMapping conn_mapping = RouterConnectionMapping::for_z_router();
@@ -177,32 +177,31 @@ TEST_F(BuilderConnectionMappingTest, ZRouter_ChannelAndConnectionMapping_Consist
 }
 
 // ============================================================================
-// Variant Detection Tests
+// Family Detection Tests (capability-based, not direction-keyed)
 // ============================================================================
 
-TEST_F(BuilderConnectionMappingTest, VariantDetection_MeshRouter) {
-    // Test that mesh routers are correctly identified
-    std::vector<RoutingDirection> mesh_directions = {
-        RoutingDirection::N,
-        RoutingDirection::E,
-        RoutingDirection::S,
-        RoutingDirection::W
-    };
-
-    for (auto dir : mesh_directions) {
-        RouterVariant variant = (dir == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
-
-        EXPECT_EQ(variant, RouterVariant::MESH)
-            << "Direction " << static_cast<int>(dir) << " should be MESH variant";
+TEST_F(BuilderConnectionMappingTest, FamilyDetection_CardinalDirectionsAreNotZBoundary) {
+    // Cardinal-facing routers are never the Z-facing intermesh boundary family
+    auto intermesh_config = IntermeshVCConfig::full_mesh();
+    for (auto dir : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+        FabricRouterChannelMapping mapping(
+            Topology::Mesh, false, dir, EdgeCapability::INTRAMESH_CARDINAL, &intermesh_config);
+        EXPECT_FALSE(mapping.is_intermesh_z_boundary())
+            << "Direction " << static_cast<int>(dir) << " must not derive the Z boundary family";
     }
 }
 
-TEST_F(BuilderConnectionMappingTest, VariantDetection_ZRouter) {
-    // Test that Z router is correctly identified
-    RoutingDirection dir = RoutingDirection::Z;
-    RouterVariant variant = (dir == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
+TEST_F(BuilderConnectionMappingTest, FamilyDetection_ZBoundaryRequiresIntermesh) {
+    // The Z boundary family is the (Z, INTERMESH) case -- direction alone does not select it.
+    auto intermesh_config = IntermeshVCConfig::full_mesh();
+    FabricRouterChannelMapping boundary(
+        Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &intermesh_config);
+    EXPECT_TRUE(boundary.is_intermesh_z_boundary());
 
-    EXPECT_EQ(variant, RouterVariant::Z_ROUTER);
+    // A same-mesh Z is an express chord: still Z-facing, but not the boundary family.
+    FabricRouterChannelMapping chord(
+        Topology::Torus, false, RoutingDirection::Z, EdgeCapability::INTRAMESH_EXPRESS, nullptr, false, true);
+    EXPECT_FALSE(chord.is_intermesh_z_boundary());
 }
 
 // ============================================================================
