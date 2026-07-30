@@ -3,71 +3,115 @@
 
 """TTNN port of the Voxtral Codec DECODER (Block 3): audio codes -> 24 kHz waveform.
 
-Mirrors reference/voxtral_codec_ref.py op-for-op. All compute runs on device; the only
-host-side step is the semantic codebook gather (see _quantizer_host):
+Mirrors reference/voxtral_codec_ref.py op-for-op. All compute runs on device; the only host-side
+step is the semantic codebook gather (see _quantizer_host):
 
     codes [1,37,T] --quantizer--> [1,292,T] --conv(k3,replicate)--> [1,1024,T]
       --4x { Transformer(2 layers, ALiBi + causal + sliding window) [+ ConvTranspose(k4,s2)] }
       --output_proj(k7,reflect)--> [1,240,T'] --unpatch--> [1,1,T'*240] @ 24 kHz
 
+Channel width is a constant 1024 through every upsample; only the final projection narrows it, to
+240, and those 240 channels then BECOME time (each frame carries a 240-sample waveform patch).
 The signal stays a channels-last [1,1,L,C] device tensor across conv stages and [1,L,C] across
-transformer stages, so there is no host round-trip between ops — only codes in, waveform out.
+transformer stages, so there is no host round-trip between ops -- codes in, waveform out.
 
-LAYOUT / OP NOTES (what the reference's torch ops map to here):
-  * `ttnn.conv1d` is native but ZERO-pad only, while every conv here is a CAUSAL left-pad with
-    reflect/replicate. `_pad_causal` builds those from slice+concat (the pad is only k-1, i.e. 2
-    or 6 columns, so this is a handful of slices — ttnn has no flip).
+=== HOW THE REFERENCE'S TORCH OPS MAP HERE ===
+  * `ttnn.conv1d` is ZERO-pad only, while every conv here is a CAUSAL left-pad with
+    reflect/replicate. `_pad_causal` builds those from slice+concat (the pad is k-1, i.e. 2 or 6
+    columns, so it is a handful of slices -- ttnn has no flip).
   * conv_transpose1d does not exist; done via `ttnn.conv_transpose2d` with a singleton HEIGHT and
     length on the WIDTH axis, which the XTTS-v2 vocoder work showed is ~10x faster than mapping
     length to height (height slicing hits a circular-buffer/L1 clash).
-  * ALiBi + causal + sliding window collapse into ONE additive pre-softmax bias, built on host
-    and cached per (S, window, dtype) — it does not depend on the weights. Because it is a
-    function of (j - i) only, it is constant along diagonals, which is what makes chunking work:
-    one slab-sized bias serves every chunk of every utterance.
+  * ALiBi + causal + sliding window collapse into ONE additive pre-softmax bias, built on host and
+    cached per (S, window, dtype); it does not depend on the weights. Being a function of (j - i)
+    only, it is constant along diagonals -- which is exactly what lets one slab-sized bias serve
+    every chunk of every utterance.
   * QK-norm is an RMSNorm over the FULL 1024-wide projection, BEFORE the head split.
   * LayerScale multiplies each residual branch by a learned [1024] vector.
-  * `norm_eps` is 1e-2 here (not 1e-5) — from params.json, and load-bearing.
+  * `norm_eps` is 1e-2 here (not 1e-5) -- from params.json, and load-bearing.
 
-PRECISION: MEASURED, not inherited. fp32 accumulation (HiFi3 + fp32_dest_acc) is on throughout;
-activations outside attention are always fp32. Swept on real weights with synthetic codes, which
-stress the numerics harder than real speech does (the same effect the XTTS-v2 speaker encoder saw
-on random input):
+=== PRECISION: MEASURED, NOT INHERITED ===
+fp32 accumulation (HiFi3 + fp32_dest_acc_en) is on throughout; activations outside attention are
+always fp32. The two knobs were swept on real weights, and scored on BOTH metrics -- PCC, and the
+worst single sample as a % of peak, which is what the ear notices and what PCC can hide (see
+"trap: PCC hides outliers" below).
 
-    weights  attention | PCC T=64 / 256 / 469        | warm T=64 / 256 / 469
-    fp32     fp32      | 0.999747 0.999761 0.999425  |  46 /  85 / 163 ms
-    bf16     fp32      | 0.999204 0.999505 0.998732  |  44 /  83 / 162 ms  <- FAILS the 0.999 gate
-    fp32     bf16      | 0.999800 0.999865 0.999795  |  44 /  81 / 155 ms  <- DEFAULT
-    bf16     bf16      | 0.999512 0.999661 0.999610  |  42 /  79 / 153 ms
+    weights  attn   | synthetic worst-sample %peak  | real speech        | warm ms
+                    |  T=64    T=256   T=469        |  PCC       worst%  | 64/256/469
+    fp32     fp32   |  8.95    8.32    29.08        |  0.999988  0.81%   | 46/85/163
+    bf16     fp32   | 13.66   14.90    49.78        |  0.999986  1.38%   | 44/83/162
+    fp32     bf16   | 10.45    8.66    11.56        |  0.999984  1.16%   | 44/81/156  <- DEFAULT
+    bf16     bf16   | 13.87   10.88    25.16        |  0.999983  1.93%   | 42/79/154
 
-bf16 ATTENTION is strictly good: best PCC of all four, slightly faster, and it halves the largest
-tensor (the attention bias). Hence the default.
+bf16 ATTENTION is the default and wins on both metrics: best PCC of the four (0.999800/0.999865/
+0.999795 on synthetic), best synthetic worst-sample at T=469 by a wide margin, faster, and it
+halves the largest tensor (the attention bias). fp32 attention is slightly better on real speech
+(0.81% vs 1.16%) but is 2.5x worse on synthetic at T=469 and ~5% slower, and synthetic is
+deliberately the conservative gate.
 
-bf16 WEIGHTS are now strictly BAD and the knob is kept only for experiments. They cost real
-accuracy -- on their own they fall below the gate at T=469 -- and they no longer buy speed: 44 vs
-46 ms. An earlier sweep showed them ~20% faster, but that gap was conv weight PREPARATION cost
-(which scales with weight bytes) being paid on every call. Once that was hoisted out of the
-per-call path the speed argument disappeared entirely.
+bf16 WEIGHTS are BAD; the knob exists only for experiments. On their own they fall below the 0.999
+PCC gate at T=469, and they no longer buy speed (44 vs 46 ms) -- an earlier sweep showed ~20%, but
+that was conv weight PREPARATION cost, since hoisted out of the per-call path. WARNING: bf16+bf16
+measures 1.93% worst-sample against a 2.00% gate, i.e. 3.5% of margin, for a ~1% speed gain. Do
+not enable it without re-running the real-speech fixture.
 
-Also tested and made no difference: keeping the small per-channel tensors (RMSNorm weights,
-QK-norm weights, LayerScale vectors) in fp32 while the matmul weights are bf16 -- PCC 0.999512
-either way, so the bf16 loss is in the matmul weights, not the norms.
+Made no difference: keeping the small per-channel tensors (RMSNorm / QK-norm weights, LayerScale)
+in fp32 while matmul weights are bf16 -- PCC 0.999512 either way, so the bf16 loss is in the matmul
+weights, not the norms.
 
-On REAL speech both bf16 variants are indistinguishable (PCC 0.999982, ASR WER 0.0%); the
-differences above only appear on random synthetic codes. Synthetic is kept as the gate because it
-is the conservative test.
+The fp32 -> bf16 conversion of q/k/v is itself worth 3.70e-03 of worst-case error, about half of
+the hand-rolled path's total 5.85e-03 (internal math alone: 4.22e-03). Real but not the dominant
+term, and the sweep above already prices it in.
 
 Not carried over: the XTTS-v2 HiFi-GAN result that bf16 costs 0.91-0.96 PCC. That was a 34-conv
 chain with bf16 ACTIVATIONS throughout; here attention output enters the residual scaled by
 LayerScale (~0.01) and there are only 8 attention ops, so it does not transfer.
 
-CURRENT PERFORMANCE (warm, N150, defaults): 43.6 ms for 5.1 s of audio (RTF 0.0085, 117x
-real-time) up to 538 ms for 120 s (RTF 0.0045, 223x). For reference, upstream report RTF 0.103 for
-their WHOLE pipeline on an H200, so this block is a few percent of the total budget.
+=== PERFORMANCE (warm, N150, defaults) ===
+43.8 ms for 5.1 s of audio (RTF 0.0086, 117x real-time), 155 ms for 37.5 s (242x), 539 ms for
+120 s (223x). Upstream report RTF 0.103 for their WHOLE pipeline on an H200, so this block is
+~4-8% of the end-to-end budget. It is NOT where the end-to-end answer gets decided -- Block 1 is
+(87% of the parameters, 12.5 sequential steps per second of audio).
 
-MEMORY: prepared conv weights are cached and DEDUPLICATED BY CONTENT (see _prepared). There are
-only 8 distinct layouts across all 5 convs and all 12 buckets, so the cache holds 98 MB rather
-than the 730 MB that keying by length alone produced -- 0.8% of an N150's DRAM instead of 6.5%.
-Plus 60.8 MB of host copies, kept so a new length can still be prepared.
+=== OPTIMIZATIONS APPLIED, AND WHAT EACH WAS WORTH ===
+  1. bf16 attention (above): best accuracy of the four configs AND faster.
+  2. Chunked windowed attention (_attention), slab 512: O(S^2) -> O(S*slab). At S=12000, warm
+     892 -> 497 ms, cold 10580 -> 1178 ms, mask 2304 MB -> 4.2 MB. EXACT, not approximate.
+  3. Uniform slab-sized chunks: one cached bias per window, and one attention shape for the
+     process lifetime. Bias cache 23 tensors/53 MB -> 5/21 MB, stable across lengths.
+  4. Conv length bucketing (BUCKET): on a stream of 12 distinct lengths, 120.9 s -> 1.66 s (73x).
+  5. Hoisted conv weight preparation (_prepared): 2.4x at short lengths (112.8 -> 43.7 ms at
+     T=128); host share of wall time 88% -> 24%.
+  6. Content-deduplicated prepared weights (_prepared): 730 MB -> 98 MB, bit-identical.
+
+=== MEASURED AND REJECTED -- do not retry without new information ===
+  * sdpa instead of the hand-rolled attention interior: 1.44-2.27x FASTER but 3.3x worse
+    worst-case error, failing 11 tests. Eight levers exhausted including a tt-metal source patch.
+    Full detail and the exhaustion list in _attention_slab's docstring.
+  * Smaller slab, toward the compute optimum 2*window: slab=32 computes 9x FEWER scores and runs
+    9x SLOWER (334 vs 36 ms per decoder pass). Per-kernel cost dominates arithmetic here.
+  * Device trace capture: 1.00x at every slab size, including 3570 ops. The async command queue
+    already hides host dispatch behind device execution, so there is nothing to recover. (Trap:
+    "time is in the TTNN wrapper" != "time is dispatch".)
+  * Batching the chunks into one matmul: the batched attention is 2.4x faster, but building the
+    stacked tensor costs more than that saves (11.30 vs 9.67 ms). The chunks overlap by `window`,
+    so the gather is an unavoidable copy -- ttnn has no strided view.
+  * Unchunked attention with a full [S,S] mask: identical accuracy (so chunking really is exact),
+    but 3x slower at S=4096 and the mask grows quadratically to 268 MB. Only S<=1024 prefers it,
+    which is a `chunk_min` question, not a chunking one -- see CHUNK_MIN.
+
+=== TRAPS ===
+  * PCC HIDES OUTLIERS. It is a correlation: it can sit at 0.9998 while individual samples are
+    badly wrong, and for audio the outliers are what you hear. Every accuracy claim here is
+    therefore paired with a worst-sample bound, and the real-speech fixture asserts both.
+  * Prepared conv weights are NOT length-independent -- same shape, different bytes. See _prepared.
+  * `prepare_conv_*`'s `input_dtype` is the ACTIVATION dtype. See _prep_weight.
+
+=== MEMORY ===
+Prepared conv weights are cached and deduplicated by content: 8 distinct layouts across all 5
+convs and all 12 buckets, so 98 MB rather than the 730 MB that keying by length alone produced
+(0.8% of an N150's DRAM instead of 6.5%). Plus 60.8 MB of host copies, kept so a new length can
+still be prepared, and 21 MB of attention bias.
 
 Validate against the reference (per-stage PCC bisect + the default bucketed path):
     TT_METAL_HOME=<repo> PYTHONPATH=<repo> python models/experimental/voxtral_tts/tt/ttnn_voxtral_codec.py
@@ -118,25 +162,20 @@ MASK_NEG = -1e9
 # bf16 for the attention interior + its bias: measured best-PCC AND faster, and halves the
 # largest tensor. See the sweep in the module docstring.
 ATTN_DTYPE = ttnn.bfloat16
-# Chunked attention. `slab` must be TILE-ALIGNED: TILE_LAYOUT pads every dim to 32, so a slab of
-# 272 would silently become 288 and waste a row and column of tiles. Chunking turns attention from
-# O(S^2) into O(S*slab) -- the window is only 2..16, so an unchunked q@kT computes 382M scores per
-# head at S=12000 of which ~17 per row survive the mask. Measured at S=12000 (before the conv
-# weight-prep fix, so absolute numbers are now lower): warm 892 -> 497 ms, cold 10580 -> 1178 ms
-# (all attention shapes become identical, so kernels compile once ever), mask 2304 -> 4.2 MB.
-# Below chunk_min the full mask is already cheap and chunking loses a few percent to dispatch
-# (T=64: 89 -> 97 ms), hence the threshold.
+# Chunked attention -- see OPTIMIZATIONS #2/#3. `slab` MUST be tile-aligned: TILE_LAYOUT pads every
+# dim to 32, so a slab of 272 would silently become 288 and waste a row and column of tiles.
+# 512 is measured-optimal; both smaller and larger lose (see MEASURED AND REJECTED).
 SLAB = 512
+# Chunk only above this length. Below it the full mask is already cheap and chunking loses a few
+# percent to per-op cost (T=64: 89 -> 97 ms). Measured crossover is S ~ 2000, so 1024 would be
+# slightly better (1.06x on attention, ~0.1% end-to-end) at the cost of a 16.8 MB bias.
 CHUNK_MIN = 512
-# Length bucketing for the CONVS. Every conv's input length scales with T (T+2, T, 2T, 4T, 8T+6),
-# so each distinct utterance length compiles 5 new conv programs -- measured at 1-5 s each, and
-# T is whatever the model happens to generate, so a server never stops paying it (a ONE-frame
-# difference cost 5.5 s vs 181 ms warm). Rounding T up to a grid caps the shape count.
-# The trade is measured: bucketing costs 7-25% on WARM steady-state (padded compute) but on a
-# realistic stream of 12 distinct lengths, total time went 120.93s (none) -> 25.47s (bucket 64)
-# -> 1.66s (bucket 128), i.e. 73x. Warm-only regression is the wrong thing to optimise here since
-# production never repeats a length. 128 gives 12 buckets for the model's ~1500-frame ceiling.
-# Set None to disable (best if you genuinely decode one fixed length repeatedly).
+# Conv length bucketing -- see OPTIMIZATIONS #4. Every conv's input length scales with T, so each
+# distinct utterance length compiles 5 new conv programs at 1-5 s each, and T is whatever the model
+# generates -- a ONE-frame difference cost 5.5 s vs 181 ms warm. Rounding T up caps the shape count:
+# costs 7-25% on warm steady-state (padded compute), which production never sees, and 128 gives 12
+# buckets for the model's ~1500-frame ceiling. Set None if you truly decode one fixed length.
+# NOTE: 128 is wrong for STREAMING -- a 1-second chunk then costs the same as a 10-second one.
 BUCKET = 128
 
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
@@ -153,10 +192,7 @@ class TtVoxtralCodecDecoder:
         than inherited. Activations outside attention are always fp32."""
         self.device = device
         self.attn_dtype = attn_dtype
-        # Chunked attention: process `slab` positions at a time, keeping the last (slab - window).
-        # `slab` is TILE-ALIGNED on purpose -- TILE_LAYOUT pads every dim to 32, so a slab of 272
-        # would silently become 288 and waste a row and column of tiles.
-        self.slab = slab
+        self.slab = slab  # attention chunk width; see the SLAB constant for why 512
         self.chunk_min = chunk_min  # chunk only when S exceeds this; None = never chunk
         self.bucket = bucket  # round T up to this multiple before decoding; None = off
         # With PRE-PREPARED weights the op can no longer infer weights_dtype from a host tensor,
@@ -352,31 +388,32 @@ class TtVoxtralCodecDecoder:
     def _attention_slab(self, q, k, v, bias):
         """Attention with an additive pre-softmax bias, in `attn_dtype`. [1,H,S,d] -> [1,H,S,d].
 
-        Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention. sdpa is FASTER --
-        1.44-2.27x when dropped into this chunk loop with the same slab bias (25.1 -> 17.0 ms per
-        decoder pass), because the fused kernel never materialises the [slab,slab] scores in DRAM
-        where this path writes them four times. It is rejected purely on ACCURACY. Against an exact
-        fp64 answer at S=512:
+Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention, which was
+        measured and rejected. sdpa DOES accept an arbitrary additive mask (`attn_mask` with
+        `is_causal=False`), and dropped into this chunk loop with the same slab bias it is
+        1.44-2.27x FASTER (25.1 -> 17.0 ms per decoder pass) because the fused kernel never
+        materialises the [slab,slab] scores in DRAM, where this path writes them four times.
+
+        It loses on ACCURACY. Against an exact fp64 answer at S=512:
 
             path                 PCC vs exact   max abs err   mean abs err
             hand-rolled (this)   0.99999559     5.85e-03      3.98e-04
             sdpa                 0.99985772     1.95e-02      2.35e-03   <- 3.3x worse worst-case
 
-        Adopting it failed 11 tests, including the real-speech fixture's "worst sample within 2% of
-        peak" -- the one gate that guards what is audible -- and per-stage PCC 0.916 after a single
-        2-layer stage. The per-slab PCC was a healthy 0.9998, so this is trap #9 (PCC hides
-        outliers) plus the XTTS-v2 Block 1 finding (a structured softmax error that later layers
-        amplify) reproducing exactly.
+        Adopting it failed 11 tests, including the real-speech fixture's worst-sample bound -- the
+        gate that guards what is audible -- and per-stage PCC 0.916 after one 2-layer stage. The
+        per-slab PCC was a healthy 0.9998, so this is the PCC-hides-outliers trap firing exactly.
 
-        DO NOT RE-LITIGATE without new information; the search space is exhausted. Every lever
-        below leaves max abs err at exactly 1.951e-02:
-          * chunk geometry -- 1 vs 4 k-blocks, and chunked vs unchunked full mask
+        DO NOT RE-LITIGATE without new information. Every lever below leaves the worst-case error at
+        exactly 1.951e-02, which is why the cause is believed to be the compute kernel's arithmetic:
+          * chunk geometry -- 1 vs 4 k-blocks; chunked vs unchunked full mask
           * `exp_approx_mode=False`; `fp32_dest_acc_en=True`; HiFi4 (`use_high_precision_compute`)
           * fp32 q/k/v -- rejected outright, sdpa is bf16/bfp8/bfp4 only
-          * patching sdpa_program_factory.cpp so im_df/stats_df are Float32 and REBUILDING. Verified
-            live via a marker (im_df=Float32, fp32_dest_acc_en=true) -- error unchanged. So the loss
-            is in the compute kernel's arithmetic, not the buffer formats, and issue #13364 (closed,
-            "Enable FP32 Accumulate in Flash Attention") is a red herring here.
+          * patching sdpa_program_factory.cpp so im_df/stats_df are Float32, and REBUILDING.
+            Confirmed live via a marker (im_df=Float32, fp32_dest_acc_en=true) -- error unchanged.
+            So closed issue #13364 ("Enable FP32 Accumulate in Flash Attention") is a red herring
+            here. Isolating the inputs confirms it too: with a bf16-rounded reference (input
+            conversion costing zero) sdpa's internal error is 2.07e-02 against our 4.22e-03.
         Reaching it would mean editing kernels/compute/sdpa.cpp. Re-test only if that changes.
 
         Separately, sdpa forbids `attn_mask` together with `is_causal` or `sliding_window_size`
@@ -384,9 +421,8 @@ class TtVoxtralCodecDecoder:
         its windowed path measured only 1.22x faster than this chunking and cannot express ALiBi at
         all (PCC 0.64 without it).
 
-        Hand-rolling also keeps `numeric_stable=True` on the softmax. Runs in bf16 by DEFAULT
-        (attn_dtype), which the module docstring's sweep showed is both more accurate and faster
-        here; activations elsewhere stay fp32."""
+        Hand-rolling also keeps `numeric_stable=True` on the softmax. Runs in bf16 by default
+        (attn_dtype) -- see the PRECISION table in the module docstring."""
         if self.attn_dtype != DTYPE:
             c = lambda t: ttnn.typecast(t, self.attn_dtype)
             q, k, v = c(q), c(k), c(v)  # the BIAS is already cached in attn_dtype -- never cast the
