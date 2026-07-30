@@ -49,6 +49,7 @@ import ttml
 import ttnn
 
 from ttml.models.qwen3.kv_cache import KVCache
+from utils.device_setup import setup_device, teardown_device
 from utils.memory import MemoryUsageTracker, finalize_memory
 from utils.tensor_utils import (
     create_input_tensor_from_torch,
@@ -529,9 +530,7 @@ def main():
         print(f"Prompt[{i}]: {p!r}  ->  {len(all_prompt_tokens[i])} tokens")
 
     # 3. Set up device
-    from utils.device_setup import setup_device
-
-    ctx, device = setup_device(dp_size, tp_size)
+    _ctx, device = setup_device(dp_size, tp_size)
 
     memory_guard = None
     if args.track_memory:
@@ -610,8 +609,14 @@ def main():
     if args.track_memory:
         finalize_memory(memory_guard)
 
-    ctx.close_device()
+    teardown_device()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # main() tears down on the success path; this covers the exception path,
+        # where that call is skipped. teardown_device() is idempotent, so the
+        # double call on success is a no-op.
+        teardown_device()

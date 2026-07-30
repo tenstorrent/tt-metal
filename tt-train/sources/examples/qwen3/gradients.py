@@ -46,6 +46,7 @@ from utils.tensor_utils import (
     create_input_tensor_from_torch as create_input_tensor,
     create_input_tensor_dp,
 )
+from utils.device_setup import setup_device, teardown_device
 from utils.memory import MemoryUsageTracker, finalize_memory
 from ttml.models.qwen3.weights import (
     repermute_proj_rows,
@@ -558,7 +559,6 @@ def main():
     # ------------------------------------------------------------------
     # 3. Set up Tenstorrent device (single or mesh)
     # ------------------------------------------------------------------
-    from utils.device_setup import setup_device
     from utils.model_factory import create_ttml_model, load_hf_weights
 
     ctx, device = setup_device(dp_size, tp_size)
@@ -636,8 +636,14 @@ def main():
     if args.track_memory:
         finalize_memory(memory_guard)
 
-    ctx.close_device()
+    teardown_device()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # main() tears down on the success path; this covers the exception path,
+        # where that call is skipped. teardown_device() is idempotent, so the
+        # double call on success is a no-op.
+        teardown_device()

@@ -78,6 +78,7 @@ from tqdm import tqdm
 
 import ttml
 
+from utils.device_setup import setup_device, teardown_device
 from utils.lora import LORA_TARGETS_ALL, inject_adapter_in_model
 from utils.memory import MemoryUsageTracker, finalize_memory
 from ttml.common.utils import no_grad, build_causal_mask
@@ -479,8 +480,6 @@ def main():
     tp_size = args.mesh_shape[1]
     distributed = tp_size > 1 or dp_size > 1
     use_distributed_model = tp_size > 1
-
-    from utils.device_setup import setup_device
 
     ctx, device = setup_device(dp_size, tp_size, seed=args.seed)
 
@@ -1082,8 +1081,14 @@ def main():
         tb_train_writer.close()
     if tb_val_writer is not None:
         tb_val_writer.close()
-    ctx.close_device()
+    teardown_device()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # main() tears down on the success path; this covers the exception path,
+        # where that call is skipped. teardown_device() is idempotent, so the
+        # double call on success is a no-op.
+        teardown_device()
