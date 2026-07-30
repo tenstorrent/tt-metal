@@ -1,0 +1,19 @@
+{
+  "mean_ms": 23.05693299858831,
+  "min_ms": 22.950630984269083,
+  "samples_ms": [
+    23.156342998845503,
+    22.950630984269083,
+    23.096047021681443,
+    23.11268899939023,
+    22.968954988755286
+  ],
+  "decoder": "optimized",
+  "candidate": "sparse_bf16",
+  "real_weights": true,
+  "mode": "prefill",
+  "batch": 1,
+  "sequence": 128,
+  "layer": 1,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37"
+}

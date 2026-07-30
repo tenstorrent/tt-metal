@@ -1,0 +1,138 @@
+2026-07-30 20:25:12.233 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-30 20:25:12.894 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-30 20:25:12.894 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-30 20:25:12.894 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-30 20:25:12.894 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-30 20:25:12.895 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-30 20:25:12.895 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-30 20:25:12.899 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-30 20:25:12.978 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-30 20:25:12.978 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-30 20:25:12.978 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-07-30 20:25:12.978 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-30 20:25:12.979 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-30 20:25:13.210 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.853faf68e2b0.6002.1e410000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  853faf68e2b0
+  Space Requested: 16777216 B
+  Space Available: 17551360 B
+--------------------------------------------------------------------------
+2026-07-30 20:25:13.330 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 20:25:13.330 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 20:25:13.330 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-30 20:25:13.330 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-30 20:25:13.330 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 20:25:13.330 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 20:25:13.330 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 20:25:13.330 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 20:25:13.330 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 20:25:13.330 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 20:25:13.330 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 20:25:13.330 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 20:25:13.330 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-30 20:25:13.330 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-30 20:25:13.335 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 20:25:13.335 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 20:25:13.335 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 20:25:13.335 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 20:25:13.363 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 20:25:13.402 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680356416_memory' (shm_resource_tracker.cpp:282)
+2026-07-30 20:25:13.981 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=143482044561022 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-30 20:25:14.376 | critical |          Always | TT_FATAL: Target number of cores 1024 is greater than total number of available cores 110 (assert.hpp:104)
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py", line 255, in <module>
+    main()
+  File "/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py", line 215, in main
+    result = _decode(
+             ^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/tests/functional_decoder_perf.py", line 86, in _decode
+    decoder.decode_forward(hidden, **kwargs)
+  File "/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py", line 1890, in decode_forward
+    mlp = self._mlp(normalized, 1, prefill=False)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py", line 1823, in _mlp
+    self._dense_mlp(normalized, prefill=prefill)
+  File "/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py", line 1521, in _dense_mlp
+    return ttnn.linear(
+           ^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/ttnn/ttnn/decorators.py", line 473, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+info:
+Target number of cores 1024 is greater than total number of available cores 110
+backtrace:
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d14f1) [0x7a7289dd14f1]
+ --- tt::tt_metal::num_cores_to_corerangeset(tt::xy_pair, unsigned int, tt::xy_pair, bool)
+ --- tt::tt_metal::num_cores_to_corerangeset(unsigned int, tt::xy_pair, bool)
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17f1349) [0x7a72893f1349]
+ --- ttnn::prim::MatmulDeviceOperation::compute_output_specs(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)
+ --- ttnn::prim::MatmulDeviceOperation::create_output_tensors(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2b3) [0x7a72893f5143]
+ --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178a65a) [0x7a728938a65a]
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKN2tt8tt_metal6TensorES6_RKSt8optionalIS5_EbbRKS7_IKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x2e6) [0x7a728938bde6]
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e4e32) [0x7a7289ee4e32]
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e4af5) [0x7a7289ee4af5]
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7a7289d15575]
+ --- python() [0x1abbf62]
+ --- python() [0x1891e9a]
+ --- python(_PyEval_EvalFrameDefault+0x6582) [0x18194c2]
+ --- python() [0x1abbf62]
+ --- python() [0x1891e9a]
+ --- python(_PyEval_EvalFrameDefault+0x6582) [0x18194c2]
+ --- python() [0x18125a0]
+ --- python(_PyEval_EvalFrameDefault+0xf63b) [0x182257b]
+ --- python(PyEval_EvalCode+0xde) [0x1897ea0]
+ --- python() [0x189984c]
+ --- python() [0x1824d7f]
+ --- python(_PyEval_EvalFrameDefault+0x3133) [0x1816073]
+ --- python() [0x198cc22]
+ --- python(Py_RunMain+0x345) [0x198c505]
+ --- python() [0x198c198]
+ --- python() [0x198bfac]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7a72d00b81ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7a72d00b828b]
+ --- python(_start+0x29) [0x19a9269]
+
+nanobind: leaked 1 instances!
+ - leaked instance 0x7a723c6ac888 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - ... skipped remainder
+nanobind: leaked 199 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "contains"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "to_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-30 20:25:15.172 | info     |    BuildKernels | JIT cache stats: 80/80 hits (100.0%) [80 cached, 8 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-30 20:25:15.172 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-30 20:25:15.183 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-30 20:25:15.183 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-30 20:25:15.667 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-30 20:25:15.667 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-30 20:25:15.667 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

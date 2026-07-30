@@ -1,0 +1,284 @@
+2026-07-30 19:11:00.043 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_sparse_prefill_batch32_sequence128_exercises_large_dense_path[blackhole-mesh_device0] 2026-07-30 19:11:01.430 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-30 19:11:01.430 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-30 19:11:01.431 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-30 19:11:01.431 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-30 19:11:01.432 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-30 19:11:01.432 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-30 19:11:01.436 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-30 19:11:01.515 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-30 19:11:01.515 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-30 19:11:01.515 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-07-30 19:11:01.515 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-30 19:11:01.516 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-30 19:11:01.742 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.853faf68e2b0.6002.b3c00000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  853faf68e2b0
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-30 19:11:01.866 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 19:11:01.866 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 19:11:01.866 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-30 19:11:01.867 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-30 19:11:01.867 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:11:01.867 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:11:01.867 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:11:01.867 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:11:01.867 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:11:01.867 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:11:01.867 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:11:01.867 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 19:11:01.867 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-30 19:11:01.867 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-30 19:11:01.922 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-30 19:11:01.922 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-30 19:11:01.922 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-30 19:11:01.922 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-30 19:11:01.922 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-30 19:11:01.922 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 19:11:01.922 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-30 19:11:01.922 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 19:11:01.926 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 19:11:01.930 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 19:11:01.935 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 19:11:01.976 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680356416_memory' (shm_resource_tracker.cpp:282)
+2026-07-30 19:11:02.555 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349979 GHz, device_time_at_sync=138944702127096 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-30 19:11:02.571 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-30 19:11:11.945 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 19:11:11.949 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 19:11:11.953 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 19:11:11.958 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+optimized-sparse-prefill-batch32-route-agreement: 0.8974359035491943
+optimized-sparse-prefill-batch32-vs-hf: 0.9898416331751403
+functional-sparse-prefill-batch32-vs-hf: 0.988945112059054
+optimized-sparse-prefill-batch32-vs-functional: 0.9821072831828548
+FAILED2026-07-30 19:11:15.679 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+_ test_optimized_sparse_prefill_batch32_sequence128_exercises_large_dense_path[blackhole-mesh_device0] _
+
+mesh_device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7b326bcdfe60>
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    def test_optimized_sparse_prefill_batch32_sequence128_exercises_large_dense_path(mesh_device, monkeypatch):
+        """Run large-prefill coverage after trace-sensitive decode tests."""
+>       _run_optimized_sparse_prefill_batch32_sequence128_exercises_large_dense_path(mesh_device, monkeypatch)
+
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py:702:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+mesh_device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7b326bcdfe60>
+
+    def _run_optimized_sparse_prefill_batch32_sequence128_exercises_large_dense_path(mesh_device, monkeypatch):
+        """Cover the exact serving-prefill shape and prove it takes the optimized large-M composite."""
+        config = _config()
+        layer_idx, batch, sequence = 1, 32, 128
+        state = _real_layer_one_state()
+        prefix = f"model.layers.{layer_idx}."
+        for projection in ("q_proj", "k_proj", "v_proj", "o_proj"):
+            state[prefix + f"self_attn.{projection}.weight"].zero_()
+
+        generator = torch.Generator().manual_seed(32128)
+        hidden = _randn(generator, batch, sequence, config.hidden_size, scale=0.02)
+        normalized = _normalized(hidden, state, config, layer_idx)
+        selected_tokens = sorted(
+            {
+                *(user * sequence + (37 * user) % sequence for user in range(batch)),
+                0,
+                1023,
+                1024,
+                2047,
+                2048,
+                3071,
+                3072,
+                batch * sequence - 1,
+            }
+        )
+        selected_flat = normalized.reshape(-1, config.hidden_size)[torch.as_tensor(selected_tokens)]
+        logits = F.linear(selected_flat, state[prefix + "mlp.gate.weight"])
+        scores, experts = torch.topk(logits, config.num_experts_per_tok, dim=-1)
+        scores = torch.sigmoid(scores)
+        gate_weights, up_weights, down_weights = _load_expert_weights(
+            state, layer_idx, config.num_experts, config.intermediate_size
+        )
+        reference_moe = torch.zeros_like(selected_flat)
+        for token in range(selected_flat.shape[0]):
+            for route in range(config.num_experts_per_tok):
+                expert = int(experts[token, route])
+                gate = selected_flat[token].float() @ gate_weights[expert].float()
+                up = selected_flat[token].float() @ up_weights[expert].float()
+                contribution = (F.silu(gate) * up) @ down_weights[expert].float()
+                reference_moe[token] += (contribution * scores[token, route]).to(reference_moe.dtype)
+        del gate_weights, up_weights, down_weights
+        reference = hidden.reshape(-1, config.hidden_size)[selected_tokens] + reference_moe
+
+        decoder = OptimizedDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=layer_idx,
+            mesh_device=mesh_device,
+            batch=batch,
+            max_cache_len=sequence,
+            candidate=_candidate(),
+        )
+        _, routed_tt = decoder._routing(
+            _to_tt(normalized.reshape(1, 1, batch * sequence, config.hidden_size), mesh_device),
+            batch * sequence,
+        )
+        routed = ttnn.to_torch(routed_tt)[selected_tokens]
+        routed_experts = torch.topk(routed, config.num_experts_per_tok, dim=-1).indices
+        route_agreement = (
+            (torch.sort(routed_experts, dim=-1).values == torch.sort(experts, dim=-1).values)
+            .all(dim=-1)
+            .float()
+            .mean()
+            .item()
+        )
+        print(f"optimized-sparse-prefill-batch32-route-agreement: {route_agreement}")
+        dense_calls = []
+        dense_expert_moe = decoder._dense_expert_moe
+
+        def tracked_dense_expert_moe(flat, routing, token_count, *, prefill=False):
+            dense_calls.append((token_count, prefill))
+            return dense_expert_moe(flat, routing, token_count, prefill=prefill)
+
+        def unexpected_sparse_expert_moe(*args, **kwargs):
+            pytest.fail("batch-32 sequence-128 prefill incorrectly entered the small-M sparse expert path")
+
+        monkeypatch.setattr(decoder, "_dense_expert_moe", tracked_dense_expert_moe)
+        monkeypatch.setattr(decoder, "_sparse_expert_moe", unexpected_sparse_expert_moe)
+
+        key_cache, value_cache = decoder.create_paged_kv_cache()
+        page_table = _to_tt(
+            _page_table(batch, math.ceil(sequence / decoder.page_size)),
+            mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        cos, sin = decoder.build_rope_rows(torch.arange(sequence), hf_config=config)
+        actual = decoder.prefill_forward(
+            _to_tt(hidden.unsqueeze(0), mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+            position_cos=_to_tt(cos, mesh_device),
+            position_sin=_to_tt(sin, mesh_device),
+        )
+        assert dense_calls == [(1024, True)] * 4
+        actual = ttnn.to_torch(actual).squeeze(0).reshape(-1, config.hidden_size)[selected_tokens]
+        # `monkeypatch` would otherwise restore bound methods onto the instance,
+        # creating a decoder -> bound-method -> decoder cycle that retains several
+        # GiB of expert tensors until a later GC.  Release the instrumentation and
+        # device tensors before the functional control is constructed.
+        monkeypatch.undo()
+        decoder.__dict__.pop("_dense_expert_moe", None)
+        decoder.__dict__.pop("_sparse_expert_moe", None)
+        del dense_expert_moe, tracked_dense_expert_moe, unexpected_sparse_expert_moe
+        del decoder, key_cache, value_cache, routed_tt
+        _, optimized_hf_pcc = comp_pcc(reference.float(), actual.float(), pcc=0.0)
+        print(f"optimized-sparse-prefill-batch32-vs-hf: {optimized_hf_pcc}")
+
+        # The official router has close top-8 boundaries: TTNN and CPU select
+        # different eighth experts for a minority of tokens.  Preserve the
+        # functional decoder's device semantics as the stage correctness bar.
+        functional = FunctionalDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=layer_idx,
+            mesh_device=mesh_device,
+            batch=batch,
+            max_cache_len=sequence,
+        )
+        functional_key, functional_value = functional.create_paged_kv_cache()
+        functional_actual = functional.prefill_forward(
+            _to_tt(hidden.unsqueeze(0), mesh_device),
+            key_cache=functional_key,
+            value_cache=functional_value,
+            page_table=page_table,
+            position_cos=_to_tt(cos, mesh_device),
+            position_sin=_to_tt(sin, mesh_device),
+        )
+        functional_actual = ttnn.to_torch(functional_actual).squeeze(0).reshape(-1, config.hidden_size)[selected_tokens]
+        _, functional_hf_pcc = comp_pcc(reference.float(), functional_actual.float(), pcc=0.0)
+        print(f"functional-sparse-prefill-batch32-vs-hf: {functional_hf_pcc}")
+        direct_passed, optimized_functional_pcc = comp_pcc(
+            functional_actual.float(),
+            actual.float(),
+            pcc=0.995,
+        )
+        print(f"optimized-sparse-prefill-batch32-vs-functional: {optimized_functional_pcc}")
+        assert optimized_hf_pcc >= functional_hf_pcc
+>       assert direct_passed, optimized_functional_pcc
+E       AssertionError: 0.9821072831828548
+E       assert False
+
+models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py:455: AssertionError
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+12.95s call     models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_sparse_prefill_batch32_sequence128_exercises_large_dense_path[blackhole-mesh_device0]
+1.33s setup    models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_sparse_prefill_batch32_sequence128_exercises_large_dense_path[blackhole-mesh_device0]
+0.13s teardown models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_sparse_prefill_batch32_sequence128_exercises_large_dense_path[blackhole-mesh_device0]
+=========================== short test summary info ============================
+FAILED models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_decoder.py::test_optimized_sparse_prefill_batch32_sequence128_exercises_large_dense_path[blackhole-mesh_device0]
+============================== 1 failed in 14.97s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7b32701bc5e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7b326fbdc4c8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "to_torch_with_padded_shape"
+ - leaked function "subtract"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "reshape"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-30 19:11:17.397 | info     |    BuildKernels | JIT cache stats: 274/274 hits (100.0%) [274 cached, 499 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-30 19:11:17.397 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-30 19:11:17.398 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-30 19:11:17.398 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-30 19:11:17.398 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-30 19:11:17.398 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-30 19:11:17.398 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-30 19:11:17.409 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-30 19:11:17.409 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-30 19:11:17.849 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-30 19:11:17.849 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-30 19:11:17.849 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

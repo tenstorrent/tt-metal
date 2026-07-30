@@ -15,14 +15,38 @@
   "serving_decode_batch": 32,
   "page_size": 32,
   "cache_dtype": "bfloat16",
+  "optimized_cache_dtype": "bfloat8_b",
   "capability_reduction": null,
-  "completion_status": "complete",
-  "pending_gates": [],
-  "independent_stage_review": {
-    "verdict": "clean-pass",
-    "required_work": []
+  "completion_status": "optimized_decoder_pending_stage_review",
+  "pending_gates": [
+    "optimized decoder independent stage review"
+  ],
+  "independent_stage_reviews": {
+    "functional_decoder": {
+      "verdict": "clean-pass",
+      "required_work": []
+    },
+    "optimized_decoder": {
+      "verdict": "pending",
+      "required_work": []
+    }
   },
   "context_probe_evidence": {
+    "optimized_prefill_500000_batch_1": {
+      "layer_kind": "dense full attention with forced RoPE",
+      "implementation": "optimized_decoder",
+      "candidate": "default",
+      "result": "pass under watcher with expected shape and finite output",
+      "pytest_call_seconds": 331.01,
+      "elapsed_seconds": 332.92,
+      "evidence_source_sha256": "599f386339c13cd3ff67e13bce35830f0c8ce1814e7425e031e46c52bdb9ac30",
+      "final_source_sha256": "21d222646cffcb8c09c0fba1b60b0c1f30f117e6dc6a53b49b3f1af340602ecd",
+      "source_equivalence": "Final source differs only by import cleanup and an explicit MODEL_ID module export; no runtime method, layout, dtype, program, or kernel path changed.",
+      "test_source_sha256": "3ae6a93e9e08017d6902510c2746c82a46a98e586e5294545d4201dcfc36fddb",
+      "artifacts": [
+        "optimized_decoder/artifacts/final_context500000_watcher.txt"
+      ]
+    },
     "prefill_500000_batch_1": {
       "layer_kind": "dense full attention with forced RoPE",
       "result": "pass",
@@ -88,8 +112,16 @@
     "bytes_per_dram_bank": 4272341376,
     "total_dram_bytes": 34178731008,
     "kv_bytes_formula": "batch * context * 2 caches * 4 kv heads * 128 head dim * 2 BF16 bytes",
+    "optimized_kv_bytes_formula": "batch * context * 2 caches * 4 kv heads * 128 head dim * (1088 BFP8 tile bytes / 1024 tile elements)",
     "batch_1_context_500000_kv_bytes": 1024000000,
     "batch_32_context_500000_kv_bytes": 32768000000,
-    "note": "All three layer kinds passed near-limit nonaligned prefill and batch-1 advertised-context traced decode. Batch-32 advertised-context cache allocation and traced dense decode passed; no capability reduction is applied."
+    "optimized_batch_1_context_500000_kv_bytes": 544000000,
+    "optimized_batch_32_context_500000_kv_bytes": 17408000000,
+    "optimized_sparse_expert_bytes": 2277507072,
+    "optimized_nonexpert_weight_bytes": 16125952,
+    "optimized_batch_32_context_500000_total_bytes": 19701633024,
+    "optimized_batch_32_context_500000_margin_bytes": 14477097984,
+    "bf16_cache_with_optimized_weights_bytes": 35061633024,
+    "note": "Official-weight populated-history decode passes with BFP8 cache (PCC 0.99937 versus 0.99937 for the matched BF16-cache control). Exact tile accounting includes 1088 bytes per 1024 BFP8 elements. Batch-32/context-500000 cache, five BFP8 sparse-expert matrix units, three BF16 large-prefill matrix units, and nonexpert weights coexist with 14.477 GB margin; BF16 cache would exceed physical DRAM by 0.883 GB. Layer 1 and 4 execute the last advertised position with the full serving cache and weights resident, and all three layer kinds pass batch-1 last-position execution."
   }
 }

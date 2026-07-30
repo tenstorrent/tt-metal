@@ -1,0 +1,454 @@
+2026-07-30 18:35:36.514 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-30 18:35:37.623 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-30 18:35:37.623 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-30 18:35:37.623 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-30 18:35:37.623 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-30 18:35:37.625 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-30 18:35:37.625 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-30 18:35:37.629 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-30 18:35:37.710 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-30 18:35:37.710 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-30 18:35:37.710 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-07-30 18:35:37.710 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-30 18:35:37.711 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-30 18:35:37.874 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.853faf68e2b0.6002.ac250000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  853faf68e2b0
+  Space Requested: 16777216 B
+  Space Available: 17551360 B
+--------------------------------------------------------------------------
+2026-07-30 18:35:37.994 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 18:35:37.994 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 18:35:37.994 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-30 18:35:37.994 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-30 18:35:37.994 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 18:35:37.994 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 18:35:37.994 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 18:35:37.994 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 18:35:37.994 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 18:35:37.994 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 18:35:37.994 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 18:35:37.994 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 18:35:37.994 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-30 18:35:37.994 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-30 18:35:38.050 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-30 18:35:38.050 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-30 18:35:38.050 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-30 18:35:38.050 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-30 18:35:38.050 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-30 18:35:38.050 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-30 18:35:38.050 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:35:38.050 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 18:35:38.054 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:35:38.058 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:35:38.063 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:35:38.106 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680356416_memory' (shm_resource_tracker.cpp:282)
+2026-07-30 18:35:38.684 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=136517696597947 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-30 18:35:48.073 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:35:48.077 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:35:48.081 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:35:48.086 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:35:48.448 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-30 18:35:58.095 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:35:58.100 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:35:58.104 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:35:58.108 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:08.116 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:08.121 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:08.125 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:08.130 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:18.140 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:18.144 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:18.148 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:18.153 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:28.163 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:28.167 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:28.172 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:28.176 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:38.186 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:38.191 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:38.195 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:38.199 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:48.209 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:48.214 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:48.219 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:48.223 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:58.233 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:58.238 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:58.242 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:36:58.247 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:08.257 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:08.261 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:08.265 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:08.270 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:18.280 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:18.284 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:18.289 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:18.293 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:28.302 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:28.307 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:28.311 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:28.315 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:38.325 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:38.330 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:38.334 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:38.338 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:48.348 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:48.353 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:48.357 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:48.361 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:58.373 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:58.377 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:58.382 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:37:58.386 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:08.396 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:08.401 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:08.405 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:08.410 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:18.420 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:18.424 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:18.428 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:18.433 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:28.443 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:28.447 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:28.451 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:28.456 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:38.466 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:38.470 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:38.475 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:38.479 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:48.490 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:48.495 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:48.499 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:48.503 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:58.514 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:58.518 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:58.523 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:38:58.527 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:08.537 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:08.541 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:08.546 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:08.550 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:18.560 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:18.565 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:18.569 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:18.573 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:28.584 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:28.588 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:28.592 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:28.597 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:38.607 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:38.611 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:38.616 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:38.620 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:48.630 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:48.634 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:48.639 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:48.643 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:58.653 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:58.658 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:58.662 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:39:58.667 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:08.677 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:08.681 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:08.686 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:08.690 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:18.700 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:18.704 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:18.709 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:18.713 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:28.723 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:28.728 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:28.732 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:28.737 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:38.747 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:38.751 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:38.756 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:38.760 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:48.770 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:48.774 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:48.779 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:48.783 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:58.793 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:58.798 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:58.802 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:40:58.806 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:41:08.816 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-30 18:41:08.821 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-30 18:41:08.825 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-30 18:41:08.829 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-30 18:41:11.821 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+{
+  "mean_ms": 323372.96723999316,
+  "min_ms": 323372.96723999316,
+  "samples_ms": [
+    323372.96723999316
+  ],
+  "decoder": "optimized",
+  "candidate": "default",
+  "real_weights": false,
+  "mode": "prefill",
+  "batch": 1,
+  "sequence": 500000,
+  "layer": 0,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "effective_configuration": {
+    "candidate": "default",
+    "policy": {
+      "attention_weight_dtype": "BFLOAT8_B",
+      "dense_gate_up_dtype": "BFLOAT4_B",
+      "dense_down_dtype": "BFLOAT8_B",
+      "cache_dtype": "BFLOAT8_B",
+      "attention_fidelity": "LoFi",
+      "dense_gate_up_fidelity": "LoFi",
+      "dense_down_fidelity": "LoFi",
+      "decode_expert_gate_up_dtype": "BFLOAT8_B",
+      "decode_expert_down_dtype": "BFLOAT8_B",
+      "prefill_expert_gate_up_dtype": "BFLOAT8_B",
+      "prefill_expert_down_dtype": "BFLOAT8_B",
+      "decode_expert_gate_up_fidelity": "HiFi2",
+      "decode_expert_down_fidelity": "HiFi2",
+      "prefill_expert_gate_up_fidelity": "HiFi2",
+      "prefill_expert_down_fidelity": "HiFi2",
+      "sparse_experts": true,
+      "gate_up_grid": [
+        8,
+        2
+      ],
+      "gate_up_in0_block_w": 16,
+      "gate_up_out_block_w": 3,
+      "gate_up_subblock_w": 3,
+      "down_grid": [
+        8,
+        2
+      ],
+      "down_in0_block_w": 24,
+      "down_out_block_w": 4,
+      "down_subblock_w": 4,
+      "prefill_chunk_size": 32,
+      "packed_expert_gate_up": true,
+      "dense_large_prefill_gate_up_grid": [
+        8,
+        8
+      ],
+      "dense_large_prefill_down_grid": [
+        8,
+        8
+      ],
+      "dense_large_prefill_gate_up_in0_block_w": 8,
+      "dense_large_prefill_down_in0_block_w": 8,
+      "dense_large_prefill_gate_up_subblock_w": 3,
+      "dense_large_prefill_down_subblock_w": 4,
+      "packed_dense_large_prefill": false,
+      "decode_sharded_residual": true,
+      "attention_dram_sharded": true,
+      "attention_dram_sharded_serving": false,
+      "decode_router_grid": null,
+      "decode_router_in0_block_w": 8,
+      "decode_router_out_block_w": 2,
+      "decode_router_subblock_w": 2
+    },
+    "sparse_matmul_output_dtype": "BFLOAT8_B",
+    "execution_topology": {
+      "decode_experts": "routed_sparse_packed_gate_up",
+      "small_prefill_experts": "routed_sparse_separate_gate_up",
+      "large_prefill_experts": "dense_all_expert_composite",
+      "large_prefill_gate_up": "separate_same_input_matmuls",
+      "large_prefill_threshold_tokens": 1024,
+      "large_prefill_chunk_tokens": 1024,
+      "large_prefill_weights": "phase_native_weights",
+      "decode_prefill_down_storage": "separate_or_not_applicable",
+      "cache_initialization": "zero_filled"
+    },
+    "decode_sdpa_program": {
+      "compute_with_storage_grid_size": [
+        11,
+        10
+      ],
+      "exp_approx_mode": false,
+      "q_chunk_size": 0,
+      "k_chunk_size": 0
+    },
+    "decode_residual_norm": {
+      "sharded": true,
+      "layout": "L1_WIDTH_SHARDED",
+      "grid": [
+        8,
+        4
+      ],
+      "shard_shape": [
+        32,
+        64
+      ],
+      "program_class": "LayerNormShardedMultiCoreProgramConfig"
+    },
+    "decode_attention_projection": {
+      "dram_sharded_weights": true,
+      "weight_memory": "DRAM_WIDTH_SHARDED",
+      "qkv_program_class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+      "qkv_in0_block_w": 2,
+      "qkv_per_core_M": 1,
+      "qkv_per_core_N": 5,
+      "o_program_class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+      "o_in0_block_w": 4,
+      "o_per_core_M": 1,
+      "o_per_core_N": 2
+    },
+    "decode_router_program": {
+      "enabled": false,
+      "grid": null,
+      "in0_block_w": 8,
+      "out_block_w": 2,
+      "out_subblock_w": 2
+    },
+    "expert_program": {
+      "decode_gate_up_cores": [
+        8,
+        2
+      ],
+      "decode_down_cores": [
+        8,
+        2
+      ],
+      "prefill_gate_up_cores": [
+        8,
+        4
+      ],
+      "prefill_down_cores": [
+        8,
+        4
+      ],
+      "decode_gate_up_in0_block_w": 16,
+      "decode_down_in0_block_w": 24,
+      "prefill_gate_up_in0_block_w": 8,
+      "prefill_down_in0_block_w": 12,
+      "decode_gate_up_out_block_w": 3,
+      "decode_down_out_block_w": 4,
+      "prefill_gate_up_out_block_w": 1,
+      "prefill_down_out_block_w": 1,
+      "decode_gate_up_subblock_w": 3,
+      "decode_down_subblock_w": 4,
+      "prefill_gate_up_subblock_w": 1,
+      "prefill_down_subblock_w": 1,
+      "sequence_chunk_size": 32,
+      "base_down_split_size": 32
+    },
+    "dense_large_prefill_program": {
+      "enabled": true,
+      "program_class": "MatmulMultiCoreReuseMultiCastProgramConfig",
+      "gate_up_grid": [
+        8,
+        8
+      ],
+      "down_grid": [
+        8,
+        8
+      ],
+      "gate_up_in0_block_w": 8,
+      "down_in0_block_w": 8,
+      "gate_up_subblock": [
+        1,
+        3
+      ],
+      "down_subblock": [
+        1,
+        4
+      ],
+      "input_memory": "DRAM_INTERLEAVED",
+      "weight_memory": "DRAM_INTERLEAVED",
+      "output_memory": "DRAM_INTERLEAVED",
+      "gate_up_compute_fidelity": "HiFi4",
+      "down_compute_fidelity": "HiFi4",
+      "fp32_dest_acc_en": true,
+      "output_dtype": "BFLOAT16",
+      "fuse_batch": false,
+      "packed_gate_up": false
+    }
+  },
+  "provenance": {
+    "git_head": "a2719cfecabce0124a96835b26eb31fb41928e2d",
+    "git_branch": "skillexp-work-northmini-fresh",
+    "sources": {
+      "models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py": {
+        "sha256": "1ef2e9328f63be4c936a94bf141ac76c76ca73fc7f4bacb7c4a2c991f5dff553",
+        "computed_git_blob_oid": "b141bb55e947b00e29c46571a3e4d9e8138db813",
+        "git_object_available": false,
+        "head_git_blob_oid": null,
+        "git_status": "?? models/autoports/coherelabs_north_mini_code_1_0/tt/optimized_decoder.py"
+      },
+      "models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py": {
+        "sha256": "31ed6c4442baa5b30683931108347ff1f3a6b127f9650eb982362823653aba2c",
+        "computed_git_blob_oid": "a8d4ddecdfc451ce38935867903f15040c10d047",
+        "git_object_available": false,
+        "head_git_blob_oid": null,
+        "git_status": "?? models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py"
+      }
+    }
+  },
+  "argv": [
+    "/home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/tests/optimized_decoder_perf.py",
+    "--mode",
+    "prefill",
+    "--batch",
+    "1",
+    "--layer",
+    "0",
+    "--sequence",
+    "500000",
+    "--candidate",
+    "default",
+    "--warmups",
+    "0",
+    "--iterations",
+    "1",
+    "--json-out",
+    "models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/artifacts/final_prefill_context500000_b1.json"
+  ],
+  "correctness_binding": null,
+  "pcc": null,
+  "pcc_evidence": null
+}
+nanobind: leaked 1 instances!
+ - leaked instance 0x7ef4d5988828 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - ... skipped remainder
+nanobind: leaked 199 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "from_json"
+ - leaked function "memory_config"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "buffer_page_size"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-30 18:41:12.712 | info     |    BuildKernels | JIT cache stats: 50/113 hits (44.2%) [50 cached, 8 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-30 18:41:12.712 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-30 18:41:12.712 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-30 18:41:12.712 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-30 18:41:12.712 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-30 18:41:12.712 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-30 18:41:12.712 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-30 18:41:12.724 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-30 18:41:12.724 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-30 18:41:13.242 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-30 18:41:13.242 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-30 18:41:13.242 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
