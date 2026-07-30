@@ -258,45 +258,12 @@ RegimeAMatmulDeviceOperation::invoke(
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
     int32_t chunks) {
-    // TEST-ONLY ablation bitmask: read from the env var so it stays out of the public API yet is captured in
-    // operation_attributes (and thus the reflection program-cache hash). Unset/0 => production. 6 bits.
-    uint32_t diag_mask = 0;
-    if (const char* e = std::getenv("TT_REGIME_A_DIAG_MASK")) {
-        const long v = std::strtol(e, nullptr, 10);
-        // NEVER silently clamp. Some diagnostic knobs are read from this env var again inside
-        // make_and_build_plan (placement targets, CB depths, reduction topology), so if a value were dropped
-        // here it would still change the PLAN while leaving diag_mask - and therefore the program-cache key -
-        // at 0. Two different masks would then alias onto one cached program and the A/B would silently
-        // compare a mode against itself. That happened: the limit sat at 0x1FFFF while bits 17-21 were in use,
-        // which invalidated four experiments. Fail loudly instead.
-        // bits 0..25 defined (22 = FORCE_CHAIN, 23 = FORCE_RSCATTER, 24 = IN1_TRID_PIPELINE,
-        // 25 = IN1_ONE_PACKET)
-        constexpr long kMaxDiagMask = 0x3FFFFFFL;
-        TT_FATAL(
-            v >= 0 && v <= kMaxDiagMask,
-            "TT_REGIME_A_DIAG_MASK={} is out of range (0..{}). Raise kMaxDiagMask when adding diagnostic bits; "
-            "silently ignoring it would alias distinct masks onto one cached program.",
-            v,
-            kMaxDiagMask);
-        diag_mask = static_cast<uint32_t>(v);
-    }
-    // TEST-ONLY in1 CB depth override (blocks). Unset/0 => production default (4). Hashed via attributes.
-    uint32_t cb1_depth = 0;
-    if (const char* e = std::getenv("TT_REGIME_A_CB1_DEPTH")) {
-        const long v = std::strtol(e, nullptr, 10);
-        if (v > 0 && v <= 256) {
-            cb1_depth = static_cast<uint32_t>(v);
-        }
-    }
-
     return {
         operation_attributes_t{
             .config = config,
             .fused_activation = std::move(fused_activation),
             .fused_ternary_scalar = fused_ternary_scalar,
-            .chunks = chunks,
-            .diag_mask = diag_mask,
-            .cb1_depth = cb1_depth},
+            .chunks = chunks},
         tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,

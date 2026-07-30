@@ -47,6 +47,8 @@ constexpr uint32_t kNumBanks = 8u;                  // Regime-A fixes the in1 DR
 constexpr uint32_t kL1BudgetBytes = 1440u * 1024u;  // BH usable L1 per core
 constexpr uint32_t kMinCores = 16u;                 // auto-picker feasibility: core-count window [kMin, kMax]
 constexpr uint32_t kMaxCores = 104u;
+constexpr uint32_t kCb1Depth = 4u;  // in1 CB depth in BLOCKS (measured best; deeper was rejected, see F5)
+constexpr uint32_t kCb7Depth = 2u;  // split-K reduction CB depth in BLOCKS (double-buffered)
 
 // ------------------------------------------------------------------------------------------------
 // Inputs
@@ -94,21 +96,6 @@ struct PlanInputs {
     // Tile byte sizes.
     uint32_t tb{kTileBytesBf16};  // bf16 tile
     uint32_t tf{kTileBytesFp32};  // fp32 tile
-
-    // in1 CB depth in BLOCKS. Production is 4 (the historical value); a TEST-ONLY override lets the depth be
-    // swept to separate a latency-x-concurrency-bound in1 read from a bandwidth-bound one. It only changes
-    // cb1's size and therefore the L1 total, so a too-large depth is rejected by the L1 budget check below —
-    // which is the intended, explicit failure mode rather than a silent clamp.
-    uint32_t cb1_depth{4};
-
-    // Depth of the split-K reduction CB (cb7) in BLOCKS. Production is 2 (double-buffered). A deeper buffer
-    // lets a band forward sub-block nb+1 while nb is still being consumed downstream, so the chain pipelines
-    // further across sub-blocks. TEST-ONLY sweep knob; the kernel derives the slot modulus from the same
-    // value (it is passed as the `use_reduce` compile arg), so the two can never disagree.
-    uint32_t cb7_depth{2};
-
-    // Meet-in-the-middle split-K reduction topology (see CorePlan). TEST-ONLY; false keeps the linear chain.
-    bool reduce_meet{false};
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -190,13 +177,6 @@ struct CorePlan {
     bool is_top{};            // kk == Pk-1
     uint32_t red_next_idx{};  // core index of the next band in the chain; self if is_top
     uint32_t red_prev_idx{};  // core index of the previous band (the one whose credit we return); self if bottom
-    // MEET-IN-THE-MIDDLE reduction (PlanInputs::reduce_meet). The linear chain roots at kk=Pk-1 and is Pk-1
-    // hops deep. Instead root at kk=Pk/2 and let bands below flow UP and bands above flow DOWN, so the depth
-    // is about Pk/2. The root then has TWO incoming partials, distinguished by CHANNEL (0 = from below,
-    // 1 = from above) with a separate semaphore each, and consumed sequentially.
-    uint32_t red_nrecv{1};      // incoming partials: 0 at a chain end, 1 normally, 2 at a meet root
-    uint32_t red_send_ord{};    // MY ordinal among my destination's inputs (0, or 1 for the root's down input)
-    uint32_t red_prev2_idx{};   // the root's second predecessor (only when red_nrecv == 2)
 
     // RING REDUCE-SCATTER reduction (selected by the factory's rs_gate; see the factory for the topology).
     // The factory fills these post-plan for the Pk cores of each (bank, sub) group; the chain leaves them at
@@ -336,11 +316,10 @@ inline PlanResult build_plan(const PlanInputs& in) {
     // --- CB sizing + L1 check (spec §5; cb7 only when Pk>1) ---
     CbSizes cb;
     cb.cb0_tiles = g.M_block_capacity * g.K_slice_capacity;  // == K_num_blocks_eff * M_block * kb
-    cb.cb1_tiles = (in.cb1_depth ? in.cb1_depth : 4u) * kb * g.N_sub;
+    cb.cb1_tiles = kCb1Depth * kb * g.N_sub;
     cb.cb2_tiles = 2u * g.M_block_capacity * g.N_sub;
     cb.cb3_tiles = g.M_block_capacity * g.N_sub;
-    const uint32_t cb7_depth = in.cb7_depth ? in.cb7_depth : 2u;
-    cb.cb7_tiles = (Pk > 1u) ? (cb7_depth * g.M_block_capacity * g.N_sub) : 0u;
+    cb.cb7_tiles = (Pk > 1u) ? (kCb7Depth * g.M_block_capacity * g.N_sub) : 0u;
     cb.l1_bytes = (cb.cb0_tiles + cb.cb1_tiles + cb.cb2_tiles + cb.cb7_tiles) * in.tb + cb.cb3_tiles * in.tf;
     if (cb.l1_bytes > in.l1_budget_bytes) {
         res.error = "L1 over budget: needs " + std::to_string(cb.l1_bytes) + " B > " +
@@ -424,31 +403,17 @@ inline PlanResult build_plan(const PlanInputs& in) {
                 return res;
             }
 
-            // reduction chain links (spec §4), linear or meet-in-the-middle
-            const uint32_t root_kk = (in.reduce_meet && Pk > 2u) ? (Pk / 2u) : (Pk - 1u);
-            const bool has_down = (Pk - 1u) > root_kk;  // is there a downward chain above the root?
-            cp.is_top = (kk == root_kk);
-            cp.is_bottom = (kk == 0u) || (has_down && kk == Pk - 1u);
-            cp.red_send_ord = (in.reduce_meet && kk == root_kk + 1u && has_down) ? 1u : 0u;
-            if (cp.is_top) {
-                cp.red_next_idx = i;
-                cp.red_nrecv = has_down ? 2u : 1u;
-                cp.red_prev_idx = i - g.mfac;                       // from below
-                cp.red_prev2_idx = has_down ? (i + g.mfac) : i;     // from above
-            } else {
-                cp.red_next_idx = (kk < root_kk) ? (i + g.mfac) : (i - g.mfac);
-                cp.red_nrecv = cp.is_bottom ? 0u : 1u;
-                cp.red_prev_idx = cp.is_bottom ? i : ((kk > root_kk) ? (i + g.mfac) : (i - g.mfac));
-                cp.red_prev2_idx = i;
-            }
-            if (Pk == 1u) {  // no chain at all: every core is its own root
+            // Linear split-K reduction chain (spec §4): band kk forwards its running sum up to kk+1; the
+            // top band (kk == Pk-1) is the root and writes the output. Pk==1 => every core is its own root.
+            cp.is_top = (kk == Pk - 1u);
+            cp.is_bottom = (kk == 0u);
+            cp.red_next_idx = cp.is_top ? i : (i + g.mfac);
+            cp.red_prev_idx = cp.is_bottom ? i : (i - g.mfac);
+            if (Pk == 1u) {
                 cp.is_top = true;
                 cp.is_bottom = true;
                 cp.red_next_idx = i;
                 cp.red_prev_idx = i;
-                cp.red_prev2_idx = i;
-                cp.red_nrecv = 0u;
-                cp.red_send_ord = 0u;
             }
             // reduce-scatter ring links default to self (the factory overwrites them when it selects rscatter)
             cp.rs_next_idx = i;

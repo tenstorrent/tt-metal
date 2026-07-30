@@ -30,7 +30,6 @@ void kernel_main() {
     constexpr uint32_t in1_shard_stride_n = get_compile_time_arg_val(6);  // physical per-bank shard width (tiles)
     constexpr uint32_t in1valid_sem = get_compile_time_arg_val(7);        // M-split: reader -> slaves "delivered"
     constexpr uint32_t in1ready_sem = get_compile_time_arg_val(8);        // M-split: slaves -> reader "slot free"
-    constexpr uint32_t cb1_depth = get_compile_time_arg_val(9);           // cb1 depth in BLOCKS (TRID pipeline)
 
     const uint32_t in1_addr = get_arg_val<uint32_t>(0);
     const uint32_t bank_id = get_arg_val<uint32_t>(1);
@@ -91,15 +90,7 @@ void kernel_main() {
         noc_semaphore_wait_min(in1ready, (mbc + 1) * mpeers);
         for (uint32_t s = 0; s < mpeers; ++s) {
             uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
-#if !defined(SKIP_IN1_FORWARD)
             noc_async_write(w1, get_noc_addr(sx, sy, w1), in1_blk_bytes);
-#else
-            // TEST-ONLY: drop the M-split in1 forward PAYLOAD. The credit wait above and the validity
-            // increment below are preserved, so the reader/slave handshake and block count are unchanged and
-            // only the NoC copy disappears (slaves then compute on stale L1 - output intentionally invalid).
-            (void)sx;
-            (void)sy;
-#endif
         }
         // Signal EARLY, then flush PER-BLOCK. The early valid-inc releases the slave without waiting on the
         // reader's flush (same-NoC write-before-inc keeps the destination from observing validity before the
@@ -120,32 +111,10 @@ void kernel_main() {
     // preserved by the writer, which zeros in0 for K/M tails -> 0*garbage == 0 kills the K-tail term; and
     // pad-N columns (>= valid_n) are never written to the output. This keeps the reader on its fast path
     // and confines the (cheap) tail zeroing to the small in0 buffer in the writer.
-#if defined(IN1_ONE_PACKET)
-    // ---- Stateful one-packet in1 row reads (diag bit25). Every read a core issues goes to the SAME DRAM bank
-    // (bank_id is fixed per core) and full-width row reads all have the SAME size, so the NoC command buffer's
-    // size/config registers only have to be written ONCE instead of per transaction; each read then supplies
-    // only its offset. Requires size <= NOC_MAX_BURST_SIZE, checked at compile time.
-    //
-    // The low 32 bits of get_noc_addr_from_bank_id(bank, a) are (bank base + a), and the coordinate bits live
-    // in the state, so `bank_lo + in1_addr + off` is the correct with_state argument.
-    // CAUTION: a plain noc_async_read shares read_cmd_buf and CLOBBERS this state, so any block that cannot use
-    // the uniform path must re-set it afterwards (see rearm below). Tail blocks are rare, so this costs nothing
-    // on the steady-state path.
-    constexpr bool one_packet_ok = (N_block * tile_bytes) <= NOC_MAX_BURST_SIZE;
-    const uint32_t bank_lo = static_cast<uint32_t>(get_noc_addr_from_bank_id<true>(bank_id, 0));
-    auto rearm = [&]() {
-        if constexpr (one_packet_ok) {
-            noc_async_read_one_packet_set_state(
-                get_noc_addr_from_bank_id<true>(bank_id, in1_addr), N_block * tile_bytes);
-        }
-    };
-    rearm();
-#endif
 
-    // ---- Issue one block's reads into L1 at `w1`. Does NOT barrier and does NOT touch the CB, so the caller
-    // chooses the completion policy: the default path barriers immediately, the TRID pipeline defers. When
-    // `trid` is non-zero every read is tagged with it so the caller can wait on that block alone. ----
-    auto issue_block_reads = [&](uint32_t kblk, uint32_t ncol_base, uint32_t vcols, uint32_t w1, uint32_t trid) {
+    // ---- Issue one block's reads into L1 at `w1`. Does NOT barrier and does NOT touch the CB; the caller
+    // waits and manages the CB. ----
+    auto issue_block_reads = [&](uint32_t kblk, uint32_t ncol_base, uint32_t vcols, uint32_t w1) {
         if (vcols == 0u) {
             return;  // whole subblock is pad N: no reads; block stays garbage, output not written
         }
@@ -155,44 +124,16 @@ void kernel_main() {
         // one read replaces K_block per-row reads (-0.5..-3.1%, PCC-exact). Falls back to per-row otherwise.
         const bool contig = (vcols == N_block) && (N_block == in1_shard_stride_n) && ((n_local + ncol_base) == 0u) &&
                             ((kblk * K_block + K_block) <= valid_k);
-        if (trid) {
-            noc_async_read_set_trid(trid);
-        }
         if (contig) {
             const uint32_t off = (k_start + kblk * K_block) * in1_shard_stride_n * tile_bytes;
-#if !defined(SKIP_IN1_READ)
             noc_async_read(get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, K_block * vcols * tile_bytes);
-#else
-            // TEST-ONLY diagnostic: drop ONLY the in1 DRAM read payload. The CB reserve/push, the rotated
-            // shard order, the barrier, M-split forwarding, semaphores and all downstream compute/output work
-            // are preserved; the block keeps its stale L1 contents, so the output is intentionally invalid.
-            (void)off;
-#endif
-#if defined(IN1_ONE_PACKET)
-            rearm();  // the coalesced read above is a plain noc_async_read and clobbers read_cmd_buf state
-#endif
         } else {
             for (uint32_t kr = 0; kr < K_block; ++kr) {
                 const uint32_t l = kblk * K_block + kr;  // capacity-local K index within the slice
                 if (l < valid_k) {
                     const uint32_t gk = k_start + l;  // global logical K tile
                     const uint32_t off = (gk * in1_shard_stride_n + n_local + ncol_base) * tile_bytes;
-#if !defined(SKIP_IN1_READ)
-#if defined(IN1_ONE_PACKET)
-                    // Uniform full-width row => reuse the preset size/config, supply only the offset.
-                    if (one_packet_ok && vcols == N_block) {
-                        noc_async_read_one_packet_with_state(bank_lo + in1_addr + off, w1);
-                    } else {
-                        noc_async_read(
-                            get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, vcols * tile_bytes);
-                        rearm();  // that plain read clobbered read_cmd_buf state
-                    }
-#else
                     noc_async_read(get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, vcols * tile_bytes);
-#endif
-#else
-                    (void)off;  // diagnostic: drop the in1 DRAM read payload only (see above)
-#endif
                     // cols [vcols, N_block) are pad-N (garbage): safe, those output cols aren't written.
                 } else {
                     // K tail: summed into EVERY valid output col -> must be exactly 0.0 (both operands zeroed;
@@ -203,51 +144,6 @@ void kernel_main() {
             }
         }
     };
-
-#if defined(IN1_TRID_PIPELINE)
-    // ---- TRID-PIPELINED read (solo/Sm==1 only; the M-split reader must have the data in hand before it can
-    // forward, so it keeps the serial path below). The production path issues one block then takes a FULL
-    // read barrier before pushing, so exactly ONE block is ever in flight and every block pays the whole DRAM
-    // latency. Here each block's reads carry their own TRID, we run up to cb1_depth-1 blocks ahead, and wait
-    // only on the OLDEST outstanding block before pushing it. Same reads, same order, same CB contents.
-    //
-    // Slot addressing: cb1 is exactly cb1_depth blocks, and we push exactly one block per retire, so block b
-    // always lives at cb1_base + (b % cb1_depth) * in1_blk_bytes. cb1_base is captured before any push.
-    // Before WRITING block b we must know the consumer has released its slot, which is what the
-    // cb_reserve_back(ahead + 1) below guarantees (reserve counts free slots beyond the pushed pointer).
-    // TRIDs are 1..cb1_depth (0 means "untagged"), so depth must be <= 15; the factory's cb1 depth is 4.
-    if (mrole == 2u) {
-        constexpr uint32_t D = (cb1_depth > 1u && cb1_depth <= 15u) ? cb1_depth : 1u;
-        const uint32_t nblocks = N_bpc * G * W;
-        cb_reserve_back(in1_cb, in1_blk);
-        const uint32_t cb1_base = get_write_ptr(in1_cb);
-        uint32_t issued = 0, pushed = 0;
-        while (pushed < nblocks) {
-            // issue as far ahead as the ring allows
-            while (issued < nblocks && (issued - pushed) < D) {
-                const uint32_t ahead = issued - pushed;
-                cb_reserve_back(in1_cb, in1_blk * (ahead + 1u));  // consumer has released slot (issued % D)
-                const uint32_t nb = issued / (G * W);
-                const uint32_t rem = issued - nb * (G * W);
-                const uint32_t step = rem / W;
-                const uint32_t wb = rem - step * W;
-                const uint32_t s = (ring_pos + G - step) % G;
-                const uint32_t ncol_base = nb * N_block;
-                const uint32_t vcols =
-                    (ncol_base < valid_n) ? (((valid_n - ncol_base) < N_block) ? (valid_n - ncol_base) : N_block) : 0u;
-                issue_block_reads(
-                    s * W + wb, ncol_base, vcols, cb1_base + (issued % D) * in1_blk_bytes, (issued % D) + 1u);
-                ++issued;
-            }
-            // retire the oldest outstanding block
-            noc_async_read_barrier_with_trid((pushed % D) + 1u);
-            cb_push_back(in1_cb, in1_blk);
-            ++pushed;
-        }
-        noc_async_read_barrier();  // nothing should be outstanding, but leave the NoC quiescent
-        return;
-    }
-#endif
 
     for (uint32_t nb = 0; nb < N_bpc; ++nb) {
         const uint32_t ncol_base = nb * N_block;  // owned-column offset of this subblock
@@ -263,7 +159,7 @@ void kernel_main() {
                 const uint32_t w1 = get_write_ptr(in1_cb);
                 // Serial policy: issue this block's reads (untagged), then wait for ALL of them before the
                 // block is forwarded/pushed. Exactly one block is in flight.
-                issue_block_reads(kblk, ncol_base, vcols, w1, 0u);
+                issue_block_reads(kblk, ncol_base, vcols, w1);
                 if (vcols > 0u) {
                     noc_async_read_barrier();
                 }
