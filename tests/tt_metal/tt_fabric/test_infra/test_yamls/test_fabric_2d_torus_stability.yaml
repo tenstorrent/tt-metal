@@ -6,13 +6,6 @@
 # system can run either (or both):
 #   - short time budget (health, exabox, upstream vanilla):  --filter 'name.*_short'
 #   - long  time budget (e2e):                               run the whole file with no filter
-#
-# Notes:
-#   - num_links: max resolves to the platform maximum (2 on a BH Galaxy) instead of a hardcoded 2.
-#   - Deterministic all_to_all stability uses a single loop dimension (top_level_iterations).
-#     Pattern-level `iterations` is for randomized patterns and would double-loop here, so it is
-#     omitted; short=1 / long=10 mirror today's `iterations: 1` vs `10`.
-#   - SequentialNeighborExchangeLatency is short-only (matches today's health-only extra).
 Tests:
 
 # ================================================
