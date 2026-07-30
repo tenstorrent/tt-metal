@@ -69,11 +69,38 @@ runs:
         MAX_CONSECUTIVE_ERRORS=60   # 60 x 5s == 5 min of unbroken failure before giving up
         HEARTBEAT_EVERY=60          # re-log an UNCHANGED phase at most this often (seconds)
 
+        # Returns non-zero rather than an empty string on failure. This is THE bug
+        # from tt-blaze run 30573758666: minting started failing mid-wait, the caller
+        # was `IDTOKEN=$(mint_token) || true` so IDTOKEN silently became empty, and
+        # `kubectl --token ""` does not error -- it falls back to the runner pod's
+        # AMBIENT in-cluster credentials. On that runner
+        # (runs-on: exabox-multihost-with-nfs) that is
+        # system:serviceaccount:ttop-ci:multihost-with-nfs, which has no RBAC for
+        # allocations, so every subsequent poll returned Forbidden. Deterministic,
+        # unrecoverable, and invisible: 578 polls over 49 minutes while the
+        # allocation had in fact been Allocated for 20 of them.
         mint_token() {
-          curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          local t
+          t=$(curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL" \
             -H "Accept: application/json; api-version=2.0" \
-            -H "Content-Type: application/json" -d "{}" | jq -r '.value'
+            -H "Content-Type: application/json" -d "{}" | jq -r '.value') || return 1
+          [[ -n "$t" && "$t" != "null" ]] || return 1
+          printf '%s' "$t"
+        }
+
+        # Only ever REPLACES a good token with another good one. On failure the
+        # previous token is kept and the caller's error counter decides when to stop
+        # -- never blank it, or the poll silently changes identity (see mint_token).
+        reissue_token() {
+          local t
+          if t=$(mint_token); then
+            IDTOKEN="$t"
+            echo "::add-mask::${IDTOKEN}"
+            return 0
+          fi
+          echo "::warning::OIDC token mint failed; retaining the previous token."
+          return 1
         }
 
         # Dump whatever the API will tell us about the object before failing. Without
@@ -86,7 +113,10 @@ runs:
             | sed 's/^/  /' || true
         }
 
-        IDTOKEN=$(mint_token) || true
+        if ! IDTOKEN=$(mint_token); then
+          echo "::error::Could not mint a GitHub OIDC token. Refusing to poll with an empty --token: kubectl would fall back to the runner pod's in-cluster service account, which has no RBAC for allocations, and every poll would return Forbidden until the caller's step timeout."
+          exit 1
+        fi
         echo "::add-mask::${IDTOKEN}"
 
         errors=0
@@ -130,19 +160,22 @@ runs:
             errors=$((errors + 1))
             # Reissue on ANY error instead of only on ones matching an auth regex.
             # The old classifier grepped 'unauthorized|must be logged in|401' and sent
-            # everything else to a warn-and-retry branch that never reissued -- but an
-            # expired token often surfaces as "error: the server has asked for the
-            # client to provide credentials", which matches none of those three. That
+            # everything else to a warn-and-retry branch that never reissued -- but the
+            # error that actually stalled run 30573758666 was
+            #   Error from server (Forbidden): ... User
+            #   "system:serviceaccount:ttop-ci:multihost-with-nfs" cannot get resource
+            #   "allocations" ...
+            # which matches none of those three, as does an expired token's "the server
+            # has asked for the client to provide credentials". That
             # run polled with a dead token until the step timeout. Minting is cheap and
             # idempotent, so there is nothing to gain by classifying first.
             echo "::warning::Poll failed (${errors}/${MAX_CONSECUTIVE_ERRORS}, rc=${rc}): $(tr '\n' ' ' < "$stderr_file" | cut -c1-300)"
             if (( errors >= MAX_CONSECUTIVE_ERRORS )); then
-              echo "::error::Giving up after ${errors} consecutive failed polls ($(( errors * POLL_INTERVAL ))s). Last phase seen: '${last_phase:-<none>}'."
+              echo "::error::Giving up after ${errors} consecutive failed polls ($(( errors * POLL_INTERVAL ))s). Last phase seen: '${last_phase:-<none>}'. A persistent 'Forbidden' naming a system:serviceaccount means the poll lost its OIDC identity; anything else, see the warnings above."
               dump_status
               exit 1
             fi
-            IDTOKEN=$(mint_token) || true
-            echo "::add-mask::${IDTOKEN}"
+            reissue_token || true
           fi
 
           sleep "$POLL_INTERVAL"
