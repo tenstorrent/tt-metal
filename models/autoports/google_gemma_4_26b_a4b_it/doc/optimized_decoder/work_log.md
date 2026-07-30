@@ -296,11 +296,24 @@ full raw health dump remains in `final_device_health.txt`.
 - [x] Final Tracy and advice-enabled `tt-perf-report` for both layer kinds.
 - [x] Stress/repeated replay and watcher-clean optimized correctness.
 - [x] Independent final `stage-review` clean-pass.
-- [ ] Local stage commits and recorded SHAs.
+- [x] Local stage commits and recorded SHAs.
 
 ## Local commits
 
-Checkpoint and final documentation SHAs will be appended after clean review.
+- Repository: `/home/mvasiljevic/tt-metal`
+- Branch: `skillexp-cell/nofuse-noadvise-onA/gemma4`
+- Optimized implementation, tests, candidate evidence, profiler reports, and
+  prior clean review: `350fd696210cf21f61ba936e73f3285e1454073f`
+- Current-branch normal-suite and separate watcher evidence:
+  `4a121c45dccfef24b7c7d476d9fb026cdf1275a2`
+
+The current-branch normal suite passed 18 tests and skipped 12 explicitly
+opt-in nodes in 169.51 seconds. The imported exact-source artifacts cover the
+opt-in context, non-aligned capacity, performance, and serving-prefill gates;
+the current JUnit is not presented as rerunning those nodes. The separate
+current watcher run passed all seven selected optimized cases in 102.02
+seconds, and `current_branch_watcher_device_log.txt` has no watcher/device
+fault signature.
 
 The persistent `/dev/shm` warning did not abort any gate. All evidence above
 was regenerated from base `bae72d8aa452c8bcdf2d8d70216de58a1fb32c25`.
