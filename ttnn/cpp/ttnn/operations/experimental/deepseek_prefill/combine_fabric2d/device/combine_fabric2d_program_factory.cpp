@@ -77,11 +77,17 @@ enum TelemetryWord : uint32_t {
     TELEM_ISSUE_CY_HI = 19,
     TELEM_RING_WAIT_CY_LO = 20,  // blocked on the reader => the DRAM read side is the limiter
     TELEM_RING_WAIT_CY_HI = 21,
-    TELEM_NUM_WORDS = 22,
+    // Whole-kernel span: producer entry (before the fabric connection open) to exit (after teardown).
+    // The send loop alone is t_last_send - t_first_send; this is the number total-time work reduces.
+    TELEM_T_KERNEL_START_LO = 22,
+    TELEM_T_KERNEL_START_HI = 23,
+    TELEM_T_KERNEL_END_LO = 24,
+    TELEM_T_KERNEL_END_HI = 25,
+    TELEM_NUM_WORDS = 26,
 };
 // Bumped whenever the record layout changes, so a stale record from an older kernel reads as invalid
 // instead of being misparsed.
-constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0005u;
+constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0006u;
 
 // ---------------------------------------------------------------------------------------------
 // Physical-column geometry
@@ -643,6 +649,10 @@ CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t 
                                  (static_cast<uint64_t>(words[TELEM_ISSUE_CY_HI]) << 32);
                 w.ring_wait_cycles = static_cast<uint64_t>(words[TELEM_RING_WAIT_CY_LO]) |
                                      (static_cast<uint64_t>(words[TELEM_RING_WAIT_CY_HI]) << 32);
+                w.t_kernel_start = static_cast<uint64_t>(words[TELEM_T_KERNEL_START_LO]) |
+                                   (static_cast<uint64_t>(words[TELEM_T_KERNEL_START_HI]) << 32);
+                w.t_kernel_end = static_cast<uint64_t>(words[TELEM_T_KERNEL_END_LO]) |
+                                 (static_cast<uint64_t>(words[TELEM_T_KERNEL_END_HI]) << 32);
             }
             out.workers.push_back(std::move(w));
         }
