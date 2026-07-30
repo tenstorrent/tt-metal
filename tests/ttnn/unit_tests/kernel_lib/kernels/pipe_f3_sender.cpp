@@ -3,9 +3,10 @@
 //
 // mcast_pipe helper unit test: F3 SENDER-IN-RECT kernel driving Pipe with INCLUDE_SRC
 // (the bake-off winner for sender-in-rect loopback). The sender is one core of the mcast
-// rectangle and ends up with the payload in its OWN cb_dst via hardware loopback, then
-// writes that to its own output shard for verification. The other rect cores run
-// pipe_receiver.cpp. Also exercises the degenerate guard when rect_len==1 (area==1, excl==0).
+// rectangle and ends up with the payload in its OWN cb_dst via hardware loopback. It
+// immediately publishes that CB to pipe_f3_compute.cpp on the same core, then writes the
+// compute result to its own output shard. The other rect cores run pipe_receiver.cpp. Also
+// exercises the degenerate guard when rect_len==1 (area==1, excl==0).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -27,7 +28,8 @@ void kernel_main() {
     constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 1);
     constexpr uint32_t num_iters = get_compile_time_arg_val(SCALARS + 2);
-    constexpr auto in_args = TensorAccessorArgs<SCALARS + 3>();
+    constexpr uint32_t cb_result = get_compile_time_arg_val(SCALARS + 3);
+    constexpr auto in_args = TensorAccessorArgs<SCALARS + 4>();
     constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -43,6 +45,7 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_src_obj(cb_src);
     CircularBuffer cb_dst_obj(cb_dst);
+    CircularBuffer cb_result_obj(cb_result);
 
     // stage payload into cb_src from DRAM
     const auto in = TensorAccessor(in_args, input_addr);
@@ -66,15 +69,17 @@ void kernel_main() {
         pipe.send(src_addr, dst_addr, payload_bytes);
     }
 
+    // Publish immediately to a different RISC. Unlike a ReceiverPipe user, the sender-side compute
+    // kernel has no data-ready wait proving loopback arrival, so send() must not return at SENT.
     cb_dst_obj.push_back(payload_pages);
 
-    // write our own received payload out to DRAM (sender's shard) for verification
+    // Write the same-core compute result out to DRAM (sender's shard) for verification.
     const auto out = TensorAccessor(out_args, output_addr);
     for (uint32_t i = 0; i < payload_pages; ++i) {
-        cb_dst_obj.wait_front(1);
-        noc.async_write(cb_dst_obj, out, page_bytes, {}, {.page_id = self_start_id + i});
+        cb_result_obj.wait_front(1);
+        noc.async_write(cb_result_obj, out, page_bytes, {}, {.page_id = self_start_id + i});
         noc.async_writes_flushed();
-        cb_dst_obj.pop_front(1);
+        cb_result_obj.pop_front(1);
     }
     noc.async_write_barrier();
 }
