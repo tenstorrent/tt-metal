@@ -46,6 +46,8 @@ file(
     split/device/kernels/*.cpp
     slice/device/kernels/*.cpp
     tilize/device/kernels/*.cpp
+    tilize/codegen/kernels/*.cpp
+    tilize/codegen/kernels/*.h
     tilize_with_val_padding/device/kernels/*.cpp
     transpose/device/kernels/*.cpp
     untilize/device/kernels/*.cpp
