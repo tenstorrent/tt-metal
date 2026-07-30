@@ -105,23 +105,33 @@ def gather_single_test_perf(device, test_passed):
     try:
         ttnn.ReadDeviceProfiler(device)
     except Exception as e:
-        # A profiler READBACK failure is a tooling failure, not a test failure: the op and
-        # its PCC check have already completed by the time we get here. Leaving this call
-        # unguarded (while the get_latest_programs_perf_data() call below WAS guarded)
-        # meant the exception propagated out of the test body and the vector was recorded
-        # as FAIL_ASSERT_EXCEPTION for a passing op.
+        # A profiler READBACK failure must not OVERWRITE the vector's own verdict. execute_test()
+        # has already run the op and its PCC check by the time we get here, so `status` is
+        # decided; leaving this call unguarded (while the get_latest_programs_perf_data() call
+        # below WAS guarded) let the exception propagate out of the test body and replace that
+        # verdict -- and its message -- with a profiler traceback.
+        #
+        # Note this does NOT decide pass/fail: callers return the original status/message
+        # alongside this sentinel, and the runner only maps it to PASS when status is already
+        # True. A vector whose PCC failed stays a failure, and now reports the PCC message
+        # instead of a misleading profiler error.
         #
         # Seen on Galaxy run 30509849370 job 90770018256, copy_model_traced 75a4...:
-        # the op ran, comp_pcc ran, then 1.2s later
-        #   TT_THROW @ tt_metal/impl/profiler/profiler.cpp:1830: Invalid packet type
-        #   DeviceProfiler::readRiscProfilerResults(...)
-        # i.e. the host decoded a marker whose 3-bit packet-type field was 6 or 7 (only
-        # 0-5 are valid and all six are handled), so it parsed past the data this
-        # iteration actually wrote -- a stale DEVICE_BUFFER_END_INDEX_* for some risc.
+        #   04:21:04.466  comp_pcc: One tensor is all zero. PCC undefined; falling back to allclose
+        #   04:21:04.468  Reading profiler data from device
+        #   04:21:05.699  TT_THROW @ tt_metal/impl/profiler/profiler.cpp:1830: Invalid packet type
+        #                 DeviceProfiler::readRiscProfilerResults(...)
+        # -> recorded as FAIL_ASSERT_EXCEPTION. The host decoded a marker whose 3-bit
+        # packet-type field was 6 or 7 (only 0-5 are valid and all six are handled), i.e. it
+        # parsed past the data that iteration wrote -- a stale DEVICE_BUFFER_END_INDEX_*.
+        # That vector's PCC result is NOT recoverable from the log, and the comp_pcc branch
+        # that fired requires exactly one tensor to be all-zero and the other not, which
+        # normally makes the follow-up allclose fail -- so it was probably a real PCC failure
+        # being masked by the profiler traceback, not a passing vector being failed.
         #
-        # Return the SKIPPED sentinel (not None) so the runner marks PASS with device-perf
-        # N/A, matching the existing _SKIP_DEVICE_PERF / _should_skip_device_profiler
-        # behaviour, instead of FAIL_UNSUPPORTED_DEVICE_PERF.
+        # Return the SKIPPED sentinel (not None) so a passing vector gets device-perf N/A
+        # rather than FAIL_UNSUPPORTED_DEVICE_PERF, matching _SKIP_DEVICE_PERF /
+        # _should_skip_device_profiler.
         logger.warning(f"Device profiler readback failed ({e}); reporting device-perf N/A for this vector.")
         return DEVICE_PERF_SKIPPED
     logger.info("Reading profiler data from device done")
