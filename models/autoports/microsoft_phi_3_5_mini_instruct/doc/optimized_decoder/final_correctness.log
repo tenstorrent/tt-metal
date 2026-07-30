@@ -1,0 +1,334 @@
+2026-07-30 08:02:58.750 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 16 items
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_path_and_policy_contract FAILED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-31-mesh_device0] 2026-07-30 08:03:00.530 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-30 08:03:00.530 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-30 08:03:00.530 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-30 08:03:00.530 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-30 08:03:00.532 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-30 08:03:00.532 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-30 08:03:00.536 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-30 08:03:00.615 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-30 08:03:00.615 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-30 08:03:00.615 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-07-30 08:03:00.615 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-30 08:03:00.617 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-30 08:03:00.863 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.853faf68e2b0.6002.730a0000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  853faf68e2b0
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-30 08:03:00.988 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:03:00.988 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:03:00.988 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-30 08:03:00.988 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-30 08:03:00.988 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 08:03:00.988 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 08:03:00.988 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 08:03:00.988 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 08:03:00.988 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 08:03:00.989 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 08:03:00.989 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 08:03:00.989 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-30 08:03:00.989 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-30 08:03:00.989 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-30 08:03:00.994 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:00.994 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:00.994 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:00.994 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:01.022 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:03:01.061 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680356416_memory' (shm_resource_tracker.cpp:282)
+2026-07-30 08:03:01.640 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349973 GHz, device_time_at_sync=100348714043048 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-30 08:03:01.656 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+[transformers] This model config has set a `rope_parameters['original_max_position_embeddings']` field, to be used together with `max_position_embeddings` to determine a scaling factor. Please set the `factor` field of `rope_parameters`with this ratio instead -- we recommend the use of this field over `original_max_position_embeddings`, as it is compatible with most model architectures.
+PCC_RESULT path=optimized-prefill-31 threshold=0.995 0.9999931409047919
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_real_weight_prefill_and_decode[blackhole-mesh_device0] 2026-07-30 08:03:03.686 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:03:03.686 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:03:03.698 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:03.699 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:03.699 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:03.700 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:03.728 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:03:03.768 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-real-prefill-33 threshold=0.995 0.9999260315972861
+PCC_RESULT path=optimized-real-decode-33 threshold=0.995 0.9999306051653665
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_multi_user_paged_prefill_routes_cache[blackhole-mesh_device0] 2026-07-30 08:03:06.177 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:03:06.177 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:03:06.189 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:06.190 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:06.191 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:06.192 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:06.220 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:03:06.261 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-prefill-batch2-33 threshold=0.995 0.9999931499206303
+PCC_RESULT path=optimized-prefill-cache-consume-batch2-33 threshold=0.995 0.9999944366745441
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_nonzero_prefill_chunk_boundary_last_token[blackhole-mesh_device0] 2026-07-30 08:03:09.909 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:03:09.909 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:03:09.922 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:09.923 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:09.923 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:09.924 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:09.952 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:03:09.993 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-prefill-nonzero-32769-last-token threshold=0.995 0.9969558763179057
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_is_deterministic[blackhole-1-mesh_device0] 2026-07-30 08:03:17.172 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:03:17.172 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:03:17.184 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:17.185 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:17.186 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:17.187 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:17.215 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:03:17.256 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-trace-decode-reference-batch1 threshold=0.995 0.9999961653272931
+TRACE_RESULT path=optimized batch=1 replays=10 bitwise_deterministic=true
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_varied_positions_consume_nonzero_decode_cache[blackhole-mesh_device0] 2026-07-30 08:03:19.250 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:03:19.250 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:03:19.262 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:19.263 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:19.263 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:19.264 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:19.292 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:03:19.333 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-varied-position-nonzero-cache-batch32 threshold=0.995 0.9999573240403713
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_long_rope_decode_at_advertised_context[blackhole-mesh_device0] 2026-07-30 08:03:21.715 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:03:21.715 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:03:21.726 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:21.727 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:21.728 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:21.729 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:21.757 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:03:21.798 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-decode-context-131072 threshold=0.995 0.9999961550432697
+CONTEXT_RESULT path=optimized mode=decode batch=1 context=131072
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_advertised_context_prefill[blackhole-131071-mesh_device0] 2026-07-30 08:03:29.401 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:03:29.401 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:03:29.413 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:29.414 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:29.414 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:29.415 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:29.443 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:03:29.484 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+CONTEXT_RESULT path=optimized mode=prefill batch=1 context=131071 non_aligned=true
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-32-mesh_device0] 2026-07-30 08:03:54.108 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:03:54.109 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:03:54.125 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:54.126 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:54.126 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:54.127 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:54.156 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:03:54.197 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-prefill-32 threshold=0.995 0.9999931256576781
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_is_deterministic[blackhole-32-mesh_device0] 2026-07-30 08:03:56.495 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:03:56.496 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:03:56.507 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:56.508 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:56.509 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:56.509 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:56.537 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:03:56.578 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-trace-decode-reference-batch32 threshold=0.995 0.9999955661003306
+TRACE_RESULT path=optimized batch=32 replays=10 bitwise_deterministic=true
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_advertised_context_prefill[blackhole-131072-mesh_device0] 2026-07-30 08:03:59.881 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:03:59.882 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:03:59.894 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:59.895 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:59.895 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:59.896 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:03:59.924 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:03:59.965 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+CONTEXT_RESULT path=optimized mode=prefill batch=1 context=131072 non_aligned=false
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-33-mesh_device0] 2026-07-30 08:04:24.667 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:04:24.668 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:04:24.683 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:24.684 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:24.685 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:24.685 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:24.714 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:04:25.327 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349975 GHz, device_time_at_sync=100461670911751 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-30 08:04:25.342 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-prefill-33 threshold=0.995 0.9999931636356351
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-63-mesh_device0] 2026-07-30 08:04:27.941 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:04:27.942 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:04:27.954 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:27.955 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:27.956 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:27.956 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:27.985 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:04:28.025 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-prefill-63 threshold=0.995 0.9999940072511238
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-64-mesh_device0] 2026-07-30 08:04:30.704 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:04:30.704 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:04:30.716 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:30.717 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:30.718 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:30.718 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:30.747 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:04:30.788 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-prefill-64 threshold=0.995 0.9999940347598251
+PASSED
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-65-mesh_device0] 2026-07-30 08:04:33.451 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-30 08:04:33.451 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-30 08:04:33.463 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:33.464 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:33.465 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:33.465 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-30 08:04:33.494 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-30 08:04:33.535 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+PCC_RESULT path=optimized-prefill-65 threshold=0.995 0.9999941636076999
+PASSED
+
+=================================== FAILURES ===================================
+___________________ test_optimized_path_and_policy_contract ____________________
+
+    def test_optimized_path_and_policy_contract():
+        assert issubclass(OptimizedDecoder, LightweightModule)
+        assert "FunctionalDecoder" not in inspect.getsource(OptimizedDecoder)
+        policy = OptimizationPolicy()
+        assert policy.attention_weight_dtype == ttnn.bfloat4_b
+        assert policy.gate_up_weight_dtype == ttnn.bfloat4_b
+        assert policy.down_weight_dtype == ttnn.bfloat4_b
+        assert policy.kv_cache_dtype == ttnn.bfloat8_b
+        assert policy.attention_math_fidelity == ttnn.MathFidelity.LoFi
+        assert policy.mlp_math_fidelity == ttnn.MathFidelity.LoFi
+        assert policy.decode_core_grid == (8, 1)
+        assert policy.fused_paged_cache_update
+>       assert policy.explicit_decode_sdpa
+E       assert False
+E        +  where False = OptimizationPolicy(attention_weight_dtype=DataType.BFLOAT4_B, gate_up_weight_dtype=DataType.BFLOAT4_B, down_weight_dtype=DataType.BFLOAT4_B, kv_cache_dtype=DataType.BFLOAT8_B, attention_math_fidelity=MathFidelity.LoFi, mlp_math_fidelity=MathFidelity.LoFi, decode_core_grid=(8, 1), qkv_in0_block_w=12, o_proj_in0_block_w=12, gate_up_in0_block_w=6, down_in0_block_w=16, gate_up_split_interleaved=True, separate_gate_up_projections=False, fused_paged_cache_update=True, explicit_decode_sdpa=False, fused_rope=False, prefill_core_grid=(8, 8), prefill_qkv_in0_block_w=2, prefill_o_proj_in0_block_w=2, prefill_gate_up_in0_block_w=2, prefill_down_in0_block_w=2, prefill_qkv_out_block_h=None, prefill_o_proj_out_block_h=None, prefill_gate_up_out_block_h=None, prefill_down_out_block_h=None, prefill_qkv_out_block_w=None, prefill_o_proj_out_block_w=None, prefill_gate_up_out_block_w=None, prefill_down_out_block_w=None).explicit_decode_sdpa
+
+models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py:55: AssertionError
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+24.30s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_advertised_context_prefill[blackhole-131072-mesh_device0]
+24.19s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_advertised_context_prefill[blackhole-131071-mesh_device0]
+7.27s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_long_rope_decode_at_advertised_context[blackhole-mesh_device0]
+6.83s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_nonzero_prefill_chunk_boundary_last_token[blackhole-mesh_device0]
+3.31s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_multi_user_paged_prefill_routes_cache[blackhole-mesh_device0]
+2.98s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_is_deterministic[blackhole-32-mesh_device0]
+2.36s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-63-mesh_device0]
+2.34s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-64-mesh_device0]
+2.27s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-33-mesh_device0]
+2.07s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_real_weight_prefill_and_decode[blackhole-mesh_device0]
+2.05s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_varied_positions_consume_nonzero_decode_cache[blackhole-mesh_device0]
+1.96s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-32-mesh_device0]
+1.69s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-31-mesh_device0]
+1.69s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-65-mesh_device0]
+1.67s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_is_deterministic[blackhole-1-mesh_device0]
+1.32s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-31-mesh_device0]
+0.95s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-33-mesh_device0]
+0.40s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-32-mesh_device0]
+0.31s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_is_deterministic[blackhole-1-mesh_device0]
+0.31s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_multi_user_paged_prefill_routes_cache[blackhole-mesh_device0]
+0.30s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_is_deterministic[blackhole-32-mesh_device0]
+0.30s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_advertised_context_prefill[blackhole-131071-mesh_device0]
+0.30s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_real_weight_prefill_and_decode[blackhole-mesh_device0]
+0.30s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_nonzero_prefill_chunk_boundary_last_token[blackhole-mesh_device0]
+0.30s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_long_rope_decode_at_advertised_context[blackhole-mesh_device0]
+0.30s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-63-mesh_device0]
+0.29s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_advertised_context_prefill[blackhole-131072-mesh_device0]
+0.29s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-65-mesh_device0]
+0.29s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_varied_positions_consume_nonzero_decode_cache[blackhole-mesh_device0]
+0.29s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-64-mesh_device0]
+0.20s setup    models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_path_and_policy_contract
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-65-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_multi_user_paged_prefill_routes_cache[blackhole-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-63-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_varied_positions_consume_nonzero_decode_cache[blackhole-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_real_weight_prefill_and_decode[blackhole-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-64-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-31-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_advertised_context_prefill[blackhole-131072-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-32-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_nonzero_prefill_chunk_boundary_last_token[blackhole-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_is_deterministic[blackhole-32-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_advertised_context_prefill[blackhole-131071-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_is_deterministic[blackhole-1-mesh_device0]
+0.12s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_long_rope_decode_at_advertised_context[blackhole-mesh_device0]
+0.11s teardown models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-33-mesh_device0]
+0.01s call     models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_path_and_policy_contract
+
+(1 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-31-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_real_weight_prefill_and_decode[blackhole-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_multi_user_paged_prefill_routes_cache[blackhole-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_nonzero_prefill_chunk_boundary_last_token[blackhole-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_is_deterministic[blackhole-1-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_varied_positions_consume_nonzero_decode_cache[blackhole-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_long_rope_decode_at_advertised_context[blackhole-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_advertised_context_prefill[blackhole-131071-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-32-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_is_deterministic[blackhole-32-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_advertised_context_prefill[blackhole-131072-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-33-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-63-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-64-mesh_device0]
+PASSED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_non_aligned_prefill_matches_reference[blackhole-65-mesh_device0]
+FAILED models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_path_and_policy_contract
+=================== 1 failed, 15 passed in 95.92s (0:01:35) ====================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7dbcc74404c8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7dbcc7a244f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "to_torch_with_padded_shape"
+ - leaked function "set_sub_device_stall_group"
+ - leaked function "__init__"
+ - leaked function "__repr__"
+ - leaked function "empty"
+ - leaked function "create_submesh"
+ - leaked function "pad_to_tile"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-30 08:04:37.124 | info     |    BuildKernels | JIT cache stats: 675/739 hits (91.3%) [675 cached, 6336 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-30 08:04:37.124 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-30 08:04:37.137 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-30 08:04:37.137 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-30 08:04:37.712 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-30 08:04:37.712 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-30 08:04:37.712 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
