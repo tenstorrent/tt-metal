@@ -216,6 +216,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/metal_v2_artifacts.hpp
     api/ttnn/operation.hpp
     api/ttnn/operation_concepts.hpp
+    api/ttnn/program_hash.hpp
     api/ttnn/reports.hpp
     api/ttnn/tensor/host_buffer/functions.hpp
     api/ttnn/tensor/layout/alignment.hpp

@@ -15,8 +15,10 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
 #include <cstdint>
+#include <tt_stl/small_vector.hpp>
 
 #include "ttnn/distributed/types.hpp"
 
@@ -182,6 +184,17 @@ consteval bool all_factories_valid(std::index_sequence<Is...>) {
           CustomProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
+
+// True iff at least one alternative builds a Metal 2.0 ProgramSpec. "Any", not "all": once one
+// factory of a multi-factory operation is ported, the operation's cache key is the spec path's
+// concern, so the keying restriction applies to the whole operation.
+template <typename Variant, std::size_t... Is>
+consteval bool any_spec_factory(std::index_sequence<Is...>) {
+    return (
+        (ProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>> ||
+         CustomProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) ||
+        ...);
+}
 }  // namespace detail
 
 template <typename Variant>
@@ -207,16 +220,42 @@ concept DeviceOperationConcept =
     (HasDirectDescriptor<device_operation_t> ||
      (HasProgramFactoryType<device_operation_t> && AllFactoriesValid<typename device_operation_t::program_factory_t>));
 
+// True iff any of the operation's program factories builds a Metal 2.0 ProgramSpec.
+template <typename device_operation_t>
+concept HasSpecProgramFactory =
+    HasProgramFactoryType<device_operation_t> &&
+    requires { std::variant_size_v<typename device_operation_t::program_factory_t>; } &&
+    detail::any_spec_factory<typename device_operation_t::program_factory_t>(
+        std::make_index_sequence<std::variant_size_v<typename device_operation_t::program_factory_t>>{});
+
+// Optional keying hooks, one relaxation per Tensor reached in tensor_args (engaged optionals only).
+// Relaxations are the only lever on the tensor half, so keying and Metal 2.0 validation stay in step.
+template <typename device_operation_t>
+concept HasTensorArgsRelaxations = requires(const typename device_operation_t::tensor_args_t& tensor_args) {
+    {
+        device_operation_t::tensor_args_relaxations(tensor_args)
+    } -> std::convertible_to<ttsl::SmallVector<tt::tt_metal::experimental::TensorSpecRelaxations>>;
+};
+
+template <typename device_operation_t>
+concept HasAttributesHash = requires(const typename device_operation_t::operation_attributes_t& operation_attributes) {
+    { device_operation_t::compute_attributes_hash(operation_attributes) } -> std::convertible_to<std::uint64_t>;
+};
+
+// The legacy freeform hash hook: one method keyed on both halves at once. Superseded by the two
+// hooks above, and forbidden on the spec path.
+template <typename device_operation_t>
+concept HasLegacyProgramHash = requires(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {
+        device_operation_t::compute_program_hash(operation_attributes, tensor_args)
+    } -> std::convertible_to<std::uint64_t>;
+};
+
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =
-    DeviceOperationConcept<device_operation_t> &&
-    requires(
-        const typename device_operation_t::operation_attributes_t& operation_attributes,
-        const typename device_operation_t::tensor_args_t& tensor_args) {
-        {
-            device_operation_t::compute_program_hash(operation_attributes, tensor_args)
-        } -> std::convertible_to<std::uint64_t>;
-    };
+    DeviceOperationConcept<device_operation_t> && HasLegacyProgramHash<device_operation_t>;
 
 template <typename device_operation_t>
 concept HasSkipLaunch = requires(
