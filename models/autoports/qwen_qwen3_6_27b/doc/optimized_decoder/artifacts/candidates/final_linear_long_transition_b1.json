@@ -1,0 +1,102 @@
+{
+  "batch": 1,
+  "bit_exact": null,
+  "candidate": "default",
+  "command_result": "pass",
+  "decode_median_ms": 2.6546730995178223,
+  "decode_min_ms": 2.6199569983873516,
+  "decode_steps": 16,
+  "pcc": [
+    {
+      "passed": true,
+      "phase": "prefill",
+      "value": 0.9999960851024156
+    },
+    {
+      "passed": true,
+      "phase": "decode_0",
+      "value": 0.9999978655856685
+    },
+    {
+      "passed": true,
+      "phase": "decode_1",
+      "value": 0.9999979849314211
+    },
+    {
+      "passed": true,
+      "phase": "decode_2",
+      "value": 0.9999983068633962
+    },
+    {
+      "passed": true,
+      "phase": "decode_3",
+      "value": 0.999998255446442
+    },
+    {
+      "passed": true,
+      "phase": "decode_4",
+      "value": 0.9999986267081933
+    },
+    {
+      "passed": true,
+      "phase": "decode_5",
+      "value": 0.9999975068277046
+    },
+    {
+      "passed": true,
+      "phase": "decode_6",
+      "value": 0.9999973430125629
+    },
+    {
+      "passed": true,
+      "phase": "decode_7",
+      "value": 0.9999976070359405
+    },
+    {
+      "passed": true,
+      "phase": "decode_8",
+      "value": 0.9999971153607254
+    },
+    {
+      "passed": true,
+      "phase": "decode_9",
+      "value": 0.9999981467762973
+    },
+    {
+      "passed": true,
+      "phase": "decode_10",
+      "value": 0.9999979295834472
+    },
+    {
+      "passed": true,
+      "phase": "decode_11",
+      "value": 0.9999985058994153
+    },
+    {
+      "passed": true,
+      "phase": "decode_12",
+      "value": 0.9999984238935246
+    },
+    {
+      "passed": true,
+      "phase": "decode_13",
+      "value": 0.9999984666606521
+    },
+    {
+      "passed": true,
+      "phase": "decode_14",
+      "value": 0.9999981263559558
+    },
+    {
+      "passed": true,
+      "phase": "decode_15",
+      "value": 0.9999986723323114
+    }
+  ],
+  "prefill_sequence": 513,
+  "real_weights": false,
+  "recurrent_nonzero": 131034,
+  "recurrent_state_dtype": "DataType.BFLOAT8_B",
+  "repeat_runs": 1,
+  "watcher_enabled": false
+}

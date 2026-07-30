@@ -1,0 +1,9 @@
+{
+  "batch": 1,
+  "candidate": "default",
+  "kind": "linear_attention",
+  "passed": true,
+  "path": "optimized",
+  "pcc": 0.9987165695638567,
+  "reference": "hf"
+}

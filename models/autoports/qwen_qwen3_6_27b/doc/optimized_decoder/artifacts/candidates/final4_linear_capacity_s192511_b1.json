@@ -1,0 +1,15 @@
+{
+  "batch": 1,
+  "candidate": "default",
+  "mode": "prefill",
+  "output_nonzero": 985656229,
+  "output_shape": [
+    1,
+    192511,
+    5120
+  ],
+  "path": "optimized",
+  "recurrent_dtype": "DataType.BFLOAT8_B",
+  "recurrent_nonzero": 129830,
+  "sequence": 192511
+}
