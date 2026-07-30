@@ -334,10 +334,16 @@ RUN FILES=(/etc/yum.repos.d/*.repo) && \
     sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
 
 # Build deps matching manylinux (AlmaLinux 9) for ABI compatibility.
-# openssl-devel/zlib-devel are required (TLS + compression). Not attempting
-# HTTP/2 (libnghttp2-devel) here - unlike zlib-devel, its availability/name
-# on this base wasn't verified, and it's a nice-to-have, not required for
-# the SigV4 fix this tool exists for.
+# openssl-devel/zlib-devel/libpsl-devel are all required (TLS, compression,
+# and Public Suffix List cookie-domain checks respectively) - install-curl.sh
+# fails configure outright if any of them is missing, rather than silently
+# building without it, since this curl replaces /usr/bin/curl for every
+# consumer in the final image, not just the Garage/SigV4 use case. Confirmed
+# libpsl-devel is in AlmaLinux 9's AppStream repo (no CRB needed) by checking
+# https://repo.almalinux.org/almalinux/9/AppStream/x86_64/os/Packages/
+# directly. Not attempting HTTP/2 (libnghttp2-devel) here - unlike the other
+# three, its availability/name on this base wasn't verified, and it's a
+# nice-to-have, not a security property, so configure just skips it if absent.
 RUN dnf install -y \
     gcc \
     make \
@@ -346,6 +352,7 @@ RUN dnf install -y \
     pkgconf-pkg-config \
     openssl-devel \
     zlib-devel \
+    libpsl-devel \
     && dnf clean all
 
 COPY dockerfile/scripts/install-curl.sh /tmp/install-curl.sh

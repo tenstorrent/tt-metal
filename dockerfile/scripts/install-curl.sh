@@ -52,16 +52,21 @@ tar -xf "${TMPDIR}/curl.tar.gz" -C "${TMPDIR}" --strip-components=1
 mkdir -p "${INSTALL_PREFIX}"
 
 # Configure, build, and install.
-# --without-libpsl / conditionally-enabled nghttp2 keep this a minimal but
-# still broadly-compatible build: OpenSSL (TLS) and zlib (compression) are
-# required (fail configure if missing), nghttp2 (HTTP/2) and libpsl (PSL-based
-# cookie domain checks) are picked up automatically if the builder stage
-# installed their dev packages, but aren't required to succeed.
+# OpenSSL (TLS), zlib (compression), and libpsl (Public Suffix List - used to
+# scope cookie-jar cookies to their real registrable domain) are all required
+# here: configure fails outright if any of them isn't found, rather than
+# silently building without it. This binary globally replaces /usr/bin/curl
+# in the final image (see Dockerfile), so silently dropping libpsl would
+# quietly weaken cookie-domain isolation for every curl consumer in the
+# image, not just the Garage/SigV4 use case this tool exists for - keep the
+# build failing loudly if the builder stage's libpsl-devel goes missing
+# rather than reintroducing that regression silently.
+# nghttp2 (HTTP/2) is the one optional extra: picked up automatically if the
+# builder stage installed its dev package, but not required to succeed.
 cd "${TMPDIR}"
 ./configure \
     --prefix="${INSTALL_PREFIX}" \
-    --with-openssl \
-    --without-libpsl
+    --with-openssl
 make -j"$(nproc)"
 make install
 
