@@ -5,7 +5,7 @@
  * x280_lossless_ring_d2h_race memory). This reverts to the PROVEN single-stream shape and solves
  * identity with a STICKY-SRC header the reader injects at each source switch:
  *
- *   worker L1 SPSCs  --(reader harts, ILP reads)-->  per-reader LIM SPSC  --(relay hart, round-robin)-->
+ *   worker L1 SPSCs  --(reader harts, wide vector reads)-->  per-reader LIM SPSC  --(relay hart, RR)-->
  *     single host ring (ONE sent/acked pair -> coherent, no per-lane fan-out)  --> host demuxes by sticky
  *
  * reader hart h (0..nread-1): owns a contiguous slice of cores. For each (core,risc) that has new data it
@@ -451,7 +451,11 @@ static void reader_run(
                 w32(sbase + (uint64_t)(prod & swm) * 4, r32(lut));
                 prod += 1;
                 /* copy the worker ring words [head,tail) into the SPSC in contiguous chunks (split at BOTH
-                 * the worker-ring and SPSC wraps), each chunk copied with ILP flits. */
+                 * the worker-ring and SPSC wraps). Each chunk goes through copy_words(), i.e. wide RVV
+                 * e32/m8 loads -- NOT an ILP unroll. One vle32.v is up to VLEN*8/32 words (512 B at
+                 * VLEN=512), so the vector length itself is what keeps many NoC reads outstanding; adding
+                 * explicit ILP on top measured as a NO-OP (rdrbench), because at that width the path is
+                 * bandwidth-bound rather than latency-bound. See BANDWIDTH.md. */
                 uint64_t wl1 = rbufs + (uint64_t)r * 2048;
                 uint32_t si = head, di = prod, left = run;
                 while (left) {
