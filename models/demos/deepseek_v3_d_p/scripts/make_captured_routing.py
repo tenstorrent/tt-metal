@@ -289,15 +289,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--tokens",
         type=int,
-        default=25600,
-        help="tokens to keep per layer; must be divisible by --dispatch-group-size. The worker's "
-        "expected numel is dispatch_group_size * seq_len_per_chip * top_k, so 25600 tokens "
-        "(8 x 3200) matches the current LB 8-device replay. 0 keeps everything.",
+        default=0,
+        help="tokens to keep per layer; must be divisible by --dispatch-group-size. 0 (default) "
+        "keeps whatever the chunk selection produced — 5120 for a single invocation, which is what "
+        "--chunk picks emits. The worker's expected numel is dispatch_group_size * "
+        "seq_len_per_chip * top_k, so pair --chunk all --tokens 25600 to match an unmodified "
+        "seq_len_per_chip=3200 worker instead.",
     )
     p.add_argument("--dispatch-group-size", type=int, default=8)
     p.add_argument("--n-worst", type=int, default=4)
     p.add_argument("--n-nominal", type=int, default=4)
     p.add_argument("--rank-only", action="store_true", help="report picks without writing a file")
+    p.add_argument(
+        "--all-layers",
+        action="store_true",
+        help="write every layer instead of just the picked ones. Off by default: the loader only "
+        "looks up the layer named by TT_DS_CAPTURED_LAYER, so the other layers are dead weight.",
+    )
     a = p.parse_args(argv)
 
     if not a.rank_only and a.out is None:
@@ -332,6 +340,8 @@ def main(argv: list[str] | None = None) -> int:
     # Rank per invocation whenever the chunk axis is known; only fall back to the aggregate
     # ranking when it isn't (a flat file with no --chunk-size), since aggregating over the ISL
     # averages away exactly the per-chunk spikes worth replaying.
+    worst_agg: list[tuple[int, int, float]] = []
+    nominal_agg: list[tuple[int, int, float]] = []
     if per_invocation is not None:
         report_per_invocation(per_invocation, a.num_routed_experts, max(a.n_worst, 8))
         worst, nominal = rank_invocations(per_invocation, a.num_routed_experts, a.n_worst, a.n_nominal)
@@ -347,8 +357,7 @@ def main(argv: list[str] | None = None) -> int:
     # Resolve what actually gets written.
     if per_invocation is not None:
         if a.chunk == "picks":
-            # Each picked layer keeps the chunk its own pick came from; unpicked layers fall back
-            # to chunk 0 so the file stays complete and every layer tensor is the same size.
+            # Each picked layer keeps the chunk its own pick came from.
             layers = {
                 layer: pc[chunk_for_layer.get(layer, min(pc))]
                 for layer, pc in per_invocation.items()
@@ -363,8 +372,17 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit(f"chunk {want} missing for layers {missing[:5]}")
             layers = {layer: pc[want] for layer, pc in per_invocation.items()}
 
+    # Keep only the picked layers by default: the file then holds exactly the n_worst + n_nominal
+    # cases and nothing else. The loader only ever looks up expert_ids_layer_{TT_DS_CAPTURED_LAYER},
+    # so carrying the other ~50 layers just inflates the file.
+    picked_layers = set(chunk_for_layer) or {layer for layer, _, _ in (worst_agg + nominal_agg)}
+    if not a.all_layers and picked_layers:
+        dropped = len(layers) - len(picked_layers & set(layers))
+        layers = {layer: t for layer, t in layers.items() if layer in picked_layers}
+        print(f"\nkeeping only the {len(layers)} picked layers (dropped {dropped}); --all-layers to keep every layer")
+
     n_tokens = next(iter(layers.values())).shape[0]
-    print(f"\nemitting from {len(layers)} layers x {n_tokens} tokens x top-{a.top_k} (chunk={a.chunk})")
+    print(f"emitting from {len(layers)} layers x {n_tokens} tokens x top-{a.top_k} (chunk={a.chunk})")
     if a.chunk == "picks" and chunk_for_layer:
         print(f"per-layer chunk selection: {dict(sorted(chunk_for_layer.items()))}")
 

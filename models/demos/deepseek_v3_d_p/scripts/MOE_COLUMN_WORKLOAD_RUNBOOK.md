@@ -175,8 +175,14 @@ python3 models/demos/deepseek_v3_d_p/scripts/make_captured_routing.py \
 Prints the **4 worst** (highest in-col share) and **4 nominal** (closest to 25%) invocations,
 formatted to paste into `_REAL_INDICES_PICKS`. Add `--rank-only` to report without writing.
 
+Each output file holds **exactly 8 keys** — one per case, `expert_ids_layer_{N}` — and is about
+**1.3 MB**. The loader only ever looks up the layer named by `TT_DS_CAPTURED_LAYER`, so the other
+~50 layers would be dead weight; pass `--all-layers` if you want them anyway. Ranking always
+scores every layer regardless of what gets written.
+
 Both sets are de-duplicated by layer. Without that the worst four collapse onto four chunks of
-one layer and replay near-identical routing instead of four distinct cases.
+one layer and replay near-identical routing instead of four distinct cases — and, since one key
+holds one chunk, they could not coexist in a single file anyway.
 
 `--chunk` controls what is written:
 
@@ -189,6 +195,11 @@ one layer and replay near-identical routing instead of four distinct cases.
 `--chunk picks` works because the 8 picks land on 8 distinct layers, so one file serves all
 cases. Two chunks of the *same* layer cannot coexist in one file (one key per layer) — that
 would need two files.
+
+`--tokens` defaults to 0, meaning "keep what the chunk selection produced" — 5120 tokens for a
+single invocation. Only pair `--chunk all --tokens 25600` if you are deliberately targeting an
+unmodified `seq_len_per_chip=3200` worker (see step 6), which makes each case a blend of chunks
+0–4 rather than one invocation.
 
 The same script also works offline on an already-flat per-layer capture, using `--chunk-size`
 to recover the per-invocation view (the row axis is token position, so chunk `c` is rows
