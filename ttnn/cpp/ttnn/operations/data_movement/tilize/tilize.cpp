@@ -4,13 +4,17 @@
 
 #include "tilize.hpp"
 
+#include "codegen/tilize_codegen_device_operation.hpp"
+#include "codegen/tilize_codegen_supported.hpp"
 #include "device/tilize_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 
 using namespace tt::tt_metal;
 
@@ -42,6 +46,43 @@ MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize, const std::optiona
 
 namespace ttnn {
 
+namespace {
+
+// Populates the codegen prim's cache-key struct from the (already ND-squeezed) input tensor and
+// the free function's resolved output placement/dtype. NC/Ht/Wt mirror ops/tilize/spec.py's
+// _geometry(): NC folds every dim above the last two, Ht/Wt are ceil(H|W / TILE_H|W) (exact once
+// supported_by_codegen has confirmed tile alignment).
+ttnn::prim::TilizeCodegenParams make_codegen_params(
+    const ttnn::Tensor& input_tensor,
+    const MemoryConfig& output_mem_config,
+    DataType output_dtype,
+    bool use_multicore,
+    bool use_low_perf) {
+    const auto& shape = input_tensor.logical_shape();
+    const uint32_t rank = shape.rank();
+    const uint32_t h = rank >= 2 ? shape[rank - 2] : 1;
+    const uint32_t w = rank >= 1 ? shape[rank - 1] : 1;
+    uint32_t nc = 1;
+    for (uint32_t i = 0; i + 2 < rank; ++i) {
+        nc *= shape[i];
+    }
+
+    ttnn::prim::TilizeCodegenParams params;
+    params.NC = nc;
+    params.Ht = (h + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+    params.Wt = (w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+    params.input_dtype = input_tensor.dtype();
+    params.output_dtype = output_dtype;
+    params.input_mem_config = input_tensor.memory_config();
+    params.output_mem_config = output_mem_config;
+    params.use_multicore = use_multicore;
+    params.use_low_perf = use_low_perf;
+    params.preserve_logical_shape = false;
+    return params;
+}
+
+}  // namespace
+
 ttnn::Tensor tilize(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
@@ -49,7 +90,8 @@ ttnn::Tensor tilize(
     bool use_multicore,
     bool use_low_perf,
     tt::tt_metal::Tile tile,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::string& implementation) {
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
@@ -82,6 +124,8 @@ ttnn::Tensor tilize(
         staging_bytes_per_tile,
         fixed_staging_bytes);
 
+    const auto selector = ttnn::prim::parse_implementation(implementation);
+
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         // Workaround for https://github.com/tenstorrent/tt-metal/issues/45331:
         // ttnn::prim::tilize routes wide width-sharded input to
@@ -90,6 +134,10 @@ ttnn::Tensor tilize(
         // and exceed L1. Reroute via interleaved DRAM so the prim selects
         // TilizeMultiCoreBlockProgramFactory, whose CBs are bounded by
         // max_l1 / (input_tile_size + output_tile_size) by construction.
+        //
+        // This reroute is sharded-input only, which the codegen prim never supports (see
+        // tilize_codegen_supported.cpp), so both calls below stay on the native prim
+        // unconditionally regardless of `implementation`.
         if (input_tensor.memory_config().is_sharded() && !enough_space_height) {
             log_debug(tt::LogOp, "ttnn::tilize: rerouting wide sharded input via DRAM interleaved (#45331)");
             const auto target_memory_config = memory_config.value_or(input_tensor.memory_config());
@@ -106,16 +154,53 @@ ttnn::Tensor tilize(
                 sub_core_grids);
             return ttnn::to_memory_config(interleaved_tile, target_memory_config);
         }
-        return ttnn::prim::tilize(
-            input_tensor,
-            memory_config,
-            output_dtype,
-            use_multicore,
-            enough_space_width,
-            enough_space_height,
-            use_low_perf,
-            tile,
-            sub_core_grids);
+
+        auto call_native = [&]() {
+            return ttnn::prim::tilize(
+                input_tensor,
+                memory_config,
+                output_dtype,
+                use_multicore,
+                enough_space_width,
+                enough_space_height,
+                use_low_perf,
+                tile,
+                sub_core_grids);
+        };
+
+        if (selector == ttnn::prim::ImplementationSelector::Native) {
+            return call_native();
+        }
+
+        // The codegen prim assumes the standard 32x32 tile and has no sub_core_grids parameter
+        // (TilizeCodegenParams carries neither); either makes this call outside its scope
+        // regardless of what supported_by_codegen() says about the tensor itself.
+        const bool codegen_eligible_context = !sub_core_grids.has_value() &&
+                                              tile.get_height() == tt::constants::TILE_HEIGHT &&
+                                              tile.get_width() == tt::constants::TILE_WIDTH;
+
+        const auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
+        const auto resolved_output_dtype = output_dtype.value_or(input_tensor.dtype());
+        const auto codegen_params =
+            make_codegen_params(input_tensor, output_mem_config, resolved_output_dtype, use_multicore, use_low_perf);
+        const ttnn::prim::TilizeCodegenInputs codegen_inputs{input_tensor};
+
+        if (selector == ttnn::prim::ImplementationSelector::Codegen) {
+            TT_FATAL(
+                codegen_eligible_context,
+                "tilize: implementation=codegen does not support a custom tile shape or sub_core_grids");
+            TT_FATAL(
+                ttnn::prim::supported_by_codegen(codegen_params, codegen_inputs),
+                "tilize: inputs not supported by the codegen implementation");
+            return ttnn::prim::tilize_codegen(input_tensor, codegen_params);
+        }
+
+        // Auto: correctness gate && perf gate.
+        if (codegen_eligible_context && ttnn::prim::supported_by_codegen(codegen_params, codegen_inputs) &&
+            !ttnn::prim::is_demoted(codegen_params, codegen_inputs)) {
+            return ttnn::prim::tilize_codegen(input_tensor, codegen_params);
+        }
+        return call_native();
     };
 
     return ttnn::operations::data_movement::build_ndiml_tilize(base_tilize, sub_core_grids)(input_tensor);

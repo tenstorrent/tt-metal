@@ -10,12 +10,15 @@
 namespace ttnn::prim {
 
 // Correctness gate: can the codegen prim produce a bit-exact result for these inputs?
-// Placeholder — phase 4a fills this in from tt-dm-codegen's invalidate_vector / op guards.
-bool supported_by_codegen(const TilizeCodegenParams& operation_attributes);
+// Transcribed from common/sweeps/codegen_tilize.py's invalidate_vector (which delegates
+// same-dtype/interleaved cases to upstream sweeps.tilize) plus ops/tilize/tilize.py's own
+// guards. Takes tensor_args too (not just the cache-key attrs) because the tile-alignment
+// and layout checks need the tensor's raw logical shape/layout, which NC/Ht/Wt (already
+// tile-rounded) cannot recover.
+bool supported_by_codegen(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args);
 
 // Perf gate (auto-routing only): in-scope cases not worth the codegen path under `auto`.
-// Placeholder — phase 4a fills this in from demotion analysis.
-bool is_demoted(const TilizeCodegenParams& operation_attributes);
+bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args);
 
 enum class ImplementationSelector { Auto, Native, Codegen };
 

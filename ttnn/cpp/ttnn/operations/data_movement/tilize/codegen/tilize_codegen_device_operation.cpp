@@ -19,8 +19,10 @@ TilizeCodegenDeviceOperation::program_factory_t TilizeCodegenDeviceOperation::se
 }
 
 void TilizeCodegenDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t&) {
-    TT_FATAL(supported_by_codegen(operation_attributes), "tilize: inputs not supported by the codegen implementation");
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        supported_by_codegen(operation_attributes, tensor_args),
+        "tilize: inputs not supported by the codegen implementation");
 }
 
 TilizeCodegenDeviceOperation::spec_return_value_t TilizeCodegenDeviceOperation::compute_output_specs(
