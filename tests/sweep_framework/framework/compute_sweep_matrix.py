@@ -435,19 +435,19 @@ def main():
     for entry in include_entries:
         entry["timeout"] = get_batch_timeout(run_type, entry.get("sku"), entry.get("module_selector", ""))
 
-    # Budget telemetry: the sum of a SKU's per-batch timeouts is that SKU's total
-    # time for this run. Report it against the per-run budget declared for the
+    # Budget enforcement: the sum of a SKU's per-batch timeouts is that SKU's total
+    # time for this run. Check it against the per-run budget declared for the
     # (target, sku) in ttnn_sweep_tests.yaml (skus.<sku>.timeout) — the same number
     # verify_time_budget.py enforces (statically) against .github/time_budget.yaml.
     # Because the batch count is dynamic, the live sum can only be checked here, not
-    # statically; this surfaces it per run so the declared budgets can be calibrated
-    # against real module sets. Untracked (target, sku) pairs (nightly/comprehensive)
-    # have no declared budget and are skipped. This is intentionally non-fatal — the
-    # static verify_time_budget.py step is the hard gate; flip the `over_budget`
-    # branch below to sys.exit(1) once the budgets are calibrated on a full run.
+    # statically; this enforces it per run. Untracked (target, sku) pairs
+    # (nightly/comprehensive) have no declared budget and are skipped. Exceeding the
+    # budget is fatal: the static verify_time_budget.py step caps the declared per-run
+    # numbers, and this caps the run that is actually about to be dispatched.
     sku_totals = defaultdict(int)
     for entry in include_entries:
         sku_totals[entry.get("sku")] += entry["timeout"]
+    over_budget_skus = []
     for sku, requested in sorted(sku_totals.items()):
         budget = get_sku_total_budget(run_type, sku)
         if budget is None:
@@ -460,14 +460,23 @@ def main():
             file=sys.stderr,
         )
         if over_budget:
+            over_budget_skus.append(sku)
             print(
-                f"[budget][WARNING] {run_type} / {sku}: the sum of this run's per-batch "
+                f"[budget][ERROR] {run_type} / {sku}: the sum of this run's per-batch "
                 f"timeouts ({requested} min) exceeds the per-run budget of {budget} min "
                 f"declared in tests/pipeline_reorg/ttnn_sweep_tests.yaml. Raise "
                 f"skus.{sku}.timeout there (and the matching .github/time_budget.yaml "
                 f"ttnn.sweep entry) or lower the per-op ceilings.",
                 file=sys.stderr,
             )
+    # Report every offending SKU before failing so one run surfaces all of them.
+    if over_budget_skus:
+        print(
+            f"[budget][ERROR] {run_type}: over budget on {len(over_budget_skus)} sku(s): "
+            f"{', '.join(over_budget_skus)}. Refusing to dispatch.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Validate GitHub Actions limits
     for label, count in [("batch", len(batches)), ("matrix entry", len(include_entries))]:

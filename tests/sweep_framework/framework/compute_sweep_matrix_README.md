@@ -39,7 +39,11 @@ Routing logic lives in `matrix_runner_config.py`; the physical runner labels
 Per-job **timeouts** come from `tests/pipeline_reorg/ttnn_sweep_tests.yaml` keyed by
 `(target, sku)` (checked against `.github/time_budget.yaml` by `verify_time_budget.py`);
 `compute_sweep_matrix.py` stamps each matrix entry's `timeout` from there and the
-workflow enforces it at the GitHub job level (`timeout-minutes`).
+workflow enforces it at the GitHub job level (`timeout-minutes`). Because the batch
+count is dynamic, `compute_sweep_matrix.py` also sums each SKU's per-batch timeouts for
+the run being dispatched and **fails** if that sum exceeds the SKU's declared per-run
+budget — raise `skus.<sku>.timeout` (and the matching `.github/time_budget.yaml`
+`ttnn.sweep` entry) or lower the per-op ceilings.
 
 To change **which runner pool / labels** a lane lands on, point the profile at a
 different existing SKU (or ask infra to adjust that SKU) in `.github/sku_config.yaml` —
