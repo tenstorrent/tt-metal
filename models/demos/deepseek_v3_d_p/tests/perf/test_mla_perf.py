@@ -104,20 +104,20 @@ def test_kimi_k3_mla_chunked_perf_loudbox():
     asserts the 2x4 measurement on its own terms; a Galaxy ground-truth test needs a Galaxy run to
     calibrate (mirror test_kimi_mla_chunked_perf_galaxy with a 'chunk1280 and k3' or 5120-chunk -k).
 
-    Measured breakdown at calibration: Matmul 1,443 us / CCL 2,013 us / SDPA 1,709 us / Other 812 us.
+    Measured breakdown at calibration: Matmul 1,430 us / CCL 2,003 us / SDPA 1,709 us / Other 786 us.
     CCL is the largest bucket, and the gate adds one TP all-gather -- worth watching if this regresses.
 
     Recalibrated after the kv_a_proj_with_mqa fix: K3 deliberately uses the untuned default for that
     one matmul because its tuned tiling degraded the KV cache enough to fail the 0.98 output PCC at
     depth (see mla_config.py and docs/KIMI_K3_MLA.md 5.1). That costs +6.3% on the matmul bucket and
-    +1.7% overall (5,875,364 -> 5,976,584 ns) and buys passing 56320-token prefill instead of failing
+    +1.7% overall and buys passing 56320-token prefill instead of failing
     at 3840 -- do not "optimise" it back without re-running test_mla_chunked_prefill[k3-depth56k-1u].
     """
     margin = adjust_margin_for_ddr_speed(0.03)
 
     run_model_device_perf_test_with_merge(
         command=_CMD_K3_CHUNKED_2X4,
-        expected_device_perf_ns_per_iteration=5_976_584,  # Recalibrated 2026-07-30 on BH LoudBox 2x4, FABRIC_2D.
+        expected_device_perf_ns_per_iteration=5_927_675,  # Recalibrated 2026-07-30 on BH LoudBox 2x4, FABRIC_2D.
         subdir="kimi_k3_mla",
         model_name="kimi_k3_mla_chunked_lb_2x4",
         num_iterations=1,

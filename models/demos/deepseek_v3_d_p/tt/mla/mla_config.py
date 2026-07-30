@@ -365,26 +365,74 @@ def _retag_for_k3(cfg: dict) -> dict:
 # o_proj: K widens 2048 -> 3072, but N is the full 7168 for both (K-sharded via mapper_tp0) and
 # in0_block_w=8 divides K_t=64 and K_t=96 alike -- so the tiling is valid unchanged.
 #
-# kv_a_proj_with_mqa is deliberately NOT retagged, even though its per-device shape is also identical.
-# Its K2.6 tiling is dimensionally fine for K3 but measurably less accurate than the untuned default,
-# and it is the ONE tuned matmul on the KV-cache path (kv_a_proj -> slice -> rms_norm -> kvpe.pack).
-# Every later chunk re-reads that cache, so the loss compounds with KV depth instead of staying local
-# to one chunk. Measured on 2x4 at S_loc=640 over 44 chunks to 56320 tokens
-# (test_mla_chunked_prefill[k3-depth56k-1u]):
+# kv_a_proj_with_mqa is NOT retagged: K2.6's tiling (in0_block_w=14) is dimensionally fine for K3 but
+# measurably less accurate, and this is the ONE tuned matmul on the KV-cache path
+# (kv_a_proj -> slice -> rms_norm -> kvpe.pack). Every later chunk re-reads that cache, so the loss
+# compounds with KV depth instead of staying local to one chunk. Measured on 2x4 at S_loc=640 over 44
+# chunks to 56320 tokens (test_mla_chunked_prefill[k3-depth56k-1u]):
 #
-#   K3 candidate present : KV cache k_nope 0.999810 -> output PCC FAILS 0.98 at kv_actual=3840
-#   K3 candidate absent  : KV cache k_nope 0.999877 -> passes all 44, 0.98550 at kv_actual=55040
+#   in0_block_w=14 : KV cache k_nope 0.999810 -> output PCC FAILS 0.98 at kv_actual=3840
+#   in0_block_w=1  : KV cache k_nope 0.999877 -> passes all 44, 0.98550 at kv_actual=55040
 #
 # A bisect isolated it: dropping this one candidate and keeping the other six (plus the k_chunk=640
-# SDPA entry) passes; keeping only this one and dropping the other six still fails. The cost of using
-# the default here is small -- kv_a_proj is ~2% of the layer's matmul FLOPs (K=1792, N=576).
+# SDPA entry) passes; keeping only this one and dropping the other six still fails.
 #
-# NOTE for the K2.6 side: K2.6 runs this same tuned config and shows the same degraded KV-cache PCC
+# K3 instead gets its own entry below that keeps the ACCURATE blocking (in0_block_w=1, the tiling the
+# untuned default picks) and only reclaims the output placement, which cannot change numerics -- same
+# dtype and same values, just a different buffer. Falling back to the default had silently also given
+# up K2.6's `out_mem_config: L1`, which cost 46.1 us vs K2.6's 17.6 us for the same shape.
+#
+# NOTE for the K2.6 side: K2.6 still runs in0_block_w=14 and shows the same degraded KV-cache PCC
 # (0.999810), asymptoting to 0.98589 against a 0.98 threshold. It passes, but the margin is thinner
-# than it needs to be; re-tuning this entry would likely buy K2.6 back ~0.0005 at depth.
+# than it needs to be; giving it this same in0_block_w=1 entry would likely buy back ~0.0005 at depth.
 for _name in ("q_a_proj", "o_proj"):
     _k26 = MLA_MATMUL_CONFIG[_name][640]
     MLA_MATMUL_CONFIG[_name][640] = [_k26, _retag_for_k3(_k26)]
+
+MLA_MATMUL_CONFIG["kv_a_proj_with_mqa"][640] = [
+    MLA_MATMUL_CONFIG["kv_a_proj_with_mqa"][640],
+    {
+        "num_heads": _K3_HEADS,
+        "q_lora_rank": 1536,
+        "chunked_only": True,
+        # in0_block_w=1 / sub2x2 / pc2x2 replicates exactly what the untuned matmul picks (confirmed
+        # from the tracy ATTRIBUTES of an untuned run: ibw1 sub2x2 pc2x2, 90 cores), so the arithmetic
+        # -- and therefore the KV-cache PCC -- is unchanged from the accurate default.
+        #
+        # in0_block_w=1 IS THE ONLY VALUE THAT REACHES PRODUCTION DEPTH. Swept every divisor of
+        # K_t=56 and depth-tested each (test_mla_chunked_prefill[k3-depth56k-1u], 44 chunks to 56320):
+        #
+        #   ibw   us (isolated)   single-chunk PCC   depth: fails at kv_actual
+        #     1        44.7          0.9999216       never -- all 44, 0.98550 @ 55040
+        #     2        28.7          0.9999339           20480
+        #     4        21.6          0.9999294            7680
+        #     8        16.5          0.9999034            5120
+        #    14        17.9          0.9998523            3840
+        #
+        # So ~28 us/chunk is the irreducible price of depth correctness here, not a tuning oversight.
+        # NOTE the trap: ibw=2 has the BEST single-chunk PCC of any value -- better than ibw=1, the one
+        # that works -- and still dies at 20480. For a matmul feeding the KV cache the per-op PCC
+        # ranking is INVERTED against depth behaviour, because its error is written to the cache and
+        # re-read by every later chunk. Never justify raising this from an op-level PCC; only
+        # depth56k-1u decides. Guarded by test_k3_accuracy_pinned_blocking.
+        "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=COMPUTE_GRID,
+            in0_block_w=1,
+            out_subblock_h=2,
+            out_subblock_w=2,
+            per_core_M=2,
+            per_core_N=2,
+            transpose_mcast=False,
+            fuse_batch=False,
+            fused_activation=None,
+        ),
+        # act_mem_config is inert for this weight (_get_act_mem_config is only consulted for q_b_proj);
+        # out_mem_config is the one that matters here.
+        "act_mem_config": ttnn.L1_MEMORY_CONFIG,
+        "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+        "out_dtype": ttnn.bfloat16,
+    },
+]
 
 # q_b_proj: N widens 3072 -> 4608 per device (N_t 96 -> 144), so per_core_N must cover 144 over 11
 # columns: 14 (154 >= 144). K_t = 48, in0_block_w = 8 divides it; out_subblock_w = 7 divides 14.
@@ -478,7 +526,10 @@ MLA_MATMUL_CONFIG["g_proj"] = {
             fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4.0, 0.0),
         ),
         "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
-        "out_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+        # L1 out: g_proj and o_proj have IDENTICAL tile counts (430,080) and both fill 110 cores, yet
+        # measured 136.6 vs 118.0 us -- the only config difference was this field (g_proj DRAM, o_proj
+        # L1). Placement cannot change numerics, so this is free accuracy-wise.
+        "out_mem_config": ttnn.L1_MEMORY_CONFIG,
         "out_dtype": ttnn.bfloat16,
     },
 }

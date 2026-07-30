@@ -207,6 +207,53 @@ Either way the gate is **linear + collective + sigmoid + multiply**, all existin
 supported shapes. Note the gate cannot be moved before `wkv_b2`: it acts in `v_head_dim` space
 and `g ⊙ (attn @ W_b2) ≠ (g ⊙ attn) @ W_b2`.
 
+### 4.1 B vs A, measured (2x4, S_loc=640, per-device shapes as shipped)
+
+The table above argues from comm volume. Measured, the decision holds by a much larger margin than
+that reasoning implies, and for a slightly different reason — so here are the numbers.
+
+The two layouts do the **same MAC work**: B's `g_proj` is 640×7168×3072 and A's is 640×1792×12288,
+both 430,080 tiles. So the decision is *not* about matmul size. It is:
+
+| term | layout B | layout A | B − A |
+|---|---|---|---|
+| collective @ **FABRIC_2D** | AG 1792→7168: **173.9 µs** | RS 12288→3072: **465.5 µs** | **−291.6 µs** |
+| sigmoid | fused into the matmul | standalone op | **−4.9 µs** |
+| matmul (untuned, same run) | 236.5 µs | 221.2 µs | +15.3 µs |
+| **net** | | | **≈ −280 µs / call** |
+
+Against a ~670 µs/chunk CCL bucket, layout A would have added ~44 % to CCL and ~5 % to total layer
+time. **The collective is the whole decision** — it outweighs the fusion term by ~60×.
+
+**The gap is fabric-dependent, and worse at the production fabric.** The all-gather is
+fabric-insensitive; the wide reduce-scatter is not:
+
+| | AG 7168 | RS 12288 | ratio |
+|---|---|---|---|
+| FABRIC_1D (line) | 177.8 µs | 305.4 µs | 1.7× |
+| **FABRIC_2D** | 173.9 µs | **465.5 µs** | **2.7×** |
+
+A line-topology benchmark understates this choice by half. Note `test_kimi_k3_gate.py` runs FABRIC_1D
+while CI's release gate runs fabric2d.
+
+**Sigmoid fusion is worth less than the §4 table implies — it relocates the work, it does not remove
+it.** Same shape, same program config, activation on vs off:
+
+| | µs |
+|---|---|
+| `g_proj` with `fused_activation=SIGMOID` | 132.5 |
+| identical matmul, no activation | 119.0 |
+| cost of fusing | **+13.5** |
+| standalone `ttnn.sigmoid` on the 3072-wide output | 18.4 |
+| **net gain from fusing** | **+4.9** |
+
+(The 132.5 µs reproduces the in-model `g_proj` exactly, so this is model-representative.)
+
+**Trap:** `ttnn.linear(activation="sigmoid")` **without** a `program_config` does *not* fuse — it emits
+a separate `UnaryDeviceOperation`. Real fusion requires `fused_activation` inside the program config.
+The §4 table above cites `string_to_unary_with_param` as if the two were equivalent; they are the same
+*numerics*, not the same *op count*.
+
 ## 5. Findings / action items
 
 > **Status.** F1–F4 are **implemented and tested**; F5–F6 remain open (they need the hybrid layer
@@ -276,6 +323,42 @@ Not changed here: out of scope for the K3 work.
 | tuned `kv_a_proj` (fails at depth) | 1,357 µs | 2,002 µs | 1,704 µs | 812 µs | 5,875 µs |
 | default `kv_a_proj` (passes) | 1,443 µs | 2,013 µs | 1,709 µs | 812 µs | **5,977 µs** |
 | Δ | **+6.3 %** | +0.6 % | +0.3 % | −0.1 % | **+1.7 %** |
+
+### 5.2 `in0_block_w` on the KV path: per-op PCC is anti-predictive
+
+`kv_a_proj_with_mqa`'s `in0_block_w` was swept over every divisor of `K_t=56`, each value depth-tested:
+
+| ibw | K passes | µs (isolated) | util% | single-chunk PCC | depth: fails at kv_actual |
+|---|---|---|---|---|---|
+| **1** (shipped) | 56 | 44.7 | 11.9 | 0.9999216 | **never — all 44, 0.98550 @ 55,040** |
+| 2 | 28 | 28.7 | 18.5 | **0.9999339** | 20,480 |
+| 4 | 14 | 21.6 | 24.6 | 0.9999294 | 7,680 |
+| 8 | 7 | 16.5 | 32.2 | 0.9999034 | 5,120 |
+| 14 | 4 | 17.9 | 29.6 | 0.9998523 | 3,840 |
+
+**`ibw=2` has the best single-chunk PCC of any value — better than `ibw=1`, the only one that survives
+— and still fails at 20,480.** The op-level PCC ranking is *inverted* against depth behaviour, because
+this matmul's error is written to the KV cache and re-read by every later chunk rather than staying
+inside one chunk. So no op-level measurement can justify raising it; only `depth56k-1u` can. Guarded by
+`test_k3_accuracy_pinned_blocking`.
+
+Consequence: **~28 µs/chunk is the irreducible price of depth correctness here**, not a tuning
+oversight. (An earlier version of this document described it as "~2 % of the layer's matmul FLOPs",
+which understated it — the FLOP share is small, the time share is not.)
+
+Two placement wins *are* free, since memory location cannot change arithmetic — verified by the depth
+PCCs coming back bit-identical:
+
+| change | Δ | note |
+|---|---|---|
+| `kv_a_proj` out → L1 | −1.1 µs | falling back to the untuned default had also surrendered K2.6's L1 output |
+| `g_proj` out → L1 | −4.2 µs | g_proj and o_proj have identical tiles and cores; this was the only differing field |
+| knock-on: `Other` bucket | **−27.9 µs** | downstream ops (incl. the gate multiply) now read L1 |
+| **total** | **5,977 → 5,928 µs (−0.82 %)** | |
+
+`g_proj` itself is **DM-bound**: 118.5 / 118.0 / 117.6 / 122.4 µs at `ibw` 8 / 14 / 16 / 28 — under 1 µs
+of movement while K-passes drop 28 → 14, at 110 cores and 78 % util. `ibw=56` there is unbuildable
+(CBs 1.70 MB vs the 1.57 MB L1 ceiling). Nothing further without an op-level change.
 
 **Other accuracy coverage, all passing on 2x4 after the fix** (random weights):
 

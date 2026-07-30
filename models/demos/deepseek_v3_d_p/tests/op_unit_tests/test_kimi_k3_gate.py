@@ -135,10 +135,15 @@ def _run_epilogue(mesh_device, hidden_full, attn_full, w_g, w_o, *, layout, fuse
             topology=ttnn.Topology.Linear,
             cluster_axis=TP_AXIS,
         )
-        # No program_config here (this test is about layout, not tiling), so the fused form goes
-        # through `activation=`. A tuned config in mla_config.py carries the equivalent
-        # UnaryWithParam(SIGMOID, 4.0, 0.0) as fused_activation instead -- the two are the same
-        # kernel path, which test_kimi_k3_mla_matmuls.py pins directly.
+        # No program_config here -- this test is about LAYOUT, not tiling or fusion.
+        #
+        # NB `activation="sigmoid"` without a program_config does NOT fuse: profiling shows it emits a
+        # separate UnaryDeviceOperation, exactly like the explicit ttnn.sigmoid below. Real fusion needs
+        # UnaryWithParam(SIGMOID, 4.0, 0.0) as the program_config's `fused_activation`, which is what
+        # mla_config.py's tuned g_proj entry carries and what ttMLA._gate_sigmoid_fused keys off.
+        # So `fuse_sigmoid` here only selects WHERE the sigmoid is expressed, not whether it fuses --
+        # both branches are numerically and structurally equivalent, which is all this test needs.
+        # Fusion cost is measured separately (see docs/KIMI_K3_MLA.md section 4).
         g = ttnn.linear(
             hidden_gathered,
             tt_w_g,
@@ -209,7 +214,7 @@ def tt_ccl_num_links(mesh_device):
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("fuse_sigmoid", [True, False], ids=["fused_sigmoid", "standalone_sigmoid"])
+@pytest.mark.parametrize("fuse_sigmoid", [True, False], ids=["activation_kwarg", "standalone_sigmoid"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3 gate epilogue is validated on Blackhole")
 def test_k3_gate_epilogue(mesh_device, fuse_sigmoid):
     """Layout B (the implemented one) against a torch reference."""

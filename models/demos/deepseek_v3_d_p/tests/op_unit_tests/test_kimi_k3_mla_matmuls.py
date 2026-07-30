@@ -143,12 +143,12 @@ def _k3_mla_stub():
     return mla
 
 
-# Weights that deliberately have NO Kimi-K3 tuned config and run the untuned default instead.
-# kv_a_proj_with_mqa: its K2.6 tiling is dimensionally valid for K3 but measurably less accurate, and
-# it is the only tuned matmul on the KV-cache path, so the loss compounds with KV depth -- it failed
-# the 0.98 output PCC at kv_actual=3840 over a 56320-token chunked prefill. See the comment in
-# mla_config.py and test_k3_expected_untuned_weights below.
-K3_EXPECTED_UNTUNED = {"kv_a_proj_with_mqa"}
+# Weights whose Kimi-K3 in0_block_w is pinned for ACCURACY, not throughput. kv_a_proj_with_mqa is the
+# only tuned matmul on the KV-cache path (kv_a_proj -> slice -> rms_norm -> kvpe.pack), so its rounding
+# is re-read by every later chunk and compounds with KV depth. K2.6's in0_block_w=14 failed the 0.98
+# output PCC at kv_actual=3840 of a 56320-token prefill; 1 (what the untuned matmul picks) passes all
+# 44 chunks. See mla_config.py and test_k3_accuracy_pinned_blocking below.
+K3_PINNED_IN0_BLOCK_W = {"kv_a_proj_with_mqa": 1}
 
 
 def _build_cases():
@@ -156,13 +156,6 @@ def _build_cases():
     cases = []
     for name, batch, m, k, n in K3_MM_SHAPES:
         cfg = stub._select_cfg(MLA_MATMUL_CONFIG.get(name, {}).get(S_LOC))
-        if name in K3_EXPECTED_UNTUNED:
-            assert cfg is None, (
-                f"{name!r} now HAS a Kimi-K3 tuned config, but it is in K3_EXPECTED_UNTUNED because a "
-                f"tuned tiling there cost enough KV-cache accuracy to fail the 0.98 depth PCC. Re-run "
-                f"test_mla_chunked_prefill[k3-depth56k-1u] before removing it from that set."
-            )
-            continue
         assert cfg is not None, f"no Kimi-K3 tuned config for {name!r} at seq_len_local={S_LOC}"
         pc = cfg["program_config"]
         fused = getattr(pc, "fused_activation", None)
@@ -209,30 +202,49 @@ def _build_cases():
 K3_MM_CASES = _build_cases()
 
 
-def test_k3_expected_untuned_weights():
-    """Weights we deliberately leave untuned for K3 must stay untuned, and everything else tuned.
+def test_k3_accuracy_pinned_blocking():
+    """in0_block_w values pinned for ACCURACY must not be "optimised" without re-running the depth test.
 
     This is a tripwire, not a preference. ``kv_a_proj_with_mqa`` feeds the KV cache, which every later
-    chunk re-reads, so a tuned tiling there degrades accuracy cumulatively rather than locally: with it
-    the chunked output PCC fell below 0.98 at kv_actual=3840 of a 56320-token prefill; without it the
-    same run passes all 44 chunks (0.98550 at kv_actual=55040). A bisect pinned it to that one config —
-    the other six tuned matmuls and the k_chunk=640 SDPA entry are all fine.
+    chunk re-reads, so its rounding degrades accuracy cumulatively rather than locally. K2.6's
+    ``in0_block_w=14`` drove the chunked output PCC below 0.98 at kv_actual=3840 of a 56320-token
+    prefill; ``in0_block_w=1`` passes all 44 chunks (0.98550 at kv_actual=55040). A bisect pinned it to
+    that one field — the other six tuned matmuls and the k_chunk=640 SDPA entry are all fine.
 
-    If someone adds a tuned candidate there, this fails and points at the depth test to re-run.
+    Raising it is exactly the kind of change that looks free and is not. The full sweep of K_t=56's
+    divisors, each depth-tested:
+
+        ibw   us (isolated)   single-chunk PCC   depth: fails at kv_actual
+          1        44.7          0.9999216       never -- all 44, 0.98550 @ 55040
+          2        28.7          0.9999339           20480
+          4        21.6          0.9999294            7680
+          8        16.5          0.9999034            5120
+         14        17.9          0.9998523            3840
+
+    ibw=2 has the BEST single-chunk PCC of any value -- better than ibw=1, the one that works -- and
+    still fails at 20480. The per-op PCC ranking is INVERTED against depth behaviour here, so no
+    op-level measurement can justify raising this; only depth56k-1u can.
     """
     stub = _k3_mla_stub()
+    for name, expected_ibw in K3_PINNED_IN0_BLOCK_W.items():
+        cfg = stub._select_cfg(MLA_MATMUL_CONFIG[name][S_LOC])
+        assert cfg is not None, f"{name!r} lost its K3 tuned config"
+        actual = cfg["program_config"].in0_block_w
+        assert actual == expected_ibw, (
+            f"{name!r} in0_block_w is {actual}, expected {expected_ibw}. This value is pinned for "
+            f"ACCURACY, not throughput: it feeds the KV cache and its error compounds with depth. "
+            f"Re-run test_mla_chunked_prefill[k3-depth56k-1u] and confirm all 44 chunks still clear "
+            f"0.98 before changing it."
+        )
+    # Every shape must still resolve to a K3 config.
     for name, *_ in K3_MM_SHAPES:
-        cfg = stub._select_cfg(MLA_MATMUL_CONFIG.get(name, {}).get(S_LOC))
-        if name in K3_EXPECTED_UNTUNED:
-            assert cfg is None, f"{name!r} unexpectedly has a K3 tuned config; re-verify the depth PCC first"
-        else:
-            assert cfg is not None, f"{name!r} lost its K3 tuned config"
-    # K2.6 must keep its own tuned kv_a_proj config -- this is a K3-only opt-out, not a removal.
+        assert stub._select_cfg(MLA_MATMUL_CONFIG.get(name, {}).get(S_LOC)) is not None, f"{name!r} untuned"
+    # K2.6 must keep its own (different) kv_a_proj config -- the K3 entry is additive, not a takeover.
     k26 = object.__new__(ttMLA)
     k26.num_heads, k26.q_lora_rank, k26.is_chunked, k26._is_dsa_family = 64, Q_LORA_RANK, True, False
-    assert (
-        k26._select_cfg(MLA_MATMUL_CONFIG["kv_a_proj_with_mqa"][S_LOC]) is not None
-    ), "the K3 opt-out must not have removed Kimi-K2.6's own kv_a_proj tuned config"
+    k26_cfg = k26._select_cfg(MLA_MATMUL_CONFIG["kv_a_proj_with_mqa"][S_LOC])
+    assert k26_cfg is not None, "Kimi-K2.6 lost its own kv_a_proj tuned config"
+    assert k26_cfg["program_config"].in0_block_w == 14, "K2.6's kv_a_proj tiling changed unexpectedly"
 
 
 def test_k3_g_proj_config_fuses_sigmoid():
