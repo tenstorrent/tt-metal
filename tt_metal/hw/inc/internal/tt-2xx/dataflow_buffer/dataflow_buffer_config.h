@@ -6,6 +6,17 @@
 
 #include <cstdint>
 
+// Transaction-id space is [0, HW_TXN_ID_MAX]. Id 0 is NOC_V2_TRID_STATIC (untagged).
+// Quasar-only pool split:
+//   user / kernel : [0, USER_TXN_ID_MAX]
+//   DFB / runtime : [DFB_TXN_ID_BASE, HW_TXN_ID_MAX]  (allocated top-down)
+constexpr uint8_t HW_TXN_ID_MAX = 31;
+constexpr uint8_t USER_TXN_ID_MAX = 15;
+constexpr uint8_t DFB_TXN_ID_BASE = USER_TXN_ID_MAX + 1;                       // 16
+constexpr uint8_t NUM_DFB_POOL_TXN_IDS = HW_TXN_ID_MAX - DFB_TXN_ID_BASE + 1;  // 16
+static_assert(USER_TXN_ID_MAX >= 1);
+static_assert(DFB_TXN_ID_BASE > USER_TXN_ID_MAX);
+
 namespace dfb {
 
 enum AccessPattern : uint8_t {
@@ -25,7 +36,9 @@ constexpr uint8_t NUM_TENSIX_TILE_COUNTERS_FOR_DM = 16;
 // Note: The Remapper can be programmed to expose these TCs to DMs.
 constexpr uint8_t TC_TENSIX_POOL_START = NUM_TENSIX_TILE_COUNTERS_FOR_DM;  // = 16
 constexpr uint8_t NUM_REMAPPER_PAIRINGS = 64;
+// Max txn ids assigned to one DFB producer or consumer side
 constexpr uint8_t NUM_TXN_IDS = 4;
+static_assert(NUM_DFB_POOL_TXN_IDS >= NUM_TXN_IDS);
 constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 6;
 // Max tile counter ids that can be collected for one side (producer or consumer) of a DFB during
 // init, summed across that side's riscs. Bounded by TxnDFBDescriptor::tile_counters, the ISR

@@ -36,7 +36,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         unsigned l1_addr_16B;
         if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B)
@@ -51,7 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc(tensor_shape_A, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
 
         _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
-        if (is_fp32_dest_acc_en)
+        if constexpr (is_fp32_dest_acc_en)
         {
             _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
         }
@@ -65,7 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -76,22 +76,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // 32-bit datacopy uses ELWADD and consumes both the selected
                 // source and the dummy source produced by unpack.
-                _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT);
+                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT);
             }
             else if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
             {
-                _perf_unpack_loop_set_valid<true, false>(LOOP_FACTOR * TILE_CNT);
+                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(LOOP_FACTOR * TILE_CNT);
             }
             else
             {
-                _perf_unpack_loop_set_valid<false, true>(LOOP_FACTOR * TILE_CNT);
+                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, tensor_shape_A);
+                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, tensor_shape_A);
             }
         }
         PROFILER_SYNC();
@@ -149,15 +149,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (is_fp32_dest_acc_en)
             {
-                _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT);
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT);
             }
             else if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
             {
-                _perf_math_loop_clear_valid<true, false>(LOOP_FACTOR * TILE_CNT);
+                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(LOOP_FACTOR * TILE_CNT);
             }
             else
             {
-                _perf_math_loop_clear_valid<false, true>(LOOP_FACTOR * TILE_CNT);
+                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -209,7 +209,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
+        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
@@ -221,7 +221,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         tdma_descriptor_t tdma_desc =
             ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
@@ -233,7 +233,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
@@ -243,14 +243,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(DST_INDEX, 0, tensor_shape_A);
+                _llk_pack_(DST_INDEX, 0 /*start_l1_tile_idx*/, tensor_shape_A);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(DST_INDEX, 0, tensor_shape_A);
+                _llk_pack_(DST_INDEX, 0 /*start_l1_tile_idx*/, tensor_shape_A);
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }

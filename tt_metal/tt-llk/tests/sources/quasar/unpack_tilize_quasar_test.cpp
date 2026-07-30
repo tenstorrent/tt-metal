@@ -49,7 +49,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false, false>();
     }
 
-    const auto tensor_shape = tensor_shape_from_params(params);
+    const ckernel::TensorShape tensor_shape = tensor_shape_from_params(params);
 
     unsigned l1_addr_16B;
     if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_A || UNPACKER_ENGINE_SEL == p_unpacr::UNP_DEST)
@@ -169,7 +169,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr auto dest_producer = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_producer, dest_dvalid_client::PACK});
 
-    const auto tensor_shape = tensor_shape_from_params(params);
+    const ckernel::TensorShape tensor_shape = tensor_shape_from_params(params);
 
     tdma_descriptor_t tdma_desc =
         ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);

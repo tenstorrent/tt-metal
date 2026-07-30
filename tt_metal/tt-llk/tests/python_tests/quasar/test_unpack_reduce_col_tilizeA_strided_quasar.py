@@ -165,16 +165,14 @@ PERF_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
 )
 
 
-def unpack_reduce_col_tilizeA_strided_implied_math_formats(*, is_perf=False):
+def unpack_reduce_col_tilizeA_strided_implied_math_formats():
     return [ImpliedMathFormat.No]
 
 
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
-    implied_math_format=lambda: unpack_reduce_col_tilizeA_strided_implied_math_formats(
-        is_perf=False
-    ),
+    implied_math_format=unpack_reduce_col_tilizeA_strided_implied_math_formats,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )

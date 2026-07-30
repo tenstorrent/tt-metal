@@ -45,6 +45,7 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
     std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
-    bool use_optimal_ccl_for_llama);
+    bool use_optimal_ccl_for_llama,
+    bool fp32_dest_acc = false);
 
 }  // namespace ttnn::prim
