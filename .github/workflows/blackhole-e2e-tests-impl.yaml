@@ -24,11 +24,11 @@ on:
         required: false
         type: string
         default: "all"
-        description: "Filter test rows by id, or by the sdpa tag group"
+        description: "Filter test rows by id"
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
@@ -36,6 +36,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -77,27 +78,17 @@ jobs:
           with open(tests_path, "r") as f:
               tests = yaml.safe_load(f) or []
 
-          if selection == "sdpa":
-              matches = any(selection in (test.get("tags") or []) for test in tests)
-          else:
-              matches = any(test.get("id") == selection for test in tests)
+          matches = any(test.get("id") == selection for test in tests)
 
           print("true" if matches else "false")
           PY
           )
             if [[ "$selection_exists" != "true" ]]; then
-              echo "::error::Unknown e2e test-selection '$TEST_SELECTION'. Use 'all', 'sdpa', or an id from $TESTS_YAML_PATH."
+              echo "::error::Unknown e2e test-selection '$TEST_SELECTION'. Use 'all' or an id from $TESTS_YAML_PATH."
               exit 1
             fi
 
-            case "$TEST_SELECTION" in
-              sdpa)
-                selected=$(echo "$selected" | jq -c '[.[] | select((.tags // []) | index("sdpa"))]')
-                ;;
-              *)
-                selected=$(echo "$selected" | jq -c --arg id "$TEST_SELECTION" '[.[] | select(.id == $id)]')
-                ;;
-            esac
+            selected=$(echo "$selected" | jq -c --arg id "$TEST_SELECTION" '[.[] | select(.id == $id)]')
           fi
 
           filtered="$selected"
@@ -149,6 +140,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work
         - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         - "${{ (matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/localdev/blackhole_demos/huggingface_data:ro') || (matrix.test-group['weights-cache-mode'] == 'local-disk' && '/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data:ro') || '/no_hf_cache' }}"
+        - "${{ (matrix.test-group['model-name'] == 'deepseek_prefill' && '/mnt/MLPerf/deepseek-prefill-cache:/mnt/MLPerf/deepseek-prefill-cache:ro') || '/no_deepseek_traces' }}"
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
@@ -157,6 +149,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -172,21 +165,12 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         if: ${{ !startsWith(matrix.test-group.sku, 'bh_p100') && !startsWith(matrix.test-group.sku, 'bh_p150') }}
         timeout-minutes: 10
-        with:
-          runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' || '' }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_logs
-          # tee combined stdout+stderr to a per-leg .log for ai-summary.
-          # Brace group: cmd may be multiple shell statements.
-          # PIPESTATUS: preserve real exit code (tee would mask it).
-          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
-          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
-          {
-            ${{ matrix.test-group.cmd }}
-          } 2>&1 | tee "$LOG_FILE"
-          exit ${PIPESTATUS[0]}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: ${{ matrix.test-group.cmd }}
       - name: Check latency/BW results
         id: check-data
         if: ${{ !cancelled() && matrix.test-group.upload_fabric_data == true }}

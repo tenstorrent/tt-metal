@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_dropout ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Dropout ALIAS ttnn_op_experimental_dropout)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_dropout TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_dropout TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_dropout)
 
 set_target_properties(
@@ -13,7 +13,7 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
+file(GLOB_RECURSE kernels device/kernels/*.cpp)
 
 target_sources(
     ttnn_op_experimental_dropout
@@ -46,3 +46,19 @@ install(
 )
 
 install(TARGETS ttnn_op_experimental_dropout LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_EXPERIMENTAL_DROPOUT_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_DROPOUT_NANOBIND_SRCS})
+endif()

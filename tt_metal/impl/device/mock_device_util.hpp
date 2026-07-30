@@ -6,4 +6,4 @@
 
 // get_mock_cluster_desc_name() is now part of the public API.
 // This internal header is kept as a forwarder for existing internal call sites.
-#include <tt-metalium/experimental/mock_device.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>

@@ -26,10 +26,11 @@
 
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 
 constexpr uint32_t kDstAccIdx = 0;    // DST tile index for accumulation
 constexpr bool kTransposeIn1 = true;  // transpose B
@@ -56,7 +57,7 @@ void matmul_blocks(
 
             // Only reconfigure when subblock size changes (edge tiles)
             if (current_sh != last_sh || current_sw != last_sw) {
-                mm_block_init_short(in0_cb, in1_cb, kTransposeIn1, current_sw, current_sh, kInnerKTiles);
+                matmul_block_init(in0_cb, in1_cb, kTransposeIn1, current_sw, current_sh, kInnerKTiles);
                 last_sh = current_sh;
                 last_sw = current_sw;
             }
@@ -95,7 +96,7 @@ void matmul_blocks(
     }
     // Restore full subblock size for next call
     if (last_sh != subblock_h || last_sw != subblock_w) {
-        mm_block_init_short(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
+        matmul_block_init(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
     }
 }
 
@@ -105,7 +106,7 @@ void matmul_blocks(
 void pack_subblock_pernsb(
     const uint32_t in_cb, const uint32_t out_cb, const uint32_t current_M, const uint32_t current_N) {
 #ifdef REDUCE_SENDER_TRANSPOSE
-    transpose_wh_init(in_cb, out_cb);
+    transpose_init(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
 
@@ -114,7 +115,7 @@ void pack_subblock_pernsb(
             const uint32_t in_tile = m * current_N + n;
             const uint32_t out_tile = n * current_M + m;
             tile_regs_acquire();
-            transpose_wh_tile(in_cb, in_tile, 0);
+            transpose_tile(in_cb, in_tile, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile<true>(0, out_cb, out_tile);
@@ -168,7 +169,7 @@ void add_reduce_block(
 // Add own_cb + recv_cb, transpose via c_7 staging, pack to mirror_cb (col by col).
 // Produces N_cols columns of M_rows tiles each (matching DM mirror write pattern).
 // src_stride: column stride in source CBs (= M_block for row-major c_2).
-// Note: transpose_wh_dest() is buggy on Blackhole (PCC≈0.2), so we stage through c_7 BF16 CB.
+// Note: transpose_dest() is buggy on Blackhole (PCC≈0.2), so we stage through c_7 BF16 CB.
 void add_transpose_block(
     const uint32_t own_cb,
     const uint32_t recv_cb,
@@ -197,12 +198,12 @@ void add_transpose_block(
         // Phase 2: transpose all M_rows tiles from staging to mirror
         cb_wait_front(staging_cb, M_rows);
         cb_reserve_back(mirror_cb, M_rows);
-        transpose_wh_init(staging_cb, mirror_cb);
+        transpose_init(staging_cb);
         reconfig_data_format_srca(staging_cb);
         pack_reconfig_data_format(mirror_cb);
         for (uint32_t m = 0; m < M_rows; m++) {
             tile_regs_acquire();
-            transpose_wh_tile(staging_cb, m, 0);
+            transpose_tile(staging_cb, m, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, mirror_cb);
@@ -240,8 +241,8 @@ void kernel_main() {
     constexpr uint32_t combined_cb = tt::CBIndex::c_6;
 #endif
 
-    mm_init(in0_cb, in1_cb, intermed_cb);
-    mm_block_init_short(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, in1_cb, intermed_cb);
+    matmul_block_init(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
     reconfig_data_format(in1_cb, in0_cb);
     pack_reconfig_data_format(intermed_cb);
 
@@ -304,8 +305,7 @@ void kernel_main() {
 
             // Re-init matmul pipeline after copy/pack changed data formats
             if (n_sub + 1 < num_n_blocks) {
-                mm_init(in0_cb, in1_cb, intermed_cb);
-                mm_block_init_short(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
+                matmul_block_init(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
                 reconfig_data_format(in1_cb, in0_cb);
                 pack_reconfig_data_format(intermed_cb);
             }
@@ -313,8 +313,7 @@ void kernel_main() {
 
         // Re-init matmul pipeline for next m_sub
         if (m_sub + 1 < num_m_blocks) {
-            mm_init(in0_cb, in1_cb, intermed_cb);
-            mm_block_init_short(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
+            matmul_block_init(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
             reconfig_data_format(in1_cb, in0_cb);
             pack_reconfig_data_format(intermed_cb);
         }

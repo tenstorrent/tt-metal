@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -43,11 +43,11 @@ void kernel_main() {
 #define NOC_MINIMUM_READ_SIZE 32
 
     Noc noc;
-    CircularBuffer cb_out0_obj(cb_id_out0);
-    CircularBuffer cb_out1_obj(cb_id_out1);
+    DataflowBuffer dfb_out0_obj(cb_id_out0);
+    DataflowBuffer dfb_out1_obj(cb_id_out1);
 
-    uint32_t l1_read_addr0 = cb_out0_obj.get_read_ptr();
-    uint32_t l1_read_addr1 = cb_out1_obj.get_read_ptr();
+    uint32_t l1_read_addr0 = dfb_out0_obj.get_read_ptr();
+    uint32_t l1_read_addr1 = dfb_out1_obj.get_read_ptr();
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
@@ -80,7 +80,7 @@ void kernel_main() {
 
         uint32_t j = 0;
         for (uint32_t w = w_start; w < w_end; w++, j++) {
-            cb_out0_obj.wait_front(1);
+            dfb_out0_obj.wait_front(1);
 
             if (element_size == 4) {
                 volatile tt_l1_ptr uint32_t* index_l1_ptr0 =
@@ -98,11 +98,11 @@ void kernel_main() {
                 index_l1_ptr1[j] = index_l1_ptr0[0];
             }
 
-            cb_out0_obj.pop_front(1);
+            dfb_out0_obj.pop_front(1);
         }
 
         noc.async_write(
-            cb_out1_obj,
+            dfb_out1_obj,
             s0,
             NOC_MINIMUM_READ_SIZE,
             {.offset_bytes = 0},

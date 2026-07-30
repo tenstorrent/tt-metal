@@ -822,7 +822,7 @@ class TestRunPhase1GenerateRankBindings:
             return mock_result
 
         result_rank_bindings, result_rankfile = run_phase1_generate_rank_bindings(
-            mgd_path, hosts, output_dir, subprocess_run=mock_run, sleep_secs=0
+            mgd_path, hosts, output_dir, subprocess_run=mock_run
         )
 
         assert result_rank_bindings == rank_bindings_path
@@ -844,7 +844,7 @@ class TestRunPhase1GenerateRankBindings:
             return mock_result
 
         with pytest.raises(RuntimeError) as exc_info:
-            run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=mock_run, sleep_secs=0)
+            run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=mock_run)
         assert "generate_rank_bindings failed" in str(exc_info.value)
 
 

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 using std::uint32_t;
 
@@ -44,7 +45,8 @@ void kernel_main() {
 
     // Setup the FPU (matrix engine) for the matmul operation. And specify the input
     // and output circular buffers.
-    mm_init(cb_in0, cb_in1, cb_out);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out);
+    matmul_init(cb_in0, cb_in1);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile

@@ -9,7 +9,7 @@ import torch
 if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
-    from .compute_node import ComputeNode
+    from .fpu_node import FpuNode
     from .block_data import BlockData
 
 
@@ -23,11 +23,14 @@ class Fpu:
     and override methods to emit the C++ LLK calls that configure and drive the
     Math thread, plus a Python golden function for test validation.
 
-    The lifecycle called by ComputeNode.fpu_calculate() is:
+    The lifecycle called by the pipeline is:
         init() -> loop.math_loop() [which calls calculate()] -> uninit()
 
     Override `loop` with an appropriate FusedLoop subclass to control
     the tile iteration pattern used by the math phase.
+
+    Set `per_block_init = True` if init() needs block dimensions and must
+    be called per-block inside the batch loop rather than hoisted out.
 
     To create a new FPU:
         1. Subclass Fpu
@@ -39,12 +42,13 @@ class Fpu:
 
     # Controls the tile iteration pattern for the math loop.
     loop: FusedLoop = FusedLoop()
+    per_block_init: bool = False
 
     def init(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that initializes the math engine before the tile loop.
@@ -60,7 +64,7 @@ class Fpu:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that performs the math operation on a single tile.
@@ -75,7 +79,7 @@ class Fpu:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that tears down the math engine after the tile loop.
@@ -94,7 +98,7 @@ class Fpu:
         tensor_dst: torch.Tensor,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute the golden math result in Python.
 
@@ -102,7 +106,7 @@ class Fpu:
         output after the math operation. tensor_a and tensor_b are passed through
         (possibly modified) for downstream stages.
 
-        Called by ComputeNode.golden() after the unpack golden. The input tensors
+        Called by FpuNode.golden() after the unpack golden. The input tensors
         are the outputs of the unpacker's golden().
         """
         return (tensor_a, tensor_b, tensor_dst)

@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/constants.hpp>
 #include "buffer.hpp"
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
@@ -16,6 +17,20 @@
 namespace tt {
 enum class DataFormat : uint8_t;
 }  // namespace tt
+
+namespace {
+
+void validate_unpack_face_geometry(uint32_t face_r_dim, uint32_t num_faces) {
+    TT_FATAL(face_r_dim > 0, "face_r_dim must be > 0");
+    TT_FATAL(
+        face_r_dim <= tt::constants::FACE_HEIGHT,
+        "face_r_dim ({}) must be <= FACE_HEIGHT ({})",
+        face_r_dim,
+        tt::constants::FACE_HEIGHT);
+    TT_FATAL(num_faces > 0, "num_faces must be > 0");
+}
+
+}  // namespace
 
 namespace tt::tt_metal {
 
@@ -97,6 +112,11 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
             this->tiles_[format_descriptor.buffer_index] = Tile(
                 {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
         }
+        if (format_descriptor.face_geometry) {
+            const auto& [face_r_dim, num_faces] = *format_descriptor.face_geometry;
+            validate_unpack_face_geometry(face_r_dim, num_faces);
+            this->unpack_face_geometry_[format_descriptor.buffer_index] = format_descriptor.face_geometry;
+        }
     };
     this->buffer_indices_.reserve(descriptor.format_descriptors.size() + descriptor.remote_format_descriptors.size());
     this->local_buffer_indices_.reserve(descriptor.format_descriptors.size());
@@ -120,6 +140,7 @@ CircularBufferConfig::CircularBufferConfig(
     const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats,
     const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes,
     const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles,
+    const std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry,
     const std::unordered_set<uint8_t>& buffer_indices,
     const std::unordered_set<uint8_t>& local_buffer_indices,
     const std::unordered_set<uint8_t>& remote_buffer_indices,
@@ -131,12 +152,19 @@ CircularBufferConfig::CircularBufferConfig(
     data_formats_(data_formats),
     page_sizes_(page_sizes),
     tiles_(tiles),
+    unpack_face_geometry_(unpack_face_geometry),
     buffer_indices_(buffer_indices),
     local_buffer_indices_(local_buffer_indices),
     remote_buffer_indices_(remote_buffer_indices),
     dynamic_cb_(dynamic_cb),
     max_size_(max_size),
-    buffer_size_(buffer_size) {}
+    buffer_size_(buffer_size) {
+    for (const auto& geom : unpack_face_geometry) {
+        if (geom.has_value()) {
+            validate_unpack_face_geometry(geom->face_r_dim, geom->num_faces);
+        }
+    }
+}
 
 CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, uint32_t page_size) {
     uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
@@ -207,8 +235,30 @@ CircularBufferConfig& CircularBufferConfig::set_tile_dims(uint8_t buffer_index, 
     return *this;
 }
 
+CircularBufferConfig& CircularBufferConfig::set_unpack_face_geometry(
+    uint8_t buffer_index, uint32_t face_r_dim, uint32_t num_faces) {
+    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+    if (buffer_index > max_cbs - 1) {
+        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
+    }
+    if (!this->buffer_indices_.contains(buffer_index)) {
+        TT_THROW(
+            "Illegal circular buffer index {}. Unpack face geometry can only be set for buffer indices configured "
+            "during config creation",
+            buffer_index);
+    }
+    validate_unpack_face_geometry(face_r_dim, num_faces);
+    this->unpack_face_geometry_[buffer_index] = FaceGeometry{face_r_dim, num_faces};
+    return *this;
+}
+
 const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::tiles() const {
     return this->tiles_;
+}
+
+const std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::unpack_face_geometry()
+    const {
+    return this->unpack_face_geometry_;
 }
 
 uint32_t CircularBufferConfig::total_size() const { return this->total_size_; }
@@ -328,7 +378,8 @@ bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs
     return lhs.total_size() == rhs.total_size() &&
            lhs.globally_allocated_address() == rhs.globally_allocated_address() &&
            lhs.data_formats() == rhs.data_formats() && lhs.page_sizes() == rhs.page_sizes() &&
-           lhs.tiles() == rhs.tiles() && lhs.shadow_global_buffer == rhs.shadow_global_buffer;
+           lhs.tiles() == rhs.tiles() && lhs.unpack_face_geometry() == rhs.unpack_face_geometry() &&
+           lhs.shadow_global_buffer == rhs.shadow_global_buffer;
 }
 
 bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) { return !(lhs == rhs); }

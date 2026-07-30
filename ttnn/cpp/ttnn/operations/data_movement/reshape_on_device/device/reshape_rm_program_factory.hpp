@@ -16,7 +16,7 @@ struct ReshapeRMProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ttnn::prim::ReshapeOnDeviceParams& operation_attributes,
         const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
-        tt::tt_metal::Tensor& output_tensor);
+        ttnn::Tensor& output_tensor);
 };
 
 }  // namespace ttnn::prim

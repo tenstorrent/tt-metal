@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -130,11 +130,11 @@ void kernel_main() {
     };
 
     Noc noc;
-    CircularBuffer cb_in0_obj(cb_in0);
-    CircularBuffer cb_in1_obj(cb_in1);
-    CircularBuffer cb_in2_obj(cb_in2);
-    CircularBuffer cb_in3_obj(cb_in3);
-    CircularBuffer cb_in4_obj(cb_in4);
+    DataflowBuffer dfb_in0_obj(cb_in0);
+    DataflowBuffer dfb_in1_obj(cb_in1);
+    DataflowBuffer dfb_in2_obj(cb_in2);
+    DataflowBuffer dfb_in3_obj(cb_in3);
+    DataflowBuffer dfb_in4_obj(cb_in4);
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
@@ -155,39 +155,39 @@ void kernel_main() {
                 }
 
                 uint32_t index_l1_addr = 0;
-                CircularBuffer* index_cb_obj = nullptr;
+                DataflowBuffer* index_dfb_obj = nullptr;
                 if (dim == 0) {
-                    index_cb_obj = &cb_in1_obj;
-                    cb_in1_obj.reserve_back(1);
-                    index_l1_addr = cb_in1_obj.get_write_ptr();
-                    noc.async_read(index0, cb_in1_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
+                    index_dfb_obj = &dfb_in1_obj;
+                    dfb_in1_obj.reserve_back(1);
+                    index_l1_addr = dfb_in1_obj.get_write_ptr();
+                    noc.async_read(index0, dfb_in1_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
                 }
                 if (dim == 1) {
-                    index_cb_obj = &cb_in2_obj;
-                    cb_in2_obj.reserve_back(1);
-                    index_l1_addr = cb_in2_obj.get_write_ptr();
-                    noc.async_read(index1, cb_in2_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
+                    index_dfb_obj = &dfb_in2_obj;
+                    dfb_in2_obj.reserve_back(1);
+                    index_l1_addr = dfb_in2_obj.get_write_ptr();
+                    noc.async_read(index1, dfb_in2_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
                 }
                 if (dim == 2) {
-                    index_cb_obj = &cb_in3_obj;
-                    cb_in3_obj.reserve_back(1);
-                    index_l1_addr = cb_in3_obj.get_write_ptr();
-                    noc.async_read(index2, cb_in3_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
+                    index_dfb_obj = &dfb_in3_obj;
+                    dfb_in3_obj.reserve_back(1);
+                    index_l1_addr = dfb_in3_obj.get_write_ptr();
+                    noc.async_read(index2, dfb_in3_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
                 }
                 if (dim == 3) {
-                    index_cb_obj = &cb_in4_obj;
-                    cb_in4_obj.reserve_back(1);
-                    index_l1_addr = cb_in4_obj.get_write_ptr();
-                    noc.async_read(index3, cb_in4_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
+                    index_dfb_obj = &dfb_in4_obj;
+                    dfb_in4_obj.reserve_back(1);
+                    index_l1_addr = dfb_in4_obj.get_write_ptr();
+                    noc.async_read(index3, dfb_in4_obj, index_stick_sizes[dim], {.page_id = 0}, {.offset_bytes = 0});
                 }
                 noc.async_read_barrier();
-                index_cb_obj->push_back(1);
+                index_dfb_obj->push_back(1);
 
                 volatile tt_l1_ptr int32_t* index_l1_ptr = reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
                 int32_t noc_idx = index_l1_ptr[index_index];
 
-                index_cb_obj->wait_front(1);
-                index_cb_obj->pop_front(1);
+                index_dfb_obj->wait_front(1);
+                index_dfb_obj->pop_front(1);
 
                 if (noc_idx < 0) {
                     noc_idx += input_size_list[dim];
@@ -208,9 +208,9 @@ void kernel_main() {
             }
         }
 
-        cb_in0_obj.reserve_back(1);
-        noc.async_read(s0, cb_in0_obj, stick_size, {.page_id = noc_id}, {.offset_bytes = 0});
+        dfb_in0_obj.reserve_back(1);
+        noc.async_read(s0, dfb_in0_obj, stick_size, {.page_id = noc_id}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in0_obj.push_back(1);
+        dfb_in0_obj.push_back(1);
     }
 }

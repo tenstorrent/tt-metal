@@ -68,7 +68,7 @@ constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t
 }
 
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
-    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+    return enable_dram_backed_cq ? (16u << 20)  // 16 MB
                                  : 0;
 }
 
@@ -91,6 +91,13 @@ public:
     using HalJitBuildQueryBase::HalJitBuildQueryBase;
     std::string linker_flags(const Params& params) const override {
         std::string flags;
+        // Quasar XIP (QuasarDataMovementKernel::read_binaries -> ElfFile::Impl::XIPify) pairs each
+        // R_RISCV_HI20 with its R_RISCV_LO12 and throws "HI20 has no matching LO12" if it can't.
+        // Linker relaxation can orphan a crt0 TLS-init __tdata_lma HI20 (its LO12 lands past a JAL in a
+        // different basic block), which trips that check on essentially every kernel. Disable linker
+        // relaxation so HI20/LO12 stay paired/adjacent. The assembler still emits R_RISCV_RELAX relocs
+        // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
+        flags += "-Wl,--no-relax ";
         if (params.processor_class == HalProcessorClassType::DM) {
             if (params.is_fw) {
                 flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_DM_FIRMWARE_BASE);
@@ -98,18 +105,36 @@ public:
                 flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE * NUM_DM_CORES);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
             } else {
-                flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_DM_KERNEL_BASE);
+                DeviceAddr kn_text = MEM_KERNEL_BASE;
+                if (params.core_type == HalProgrammableCoreType::DISPATCH) {
+                    static constexpr DeviceAddr dispatch_dm_kernel_bases[] = {
+                        MEM_DISPATCH_DM0_KERNEL_BASE,
+                        MEM_DISPATCH_DM1_KERNEL_BASE,
+                        MEM_DISPATCH_DM2_KERNEL_BASE,
+                        MEM_DISPATCH_DM3_KERNEL_BASE,
+                        MEM_DISPATCH_DM4_KERNEL_BASE,
+                        MEM_DISPATCH_DM5_KERNEL_BASE,
+                        MEM_DISPATCH_DM6_KERNEL_BASE,
+                        MEM_DISPATCH_DM7_KERNEL_BASE,
+                    };
+                    static_assert(std::size(dispatch_dm_kernel_bases) == NUM_DM_CORES);
+                    if (params.processor_id >= NUM_DM_CORES) {
+                        TT_THROW("Invalid dispatch DM processor id {}", params.processor_id);
+                    }
+                    kn_text = dispatch_dm_kernel_bases[params.processor_id];
+                }
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__kn_data={} ", MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE * NUM_DM_CORES);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
@@ -174,49 +199,44 @@ public:
                     case 4:
                     case 8:
                     case 12:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC0_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC0_GLOBAL_BASE +
-                                MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));  // for legacy kernels
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC0_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC0_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC0_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
                         break;
                     case 1:
                     case 5:
                     case 9:
                     case 13:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC1_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC1_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC1_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         break;
                     case 2:
                     case 6:
                     case 10:
                     case 14:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC2_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC2_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC2_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         break;
                     case 3:
                     case 7:
                     case 11:
                     case 15:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC3_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC3_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC3_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
                         break;
                     default: TT_THROW("Invalid processor id {}", params.processor_id);
@@ -286,6 +306,12 @@ public:
                 break;
             }
             case HalProgrammableCoreType::IDLE_ETH: break;
+            case HalProgrammableCoreType::DISPATCH:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: break;
+                    case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
+                }
+                break;
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
@@ -337,9 +363,7 @@ public:
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_trisc{}.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.is_fw ? "" : "_lgc");
+                            "runtime/hw/toolchain/quasar/{}_trisc.ld", params.is_fw ? "firmware" : "kernel");
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
@@ -354,6 +378,16 @@ public:
                         return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_subordinate_ierisc.ld"
                                             : "runtime/hw/toolchain/quasar/kernel_subordinate_ierisc.ld";
                     default: TT_THROW("Invalid processor id {}", params.processor_id);
+                }
+            case HalProgrammableCoreType::DISPATCH:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: {
+                        return fmt::format(
+                            "runtime/hw/toolchain/quasar/{}_dm.ld",
+                            params.is_fw ? "firmware" : "kernel");
+                    }
+                    case HalProcessorClassType::COMPUTE:
+                        TT_THROW("DISPATCH cores do not have compute processors");
                 }
             default:
                 TT_THROW(
@@ -385,15 +419,14 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
+    static_assert(
+        static_cast<int>(HalProgrammableCoreType::DISPATCH) == static_cast<int>(ProgrammableCoreType::DISPATCH));
 
-    HalCoreInfoType tensix_mem_map = quasar::create_tensix_mem_map();
-    this->core_info_.push_back(tensix_mem_map);
-
-    HalCoreInfoType active_eth_mem_map = quasar::create_active_eth_mem_map();
-    this->core_info_.push_back(active_eth_mem_map);
-
-    HalCoreInfoType idle_eth_mem_map = quasar::create_idle_eth_mem_map();
-    this->core_info_.push_back(idle_eth_mem_map);
+    this->core_info_.push_back(quasar::create_tensix_mem_map());
+    this->core_info_.push_back(quasar::create_active_eth_mem_map());
+    this->core_info_.push_back(quasar::create_idle_eth_mem_map());
+    ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] = quasar::create_dispatch_mem_map();
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
@@ -486,6 +519,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
             case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER: return false;
             default: TT_THROW("Invalid Quasar dispatch feature {}", static_cast<int>(feature));
         }
     };
@@ -538,6 +572,11 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->eps_ = EPS_QA;
     this->nan_ = NAN_QA;
     this->inf_ = INF_QA;
+
+    // Values found in PCIe tile spec
+    this->pcie_addr_lower_bound_ = 0x0000'0000'0000'0000ULL;
+    this->pcie_addr_upper_bound_ = 0x1FFF'FFFF'FFFF'FFFFULL;
+    this->supports_64_bit_pcie_addressing_ = true;
 
     this->noc_x_id_translate_table_ = {};
 

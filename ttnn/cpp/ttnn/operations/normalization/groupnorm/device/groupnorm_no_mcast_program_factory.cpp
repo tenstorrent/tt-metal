@@ -288,7 +288,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         "group_norm welford with Float32 input requires fp32_dest_acc_en=true in the compute "
         "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
 
-    // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_wh_tile
+    // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_tile
     // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29
     // in the TILIZE_IN branch (configured below) or the c_19 alias of c_0 in the
     // non-TILIZE_IN branch (welford_fp32_alias). Both paths route the transpose through
@@ -379,13 +379,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             input_mask.value().padded_shape()[3],
             block_wt * tile_width);
     }
-
-    // get addr
-    auto in0_dram_addr = a.buffer()->address();
-    auto out_dram_addr = output.buffer()->address();
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().buffer()->address() : 0;
 
     // Parameters Setup
     uint32_t in0_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
@@ -855,8 +848,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp");
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
-    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode):
-    // c_0 (input) has two consumers in the welford kernel: transpose_wh_tile during the
+    // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode):
+    // c_0 (input) has two consumers in the welford kernel: transpose_tile during the
     //   welford intake (non-TILIZE_IN branch) and sub_tiles_bcast_scalar during the final
     //   (x - mean) normalization. The latter is FPU on SrcA, so the flag cannot be set on
     //   c_0 directly. Instead we register c_19 as a second buffer index pointing to the same
@@ -865,7 +858,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     //   23-bit mantissa into DEST, which the SFPU welford then consumes) and via c_0 for the
     //   final-stage FPU sub.
     // c_29 is the tilized-input CB used by the welford TILIZE_IN path; its only consumer is
-    //   transpose_wh_tile (final normalization reads c_0, not c_29). Pure unary-only path,
+    //   transpose_tile (final normalization reads c_0, not c_29). Pure unary-only path,
     //   so the flag is safe.
     //
     // Other FP32 CBs were considered and rejected because, even though they pass through an
@@ -1343,9 +1336,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             if (reader_noc == NOC::NOC_1) {
                 std::swap(mcast_start, mcast_end);
             }
-            std::vector<uint32_t> mcast_sender_args;
-            mcast_sender_args.push_back(in0_dram_addr);
-            mcast_sender_args.push_back(out_dram_addr);
+            tt::tt_metal::KernelDescriptor::RTArgList mcast_sender_args;
+            mcast_sender_args.push_back(a.buffer());
+            mcast_sender_args.push_back(output.buffer());
             mcast_sender_args.push_back(in0_start_id);
             mcast_sender_args.push_back(out_tile_start_id);
             mcast_sender_args.push_back(Wt);
@@ -1397,11 +1390,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                 CoreCoord coord = device->worker_core_from_logical_core(gcore);
                 mcast_noc_xy.push_back(coord.y);
             }
-            mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
+            mcast_sender_args.append(mcast_noc_xy);
             if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
-                reader_mcast_sender_desc_g1.runtime_args.emplace_back(core, std::move(mcast_sender_args));
+                reader_mcast_sender_desc_g1.emplace_runtime_args(core, mcast_sender_args);
             } else {
-                reader_mcast_sender_desc_g2.runtime_args.emplace_back(core, std::move(mcast_sender_args));
+                reader_mcast_sender_desc_g2.emplace_runtime_args(core, mcast_sender_args);
             }
         }
     }
@@ -1438,21 +1431,33 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }
         }
 
-        std::vector<uint32_t> writer_mcast_sender_args;
+        tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
         writer_mcast_sender_args.push_back(eps_u);
-        writer_mcast_sender_args.push_back(out_dram_addr);
-        writer_mcast_sender_args.push_back(gamma_dram_addr);
-        writer_mcast_sender_args.push_back(beta_dram_addr);
-        writer_mcast_sender_args.push_back(input_mask_dram_addr);
+        writer_mcast_sender_args.push_back(output.buffer());
+        if (gamma.has_value()) {
+            writer_mcast_sender_args.push_back(gamma.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (beta.has_value()) {
+            writer_mcast_sender_args.push_back(beta.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (input_mask.has_value()) {
+            writer_mcast_sender_args.push_back(input_mask.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
         writer_mcast_sender_args.push_back(out_tile_start_id);
         writer_mcast_sender_args.push_back(gamma_tile_start_id);
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         writer_mcast_sender_args.push_back(Wt);
         if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
-            writer_desc_g1.runtime_args.emplace_back(core, std::move(writer_mcast_sender_args));
+            writer_desc_g1.emplace_runtime_args(core, writer_mcast_sender_args);
         } else {
-            writer_desc_g2.runtime_args.emplace_back(core, std::move(writer_mcast_sender_args));
+            writer_desc_g2.emplace_runtime_args(core, writer_mcast_sender_args);
         }
     }
 

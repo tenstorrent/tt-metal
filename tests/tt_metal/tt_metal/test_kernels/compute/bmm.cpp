@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
@@ -27,7 +28,8 @@ void kernel_main() {
     DataflowBuffer dfb1(dfb::src1);
     DataflowBuffer dfb_out(dfb::dst);
 
-    mm_init(dfb::src0, dfb::src1, dfb::dst);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::src0, dfb::src1, dfb::dst);
+    matmul_init(dfb::src0, dfb::src1);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile

@@ -245,6 +245,13 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
     const uint32_t u_weight_decay = std::bit_cast<uint32_t>(weight_decay);
     const uint32_t u_one = std::bit_cast<uint32_t>(1.0f);
 
+    // Pass optional tensor buffers as Buffer* (not raw ->address()) so the framework registers them
+    // as buffer bindings and re-patches their addresses on program-cache hits. momentum_buffer_in is
+    // an input tensor and momentum_buffer_out is an output tensor of this op, so binding them is
+    // allowed. nullptr is fine when the optional is absent (the kernel is compiled without it).
+    auto* const momentum_in_buf = momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer() : nullptr;
+    auto* const momentum_out_buf = momentum_buffer_out.has_value() ? momentum_buffer_out.value().buffer() : nullptr;
+
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t num_tiles_per_core;
@@ -260,7 +267,7 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
             core,
             {param_in.buffer(),
              grad.buffer(),
-             momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0u,
+             momentum_in_buf,
              num_tiles_per_core,
              tile_offset,
              u_lr,
@@ -269,12 +276,7 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
              u_weight_decay,
              u_one});
 
-        writer_desc.emplace_runtime_args(
-            core,
-            {param_out.buffer(),
-             momentum_buffer_out.has_value() ? momentum_buffer_out.value().buffer()->address() : 0u,
-             num_tiles_per_core,
-             tile_offset});
+        writer_desc.emplace_runtime_args(core, {param_out.buffer(), momentum_out_buf, num_tiles_per_core, tile_offset});
 
         tile_offset += num_tiles_per_core;
     }

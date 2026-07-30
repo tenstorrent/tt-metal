@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "../../../device/kernels/accumulation_common.hpp"
 
@@ -34,14 +34,14 @@ void kernel_main() {
     const auto dst_accessor = TensorAccessor(dst_args, dst_base_addr);
 
     Noc noc;
-    CircularBuffer cb_dst(dst_cb_idx);
+    DataflowBuffer dfb_dst(dst_cb_idx);
 
     //-------------------------------------------------------------------------
     // Main loop - pull pages from dst_cb and push to dst
     for (uint32_t tile_id = dst_start_tile; tile_id < (dst_start_tile + total_tiles_per_core); ++tile_id) {
-        cb_dst.wait_front(ONE_TILE);
-        noc.async_write(cb_dst, dst_accessor, dst_tile_size, {.offset_bytes = 0}, {.page_id = tile_id});
+        dfb_dst.wait_front(ONE_TILE);
+        noc.async_write(dfb_dst, dst_accessor, dst_tile_size, {.offset_bytes = 0}, {.page_id = tile_id});
         noc.async_write_barrier();
-        cb_dst.pop_front(ONE_TILE);
+        dfb_dst.pop_front(ONE_TILE);
     }
 }

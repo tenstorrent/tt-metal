@@ -26,11 +26,11 @@
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
-// Tensor-float binary op (calls invoke_binary_ng)
-#define TTNN_BINARY_OP_TENSOR_FLOAT(NAME, OP_TYPE)                                        \
+// Tensor-scalar binary op (calls invoke_binary_ng)
+#define TTNN_BINARY_OP_TENSOR_SCALAR(NAME, OP_TYPE)                                       \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
-        float rhs,                                                                        \
+        operations::unary::ScalarVariant rhs,                                             \
         const std::optional<const DataType>& output_dtype = std::nullopt,                 \
         const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
         const std::optional<Tensor>& output = std::nullopt,                               \
@@ -40,7 +40,7 @@
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
-// Inplace binary op (Tensor-Tensor and Tensor-float, calls invoke_binary_ng with output=lhs)
+// Inplace binary op (Tensor-Tensor and Tensor-scalar, calls invoke_binary_ng with output=lhs)
 #define TTNN_BINARY_OP_INPLACE(NAME, OP_TYPE)                                             \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
@@ -52,14 +52,14 @@
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);    \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
-        float rhs,                                                                        \
+        operations::unary::ScalarVariant rhs,                                             \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
-// Inplace relational binary op (Tensor-Tensor and Tensor-float, calls inplace_relational_binary)
+// Inplace relational binary op (Tensor-Tensor and Tensor-scalar, calls inplace_relational_binary)
 #define TTNN_BINARY_OP_INPLACE_RELATIONAL(NAME, OP_TYPE)                                  \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
@@ -71,7 +71,7 @@
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);    \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
-        float rhs,                                                                        \
+        operations::unary::ScalarVariant rhs,                                             \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
@@ -116,7 +116,7 @@
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);    \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
-        float rhs,                                                                        \
+        operations::unary::ScalarVariant rhs,                                             \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
@@ -156,21 +156,7 @@ Tensor invoke_binary_ng(
 
 Tensor invoke_binary_ng(
     const Tensor& lhs,
-    float rhs,
-    operations::binary::BinaryOpType binary_op_type,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& fast_and_approximate_mode = false,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
-
-Tensor invoke_binary_ng(
-    const Tensor& lhs,
-    int32_t rhs,
+    operations::unary::ScalarVariant rhs,
     operations::binary::BinaryOpType binary_op_type,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
@@ -195,15 +181,15 @@ Tensor invoke_binary_ng_isclose(
 }  // namespace detail
 
 TTNN_BINARY_OP_TENSOR_TENSOR(add, ADD)
-TTNN_BINARY_OP_TENSOR_FLOAT(add, ADD)
+TTNN_BINARY_OP_TENSOR_SCALAR(add, ADD)
 TTNN_BINARY_OP_INPLACE(add_, ADD)
 TTNN_BINARY_OP_TENSOR_TENSOR(subtract, SUB)
-TTNN_BINARY_OP_TENSOR_FLOAT(subtract, SUB)
+TTNN_BINARY_OP_TENSOR_SCALAR(subtract, SUB)
 TTNN_BINARY_OP_INPLACE(subtract_, SUB)
 TTNN_BINARY_OP_TENSOR_TENSOR(eq, EQ)
 Tensor eq(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt,
@@ -221,7 +207,7 @@ Tensor eq(
 TTNN_BINARY_OP_TENSOR_TENSOR(ne, NE)
 Tensor ne(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt,
@@ -239,7 +225,7 @@ Tensor ne(
 TTNN_BINARY_OP_TENSOR_TENSOR(ge, GE)
 Tensor ge(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt,
@@ -257,7 +243,7 @@ Tensor ge(
 TTNN_BINARY_OP_TENSOR_TENSOR(gt, GT)
 Tensor gt(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt,
@@ -275,7 +261,7 @@ Tensor gt(
 TTNN_BINARY_OP_TENSOR_TENSOR(le, LE)
 Tensor le(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt,
@@ -293,7 +279,7 @@ Tensor le(
 TTNN_BINARY_OP_TENSOR_TENSOR(lt, LT)
 Tensor lt(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt,
@@ -309,22 +295,22 @@ Tensor lt(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt);
 TTNN_BINARY_OP_TENSOR_TENSOR(logical_and, LOGICAL_AND)
-TTNN_BINARY_OP_TENSOR_FLOAT(logical_and, LOGICAL_AND)
+TTNN_BINARY_OP_TENSOR_SCALAR(logical_and, LOGICAL_AND)
 TTNN_BINARY_OP_TENSOR_TENSOR(logical_or, LOGICAL_OR)
-TTNN_BINARY_OP_TENSOR_FLOAT(logical_or, LOGICAL_OR)
+TTNN_BINARY_OP_TENSOR_SCALAR(logical_or, LOGICAL_OR)
 TTNN_BINARY_OP_TENSOR_TENSOR(logical_xor, LOGICAL_XOR)
-TTNN_BINARY_OP_TENSOR_FLOAT(logical_xor, LOGICAL_XOR)
+TTNN_BINARY_OP_TENSOR_SCALAR(logical_xor, LOGICAL_XOR)
 TTNN_BINARY_OP_TENSOR_TENSOR(ldexp, LDEXP)
-TTNN_BINARY_OP_TENSOR_FLOAT(ldexp, LDEXP)
+TTNN_BINARY_OP_TENSOR_SCALAR(ldexp, LDEXP)
 TTNN_BINARY_OP_INPLACE(ldexp_, LDEXP)
 TTNN_BINARY_OP_TENSOR_TENSOR(logaddexp, LOGADDEXP)
-TTNN_BINARY_OP_TENSOR_FLOAT(logaddexp, LOGADDEXP)
+TTNN_BINARY_OP_TENSOR_SCALAR(logaddexp, LOGADDEXP)
 TTNN_BINARY_OP_INPLACE(logaddexp_, LOGADDEXP)
 TTNN_BINARY_OP_TENSOR_TENSOR(logaddexp2, LOGADDEXP2)
-TTNN_BINARY_OP_TENSOR_FLOAT(logaddexp2, LOGADDEXP2)
+TTNN_BINARY_OP_TENSOR_SCALAR(logaddexp2, LOGADDEXP2)
 TTNN_BINARY_OP_INPLACE(logaddexp2_, LOGADDEXP2)
 TTNN_BINARY_OP_TENSOR_TENSOR(squared_difference, SQUARED_DIFFERENCE)
-TTNN_BINARY_OP_TENSOR_FLOAT(squared_difference, SQUARED_DIFFERENCE)
+TTNN_BINARY_OP_TENSOR_SCALAR(squared_difference, SQUARED_DIFFERENCE)
 TTNN_BINARY_OP_INPLACE(squared_difference_, SQUARED_DIFFERENCE)
 Tensor divide(
     const Tensor& lhs,
@@ -340,7 +326,7 @@ Tensor divide(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor divide(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt,
@@ -361,7 +347,7 @@ Tensor divide_(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor divide_(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
@@ -382,7 +368,7 @@ Tensor multiply(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor multiply(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt,
@@ -393,7 +379,7 @@ Tensor multiply(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor multiply(const Tensor& lhs, const Tensor& rhs, bool fast_and_approximate_mode);
-Tensor multiply(const Tensor& lhs, float rhs, bool fast_and_approximate_mode);
+Tensor multiply(const Tensor& lhs, operations::unary::ScalarVariant rhs, bool fast_and_approximate_mode);
 Tensor multiply_(
     const Tensor& lhs,
     const Tensor& rhs,
@@ -405,7 +391,7 @@ Tensor multiply_(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor multiply_(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
@@ -436,7 +422,7 @@ Tensor subalpha(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt);
 TTNN_BINARY_OP_TENSOR_TENSOR(logical_right_shift, LOGICAL_RIGHT_SHIFT)
-TTNN_BINARY_OP_TENSOR_FLOAT(logical_right_shift, LOGICAL_RIGHT_SHIFT)
+TTNN_BINARY_OP_TENSOR_SCALAR(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_and, BITWISE_AND)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_and, BITWISE_AND)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_or, BITWISE_OR)
@@ -450,7 +436,7 @@ TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_right_shift, RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(logical_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE(logical_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR(xlogy, XLOGY)
-TTNN_BINARY_OP_TENSOR_FLOAT(xlogy, XLOGY)
+TTNN_BINARY_OP_TENSOR_SCALAR(xlogy, XLOGY)
 Tensor hypot(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -512,7 +498,7 @@ ttnn::Tensor operator<=(const ttnn::Tensor& lhs, InputBType rhs) {
 }  // namespace ttnn
 
 #undef TTNN_BINARY_OP_TENSOR_TENSOR
-#undef TTNN_BINARY_OP_TENSOR_FLOAT
+#undef TTNN_BINARY_OP_TENSOR_SCALAR
 #undef TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE
 #undef TTNN_BINARY_OP_TENSOR_INT32_BITWISE
 #undef TTNN_BINARY_OP_INPLACE

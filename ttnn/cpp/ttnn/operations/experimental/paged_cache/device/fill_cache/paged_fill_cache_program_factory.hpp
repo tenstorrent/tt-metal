@@ -5,53 +5,29 @@
 #pragma once
 
 #include "paged_fill_cache_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
+
+#include <tt-metalium/program_descriptors.hpp>
+
+#include <optional>
 
 namespace ttnn::experimental::prim {
 
-struct PagedFillCacheSharedVariables {
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = 0;
-    std::vector<tt::tt_metal::CoreCoord> cores;
-    uint32_t g1_numcores = 0;
-    uint32_t g2_numcores = 0;
-    uint32_t num_blocks_per_core_group_1 = 0;
-    uint32_t num_blocks_per_core_group_2 = 0;
-    uint32_t Wt = 0;
-    bool use_batch_idx_tensor = false;
-};
-
 struct PagedFillCacheProgramFactory {
-    using shared_variables_t = PagedFillCacheSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const PagedFillCacheParams& operation_attributes,
-        const PagedFillCacheInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const PagedFillCacheParams& operation_attributes,
         const PagedFillCacheInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 
 struct PagedFillCacheMeshWorkloadFactory {
-    using shared_variables_t = PagedFillCacheSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const PagedFillCacheParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const PagedFillCacheInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+    // Per-coord program build.  When mesh_coords is provided and the dispatch
+    // coordinate is not in it, the resulting program is a noop (early-exits in
+    // kernels) so the cache slot is still populated for that coord.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const PagedFillCacheParams& operation_attributes,
         const PagedFillCacheInputs& tensor_args,
-        Tensor& tensor_return_value);
+        Tensor& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 };
 
 }  // namespace ttnn::experimental::prim

@@ -488,8 +488,30 @@ ttnn.register_python_operation(
 ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor",
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
+doc = """
+Copies host tensor data into a pre-allocated device tensor, writing only the shards mapped to cores in :attr:`logical_core_filter`.
+
+The device tensor must use a sharded memory layout (height, width, block, or ND sharded). Only shards whose logical core coordinates intersect the filter are written; all other shards remain unchanged on the device.
+
+Args:
+    * :attr:`host_tensor`: the ttnn.Tensor on host containing the source data.
+    * :attr:`device_tensor`: the ttnn.Tensor already allocated on device with a sharded memory config.
+    * :attr:`logical_core_filter`: a ttnn.CoreRangeSet selecting which logical cores' shards to write. An empty set is a no-op.
+    * :attr:`cq_id`: the optional ttnn.QueueId command queue to use. Defaults to ``None``.
+
+Note:
+    - The device tensor must have a sharded buffer layout (L1 or DRAM sharded).
+    - An empty ``logical_core_filter`` is a no-op — no data is transferred.
+    - Host and device tensors must have the same shape, dtype, and data layout.
+
+Example:
+    >>> dev_tensor = ttnn.allocate_tensor_on_device(shape, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device, sharded_mem_config)
+    >>> filter = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    >>> ttnn.copy_host_to_device_tensor_partial(host_tensor, dev_tensor, filter)
+"""
 ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor_partial",
+    doc=doc,
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor_partial)
 ttnn.register_python_operation(
     name="ttnn.copy_device_to_host_tensor",

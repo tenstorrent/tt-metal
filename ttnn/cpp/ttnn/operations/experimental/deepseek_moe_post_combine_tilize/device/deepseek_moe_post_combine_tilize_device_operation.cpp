@@ -84,21 +84,21 @@ void DeepseekMoEPostCombineTilizeDeviceOperation::validate_on_program_cache_miss
         "DeepseekMoEPostCombineTilize requires one output shard per core");
 }
 
-ttnn::TensorSpec DeepseekMoEPostCombineTilizeDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec DeepseekMoEPostCombineTilizeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const auto& output_shape = input_tensor.padded_shape();
 
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         operations::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
 }
 
 ttnn::Tensor DeepseekMoEPostCombineTilizeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const ttnn::TensorSpec& output_tensor_spec = compute_output_specs(operation_attributes, tensor_args);
+    const tt::tt_metal::TensorSpec& output_tensor_spec = compute_output_specs(operation_attributes, tensor_args);
 
     return create_device_tensor(output_tensor_spec, tensor_args.input_tensor.device());
 }

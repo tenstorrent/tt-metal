@@ -22,7 +22,7 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
         tt::tt_metal::experimental::sender_core_type(*args.global_cb) !=
             tt::tt_metal::experimental::SenderCoreType::Dram,
         "ttnn.dram_prefetcher does not support DRAM-sender GlobalCircularBuffers. Use "
-        "ttnn.experimental.start_dram_core_prefetcher / ttnn.experimental.stop_dram_core_prefetcher instead.");
+        "ttnn.experimental.start_tensor_prefetcher / ttnn.experimental.stop_tensor_prefetcher instead.");
 
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
@@ -80,9 +80,9 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor_addrs_data_format == tt::DataFormat::UInt32, "Tensor containing addresses must be of type UInt32");
 }
 
-TensorSpec DramPrefetcherOperation::compute_output_specs(
+tt::tt_metal::TensorSpec DramPrefetcherOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape{32, 32},
         tt::tt_metal::TensorLayout(
             tensor_args.input_tensors[0].dtype(),

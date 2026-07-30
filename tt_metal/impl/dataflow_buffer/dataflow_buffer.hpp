@@ -5,9 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <utility>
 #include <variant>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
@@ -51,6 +54,12 @@ struct DataflowBufferConfig {
     // Data format and tile formats for LLKs
     DataFormat data_format = tt::DataFormat::Float16_b;
     std::optional<Tile> tile = std::nullopt;
+    /**
+     * Optional override for how the compute engine interprets this DFB's tile faces. When set, it overrides the
+     * face layout otherwise derived from @ref tile. Use it when an operand's data is laid out with a non-default
+     * number of faces or rows-per-face.
+     */
+    std::optional<FaceGeometry> unpack_face_geometry = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel
     std::optional<TensixScope> tensix_scope = std::nullopt;
     // When true, the DFB borrows L1 memory from an externally managed buffer
@@ -66,8 +75,10 @@ uint32_t CreateDataflowBuffer(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DataflowBufferConfig& config);
 
-// Need to know which riscs the producer and consumer kernel run on to do tile counter and remapper allocation before a program is launched
-// This information may not be available to user at time of DFB creation so binding can be done explicitly after kernels are created
-void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_id, KernelHandle producer_kernel_handle, KernelHandle consumer_kernel_handle);
+// Need to know which riscs the producer and consumer kernel run on to do tile counter and remapper allocation before a
+// program is launched This information may not be available to user at time of DFB creation so binding can be done
+// explicitly after kernels are created
+void BindDataflowBufferToProducerConsumerKernels(
+    Program& program, uint32_t dfb_id, KernelHandle producer_kernel_handle, KernelHandle consumer_kernel_handle);
 
 }  // namespace tt::tt_metal::experimental::dfb

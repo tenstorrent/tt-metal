@@ -30,6 +30,15 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from ..test_factory import TestFactory, compare_tensors, find_layer_idx, get_pcc_threshold, parametrize_mesh_with_fabric
 from ..vllm_harness import Gemma4VllmLayout, Gemma4VllmRequestPool, allocate_vllm_kv_cache
 
+
+def _skip_full_model_parity_if_mesh_too_small(mesh_device):
+    """Skip multi-layer parity shapes that overflow L1 on single-device 31B."""
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    hf_config = TestFactory.create_hf_config()
+    if getattr(hf_config, "hidden_size", 0) > 4096 and tp < 2:
+        pytest.skip(f"Full-model vLLM parity overflows L1 on single device (hidden={hf_config.hidden_size})")
+
+
 # ── Pure-Python layout tests (no device) ─────────────────────────────────
 
 
@@ -696,6 +705,8 @@ def test_full_model_parity_uniform_vs_vllm(mesh_device, reset_seeds, request):
     per-layer routing) — exactly the class of bug uniform-shape tests
     miss.
     """
+    _skip_full_model_parity_if_mesh_too_small(mesh_device)
+
     from ...tests.test_factory import num_layers_for_full_attention_group
     from ..unit.test_model import _create_hf_model, _create_hf_text_config, _hf_model_state_to_tt_state
 
@@ -858,6 +869,8 @@ def _build_parity_models(
     (overriding the stash) or ``del``-s it before the next uniform
     call — none rely on the model carrying it between passes.
     """
+    _inject_missing_kv_shared_attention_weights(tt_state, hf_text_config, num_layers)
+
     tt_model = Gemma4Model(
         mesh_device=mesh_device,
         hf_config=model_args,
@@ -878,19 +891,23 @@ def _decode_step_inputs(model, mesh_device, token_id, position):
     """Build the host-side decode inputs both paths consume.
 
     Mirrors what ``Gemma4Model.prepare_decode_inputs_host`` packs into
-    its return tuple. Returns ``(embeds, pos_uint32, pos_int32, pli)``;
+    its return tuple. Returns ``(tokens, pos_uint32, pos_int32, pli)``;
     ``pli`` is ``None`` when the model has no PLI configured. Caller is
     responsible for deallocating the returned device tensors after
     each step.
     """
     import torch.nn.functional as F
 
-    embeds, pli = model.compute_host_embeddings(token_id)
+    pli = model.compute_host_pli(token_id)
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
-    embeds_tt = ttnn.from_torch(
-        embeds, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper
+    tokens_tt = ttnn.from_torch(
+        torch.tensor([[token_id]], dtype=torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=mapper,
     )
     pos_padded = F.pad(torch.tensor([position], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0)
     pos_tt = ttnn.from_torch(
@@ -912,7 +929,7 @@ def _decode_step_inputs(model, mesh_device, token_id, position):
             dtype=ttnn.bfloat16,
             mesh_mapper=mapper,
         )
-    return embeds_tt, pos_tt, pos_int32_tt, pli_tt
+    return tokens_tt, pos_tt, pos_int32_tt, pli_tt
 
 
 def _page_table_to_tt(page_table_torch, mesh_device):
@@ -947,6 +964,48 @@ def _compute_num_layers_for_kv_shared(hf_text_config) -> int | None:
     return max(1, full_n - kv_shared + 1)
 
 
+def _inject_missing_kv_shared_attention_weights(state_dict, hf_text_config, num_layers, prefix="model."):
+    """Pad synthetic HF states whose kv-shared layers omit K/V weights.
+
+    HF checkpoints for Gemma4 variants with ``num_kv_shared_layers`` can omit
+    K/V projection tensors on shared layers because those layers reuse a source
+    layer's cache at runtime. The TT attention constructor still builds a fused
+    QKV tensor for every layer before runtime can discard K/V under
+    ``is_kv_shared=True``, so test-generated full-layer states need zero K/V
+    placeholders for any omitted entries.
+    """
+    hidden = int(hf_text_config.hidden_size)
+    for layer_idx in range(num_layers):
+        attn_prefix = f"{prefix}layers.{layer_idx}.self_attn"
+        layer_type = hf_text_config.layer_types[layer_idx]
+        is_sliding = layer_type == "sliding_attention"
+        if is_sliding:
+            num_kv_heads = int(hf_text_config.num_key_value_heads)
+            head_dim = int(hf_text_config.head_dim)
+        else:
+            num_kv_heads = int(
+                getattr(hf_text_config, "num_global_key_value_heads", None) or hf_text_config.num_key_value_heads
+            )
+            head_dim = int(getattr(hf_text_config, "global_head_dim", None) or hf_text_config.head_dim)
+        kv_size = num_kv_heads * head_dim
+
+        state_dict.setdefault(
+            f"{attn_prefix}.k_proj.weight",
+            torch.zeros((kv_size, hidden), dtype=torch.bfloat16),
+        )
+        use_kv_tying = bool(getattr(hf_text_config, "attention_k_eq_v", False)) and not is_sliding
+        if not use_kv_tying:
+            state_dict.setdefault(
+                f"{attn_prefix}.v_proj.weight",
+                torch.zeros((kv_size, hidden), dtype=torch.bfloat16),
+            )
+        state_dict.setdefault(
+            f"{attn_prefix}.k_norm.weight",
+            torch.ones((head_dim,), dtype=torch.bfloat16),
+        )
+    return state_dict
+
+
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("decode_steps", [4, 8], ids=lambda n: f"steps{n}")
 @pytest.mark.parametrize(
@@ -976,6 +1035,8 @@ def test_full_model_parity_decode_uniform_vs_vllm(layer_set, decode_steps, mesh_
     and feed that token into both for the next step (so the test
     measures parity, not "do they pick the same EOS").
     """
+    _skip_full_model_parity_if_mesh_too_small(mesh_device)
+
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
     from ...tests.test_factory import num_layers_for_full_attention_group
@@ -1262,6 +1323,8 @@ def test_full_model_parity_decode_with_pli(layer_set, decode_steps, mesh_device,
     bug should surface here (likely on ``all-kv-shared`` where every
     layer in the kv-share map sees PLI).
     """
+    _skip_full_model_parity_if_mesh_too_small(mesh_device)
+
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
     from ...tests.test_factory import num_layers_for_full_attention_group
@@ -1467,6 +1530,8 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
     the :class:`Gemma4Model._decode_pli_combined` issue I fixed
     earlier, it should surface here as a PCC drop at decode step 2+.
     """
+    _skip_full_model_parity_if_mesh_too_small(mesh_device)
+
     import torch.nn.functional as F
 
     from models.demos.gemma4.tt.generator import Gemma4Generator
@@ -1691,8 +1756,8 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("decode_steps", [4], ids=lambda n: f"steps{n}")
-@pytest.mark.parametrize("layer_set", ["all_kv_shared"], ids=["all-kv-shared"])
-@pytest.mark.parametrize("pli", [True], ids=["pli"])
+@pytest.mark.parametrize("layer_set", ["small", "all_kv_shared"], ids=["small", "all-kv-shared"])
+@pytest.mark.parametrize("pli", [False, True], ids=["no-pli", "pli"])
 def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, mesh_device, reset_seeds, request):
     """End-to-end mirror of vLLM's warmup→inference flow.
 
@@ -1721,6 +1786,8 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
     PCC against the uniform baseline at every replay step. If we are
     going to reproduce the chat garble in a unit test, this is where.
     """
+    _skip_full_model_parity_if_mesh_too_small(mesh_device)
+
     import torch.nn.functional as F
 
     from models.demos.gemma4.tt.generator import Gemma4Generator
@@ -1738,8 +1805,6 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             real = TestFactory.create_hf_config()
             num_layers = int(real.num_hidden_layers)
             kv_shared_override = int(getattr(real, "num_kv_shared_layers", 0) or 0)
-            if kv_shared_override <= 0:
-                pytest.skip("Model has no kv-shared layers")
         hf_text_config = _create_hf_text_config_with_pli(vocab_size=256, num_layers=num_layers, pli_size=64)
         if kv_shared_override is not None:
             hf_text_config.num_kv_shared_layers = kv_shared_override
@@ -1754,8 +1819,6 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             real = TestFactory.create_hf_config()
             num_layers = int(real.num_hidden_layers)
             kv_shared_override = int(getattr(real, "num_kv_shared_layers", 0) or 0)
-            if kv_shared_override <= 0:
-                pytest.skip("Model has no kv-shared layers")
         hf_text_config = _create_hf_text_config(vocab_size=256, num_layers=num_layers)
         if kv_shared_override is not None:
             hf_text_config.num_kv_shared_layers = kv_shared_override
@@ -1831,7 +1894,7 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
         max_batch_size=1,
         num_blocks=uniform_num_blocks,
         can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        greedy_only=True,
     )
 
     # vLLM warmup — replicate the bridge's pre-decode setup so the
@@ -1848,7 +1911,7 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             max_batch_size=1,
             num_blocks=warmup_num_blocks,
             can_sample_on_device=False,
-            non_greedy_decoding_on_device=False,
+            greedy_only=True,
         )
     finally:
         if hasattr(tt_model_vllm, "_active_page_tables_per_layer"):

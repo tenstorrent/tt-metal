@@ -7,6 +7,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "mesh_tensor_impl.hpp"
+#include "spec/layout/tensor_layout_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -30,10 +31,6 @@ const MeshTensorImpl& MeshTensor::impl() const {
 }
 
 const distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return impl().mesh_buffer(); }
-
-std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_breaking() const {
-    return impl().raw_mesh_buffer();
-}
 
 const distributed::MeshDevice& MeshTensor::device() const { return mutable_device(); }
 
@@ -82,7 +79,7 @@ std::size_t MeshTensor::element_size() const {
     }
 }
 
-Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
+Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().impl().compute_strides(logical_shape()); }
 
 void MeshTensor::update_tensor_topology(TensorTopology tensor_topology) {
     impl().update_topology(std::move(tensor_topology));
@@ -101,7 +98,12 @@ MeshTensor MeshTensor::allocate_on_device(
             mesh_device.arch());
     }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
-    return MeshTensor(std::move(mesh_buffer), spec, topology);
+    return MeshTensor::from_buffer(std::move(*mesh_buffer), spec, topology);
+}
+
+MeshTensor MeshTensor::from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology) {
+    return MeshTensor(
+        std::make_shared<distributed::MeshBuffer>(std::move(mesh_buffer)), std::move(spec), std::move(topology));
 }
 
 }  // namespace tt::tt_metal

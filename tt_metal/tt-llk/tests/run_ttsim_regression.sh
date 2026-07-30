@@ -21,8 +21,14 @@ RESULTS_DIR="${TESTS_DIR}/ttsim_results"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 XML_PATH="${RESULTS_DIR}/ttsim_${TIMESTAMP}.xml"
 HTML_PATH="${RESULTS_DIR}/ttsim_${TIMESTAMP}.html"
+COLLECTED_PATH="${RESULTS_DIR}/ttsim_${TIMESTAMP}.collected.txt"
 LATEST_XML="${RESULTS_DIR}/latest.xml"
 LATEST_HTML="${RESULTS_DIR}/latest.html"
+LATEST_COLLECTED="${RESULTS_DIR}/latest.collected.txt"
+
+# Marker expression shared by the collection pass and the real run so the
+# "expected" denominator and the "recorded" results select the exact same set.
+MARKER_EXPR="not quasar and not nightly and not perf and not accuracy"
 
 WORKERS="${WORKERS:-10}"
 TIMEOUT="${TIMEOUT:-300}"
@@ -204,7 +210,7 @@ if [[ ! -d "$TESTS_DIR" ]]; then
 fi
 
 # ttsim does not implement SFPLOADMACRO; default to disabling unless caller set it.
-export DISABLE_SFPLOADMACRO="${DISABLE_SFPLOADMACRO:-1}"
+export TT_METAL_DISABLE_SFPLOADMACRO="${TT_METAL_DISABLE_SFPLOADMACRO:-1}"
 
 mkdir -p "$RESULTS_DIR"
 
@@ -212,21 +218,22 @@ mkdir -p "$RESULTS_DIR"
 # Build pytest argv
 # ──────────────────────────────────────────────────────────────
 PYTEST_BASE_ARGS=(
-    # Display config: this is the verbose, capture-untouched setup that we
-    # confirmed actually preserves the child's captured stdout in the junit
-    # XML. -v gives one line per test result, sugar stays off (it confused
-    # the failure tally with pytest-forked anyway), and we deliberately do
-    # NOT override `-s` from python_tests/pytest.ini or `log_cli=true` —
-    # both of those overrides empirically caused pytest-forked's child
-    # output to disappear from <system-out>, so the ttsim ERROR lines were
-    # missing from the HTML report.
-    -v
+    # Display config: capture-untouched setup that we confirmed actually
+    # preserves the child's captured stdout in the junit XML. -q keeps the
+    # terminal to one dot per test, `console_output_style=classic` drops the
+    # trailing percentage column so it's pure dots, sugar stays off (it
+    # confused the failure tally with pytest-forked anyway), and we
+    # deliberately do NOT override `-s` from python_tests/pytest.ini or
+    # `log_cli=true` — both of those overrides empirically caused
+    # pytest-forked's child output to disappear from <system-out>, so the
+    # ttsim ERROR lines were missing from the HTML report.
+    -q
+    -o console_output_style=classic
     -p no:sugar
     --run-simulator
     --timeout="$TIMEOUT"
     --forked
-    --show-progress
-    -m "not quasar and not nightly and not perf"
+    -m "$MARKER_EXPR"
     --junit-xml="$XML_PATH"
     # ttsim writes via printf (stdout), so caplog and stderr are always
     # empty for these tests. Capture only stdout to keep the XML and the
@@ -253,6 +260,66 @@ if [[ "$WORKERS" -gt 0 ]]; then
 fi
 
 # ──────────────────────────────────────────────────────────────
+# Enumerate the expected test set (stable denominator)
+# ──────────────────────────────────────────────────────────────
+# `--collect-only` lists the tests pytest *would* run for this selection. This
+# set is pure static parametrization (there is no pytest_generate_tests, and
+# pytest_collection_modifyitems no-ops without --test-order-file) and therefore
+# identical across ttsim versions, so it gives us a version-independent
+# denominator. The renderer diffs it against the testcases actually recorded in
+# the JUnit XML; anything collected but never recorded is counted as "crashed"
+# (a hard crash that took down the worker before its result could be written,
+# so --forked never turned it into a normal failure).
+#
+# We avoid --run-simulator here (it would load+init the ttsim .so just to
+# enumerate). Instead:
+#   * CHIP_ARCH=<arch> lets conftest import without probing for a real device
+#     (helpers.device runs get_all_cores() at import → get_chip_architecture(),
+#     which short-circuits on CHIP_ARCH instead of calling check_context()).
+#   * --compile-producer puts conftest in BuildMode.PRODUCE, which is the only
+#     mode that skips *both* check_context() calls in pytest_configure
+#     (override_gprs_used_by_tensix_dump and the device/simulator init block).
+# --collect-only never executes a test, so producer mode compiles nothing and
+# the selected set matches the real run (build mode / run_simulator only affect
+# runtime, never collection).
+case "$ARCHITECTURE" in
+    blackhole|bh)                 COLLECT_CHIP_ARCH=blackhole ;;
+    wormhole|wormhole_b0|wh)      COLLECT_CHIP_ARCH=wormhole ;;
+    *)                            COLLECT_CHIP_ARCH="$ARCHITECTURE" ;;
+esac
+COLLECT_CMD=(
+    "pytest"
+    --collect-only
+    -q
+    -p no:sugar
+    -o log_cli=false
+    --compile-producer
+    -m "$MARKER_EXPR"
+)
+if [[ ${#TEST_PATHS[@]} -gt 0 ]]; then
+    COLLECT_CMD+=("${TEST_PATHS[@]}")
+fi
+if [[ ${#PYTEST_ARGS[@]} -gt 0 ]]; then
+    COLLECT_CMD+=("${PYTEST_ARGS[@]}")
+fi
+
+collected_count=0
+collect_exit=0
+(
+    cd "$TESTS_DIR"
+    CHIP_ARCH="$COLLECT_CHIP_ARCH" "${COLLECT_CMD[@]}"
+) 2>/dev/null | grep -E '\.py::' >"$COLLECTED_PATH" || collect_exit=$?
+# `grep` returns 1 when it matches nothing; only treat a missing/empty file as
+# a real failure so the run still proceeds (gap analysis is best-effort).
+if [[ -s "$COLLECTED_PATH" ]]; then
+    collected_count="$(wc -l <"$COLLECTED_PATH" | tr -d ' ')"
+else
+    echo "WARNING: test collection produced no node IDs (exit=$collect_exit);" >&2
+    echo "         crashed-test gap analysis will be skipped." >&2
+    rm -f "$COLLECTED_PATH"
+fi
+
+# ──────────────────────────────────────────────────────────────
 # Banner
 # ──────────────────────────────────────────────────────────────
 echo "============================================================"
@@ -261,10 +328,11 @@ echo "============================================================"
 echo " Architecture   : ${ARCHITECTURE}"
 echo " Simulator      : ${TT_METAL_SIMULATOR}"
 echo " SoC descriptor : $(dirname "$TT_METAL_SIMULATOR")/soc_descriptor.yaml"
-echo " SFPLOADMACRO   : disabled=${DISABLE_SFPLOADMACRO}"
+echo " SFPLOADMACRO   : disabled=${TT_METAL_DISABLE_SFPLOADMACRO}"
 echo " Workers (-n)   : ${WORKERS}"
 echo " Per-test fork  : on"
 echo " Timeout        : ${TIMEOUT}s"
+echo " Tests collected: ${collected_count}"
 echo " JUnit XML      : ${XML_PATH}"
 echo " HTML report    : ${HTML_PATH}"
 echo " Test paths     : ${TEST_PATHS[*]:-<all>}"
@@ -304,7 +372,13 @@ if [[ -f "$XML_PATH" ]]; then
     rendered=0
     if [[ -x "$RENDERER" || -f "$RENDERER" ]] \
        && python3 -c "import junitparser" &>/dev/null; then
-        if python3 "$RENDERER" "$XML_PATH" "$HTML_PATH"; then
+        RENDER_CMD=(python3 "$RENDERER" "$XML_PATH" "$HTML_PATH")
+        # Pass the expected-test list so the renderer can flag the
+        # collected-but-unrecorded gap as crashed tests.
+        if [[ -s "$COLLECTED_PATH" ]]; then
+            RENDER_CMD+=(--collected "$COLLECTED_PATH")
+        fi
+        if "${RENDER_CMD[@]}"; then
             rendered=1
         fi
     fi
@@ -316,6 +390,7 @@ if [[ -f "$XML_PATH" ]]; then
     if [[ $rendered -eq 1 ]]; then
         ln -sfn "$(basename "$XML_PATH")"  "$LATEST_XML"
         ln -sfn "$(basename "$HTML_PATH")" "$LATEST_HTML"
+        [[ -s "$COLLECTED_PATH" ]] && ln -sfn "$(basename "$COLLECTED_PATH")" "$LATEST_COLLECTED"
     else
         echo ""
         echo "WARNING: no HTML renderer available; only XML produced." >&2

@@ -30,6 +30,7 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hal_types.hpp"
 #include "api/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
@@ -100,6 +101,16 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
                 core_type);
             return names[processor_index];
         }
+        case HalProgrammableCoreType::DISPATCH: {
+            auto num_processors = hal.get_num_risc_processors(core_type);
+            TT_FATAL(
+                processor_index < num_processors,
+                "Watcher data corrupted, unexpected processor index {} on core {} (max {})",
+                processor_index,
+                core_type,
+                num_processors - 1);
+            return hal.get_processor_class_name(core_type, processor_index, false).c_str();
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("unsupported core type");
     }
     TT_THROW("unreachable");
@@ -121,6 +132,13 @@ tt::CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& 
     if (std::find(translated_dram_cores.begin(), translated_dram_cores.end(), virtual_coord) !=
         translated_dram_cores.end()) {
         return tt::CoreType::DRAM;
+    }
+
+    const std::vector<tt::umd::CoreCoord>& translated_dispatch_cores =
+        soc_desc.get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::TRANSLATED);
+    if (std::find(translated_dispatch_cores.begin(), translated_dispatch_cores.end(), virtual_coord) !=
+        translated_dispatch_cores.end()) {
+        return tt::CoreType::DISPATCH;
     }
 
     tt::CoreType core_type =
@@ -169,6 +187,7 @@ string get_noc_target_str(
         }
         switch (core_type) {
             case tt::CoreType::DRAM: return {"DRAM", "DRAM"};
+            case tt::CoreType::DISPATCH: return {"Dispatch", "L1"};
             case tt::CoreType::ETH: return {"Ethernet", "L1"};
             case tt::CoreType::PCIE: return {"PCIe", "PCIE"};
             case tt::CoreType::WORKER: return {"Tensix", "L1"};
@@ -418,9 +437,22 @@ void WatcherDeviceReader::Dump(FILE* file) {
         bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
         if (has_dram_fw) {
             const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
-            for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
-                Core::Create(CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM, *this, dump_data)
-                    .Dump();
+            // get_metal_dram_cores omits the syseng-owned NOC0 endpoints (no Metal DRISC firmware),
+            // whose launch message / debug mailbox is never initialized and would read as garbage.
+            for (const auto& logical_dram_core : soc_d.get_metal_dram_cores(CoordSystem::LOGICAL)) {
+                Core::Create(logical_dram_core, HalProgrammableCoreType::DRAM, *this, dump_data).Dump();
+            }
+        }
+    }
+
+    // Dump dispatch-engine cores (Quasar only)
+    {
+        const auto& hal = env.get_hal();
+        if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+            const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
+            for (const auto& logical_dispatch_core : tt::tt_metal::detail::get_quasar_soc_dispatch_engine_logical_cores(
+                     soc_d)) {
+                Core::Create(logical_dispatch_core, HalProgrammableCoreType::DISPATCH, *this, dump_data).Dump();
             }
         }
     }
@@ -533,6 +565,8 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         core_type_str = "idleth";
     } else if (programmable_core_type == HalProgrammableCoreType::DRAM) {
         core_type_str = "dram";
+    } else if (programmable_core_type == HalProgrammableCoreType::DISPATCH) {
+        core_type_str = "dispatch";
     } else {
         core_type_str = "worker";
     }
@@ -577,6 +611,7 @@ void WatcherDeviceReader::Core::Dump() const {
         (programmable_core_type_ == HalProgrammableCoreType::ACTIVE_ETH ||
          programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH);
     bool is_dram_core = (programmable_core_type_ == HalProgrammableCoreType::DRAM);
+    bool is_dispatch_core = (programmable_core_type_ == HalProgrammableCoreType::DISPATCH);
 
     ValidateKernelIDs();
 
@@ -599,8 +634,8 @@ void WatcherDeviceReader::Core::Dump() const {
             DumpWaypoints();
         }
         // DumpL1Status() is TENSIX-specific: it asserts programmable_core_type_ == TENSIX and
-        // checks L1[0] for the TENSIX firmware launch value, so skip non-TENSIX cores (ETH, DRAM).
-        if (!is_eth_core && !is_dram_core) {
+        // checks L1[0] for the TENSIX firmware launch value, so skip non-TENSIX cores (ETH, DRAM, DISPATCH).
+        if (!is_eth_core && !is_dram_core && !is_dispatch_core) {
             DumpL1Status();
         }
         if (!rtoptions.watcher_noc_sanitize_disabled()) {
@@ -753,6 +788,13 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC transaction overflows a circular buffer).";
             break;
+        case dev_msgs::DebugSanitizeNocInvalidTxnId:
+            error_msg = fmt::format(
+                "{} used invalid NoC transaction id {} (exceeds max {}).",
+                get_riscv_name(reader_.env.get_hal(), programmable_core_type_, san.which_risc()),
+                san.l1_addr(),
+                san.len());
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -903,6 +945,10 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
         code = 'D';
     } else if (state == dev_msgs::RUN_MSG_RESET_READ_PTR) {
         code = 'R';
+    } else if (state == dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+        code = 'H';
+    } else if (state == dev_msgs::RUN_MSG_REPLAY_TRACE) {
+        code = 'T';
     } else if (state == dev_msgs::RUN_SYNC_MSG_LOAD) {
         code = 'L';
     } else if (state == dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET) {
@@ -913,14 +959,19 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
     if (code == 'U') {
         LogRunningKernels();
         TT_THROW(
-            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, or {})",
+            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, or "
+            "{})",
             virtual_coord_.str(),
             state,
             dev_msgs::RUN_MSG_INIT,
             dev_msgs::RUN_MSG_GO,
             dev_msgs::RUN_MSG_DONE,
+            dev_msgs::RUN_MSG_RESET_READ_PTR,
+            dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST,
+            dev_msgs::RUN_MSG_REPLAY_TRACE,
             dev_msgs::RUN_SYNC_MSG_LOAD,
-            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET);
+            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET,
+            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS);
     } else {
         fprintf(reader_.f, "%c", code);
     }

@@ -44,6 +44,7 @@ enum ShardOrientation : ubyte {
 enum ShardDistributionStrategy : ubyte {
     ROUND_ROBIN_1D = 0,
     GRID_2D = 1,
+    CONTIGUOUS_1D = 2,
 }
 
 enum ShardModeDeprecated : ubyte {

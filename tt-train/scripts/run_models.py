@@ -106,7 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model_config",
         type=str,
-        default=f"{tt_metal_runtime_root}/tt-train/scripts/run_models_config.yaml",
+        default=f"{tt_metal_runtime_root}/tt-train/scripts/run_models_configs/single_cards.yaml",
         help="Path to run_models_config.yaml",
     )
     parser.add_argument(
@@ -199,6 +199,13 @@ def main() -> int:
         if exclude_filenames:
             if model_filename in exclude_filenames:
                 continue
+        if "mgd" in model:
+            os.environ["TT_MESH_GRAPH_DESC_PATH"] = _verify_path(
+                os.path.expandvars(model["mgd"]), tt_metal_runtime_root
+            )
+        else:
+            # Since mgd is optional, clear env so previous iterations won't affect current
+            os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
 
         binary = os.path.expandvars(model["binary"])
         args = process_args(model["args"]) if model["args"] is not None else []
@@ -243,7 +250,8 @@ def main() -> int:
         print()
         cmd_start = time.time()
         ret_code = run_and_save_log(cmd, log_path)
-        elapsed_time = str(timedelta(seconds=(int(time.time() - cmd_start))))
+        elapsed_time_s = time.time() - cmd_start
+        elapsed_time = str(timedelta(seconds=(int(elapsed_time_s))))
         print(f"{model_filename} elapsed time: {elapsed_time}")
 
         # Record failing model run but continue to run remaining models
@@ -288,6 +296,9 @@ def main() -> int:
             mfu=step_data["mfu"],
             arch_name=arch_name,
             ci_runner_label=card_type,
+            github_event_name=get_env("GITHUB_EVENT_NAME"),
+            elapsed_time_ms=elapsed_time_s * 1000,
+            tps=step_data["tps"],
         )
         print(pydantic_data)
 

@@ -4,6 +4,7 @@
 from loguru import logger
 from datetime import datetime
 import json
+import math
 import torch
 import pytest
 import os
@@ -19,6 +20,10 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import (
     comp_pcc,
 )
+from models.demos.utils.device_sku import get_current_device_sku_name
+from models.demos.utils.llm_demo_utils import verify_perf, verify_accuracy
+from models.demos.utils.model_targets import resolve_perf_targets, resolve_accuracy_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
@@ -28,6 +33,62 @@ from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
 
 # Use common functions from demo_common.py
 # load_and_cache_context and load_inputs are now imported from demo_common
+
+
+class TokenAccuracy:
+    def __init__(self, model_name):
+        self.gt_pos = -1
+        self.store_predicted_tokens = []
+        reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
+        assert os.path.exists(reference_data_file), f"Reference data file {reference_data_file} does not exist"
+        logger.info(f"Loading reference data from {reference_data_file}")
+        reference_data = torch.load(reference_data_file)
+        reference_tokens = reference_data["reference_tokens"]
+        split_point = reference_tokens.shape[-1] // 2
+        self.input_prompt = reference_tokens[0, :split_point]
+        self.reference_tokens = reference_tokens[0, split_point:]
+        self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
+        self.maxindex = len(self.reference_tokens) - 1
+
+    def prepare_ref_tokens(self, tokenizer):
+        return tokenizer.decode(self.input_prompt.tolist())
+
+    def collect_predicted_tokens(self, token):
+        token = token.item() if hasattr(token, "item") else token
+        self.store_predicted_tokens.append(int(token))
+        self.gt_pos += 1
+        return self.reference_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
+
+    def compute_accuracy(self):
+        count = 0
+        count_t5 = 0
+        matching_sz = min(len(self.reference_tokens), len(self.store_predicted_tokens))
+        assert matching_sz > 0, "No tokens collected for token accuracy"
+        for i in range(matching_sz):
+            if self.top5_tokens[i, 0].item() == self.store_predicted_tokens[i]:
+                count += 1
+            if self.store_predicted_tokens[i] in self.top5_tokens[i, :]:
+                count_t5 += 1
+
+        return count / matching_sz, count_t5 / matching_sz
+
+
+def get_accuracy_thresholds(model_args, seq_len, batch_size=1):
+    """Resolve token accuracy thresholds from the centralized model targets."""
+    centralized_targets = resolve_accuracy_targets(
+        model_name="qwen3-32b-galaxy",
+        sku=model_args.device_name,
+        batch_size=batch_size,
+        seq_len=seq_len,
+    )
+    if not centralized_targets or "top1" not in centralized_targets or "top5" not in centralized_targets:
+        raise ValueError(
+            "Could not find centralized accuracy targets for qwen3-32b-galaxy on "
+            f"{model_args.device_name} (batch_size={batch_size}, seq_len={seq_len})"
+        )
+
+    # Preserve previous behavior for integer-rounded CI checks.
+    return float(centralized_targets["top1"]) - 0.5, float(centralized_targets["top5"]) - 0.5
 
 
 def load_demo_targets(filename):
@@ -125,7 +186,7 @@ def create_tt_qwen_model(
 #
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, token_accuracy, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -140,6 +201,7 @@ def create_tt_qwen_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             64,  # num layers (Qwen has 64 layers)
             False,  # print_outputs
@@ -159,6 +221,7 @@ def create_tt_qwen_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
@@ -178,6 +241,7 @@ def create_tt_qwen_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
@@ -197,6 +261,7 @@ def create_tt_qwen_model(
             True,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
@@ -216,6 +281,7 @@ def create_tt_qwen_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
@@ -235,6 +301,7 @@ def create_tt_qwen_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
@@ -254,6 +321,7 @@ def create_tt_qwen_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
@@ -273,6 +341,7 @@ def create_tt_qwen_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
@@ -292,6 +361,7 @@ def create_tt_qwen_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
@@ -311,6 +381,7 @@ def create_tt_qwen_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             True,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
@@ -330,6 +401,7 @@ def create_tt_qwen_model(
             False,  # stop_at_eos
             True,  # apc_test
             True,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
@@ -349,11 +421,32 @@ def create_tt_qwen_model(
             False,  # stop_at_eos
             False,  # apc_test
             True,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
+        ),
+        (  # ci-token-matching - CI Run for teacher-forced top-1/top-5 token accuracy
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            500,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            True,  # token_accuracy
+            False,  # prefill-only profile
+            64,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
     ],
     ids=[
@@ -369,6 +462,7 @@ def create_tt_qwen_model(
         "prefill-profile",  # prefill-only profile run
         "apc-test",  # apc check for 64L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-64L",  # pcc check for 64L + teacher forced
+        "ci-token-matching",  # CI performs token accuracy matching with precomputed reference tokens
     ],
 )
 @pytest.mark.parametrize(
@@ -385,7 +479,7 @@ def create_tt_qwen_model(
     "device_params",
     [
         {
-            "trace_region_size": 184915840,
+            TRACE_MODEL_KEY_PARAM: "llama3.3-70b-galaxy-qwen",
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,
@@ -419,6 +513,7 @@ def test_qwen_demo_text(
     prefill_profile,
     num_layers,
     pcc_check,
+    token_accuracy,
     pcc_decode_len,
     reset_seeds,
     request,
@@ -464,8 +559,16 @@ def test_qwen_demo_text(
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
+    token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
+
+    if token_accuracy and pcc_check:
+        raise ValueError("Token accuracy and PCC check are separate demo modes")
+    if token_accuracy and batch_size != 1:
+        raise ValueError("Token accuracy mode only supports batch_size=1")
 
     enable_trace = True  # Use tracing for better perf
+    if token_accuracy:
+        enable_trace = False  # Teacher forcing uses fresh host tokens each iteration.
     prefill_enable_trace = True
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 64 and instruct  # if using instruct weights it must be full model
@@ -581,6 +684,12 @@ def test_qwen_demo_text(
     tokenizer = AutoTokenizer.from_pretrained(model_args.TOKENIZER_PATH)
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
+    token_acc = None
+    acc = None
+    if token_accuracy:
+        token_acc = TokenAccuracy(model_args.model_name)
+        repeat_batch_prompts = [[token_acc.prepare_ref_tokens(tokenizer)]]
+
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
@@ -598,7 +707,7 @@ def test_qwen_demo_text(
                 input_prompts,
                 tokenizer,
                 [model_args],
-                instruct,
+                False if token_accuracy else instruct,
                 max_generated_tokens,
             )
 
@@ -763,6 +872,8 @@ def test_qwen_demo_text(
 
         # Replace the prefill token with reference token if PCC check enabled
         out_tok = prefilled_token if not pcc_check else ref_tokens[max_encoded_prompt_len]
+        if token_accuracy:
+            out_tok = token_acc.collect_predicted_tokens(out_tok[0].item())
 
         if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
             out_tok = out_tok.repeat(32, 1)
@@ -782,6 +893,11 @@ def test_qwen_demo_text(
         read_events = []
         tt_out_toks = []
         while users_decoding:
+            if token_accuracy and iteration > 0:
+                out_tok = token_acc.collect_predicted_tokens(out_tok[0].item())
+                if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
+                    out_tok = out_tok.repeat(32, 1)
+
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
             else:
@@ -796,22 +912,27 @@ def test_qwen_demo_text(
             try:
                 # Save logits only for PCC check when tracing is disabled
                 tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
-                tt_out_tok, read_event = generator.decode_forward(
+                decode_async_read = not token_accuracy
+                decode_output = generator.decode_forward(
                     out_tok,
                     current_pos,
                     enable_trace=is_enable_trace,
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     read_from_device=True,
-                    async_read=True,
+                    async_read=decode_async_read,
                     sampling_params=device_sampling_params,
                     reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,
                     is_cur_pos_sharded=is_cur_pos_sharded,
                     is_page_table_sharded=is_page_table_sharded,
                 )
-                read_events.append(read_event)
-                tt_out_toks.append(tt_out_tok)
+                if decode_async_read:
+                    tt_out_tok, read_event = decode_output
+                    read_events.append(read_event)
+                    tt_out_toks.append(tt_out_tok)
+                else:
+                    tt_out_tok, tt_log_probs = decode_output
                 if apc_test and iteration == 0:
                     tt_out_logits_saved_iter_0 = tt_out_logits_saved
             except Exception as e:
@@ -830,9 +951,10 @@ def test_qwen_demo_text(
                 and max_encoded_prompt_len + iteration + 1 < len(ref_tokens)
                 and num_layers == 64
             )
-            if iteration > 0:
-                ttnn.event_synchronize(read_events.pop(0)[0])
-                tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
+            if iteration > 0 or token_accuracy:
+                if not token_accuracy:
+                    ttnn.event_synchronize(read_events.pop(0)[0])
+                    tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
                 if isinstance(out_tok, tuple):
@@ -908,30 +1030,33 @@ def test_qwen_demo_text(
                         logger.info("[User {}] {}".format(user, text))
 
                 # The e2e decode inference accounts for device execution + host post-processing time
-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                # Always print perf after every iteration
-                tokens_per_second_per_user = 1 / decode_iteration_time
-
-                logger.info(
-                    f"Decode Iteration {iteration}: Time: {1000*decode_iteration_time:.4f}ms, tok/s/user: {tokens_per_second_per_user:.2f}, Throughput: {batch_size*tokens_per_second_per_user:.2f} tok/s"
-                )
-                if apc_test and (demo_targets["token_pos"] - len(input_tokens_prefill_pt)) == iteration:
-                    # Check if the throughput is within the expected range
-                    print(f"len of input tokens prefill: {len(input_tokens_prefill_pt)}")
-                    lower_bound = demo_targets["throughput"] - demo_targets["absolute_margin"]
-                    upper_bound = demo_targets["throughput"] + demo_targets["absolute_margin"]
-                    # TODO: Enable once experimentaly established avg and absolute margin
-                    assert_message = (
-                        f"Current throughput: {tokens_per_second_per_user:.1f} tok/s/user for APC test is not within the expected range: ({lower_bound}, {upper_bound}).\n"
-                        f"Update qwen_demo_targets.json file with the expected throughput.\n"
-                        f"See the comment on the text_qwen_demo.py by the assert for instructions."
+                if iteration > 0:
+                    profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                    decode_iteration_time = profiler.get_duration(
+                        f"inference_decode_time_{iteration}", iteration=batch_idx
                     )
-                    assert lower_bound <= tokens_per_second_per_user <= upper_bound, assert_message
-                    # A mismatch of throughput suggests a regression in performance, likely due to changes in one or more ops used by the model, resulting in reduced end-to-end throughput.
-                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json.
-                    # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
-                    # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
+                    # Always print perf after every iteration
+                    tokens_per_second_per_user = 1 / decode_iteration_time
+
+                    logger.info(
+                        f"Decode Iteration {iteration}: Time: {1000*decode_iteration_time:.4f}ms, tok/s/user: {tokens_per_second_per_user:.2f}, Throughput: {batch_size*tokens_per_second_per_user:.2f} tok/s"
+                    )
+                    if apc_test and (demo_targets["token_pos"] - len(input_tokens_prefill_pt)) == iteration:
+                        # Check if the throughput is within the expected range
+                        print(f"len of input tokens prefill: {len(input_tokens_prefill_pt)}")
+                        lower_bound = demo_targets["throughput"] - demo_targets["absolute_margin"]
+                        upper_bound = demo_targets["throughput"] + demo_targets["absolute_margin"]
+                        # TODO: Enable once experimentaly established avg and absolute margin
+                        assert_message = (
+                            f"Current throughput: {tokens_per_second_per_user:.1f} tok/s/user for APC test is not within the expected range: ({lower_bound}, {upper_bound}).\n"
+                            f"Update qwen_demo_targets.json file with the expected throughput.\n"
+                            f"See the comment on the text_qwen_demo.py by the assert for instructions."
+                        )
+                        assert lower_bound <= tokens_per_second_per_user <= upper_bound, assert_message
+                        # A mismatch of throughput suggests a regression in performance, likely due to changes in one or more ops used by the model, resulting in reduced end-to-end throughput.
+                        # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json.
+                        # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
+                        # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
             current_pos += 1
             iteration += 1
@@ -1039,6 +1164,10 @@ def test_qwen_demo_text(
                     logger.warning("Expected outputs data is empty or not loaded, cannot compare.")
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
+        if token_accuracy:
+            acc = token_acc.compute_accuracy()
+            logger.info("=== Top1 and Top5 Token Accuracy ===")
+            logger.info(f" Top1 Accuracy: {acc[0] * 100:.2f}%, Top5 Accuracy: {acc[1] * 100:.2f}%")
 
     profiler.end(f"inference_decode", iteration=batch_idx)
 
@@ -1084,6 +1213,23 @@ def test_qwen_demo_text(
         measurements["Top 1 Accuracy"] = sum(top_1_accs) / len(top_1_accs)
         measurements["Top 5 Accuracy"] = sum(top_5_accs) / len(top_5_accs)
 
+    if token_accuracy:
+        assert acc is not None, "Token accuracy mode completed without accuracy results"
+        total_top1_acc = math.ceil(acc[0] * 100)
+        total_top5_acc = math.ceil(acc[1] * 100)
+        measurements["Top 1 Accuracy"] = total_top1_acc
+        measurements["Top 5 Accuracy"] = total_top5_acc
+
+        min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args, seq_len=len(token_acc.input_prompt))
+        verify_accuracy(
+            measurements={
+                "top1_token_accuracy": total_top1_acc,
+                "top5_token_accuracy": total_top5_acc,
+            },
+            expected_accuracy_metrics={"top1": min_top1_acc, "top5": min_top5_acc},
+        )
+        logger.info("Checks of top-1 and top-5 accuracy against centralized model targets passed")
+
     # Decode performance for some specific tokens
     tok_1_perf = profiler.get_duration(f"inference_decode_time_{1}")  # Iteration 0 is compile time
     tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}") if 127 < iteration else 0
@@ -1123,18 +1269,31 @@ def test_qwen_demo_text(
 
     # Test batch-32, ISL=128, OSL=128 TTFT and decode throughput
     if batch_size == 32 and len(input_prompts[0]) == 507:
-        target_time_to_first_token = 700
-        assert (
-            avg_time_to_first_token * 1000 < target_time_to_first_token
-        ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target_time_to_first_token}."
-        target_decode_tok_s_u = 60
-        target_decode_tok_s = target_decode_tok_s_u * batch_size
-        assert (
-            decode_tok_s_user >= target_decode_tok_s_u
-        ), f"Decode throughput {decode_tok_s_user} tok/s/user is too low, should be > {target_decode_tok_s_u}."
-        assert (
-            decode_tok_s >= target_decode_tok_s
-        ), f"Decode throughput {decode_tok_s} tok/s is too low, should be > {target_decode_tok_s}."
+        sku = get_current_device_sku_name()
+        resolved_targets = resolve_perf_targets(
+            model_name="qwen3-32b-galaxy",
+            sku=sku,
+            batch_size=batch_size,
+            seq_len=len(input_prompts[0]),
+        )
+        if resolved_targets:
+            verify_perf(
+                measurements,
+                expected_measurements={
+                    "prefill_time_to_token": True,
+                    "decode_t/s/u": True,
+                    "decode_t/s": True,
+                },
+                model_name="qwen3-32b-galaxy",
+                sku=sku,
+                batch_size=batch_size,
+                seq_len=len(input_prompts[0]),
+            )
+        else:
+            logger.warning(
+                "No centralized perf targets found for qwen3-32b-galaxy "
+                f"on sku={sku}, batch_size={batch_size}, seq_len={len(input_prompts[0])}"
+            )
 
     # Save benchmark data for CI dashboard
     if is_ci_env and repeat_batches > 1:
@@ -1150,4 +1309,38 @@ def test_qwen_demo_text(
             profiler,
             run_type=f"tg_qwen_text_demo_prefill_6U",
             ml_model_name="qwen32b-tg",
+        )
+
+    # The token-accuracy CI run uses a single batch, so publish the accuracy metrics separately (the
+    # perf save above only runs for repeat batches). Saving top1/top5 here lets the centralized
+    # "Validate perf and accuracy targets" CI step read them from the demo_accuracy run.
+    if is_ci_env and token_accuracy:
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "inference_decode",
+            "top1_token_accuracy",
+            acc[0] * 100,
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "inference_decode",
+            "top5_token_accuracy",
+            acc[1] * 100,
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="demo_accuracy",
+            ml_model_name="qwen3-32b-galaxy",
+            ml_model_type="llm",
+            device_name=get_current_device_sku_name(),
+            num_layers=model_args.n_layers,
+            batch_size=batch_size,
+            input_sequence_length=len(token_acc.input_prompt),
+            output_sequence_length=len(token_acc.store_predicted_tokens),
         )

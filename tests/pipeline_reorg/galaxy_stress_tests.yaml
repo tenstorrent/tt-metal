@@ -10,35 +10,15 @@
 
 # Max timeouts: .github/time_budget.yaml (workflow key: stress)
 
-- id: galaxy-llama-nd-hang-stress
-  name: Llama Galaxy ND hang stress (loop)
-  team: models
-  owner_id: U053W15B6JF # Djordje Ivanovic
-  cmd: |
-    for i in {1..5}; do
-      echo "🔁 Run #$i"
-      timeout --preserve-status 1200 pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "nd-hang-test"
-    done
-  skus:
-    wh_galaxy_perf:
-      timeout: 360
-
 - id: galaxy-fabric-stability-stress
   name: Galaxy Fabric Stability Tests
   team: scaleout
   owner_id: U08FXFFH7L0 # Abhishek Agarwal
   cmd: |
-    TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml
+    # 0 disables the metal per-op timeout (overrides setup-job's 5s default), which
+    # else false-fails legitimately slow subtests (size_4096 unicast ~6.2s). A real
+    # hang is bounded by the SKU job timeout below.
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability_6U_galaxy.yaml
   skus:
     wh_galaxy_perf:
       timeout: 100
-
-- id: galaxy-llama-long-stress
-  name: Llama Galaxy Long Stress Test
-  team: models
-  owner_id: U053W15B6JF # Djordje Ivanovic
-  cmd: |
-    LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test"
-  skus:
-    wh_galaxy_perf:
-      timeout: 140

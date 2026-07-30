@@ -18,18 +18,6 @@ namespace ckernel {
 namespace sfpu {
 
 /**
- * @brief Primes the SFPU CC stack ahead of the first ternary SFPU op.
- *
- * Issues an SFPENCC with mode/imm matching what sfpi emits at every @c v_endif
- * (@c EI_RI / @c IMM12_BOTH, i.e. mode 10 / 0x003) so init and per-iteration
- * cleanup leave the CC stack in identical state. Without this priming, the
- * very first @c v_if AND-s into whatever lane mask the CC stack happened to
- * hold at boot, leaving some lanes pre-disabled in @c v_if and active in
- * @c v_else — manifests as a deterministic mismatch on face 0 of tile 0.
- */
-inline void init_where() { TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, sfpi::SFPENCC_MOD1_EI_RI); }
-
-/**
  * @brief Per-lane ternary select: @c out = (cond == 0) ? false_val : true_val.
  *
  * Loads @c false_val directly into the @c result variable so sfpi aliases
@@ -54,19 +42,24 @@ inline void init_where() { TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, sfpi::SFPENCC_M
  *         to 8 for the standard 16-row face. The outer per-face loop and
  *         section base setup are owned by
  *         @c _llk_math_eltwise_ternary_sfpu_params_.
+ * @tparam TILE_SHAPE         Destination tile shape used to calculate operand
+ *         offsets.
  *
  * @param dst_index_in0 DEST tile index holding the condition operand.
  * @param dst_index_in1 DEST tile index holding the true-branch operand.
  * @param dst_index_in2 DEST tile index holding the false-branch operand.
  * @param dst_index_out DEST tile index that receives the per-lane result.
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_where(
     const std::uint32_t dst_index_in0,
     const std::uint32_t dst_index_in1,
     const std::uint32_t dst_index_in2,
     const std::uint32_t dst_index_out) {
-    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

@@ -111,12 +111,21 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t num_datum_row_per_group_mod_tile_w =
         num_datum_row_per_group % tile_width == 0 ? tile_width : num_datum_row_per_group % tile_width;
     uint32_t group_size = W / num_groups;
-    // grid
-    uint32_t num_cores_c = grid_size.x;
-    uint32_t num_cores_r = grid_size.y;
-    auto all_cores = a.shard_spec().value().grid;
+    auto all_cores = a.shard_spec().value().grid.merge_ranges();
+    TT_FATAL(all_cores.ranges().size() == 1, "sharded groupnorm requires a rectangular shard grid");
     uint32_t num_cores = all_cores.num_cores();
     auto shard_orientation = a.shard_spec().value().orientation;
+    const auto shard_bbox = all_cores.bounding_box();
+    // grid
+    uint32_t num_cores_c = shard_bbox.end_coord.x - shard_bbox.start_coord.x + 1;
+    uint32_t num_cores_r = shard_bbox.end_coord.y - shard_bbox.start_coord.y + 1;
+    TT_FATAL(
+        grid_size.x == num_cores_c && grid_size.y == num_cores_r,
+        "program_config compute_with_storage_grid_size ({}x{}) must match shard grid dimensions ({}x{})",
+        grid_size.x,
+        grid_size.y,
+        num_cores_c,
+        num_cores_r);
     // split each batch into multiple cores
     uint32_t num_shards_r = H / per_core_M;
     uint32_t num_cores_per_batch = num_batches > num_shards_r ? 1 : num_shards_r / num_batches;
@@ -296,13 +305,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             block_wt * tile_width);
     }
 
-    // get sharded addr
-    // gamma, beta addr
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().buffer()->address() : 0;
-    auto input_negative_mask_dram_addr = negative_mask.has_value() ? negative_mask.value().buffer()->address() : 0;
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -358,7 +360,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
 
     // create a vector of cores, in either RM or CM
     std::vector<CoreCoord> core_coords =
-        grid_to_cores(num_cores, num_cores_c, num_cores_r, shard_orientation == ShardOrientation::ROW_MAJOR);
+        corerange_to_cores(all_cores, num_cores, shard_orientation == ShardOrientation::ROW_MAJOR);
     for ([[maybe_unused]] const auto& core_coord : core_coords) {
         log_debug(tt::LogOp, "worker coord: {} {}", core_coord.x, core_coord.y);
     }
@@ -369,7 +371,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                 std::vector<CoreCoord> temp;
                 temp.reserve(num_cores_per_group);
                 for (uint32_t k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)(k + (i * num_cores_per_group)), (std::size_t)j});
+                    const uint32_t idx = j * num_cores_c + i * num_cores_per_group + k;
+                    temp.push_back(core_coords[idx]);
                 }
                 core_coords2D.push_back(temp);
             }
@@ -380,7 +383,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                 std::vector<CoreCoord> temp;
                 temp.reserve(num_cores_per_group);
                 for (uint32_t k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)j, (std::size_t)(k + (i * num_cores_per_group))});
+                    const uint32_t idx = j * num_cores_r + k + i * num_cores_per_group;
+                    temp.push_back(core_coords[idx]);
                 }
                 core_coords2D.push_back(temp);
             }
@@ -721,9 +725,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
-    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode).
+    // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode).
     // The welford_groupnorm_sharded_v2 kernel feeds both c_0 (non-TILIZE_IN) and c_1
-    // (TILIZE_IN) through both transpose_wh_tile (welford intake) and sub_tiles_bcast_scalar
+    // (TILIZE_IN) through both transpose_tile (welford intake) and sub_tiles_bcast_scalar
     // (final (x - mean) normalization). The FPU consumer means neither CB can carry the flag
     // directly. The workaround is the multi-buffer-index aliasing pattern: register
     // c_29 as a second buffer index on c_0's SRAM and c_31 on c_1's, set
@@ -1225,16 +1229,32 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t beta_tile_start_id = 0;
     uint32_t input_mask_tile_start_id = 0;
     for (const auto& core : core_coords) {
-        std::vector<uint32_t> writer_mcast_sender_args;
+        tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
         writer_mcast_sender_args.push_back(eps_u);
-        writer_mcast_sender_args.push_back(gamma_dram_addr);
-        writer_mcast_sender_args.push_back(beta_dram_addr);
-        writer_mcast_sender_args.push_back(input_mask_dram_addr);
-        writer_mcast_sender_args.push_back(input_negative_mask_dram_addr);
+        if (gamma.has_value()) {
+            writer_mcast_sender_args.push_back(gamma.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (beta.has_value()) {
+            writer_mcast_sender_args.push_back(beta.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (input_mask.has_value()) {
+            writer_mcast_sender_args.push_back(input_mask.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (negative_mask.has_value()) {
+            writer_mcast_sender_args.push_back(negative_mask.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
         writer_mcast_sender_args.push_back(gamma_tile_start_id);
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_mcast_sender_args));
+        writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
 
         if (gamma.has_value()) {
             gamma_tile_start_id = (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) %

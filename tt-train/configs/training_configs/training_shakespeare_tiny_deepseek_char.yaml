@@ -10,13 +10,14 @@ training_config:
   data_path: "data/shakespeare.txt"
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/moe/tiny_deepseek_char.yaml"
   optimizer:
-    type: AdamWFullPrecision
-    lr: 0.0001
+    type: AdamW
+    lr: 0.0003
     beta1: 0.9
     beta2: 0.999
     epsilon: 1.0e-8
     weight_decay: 0.01
     amsgrad: false
+    stochastic_rounding: true
 
 device_config:
   enable_ddp: false

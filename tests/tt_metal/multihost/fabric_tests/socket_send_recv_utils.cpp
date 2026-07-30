@@ -62,19 +62,19 @@ uint32_t sync_seed_across_ranks(tt_fabric::MeshId sender_mesh_id, tt_fabric::Mes
                 continue;
             }
             distributed_context->send(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
                 rank,
                 tt::tt_metal::distributed::multihost::Tag{0});
         }
         for (const auto& rank : recv_ranks) {
             distributed_context->send(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
                 rank,
                 tt::tt_metal::distributed::multihost::Tag{0});
         }
     } else {
         distributed_context->recv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
             controller_rank,
             tt::tt_metal::distributed::multihost::Tag{0});
     }

@@ -279,8 +279,11 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     } else {
         // Enable VC1 for all routers when intermesh VC is configured
         bool enable_vc1 = intermesh_config.requires_vc1;
-        connection_mapping =
-            RouterConnectionMapping::for_mesh_router(topology, location.direction, has_z_router, enable_vc1);
+        // EXPERIMENTAL: in pass-through mode, mesh routers also forward VC1 traffic to the local Z
+        // router (MESH_TO_Z on VC1) so inter-mesh traffic can traverse intermediate meshes (A->B->C).
+        bool enable_mesh_pass_through = intermesh_config.requires_vc1_mesh_pass_through;
+        connection_mapping = RouterConnectionMapping::for_mesh_router(
+            topology, location.direction, has_z_router, enable_vc1, enable_mesh_pass_through);
     }
 
     // Compute injection channel flags at router level BEFORE creating builders
@@ -625,7 +628,7 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
     auto* adapter_ptr = erisc_builder_->receiver_channel_to_downstream_adapter.get();
     const auto tensix_noc_x = tensix_builder.get_noc_x();
     const auto tensix_noc_y = tensix_builder.get_noc_y();
-    adapter_ptr->add_local_tensix_connection(adapter_spec, local_tensix_dir, CoreCoord(tensix_noc_x, tensix_noc_y));
+    adapter_ptr->add_local_tensix_connection(adapter_spec, local_tensix_dir, tt::tt_metal::CoreCoord(tensix_noc_x, tensix_noc_y));
 
     // Provide router NOC coordinates to relay kernel for sending packets back to router
     tensix_builder.append_relay_router_noc_xy(erisc_builder_->get_noc_x(), erisc_builder_->get_noc_y());

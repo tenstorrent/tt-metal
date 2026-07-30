@@ -9,6 +9,12 @@
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_fold {
+
+MorehFoldOperation::program_factory_t MorehFoldOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return MultiCore{};
+}
+
 void MorehFoldOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
@@ -75,7 +81,7 @@ MorehFoldOperation::spec_return_value_t MorehFoldOperation::compute_output_specs
         uint32_t C = input_tensor_shape[0] / kernel_size_product;
         return ttnn::Shape{C, operation_attributes.output_size[0], operation_attributes.output_size[1]};
     }();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             tensor_args.input.dtype(),

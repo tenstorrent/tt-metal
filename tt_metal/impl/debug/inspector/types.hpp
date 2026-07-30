@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
@@ -35,6 +36,10 @@ struct KernelData {
     std::string path;
     std::string source;
     int watcher_kernel_id{};
+    // ELF paths indexed by processor index (risc_id), resolved at compile time. Processor indices not used by this
+    // kernel are left empty. Served to tt-triage over RPC so it doesn't have to reconstruct paths from per-processor
+    // naming conventions.
+    std::vector<std::string> processor_elf_paths;
 };
 
 struct ProgramData {

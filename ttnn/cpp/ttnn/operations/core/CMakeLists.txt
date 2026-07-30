@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_core ${LIB_TYPE})
 add_library(TTNN::Ops::Core ALIAS ttnn_op_core)
 
-tt_reuse_precompile_headers(ttnn_op_core TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_core TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_core)
 
 target_sources(

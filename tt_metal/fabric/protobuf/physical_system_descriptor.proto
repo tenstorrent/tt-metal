@@ -2,11 +2,24 @@ syntax = "proto3";
 
 package tt.fabric.proto;
 
+// Physical port / cable type
+enum PortType {
+    UNKNOWN = 0;
+    TRACE = 1;
+    QSFP_DD = 2;
+    WARP100 = 3;
+    WARP400 = 4;
+    LINKING_BOARD_1 = 5;
+    LINKING_BOARD_2 = 6;
+    LINKING_BOARD_3 = 7;
+}
+
 // Ethernet connection between two ASICs
 message EthConnection {
     uint32 src_chan = 1;
     uint32 dst_chan = 2;
     bool is_local = 3;
+    PortType port_type = 4;
 }
 
 // Connection edge to another ASIC with multiple ethernet connections
@@ -97,6 +110,12 @@ message EthernetFirmwareVersion {
     uint32 patch = 3;
 }
 
+message FirmwareBundleVersion {
+    uint32 major = 1;
+    uint32 minor = 2;
+    uint32 patch = 3;
+}
+
 // PCIe devices per tray for a specific host
 message PcieDevicesPerTray {
     uint32 tray_id = 1;
@@ -130,6 +149,7 @@ message PhysicalSystemDescriptor {
     repeated ExitNodeConnectionTable exit_node_connection_table = 5;
     uint32 target_device_type = 6;
     EthernetFirmwareVersion ethernet_firmware_version = 7;
+    optional FirmwareBundleVersion firmware_bundle_version = 10;
     repeated HostPcieDevicesMap pcie_devices_per_tray = 8;
     repeated HostPcieIdToAsicLocationMap pcie_id_to_asic_location = 9;
 }

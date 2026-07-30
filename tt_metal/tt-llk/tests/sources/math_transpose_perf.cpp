@@ -8,6 +8,7 @@
 #include "build.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
@@ -39,17 +40,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool UNPACK_TRANSPOSE_FACES = params.UNPACK_TRANSPOSE_FACES;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            UNPACK_TRANSPOSE_FACES, false, FACE_R_DIM, TILE_NUM_FACES, formats.unpack_A_src, formats.unpack_A_dst);
+            UNPACK_TRANSPOSE_FACES, false, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES), formats.unpack_A_src, formats.unpack_A_dst);
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
         PROFILER_SYNC();
     }
 
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
         {
@@ -86,7 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT = params.TILE_CNT;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -94,7 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
         {
@@ -146,14 +147,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT = params.TILE_CNT;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
         {

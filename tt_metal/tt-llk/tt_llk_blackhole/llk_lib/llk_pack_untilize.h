@@ -13,10 +13,17 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
 
+/**
+ * @brief Configure the ADDR_MOD slots used by the untilize pack MOP.
+ *
+ * ADDR_MOD_0 keeps y_src on the current Dest face-row (used by every inner-loop PACR); ADDR_MOD_1
+ * advances y_src by one row and is used by the row-closing PACR.
+ */
 inline void _llk_pack_untilize_configure_addrmod_()
 {
     // In DST_STRIDED_MODE, y_src tracks the row within each Dest face and W tracks
@@ -41,6 +48,20 @@ inline void _llk_pack_untilize_configure_addrmod_()
 block_ct_dim represents the number of input tiles in a block.
 dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or smaller) tiles are packed in a single 32x32 tile region in dest.
 */
+/**
+ * @brief Build and program the packer MOP template for an untilize (tilized -> row-major) pack.
+ *
+ * Programs a MOP that walks face rows in the outer loop and tiles within the block in the inner loop,
+ * using DST_STRIDED_MODE so each PACR packs a row from each tile, plus a replay buffer that advances
+ * the L1 destination address by the per-row stride.
+ *
+ * @tparam block_ct_dim: Number of input tiles per block.
+ * @tparam narrow_row: True when faces occupy only the first column of the tile (single packer interface).
+ * @tparam dense: True to pack two tiles into one 32x32 dest region using all interfaces; requires num_faces == 2 and even block_ct_dim.
+ * @param face_r_dim: Number of rows per face.
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @note @ref _llk_pack_untilize_configure_addrmod_ must have programmed the ADDR_MOD slots.
+ */
 template <std::uint32_t block_ct_dim, bool narrow_row = false, bool dense = false>
 inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
@@ -146,6 +167,24 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     tmp.program();
 }
 
+/**
+ * @brief Initialize the packer for an untilize pack op.
+ *
+ * Configures ADDR_MODs and the untilize MOP, programs the Z stride, and stores the per-row L1
+ * destination address offset into a scratch config slot so the MOP can advance the L1 address per row.
+ *
+ * @tparam block_ct_dim: Number of input tiles per block.
+ * @tparam full_ct_dim: Total number of input tiles across all blocks (must be divisible by block_ct_dim).
+ * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
+ * @tparam row_num_datums: Number of datums per output row when narrow_row is set.
+ * @tparam dense: True to pack two tiles into one dest region; requires num_faces == 2 and even block_ct_dim.
+ * @param pack_src_format: Source (dest register) data format.
+ * @param pack_dst_format: Destination (L1) data format.
+ * @param face_r_dim: Number of rows per face.
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @note On the math thread, @ref _llk_math_eltwise_unary_datacopy_ (A2D) populates the dest register this packer reads.
+ * @note Pair with @ref _llk_pack_untilize_uninit_ after the matching @ref _llk_pack_untilize_ execute calls.
+ */
 template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim    = block_ct_dim,
@@ -168,14 +207,16 @@ inline void _llk_pack_untilize_init_(
         static_assert(row_num_datums < TILE_C_DIM, "row_num_datums must be set to less than TILE_C_DIM for narrow_row packing");
     }
 
+    llk::san::pack_operand_check(
+        llk::san::IGNORE, pack_src_format, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, llk::san::IGNORE, llk::san::IGNORE);
+    llk::san::operation_init<llk::san::Operation::PackUntilize>(block_ct_dim, full_ct_dim, narrow_row);
+
     _llk_pack_untilize_configure_addrmod_();
 
     _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces);
 
     // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
-    std::uint32_t x_stride       = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                   : (pack_src_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                   : 1;
+    std::uint32_t x_stride       = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride       = FACE_C_DIM * x_stride;
     const std::uint32_t z_stride = 2 * face_r_dim * y_stride;
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
@@ -212,6 +253,24 @@ inline void _llk_pack_untilize_init_(
     }
 }
 
+/**
+ * @brief Untilize-pack one block of tiles from the destination register to L1.
+ *
+ * Programs the L1 destination address and the packer Z/W/XY counters (establishing the W_Cr shadow so
+ * each MOP row restores W), then runs the MOP once per face group, advancing the Z counter between
+ * face groups and resetting counters afterward.
+ *
+ * @tparam block_ct_dim: Number of input tiles per block.
+ * @tparam full_ct_dim: Total number of input tiles across all blocks.
+ * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
+ * @tparam tile_dst_ct_offset: Compile-time column-tile offset into the destination register.
+ * @tparam dense: True to pack two tiles into one dest region; requires num_faces == 2 and even block_ct_dim.
+ * @param address: L1 destination base address for the block.
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param tile_dst_rt_offset: Runtime row-tile offset into the destination register.
+ * @note Call @ref _llk_pack_untilize_init_ with matching template/runtime args before this function, and
+ *       @ref _llk_pack_untilize_uninit_ once all untilize-pack calls are complete.
+ */
 template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim        = block_ct_dim,
@@ -225,6 +284,10 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
+
+    llk::san::pack_operand_check(
+        llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, num_faces, llk::san::IGNORE, llk::san::IGNORE);
+    llk::san::operation_check<llk::san::Operation::PackUntilize>(block_ct_dim, full_ct_dim, narrow_row);
 
     /*
     full_ct_dim represents the number of input tiles.
@@ -257,8 +320,21 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     set_dst_write_addr(tile_dst_offset);             // reset w counter
 }
 
+/**
+ * @brief Restore the packer Z stride after an untilize pack op.
+ *
+ * Stalls on the pack pipe and reprograms the Z stride to its default (single face) value, undoing the
+ * strided-mode stride set in @ref _llk_pack_untilize_init_.
+ *
+ * @param pack_src_format: Source (dest register) data format used to size the default Z stride.
+ * @note Pairs with @ref _llk_pack_untilize_init_.
+ */
 inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
 {
+    llk::san::pack_operand_check(
+        llk::san::IGNORE, pack_src_format, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE);
+    llk::san::operation_uninit<llk::san::Operation::PackUntilize>();
+
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     const std::uint32_t z_stride = SCALE_DATUM_SIZE(pack_src_format, FACE_R_DIM * FACE_C_DIM);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);

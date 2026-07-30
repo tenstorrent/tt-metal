@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
@@ -83,6 +84,17 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     uint32_t cb_idx = tt::CBIndex::c_0;
 
     // Create CBs
+    const auto input_face_geometry = FaceGeometry{.face_r_dim = REDUCTION_SIZE, .num_faces = 2};
+    const auto scalar_face_geometry = FaceGeometry{.face_r_dim = 1, .num_faces = 2};
+    const bool last_output_tile_is_partial = input_shape[-1] % tt::constants::TILE_WIDTH != 0;
+    const bool single_partial_output_fits_in_face =
+        last_output_tile_is_partial && input_shape[-1] <= tt::constants::FACE_WIDTH;
+    const auto output_face_geometry =
+        FaceGeometry{.face_r_dim = 1, .num_faces = single_partial_output_fits_in_face ? 1U : 2U};
+    const std::optional<TileDescriptor> output_tile =
+        single_partial_output_fits_in_face ? std::optional{TileDescriptor{1, tt::constants::FACE_WIDTH, false}}
+                                           : std::nullopt;
+
     const uint32_t grid_stick_size =
         is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
     const uint32_t grid_cb_index = cb_idx++;
@@ -137,6 +149,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(input_cb_index_0),
             .data_format = input_cb_data_format,
             .page_size = input_cb_page_size,
+            .face_geometry = input_face_geometry,
         }}},
     });
 
@@ -150,6 +163,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(input_cb_index_1),
                 .data_format = input_cb_data_format,
                 .page_size = input_cb_page_size,
+                .face_geometry = input_face_geometry,
             }}},
         });
     }
@@ -163,6 +177,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(scalar_cb_index_0),
             .data_format = input_cb_data_format,
             .page_size = scalar_cb_page_size,
+            .face_geometry = scalar_face_geometry,
         }}},
     });
 
@@ -176,6 +191,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(scalar_cb_index_1),
                 .data_format = input_cb_data_format,
                 .page_size = scalar_cb_page_size,
+                .face_geometry = scalar_face_geometry,
             }}},
         });
     }
@@ -193,6 +209,8 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_cb_page_size,
+            .tile = output_tile,
+            .face_geometry = output_face_geometry,
         }}},
         .buffer = is_sharded ? output_tensor.buffer() : nullptr,
     });
@@ -329,6 +347,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             1,                                 // ct_arg[35]: kernel_h (unused by grid_sample)
             1,                                 // ct_arg[36]: kernel_w (unused by grid_sample)
             0,                                 // ct_arg[37]: indexes_32_bit (unused by grid_sample)
+            DUMMY_CB_ID,                       // ct_arg[38]: fast_tilize_cb_id (tiled-output only)
         };
 
         KernelDescriptor compute_desc;
@@ -384,14 +403,19 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             const CoreCoord& core = logical_cores[i];
 
             // Runtime arguments for sharded reader
-            KernelDescriptor::CoreRuntimeArgs reader_runtime_args = {
-                input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
-                i * grid_nsticks_per_core          // rt_arg[1]: grid_stick_offset
-            };
-
-            reader0_desc.runtime_args.emplace_back(core, reader_runtime_args);
+            reader0_desc.emplace_runtime_args(
+                core,
+                {
+                    input_tensor.buffer(),     // rt_arg[0]: input_buffer_address
+                    i * grid_nsticks_per_core  // rt_arg[1]: grid_stick_offset
+                });
             if (enable_split_reader) {
-                reader1_desc.runtime_args.emplace_back(core, reader_runtime_args);
+                reader1_desc.emplace_runtime_args(
+                    core,
+                    {
+                        input_tensor.buffer(),     // rt_arg[0]: input_buffer_address
+                        i * grid_nsticks_per_core  // rt_arg[1]: grid_stick_offset
+                    });
             }
         }
     } else {
@@ -405,22 +429,23 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             const uint32_t output_sticks = batch_output_channels ? grid_sticks : grid_sticks * grid_batching_factor;
 
             // Runtime arguments for interleaved reader - expanded row by row
-            KernelDescriptor::CoreRuntimeArgs reader_runtime_args = {
-                input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
-                grid_tensor.buffer()->address(),   // rt_arg[1]: grid_buffer_address
-                grid_sticks,                       // rt_arg[2]: grid_sticks
-                grid_processed                     // rt_arg[3]: grid_processed
-            };
+            reader0_desc.emplace_runtime_args(
+                core,
+                {
+                    input_tensor.buffer(),  // rt_arg[0]: input_buffer_address
+                    grid_tensor.buffer(),   // rt_arg[1]: grid_buffer_address
+                    grid_sticks,            // rt_arg[2]: grid_sticks
+                    grid_processed          // rt_arg[3]: grid_processed
+                });
 
             // Runtime arguments for interleaved writer - expanded row by row
-            KernelDescriptor::CoreRuntimeArgs writer_runtime_args = {
-                output_tensor.buffer()->address(),  // rt_arg[0]: output_buffer_address
-                output_sticks,                      // rt_arg[1]: output_sticks
-                output_processed                    // rt_arg[2]: output_processed
-            };
-
-            reader0_desc.runtime_args.emplace_back(core, std::move(reader_runtime_args));
-            writer_desc.runtime_args.emplace_back(core, std::move(writer_runtime_args));
+            writer_desc.emplace_runtime_args(
+                core,
+                {
+                    output_tensor.buffer(),  // rt_arg[0]: output_buffer_address
+                    output_sticks,           // rt_arg[1]: output_sticks
+                    output_processed         // rt_arg[2]: output_processed
+                });
 
             grid_processed += grid_sticks;
             output_processed += output_sticks;

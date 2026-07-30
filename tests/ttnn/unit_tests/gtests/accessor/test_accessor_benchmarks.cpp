@@ -124,7 +124,9 @@ void benchmark_args_combinations_single_core(
         // Set up accessor compile-time args for reader kernel
         const auto accessor_args = TensorAccessorArgs(*input_device_buffer, arg_config);
         auto cta = accessor_args.get_compile_time_args();
-        cta.push_back(params.physical_tensor_shape.volume());  // tensor volume for interleaved tensors
+        // Pass page count (not element volume) — the kernel iterates page_ids from 0..N-1
+        // and calls get_noc_addr(page_id), so it needs number of pages, not number of elements.
+        cta.push_back(input_device_buffer->num_pages());
 
         std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
         defines["INTERLEAVED_LAYOUT"] = is_interleaved ? "1" : "0";
@@ -209,9 +211,6 @@ TEST_P(AccessorBenchmarks, PagesIteratorSharded) {
 }
 
 TEST_P(AccessorBenchmarks, ManualPagesIterationInterleaved) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     auto static_interleaved_args_combinations = get_all_static_interleaved_args_config();
     benchmark_args_combinations_single_core(
         GetParam(),
@@ -223,9 +222,6 @@ TEST_P(AccessorBenchmarks, ManualPagesIterationInterleaved) {
 }
 
 TEST_P(AccessorBenchmarks, PagesIteratorInterleaved) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     auto static_interleaved_args_combinations = get_all_static_interleaved_args_config();
     benchmark_args_combinations_single_core(
         GetParam(),

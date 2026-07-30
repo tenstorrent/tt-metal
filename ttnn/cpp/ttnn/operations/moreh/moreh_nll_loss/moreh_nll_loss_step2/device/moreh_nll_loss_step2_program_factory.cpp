@@ -189,8 +189,10 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_step2_impl_2d(
 
     auto* const input_buf = input.buffer();
     auto* const target_buf = target.buffer();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0u;
-    const auto divisor_addr = divisor_has_value ? divisor.value().buffer()->address() : 0u;
+    // Pass Buffer* (not a raw address) so the program-cache fast hit path re-patches the binding
+    // when the tensor is reallocated; nullptr is fine for an absent optional (framework emits 0u).
+    auto* const weight_buf = weight_has_value ? weight.value().buffer() : nullptr;
+    auto* const divisor_buf = divisor_has_value ? divisor.value().buffer() : nullptr;
     auto* const output_buf = output.buffer();
 
     // Set Runtime Args
@@ -210,8 +212,8 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_step2_impl_2d(
             {
                 input_buf,
                 target_buf,
-                weight_addr,
-                divisor_addr,
+                weight_buf,
+                divisor_buf,
                 static_cast<uint32_t>(ignore_index),
                 units_per_core,
                 tile_offset,
@@ -398,8 +400,10 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_step2_impl_3d(
 
     auto* const input_buf = input.buffer();
     auto* const target_buf = target.buffer();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0u;
-    const auto divisor_addr = divisor_has_value ? divisor.value().buffer()->address() : 0u;
+    // Pass Buffer* (not a raw address) so the program-cache fast hit path re-patches the binding
+    // when the tensor is reallocated; nullptr is fine for an absent optional (framework emits 0u).
+    auto* const weight_buf = weight_has_value ? weight.value().buffer() : nullptr;
+    auto* const divisor_buf = divisor_has_value ? divisor.value().buffer() : nullptr;
     auto* const output_buf = output.buffer();
 
     // Set Runtime Args
@@ -419,8 +423,8 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_step2_impl_3d(
             {
                 input_buf,
                 target_buf,
-                weight_addr,
-                divisor_addr,
+                weight_buf,
+                divisor_buf,
                 static_cast<uint32_t>(ignore_index),
                 units_per_core,
                 tile_offset,
@@ -626,8 +630,10 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_step2_impl_4d(
 
     auto* const input_buf = input.buffer();
     auto* const target_buf = target.buffer();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0u;
-    const auto divisor_addr = divisor_has_value ? divisor.value().buffer()->address() : 0u;
+    // Pass Buffer* (not a raw address) so the program-cache fast hit path re-patches the binding
+    // when the tensor is reallocated; nullptr is fine for an absent optional (framework emits 0u).
+    auto* const weight_buf = weight_has_value ? weight.value().buffer() : nullptr;
+    auto* const divisor_buf = divisor_has_value ? divisor.value().buffer() : nullptr;
     auto* const output_buf = output.buffer();
 
     // Set Runtime Args
@@ -647,8 +653,8 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_step2_impl_4d(
             {
                 input_buf,
                 target_buf,
-                weight_addr,
-                divisor_addr,
+                weight_buf,
+                divisor_buf,
                 static_cast<uint32_t>(ignore_index),
                 units_per_core,
                 tile_offset,

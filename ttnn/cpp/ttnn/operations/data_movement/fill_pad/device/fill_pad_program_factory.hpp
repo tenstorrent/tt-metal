@@ -6,8 +6,8 @@
 
 #include "fill_pad_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <array>
 #include <bit>
 
@@ -41,7 +41,23 @@ inline uint32_t pack_fill_value(T fill_value) {
 // Float DataTypes (FLOAT32, BFLOAT16) keep the full float32 bit pattern — the
 // compute kernel reconstructs it via fill_tile_bitcast and the downstream
 // packer handles the bf16 narrowing.
-inline uint32_t pack_fill_value_for_dtype(ttnn::DataType dtype, float fill_value) {
+inline uint32_t pack_fill_value_for_dtype(ttnn::DataType dtype, const tt::tt_metal::PadValue& pad_value) {
+    // PadValue's uint32_t arm carries an integer value / raw 32-bit pattern (e.g. reduce's int32 pad
+    // sentinels, which are not float-representable); the float arm carries a numeric float value (the
+    // default for prod, reshape, slice, ...). Mirrors tilize_with_val_padding's get_packed_value.
+    if (std::holds_alternative<uint32_t>(pad_value)) {
+        const uint32_t fill_value = std::get<uint32_t>(pad_value);
+        switch (dtype) {
+            // 32-bit integers: the value is already the native bit pattern.
+            case ttnn::DataType::INT32:
+            case ttnn::DataType::UINT32: return fill_value;
+            case ttnn::DataType::UINT16: return pack_fill_value(static_cast<uint16_t>(fill_value));
+            case ttnn::DataType::BFLOAT16:
+            case ttnn::DataType::FLOAT32: return pack_fill_value(static_cast<float>(fill_value));
+            default: TT_THROW("fill_pad: unsupported dtype"); return 0u;
+        }
+    }
+    const float fill_value = std::get<float>(pad_value);
     switch (dtype) {
         case ttnn::DataType::FLOAT32:
         case ttnn::DataType::BFLOAT16: return pack_fill_value(fill_value);
@@ -78,7 +94,7 @@ namespace ttnn::prim {
 // with num == 0 are skipped. A single compute kernel binary covers all cores
 // (CT has_right_pad / has_bottom_pad gate the phase branches at compile time).
 struct FillPadProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& tensor_return_value);
 };
 
@@ -86,7 +102,7 @@ struct FillPadProgramFactory {
 // Unlike `FillPadProgramFactory` which gives each core a comparable number of borders,
 // with FillPadL1ShardedProgramFactory, each core only processes its own local L1 data (no balancing).
 struct FillPadL1ShardedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& tensor_return_value);
 };
 

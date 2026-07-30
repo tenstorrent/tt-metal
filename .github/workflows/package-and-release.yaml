@@ -76,6 +76,7 @@ jobs:
           echo "ignore-commits=${{ env.DEFAULT_IGNORE_COMMITS }}" >> "$GITHUB_OUTPUT"
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
       - name: Set default release-type for cron job
@@ -204,6 +205,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
       - name: Get previous tag for changelog
@@ -240,6 +242,7 @@ jobs:
         uses: mikepenz/release-changelog-builder-action@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          configuration: infra/release-changelog-config.json
           fromTag: ${{ steps.get-previous-tag.outputs.previous-tag }}
           toTag: ${{ needs.create-tag.outputs.version }}
           failOnError: true
@@ -247,6 +250,24 @@ jobs:
       - name: Create empty changelog for dry run
         if: ${{ inputs.dry-run }}
         run: echo "Changelog generation skipped for dry run" > CHANGELOG.txt
+      - name: Set up Python for title rework
+        if: ${{ !inputs.dry-run }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Rework unclear PR titles
+        if: ${{ !inputs.dry-run }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUG_CHECKER_API_KEY: ${{ secrets.BUG_CHECKER_API_KEY }}
+        run: |
+          pip install --quiet anthropic==0.91.0
+          python3 .github/actions/scripts/release_notes_rewrite_titles.py CHANGELOG.txt
+      - name: Group changelog by layer
+        if: ${{ !inputs.dry-run }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/actions/scripts/release_notes_by_layer.py CHANGELOG.txt
       - name: Output changelog
         if: ${{ !inputs.dry-run }}
         run: cat CHANGELOG.txt
@@ -262,10 +283,11 @@ jobs:
     if: ${{ !inputs.dry-run }}
     needs: create-changelog
     permissions: read-all
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Download changelog
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -291,7 +313,7 @@ jobs:
 
   check-existing-release:
     needs: [create-tag, create-release-notes, build-test-publish]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: ${{ !cancelled() }}
     concurrency: create_upload_draft_release
     outputs:
@@ -299,6 +321,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
       - name: Check release conditions and existing assets
@@ -406,6 +429,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
       - name: Create archive with submodules
@@ -483,11 +507,12 @@ jobs:
   convert-draft-to-prerelease:
     needs: [create-and-upload-draft-release, create-tag]
     concurrency: create_upload_draft_release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: ${{ !cancelled() && needs.create-and-upload-draft-release.result == 'success' && !inputs.dry-run && github.run_attempt == '1' }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Convert draft to prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -518,6 +543,7 @@ jobs:
     steps:
       - name: Checkout stable branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: stable
           fetch-depth: 0
@@ -631,7 +657,7 @@ jobs:
 
   trigger-prod-after-rc-success:
     needs: [build-test-publish, release-precheck, create-tag]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Only trigger if we are on an RC and the RC build-test-publish succeeded
     if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
     steps:

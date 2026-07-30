@@ -82,6 +82,11 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                     * - BFLOAT16
                       - TILE, ROW_MAJOR
 
+                ROW_MAJOR input is supported only for sharded inputs. An interleaved
+                (non-sharded) input must be in TILE layout; convert it first with
+                ``ttnn.to_layout(input, ttnn.TILE_LAYOUT)`` (and convert the output
+                back with ``ttnn.to_layout`` if a ROW_MAJOR result is required).
+
                 .. list-table:: weight (gamma) and bias (beta)
                     :header-rows: 1
 

@@ -8,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_binary_remainder.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel::sfpu {
@@ -43,7 +43,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     sfpi::vFloat b_abs = sfpi::abs(b);
 
     // Compute reciprocal 1/b
-    sfpi::vFloat recip = ckernel::sfpu::_sfpu_reciprocal_<2>(b);
+    sfpi::vFloat recip = ckernel::sfpu::sfpu_reciprocal_iter<2>(b);
 
     // Compute a/b = a * (1/b)
     sfpi::vFloat div_result = a * recip;
@@ -100,7 +100,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
     }
 
     return result;
@@ -137,7 +137,7 @@ inline void fmod_int32_init() {
 
 template <bool APPROXIMATION_MODE>
 inline void fmod_binary_init() {
-    _init_sfpu_reciprocal_<false>();
+    sfpu_reciprocal_init<false>();
 }
 
 }  // namespace ckernel::sfpu

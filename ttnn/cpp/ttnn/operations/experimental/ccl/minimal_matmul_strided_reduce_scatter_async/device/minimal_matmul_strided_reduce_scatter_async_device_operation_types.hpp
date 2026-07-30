@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
@@ -39,6 +40,43 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
     const std::optional<uint32_t> chunk_width_in_mm_blocks;
 
     const CoreCoord reduce_scatter_core_grid_offset;
+
+    // Compile-time attributes select exactly the program-structure-affecting fields for the default
+    // program-cache reflection hash + canonical key.
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "matmul_struct",
+        "dim",
+        "num_links",
+        "ring_size",
+        "rs_output_mem_config",
+        "rs_intermediate_mem_config",
+        "topology",
+        "has_barrier_semaphore",
+        "using_persistent_buffers",
+        "has_sub_device_id",
+        "cluster_axis",
+        "num_workers_per_link",
+        "num_buffers_per_channel",
+        "chunk_width_in_mm_blocks",
+        "reduce_scatter_core_grid_offset");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(matmul_struct),
+            dim,
+            num_links,
+            ring_size,
+            std::cref(rs_output_mem_config),
+            std::cref(rs_intermediate_mem_config),
+            topology,
+            barrier_semaphore.has_value(),
+            using_persistent_buffers,
+            sub_device_id.has_value(),
+            std::cref(cluster_axis),
+            std::cref(num_workers_per_link),
+            std::cref(num_buffers_per_channel),
+            std::cref(chunk_width_in_mm_blocks),
+            std::cref(reduce_scatter_core_grid_offset));
+    }
 };
 
 struct MinimalMatmulStridedReduceScatterAsyncInputs {

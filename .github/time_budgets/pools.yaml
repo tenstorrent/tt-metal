@@ -22,27 +22,18 @@ wh_n150:                   859
 wh_n300:                   683
 wh_n300_perf:               70
 wh_llmbox:                 684
-wh_llmbox_perf:            222
-wh_llmbox_perf_release:     45
-wh_galaxy:                 131
+wh_llmbox_perf:            267
+wh_galaxy:                 202
 wh_galaxy_perf:            291
-wh_galaxy_release:          71
-wh_galaxy_perf_release:      0
 bh_p100:                   357
 bh_p100_perf:                0
 bh_p150:                   210
 bh_p150_perf:               38
-bh_llmbox:                 192
 bh_loudbox:                502
 bh_p300:                   189  # includes bh_p300_viommu (indistinguishable in Snowflake)
 bh_p300_viommu:              0  # see bh_p300
-bh_quietbox:               347
-bh_quietbox_perf:            5
 bh_quietbox_2:             106
-bh_deskbox:                415
 bh_galaxy:                  38
 bh_galaxy_perf:             15
-bh_galaxy_release:           0
-bh_galaxy_perf_release:      0
-bh_sp1:                      0  # exabox-multihost-with-nfs; no observed tt-metal jobs
-bh_sp4:                      0  # exabox-multihost-with-nfs; same label as bh_sp1
+bh_sc4:                      0  # exabox-multihost-with-nfs; no observed tt-metal jobs
+bh_sc16:                     0  # exabox-multihost-with-nfs; same label as bh_sc4

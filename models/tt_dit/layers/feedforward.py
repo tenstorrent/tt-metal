@@ -4,7 +4,7 @@
 
 import ttnn
 
-from .linear import ColParallelLinear, Linear, RowParallelLinear
+from .linear import ColParallelLinear, Linear, LoRAColParallelLinear, LoRARowParallelLinear, RowParallelLinear
 from .module import Module
 
 
@@ -60,6 +60,7 @@ class ParallelFeedForward(Module):
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
+        lora_enabled: bool = False,
     ):
         super().__init__()
 
@@ -78,7 +79,10 @@ class ParallelFeedForward(Module):
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
 
-        self.ff1 = ColParallelLinear(
+        ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
+        RowCls = LoRARowParallelLinear if lora_enabled else RowParallelLinear
+
+        self.ff1 = ColCls(
             dim,
             inner_dim,
             bias=bias,
@@ -88,7 +92,7 @@ class ParallelFeedForward(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
-        self.ff2 = RowParallelLinear(
+        self.ff2 = RowCls(
             inner_dim,
             dim_out,
             bias=bias,

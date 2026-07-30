@@ -3,7 +3,7 @@
 **Status**
 
 - **Design** (MPI sub-context split, `inter_context_*` API, merged launch): described below; most of that C++ / `tt-run` work is **not merged yet**.
-- **In-tree today (mock / CPU):** two overlay rank-binding YAMLs (optionally **different** `mesh_graph_desc_path` per overlay), a **`subcontext_id_to_rank_bindings` mapping** file, **`tt-run --rank-bindings-mapping`**, and a **mock cluster mapping** (`rank_to_cluster_mock_cluster_desc`, keyed by **MPI world rank**) under `tests/tt_metal/distributed/config/` and `tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/`. See **Target CLI** and fabric CPU-only workflow for the BH sub-context test line (4×4 vs dual-2×4+intermesh).
+- **In-tree today (mock / CPU):** two overlay rank-binding YAMLs (optionally **different** `mesh_graph_desc_path` per overlay), a **`subcontext_id_to_rank_bindings` mapping** file, **`tt-run --rank-bindings-mapping`**, and a **mock cluster mapping** (`rank_to_cluster_mock_cluster_desc`, keyed by **MPI world rank**) under `tests/tt_metal/distributed/config/` and `tt_metal/third_party/tt-cluster-descriptors/`. See **Target CLI** and fabric CPU-only workflow for the BH sub-context test line (4×4 vs dual-2×4+intermesh).
 - **Not in-tree:** `tests/tt_metal/multihost/single_host_mp_tests/test_sub_context.cpp` and the `inter_context_*` helpers are **plan-only** until implemented; the code blocks below are the target shape.
 
 ---
@@ -34,7 +34,7 @@ subcontext_id_to_rank_bindings:
 
 ```bash
 tt-run \
-  --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml \
+  --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml \
   --rank-bindings-mapping tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml \
   --mpi-args "--allow-run-as-root --oversubscribe" \
   ./build/test/tt_metal/distributed/distributed_unit_tests \
@@ -60,7 +60,7 @@ The launcher **loads each overlay from the mapping**, assigns **`TT_RUN_SUBCONTE
 
 **Mock cluster descriptor mapping (per MPI rank → `bh_6u_cluster_desc.yaml`):**
 
-- `tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml`
+- `tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml`
 
 ---
 
@@ -74,7 +74,7 @@ This validates **Metal fabric config**, **MPI sub-context** (`TT_RUN_SUBCONTEXT_
 
 ```bash
 tt-run \
-  --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml \
+  --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml \
   --rank-bindings-mapping tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml \
   --mpi-args "--allow-run-as-root --oversubscribe" \
   ./build/test/tt_metal/distributed/distributed_unit_tests \
@@ -659,7 +659,7 @@ TEST(SubContextTest, PrefillDecodeDisaggregated) {
 | `tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml` | `subcontext_id_to_rank_bindings` (overlays may use different `mesh_graph_desc_path`) |
 | `tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_single_4x4_mesh.textproto` | One **4×4** BH mesh (prefill / “big mesh” overlay) |
 | `tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_dual_2x4_intermesh.textproto` | Two **2×4** BH meshes + one inter-mesh connection (decode overlay) |
-| `tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml` | Mock cluster mapping → `bh_6u_cluster_desc.yaml` (ranks 0–3) |
+| `tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml` | Mock cluster mapping → `bh_6u_cluster_desc.yaml` (ranks 0–3) |
 | `tests/tt_metal/distributed/test_mpi_subcontext.cpp` | `MpiSubContext.SingleGalaxySplitContext` |
 | `.github/workflows/fabric-cpu-only-tests-impl.yaml` | Fabric CPU-only workflow (`--rank-bindings-mapping` for quad-2×4 sub-context test) |
 

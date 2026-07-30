@@ -8,6 +8,10 @@ import ttnn
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
+    ttnn_rms_norm_pre_all_gather,
+    ttnn_rms_norm_post_all_gather,
+)
 
 
 def _run_distributed_rmsnorm_single_device(
@@ -68,7 +72,7 @@ def _run_distributed_rmsnorm_single_device(
 
     # Step 1: per-shard pre-all-gather stats.
     tt_stats = [
-        ttnn.rms_norm_pre_all_gather(
+        ttnn_rms_norm_pre_all_gather(
             t,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
@@ -82,7 +86,7 @@ def _run_distributed_rmsnorm_single_device(
 
     # Step 3: per-shard post-all-gather norm using the gathered stats.
     tt_outputs = [
-        ttnn.rms_norm_post_all_gather(
+        ttnn_rms_norm_post_all_gather(
             tt_inputs[i],
             tt_stats_gathered,
             epsilon=eps,
@@ -108,6 +112,9 @@ def _run_distributed_rmsnorm_single_device(
         # LLaMA 70B Galaxy decode shape: hidden=8192, cluster_axis=1 with 4 devices.
         # The 2D-grid path activates when shape[-2] == 128.
         (128, 8192, 4),
+        # Regression: cores_y > tiles_per_core_y (Wt=32 -> cores_y=8, tiles_per_core_y=4) exercises
+        # the c_15 merge-gather CB OOB; fails unless c_15 is sized by cores_y.
+        (128, 4096, 4),
     ],
 )
 @pytest.mark.parametrize("use_2d_core_grid", [False, True])

@@ -67,7 +67,6 @@ struct DataflowBufferImpl {
     std::unordered_map<CoreCoord, std::pair<size_t, uint32_t>> core_lookup_;
 
     // Shared config fields (written to dfb_initializer_t, same for all cores)
-    uint32_t entry_size = 0;
     uint32_t stride_in_entries = 0;
     dfb_txn_id_descriptor_t producer_txn_descriptor = {};
     dfb_txn_id_descriptor_t consumer_txn_descriptor = {};
@@ -108,6 +107,11 @@ struct DataflowBufferImpl {
     uint32_t serialized_size() const;
     std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;
 
+    // Override entry_size and/or num_entries. Recomputes capacity/stride and, on a re-entry
+    // (already-finalized) DFB with implicit sync, recomputes the txn descriptors in place while
+    // preserving the allocated transaction IDs and TC assignment.
+    void update_size(std::optional<uint32_t> new_entry_size, std::optional<uint32_t> new_num_entries);
+
     // Returns the L1 data-buffer base address, which is identical for every core in the
     // DFB's core range (guaranteed by finalize_dataflow_buffer_configs).
     uint32_t uniform_alloc_addr() const {
@@ -142,14 +146,17 @@ private:
     std::unordered_map<CoreCoord, uint8_t> next_index_;
 };
 
-// Allocates hardware transaction IDs. Valid range: [0, 31]
+// Allocates DFB implicit-sync transaction IDs from the runtime pool
+// [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], top-down.
+// Txn id 0 is reserved (NOC_V2_TRID_STATIC). User kernels may use [0, USER_TXN_ID_MAX].
 class TxnIdAllocator {
 public:
     std::vector<uint8_t> allocate(uint8_t count);
-    void reset() { next_id_ = 0; }
+    void reset() { next_id_ = HW_TXN_ID_MAX; }
 
 private:
-    uint8_t next_id_ = 0;
+    // Next highest ID available to allocate (descending within the DFB pool).
+    uint8_t next_id_ = HW_TXN_ID_MAX;
 };
 
 // Allocates Remapper clientTypes for ALL consumer mode.

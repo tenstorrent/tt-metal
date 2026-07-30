@@ -158,14 +158,14 @@ Config{...root_report_path=generated/ttnn/reports,report_name=ttnn_visualizer_tu
 
 The final number (`4042956046390500517`) indicates the memory report output directory. Once execution completes, navigate to `generated/ttnn/reports/4042956046390500517/` which will contain:
 
-* `config.json`
+* `config.json` (single-process; distributed runs use `config_<rank>_of_<world_size>.json` when world_size > 1)
 * `db.sqlite`
-* `cluster_descriptor.yaml`
-* `physical_chip_mesh_coordinate_mapping_1_of_1.yaml`
+* `cluster_descriptor.yaml` (single-process; distributed runs add `cluster_descriptor_<rank>_of_<world_size>.yaml`)
+* `physical_chip_mesh_coordinate_mapping.yaml` (single-process; distributed runs add `physical_chip_mesh_coordinate_mapping_<rank>_of_<world_size>.yaml`)
 
 Upload this entire directory to TT-NN Visualizer under the **Memory reports** section.
 
-For the `physical_chip_mesh_coordinate_mapping_1_of_1.yaml` file to be generated, you have have `TT_METAL_HOME` set. On multi-host systems, there will be multiple `physical_chip_mesh_coordinate_mapping_x_of_y.yaml` files in the report.
+For the mesh coordinate mapping YAML to be generated, you must have `TT_METAL_HOME` set.
 
 ---
 

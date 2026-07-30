@@ -9,6 +9,7 @@
 #include <map>
 #include <utility>
 #include <limits>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -82,6 +83,40 @@ void create_tensor_cb(
 
 namespace {
 
+// Pick a routing-plane link index that is VALID for each combine-axis neighbor's own forwarding
+// direction. get_forwarding_link_indices resolves the forwarding direction first and returns links in
+// that direction, so on a ring the wrap-direction neighbor may not share the line direction's valid
+// link index. Broadcasting a single {core_link} to every connection would land the wrap connection on
+// an EDM plane that never services it -> the worker hangs in open_finish. Indexing core_link into each
+// neighbor's own valid-link set keeps the choice valid for that direction while still spreading sender
+// cores across links where more than one plane exists. (Kept file-local because the natural shared
+// home, ccl/common, is outside this op's code ownership.)
+std::vector<uint32_t> compute_per_neighbor_forwarding_links(
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+    uint32_t core_link,
+    const char* axis_label) {
+    std::vector<uint32_t> per_conn_links;
+    per_conn_links.reserve(dst_nodes.size());
+    for (const auto& dst_node : dst_nodes) {
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
+        TT_FATAL(
+            !links.empty(), "No forwarding links from {} to {} neighbor {}", src_fabric_node_id, axis_label, dst_node);
+        log_debug(
+            tt::LogOp,
+            "FABRIC_2D {} link select: src={} dst={} dir={} core_link={} valid_links={} -> {}",
+            axis_label,
+            src_fabric_node_id,
+            dst_node,
+            tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node).value(),
+            core_link,
+            links.size(),
+            links[core_link % links.size()]);
+        per_conn_links.push_back(links[core_link % links.size()]);
+    }
+    return per_conn_links;
+}
+
 // Per-coord ProgramDescriptor builder.  The cross-device GlobalSemaphores are
 // allocated once at workload scope in create_workload_descriptor() and passed
 // down by const-reference so every per-coord program references the same
@@ -137,6 +172,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const auto [neighbors, directions] =
         ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
+    // FABRIC_2D uses the portable RoutingPlaneConnectionManager (per-destination connection +
+    // multicast handshake) for multi-hop combine-axis forwarding; FABRIC_1D keeps the legacy
+    // per-direction array connection. Must match the writer kernel's #ifdef FABRIC_2D gating.
+    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+
     auto dispatched_shape = dispatched_buffer.logical_shape();
     auto hidden_size = dispatched_shape[-1];
     auto max_dispatch_buffer_token_size = dispatched_shape[-2];
@@ -166,21 +206,66 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     //     [sender0, untilizer0_0..untilizer0_{k0-1}, sender1, untilizer1_0..untilizer1_{k1-1}, ...]
     //   ROW_MAJOR: first num_cores cores are senders, remaining are untilizer (for output-zeroing only).
     //     [sender0, sender1, untilizer0, untilizer1, untilizer2, ...]
-    // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
-    uint32_t sender_row_y = subdevice_cores.at(0).y;
-    std::vector<CoreCoord> all_row_cores;
+    // Lay the sender/untilizer groups along a 1-D line of worker cores taken from the (sub)device
+    // grid.  The subdevice is guaranteed to be a single line — first/last row OR first/last column —
+    // and the orientation is inferred here from the grid shape (no extra API flag is needed):
+    //   - single-column grid (all cores share x): use the whole column, ordered by y.
+    //   - single-row grid, or the default full 2-D worker grid (subdevice_id == None): use the first
+    //     row (smallest y), ordered by x — byte-identical to the previous behavior.
+    // Everything downstream is geometry-agnostic: it treats `all_row_cores` as an ordered line and
+    // addresses cores by absolute NOC coordinates, so a column needs no further changes.
+    uint32_t min_x = subdevice_cores.at(0).x, max_x = subdevice_cores.at(0).x;
+    uint32_t min_y = subdevice_cores.at(0).y, max_y = subdevice_cores.at(0).y;
     for (const auto& core : subdevice_cores) {
-        if (core.y == sender_row_y) {
-            all_row_cores.push_back(core);
-        }
+        min_x = std::min(min_x, (uint32_t)core.x);
+        max_x = std::max(max_x, (uint32_t)core.x);
+        min_y = std::min(min_y, (uint32_t)core.y);
+        max_y = std::max(max_y, (uint32_t)core.y);
     }
-    std::sort(
-        all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x; });
+    // The sender/untilizer pipeline is laid out along a single line of cores, so the worker
+    // subdevice must be a single row (first/last row) or single column (first/last column).
+    // A subdevice spanning both multiple rows and multiple columns has no defined line layout.
+    // The legacy no-subdevice path passes the full device worker grid (also 2-D) and is handled
+    // by taking its first row, so that case is exempted.
+    if ((max_x > min_x) && (max_y > min_y)) {
+        auto compute_grid = mesh_device->compute_with_storage_grid_size();
+        const bool is_full_worker_grid = min_x == 0 && min_y == 0 && max_x == compute_grid.x - 1 &&
+                                         max_y == compute_grid.y - 1 &&
+                                         subdevice_cores.size() == compute_grid.x * compute_grid.y;
+        TT_FATAL(
+            is_full_worker_grid,
+            "Combine requires the worker subdevice to be a single row (first/last row) or single column "
+            "(first/last column); a 2-D subdevice core grid spanning x=[{}, {}] y=[{}, {}] is not supported.",
+            min_x,
+            max_x,
+            min_y,
+            max_y);
+    }
+    const bool is_single_column = (min_x == max_x) && (max_y > min_y);
+
+    std::vector<CoreCoord> all_row_cores;
+    if (is_single_column) {
+        // First/last-column subdevice: every core shares x, so order the line by y.
+        all_row_cores = subdevice_cores;
+        std::sort(all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+            return a.y < b.y;
+        });
+    } else {
+        // First/last-row subdevice or full 2-D grid: take the first row, ordered by x (legacy path).
+        for (const auto& core : subdevice_cores) {
+            if (core.y == min_y) {
+                all_row_cores.push_back(core);
+            }
+        }
+        std::sort(all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+            return a.x < b.x;
+        });
+    }
 
     uint32_t total_row_cores = static_cast<uint32_t>(all_row_cores.size());
     TT_FATAL(
         total_row_cores > num_cores,
-        "Same-row has only {} cores for {} senders — need at least one untilizer core per sender",
+        "Worker line has only {} cores for {} senders — need at least one untilizer core per sender",
         total_row_cores,
         num_cores);
 
@@ -190,8 +275,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     std::vector<CoreCoord> all_untilizer_cores;
     std::vector<uint32_t> untilizer_sender_map;
 
-    if (is_tile_layout) {
-        // TILE_LAYOUT: divide into groups, sender at the start of each group
+    // Both TILE_LAYOUT and ROW_MAJOR route dispatched_buffer through the untilizer pipeline, so
+    // both use the same layout: divide the line into per-sender groups with the sender at the
+    // start of each group (every untilizer sits to the sender's right).  In ROW_MAJOR the untilizer
+    // reader page-copies rows into c_2 instead of untilizing, but the core layout is identical.
+    {
         uint32_t base_group_size = total_row_cores / num_cores;
         uint32_t extra_groups = total_row_cores % num_cores;
 
@@ -211,18 +299,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 pos++;
             }
         }
-    } else {
-        // ROW_MAJOR: first num_cores cores are senders, all remaining are untilizer
-        for (uint32_t s = 0; s < num_cores; s++) {
-            sender_cores.push_back(all_row_cores[s]);
-        }
-        for (uint32_t i = num_cores; i < total_row_cores; i++) {
-            // Distribute untilizer cores round-robin across senders (for output-zeroing)
-            uint32_t s = (i - num_cores) % num_cores;
-            sender_untilizer_groups[s].push_back(all_row_cores[i]);
-            all_untilizer_cores.push_back(all_row_cores[i]);
-            untilizer_sender_map.push_back(s);
-        }
     }
 
     // Cap each sender's untilizer group at MAX_UNTILIZERS_PER_SENDER (TILE_LAYOUT only).  Required to
@@ -231,8 +307,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // + 2 fabric sems for middle chips, totaling 6 + k_s.  Excess untilizers assigned by the
     // initial split above are dropped: their row cores stay in the worker grid but get no
     // untilizer kernels.  k_s[i] = min(k_s[i], MAX_UNTILIZERS_PER_SENDER).
-    constexpr uint32_t MAX_UNTILIZERS_PER_SENDER = 5;
-    if (is_tile_layout) {
+    constexpr uint32_t MAX_UNTILIZERS_PER_SENDER = 4;
+    {
         std::vector<CoreCoord> trimmed_all_untilizer_cores;
         std::vector<uint32_t> trimmed_untilizer_sender_map;
         for (uint32_t s = 0; s < num_cores; s++) {
@@ -251,7 +327,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     uint32_t num_untilizer_cores = static_cast<uint32_t>(all_untilizer_cores.size());
     TT_FATAL(
         num_untilizer_cores >= num_cores,
-        "Same-row has only {} untilizer cores for {} senders — need at least one untilizer core per sender",
+        "Worker line has only {} untilizer cores for {} senders — need at least one untilizer core per sender",
         num_untilizer_cores,
         num_cores);
     uint32_t untilizer_cores_per_sender = num_untilizer_cores / num_cores;
@@ -314,7 +390,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     uint32_t output_init_complete_semaphore_id = add_sema(sender_core_grid);
     uint32_t output_init_barrier_semaphore_id = add_sema(sender_core_grid);
 
-    const uint32_t read_batch_size = is_tile_layout ? dispatched_buffer.tensor_spec().tile().get_height() : 8;
+    // Rows per untilize batch.  Both layouts route through the untilizer pipeline and share the
+    // same receive_buf ring / sender polling loop, so ROW_MAJOR uses the same batch size as TILE
+    // (tile height = 32) rather than diverging.
+    const uint32_t read_batch_size =
+        is_tile_layout ? dispatched_buffer.tensor_spec().tile().get_height() : tt::constants::TILE_HEIGHT;
 
     // c_1: dispatched_metadata scratch (reader-only, batched DRAM reads)
     detail::create_tensor_cb(
@@ -356,11 +436,12 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         /*cb_id=*/tt::CBIndex::c_8,
         "expert_region_offsets");
 
-    if (is_tile_layout) {
+    {
         // c_18: per-sender receive buffer.  Partitioned into k_s 16-row regions, one per untilizer
         // core in this sender's group.  Untilizer i writes to slot j in its region at offset
         //   c_18_base + i * SLOTS_PER_UNTILIZER * aligned_output_page_size + j * aligned_output_page_size
-        // Size depends on k_s, so allocate per sender on its single-core CRS.
+        // Size depends on k_s, so allocate per sender on its single-core CRS.  Both layouts use the
+        // untilizer pipeline, so c_18/c_19 are always allocated (no sender-side dispatched_buffer CB).
         for (uint32_t s = 0; s < num_cores; s++) {
             uint32_t k_s = static_cast<uint32_t>(sender_untilizer_groups[s].size());
             CoreRangeSet single_sender_crs({CoreRange(sender_cores[s])});
@@ -384,15 +465,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 /*cb_id=*/tt::CBIndex::c_19,
                 "metadata_ring_sender_" + std::to_string(s));
         }
-    } else {
-        // c_0 on sender cores: dispatched_buffer rows for ROW_MAJOR DMA reads
-        detail::create_tensor_cb(
-            desc,
-            sender_core_grid,
-            dispatched_buffer,
-            /*buffering_factor=*/read_batch_size,
-            /*cb_id=*/tt::CBIndex::c_0,
-            "dispatched_buffer_sender");
     }
 
     // c_3: merged route_info + output_data (reader -> writer).
@@ -574,7 +646,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         std::vector<std::pair<uint32_t, uint32_t>> untilizer_noc_coords;
     };
     std::vector<SenderMcastCfg> sender_mcast_cfgs(num_cores);
-    if (is_tile_layout) {
+    {
         // Compute per-sender NOC multicast bounding box (min/max x,y over untilizer cores)
         // and collect individual untilizer core NOC coordinates for semaphore signaling.
         for (uint32_t s = 0; s < num_cores; s++) {
@@ -610,7 +682,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     uint32_t counter_ready_semaphore_id = 0;
     std::vector<std::vector<uint32_t>> data_ready_semaphore_ids(num_cores);
     std::vector<std::vector<uint32_t>> credits_semaphore_ids(num_cores);
-    if (is_tile_layout) {
+    {
         // counter_ready semaphore: created only on sender + untilizer cores so get_semaphore() returns
         // the same L1 offset on both sides (sender writes to untilizer's copy, untilizer waits on its own)
         std::set<CoreRange> sender_and_untilizer_ranges;
@@ -659,9 +731,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         --block_ct_dim;
     }
 
-    if (is_tile_layout) {
+    {
         // c_1 on untilizer cores: receives the expert_token_counts multicast from the owning sender.
-        // MUST be allocated BEFORE c_0 so its L1 address matches the sender's c_1 address.
+        // MUST be allocated BEFORE c_0/c_2 so its L1 address matches the sender's c_1 address.
+        // Both layouts use the untilizer pipeline, so these CBs are always allocated; only c_0
+        // (tile-input for the compute kernel) is TILE-only.
         {
             uint32_t counter_pages = detail::get_num_pages(expert_token_counts);
             uint32_t counter_page_size = detail::get_aligned_page_size(expert_token_counts);
@@ -678,17 +752,22 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 }}},
             });
         }
-        // c_0 on untilizer cores: dispatched_buffer tiles, sized for double-buffered block_ct_dim chunks.
-        detail::create_tensor_cb(
-            desc,
-            untilizer_core_grid,
-            dispatched_buffer,
-            /*buffering_factor=*/2 * block_ct_dim,
-            /*cb_id=*/tt::CBIndex::c_0,
-            "dispatched_buffer_untilizer");
-        // c_2 on untilizer cores: untilized output rows, double-buffered (2 × read_batch_size).
-        // Lets compute pack batch N+1 into the second half while writer_untilize is still
-        // routing batch N out of the first half — overlapping pack with NOC sends.
+        // c_0 on untilizer cores: dispatched_buffer tiles, sized for double-buffered block_ct_dim
+        // chunks.  TILE_LAYOUT only — the compute kernel reads c_0 and untilizes into c_2.  In
+        // ROW_MAJOR there is no compute kernel and reader_untilize writes rows straight into c_2,
+        // so c_0 is not allocated.
+        if (is_tile_layout) {
+            detail::create_tensor_cb(
+                desc,
+                untilizer_core_grid,
+                dispatched_buffer,
+                /*buffering_factor=*/2 * block_ct_dim,
+                /*cb_id=*/tt::CBIndex::c_0,
+                "dispatched_buffer_untilizer");
+        }
+        // c_2 on untilizer cores: untilized (TILE) or row-copied (ROW_MAJOR) output rows,
+        // double-buffered (2 × read_batch_size).  Lets the producer fill batch N+1 into the
+        // second half while writer_untilize is still routing batch N out of the first half.
         detail::create_tensor_cb(
             desc,
             untilizer_core_grid,
@@ -725,23 +804,28 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     uint32_t counter_offset =
         mesh_col_coord * experts_per_dispatch_group + mesh_row_coord * operation_attributes.experts_per_chip;
 
-    // reader_untilize + compute kernels only needed for TILE_LAYOUT
+    // reader_untilize runs on untilizer cores for BOTH layouts: TILE reads tiles into c_0 (for the
+    // compute kernel), ROW_MAJOR reads rows straight into c_2 (no compute).  The compute kernel
+    // itself is created TILE-only further below.
     std::vector<tt::tt_metal::KernelHandle> reader_untilize_kernel_ids;
-    if (is_tile_layout) {
+    {
         // Compile-time args layout for reader_untilize (matching reader_untilize.cpp):
         //   0-11: shared base (below, includes max_dispatch_buffer_token_size at 11)
-        //   12:   core_id   — local index within sender s's untilizer group (0..k_s-1)
-        //   13:   num_untilizer_cores — per-sender count k_s (for round-robin batch assignment)
-        //   14:   aligned_output_page_size
-        //   15:   aligned_experts_tok_counter_page_size
-        //   16:   cb_metadata_batch_id — CB this kernel pushes per-batch metadata pages into
-        //   17:   aligned_dispatched_metadata_page_size
-        //   18:   block_ct_dim — tiles per chunk pushed to cb_dispatched_buffer_id (matches the
+        //   12:   aligned_output_page_size
+        //   13:   aligned_experts_tok_counter_page_size
+        //   14:   cb_metadata_batch_id — CB this kernel pushes per-batch metadata pages into
+        //   15:   aligned_dispatched_metadata_page_size
+        //   16:   block_ct_dim — tiles per chunk pushed to cb_dispatched_buffer_id (matches the
         //                       compute kernel's per-block consumption)
-        //   19+:  TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for
+        //   17+:  TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for
         //         dispatched_metadata (no num_senders — single-sender kernel)
-        const uint32_t tile_height = dispatched_buffer.tensor_spec().tile().get_height();
-        const uint32_t tile_width = dispatched_buffer.tensor_spec().tile().get_width();
+        // ROW_MAJOR dispatched_buffer has no tile spec; use the hardware tile dims so the
+        // tile-aligned per-expert region math (start_token / tiles_per_batch) in reader_untilize
+        // matches the host's expert_region_offsets (cumsum of ceil(count, 32)*32) in both layouts.
+        const uint32_t tile_height =
+            is_tile_layout ? dispatched_buffer.tensor_spec().tile().get_height() : tt::constants::TILE_HEIGHT;
+        const uint32_t tile_width =
+            is_tile_layout ? dispatched_buffer.tensor_spec().tile().get_width() : tt::constants::TILE_WIDTH;
         const std::vector<uint32_t> reader_untilize_compile_time_args_base = {
             static_cast<uint32_t>(tt::CBIndex::c_1),           // 0:  cb_experts_tok_counter_id
             detail::get_num_pages(expert_token_counts),        // 1:  experts_tok_counter_pages
@@ -758,8 +842,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         };
 
         // Partitioned untilizer cores: each sender s owns a dedicated group of k_s untilizer cores.
-        // core_id is LOCAL within the sender's group (0..k_s-1) for round-robin batch assignment.
-        // num_untilizer_cores baked in as k_s so the kernel only considers its own group.
+        // The global round-robin (untilizer_global_pos / total_untilizers, passed as runtime args)
+        // drives batch assignment, so the kernel no longer needs core_id / num_untilizer_cores.
         // No num_senders arg — each kernel is bound to a single sender.
         reader_untilize_kernel_ids.reserve(num_untilizer_cores);
 
@@ -768,18 +852,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             uint32_t k_s = static_cast<uint32_t>(sender_untilizer_groups[s].size());
             for (uint32_t j = 0; j < k_s; j++, global_untilizer_idx++) {
                 auto per_core_args = reader_untilize_compile_time_args_base;
-                per_core_args.push_back(j);    // 12: core_id (local to sender s's group)
-                per_core_args.push_back(k_s);  // 13: num_untilizer_cores (per-sender)
-                per_core_args.push_back(detail::get_aligned_page_size(output_tensor));        // 14
-                per_core_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // 15
-                per_core_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // 16: cb_metadata_batch_id
-                per_core_args.push_back(detail::get_aligned_page_size(dispatched_metadata));  // 17
-                per_core_args.push_back(block_ct_dim);                                        // 18: block_ct_dim
-                // 19: cb_counter_total_pages = full page capacity of c_1 on the untilizer
+                per_core_args.push_back(detail::get_aligned_page_size(output_tensor));        // 12
+                per_core_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // 13
+                per_core_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // 14: cb_metadata_batch_id
+                per_core_args.push_back(detail::get_aligned_page_size(dispatched_metadata));  // 15
+                per_core_args.push_back(block_ct_dim);                                        // 16: block_ct_dim
+                // 17: cb_counter_total_pages = full page capacity of c_1 on the untilizer
                 // (counter pages + trailer page). Passed so reader_untilize can reserve / push /
                 // wait the entire CB, not just the counter slice.
                 per_core_args.push_back(detail::get_num_pages(expert_token_counts) + 1);  // cb_counter_total_pages
-                // 20+: TensorAccessorArgs for dispatched_buffer + dispatched_metadata
+                // 18+: TensorAccessorArgs for dispatched_buffer + dispatched_metadata
                 tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(per_core_args);
                 tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(per_core_args);
 
@@ -791,6 +873,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 reader_untilize_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
                 reader_untilize_kd.core_ranges = single_untilizer_core;
                 reader_untilize_kd.compile_time_args = std::move(per_core_args);
+                reader_untilize_kd.defines = {{"IS_TILE_LAYOUT", is_tile_layout ? "1" : "0"}};
                 reader_untilize_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
                     .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
@@ -804,13 +887,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     std::map<std::string, std::string> writer_defines = fabric_defines;
     writer_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
 
-    // writer_untilize kernel is launched whenever either:
-    //   (a) init_zeros=True — it does the per-bank output-zeroing of the output tensor
-    //   (b) is_tile_layout — it runs the post-output-zeroing untilized-data send loop
-    //                        (consumes cb_untilize_id, writes back to the sender's c_18).
-    // With init_zeros=False on TILE_LAYOUT only (b) applies, so the output-zeroing CBs/semaphore
-    // are skipped and the kernel is compiled with INIT_ZEROS=0.
-    const bool create_writer_untilize_kernel = init_zeros || is_tile_layout;
+    // writer_untilize runs on untilizer cores for BOTH layouts now: it consumes cb_untilize_id
+    // (c_2 — produced by the compute kernel in TILE, or directly by reader_untilize in ROW_MAJOR)
+    // and forwards each row to the owning sender's receive_buf (c_18) / metadata ring (c_19).  It
+    // also performs the optional per-bank output-zeroing when init_zeros=True (INIT_ZEROS define).
+    const bool create_writer_untilize_kernel = true;
 
     if (init_zeros) {
         uint32_t noc_max_burst_size;
@@ -863,9 +944,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_untilize_compile_time_args);
 
-        // Tile-layout-only compile-time args used by the post-output-zeroing untilized-data send loop.
-        // In ROW_MAJOR the corresponding #if IS_TILE_LAYOUT block is compiled out, so these
-        // trailing args are ignored — still pushed unconditionally to keep the kernel object stable.
+        // Compile-time args for the untilized-data send loop, which now runs for BOTH layouts
+        // (writer_untilize forwards cb_untilize_id rows to the sender regardless of layout).
         writer_untilize_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_2));  // cb_untilize_id
         writer_untilize_compile_time_args.push_back(
             static_cast<uint32_t>(tt::CBIndex::c_1));  // cb_experts_tok_counter_id
@@ -920,16 +1000,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         reader_compile_time_args_base.push_back(
             num_untilizer_cores);  // num_total_untilizer_cores (both layouts need this)
     }
-    // num_untilizer_cores (per-sender k_s) and cb_untilize_id are appended per-sender below (TILE_LAYOUT only).
+    // num_untilizer_cores (per-sender k_s) and the c_18/c_19 ring CBs are appended per-sender below.
 
-    // One reader_combine kernel per sender.  For TILE_LAYOUT, k_s (per-sender untilizer count)
-    // is baked in as num_untilizer_cores so the sender only round-robins across its own dedicated
-    // untilizer cores.  For ROW_MAJOR, no untilizer-core args are needed.
+    // One reader_combine kernel per sender.  k_s (per-sender untilizer count) is baked in as
+    // num_untilizer_cores so the sender only round-robins across its own dedicated untilizer
+    // cores.  Both layouts use the untilizer-fed sender path, so these args are always appended.
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     reader_kernel_ids.reserve(num_cores);
     for (uint32_t s = 0; s < num_cores; s++) {
         auto per_sender_compile_args = reader_compile_time_args_base;
-        if (is_tile_layout) {
+        {
             uint32_t k_s = static_cast<uint32_t>(sender_untilizer_groups[s].size());
             per_sender_compile_args.push_back(k_s);  // num_untilizer_cores (per-sender)
             per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_untilize_id
@@ -1015,6 +1095,39 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         sender_noc_coords.emplace_back(noc_coord.x, noc_coord.y);
     }
 
+    // Global interleaved position of each untilizer core in rank-major / sender-minor order
+    // [S0.U0, S1.U0, S0.U1, S1.U1, …]: every untilizer core processes batches global_pos, +G,
+    // +2G, … of every expert (G = num_untilizer_cores, the total untilizer-core count).  Spreading
+    // consecutive batches of an expert across senders keeps either sender's forwarder from getting
+    // a monopoly of local (or remote) rows regardless of how dispatch clustered them; each sender's
+    // batch share is proportional to its untilizer-core count.  Indexed by untilizer idx so both
+    // the writer_untilize loop and the reader_untilize/compute loop below agree on the same value.
+    std::vector<uint32_t> untilizer_global_pos(num_untilizer_cores, 0);
+    {
+        uint32_t max_k = 0;
+        for (uint32_t s = 0; s < num_cores; s++) {
+            max_k = std::max(max_k, static_cast<uint32_t>(sender_untilizer_groups[s].size()));
+        }
+        std::vector<std::vector<uint32_t>> pos_by_sender_rank(num_cores);
+        for (uint32_t s = 0; s < num_cores; s++) {
+            pos_by_sender_rank[s].resize(sender_untilizer_groups[s].size());
+        }
+        uint32_t pos = 0;
+        for (uint32_t r = 0; r < max_k; r++) {
+            for (uint32_t s = 0; s < num_cores; s++) {
+                if (r < sender_untilizer_groups[s].size()) {
+                    pos_by_sender_rank[s][r] = pos++;
+                }
+            }
+        }
+        std::vector<uint32_t> rank_counter(num_cores, 0);
+        for (uint32_t idx = 0; idx < num_untilizer_cores; idx++) {
+            uint32_t s = untilizer_sender_map[idx];
+            uint32_t r = rank_counter[s]++;
+            untilizer_global_pos[idx] = pos_by_sender_rank[s][r];
+        }
+    }
+
     // Set runtime args for hybrid untilizer row cores.  Three layouts are possible:
     //   init_zeros && tile_layout: [output_addr, page_start, page_end, output_init_done_sem,
     //                               (sender_noc_x, sender_noc_y) * num_cores,
@@ -1046,13 +1159,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 }
             }
 
-            // TILE_LAYOUT: append owning-sender info so writer_untilize can run its send loop.
-            // In ROW_MAJOR the trailing args are ignored (kernel compiled with IS_TILE_LAYOUT=0).
-            if (is_tile_layout) {
+            // Append owning-sender info so writer_untilize can run its send loop.  Both layouts
+            // forward c_2 rows to the sender, so these args are always pushed.
+            {
                 uint32_t s = untilizer_sender_map[untilizer_idx];
-                uint32_t k_s = static_cast<uint32_t>(sender_untilizer_groups[s].size());
-                uint32_t expert_start = s * experts_per_core_range;
-                uint32_t expert_end = std::min((s + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
+                // Every sender now processes EVERY expert (full range); the per-expert work is
+                // split across senders by data instead — sender s handles batch-chunk s of each
+                // expert (see sender_idx / num_senders below).
+                uint32_t expert_start = 0;
+                uint32_t expert_end = operation_attributes.experts_per_chip;
                 // core_id = this untilizer core's local index within sender s's group (0..k_s-1).
                 uint32_t local_core_id = 0;
                 for (uint32_t j = 0; j < untilizer_idx; j++) {
@@ -1066,9 +1181,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 writer_untilize_runtime_args.push_back(data_ready_semaphore_ids[s][local_core_id]);
                 writer_untilize_runtime_args.push_back(credits_semaphore_ids[s][local_core_id]);
                 writer_untilize_runtime_args.push_back(local_core_id);
-                writer_untilize_runtime_args.push_back(k_s);           // num_untilizer_cores
                 writer_untilize_runtime_args.push_back(expert_start);  // expert_start_idx
                 writer_untilize_runtime_args.push_back(expert_end);    // expert_end_idx
+                writer_untilize_runtime_args.push_back(untilizer_global_pos[untilizer_idx]);  // global batch start
+                writer_untilize_runtime_args.push_back(num_untilizer_cores);                  // global batch stride (G)
             }
 
             desc.kernels[writer_untilize_kernel_id].emplace_runtime_args(
@@ -1078,8 +1194,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     uint32_t core_idx = 0;
     for (const auto& sender_core : sender_cores) {
-        uint32_t expert_start = core_idx * experts_per_core_range;
-        uint32_t expert_end = std::min((core_idx + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
+        // Sender kernels (reader_combine / writer_combine) are expert-range agnostic — they only
+        // poll their untilizer group's receive_buf and fabric-forward whatever rows arrive — so
+        // they get the full expert range now that the per-expert split is by data, not by expert.
+        uint32_t expert_start = 0;
+        uint32_t expert_end = operation_attributes.experts_per_chip;
 
         // Reader RT args.  Tensor buffer addresses are pushed as Buffer* so the
         // framework records BufferBindings for the O(1) cache-hit fast path.
@@ -1101,7 +1220,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             reader_runtime_args.push_back(sender_page_end);
             reader_runtime_args.push_back(output_init_done_semaphore_id);
         }
-        if (is_tile_layout) {
+        {
             // Multicast targets only this sender's dedicated untilizer group
             const auto& mcast_cfg = sender_mcast_cfgs[core_idx];
             reader_runtime_args.push_back(counter_ready_semaphore_id);
@@ -1147,33 +1266,45 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
 
         if (num_links > 0) {
-            uint32_t core_link = core_idx % num_links;
+            // Combine-axis neighbors (each a distinct fabric direction) as fabric nodes.
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             for (const auto& neighbor_coordinate : neighbors) {
                 if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
                     continue;
                 }
-
-                log_debug(
-                    tt::LogOp,
-                    "Combine connection: ({}, {}) -> ({}, {}) core {} link {} experts [{}, {})",
-                    mesh_coordinate[0],
-                    mesh_coordinate[1],
-                    neighbor_coordinate[0],
-                    neighbor_coordinate[1],
-                    sender_core,
-                    core_link,
-                    expert_start,
-                    expert_end);
-
-                // ProgramDescriptor specialization: appends fabric-routing args
-                // onto writer_runtime_args_raw and patches desc-side bookkeeping.
-                tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+            }
+            const uint32_t core_link = core_idx % num_links;
+            if (is_2d_fabric) {
+                // Portable RoutingPlaneConnectionManager path: one connection per combine-axis neighbor
+                // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
+                // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
+                // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
+                // appended args. Pick a forwarding link valid for each neighbor's own direction (see
+                // compute_per_neighbor_forwarding_links above) rather than broadcasting one {core_link}.
+                const std::vector<uint32_t> per_conn_links =
+                    compute_per_neighbor_forwarding_links(src_fabric_node_id, dst_nodes, core_link, "combine-axis");
+                writer_runtime_args_raw.push_back(static_cast<uint32_t>(dst_nodes.size()));
+                tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,
-                    mesh_device->get_fabric_node_id(neighbor_coordinate),
-                    core_link,
+                    dst_nodes,
+                    per_conn_links,
                     desc,
+                    writer_kernel_id,
                     sender_core,
                     writer_runtime_args_raw);
+                log_debug(
+                    tt::LogOp,
+                    "FABRIC_2D combine writer: src={} num_connections={} core_link={}",
+                    src_fabric_node_id,
+                    dst_nodes.size(),
+                    core_link);
+            } else {
+                // Legacy per-direction array connection (FABRIC_1D linear/ring — never deadlocked).
+                for (const auto& dst_node : dst_nodes) {
+                    tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                        src_fabric_node_id, dst_node, core_link, desc, sender_core, writer_runtime_args_raw);
+                }
             }
         }
 
@@ -1198,17 +1329,21 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         core_idx++;
     }
 
-    // Set runtime args for untilizer cores (TILE_LAYOUT only — reader_untilize kernel).
+    // Set runtime args for untilizer cores (both layouts — reader_untilize kernel).
     // Layout: counter_ready_sem, dispatched_buffer_addr, expert_start, expert_end,
     //         dispatched_metadata_addr.
     // Sender NOC coords and per-sender data_ready/start semaphores are now consumed by
-    // writer_untilize on the same core (which owns the untilized-data send).
-    if (is_tile_layout) {
+    // writer_untilize on the same core (which owns the untilized-data send).  The compute
+    // kernel exists only in TILE_LAYOUT, so its runtime args are set under that guard below.
+    {
         for (uint32_t j = 0; j < num_untilizer_cores; j++) {
             uint32_t s = untilizer_sender_map[j];
             uint32_t k_s = static_cast<uint32_t>(sender_untilizer_groups[s].size());
-            uint32_t expert_start = s * experts_per_core_range;
-            uint32_t expert_end = std::min((s + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
+            // Full expert range on every untilizer core; the per-expert work is split across
+            // senders by data — sender s's group handles batch-chunk s of each expert (sender_idx /
+            // num_senders below), then round-robins those batches across its k_s untilizer cores.
+            uint32_t expert_start = 0;
+            uint32_t expert_end = operation_attributes.experts_per_chip;
             // local_core_id: this untilizer's index within sender s's group, found by counting prior
             // untilizer_idxs that map to the same sender (untilizer_row_cores is grouped by sender).
             uint32_t local_core_id = 0;
@@ -1217,9 +1352,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                     local_core_id++;
                 }
             }
-            // Reader_untilize RT args (5):
+            // Reader_untilize RT args (7):
             //   [0]: counter_ready_sem, [1]: dispatched_buffer*, [2]: expert_start,
-            //   [3]: expert_end,        [4]: dispatched_metadata*.
+            //   [3]: expert_end,        [4]: dispatched_metadata*, [5]: sender_idx, [6]: num_senders.
             // Buffers pushed as Buffer* so the framework records BufferBindings for the
             // cache-hit fast path.
             tt::tt_metal::KernelDescriptor::RTArgList untilizer_rt_args;
@@ -1228,19 +1363,26 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             untilizer_rt_args.push_back(expert_start);
             untilizer_rt_args.push_back(expert_end);
             untilizer_rt_args.push_back(dispatched_metadata.buffer());
+            untilizer_rt_args.push_back(untilizer_global_pos[j]);  // global batch start
+            untilizer_rt_args.push_back(num_untilizer_cores);      // global batch stride (G)
             desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(
                 untilizer_row_cores[j], untilizer_rt_args);
 
             // Compute kernel walks the same expert/batch iteration as reader_untilize and
             // writer_untilize (no per-batch signal CB).  Per-sender k_s + local_core_id drive
-            // round-robin batch assignment within the group.
-            tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
-            compute_rt_args.push_back(expert_start);
-            compute_rt_args.push_back(expert_end);
-            compute_rt_args.push_back(local_core_id);
-            compute_rt_args.push_back(k_s);
-            desc.kernels[untilize_compute_kernel_id].emplace_runtime_args(
-                untilizer_row_cores[j], compute_rt_args);
+            // round-robin batch assignment within the group; sender_idx / num_senders select this
+            // group's data chunk within each expert.  TILE_LAYOUT only — ROW_MAJOR has no compute
+            // kernel (reader_untilize writes rows straight into c_2).
+            if (is_tile_layout) {
+                tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
+                compute_rt_args.push_back(expert_start);
+                compute_rt_args.push_back(expert_end);
+                compute_rt_args.push_back(local_core_id);
+                compute_rt_args.push_back(k_s);
+                compute_rt_args.push_back(untilizer_global_pos[j]);  // global batch start
+                compute_rt_args.push_back(num_untilizer_cores);      // global batch stride (G)
+                desc.kernels[untilize_compute_kernel_id].emplace_runtime_args(untilizer_row_cores[j], compute_rt_args);
+            }
         }
     }
 

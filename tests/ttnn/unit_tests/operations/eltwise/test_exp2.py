@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 import numpy as np
-from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose, flush_subnormal_values_to_zero
 
 
 def test_exp2_arange_masking(device):
@@ -108,6 +108,110 @@ def test_exp2_atol(input_shapes, low, high, device):
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
     assert_allclose(tt_result, golden, rtol=1e-2, atol=1e-3)
+
+
+def test_exp2_fp32_accuracy(device):
+    low = -126.0
+    high = 127.0
+
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    bf16_promoted_inputs = all_bitpatterns.view(torch.bfloat16).to(torch.float32)
+
+    mask = (bf16_promoted_inputs >= low) & (bf16_promoted_inputs <= high)
+    bf16_promoted_inputs = bf16_promoted_inputs[mask]
+
+    dense_fp32_inputs = torch.cat(
+        [
+            torch.linspace(low, high, 4096, dtype=torch.float32),
+            torch.linspace(-5.0, 5.0, 4096, dtype=torch.float32),
+            torch.linspace(-0.5, 0.5, 4096, dtype=torch.float32),
+        ]
+    )
+    boundary_inputs = torch.tensor(
+        [
+            low,
+            -10.0,
+            -1.0,
+            -0.75,
+            -0.5,
+            -0.25,
+            -0.0,
+            0.0,
+            0.25,
+            0.5,
+            0.75,
+            1.0,
+            10.0,
+            high,
+        ],
+        dtype=torch.float32,
+    )
+    input_tensor = torch.cat([bf16_promoted_inputs, dense_fp32_inputs, boundary_inputs]).unique()
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.exp2(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert_with_ulp(golden, result, 1)
+
+
+def test_exp2_fp32_special_values(device):
+    positive_nan = torch.tensor(float("nan"), dtype=torch.float32)
+    negative_nan = -positive_nan
+    input_tensor = torch.cat(
+        [
+            torch.tensor(
+                [
+                    -float("inf"),
+                    -149.0,
+                    -127.0,
+                    -126.0,
+                    -0.25,
+                    -0.0,
+                    0.0,
+                    0.25,
+                    1.0,
+                    127.0,
+                    float.fromhex("0x1.fffffep+6"),  # largest float32 below 128: finite, near FLT_MAX
+                    128.0,
+                    float("inf"),
+                ],
+                dtype=torch.float32,
+            ),
+            positive_nan.reshape(1),
+            negative_nan.reshape(1),
+        ]
+    )
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = golden_function(input_tensor, device=device)
+    golden = flush_subnormal_values_to_zero(golden)
+
+    tt_result = ttnn.exp2(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert torch.equal(torch.isnan(result), torch.isnan(golden))
+    assert torch.equal(torch.isposinf(result), torch.isposinf(golden))
+    assert torch.equal(torch.isneginf(result), torch.isneginf(golden))
+    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
 
 
 # Targeted edge-case coverage for the optimised exp2 (see #44507).

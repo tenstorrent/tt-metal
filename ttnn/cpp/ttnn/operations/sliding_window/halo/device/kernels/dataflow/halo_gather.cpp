@@ -336,7 +336,13 @@ void kernel_main() {
         }
     }
 
-    if constexpr (skip_untilize) {
+    // src_cb is the resident input shard, read in place by both split readers. Only the
+    // block_start_offset == 0 reader does the reserve/push bookkeeping that marks it ready, so only
+    // that reader waits on (and later pops) it; the other reader reads the already-resident shard
+    // directly. Confining the wait/pop to the single producing reader keeps the shared input CB's
+    // received/acked counts balanced and avoids a cross-reader race on the shared read pointer (a
+    // pop from one reader must not retire pages the other reader is still waiting on).
+    if constexpr (skip_untilize && block_start_offset == 0) {
         src_cb.wait_front(in_nsticks);
     }
 
@@ -357,4 +363,11 @@ void kernel_main() {
 
     noc.async_read_barrier();
     noc.async_write_barrier();
+
+    // Balance the reserve/push + wait above on the single producing reader. The other split
+    // reader never waited src_cb, so it has nothing to pop and the shared read pointer is only
+    // advanced once, after this reader's reads are complete.
+    if constexpr (skip_untilize && block_start_offset == 0) {
+        src_cb.pop_front(in_nsticks);
+    }
 }

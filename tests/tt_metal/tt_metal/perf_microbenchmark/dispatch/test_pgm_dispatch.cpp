@@ -64,6 +64,8 @@ using namespace tt::tt_metal::distributed;
 
 static bool dump_test_info = false;
 
+static bool slow_dispatch_enabled() { return std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr; }
+
 struct TestInfo {
     uint32_t iterations = DEFAULT_ITERATIONS;
     uint32_t warmup_iterations = DEFAULT_WARMUP_ITERATIONS;
@@ -689,7 +691,10 @@ static int pgm_dispatch(T& state, TestInfo info) {
         const ChipId device_id = 0;
         const std::size_t cq_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-        size_t trace_region_size = 1'000'000'000;
+        // load_prefetcher_test captures hundreds of programs in a single trace to overflow the
+        // prefetcher cache; the captured trace is ~1.03 GB on wormhole_b0 (refs #46983), so the
+        // region must comfortably exceed 1 GB.
+        size_t trace_region_size = 1'500'000'000;
         std::string arch_name = tt::tt_metal::hal::get_arch_name();
         if (arch_name == std::string("blackhole")) {
             // Blackhole has more cores, so we need more room to store RTAs.
@@ -1055,8 +1060,17 @@ int main(int argc, char** argv) {
     if (test_args::has_command_option(input_args, "--custom")) {
         TestInfo info;
         init(input_args, info);
+        if (info.use_trace && slow_dispatch_enabled()) {
+            log_info(tt::LogTest, "Trace capture is not supported for slow dispatch; skipping test");
+            return 0;
+        }
         FakeBenchmarkState state;
         return pgm_dispatch(state, info);
+    }
+
+    if (slow_dispatch_enabled()) {
+        log_info(tt::LogTest, "Program dispatch trace benchmarks are not supported for slow dispatch; skipping suite");
+        return 0;
     }
 
     if (test_args::has_command_option(input_args, "--dump-test-info")) {

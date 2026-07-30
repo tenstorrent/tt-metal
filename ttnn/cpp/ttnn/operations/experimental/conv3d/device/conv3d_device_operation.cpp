@@ -216,7 +216,7 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         total_cores);
 }
 
-TensorSpec Conv3dDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     const auto& input_tensor_a_shape = input_tensor_a.logical_shape();
@@ -236,7 +236,7 @@ TensorSpec Conv3dDeviceOperation::compute_output_specs(
     const auto& memory_config = args.output_mem_config;
     auto dtype = args.dtype;
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config, output_shape, padded_output_shape));
@@ -245,24 +245,6 @@ TensorSpec Conv3dDeviceOperation::compute_output_specs(
 Tensor Conv3dDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
-}
-
-ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& weight_tensor = tensor_args.weight_tensor;
-    const auto& bias_tensor = tensor_args.bias_tensor;
-    operation::Hash hash = operation::hash_operation<Conv3dDeviceOperation>(
-        args,
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_tensor.logical_shape(),
-        weight_tensor.dtype(),
-        weight_tensor.memory_config(),
-        weight_tensor.logical_shape(),
-        bias_tensor.has_value());
-
-    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv3dDeviceOperation::create_op_performance_model(

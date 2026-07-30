@@ -27,7 +27,7 @@ uint32_t get_num_pages(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->num
 uint32_t get_page_size(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->page_size(); }
 uint32_t get_aligned_page_size(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->aligned_page_size(); }
 
-std::string serialize_physical_core_coords(const std::vector<CoreCoord>& cores, tt::tt_metal::IDevice* device) {
+std::string serialize_physical_core_coords(const std::vector<tt::tt_metal::CoreCoord>& cores, tt::tt_metal::IDevice* device) {
     std::vector<uint32_t> flat_physical_core_coords;
     flat_physical_core_coords.reserve(2 * cores.size());
 

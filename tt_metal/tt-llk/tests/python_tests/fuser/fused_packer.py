@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
     from .block_data import BlockData
-    from .compute_node import ComputeNode
+    from .pack_node import PackNode
 
 from helpers.golden_generators import PackGolden
 from helpers.tilize_untilize import tilize_block, untilize_block
@@ -42,19 +42,31 @@ class Packer:
     @staticmethod
     def _l1_acc_golden(
         tensor: torch.Tensor,
+        pack_node: "PackNode",
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
         """Golden helper: simulate L1 accumulation across blocks."""
-        output_dims = operation.output.dimensions
-        output_format = operation.output.data_format
-        tile_size = operation.output.tile_shape.total_tile_size()
-        tile_count_x = operation.output.tile_count_x
-        tile_count_y = operation.output.tile_count_y
+        output_dims = pack_node.output.dimensions
+        output_format = pack_node.output.data_format
+        tile_size = pack_node.output.tile_shape.total_tile_size()
+        tile_count_x = pack_node.output.tile_count_x
+        tile_count_y = pack_node.output.tile_count_y
         block_tiles_x = operation.block_tiles_x
         block_tiles_y = operation.block_tiles_y
 
-        tensor = tilize_block(tensor, output_dims, output_format).flatten()
+        tile_dims = (
+            pack_node.output.tile_shape.total_row_dim(),
+            pack_node.output.tile_shape.total_col_dim(),
+        )
+        num_faces = pack_node.output.tile_shape.total_num_faces()
+        tensor = tilize_block(
+            tensor,
+            output_dims,
+            output_format,
+            num_faces=num_faces,
+            tile_dimensions=tile_dims,
+        ).flatten()
         tile_grid = tensor.view(tile_count_y, tile_count_x, tile_size)
 
         accumulated = torch.zeros(
@@ -70,18 +82,24 @@ class Packer:
             tile_count_y, tile_count_x, tile_size, dtype=tensor.dtype
         )
         result_grid[:block_tiles_y, :block_tiles_x] = accumulated
-        return untilize_block(result_grid.flatten(), output_format, output_dims)
+        return untilize_block(
+            result_grid.flatten(),
+            output_format,
+            output_dims,
+            tile_dimensions=tile_dims,
+            num_faces=num_faces,
+        )
 
     @staticmethod
     def _relu_golden(
         tensor: torch.Tensor,
-        operation: "FusedOperation",
+        pack_node: "PackNode",
         config: "GlobalConfig",
     ) -> torch.Tensor:
         """Golden helper: apply packer ReLU activation."""
-        intermediate_format = config.sentinel.golden_format.pack_src
+        intermediate_format = config.sentinel.golden_pack_src
         relu_config = PackGolden.generate_relu_config(
-            operation.pack_relu, operation.relu_threshold, intermediate_format
+            pack_node.pack_relu, pack_node.relu_threshold, intermediate_format
         )
         return PackGolden.apply_relu(tensor, relu_config, intermediate_format)
 
@@ -97,6 +115,7 @@ class Packer:
     def golden(
         self,
         tensor: torch.Tensor,
+        pack_node: "PackNode",
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
@@ -104,15 +123,15 @@ class Packer:
 
         Returns the tensor after applying pack transforms.
         Override and call _relu_golden() or _l1_acc_golden()
-        as needed based on the operation config.
+        as needed based on the pack_node config.
         """
         return tensor
 
     def init(
         self,
+        pack_node: "PackNode",
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that initializes the packer before the pack loop.
@@ -124,9 +143,9 @@ class Packer:
 
     def pack(
         self,
+        pack_node: "PackNode",
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that packs a single tile from dest to L1.
@@ -140,9 +159,9 @@ class Packer:
 
     def uninit(
         self,
+        pack_node: "PackNode",
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that uninitializes the packer after the pack loop.

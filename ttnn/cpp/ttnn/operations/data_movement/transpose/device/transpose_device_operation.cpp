@@ -84,13 +84,14 @@ MemoryConfig derive_effective_output_memory_config(
             const bool tile_aligned = adjusted->shape[0] % tt::constants::TILE_HEIGHT == 0 &&
                                       adjusted->shape[1] % tt::constants::TILE_WIDTH == 0;
             if (!tile_layout || tile_aligned) {
-                return output_mem_config.with_shard_spec(std::move(adjusted));
+                return MemoryConfig(
+                    output_mem_config.memory_layout(), output_mem_config.buffer_type(), std::move(adjusted));
             }
         }
     }
     auto shard_spec =
         generate_transpose_shard_spec(input_tensor, output_padded_shape, output_mem_config.memory_layout());
-    return output_mem_config.with_shard_spec(shard_spec);
+    return MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
 }
 
 }  // namespace
@@ -204,13 +205,13 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec TransposeDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec TransposeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto output_mem_config = derive_effective_output_memory_config(operation_attributes, tensor_args);
     const auto [output_shape, output_padded_shape] = transposed_shapes(input_tensor, operation_attributes.dim);
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),

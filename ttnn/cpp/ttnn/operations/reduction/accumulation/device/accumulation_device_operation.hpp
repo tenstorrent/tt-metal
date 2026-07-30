@@ -26,7 +26,7 @@ using namespace ttsl;
 struct AccumulationDeviceOperation {
     using operation_attributes_t = AccumulationParams;
     using tensor_args_t = AccumulationInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct AccumulationProgramFactory {
@@ -60,8 +60,6 @@ struct AccumulationDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 ttnn::Tensor accumulation(

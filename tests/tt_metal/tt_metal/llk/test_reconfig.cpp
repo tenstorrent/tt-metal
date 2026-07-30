@@ -288,7 +288,7 @@ bool single_core_reconfig(
         packed_golden0 = pack_vector<uint32_t, bfloat16>(golden0_bfp16);
     }
     // Pack out1 vector:
-    std::vector<uint32_t> packed_golden1 = pack_as_bfp8_tiles(tt::stl::make_const_span(golden1), true, false);
+    std::vector<uint32_t> packed_golden1 = pack_as_bfp8_tiles(ttsl::make_const_span(golden1), true, false);
 
     // ////////////////////////////////////////////////////////////////////////////
     // //                      Compile and Execute Application
@@ -382,18 +382,18 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, f16_dram_cfg, mesh_device.get());
 
-    constexpr const char* INP0_DFB = "in0";
-    constexpr const char* INP1_DFB = "in1";
-    constexpr const char* INP2_DFB = "in2";
-    constexpr const char* INP3_DFB = "in3";
-    constexpr const char* INP4_DFB = "in4";
-    constexpr const char* INP5_DFB = "in5";
-    constexpr const char* OUT_DFB = "out";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INP0_DFB{"in0"};
+    const experimental::DFBSpecName INP1_DFB{"in1"};
+    const experimental::DFBSpecName INP2_DFB{"in2"};
+    const experimental::DFBSpecName INP3_DFB{"in3"};
+    const experimental::DFBSpecName INP4_DFB{"in4"};
+    const experimental::DFBSpecName INP5_DFB{"in5"};
+    const experimental::DFBSpecName OUT_DFB{"out"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
-    auto make_f16_input_dfb = [&](const std::string& name) {
+    auto make_f16_input_dfb = [&](const experimental::DFBSpecName& name) {
         return experimental::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = f16_tile_size,
@@ -401,7 +401,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
             .data_format_metadata = tt::DataFormat::Float16_b,
         };
     };
-    auto make_f32_input_dfb = [&](const std::string& name) {
+    auto make_f32_input_dfb = [&](const experimental::DFBSpecName& name) {
         return experimental::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = f32_tile_size,
@@ -424,10 +424,10 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
 
     using DFBEndpoint = experimental::DFBEndpointType;
     using DFBAccess = experimental::DFBAccessPattern;
-    auto dfb_binding = [](const std::string& name, DFBEndpoint endpoint) {
+    auto dfb_binding = [](const experimental::DFBSpecName& name, DFBEndpoint endpoint) {
         return experimental::DFBBinding{
             .dfb_spec_name = name,
-            .accessor_name = name,
+            .accessor_name = name.get(),
             .endpoint_type = endpoint,
             .access_pattern = DFBAccess::STRIDED,
         };
@@ -459,16 +459,12 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
                   "src5_addr",
                   "src5_bank_id",
                   "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB, INP3_DFB, INP4_DFB, INP5_DFB}}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
@@ -477,10 +473,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
             .access_pattern = DFBAccess::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     experimental::KernelSpec compute_spec{
@@ -496,12 +489,12 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
              dfb_binding(INP5_DFB, DFBEndpoint::CONSUMER),
              dfb_binding(OUT_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode =
-                    {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
-                     {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+            experimental::ComputeGen2Config{
+                .fpu_math_fidelity = MathFidelity::HiFi4,
+                .enable_32_bit_dest = true,
+                .unpack_modes =
+                    {{INP2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+                     {INP3_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}},
             },
     };
 
@@ -602,36 +595,30 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
-                       {"src0_bank_id", 0u},
-                       {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
-                       {"src1_bank_id", 0u},
-                       {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
-                       {"src2_bank_id", 0u},
-                       {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
-                       {"src3_bank_id", 0u},
-                       {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
-                       {"src4_bank_id", 0u},
-                       {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
-                       {"src5_bank_id", 0u},
-                       {"num_tiles", 1u}}}},
+            .kernel = READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
+                 {"src1_bank_id", 0u},
+                 {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
+                 {"src2_bank_id", 0u},
+                 {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
+                 {"src3_bank_id", 0u},
+                 {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
+                 {"src4_bank_id", 0u},
+                 {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
+                 {"src5_bank_id", 0u},
+                 {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", static_cast<uint32_t>(out_dram->address())},
-                       {"bank_id", 0u},
-                       {"num_tiles", kNumOps}}}},
+            .kernel = WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", static_cast<uint32_t>(out_dram->address())}, {"bank_id", 0u}, {"num_tiles", kNumOps}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, params);
 
@@ -708,22 +695,22 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     auto out1_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
     auto out2_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
 
-    constexpr const char* INP0_DFB = "in0";
-    constexpr const char* INP1_DFB = "in1";
-    constexpr const char* INP2_DFB = "in2";
-    constexpr const char* INP3_DFB = "in3";
-    constexpr const char* INP4_DFB = "in4";
-    constexpr const char* INP5_DFB = "in5";
-    constexpr const char* OUT0_DFB = "out0";
-    constexpr const char* OUT1_DFB = "out1";
-    constexpr const char* OUT2_DFB = "out2";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER0 = "writer0";
-    constexpr const char* WRITER1 = "writer1";
-    constexpr const char* WRITER2 = "writer2";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INP0_DFB{"in0"};
+    const experimental::DFBSpecName INP1_DFB{"in1"};
+    const experimental::DFBSpecName INP2_DFB{"in2"};
+    const experimental::DFBSpecName INP3_DFB{"in3"};
+    const experimental::DFBSpecName INP4_DFB{"in4"};
+    const experimental::DFBSpecName INP5_DFB{"in5"};
+    const experimental::DFBSpecName OUT0_DFB{"out0"};
+    const experimental::DFBSpecName OUT1_DFB{"out1"};
+    const experimental::DFBSpecName OUT2_DFB{"out2"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER0{"writer0"};
+    const experimental::KernelSpecName WRITER1{"writer1"};
+    const experimental::KernelSpecName WRITER2{"writer2"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
-    auto make_f16_input_dfb = [&](const std::string& name) {
+    auto make_f16_input_dfb = [&](const experimental::DFBSpecName& name) {
         return experimental::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = f16_tile_size,
@@ -731,7 +718,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
             .data_format_metadata = tt::DataFormat::Float16_b,
         };
     };
-    auto make_f32_input_dfb = [&](const std::string& name) {
+    auto make_f32_input_dfb = [&](const experimental::DFBSpecName& name) {
         return experimental::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = f32_tile_size,
@@ -766,29 +753,23 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 
     using DFBEndpoint = experimental::DFBEndpointType;
     using DFBAccess = experimental::DFBAccessPattern;
-    auto dfb_binding = [](const std::string& name, DFBEndpoint endpoint) {
+    auto dfb_binding = [](const experimental::DFBSpecName& name, DFBEndpoint endpoint) {
         return experimental::DFBBinding{
             .dfb_spec_name = name,
-            .accessor_name = name,
+            .accessor_name = name.get(),
             .endpoint_type = endpoint,
             .access_pattern = DFBAccess::STRIDED,
         };
     };
-    auto make_writer_spec = [&](const char* writer_id, const char* out_dfb) {
+    auto make_writer_spec = [&](const experimental::KernelSpecName& writer_id,
+                                const experimental::DFBSpecName& out_dfb) {
         return experimental::KernelSpec{
             .unique_id = writer_id,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
             .num_threads = 1,
             .dfb_bindings = {experimental::ConsumerOf(out_dfb, "in")},
             .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen1_config =
-                        experimental::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                            .noc = tt_metal::NOC::RISCV_0_default},
-                    .gen2_config =
-                        experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {out_dfb}}},
+            .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
         };
     };
 
@@ -818,11 +799,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
                   "src5_addr",
                   "src5_bank_id",
                   "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB, INP3_DFB, INP4_DFB, INP5_DFB}}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     experimental::KernelSpec writer0_spec = make_writer_spec(WRITER0, OUT0_DFB);
@@ -844,12 +821,12 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
              dfb_binding(OUT1_DFB, DFBEndpoint::PRODUCER),
              dfb_binding(OUT2_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode =
-                    {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
-                     {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+            experimental::ComputeGen2Config{
+                .fpu_math_fidelity = MathFidelity::HiFi4,
+                .enable_32_bit_dest = true,
+                .unpack_modes =
+                    {{INP2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+                     {INP3_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}},
             },
     };
 
@@ -964,48 +941,39 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
-                       {"src0_bank_id", 0u},
-                       {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
-                       {"src1_bank_id", 0u},
-                       {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
-                       {"src2_bank_id", 0u},
-                       {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
-                       {"src3_bank_id", 0u},
-                       {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
-                       {"src4_bank_id", 0u},
-                       {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
-                       {"src5_bank_id", 0u},
-                       {"num_tiles", 1u}}}},
+            .kernel = READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
+                 {"src1_bank_id", 0u},
+                 {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
+                 {"src2_bank_id", 0u},
+                 {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
+                 {"src3_bank_id", 0u},
+                 {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
+                 {"src4_bank_id", 0u},
+                 {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
+                 {"src5_bank_id", 0u},
+                 {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER0,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", static_cast<uint32_t>(out0_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}}},
+            .kernel = WRITER0,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", static_cast<uint32_t>(out0_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER1,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", static_cast<uint32_t>(out1_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}}},
+            .kernel = WRITER1,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", static_cast<uint32_t>(out1_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER2,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", static_cast<uint32_t>(out2_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}}},
+            .kernel = WRITER2,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", static_cast<uint32_t>(out2_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, params);
 

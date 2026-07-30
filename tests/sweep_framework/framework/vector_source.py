@@ -533,7 +533,11 @@ class VectorExportSource(VectorSource):
                 "but no owned mesh shapes were configured for that lane."
             )
 
-        hardware_rules = capability_profile.get("hardware_rules", ())
+        # capability_profile is None when no TEST_GROUP_NAME is set and none can be
+        # inferred from the machine (common for local single-/sub-mesh runs); guard
+        # so vector loading degrades to "no hardware rules" instead of crashing with
+        # AttributeError on None.
+        hardware_rules = (capability_profile or {}).get("hardware_rules", ())
         if filter_policy["enforce_hardware_capability"] and not hardware_rules:
             logger.warning(
                 f"Manifest grouping mode is 'hw' for module '{module_name}', but no hardware capability profile "
@@ -600,6 +604,20 @@ class VectorExportSource(VectorSource):
                                         f"test_group_name='{test_group_name}'"
                                     )
                                     machine_mismatch_count += 1
+                                    continue
+
+                            # Explicit MESH_DEVICE_SHAPE filter: when set by mesh-split
+                            # batches, reject vectors whose traced mesh doesn't match.
+                            _mesh_env = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+                            if _mesh_env and "x" in _mesh_env and traced_machine_entries:
+                                _target = tuple(int(x) for x in _mesh_env.split("x"))
+                                _has_mesh_match = any(
+                                    tuple(e.get("mesh_device_shape", [])) == _target
+                                    for e in traced_machine_entries
+                                    if isinstance(e.get("mesh_device_shape"), (list, tuple))
+                                )
+                                if not _has_mesh_match:
+                                    filtered_count += 1
                                     continue
 
                             # Apply mesh filtering when manifest grouping mode says ownership is by mesh.

@@ -13,7 +13,7 @@ namespace ttnn::experimental::prim {
 struct ReduceScatterMinimalAsyncDeviceOperation {
     using operation_attributes_t = ReduceScatterMinimalAsyncParams;
     using tensor_args_t = ReduceScatterMinimalAsyncInputs;
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<RingReduceScatterMeshWorkloadFactory, LineReduceScatterMeshWorkloadFactory>;
@@ -29,8 +29,6 @@ struct ReduceScatterMinimalAsyncDeviceOperation {
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);

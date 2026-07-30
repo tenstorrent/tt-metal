@@ -17,6 +17,7 @@
 #include "device/device_impl.hpp"
 #include "common/executor.hpp"
 #include "impl/context/context_descriptor.hpp"
+#include "context/metal_context.hpp"
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -31,6 +32,13 @@ namespace {
 
 using tt::tt_fabric::chan_id_t;
 using tt::tt_fabric::EDMStatus;
+
+// Emule teleports cross-chip traffic at the fabric client-API shim and never runs the ERISC router,
+// so its launch/sync handshake would never complete — skip it (as for Mock). See tt-emule
+// docs/fabric-ccl-emulation.md.
+bool skip_fabric_fw_for_emule() {
+    return MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+}
 
 static_assert(static_cast<uint32_t>(EDMStatus::STARTED) != 0);
 static_assert(static_cast<uint32_t>(EDMStatus::REMOTE_HANDSHAKE_COMPLETE) != 0);
@@ -279,13 +287,27 @@ void FabricFirmwareInitializer::init(
         return;
     }
 
-    if (descriptor_->is_mock_device()) {
-        log_info(tt::LogMetal, "Skipping fabric initialization for mock devices");
+    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
+        log_info(tt::LogMetal, "Skipping fabric initialization for mock/emule devices");
         return;
     }
 
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         log_info(tt::LogMetal, "Initializing Fabric");
+#if defined(TT_UMD_BUILD_SIMULATION)
+        if (rtoptions_.get_simulator_enabled()) {
+            for (auto* dev : devices_) {
+                const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                cluster_.get_driver()->register_sim_fabric_node_id(
+                    dev->id(), uint32_t(fabric_node_id.mesh_id.get()), uint32_t(fabric_node_id.chip_id));
+                for (const auto& [eth_chan, direction] :
+                     control_plane_.get_active_fabric_eth_channels(fabric_node_id)) {
+                    cluster_.get_driver()->register_sim_fabric_endpoint_direction(
+                        dev->id(), uint32_t(eth_chan), uint32_t(direction));
+                }
+            }
+        }
+#endif
         control_plane_.write_routing_tables_to_all_chips();
         compile_and_configure_fabric();
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
@@ -300,6 +322,13 @@ void FabricFirmwareInitializer::init(
 }
 
 void FabricFirmwareInitializer::configure() {
+    // Mock/Emule: skip router sync (init() skips fabric; sync would fatal/timeout — emule never
+    // runs the ERISC router, so the handshake status stays NOT_STARTED).
+    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
+        log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock/emule devices");
+        initialized_.test_and_set();
+        return;
+    }
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
     }
@@ -310,8 +339,8 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     TT_FATAL(
         !init_done.contains(InitializerKey::Dispatch),
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
-    if (descriptor_->is_mock_device()) {
-        log_info(tt::LogMetal, "Skipping fabric teardown for mock devices");
+    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
+        log_info(tt::LogMetal, "Skipping fabric teardown for mock/emule devices");
         init_done.erase(key);
         return;
     }
@@ -492,10 +521,10 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
 }
 
 uint32_t FabricFirmwareInitializer::get_fabric_router_sync_timeout_ms() const {
-    if (rtoptions_.get_simulator_enabled()) {
-        return 15000;
-    }
     auto timeout = rtoptions_.get_fabric_router_sync_timeout_ms();
+    if (rtoptions_.get_simulator_enabled()) {
+        return timeout.value_or(15000);
+    }
     return timeout.value_or(10000);
 }
 

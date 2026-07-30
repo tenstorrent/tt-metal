@@ -4,6 +4,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "full_kernel_common.hpp"
 
 void kernel_main() {
@@ -22,12 +25,15 @@ void kernel_main() {
     value val;
     val.u = fill_value;
 
-    cb_reserve_back(cb_value, onepage);
+    Noc noc;
+    CircularBuffer cb(cb_value);
 
-    uint32_t write_addr = get_write_ptr(cb_value);
+    cb.reserve_back(onepage);
+
+    uint32_t write_addr = cb.get_write_ptr();
 
     if (val.u == 0) {
-        zero_buffer(write_addr, page_size);
+        zero_buffer(cb_value, page_size);
     } else {
 #ifdef OUTPUT_DTYPE_BFLOAT16
         auto ptr = reinterpret_cast<uint16_t*>(write_addr);
@@ -49,23 +55,22 @@ void kernel_main() {
 #endif
     }
 
-    cb_push_back(cb_value, 1);
+    cb.push_back(1);
 
     const auto dst_accessor = TensorAccessor(dst_args, output_addr);
 
-    cb_wait_front(cb_value, 1);
+    cb.wait_front(1);
 
     for (uint32_t shard_row_id = 0; shard_row_id < num_pages_per_shard_col; ++shard_row_id) {
         uint32_t curr_page_id = start_page_id;
         for (uint32_t shard_col_id = 0; shard_col_id < num_pages_per_shard_row; ++shard_col_id) {
-            const auto cb_value_addr = get_read_ptr(cb_value);
-            noc_async_write_page(curr_page_id, dst_accessor, cb_value_addr);
+            noc.async_write(cb, dst_accessor, dst_accessor.get_aligned_page_size(), {}, {.page_id = curr_page_id});
             curr_page_id++;
         }
         start_page_id += tensor_width_in_pages;
     }
 
-    noc_async_writes_flushed();
-    cb_pop_front(cb_value, 1);
-    noc_async_write_barrier();
+    noc.async_writes_flushed();
+    cb.pop_front(1);
+    noc.async_write_barrier();
 }

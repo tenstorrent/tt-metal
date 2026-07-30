@@ -200,13 +200,19 @@ Tensor quantize(
                                : input_tensor;
 
     const DataType a_dtype = input_a.dtype();
-    constexpr DataType c_dtype = DataType::INT32;
+
+    const DataType c_dtype = get_output_dtype(output_dtype, optional_output_tensor, DataType::INT32);
 
     TT_FATAL(tt::tt_metal::is_floating_point(a_dtype), "Quantize only takes floating-point number inputs");
-    TT_FATAL(output_dtype.value_or(c_dtype) == c_dtype, "Quantize only supports int32 outputs for now");
-    if (optional_output_tensor.has_value()) {
-        TT_FATAL(optional_output_tensor->dtype() == c_dtype, "Quantize only supports int32 outputs for now");
-    }
+    TT_FATAL(
+        c_dtype == DataType::INT32 || c_dtype == DataType::UINT8,
+        "Quantize only supports int32 or uint8 outputs for now, got {}",
+        c_dtype);
+    // per-channel path narrows with ttnn::typecast(float, uint8), which wraps
+    // mod 256 instead of saturating, so reject it here.
+    TT_FATAL(
+        !(axis.has_value() && c_dtype == DataType::UINT8),
+        "Per-channel (axis) quantize does not support uint8 output yet; use int32 output or per-tensor quantize");
 
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
@@ -323,13 +329,20 @@ Tensor requantize(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     const DataType a_dtype = input_tensor.dtype();
-    constexpr DataType c_dtype = DataType::INT32;
+    const DataType c_dtype = get_output_dtype(output_dtype, optional_output_tensor, DataType::INT32);
 
-    TT_FATAL(a_dtype == DataType::INT32, "Requantize only supports int32 inputs for now");
-    TT_FATAL(output_dtype.value_or(c_dtype) == c_dtype, "Requantize only supports int32 outputs for now");
-    if (optional_output_tensor.has_value()) {
-        TT_FATAL(optional_output_tensor->dtype() == c_dtype, "Requantize only supports int32 outputs for now");
-    }
+    TT_FATAL(
+        a_dtype == DataType::INT32 || a_dtype == DataType::UINT8,
+        "Requantize only supports int32 or uint8 inputs for now, got {}",
+        a_dtype);
+    TT_FATAL(
+        c_dtype == DataType::INT32 || c_dtype == DataType::UINT8,
+        "Requantize only supports int32 or uint8 outputs for now, got {}",
+        c_dtype);
+
+    TT_FATAL(
+        !(axis.has_value() && c_dtype == DataType::UINT8),
+        "Per-channel (axis) requantize does not support uint8 output yet; use int32 output or per-tensor requantize");
 
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
@@ -467,7 +480,10 @@ Tensor dequantize(
     const DataType a_dtype = input_tensor.dtype();
     const DataType c_dtype = get_output_dtype(output_dtype, optional_output_tensor, DataType::BFLOAT16);
 
-    TT_FATAL(a_dtype == DataType::INT32, "Dequantize only supports int32 inputs for now");
+    TT_FATAL(
+        a_dtype == DataType::INT32 || a_dtype == DataType::UINT8,
+        "Dequantize only supports int32 or uint8 inputs for now, got {}",
+        a_dtype);
     TT_FATAL(
         c_dtype == DataType::FLOAT32 || c_dtype == DataType::BFLOAT16,
         "Dequantize only supports bf16/f32 outputs for now");

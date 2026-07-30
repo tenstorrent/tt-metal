@@ -5,11 +5,13 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include <functional>
@@ -20,6 +22,7 @@
 #include <bitset>
 #include <filesystem>
 #include <optional>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -61,6 +64,7 @@ struct CBFormatDescriptor {
     tt::DataFormat data_format = tt::DataFormat::Float32;
     uint32_t page_size = 0;
     std::optional<TileDescriptor> tile;
+    std::optional<FaceGeometry> face_geometry;
 };
 
 struct CBDescriptor {
@@ -148,6 +152,8 @@ struct KernelDescriptor {
     // runtime args for that core
     RuntimeArgs runtime_args;
     CommonRuntimeArgs common_runtime_args;
+    // EXPERIMENTAL: named kernel args
+    experimental::blaze::NamedKernelArgs blaze_named_args;
 
     std::optional<KernelBuildOptLevel> opt_level = std::nullopt;
 
