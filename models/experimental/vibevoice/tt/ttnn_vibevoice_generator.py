@@ -1606,24 +1606,9 @@ class TTVibeVoiceGenerator:
         # acoustic decoder's causal cache; we accumulate the chunks to form the
         # final waveform (identical structure to the reference streaming decode).
         audio_chunks: List[torch.Tensor] = []
-        # Optional disk-streaming (VV_STREAM_AUDIO=<path>): append each frame's fp32 samples to a raw
-        # file (flushed → survives SIGKILL) instead of accumulating in host RAM.  Bounds host memory
-        # on very long renders AND preserves partial audio if the process dies mid-run.  Numerically
-        # identical (storage only).  Read back at the end (happy path) or offline from the .f32 file.
-        # Absolutized inline so the path reaching ``open`` is a normalized artifact path.
-        # No extension check here: the chunked demo path appends ``.part<N>`` to the base
-        # name (see demo.py), so this writer has no single expected suffix.
-        _stream_path = os.environ.get("VV_STREAM_AUDIO", "")
-        if _stream_path:
-            _stream_path = os.path.abspath(_stream_path)
-        _stream_fh = open(_stream_path, "wb") if _stream_path else None
 
         def _emit_audio(chunk_1d: torch.Tensor) -> None:
-            if _stream_fh is not None:
-                chunk_1d.contiguous().numpy().tofile(_stream_fh)
-                _stream_fh.flush()
-            else:
-                audio_chunks.append(chunk_1d)
+            audio_chunks.append(chunk_1d)
 
         pending_embeds: Optional[ttnn.Tensor] = None
 
@@ -1845,13 +1830,7 @@ class TTVibeVoiceGenerator:
         # The per-step streaming decode already produced each frame's audio chunk
         # (with full causal context via the decoder cache); concatenate for the
         # final waveform — no separate batch decode needed.
-        if _stream_fh is not None:
-            _stream_fh.flush()
-            _stream_fh.close()
-            import numpy as _np
-
-            speech_waveform = torch.from_numpy(_np.fromfile(_stream_path, dtype=_np.float32).copy())
-        elif audio_chunks:
+        if audio_chunks:
             speech_waveform = torch.cat(audio_chunks, dim=0)
         else:
             speech_waveform = torch.zeros(0)
