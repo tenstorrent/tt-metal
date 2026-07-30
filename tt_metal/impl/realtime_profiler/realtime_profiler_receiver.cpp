@@ -799,10 +799,9 @@ uint64_t RealtimeProfilerReceiver::run_loop(
     constexpr std::chrono::microseconds kReceiverMaxBackoff{100};
     std::chrono::microseconds backoff{1};
     uint64_t num_pages_received = 0;
-#if defined(TRACY_ENABLE) && TT_TRACY_CATEGORY_RT_PROFILER
-    constexpr auto kFifoPlotInterval = std::chrono::milliseconds(10);
+
+    constexpr auto kFifoPlotInterval = std::chrono::milliseconds(50);
     auto last_fifo_plot = std::chrono::steady_clock::now();
-#endif
     auto last_pass = std::chrono::steady_clock::now();
     while (!stop_.load(std::memory_order_acquire)) {
         const auto now = std::chrono::steady_clock::now();
@@ -823,7 +822,7 @@ uint64_t RealtimeProfilerReceiver::run_loop(
         last_pass = now;
         const uint32_t num_pages = drain_all_devices(now, page_buf, record_buf);
         num_pages_received += num_pages;
-#if defined(TRACY_ENABLE) && TT_TRACY_CATEGORY_RT_PROFILER
+
         if (now - last_fifo_plot >= kFifoPlotInterval) {
             TTTracyPlotD(
                 RT_PROFILER,
@@ -836,10 +835,10 @@ uint64_t RealtimeProfilerReceiver::run_loop(
                     worst_sync_error_ns,
                     static_cast<int64_t>(dev_state.clock_sync->calibration().mapping.sync_error_ns));
             }
-            TTTracyPlotD(RT_PROFILER, "RT sync error (us)", static_cast<double>(worst_sync_error_ns) / 1000.0);
+            TracyPlot("RT profiler sync error (us)", static_cast<double>(worst_sync_error_ns) / 1000.0);
             last_fifo_plot = now;
         }
-#endif
+
         if (num_pages > 0) {
             backoff = std::chrono::microseconds{1};
             continue;
