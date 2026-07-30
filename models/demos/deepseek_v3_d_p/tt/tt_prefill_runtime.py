@@ -84,6 +84,12 @@ class TtPrefillRuntimeConfig:
     # ~2*(MoE layers) host load/clear round-trips per replay. Set False (PREFILL_OVERLAP_SHARED_EXPERT=0) to
     # capture the forward as ONE trace segment (no per-chunk swaps -> faster replay); costs the overlap.
     overlap_shared_expert_with_dispatch: bool = True
+    # GLM-5.2 KV dedup: shard the KV/index caches across tp_axis as well as sp_axis, so each of the
+    # sp*tp devices stores a distinct 1/(sp*tp) sequence slice instead of tp identical copies. Storage
+    # only — the writes/reads stay numerically identical (TP-inner + SP-outer gather on read-back). Must
+    # match how the caches were allocated (init_kvpe_cache(tp_axis=...)) and how the KV chunk address
+    # table was built; the sparse (DSA) path only.
+    tp_shard_kv: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -245,6 +251,7 @@ class TtPrefillRuntime:
             is_last_rank=self.config.is_last_rank,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
+            tp_shard_kv=self.config.tp_shard_kv,
         )
         self.model_built = True
 
@@ -955,6 +962,7 @@ class TtPrefillRuntime:
             mesh_shape=self.config.mesh_shape,
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
+            tp_shard_kv=self.config.tp_shard_kv,
             num_users=self.config.num_users,
             chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
             path=path,
@@ -972,6 +980,16 @@ class TtPrefillRuntime:
         not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is
         ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
         read-back."""
+        # The `[:, :1]` below keeps ONE TP column and discards the rest, which is only sound while the
+        # cache is TP-replicated. Under GLM-5.2 KV dedup each column holds a DISTINCT 1/tp of its SP row,
+        # so that would silently drop (tp-1)/tp of the tokens and PCC garbage against the golden. Assert
+        # instead: the table-driven producer read-back (mock migration) is the TP-sharded read path.
+        assert not self.config.tp_shard_kv, (
+            "read_slot_kv (and the pairwise dst==src migration validation built on it) has no TP-sharded "
+            "host reconstruction: it keeps a single TP column, which is only a full replica when "
+            "tp_shard_kv=False. Use the mock-migration producer read-back to validate a TP-sharded cache. "
+            "kv_cache_pcc_check carries its own equivalent guard."
+        )
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
         # `.kvpe` is an MlaKvCache wrapper, NOT a bare tensor: physical ops use `.storage`, and physical
