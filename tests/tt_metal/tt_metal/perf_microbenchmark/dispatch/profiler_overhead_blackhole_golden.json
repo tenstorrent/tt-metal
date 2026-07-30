@@ -1,0 +1,33 @@
+{
+  "_comment": "Device profiler overhead CI golden (Blackhole). BRING-UP: real_time values are real measurements captured locally on a Blackhole (p100a, ENABLE_TRACY=ON, WITHOUT TT_METAL_PROFILER_ACCUMULATE), used as realistic placeholders; they are NOT gated yet. The runtime_perf_profiler_overhead CI job runs compare_profiler_overhead_ci.py with --ignore-times so only the benchmark set (names) is validated. Arm the gate by replacing these with a real benchmark_out JSON captured on bh_p150_perf CI silicon, then drop --ignore-times from the job. Metric = host-side real_time (ns) of the min aggregate: BM_profiler_read = ReadMeshDeviceProfilerResults writeout cost (dominant, ~9ms; largely fixed-cost - worst grid is only ~13% over single core), BM_profiled_dispatch = profiler-enabled EnqueueMeshWorkload+Finish (~37-39us; shape-insensitive, marker cost dwarfed by enqueue+finish).",
+  "benchmarks": [
+    {
+      "name": "BM_profiler_read/common/iterations:20/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 8732544.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_profiler_read/worst/iterations:20/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 9897339.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_profiled_dispatch/common/iterations:200/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 39262.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_profiled_dispatch/worst/iterations:200/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 36476.0,
+      "time_unit": "ns"
+    }
+  ]
+}
