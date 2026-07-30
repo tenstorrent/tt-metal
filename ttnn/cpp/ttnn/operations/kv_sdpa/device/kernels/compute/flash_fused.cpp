@@ -39,8 +39,10 @@ inline void flash_accumulate_chunk(
     uint32_t& cur_out,
     uint32_t processed_k_chunks) {
     constexpr uint32_t Sq_chunk_t = 1;
-    // QK^T block params: M=Sq(1), N=Sk_chunk, K=DHt. K is pre-transposed by the reader, so no matmul
-    // transpose. One K-block (in0_block_w == DHt), Sk_chunk / qk_subblock_w N-subblocks.
+    // QK^T block params: M=Sq(1), N=Sk_chunk, K=DHt. The reader transposes only the K TILE GRID
+    // ([Sk_chunk, DHt] -> [DHt, Sk_chunk]); matmul's transpose flag is still required to transpose
+    // each tile's contents. Without it, score column c does not correspond to K row c, so a partial
+    // additive mask lands on different keys even though whole-tile masking appears correct.
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_subblock_w;
     // QK@V block params: M=Sq(1), N=vDHt(DHt), K=Sk_chunk. One K-block (in0_block_w == Sk_chunk).
     const uint32_t out_in1_num_subblocks = DHt / out_subblock_w;
@@ -61,7 +63,7 @@ inline void flash_accumulate_chunk(
         /*in0_block_w=*/DHt,
         /*subblock_h=*/1,
         qk_subblock_w,
-        /*transpose=*/false);
+        /*transpose=*/true);
 
     /* QK += MASK (additive, over this chunk's column-tiles). Applied to the RAW scores, before the
        row-max, so the scale folds in via sub_exp below exactly as in the general SDPA -- that ordering

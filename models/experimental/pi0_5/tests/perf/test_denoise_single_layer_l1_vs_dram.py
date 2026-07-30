@@ -133,7 +133,18 @@ _PREFIX_KV_DTYPE = {
 }[os.environ.get("PI05_PREFIX_KV_DTYPE", "bfloat8_b")]
 
 
-def _build_l1(submesh, ref_blocks, ec, config, suffix_len, ah, adarms_cond, prefix_kv, mask):
+def _build_l1(
+    submesh,
+    ref_blocks,
+    ec,
+    config,
+    suffix_len,
+    ah,
+    adarms_cond,
+    prefix_kv,
+    mask,
+    prefix_valid_tiles=None,
+):
     import models.experimental.pi0_5.tt.tt_pipeline.denoise_block as _db
     from models.experimental.pi0_5.tt.tt_pipeline._device import set_device
     from models.experimental.pi0_5.tt.tt_pipeline.denoise_block import TTNNPi05DenoiseExpertBlock
@@ -179,6 +190,9 @@ def _build_l1(submesh, ref_blocks, ec, config, suffix_len, ah, adarms_cond, pref
     stage._attention_mask = from_torch_pi05(
         mask, dtype=ttnn.bfloat16, device=submesh, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
+    if prefix_valid_tiles is not None:
+        for block in stage.blocks:
+            block.attention._prefix_valid_tiles = list(prefix_valid_tiles)
     dev.append(stage._attention_mask)
     return dev, lambda x: stage.forward(x)
 
@@ -390,6 +404,80 @@ def test_l1_single_layer_pcc(mesh_device):
         print(f"\n[L1 single-layer] PCC(active)={pcc:.6f}")
         assert pcc >= _PCC, f"L1 PCC {pcc:.6f} < {_PCC}"
     finally:
+        for t in dev:
+            try:
+                ttnn.deallocate(t)
+            except Exception:
+                pass
+
+
+@pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+@pytest.mark.skipif(
+    os.environ.get("PI05_PASS_EXPERT_MASK", "0") != "1",
+    reason="ragged-mask comparison requires PI05_PASS_EXPERT_MASK=1",
+)
+def test_l1_single_layer_pcc_ragged_mask(mesh_device):
+    """Exercise the production LIBERO mask: absent camera tiles plus a partial prompt tile."""
+    config, ah, suffix_len, bw, ref_blocks, adarms_cond, hidden, prefix_kv, mask, _ = _setup(mesh_device)
+
+    # Camera slot 3 occupies prefix tiles 16..23 and is absent. The prompt begins at tile 24,
+    # has ten real tokens, and the remainder of the 1024-row prefix is language padding.
+    mask[:, :, :, 16 * 32 : 24 * 32] = -1e4
+    mask[:, :, :, 24 * 32 + 10 : _PREFIX_LEN] = -1e4
+    if suffix_len > ah:
+        mask[:, :, :, _PREFIX_LEN + ah : _PREFIX_LEN + suffix_len] = -1e4
+        mask[:, :, ah:suffix_len, :] = -1e4
+    valid = list(range(16)) + [24]
+
+    _, _, _, _, _, _, cos, sin = _build_inputs(config, suffix_len, ah)
+    h_oracle = _torch_oracle(ref_blocks, hidden, adarms_cond, prefix_kv, mask, cos, sin, suffix_len)
+    dev, l1_fwd = _build_l1(
+        mesh_device,
+        ref_blocks,
+        config.expert_config,
+        config,
+        suffix_len,
+        ah,
+        adarms_cond,
+        prefix_kv,
+        mask,
+        prefix_valid_tiles=valid,
+    )
+    old_fused = os.environ.get("PI05_FUSED_KV_MASK")
+    try:
+        def run(fused):
+            os.environ["PI05_FUSED_KV_MASK"] = "1" if fused else "0"
+            xi = from_torch_pi05(
+                hidden,
+                dtype=ttnn.bfloat16,
+                device=mesh_device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            dev.append(xi)
+            out = l1_fwd(xi)
+            ttnn.synchronize_device(mesh_device)
+            return ttnn.to_torch(out)
+
+        h_fallback = run(False)
+        h_fused = run(True)
+        active_oracle = h_oracle[:, :ah, :].float()
+        active_fallback = h_fallback[:, :ah, :].float()
+        active_fused = h_fused[:, :ah, :].float()
+        pcc = _compute_pcc(active_oracle, active_fused)
+        mae = (active_oracle - active_fused).abs().mean().item()
+        path_mae = (active_fallback - active_fused).abs().mean().item()
+        path_max = (active_fallback - active_fused).abs().max().item()
+        print(
+            f"\n[L1 ragged-mask single-layer] fused-vs-oracle PCC={pcc:.6f} MAE={mae:.6g}; "
+            f"fused-vs-fallback MAE={path_mae:.6g} max={path_max:.6g}"
+        )
+        assert pcc >= _PCC, f"L1 ragged-mask PCC {pcc:.6f} < {_PCC}"
+    finally:
+        if old_fused is None:
+            os.environ.pop("PI05_FUSED_KV_MASK", None)
+        else:
+            os.environ["PI05_FUSED_KV_MASK"] = old_fused
         for t in dev:
             try:
                 ttnn.deallocate(t)

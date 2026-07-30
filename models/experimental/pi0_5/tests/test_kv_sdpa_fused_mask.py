@@ -28,6 +28,7 @@ compare device path against device path with byte-identical inputs:
 
 import pytest
 import torch
+import torch.nn.functional as F
 import ttnn
 
 from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT
@@ -52,7 +53,7 @@ def _mask_to_tt(mask_2d, device, tile_h):
     )
 
 
-def _inputs(device):
+def _inputs(device, *, prefix_mutator=None):
     """(q, k, v, past_k, past_v) at the production dtypes/tiles, plus the torch suffix rows."""
     sq = TILE_HEIGHT
     torch.manual_seed(0)
@@ -61,6 +62,8 @@ def _inputs(device):
     v_t = torch.randn(1, NKH, sq, HD)
     pk_t = torch.randn(1, NKH, PREFIX, HD)
     pv_t = torch.randn(1, NKH, PREFIX, HD)
+    if prefix_mutator is not None:
+        prefix_mutator(pk_t, pv_t)
 
     def to_tt(x, tile_h):
         return ttnn.from_torch(
@@ -192,6 +195,74 @@ def test_partial_tile_mask_is_strictly_between_open_and_blocked(device):
         f"masking 16 of tile 24's 32 columns is indistinguishable from blocking it ENTIRELY "
         f"(|half-blocked|={d_blocked:.6g} vs span={span:.6g}) -- the whole tile is being over-masked"
     )
+
+
+def test_partial_tile_mask_blocks_the_requested_columns(device):
+    """Changing only masked K/V rows must not change the output.
+
+    The open/half/blocked bracket proves that a partial mask has an effect, but cannot detect a
+    within-tile column permutation: masking the wrong 22 columns still lands between the endpoints.
+    This mirrors LIBERO's tile 24, where ten prompt tokens are real and the remaining 22 are padding.
+    """
+    prompt_end = 24 * 32 + 10
+
+    q, k, v, pk, pv, sq = _inputs(device)
+    mask = torch.zeros(sq, PREFIX + 32, dtype=torch.bfloat16)
+    mask[:, prompt_end:PREFIX] = _MASK_VAL
+    m_tt = _mask_to_tt(mask, device, sq)
+    reference = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, attn_mask=m_tt)).float()
+    if not torch.isfinite(reference).all():
+        pytest.skip(
+            f"standalone kv_sdpa baseline is not finite at TILE_HEIGHT={TILE_HEIGHT}; "
+            "tile-16 exact-column coverage runs in-model"
+        )
+
+    def mutate_masked(pk_t, pv_t):
+        pk_t[:, :, prompt_end:PREFIX, :] = torch.randn_like(pk_t[:, :, prompt_end:PREFIX, :]) * 100
+        pv_t[:, :, prompt_end:PREFIX, :] = torch.randn_like(pv_t[:, :, prompt_end:PREFIX, :]) * 100
+
+    q2, k2, v2, pk2, pv2, _ = _inputs(device, prefix_mutator=mutate_masked)
+    changed_masked = ttnn.to_torch(ttnn.kv_sdpa(q2, k2, v2, past_k=pk2, past_v=pv2, attn_mask=m_tt)).float()
+    pcc = _pcc(reference, changed_masked)
+    mae = (reference - changed_masked).abs().mean().item()
+    print(f"\n[fused mask] mutate masked columns: PCC={pcc:.6f} MAE={mae:.6g}")
+    assert pcc > 0.9999 and mae < 1e-3, (
+        f"changing masked K/V rows changed the result (PCC={pcc}, MAE={mae}); "
+        "the partial mask is landing on different within-tile columns"
+    )
+
+
+@pytest.mark.parametrize("mask_mode", ["unmasked", "prefix-only", "suffix-only"])
+def test_absolute_torch_phase_isolation(device, mask_mode):
+    """Pin absolute correctness and identify which folded-KV phase first diverges."""
+    q, k, v, pk, pv, sq = _inputs(device)
+    kv_total = PREFIX + 32
+    mask = torch.zeros(sq, kv_total, dtype=torch.bfloat16)
+    if mask_mode == "prefix-only":
+        mask[:, PREFIX:] = _MASK_VAL
+    elif mask_mode == "suffix-only":
+        mask[:, :PREFIX] = _MASK_VAL
+        mask[:, PREFIX + sq :] = _MASK_VAL
+
+    kwargs = {}
+    if mask_mode != "unmasked":
+        kwargs["attn_mask"] = _mask_to_tt(mask, device, sq)
+    actual = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, **kwargs)).float()
+
+    q_t = ttnn.to_torch(q).float()
+    k_t = torch.cat([ttnn.to_torch(pk).float(), ttnn.to_torch(k).float()], dim=2)
+    v_t = torch.cat([ttnn.to_torch(pv).float(), ttnn.to_torch(v).float()], dim=2)
+    torch_mask = None if mask_mode == "unmasked" else mask[:, : PREFIX + sq].unsqueeze(0).unsqueeze(0).float()
+    expected = F.scaled_dot_product_attention(q_t, k_t, v_t, attn_mask=torch_mask)
+
+    finite = bool(torch.isfinite(actual).all())
+    pcc = _pcc(actual, expected) if finite else float("nan")
+    mae = (actual - expected).abs().mean().item() if finite else float("inf")
+    print(
+        f"\n[absolute {mask_mode}] tile={sq} finite={finite} PCC={pcc:.6f} MAE={mae:.6g} "
+        f"actual_absmax={actual.abs().max().item():.6g}"
+    )
+    assert finite and pcc > 0.99, f"{mask_mode} kv_sdpa diverges from torch: finite={finite}, PCC={pcc}, MAE={mae}"
 
 
 def test_mask_composes_with_prefix_tile_skipping(device):
