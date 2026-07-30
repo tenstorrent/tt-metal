@@ -159,14 +159,26 @@ survive. Result: `vllm 0.24.0+empty` + `vllm-tt-plugin 0.1.0`,
 `Platform plugin tt is activated`.
 
 Only three package versions moved, and one is worth watching: **`numpy 1.26.4 → 2.3.5`**
-(also `xgrammar 0.1.29 → 0.2.3`, `+fastsafetensors 0.3.3`). `import ttnn` and all host
-tests pass under numpy 2, but this is the one silent-ABI risk in the migration.
+(also `xgrammar 0.1.29 → 0.2.3`, `+fastsafetensors 0.3.3`). That was the one silent-ABI
+worry here, and the paired device runs retire it: the fork arm ran on numpy 1.26.4 and the
+plugin arm on 2.3.5, and their generated tokens are bit-identical. `import ttnn` and all
+host tests pass under numpy 2 as well.
 
 Launch differs from the fork recipe in exactly one way: the plugin no longer needs to be on
 `PYTHONPATH` (it is an installed package, so `PYTHONPATH=/home/zni/tt-metal` alone is
-enough — and pointing `TT_VLLM_ROOT` at the old fork checkout would *shadow* the installed
-0.24 vLLM). No `VLLM_USE_V2_MODEL_RUNNER` is needed: the Break-2 fix lives in the plugin,
-and the device run below confirms it in the live path.
+enough). Leaving `TT_VLLM_ROOT` at the old fork checkout **silently reverts you to the
+fork** — measured, not assumed:
+
+```text
+PYTHONPATH=tt-metal                          -> 0.24.0            site-packages/vllm/__init__.py
+                                                + "Platform plugin tt is activated"
+PYTHONPATH=tt-metal:tt-vllm:tt-vllm/plugins/vllm-tt-plugin/src
+                                             -> 0.1.dev1+g6b4a3a7b4  /home/zni/tt-vllm/vllm/__init__.py
+                                                (and the tt platform plugin never activates)
+```
+
+No `VLLM_USE_V2_MODEL_RUNNER` is needed: the Break-2 fix lives in the plugin, and the device
+run below confirms it in the live path.
 
 ## Plugin-side commits
 
