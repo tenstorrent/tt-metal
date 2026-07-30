@@ -82,6 +82,7 @@ class PromptEncoder:
             subfolder="text_encoder",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
+            mesh_device=self._device,
             dtype="bf16",
             get_torch_state_dict=get_torch_state_dict,
         )
