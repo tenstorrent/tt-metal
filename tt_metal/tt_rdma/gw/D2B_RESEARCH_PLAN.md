@@ -141,13 +141,21 @@ handling**. The sync kernel worked because it *blocked* on each eth CQE (`while(
 which both paced the SQ and reaped every completion; the async non-blocking drain
 (`while(get_completion(eth)){ack;eth_done++}`) reaps only ~1 then `eth_done` sticks → the ETH SQ stops
 transmitting (only ~2 frames egress) → backpressure deadlock. This is exactly the critic's flagged open-Q.
-**THE FIX is in the eth-completion path** (`kernels_dev.c` drain + `sample.c` eth_completion setup) — try, in order:
-1. **`doca_dpa_dev_completion_request_notification(eth_comp_handle)`** re-arm after each drain pass (the flagged
-   fix — the unattached ETH CQ likely needs re-arming to keep delivering under polling).
-2. If not, a **blocking-drain-one per iteration** hybrid (reap exactly one eth CQE each loop like the sync kernel,
-   but keep the recv side pipelined) — guarantees the SQ drains 1:1 while still overlapping recv processing.
-3. Check the eth CQE **error bits** on the reaped completion (is send #1 SUCCESS and #2 never-arrives, or are
-   #2+ erroring?). Load the `doca-verbs`/`doca-dpa` skill for ETH-SQ completion semantics.
+**THE FIX is in the eth-completion path** (`kernels_dev.c` drain). REVISED RANKING (overhead-aware — see below):
+1. **DIAGNOSTIC (free, do first): read the eth CQE status bits** on the completion that arrives + any that follow.
+   - #1 SUCCESS and #2+ **never arrive** → delivery/drain issue → apply fix (2).
+   - #2+ arrive as **`DOCA_DPA_DEV_COMP_SEND_ERR`** → NOT a drain issue; it's a bad WQE → apply fix (3).
+2. **blocking-drain-one-per-iteration** (reap exactly one eth CQE each loop like the sync kernel, but keep the
+   recv side pipelined). **~zero extra overhead** (one `get_completion`/frame, already done) + restores 1:1
+   post:reap pacing so the SQ always drains. **Primary fix.**
+3. **`send_wr`-reuse fix**: the loop reuses ONE `send_wr` struct + reconfigures/re-posts it each iteration without
+   waiting — the sync kernel waited between posts (struct free), the async may re-post while the prior send still
+   references it. Use a fresh/cleared `send_wr` per post, or confirm `post_send_wr` copies the WR into the WQE.
+4. **`doca_dpa_dev_completion_request_notification(eth_comp)` re-arm — DEMOTED.** It's the EVENT/wakeup primitive
+   for a *sleeping* thread; our kernel is a persistent SPINNING poller (the sync kernel polled `get_completion`
+   with NO notification and reaped 50000), so it likely doesn't fix a polling drain AND adds a per-frame
+   arm-call (~1M/s at target, ~1–3% tax). Only relevant if redesigning to an event-driven (sleep/wake) thread.
+Load the `doca-verbs`/`doca-dpa` skill for ETH-SQ completion semantics.
 Ring gather (header + landing) and recv/deep-RQ paths are CONFIRMED WORKING — do not touch them.
 
 **(superseded) earlier gather-vs-else framing:** (b) Check the ETH send **CQE status** for slot>0 (log `ce` error bits — `DOCA_DPA_DEV_COMP_
