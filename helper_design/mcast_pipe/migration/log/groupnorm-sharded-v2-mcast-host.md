@@ -60,5 +60,8 @@ degenerate device coverage.
 ## Diff and coverage
 
 - Production diff: 168 insertions, 376 deletions (net 208 lines removed).
-- Coverage gap: no.
+- Coverage gap: the legacy and Welford `use_mcast=false` host bindings have
+  direct host-helper and device-wire degenerate coverage, but no mapped device
+  operation test reaches the GroupNorm v2 sender-only route. The same sender
+  kernels have exact JIT and broad operation coverage through `use_mcast=true`.
 - Result: PASS; no rollback or quarantine required.

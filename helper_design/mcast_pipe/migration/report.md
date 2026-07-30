@@ -1,141 +1,130 @@
-# mcast_pipe rollout report — API v9, host rollout updated 2026-07-30
+# mcast_pipe rollout report — API v9, completed 2026-07-30
 
 ## Run header
 
-- Source migration branch: `origin/sjovic/mcast-helpers-july`
-- Source migration commit: `acafdfcc6c4`
-- Current branch baseline: `origin/llk_helper_library` at `54d8dfb7bef`
-- Current helper/rollback commit: `307951cc8dc`
-- Host rollout plan commit: `bb66c3a25fc`
-- Conv2D height-sharded host migration commit: `75b977e1a04`
-- Helper contract: `MCAST_PIPE_API_VERSION 9`
+- Helper: `mcast_pipe`, `MCAST_PIPE_API_VERSION=9`
 - Entry mode: re-entry
 - Invocation mode: `run-all`
-- Selected unit approved at Gate A: `conv2d-weights-single-sender-rect`
-- Re-entry breakdown: 0 stale kernels, 0 stale host bindings, 10 newly
-  inventoried host integrations across 4 atomic units, 0 net-new kernel units
-- Device validation: single-chip Blackhole p100a
+- Baseline: `origin/llk_helper_library` at `54d8dfb7bef`
+- Branch: `sjovic/mcast-migration`
+- Re-entry worklist: 0 stale kernels, 0 stale host bindings, 10 pending
+  host integrations across 4 atomic units, and 0 net-new kernel units
+- Device: single-chip Blackhole p100a
 - Test runner: repository environment plus `scripts/run_safe_pytest.sh`
 
-## Outcome
+The user first approved the easiest height-sharded Conv2D unit, then expanded
+the run to every remaining host-helper unit. Device tests were serialized. In
+`run-all` mode, a failed unit would have been restored and quarantined before
+continuing; no unit ultimately failed or required quarantine.
 
-The selected Conv2D height-sharded **weights binding** is fully current end to
-end at v9. This status applies to that protocol channel, not to every Conv2D
-multicast path. Height-sharded Conv2D reads activations locally from each input
-shard and has no activation-multicast binding. No selected unit failed or was
-quarantined. The other three host-integration units were outside the
-user-approved scope for this run and remain pending.
+## Rollout state at v9
 
-| Rollout state at v9 | Count |
+| State | Count |
 |---|---:|
 | kernel-current | 10 |
-| host-binding-current | 1 |
-| fully end-to-end current | 1 binding / 2 kernels |
-| host-pending | 9 |
+| host-binding-current | 10 |
+| fully end-to-end current | 10 bindings / 10 kernels |
+| host-pending | 0 |
+| kernel-pending | 0 |
 | quarantined | 0 |
 | deferred | 82 kernels / 0 host bindings |
 
-Every deferred production kernel is byte-for-byte equal to the confirmed
-target baseline. Every migrated multicast channel delegates its multicast
-semaphore ownership to `SenderPipe` / `ReceiverPipe`. The raw
-`reserve_done_sem` and `write_done_sem` instances remaining in the 2D Conv
-pair coordinate a separate split-reader circular-buffer protocol.
+All required bindings in the host census are current at v9. “Fully end to end”
+is channel-specific: for example, height-sharded Conv2D has a weights
+multicast binding but reads activations locally. Block- and width-sharded
+Conv2D activation multicast kernels remain in the deferred kernel census and
+were not eligible for this host-only worklist.
 
-The migrated Conv2D host binding constructs the full height-sharded rectangle
-with `Mcast2D` while preserving `total_active_num_cores - 1` as the acknowledged
-receiver subset. Its sender and receiver kernels consume the helper-owned
-five-word compile-time and four-word runtime wire through `McastArgs`.
+## Summary by tier
 
-## This run by tier
+| Tier / atomic unit | Bindings migrated | Failed | Quarantined | Production diff |
+|---|---:|---:|---:|---:|
+| 1 — `conv2d-weights-single-sender-rect` | 1 | 0 | 0 | +48 / -51 |
+| 2 — `conv2d-weights-fixed-line` | 1 | 0 | 0 | +40 / -96 |
+| 3 — `matmul-in1-mcast-padding-host` | 4 | 0 | 0 | +196 / -70 |
+| 4 — `groupnorm-sharded-v2-mcast-host` | 4 | 0 | 0 | +168 / -376 |
+| Total | 10 | 0 | 0 | +452 / -593 |
 
-| Tier | Migrated | Failed/quarantined | Skipped/deferred |
-|---|---:|---:|---:|
-| 1 — Conv2D height-sharded host binding | 1 | 0 | 0 |
-| Selected-scope total | 1 | 0 | 0 |
+The production rollout removed 593 lines and added 452, a net reduction of
+141 lines. No in-context performance run was requested, so no performance
+delta is claimed.
 
-Nine required host bindings across the Conv2D fixed-line, matmul in1, and
-GroupNorm v2 units remain pending outside this selected scope. They are not
-counted as failures or deferrals. Conv2D activation multicast is used by the
-block- and width-sharded paths; those activation kernels remain deferred at the
-kernel-helper stage and therefore are not part of the host-binding worklist.
+## Per-kernel result
 
-## Per-kernel and binding result
+| Kernel | Status | Validation | File deletions |
+|---|---|---|---:|
+| Conv2D 1D weights sender | migrated, fully end-to-end | exact JIT; height 49/16 skips; DRAM 14/14 | 19 |
+| Conv2D 1D weights receiver | migrated, fully end-to-end | exact JIT; height 49/16 skips; DRAM 14/14 | 11 |
+| Conv2D fixed-line weights sender | migrated, fully end-to-end | exact PerRow/PerColumn JIT; block 49/16 skips; DRAM 14/14 | 15 |
+| Conv2D fixed-line weights receiver | migrated, fully end-to-end | exact PerRow/PerColumn JIT; block 49/16 skips; DRAM 14/14 | 12 |
+| Matmul in1 padding sender | migrated, fully end-to-end | exact offset 1D and both 2D orientations; full 302/188 skips | 40 |
+| Matmul in1 padding receiver | migrated, fully end-to-end | exact offset 1D and both 2D orientations; full 302/188 skips | 25 |
+| GroupNorm v2 legacy sender | migrated, fully end-to-end | exact JIT; parameterized 108/2 skips | 111 |
+| GroupNorm v2 legacy receiver | migrated, fully end-to-end | exact JIT; parameterized 108/2 skips | 17 |
+| GroupNorm v2 Welford sender | migrated, fully end-to-end | exact JIT; parameterized 108/2 skips | 113 |
+| GroupNorm v2 Welford receiver | migrated, fully end-to-end | exact JIT; parameterized 108/2 skips | 20 |
 
-| Site | Status | Validation | Production deletions | Perf |
-|---|---|---|---:|---|
-| Conv2D 1D weights sender | migrated, fully end-to-end | exact JIT hit; height and shared regressions passed | 19 | not measured |
-| Conv2D 1D weights receiver | migrated, fully end-to-end | exact JIT hit; height and shared regressions passed | 11 | not measured |
-| Height-sharded factory binding | migrated at v9 | host build, host oracle, and device wire passed | 21 | not measured |
+Factory deletions account for the remaining 210 removed lines. Detailed
+runtime layouts, JIT hashes, refactor notes, and exact commands are in the four
+per-unit logs under `migration/log/`.
 
-The atomic production change contains 48 insertions and 51 deletions, for a net
-reduction of 3 lines. The factory refactor preserves the full multicast
-rectangle, the smaller active ACK subset, buffer bindings, activation-reuse
-offsets, and the `SKIP_MCAST` path. No in-context performance run was requested,
-so this report makes no performance-delta claim.
+## Validation
+
+- Host rebuild passed after every atomic host-code unit.
+- Conv2D height-sharded: 49 passed, 16 expected skips; shared DRAM 14/14.
+- Conv2D block-sharded: 49 passed, 16 expected skips; shared DRAM 14/14.
+- Matmul in1 mapped inventory: 302 passed, 188 expected skips.
+- GroupNorm legacy: 108 passed, 2 expected skips.
+- GroupNorm Welford: 108 passed, 2 expected skips.
+- GroupNorm fixed/default routing: 19 passed, 6 expected skips.
+- `McastHostFixture.*`: 19/19 after each unit.
+- `test_mcast_pipe.py`: 68/68 after each unit.
+
+The first Conv2D fixed-line PerColumn smoke hung because the migrated sender
+read its trailing booleans before advancing over the helper runtime block.
+Changing the cursor to `McastArgs::next_runtime_args_offset()` fixed the issue;
+the exact retry, opposite orientation, full block inventory, and every shared
+regression then passed.
 
 ## Coverage gaps
 
-None for the selected unit. Both participating kernels were observed in an
-isolated JIT cache, and focused plus regression validation passed.
+No migrated kernel lacks device runtime coverage. Four host-binding variants
+have narrower coverage and remain flagged in the ledger:
 
-## Validation headline
+- Matmul legacy 1D and 2D constructors compile in the host build, but their
+  callers are fused CCL factories; mapped single-chip tests runtime-exercise
+  the descriptor constructors only.
+- GroupNorm legacy and Welford `use_mcast=false` bindings have direct host
+  oracle and device-wire degenerate coverage, but no mapped operation test
+  reaches the v2 sender-only route. The same sender kernels are JIT-verified
+  through the multicast route.
 
-- Helper baseline: 68 passed.
-- Post-allgather LayerNorm rollback: the baseline-restored pair passed all 136
-  mapped cases on 2026-07-30. This inventory exercises only `mcast_1d`, so it
-  validates the rollback but does not unblock the helper migration for the
-  accepted non-1D sender geometry.
-- GroupNorm legacy: 108 passed, 2 expected skips; fixed/default routing: 19 passed, 6 expected skips.
-- GroupNorm Welford: 108 passed, 2 expected skips; fixed/default routing shares the same 19 passed, 6 expected skips.
-- Matmul in1 inventory: 302 passed, 188 expected skips.
-- Conv height direct inventory after the host migration: 49 passed, 16 expected
-  skips. The exact compile-focused case passed under `--dev` and produced both
-  sender and receiver JIT artifacts.
-- Conv block direct inventory: 49 passed, 16 expected skips.
-- Conv shared DRAM regressions after the host migration: 14 passed.
-- Host helper tests after the host migration: 19 passed.
-- Device helper-wire tests after the host migration: 68 passed.
-- Host rebuild after Conv factory changes: passed.
+## Deferred kernel work
 
-The rotating width-sharded Conv migration passed its initial smoke but failed
-25 of the full 65 selected cases numerically. It was restored to baseline and
-is not counted as migrated. The rotating block-sharded matmul migration also
-failed an exact numeric regression that passed after restoring the baseline.
+The 82 deferred kernel rows remain outside this host rollout. The principal
+production blockers are:
 
-## Missing helper capabilities
+- matmul in0 control channels that require typed/custom control values or
+  independent data/signal loopback behavior;
+- width-sharded Conv2D activation multicast, whose prior port failed 25
+  numerical cases and was restored;
+- block-sharded Conv2D activation multicast, whose producer-overlapped chunked
+  send is not expressible by the current helper;
+- LayerNorm channels requiring acknowledged signal-only, mixed-mode streaming,
+  or explicit include-source loopback semantics;
+- TopK no-handshake receiver initialization hazards.
 
-1. Acknowledged signal-only send/receive.
-2. One-gate, multi-block mixed flag/counter streaming.
-3. Race-free host-owned initialization for no-handshake flag receivers.
-4. Typed/custom control values such as `IGNORE_BATCH`.
-5. Independent data and signal loopback modes.
-6. Explicit INCLUDE-source loopback independent of rectangle membership.
-7. Explicit multicast fan-out when host population differs from rectangle
-   area, or a checked dense-rectangle invariant.
+No partial migration for a deferred or quarantined unit remains in the
+worktree.
 
-Detailed semantics and failed/passing test evidence are recorded in
-`ledger.json`, `test_map.json`, `tiers.md`, and the per-kernel migration logs.
+## Commits
 
-## Documentation state
+| Unit | Code commit | Ledger/log commit |
+|---|---|---|
+| Conv2D height weights | `75b977e1a04ee7a14df5d8039393c7844f33fdae` | `de4122b2ca4894aafeebaab751306e5b204a8bde` |
+| Conv2D fixed-line weights | `261e322ed2284175e3b4b7b80f98e947b569fe10` | `200e157a8278a25386c8fa440da3a25ca89d1961` |
+| Matmul in1 | `2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd` | `080237302623cbdb49e37854cf38a35d43715bee` |
+| GroupNorm v2 | `0a796a025c9dc678387e2a7fa52518c898737dc9` | `3cac5e6d0a9d716d640167750852d92913953d07` |
 
-The skill-owned `helper_design/mcast_pipe` documentation tree is present and
-reconciled through 2026-07-30. The current tree contains 128 artifacts,
-including two host-I/O annotations renamed to their live kernels. The following
-are current:
-
-- `migration/ledger.json`
-- `migration/ledger.md`
-- `migration/report.md`
-- `migration/reconcile_2026-07-29.md`
-- `migration/test_map.json`
-- `migration/tiers.md`
-- `migration/log/*.md`
-
-`test_map.json` owns the complete definitions behind production inventory
-labels, compile/JIT coverage rules, reusable routes for additional
-single-device census candidates, and the known multi-device or binary-only
-coverage gaps.
-
-The 2026-06-19 and 2026-06-27 reconcile reports, original per-kernel logs, and
-pre-migration audits remain historical records. Current-status banners on
-historical files take precedence over their retained execution text.
+The authoritative machine state is `migration/ledger.json`; this report is its
+regenerated run view.

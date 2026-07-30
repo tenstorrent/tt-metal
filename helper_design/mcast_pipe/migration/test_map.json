@@ -128,9 +128,10 @@
       "dispatch": "use_welford=false and use_mcast=false",
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "inventory": [
-        "GN-SHARDED-PARAMETERIZED legacy fixed/default routing"
+        "McastHostFixture degenerate cases",
+        "test_mcast_pipe.py::test_f3_degenerate"
       ],
-      "coverage": "complete"
+      "coverage": "helper-wire coverage only; no mapped device operation test reaches the GroupNorm v2 sender-only binding"
     },
     {
       "id": "groupnorm-v2:sharded:welford:mcast",
@@ -150,9 +151,10 @@
       "dispatch": "use_welford=true and use_mcast=false",
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "inventory": [
-        "GN-SHARDED-PARAMETERIZED Welford fixed/default routing"
+        "McastHostFixture degenerate cases",
+        "test_mcast_pipe.py::test_f3_degenerate"
       ],
-      "coverage": "complete"
+      "coverage": "helper-wire coverage only; no mapped device operation test reaches the GroupNorm v2 sender-only binding"
     }
   ],
   "inventory_definitions": {

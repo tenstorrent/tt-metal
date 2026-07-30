@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 75b977e1a04ee7a14df5d8039393c7844f33fdae, fixed-line migration at code commit 261e322ed2284175e3b4b7b80f98e947b569fe10, and matmul in1 multicast migration at code commit 2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd. Remaining status is reconciled through commit 307951cc8dc from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
+  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 75b977e1a04ee7a14df5d8039393c7844f33fdae, fixed-line migration at code commit 261e322ed2284175e3b4b7b80f98e947b569fe10, matmul in1 multicast migration at code commit 2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd, and GroupNorm v2 migration at code commit 0a796a025c9dc678387e2a7fa52518c898737dc9. Remaining kernel status is reconciled through commit 307951cc8dc from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
   "host_bindings": [
     {
       "id": "weights-mcast:conv2d-sharded:single-sender-rect",
@@ -208,15 +208,17 @@
         "GN-SHARDED-PARAMETERIZED legacy: 108 passed, 2 expected skips",
         "fixed/default routing: 19 passed, 6 expected skips",
         "McastHostFixture degenerate cases: passed",
-        "test_mcast_pipe.py including test_f3_degenerate: 68 passed"
+        "test_mcast_pipe.py including test_f3_degenerate: 68 passed",
+        "coverage gap: no mapped device operation test reaches the GroupNorm v2 use_mcast=false binding"
       ],
-      "coverage_confidence": "high",
+      "coverage_confidence": "medium",
       "last_verified": "2026-07-30",
       "flags": [
         "tier:4",
         "fully-end-to-end",
         "fixed-three-rectangle-wire",
-        "degenerate-sender-only"
+        "degenerate-sender-only",
+        "degenerate-runtime-coverage-gap"
       ]
     },
     {
@@ -263,15 +265,17 @@
         "GN-SHARDED-PARAMETERIZED Welford: 108 passed, 2 expected skips",
         "fixed/default routing: 19 passed, 6 expected skips",
         "McastHostFixture degenerate cases: passed",
-        "test_mcast_pipe.py including test_f3_degenerate: 68 passed"
+        "test_mcast_pipe.py including test_f3_degenerate: 68 passed",
+        "coverage gap: no mapped device operation test reaches the GroupNorm v2 use_mcast=false binding"
       ],
-      "coverage_confidence": "high",
+      "coverage_confidence": "medium",
       "last_verified": "2026-07-30",
       "flags": [
         "tier:4",
         "fully-end-to-end",
         "fixed-three-rectangle-wire",
-        "degenerate-sender-only"
+        "degenerate-sender-only",
+        "degenerate-runtime-coverage-gap"
       ]
     }
   ],
