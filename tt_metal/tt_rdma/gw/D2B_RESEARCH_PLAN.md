@@ -98,6 +98,40 @@ pivot needed for the depth fix. Recv-post is now **depth-parametric (RQ=64 valid
 **Still 0.37 Mpps** — the kernel posts 1 recv/iteration (1-in-flight). Deep RQ is now *available*; converting it
 to throughput is Stage 2 (post N recvs + pipeline). SRQ remains the Stage-3 multi-EU buffer model.
 
+## ★ Stage 2 IMPLEMENTATION STATUS (2026-07-30) — code done, egress/completion blocker
+
+**Implemented + deployed + builds + connects + runs multi-frame** (repo working tree; DPU built):
+- `common_defs.h`: `#define TT_RING (256)`.
+- `sample.c`: landing ring `calloc(TT_RING, plen)` + `reg_mr TT_RING*plen` (SF advertised + PF gather); DPA-heap
+  header **ring** `mem_alloc(TT_RING*TT_FRAME_HDR)` + every slot pre-filled with the template + `mmap` full len.
+- `kernels_dev.c`: async-ring `target_thread_kernel` (slot=seq%TT_RING, post eth SEND without per-frame wait,
+  non-blocking eth-CQE drain, `ETH_MAX_INFLIGHT=128` backpressure) + batch pre-post `TT_PREPOST=48` recvs.
+- Requester: `tt_p15_requester` rebuilt with `TT_RING=256` to match (slots align).
+
+**Proven working via DPA `DOCA_DPA_DEV_LOG_INFO`:** the RC-recv → re-head → eth-post pipeline **runs multi-frame**
+(recv#0..#5+, `eth_posted` climbs 0→5+), and the first frame egresses byte-exact. So the ring gather + recv path
+are correct.
+
+**★ BLOCKER: ETH sends post but do NOT egress/complete.** `eth_done` stuck at **1**; **p0 tx delta = +2** over a
+run (only ~2 frames leave p0). Frames pile in the SF ETH SQ un-transmitted → once `eth_posted-eth_done` hits 128
+the backpressure loop deadlocks → requester stalls. Two candidate causes, **not yet isolated**:
+1. **The async eth-completion handling** — the sync kernel *blocked* on each eth CQE (which paced + drained the
+   SQ); the async non-blocking drain may need a different reap/re-arm (critic's `request_notification` open-Q), or
+   the per-frame `commit_send` + varying-header-slot gather interacts badly.
+2. **The DPU rebooted mid-session** (SF/host RoCE IPs were wiped + re-added; steering flow was dropped + re-added
+   **COLD**). A cold SF→p0 eswitch flow / post-reboot eswitch state could be backpressuring the SF ETH SQ so sends
+   don't complete. **The clean isolation (re-run the Stage-1 SYNC kernel post-reboot to confirm SF→p0 still
+   egresses 50000) was botched** — `git stash` didn't move the *untracked* kernels_dev.c, so that test actually
+   ran Stage-2 + the wrong requester. REDO it first next session.
+
+**Next session (in order):** (a) reconstruct/redeploy the Stage-1 sync kernel + single-slot requester, confirm
+SF→p0 egresses 50000 post-reboot (isolates bench-vs-code); (b) if bench is fine, **warm the steering flow** (send
+warm-up frames or a `skip_sw` tc filter, §9) and re-test — cold-flow backpressure is the leading suspect; (c) if
+still stalling, fix the async eth-completion reap (try blocking-drain-one like the sync kernel, or
+`request_notification` re-arm; load the `doca-verbs`/`doca-dpa` skill for ETH-SQ completion semantics). The
+Stage-2 source is backed up in the session scratchpad `stage2_backup/`. Note: gw/dpa_rehead_verbs/*.c were
+**untracked** in git before this — the Stage-2 commit adds `kernels_dev.c`+`common_defs.h` to tracking.
+
 ## Stage 2 implementation plan (scoped 2026-07-30 — port the async-ring onto the DBR-fixed base)
 
 The `async_ring_wip` **kernel** (`async_ring_wip_kernels_dev.c` `target_thread_kernel`) IS the pipelined design and

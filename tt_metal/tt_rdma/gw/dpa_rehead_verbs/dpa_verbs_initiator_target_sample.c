@@ -1084,14 +1084,19 @@ static doca_error_t create_tt_egress_engine(struct verbs_resources* r) {
         return status;
     }
 
-    /* DPA-heap header (pf_dpa_ctx): copy the host template in, mmap it for the ETH gather SGE0 mkey */
-    status = doca_dpa_mem_alloc(r->pf_dpa_ctx, TT_FRAME_HDR, &r->tt_hdr_dpa_addr);
+    /* DPA-heap header RING (pf_dpa_ctx): TT_RING slots, each pre-filled with the host template; the kernel
+     * patches only the per-frame seq into slot (seq%TT_RING). mmap covers the whole ring for the ETH gather
+     * SGE0 mkey. A ring (not one slot) is what lets the kernel pipeline without a header alias. */
+    status = doca_dpa_mem_alloc(r->pf_dpa_ctx, (size_t)TT_RING * TT_FRAME_HDR, &r->tt_hdr_dpa_addr);
     if (status != DOCA_SUCCESS) {
         return status;
     }
-    status = doca_dpa_h2d_memcpy(r->pf_dpa_ctx, r->tt_hdr_dpa_addr, r->tt_hdr_buf, TT_FRAME_HDR);
-    if (status != DOCA_SUCCESS) {
-        return status;
+    for (uint32_t i = 0; i < TT_RING; i++) {
+        status = doca_dpa_h2d_memcpy(
+            r->pf_dpa_ctx, r->tt_hdr_dpa_addr + (uint64_t)i * TT_FRAME_HDR, r->tt_hdr_buf, TT_FRAME_HDR);
+        if (status != DOCA_SUCCESS) {
+            return status;
+        }
     }
     r->tt_hdr_dpa_mmap.mmap_type = MMAP_TYPE_DPA;
     r->tt_hdr_dpa_mmap.doca_dpa = r->pf_dpa_ctx;
@@ -1100,10 +1105,10 @@ static doca_error_t create_tt_egress_engine(struct verbs_resources* r) {
     r->tt_hdr_dpa_mmap.permissions =
         DOCA_ACCESS_FLAG_LOCAL_READ_WRITE | DOCA_ACCESS_FLAG_RDMA_WRITE | DOCA_ACCESS_FLAG_RDMA_READ;
     r->tt_hdr_dpa_mmap.memrange_addr = (void*)r->tt_hdr_dpa_addr;
-    r->tt_hdr_dpa_mmap.memrange_len = TT_FRAME_HDR;
+    r->tt_hdr_dpa_mmap.memrange_len = (size_t)TT_RING * TT_FRAME_HDR;
     status = doca_mmap_obj_init(&r->tt_hdr_dpa_mmap);
     if (status != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("TT: failed to mmap DPA-heap header: %s", doca_error_get_descr(status));
+        DOCA_LOG_ERR("TT: failed to mmap DPA-heap header ring: %s", doca_error_get_descr(status));
         return status;
     }
 
@@ -1244,14 +1249,17 @@ static doca_error_t create_tt_rehead_resources(struct verbs_resources* resources
     /* Single-context (SF): landing buffer registered once on the SF PD -- serves the RC recv target +
      * advertised rkey AND the SF ETH SQ gather source (same PD as the ETH SQ). */
     (void)pf_ibv_pd;
-    resources->tt_land_buf = calloc(1, resources->tt_plen);
+    /* Stage-2 async-ring: TT_RING landing slots. The ring requester WRITEs frame i to
+     * advertised_addr + (i%TT_RING)*plen, so the advertised MR must span the whole ring (a single-slot MR
+     * would give the requester a remote-access error past slot 0). */
+    resources->tt_land_buf = calloc(TT_RING, resources->tt_plen);
     if (!resources->tt_land_buf) {
         return DOCA_ERROR_NO_MEMORY;
     }
     resources->tt_land_sf_mr = ibv_reg_mr(
         sf_ibv_pd,
         resources->tt_land_buf,
-        resources->tt_plen,
+        (size_t)TT_RING * resources->tt_plen,
         IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
     if (!resources->tt_land_sf_mr) {
         DOCA_LOG_ERR("TT: failed to register landing buffer");
