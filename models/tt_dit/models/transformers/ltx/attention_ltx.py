@@ -21,10 +21,9 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
 # Fold the per-head gate projection into Q's matmul as an extra equal chunk, trading a
-# redundant activation all-gather for a wider matmul. Set LTX_FUSE_GATE_QKV=1 to enable.
-# "cross" folds the gate into to_q for the cross-attentions; "self" (to_qkv, chunks=4) is
-# NOT usable — the op returns corrupted q/k/v for a 4-way split, even with the gate chunk
-# ignored, so only the cross path is wired for real use.
+# redundant activation all-gather for a wider matmul. Values: "1" (all attentions),
+# "self" (to_qkv, chunks=4), "cross" (to_q, chunks=2); anything else disables it.
+# Off by default: correct at block level but not yet validated end to end.
 _FUSE_GATE_QKV = os.getenv("LTX_FUSE_GATE_QKV", "0")
 
 
@@ -421,14 +420,20 @@ class LTXAttention(Module):
         """Per-head gate from Q's trailing chunk: 2 * sigmoid(logits) as (B, H_local, N, 1).
 
         Each head owns a head_dim-wide slot whose first column carries its logit (see
-        _gate_block), so the reshape is a free view and the slice picks slot 0 per head.
+        _gate_block), so the same head split V uses lands the logits in slot 0 and emits
+        (B, H_local, N, head_dim) directly -- no permute. Reaching them via ttnn.reshape
+        instead costs ~115us, as much as the all-gather this fold removes: splitting the
+        last dim of a tiled tensor is a retile, not a view.
+
+        The slice leaves a sub-tile last dim whose padding still holds the head split's
+        data, and the downstream broadcast multiply reads it, so clone to a canonical
+        buffer.
         """
-        n, f = gate_1BNF.shape[-2], gate_1BNF.shape[-1]
-        g = ttnn.reshape(gate_1BNF, (1, n, self.n_local_heads, f // self.n_local_heads))
-        g = ttnn.slice(g, (0, 0, 0, 0), (1, n, self.n_local_heads, 1))
-        g = ttnn.multiply(ttnn.sigmoid(g), 2.0)
-        # (1, N, H_local, 1) -> (B=1, H_local, N, 1) to match the SDPA-output head layout.
-        return ttnn.permute(g, (0, 2, 1, 3))
+        g, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            gate_1BNF, num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
+        )
+        g = ttnn.clone(ttnn.slice(g, (0, 0, 0, 0), (g.shape[0], self.n_local_heads, g.shape[2], 1)))
+        return ttnn.multiply(ttnn.sigmoid(g), 2.0)
 
     def _compute_gate(
         self, spatial_1BND: ttnn.Tensor, qkv_parallel_config: DiTParallelConfig | None
