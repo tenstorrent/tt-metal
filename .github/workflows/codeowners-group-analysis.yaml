@@ -2929,13 +2929,24 @@ jobs:
 
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"Please review when you have a moment. Thank you! 🚀"
 
-            # A rate-limited username lookup is a real ping failure, not a cosmetic
-            # fallback — replace the (possibly wrong/incomplete) message with an
-            # explicit failure notice instead of sending something that looks like
-            # a successful ping.
-            if [ "$RATE_LIMIT_HIT" = "true" ]; then
-              echo "❌ Aborting CodeOwners Slack ping — GitHub API rate limit exceeded while resolving one or more GitHub usernames"
-              SLACK_MESSAGE="⚠️ *CodeOwners Ping Failed*"$'\n\n'"GitHub API rate limit was exceeded while resolving codeowner/author names for <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|PR #$PR_NUMBER>, so no ping was sent."$'\n\n'"Please re-run \`/codeowners ping\` once the rate limit resets."
+            # A rate-limited username lookup means some names/mentions in the
+            # message above may be wrong or incomplete — surface that visibly on
+            # the PR itself with a ⚠️ warning comment (GitHub's reaction API has
+            # no "warning" content type, so a reply comment is the closest visible
+            # equivalent) rather than silently sending a broken-looking ping with
+            # no indication anything went wrong. The Slack message still goes out.
+            if [ "$RATE_LIMIT_HIT" = "true" ] && [ "${{ github.event_name }}" = "issue_comment" ]; then
+              echo "⚠️  GitHub API rate limit hit while resolving one or more usernames — posting a warning comment on the PR"
+              WARNING_BODY="⚠️ **CodeOwners Ping Warning**"$'\n\n'"GitHub API rate limit was hit while resolving one or more codeowner/author names for this ping. The Slack notification was still sent, but it may be missing a proper Slack mention or full name for some codeowners. Re-run \`/codeowners ping\` once the rate limit resets if anyone appears to have been missed."
+              WARNING_JSON_FILE=$(mktemp)
+              jq -n --arg body "$WARNING_BODY" '{"body": $body}' > "$WARNING_JSON_FILE"
+              curl -s -X POST \
+                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                -H "Content-Type: application/json" \
+                --data-binary @"$WARNING_JSON_FILE" \
+                "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments" > /dev/null
+              rm -f "$WARNING_JSON_FILE"
             fi
 
             # Debug: Show the final message being sent (truncated for large messages)
@@ -2982,12 +2993,6 @@ jobs:
 
             # Clean up temp file
             rm -f /tmp/slack_message.txt
-
-            # Fail the job on a rate-limited ping so it shows up as a real CI
-            # failure instead of a quietly-successful run.
-            if [ "$RATE_LIMIT_HIT" = "true" ]; then
-              exit 1
-            fi
 
           elif [ "$SEND_SLACK" = "true" ] && [ "$NO_OWNERS_AVAILABLE" = "true" ]; then
             echo "Slack notification enabled but no owners available for notification (only PR author is codeowner)"
