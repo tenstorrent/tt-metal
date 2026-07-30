@@ -1,0 +1,87 @@
+{
+  "layer_kind": "dense",
+  "layers_of_kind": 32,
+  "total_layers": 32,
+  "measured_window_us": 40507.783,
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, NOT per-op",
+  "reconcile_command": "python .agents/skills/advisor-challenger/scripts/reconcile.py --report doc/advisor_challenger/shard_advise/dense/report.json --ir doc/advisor_challenger/shard_advise/dense/final_ir.mlir --perf doc/advisor_challenger/tracy/incumbent_ops.csv --layer-kind dense --layers-of-kind 32 --total-layers 32 --threshold-pct 1.0 --out doc/advisor_challenger/reconciliation.json",
+  "reconcile_parser_note": "The supplied parser produced zero rows because this advisor emits aliased #ttnn_layoutN definitions rather than inline #l1 layout spellings. The rows below are the manual resolution of the same authoritative final_ir.mlir against INPUT_1 shape/dtype/memory and CORE COUNT in incumbent_ops.csv.",
+  "dram_sharded_considered": 4,
+  "dram_sharded_advised": 4,
+  "chains": [
+    {
+      "chain": "qkv_projection",
+      "ops": ["qkv linear"],
+      "op_count": 1,
+      "summed_window_share_pct": 4.249,
+      "verdict": "kept",
+      "measured_ms": 0.798748,
+      "oracle": "real-weight batch-32 decode against PyTorch reference, PCC >= 0.995",
+      "oracle_passed": true,
+      "perf_report": "tracy/qkv_ds_ops.csv",
+      "reason": "Whole-decoder single-chain measurement beat the frozen incumbent by 0.007522 ms."
+    },
+    {
+      "chain": "gate_up_projection",
+      "ops": ["gate_up linear"],
+      "op_count": 1,
+      "summed_window_share_pct": 6.247,
+      "verdict": "kept",
+      "measured_ms": 0.803843,
+      "oracle": "real-weight batch-32 decode against PyTorch reference, PCC >= 0.995",
+      "oracle_passed": true,
+      "perf_report": "tracy/gate_up_ds_ops.csv",
+      "reason": "Whole-decoder single-chain measurement beat the frozen incumbent by 0.002427 ms."
+    },
+    {
+      "chain": "output_projection",
+      "ops": ["o_proj linear"],
+      "op_count": 1,
+      "summed_window_share_pct": 1.118,
+      "verdict": "rejected",
+      "measured_ms": 0.809640,
+      "reason": "Whole-decoder single-chain measurement was 0.003370 ms slower than the frozen incumbent."
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "qkv linear",
+      "chain": "qkv_projection",
+      "layer_kind": "dense",
+      "advised": {"memory": "dram_sharded_weight", "layout": "l1_width_sharded", "program_config_family": "dram_sharded"},
+      "shipped": {"cores": 96, "dram_sharded": false, "weight_dtype": "BFLOAT4_B"},
+      "device_us": 1721.293,
+      "window_share_pct": 4.249,
+      "verdict": "kept",
+      "measured_ms": 0.798748,
+      "oracle": "real-weight batch-32 decode against PyTorch reference, PCC >= 0.995",
+      "perf_report": "tracy/qkv_ds_ops.csv"
+    },
+    {
+      "op": "gate_up linear",
+      "chain": "gate_up_projection",
+      "layer_kind": "dense",
+      "advised": {"memory": "dram_sharded_weight", "layout": "l1_width_sharded", "program_config_family": "dram_sharded"},
+      "shipped": {"cores": 103, "dram_sharded": false, "weight_dtype": "BFLOAT4_B"},
+      "device_us": 2530.660,
+      "window_share_pct": 6.247,
+      "verdict": "kept",
+      "measured_ms": 0.803843,
+      "oracle": "real-weight batch-32 decode against PyTorch reference, PCC >= 0.995",
+      "perf_report": "tracy/gate_up_ds_ops.csv"
+    },
+    {
+      "op": "o_proj linear",
+      "chain": "output_projection",
+      "layer_kind": "dense",
+      "advised": {"memory": "dram_sharded_weight", "layout": "l1_width_sharded", "program_config_family": "dram_sharded"},
+      "shipped": {"cores": 32, "dram_sharded": false, "weight_dtype": "BFLOAT4_B"},
+      "device_us": 452.911,
+      "window_share_pct": 1.118,
+      "verdict": "rejected",
+      "measured_ms": 0.809640,
+      "reason": "Slower alone, but retained in combination search because interactions were required to be measured."
+    }
+  ]
+}

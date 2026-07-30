@@ -1,0 +1,52 @@
+{
+  "incumbent_ms": 0.806270,
+  "final_ms": 0.796420,
+  "noise_floor_ms": 0.000501,
+  "delta_ms": -0.009850,
+  "delta_pct": -1.2217,
+  "changed": true,
+  "winning_config": {
+    "decode_weight_layout": {
+      "qkv": "DRAM width-sharded",
+      "o_proj": "DRAM width-sharded",
+      "gate_up": "DRAM width-sharded",
+      "down": "DRAM width-sharded"
+    },
+    "activation_and_output_layout": "L1 width-sharded on 16 cores within each projection",
+    "in0_block_w": {"qkv": 3, "o_proj": 3, "gate_up": 6, "down": 16},
+    "compute_fidelity": "LoFi (explicit override; not copied from traced IR)"
+  },
+  "oracle": "models/autoports/microsoft_phi_3_5_mini_instruct/tests/test_optimized_decoder.py::test_optimized_decode_real_reference_and_determinism at batch 32, real layer-0 weights, PCC >= 0.995",
+  "oracle_passed": true,
+  "oracle_pcc": 0.998931492826291,
+  "best_single_ms": 0.798748,
+  "best_set": ["qkv_ds", "o_proj_ds", "gate_up_ds"],
+  "combination": {
+    "measured_sets": [
+      {"set": ["qkv_ds"], "measured_ms": 0.798748, "oracle_passed": true},
+      {"set": ["o_proj_ds"], "measured_ms": 0.809640, "oracle_passed": true},
+      {"set": ["gate_up_ds"], "measured_ms": 0.803843, "oracle_passed": true},
+      {"set": ["qkv_ds", "o_proj_ds"], "measured_ms": 0.799755, "oracle_passed": true},
+      {"set": ["qkv_ds", "gate_up_ds"], "measured_ms": 0.797325, "oracle_passed": true},
+      {"set": ["o_proj_ds", "gate_up_ds"], "measured_ms": 0.802093, "oracle_passed": true},
+      {"set": ["qkv_ds", "o_proj_ds", "gate_up_ds"], "measured_ms": 0.796261, "oracle_passed": true}
+    ]
+  },
+  "shipped_repeats_ms": [0.796420, 0.797109, 0.796624],
+  "perf_report": "tracy/final_ops.csv",
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial post-incumbent advisor capture at shipped BFP4 precision",
+      "capture": "shard_advise/dense/report.json",
+      "screened_chains": ["qkv_projection", "output_projection", "gate_up_projection"]
+    },
+    {
+      "iteration": 2,
+      "trigger": "apply the best measured combination, then re-profile and re-rank remaining disagreements",
+      "reranked_from": "tracy/final_ops.csv",
+      "capture": null,
+      "result": "All four advised dense projections now use DRAM-sharded weights; no remaining advised set difference and no topology shape rewrite, so no recapture."
+    }
+  ]
+}

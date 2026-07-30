@@ -1,0 +1,30 @@
+{
+  "cell_tag": "microsoft_phi_3_5_mini_instruct-optimized-noadvise",
+  "commit": "bd3a97a5fd8b341289dbdcba4f08f9f132eb0b54",
+  "harness": "tests/optimized_decoder_perf.py::test_candidate_traced_decode",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "repeats_ms": [
+    0.806270,
+    0.806771,
+    0.806426
+  ],
+  "incumbent_ms": 0.806270,
+  "noise_floor_ms": 0.000501,
+  "measured_at": "2026-07-30T15:44:35Z",
+  "shipped_policy": {
+    "attention_weight_dtype": "BFLOAT4_B",
+    "mlp_gate_up_weight_dtype": "BFLOAT4_B",
+    "mlp_down_weight_dtype": "BFLOAT4_B",
+    "decode_down_dram_sharded": true,
+    "decode_down_in0_block_w": 16,
+    "decode_down_compute_fidelity": "LoFi"
+  },
+  "shipped_weight_dtypes": {
+    "qkv": "BFLOAT4_B",
+    "o_proj": "BFLOAT4_B",
+    "gate_up": "BFLOAT4_B",
+    "down": "BFLOAT4_B"
+  },
+  "shipped_policy_source": "doc/advisor_challenger/tracy/incumbent_ops.csv (executed optimized rows: BFLOAT4_B projection weights; down weight DEV_0_DRAM_WIDTH_SHARDED and LoFi)"
+}

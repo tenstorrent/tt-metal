@@ -57,19 +57,20 @@ class OptimizedDecoder(FusedDecoder):
         dram = decoder.mesh_device.dram_grid_size()
         dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram.x - 1, dram.y - 1))})
 
-        shard_width = (
-            (decoder.hidden_size + dram.x * ttnn.TILE_SIZE - 1) // (dram.x * ttnn.TILE_SIZE)
-        ) * ttnn.TILE_SIZE
-        memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(
-                dram_grid,
-                (decoder.intermediate_size, shard_width),
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        )
-        decoder.weights["down_decode"] = ttnn.to_memory_config(decoder.weights["down"], memory_config)
+        decode_weights = {
+            "qkv_decode": ("qkv", decoder.hidden_size, 3 * decoder.hidden_size),
+            "o_proj_decode": ("o_proj", decoder.hidden_size, decoder.hidden_size),
+            "gate_up_decode": ("gate_up", decoder.hidden_size, 2 * decoder.intermediate_size),
+            "down_decode": ("down", decoder.intermediate_size, decoder.hidden_size),
+        }
+        for decode_name, (source_name, k, n) in decode_weights.items():
+            shard_width = ((n + dram.x * ttnn.TILE_SIZE - 1) // (dram.x * ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
+            memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.DRAM,
+                ttnn.ShardSpec(dram_grid, (k, shard_width), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            decoder.weights[decode_name] = ttnn.to_memory_config(decoder.weights[source_name], memory_config)
         return decoder
 
     def _decode_projection_memcfg(self, width):
@@ -84,16 +85,25 @@ class OptimizedDecoder(FusedDecoder):
         )
 
     def _decode_down(self, value):
+        # Preserve the explicit shipped-weight contract: self.weights["down_decode"].
+        return self._decode_dram_sharded_linear(
+            value,
+            weight_name="down_decode",
+            output_width=self.hidden_size,
+            in0_block_w=16,
+        )
+
+    def _decode_dram_sharded_linear(self, value, *, weight_name, output_width, in0_block_w):
         value = ttnn.to_memory_config(value, self._decode_projection_memcfg(tuple(value.shape)[-1]))
         output = ttnn.linear(
             value,
-            self.weights["down_decode"],
+            self.weights[weight_name],
             dtype=ttnn.bfloat16,
-            memory_config=self._decode_projection_memcfg(self.hidden_size),
+            memory_config=self._decode_projection_memcfg(output_width),
             program_config=ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                in0_block_w=16,
+                in0_block_w=in0_block_w,
                 per_core_M=1,
-                per_core_N=(self.hidden_size // ttnn.TILE_SIZE) // 16,
+                per_core_N=(output_width // ttnn.TILE_SIZE) // 16,
                 fused_activation=None,
             ),
             compute_kernel_config=ttnn.types.BlackholeComputeKernelConfig(
@@ -128,7 +138,15 @@ class OptimizedDecoder(FusedDecoder):
     def _mlp(self, hidden_states):
         normalized = self._norm(hidden_states, self.weights["post_norm"])
         is_decode = tuple(hidden_states.shape) == (1, 1, self.batch, self.hidden_size)
-        gate_up = ttnn.linear(normalized, self.weights["gate_up"], dtype=ttnn.bfloat16)
+        if is_decode and self.batch == ttnn.TILE_SIZE:
+            gate_up = self._decode_dram_sharded_linear(
+                normalized,
+                weight_name="gate_up_decode",
+                output_width=2 * self.intermediate_size,
+                in0_block_w=6,
+            )
+        else:
+            gate_up = ttnn.linear(normalized, self.weights["gate_up"], dtype=ttnn.bfloat16)
         gate_up_shape = tuple(gate_up.shape)
         gate = ttnn.slice(gate_up, [0, 0, 0, 0], [*gate_up_shape[:-1], self.intermediate_size])
         up = ttnn.slice(
@@ -141,3 +159,63 @@ class OptimizedDecoder(FusedDecoder):
             return ttnn.add(hidden_states, self._prefill_down(activated))
         projected = self._decode_down(activated)
         return ttnn.add(hidden_states, projected)
+
+    def decode_forward(
+        self,
+        hidden_states,
+        *,
+        key_cache,
+        value_cache,
+        page_table,
+        current_positions,
+        use_long_rope,
+    ):
+        if self.batch != ttnn.TILE_SIZE:
+            return super().decode_forward(
+                hidden_states,
+                key_cache=key_cache,
+                value_cache=value_cache,
+                page_table=page_table,
+                current_positions=current_positions,
+                use_long_rope=use_long_rope,
+            )
+        residual = hidden_states
+        normalized = self._norm(hidden_states, self.weights["input_norm"])
+        fused = self._decode_dram_sharded_linear(
+            normalized,
+            weight_name="qkv_decode",
+            output_width=3 * self.hidden_size,
+            in0_block_w=3,
+        )
+        query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
+            fused,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        )
+        query, key = self._decode_rope(query, key, current_positions, use_long_rope=use_long_rope)
+        ttnn.experimental.paged_update_cache(
+            key_cache, key, update_idxs_tensor=current_positions, page_table=page_table
+        )
+        ttnn.experimental.paged_update_cache(
+            value_cache, value, update_idxs_tensor=current_positions, page_table=page_table
+        )
+        attended = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            query,
+            key_cache,
+            value_cache,
+            cur_pos_tensor=current_positions,
+            page_table_tensor=page_table,
+            scale=self.scale,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attended = ttnn.to_memory_config(attended, self._decode_concat_memory_config())
+        attended = ttnn.experimental.nlp_concat_heads_decode(attended, num_heads=self.num_heads)
+        projected = self._decode_dram_sharded_linear(
+            attended,
+            weight_name="o_proj_decode",
+            output_width=self.hidden_size,
+            in0_block_w=3,
+        )
+        projected = ttnn.reshape(projected, [1, 1, self.batch, self.hidden_size])
+        return self._mlp(ttnn.add(residual, projected))
