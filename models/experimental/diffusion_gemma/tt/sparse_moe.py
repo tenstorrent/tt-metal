@@ -56,7 +56,21 @@ class RaggedRouting:
 
 
 # Host-side cache of the router per-expert scale, keyed by device tensor id.
+#
+# The value keeps a STRONG REFERENCE to the device tensor it was read from, and that
+# reference is what makes ``id()`` a sound key. ``id()`` is unique only among LIVE
+# objects, so a cache that stored the host scale alone would silently serve a stale
+# scale once the original tensor was collected and a new one was allocated at the same
+# address -- wrong routing weights, no error raised. Pinning costs nothing real here:
+# the tensor is a ``[num_experts]`` router weight that already lives for the model's
+# lifetime. ``clear_router_scale_host_cache()`` exists for tests that build and tear
+# down several models in one process.
 _ROUTER_SCALE_HOST_CACHE = {}
+
+
+def clear_router_scale_host_cache() -> None:
+    """Drop every cached router per-expert scale (and the tensor refs pinning them)."""
+    _ROUTER_SCALE_HOST_CACHE.clear()
 
 
 def ragged_router_forward(router, hidden_states):
@@ -195,13 +209,17 @@ def _ragged_metadata_host(dense_routing, num_experts, top_k, max_m_blocks=RAGGED
         route_weight = torch.gather(route_weight, -1, per_token_order)
         if dense_routing.per_expert_scale is not None:
             scale_tensor = dense_routing.per_expert_scale
-            scale = _ROUTER_SCALE_HOST_CACHE.get(id(scale_tensor))
-            if scale is None:
+            cached = _ROUTER_SCALE_HOST_CACHE.get(id(scale_tensor))
+            # ``cached[0] is scale_tensor`` rejects an entry whose tensor died and whose
+            # address was recycled; without it a stale scale is served silently.
+            if cached is not None and cached[0] is scale_tensor:
+                scale = cached[1]
+            else:
                 if scale_tensor.device().get_num_devices() > 1:
                     scale = ttnn.to_torch(ttnn.get_device_tensors(scale_tensor)[0]).reshape(-1)
                 else:
                     scale = ttnn.to_torch(scale_tensor).reshape(-1)
-                _ROUTER_SCALE_HOST_CACHE[id(scale_tensor)] = scale
+                _ROUTER_SCALE_HOST_CACHE[id(scale_tensor)] = (scale_tensor, scale)
             route_weight = route_weight * scale[expert_index]
     else:
         if dense_routing.device().get_num_devices() > 1:
