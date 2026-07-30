@@ -1215,14 +1215,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
 }
 
 // Single row - multi core
-//
-// NOT PORTED to Metal 2.0. This factory needs two WorkUnitSpecs over disjoint node sets (a
-// single-node coordinator and the worker grid), each binding its own dataflow buffers. Under
-// that shape the per-core-range dataflow-buffer config payload is sized by the largest
-// per-kernel-group buffer count but indexed by the program-global buffer id, so a buffer whose
-// id exceeds that count is serialized out of bounds.
-// Fix tracked in issue #51409.
-ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
+ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::create_program_artifacts(
     const SortParams& attributes, const SortInputs& tensor_args, std::vector<Tensor>& output_tensors) {
     const tt::DataFormat input_tensor_cb_data_format =
         datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
@@ -1233,9 +1226,9 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     const uint32_t value_tensor_tile_size = tile_size(value_tensor_cb_data_format);
     const uint32_t index_tensor_tile_size = tile_size(index_tensor_cb_data_format);
 
-    auto* const input_buffer = tensor_args.input_tensor.buffer();
-    auto* const value_buffer = output_tensors.at(0).buffer();
-    auto* const index_buffer = output_tensors.at(1).buffer();
+    const auto& input_mesh_tensor = tensor_args.input_tensor.mesh_tensor();
+    const auto& value_mesh_tensor = output_tensors.at(0).mesh_tensor();
+    const auto& index_mesh_tensor = output_tensors.at(1).mesh_tensor();
 
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
@@ -1249,6 +1242,8 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
 
     const uint32_t value_element_size = tt::datum_size(input_tensor_cb_data_format);
     const uint32_t W_tile_bytes = tile_width * value_element_size;
+    const uint32_t index_element_size = tt::datum_size(index_tensor_cb_data_format);
+    const uint32_t W_index_bytes = tile_width * index_element_size;
 
     auto* device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -1294,173 +1289,353 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     CoreRangeSet all_core_set({CoreRange(coordinator_core)});
     all_core_set = all_core_set.merge<CoreRangeSet>(core_range);
 
-    ProgramDescriptor desc;
+    // -----------------------------------------------------------------------
+    // Resource names
+    //
+    // The coordinator and the workers run different kernels on disjoint nodes and share no dataflow
+    // buffer, so each side gets its own buffer specs. Placement is derived from the bindings, which
+    // is what keeps the coordinator node from carrying the worker buffers it never touches.
+    // -----------------------------------------------------------------------
+    const KernelSpecName COORDINATOR{"coordinator"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    const DFBSpecName COORD_INPUT{"coord_input_tensor"};
+    const DFBSpecName COORD_INDEX{"coord_index_tensor"};
+    const DFBSpecName COORD_VALUE_ROW{"rm_coord_value_row"};
+    const DFBSpecName COORD_INDEX_ROW{"rm_coord_index_row"};
+
+    const DFBSpecName WORKER_INPUT{"input_tensor"};
+    const DFBSpecName WORKER_INDEX{"index_tensor"};
+    const DFBSpecName WORKER_INPUT_TRANSPOSED{"input_tensor_transposed"};
+    const DFBSpecName WORKER_INDEX_TRANSPOSED{"index_tensor_transposed"};
+    const DFBSpecName WORKER_VALUE_OUTPUT{"input_tensor_output"};
+    const DFBSpecName WORKER_INDEX_OUTPUT{"index_tensor_output"};
+    const DFBSpecName WORKER_RM_IN_VALUE{"rm_worker_input_value"};
+    const DFBSpecName WORKER_RM_IN_INDEX{"rm_worker_input_index"};
+    const DFBSpecName WORKER_RM_OUT_VALUE{"rm_worker_output_value"};
+    const DFBSpecName WORKER_RM_OUT_INDEX{"rm_worker_output_index"};
+
+    const SemaphoreSpecName SEM_COORD_TO_CORES{"coordinator_to_cores"};
+    const SemaphoreSpecName SEM_CORES_TO_COORD_READY{"cores_to_coordinator_ready"};
+    const SemaphoreSpecName SEM_CORES_TO_COORD_DONE{"cores_to_coordinator_done"};
+
+    const TensorParamName INPUT_PARAM{"input"};
+    const TensorParamName VALUE_PARAM{"value_output"};
+    const TensorParamName INDEX_PARAM{"index_output"};
+
+    ProgramSpec spec;
+    spec.name = "sort_single_row_multi_core";
 
     // -----------------------------------------------------------------------
-    // Circular buffers (c_0–c_5 on all cores, c_6–c_9 RM-only)
+    // Dataflow buffers
     // -----------------------------------------------------------------------
     constexpr uint32_t buffer_scale_factor = 2;
-    constexpr uint32_t input_tensor_cb_index = tt::CBIndex::c_0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * input_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_tensor_cb_index),
-            .data_format = input_tensor_cb_data_format,
-            .page_size = input_tensor_tile_size,
-        }}},
-    });
 
-    constexpr uint32_t index_tensor_cb_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * index_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(index_tensor_cb_index),
-            .data_format = index_tensor_cb_data_format,
-            .page_size = index_tensor_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t input_tensor_transposed_cb_index = tt::CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * input_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_tensor_transposed_cb_index),
-            .data_format = input_tensor_cb_data_format,
-            .page_size = input_tensor_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t index_tensor_transposed_cb_index = tt::CBIndex::c_3;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * index_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(index_tensor_transposed_cb_index),
-            .data_format = index_tensor_cb_data_format,
-            .page_size = index_tensor_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t input_tensor_output_cb_index = tt::CBIndex::c_4;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * value_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_tensor_output_cb_index),
-            .data_format = value_tensor_cb_data_format,
-            .page_size = value_tensor_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_5;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * index_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(index_tensor_output_cb_index),
-            .data_format = index_tensor_cb_data_format,
-            .page_size = index_tensor_tile_size,
-        }}},
-    });
-
-    const uint32_t index_element_size = tt::datum_size(index_tensor_cb_data_format);
-    const uint32_t W_index_bytes = tile_width * index_element_size;
-
-    constexpr uint32_t rm_coord_value_row_cb_index = tt::CBIndex::c_6;
-    constexpr uint32_t rm_coord_index_row_cb_index = tt::CBIndex::c_7;
-    constexpr uint32_t rm_worker_input_value_cb_index = tt::CBIndex::c_6;
-    constexpr uint32_t rm_worker_input_index_cb_index = tt::CBIndex::c_7;
-    constexpr uint32_t rm_worker_output_value_cb_index = tt::CBIndex::c_8;
-    constexpr uint32_t rm_worker_output_index_cb_index = tt::CBIndex::c_9;
-    if (is_row_major) {
-        const CoreRangeSet coordinator_core_set{CoreRange(coordinator_core)};
-        constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
-
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = W_tile_bytes,
-            .core_ranges = coordinator_core_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_coord_value_row_cb_index),
-                .data_format = input_tensor_cb_data_format,
-                .page_size = W_tile_bytes,
-            }}},
+    if (!is_row_major) {
+        // The coordinator stages one tile at a time through these while copying the input to the
+        // output in DRAM and generating the index tensor there.
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = COORD_INPUT,
+            .entry_size = input_tensor_tile_size,
+            .num_entries = buffer_scale_factor,
+            .data_format_metadata = input_tensor_cb_data_format,
         });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = W_index_bytes,
-            .core_ranges = coordinator_core_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_coord_index_row_cb_index),
-                .data_format = index_tensor_cb_data_format,
-                .page_size = W_index_bytes,
-            }}},
-        });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * TILE_H * W_tile_bytes,
-            .core_ranges = core_range,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_worker_input_value_cb_index),
-                .data_format = input_tensor_cb_data_format,
-                .page_size = W_tile_bytes,
-            }}},
-        });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * TILE_H * W_index_bytes,
-            .core_ranges = core_range,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_worker_input_index_cb_index),
-                .data_format = index_tensor_cb_data_format,
-                .page_size = W_index_bytes,
-            }}},
-        });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * TILE_H * W_tile_bytes,
-            .core_ranges = core_range,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_worker_output_value_cb_index),
-                .data_format = input_tensor_cb_data_format,
-                .page_size = W_tile_bytes,
-            }}},
-        });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * TILE_H * W_index_bytes,
-            .core_ranges = core_range,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_worker_output_index_cb_index),
-                .data_format = index_tensor_cb_data_format,
-                .page_size = W_index_bytes,
-            }}},
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = COORD_INDEX,
+            .entry_size = index_tensor_tile_size,
+            .num_entries = buffer_scale_factor,
+            .data_format_metadata = index_tensor_cb_data_format,
         });
     }
 
-    // Semaphores.  The cores->coordinator channel uses two separate semaphores so a fast
-    // reader's next-row readiness increment can never be miscounted as a sub-stage
-    // confirmation: on one shared counter it could overshoot the coordinator's exact-match
-    // wait and deadlock the op at Ht >= 2.  Readiness -> ready sem; per-pair confirmations
-    // -> done sem.
-    constexpr uint32_t coordinator_to_cores_semaphore_id = 0;
-    constexpr uint32_t cores_to_coordinator_ready_semaphore_id = 1;
-    constexpr uint32_t cores_to_coordinator_done_semaphore_id = 2;
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = coordinator_to_cores_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_core_set,
-        .initial_value = 0,
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_INPUT,
+        .entry_size = input_tensor_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = input_tensor_cb_data_format,
     });
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = cores_to_coordinator_ready_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_core_set,
-        .initial_value = 0,
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_INDEX,
+        .entry_size = index_tensor_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = index_tensor_cb_data_format,
     });
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = cores_to_coordinator_done_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_core_set,
-        .initial_value = 0,
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_INPUT_TRANSPOSED,
+        .entry_size = input_tensor_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = input_tensor_cb_data_format,
     });
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_INDEX_TRANSPOSED,
+        .entry_size = index_tensor_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = index_tensor_cb_data_format,
+    });
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_VALUE_OUTPUT,
+        .entry_size = value_tensor_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = value_tensor_cb_data_format,
+    });
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_INDEX_OUTPUT,
+        .entry_size = index_tensor_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = index_tensor_cb_data_format,
+    });
+
+    if (is_row_major) {
+        constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
+
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = COORD_VALUE_ROW,
+            .entry_size = W_tile_bytes,
+            .num_entries = 1,
+            .data_format_metadata = input_tensor_cb_data_format,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = COORD_INDEX_ROW,
+            .entry_size = W_index_bytes,
+            .num_entries = 1,
+            .data_format_metadata = index_tensor_cb_data_format,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WORKER_RM_IN_VALUE,
+            .entry_size = W_tile_bytes,
+            .num_entries = 2 * TILE_H,
+            .data_format_metadata = input_tensor_cb_data_format,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WORKER_RM_IN_INDEX,
+            .entry_size = W_index_bytes,
+            .num_entries = 2 * TILE_H,
+            .data_format_metadata = index_tensor_cb_data_format,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WORKER_RM_OUT_VALUE,
+            .entry_size = W_tile_bytes,
+            .num_entries = 2 * TILE_H,
+            .data_format_metadata = input_tensor_cb_data_format,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WORKER_RM_OUT_INDEX,
+            .entry_size = W_index_bytes,
+            .num_entries = 2 * TILE_H,
+            .data_format_metadata = index_tensor_cb_data_format,
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Semaphores. The cores to coordinator channel uses two separate semaphores so a fast reader's
+    // next-row readiness increment can never be miscounted as a sub-stage confirmation: on one
+    // shared counter it could overshoot the coordinator's exact-match wait and deadlock the op at
+    // Ht >= 2. Readiness goes to the ready semaphore, per-pair confirmations to the done semaphore.
+    // -----------------------------------------------------------------------
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_COORD_TO_CORES, .target_nodes = all_core_set});
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_CORES_TO_COORD_READY, .target_nodes = all_core_set});
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_CORES_TO_COORD_DONE, .target_nodes = all_core_set});
+
+    // -----------------------------------------------------------------------
+    // Tensor parameters
+    // -----------------------------------------------------------------------
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = INPUT_PARAM, .spec = input_mesh_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = VALUE_PARAM, .spec = value_mesh_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = INDEX_PARAM, .spec = index_mesh_tensor.tensor_spec()});
+
+    // -----------------------------------------------------------------------
+    // Kernel resource bindings
+    // -----------------------------------------------------------------------
+    Group<DFBBinding> coordinator_dfb_bindings;
+    Group<DFBBinding> reader_dfb_bindings;
+    Group<DFBBinding> writer_dfb_bindings;
+    Group<DFBBinding> compute_dfb_bindings;
+
+    // The coordinator both fills its staging buffers from DRAM and drains them back, so it holds
+    // both ends of each.
+    if (is_row_major) {
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_VALUE_ROW,
+            .accessor_name = "rm_coord_value_row",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_VALUE_ROW,
+            .accessor_name = "rm_coord_value_row",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INDEX_ROW,
+            .accessor_name = "rm_coord_index_row",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INDEX_ROW,
+            .accessor_name = "rm_coord_index_row",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    } else {
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INPUT,
+            .accessor_name = "input_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INPUT,
+            .accessor_name = "input_tensor",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INDEX,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INDEX,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
+
+    if (is_row_major) {
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_IN_VALUE,
+            .accessor_name = "rm_input_value",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_IN_INDEX,
+            .accessor_name = "rm_input_index",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    } else {
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INPUT,
+            .accessor_name = "input_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INDEX,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
+
+    if (is_row_major) {
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_OUT_VALUE,
+            .accessor_name = "rm_output_value",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_OUT_INDEX,
+            .accessor_name = "rm_output_index",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    } else {
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_VALUE_OUTPUT,
+            .accessor_name = "input_tensor_output",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INDEX_OUTPUT,
+            .accessor_name = "index_tensor_output",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
+
+    // In ROW_MAJOR the compute kernel fills the tile-format buffers itself from the tilize and
+    // drains the output ones through pack_untilize, so it holds both ends of all four.
+    if (is_row_major) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INPUT,
+            .accessor_name = "input_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INDEX,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INPUT,
+        .accessor_name = "input_tensor",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INDEX,
+        .accessor_name = "index_tensor",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INPUT_TRANSPOSED,
+        .accessor_name = "input_tensor_transposed",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INPUT_TRANSPOSED,
+        .accessor_name = "input_tensor_transposed",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INDEX_TRANSPOSED,
+        .accessor_name = "index_tensor_transposed",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INDEX_TRANSPOSED,
+        .accessor_name = "index_tensor_transposed",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_VALUE_OUTPUT,
+        .accessor_name = "input_tensor_output",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INDEX_OUTPUT,
+        .accessor_name = "index_tensor_output",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    if (is_row_major) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_VALUE_OUTPUT,
+            .accessor_name = "input_tensor_output",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INDEX_OUTPUT,
+            .accessor_name = "index_tensor_output",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_IN_VALUE,
+            .accessor_name = "rm_input_value",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_IN_INDEX,
+            .accessor_name = "rm_input_index",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_OUT_VALUE,
+            .accessor_name = "rm_output_value",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_OUT_INDEX,
+            .accessor_name = "rm_output_index",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
 
     // -----------------------------------------------------------------------
     // Kernels
@@ -1470,169 +1645,199 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     const auto start_core_physical_coord = device->worker_core_from_logical_core(start_core_logical);
     const auto end_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
 
-    std::vector<uint32_t> coordinator_compile_time_args = {
-        total_work_units,
-        Wt,
-        Ht,
-        total_number_of_cores,
-        number_of_available_cores,
-        input_tensor_cb_index,
-        index_tensor_cb_index,
-        static_cast<uint32_t>(is_32_bit_data)};
-    TensorAccessorArgs(*input_buffer).append_to(coordinator_compile_time_args);
-    TensorAccessorArgs(*value_buffer).append_to(coordinator_compile_time_args);
-    TensorAccessorArgs(*index_buffer).append_to(coordinator_compile_time_args);
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = COORDINATOR,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
+                  "coordinator_single_row_multi_core.cpp",
+        .compiler_options = {.defines = layout_defines(is_row_major)},
+        .dfb_bindings = std::move(coordinator_dfb_bindings),
+        .semaphore_bindings =
+            {
+                SemaphoreBinding{.semaphore_spec_name = SEM_COORD_TO_CORES, .accessor_name = "coordinator_to_cores"},
+                SemaphoreBinding{
+                    .semaphore_spec_name = SEM_CORES_TO_COORD_READY, .accessor_name = "cores_to_coordinator_ready"},
+                SemaphoreBinding{
+                    .semaphore_spec_name = SEM_CORES_TO_COORD_DONE, .accessor_name = "cores_to_coordinator_done"},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input_tensor"},
+                TensorBinding{.tensor_parameter_name = VALUE_PARAM, .accessor_name = "output_tensor"},
+                TensorBinding{.tensor_parameter_name = INDEX_PARAM, .accessor_name = "output_index_tensor"},
+            },
+        .compile_time_args =
+            {
+                {"total_work_units", total_work_units},
+                {"Wt", Wt},
+                {"Ht", Ht},
+                {"total_number_of_cores", total_number_of_cores},
+                {"number_of_available_cores", number_of_available_cores},
+                {"is_32_bit_data", static_cast<uint32_t>(is_32_bit_data)},
+                {"W_tile_bytes", W_tile_bytes},
+                {"W_index_bytes", W_index_bytes},
+                {"tile_width", static_cast<uint32_t>(tile_width)},
+            },
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"start_core_physical_coord_x",
+                  "start_core_physical_coord_y",
+                  "end_core_physical_coord_x",
+                  "end_core_physical_coord_y",
+                  "number_of_dest"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    });
 
-    coordinator_compile_time_args.push_back(static_cast<uint32_t>(is_row_major));
-    coordinator_compile_time_args.push_back(static_cast<uint32_t>(rm_coord_value_row_cb_index));
-    coordinator_compile_time_args.push_back(static_cast<uint32_t>(rm_coord_index_row_cb_index));
-    coordinator_compile_time_args.push_back(W_tile_bytes);
-    coordinator_compile_time_args.push_back(W_index_bytes);
-    coordinator_compile_time_args.push_back(tile_width);
+    // The workers read their input from the value-output buffer: the coordinator has already copied
+    // the input tensor there and generated the index tensor alongside it, and the sort then runs in
+    // place in those two output buffers.
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
+                  "reader_single_row_multi_core.cpp",
+        .compiler_options = {.defines = layout_defines(is_row_major)},
+        .dfb_bindings = std::move(reader_dfb_bindings),
+        .semaphore_bindings =
+            {
+                SemaphoreBinding{.semaphore_spec_name = SEM_COORD_TO_CORES, .accessor_name = "coordinator_to_cores"},
+                SemaphoreBinding{
+                    .semaphore_spec_name = SEM_CORES_TO_COORD_READY, .accessor_name = "cores_to_coordinator_ready"},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = VALUE_PARAM, .accessor_name = "input_tensor"},
+                TensorBinding{.tensor_parameter_name = INDEX_PARAM, .accessor_name = "index_tensor"},
+            },
+        .compile_time_args =
+            {
+                {"Wt", Wt},
+                {"Ht", Ht},
+                {"total_number_of_cores", total_number_of_cores},
+                {"compute_with_storage_grid_size_x", static_cast<uint32_t>(compute_with_storage_grid_size.x)},
+                {"compute_with_storage_grid_size_y", static_cast<uint32_t>(compute_with_storage_grid_size.y)},
+                {"number_of_available_cores", number_of_available_cores},
+                {"W_tile_bytes", W_tile_bytes},
+                {"W_index_bytes", W_index_bytes},
+            },
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"coordinator_core_physical_coord_x", "coordinator_core_physical_coord_y"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    });
 
-    KernelDescriptor coordinator_desc;
-    coordinator_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp";
-    coordinator_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    coordinator_desc.core_ranges = CoreRangeSet(CoreRange(coordinator_core));
-    coordinator_desc.compile_time_args = std::move(coordinator_compile_time_args);
-    coordinator_desc.config = ReaderConfigDescriptor{};
-    coordinator_desc.emplace_runtime_args(
-        coordinator_core,
-        {static_cast<uint32_t>(start_core_physical_coord.x),
-         static_cast<uint32_t>(start_core_physical_coord.y),
-         static_cast<uint32_t>(end_core_physical_coord.x),
-         static_cast<uint32_t>(end_core_physical_coord.y),
-         coordinator_to_cores_semaphore_id,
-         cores_to_coordinator_ready_semaphore_id,
-         cores_to_coordinator_done_semaphore_id,
-         static_cast<uint32_t>(core_range.num_cores()),
-         input_buffer,
-         value_buffer,
-         index_buffer});
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
+                  "writer_single_row_multi_core.cpp",
+        .compiler_options = {.defines = layout_defines(is_row_major)},
+        .dfb_bindings = std::move(writer_dfb_bindings),
+        .semaphore_bindings =
+            {
+                SemaphoreBinding{
+                    .semaphore_spec_name = SEM_CORES_TO_COORD_DONE, .accessor_name = "cores_to_coordinator_done"},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = VALUE_PARAM, .accessor_name = "input_tensor"},
+                TensorBinding{.tensor_parameter_name = INDEX_PARAM, .accessor_name = "index_tensor"},
+            },
+        .compile_time_args =
+            {
+                {"Wt", Wt},
+                {"Ht", Ht},
+                {"total_number_of_cores", total_number_of_cores},
+                {"compute_with_storage_grid_size_x", static_cast<uint32_t>(compute_with_storage_grid_size.x)},
+                {"compute_with_storage_grid_size_y", static_cast<uint32_t>(compute_with_storage_grid_size.y)},
+                {"number_of_available_cores", number_of_available_cores},
+                {"W_tile_bytes", W_tile_bytes},
+                {"W_index_bytes", W_index_bytes},
+            },
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"coordinator_core_physical_coord_x", "coordinator_core_physical_coord_y"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    });
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        input_tensor_cb_index,
-        index_tensor_cb_index,
-        Wt,
-        Ht,
-        total_number_of_cores,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
-        number_of_available_cores};
-    TensorAccessorArgs(*value_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*index_buffer).append_to(reader_compile_time_args);
-
-    // ROW_MAJOR args for reader (appended after TensorAccessorArgs).
-    reader_compile_time_args.push_back(static_cast<uint32_t>(is_row_major));
-    reader_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_input_value_cb_index));
-    reader_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_input_index_cb_index));
-    reader_compile_time_args.push_back(W_tile_bytes);
-    reader_compile_time_args.push_back(W_index_bytes);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core_range;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    std::vector<uint32_t> writer_compile_time_args = {
-        input_tensor_output_cb_index,
-        index_tensor_output_cb_index,
-        Wt,
-        Ht,
-        total_number_of_cores,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
-        number_of_available_cores};
-    TensorAccessorArgs(*value_buffer).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*index_buffer).append_to(writer_compile_time_args);
-
-    // ROW_MAJOR args for writer.
-    writer_compile_time_args.push_back(static_cast<uint32_t>(is_row_major));
-    writer_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_output_value_cb_index));
-    writer_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_output_index_cb_index));
-    writer_compile_time_args.push_back(W_tile_bytes);
-    writer_compile_time_args.push_back(W_index_bytes);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = core_range;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    // Worker per-core runtime args.  The coordinator core is excluded — its args
-    // are emplaced separately above on the coordinator kernel.
-    for (const auto& cr : core_range.ranges()) {
-        for (const auto& core : cr) {
-            reader_desc.emplace_runtime_args(
-                core,
-                {value_buffer,
-                 index_buffer,
-                 static_cast<uint32_t>(coordinator_core_physical_coord.x),
-                 static_cast<uint32_t>(coordinator_core_physical_coord.y),
-                 coordinator_to_cores_semaphore_id,
-                 cores_to_coordinator_ready_semaphore_id});
-            writer_desc.emplace_runtime_args(
-                core,
-                {value_buffer,
-                 index_buffer,
-                 static_cast<uint32_t>(coordinator_core_physical_coord.x),
-                 static_cast<uint32_t>(coordinator_core_physical_coord.y),
-                 coordinator_to_cores_semaphore_id,
-                 cores_to_coordinator_done_semaphore_id});
+    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
+    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
+        // Only buffers this configuration actually binds may appear here, and an absent entry
+        // means UnpackToSrc. Float32 operands are unpacked straight to Dest so the sort keeps full
+        // precision; the index buffers stay on the default path.
+        compute_hw_config.unpack_modes.insert({WORKER_INPUT, UnpackMode::UnpackToDest});
+        compute_hw_config.unpack_modes.insert({WORKER_INPUT_TRANSPOSED, UnpackMode::UnpackToDest});
+        compute_hw_config.unpack_modes.insert({WORKER_VALUE_OUTPUT, UnpackMode::UnpackToDest});
+        if (is_row_major) {
+            compute_hw_config.unpack_modes.insert({WORKER_RM_IN_VALUE, UnpackMode::UnpackToDest});
         }
     }
 
-    std::vector<uint32_t> compute_compile_time_args = {
-        input_tensor_cb_index,
-        index_tensor_cb_index,
-        input_tensor_transposed_cb_index,
-        index_tensor_transposed_cb_index,
-        input_tensor_output_cb_index,
-        index_tensor_output_cb_index,
-        Wt,
-        Ht,
-        number_of_available_cores,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
-        static_cast<uint32_t>(attributes.descending),
-        static_cast<uint32_t>(attributes.stable),
-        log2Wt};
-    compute_compile_time_args.push_back(static_cast<uint32_t>(is_row_major));
-    compute_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_input_value_cb_index));
-    compute_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_input_index_cb_index));
-    compute_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_output_value_cb_index));
-    compute_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_output_index_cb_index));
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode_vector(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_output_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[rm_worker_input_value_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    }
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = COMPUTE,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/"
+                  "sort_single_row_multi_core.cpp",
+        .compiler_options = {.defines = layout_defines(is_row_major)},
+        .dfb_bindings = std::move(compute_dfb_bindings),
+        .compile_time_args =
+            {
+                {"Wt", Wt},
+                {"Ht", Ht},
+                {"number_of_available_cores", number_of_available_cores},
+                {"compute_with_storage_grid_size_x", static_cast<uint32_t>(compute_with_storage_grid_size.x)},
+                {"compute_with_storage_grid_size_y", static_cast<uint32_t>(compute_with_storage_grid_size.y)},
+                {"descending", static_cast<uint32_t>(attributes.descending)},
+                {"stable", static_cast<uint32_t>(attributes.stable)},
+                {"log2Wt", log2Wt},
+            },
+        .hw_config = ComputeHardwareConfig{compute_hw_config},
+    });
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_multi_core.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_range;
-    compute_desc.compile_time_args = std::move(compute_compile_time_args);
-    compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = is_32_bit_data,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode_vector),
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "coordinator",
+        .kernels = {COORDINATOR},
+        .target_nodes = CoreRangeSet(CoreRange(coordinator_core)),
+    });
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "workers",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = core_range,
+    });
+
+    // -----------------------------------------------------------------------
+    // Run args
+    // -----------------------------------------------------------------------
+    KernelRunArgs coordinator_run_args{
+        .kernel = COORDINATOR,
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+            coordinator_core,
+            {{"start_core_physical_coord_x", static_cast<uint32_t>(start_core_physical_coord.x)},
+             {"start_core_physical_coord_y", static_cast<uint32_t>(start_core_physical_coord.y)},
+             {"end_core_physical_coord_x", static_cast<uint32_t>(end_core_physical_coord.x)},
+             {"end_core_physical_coord_y", static_cast<uint32_t>(end_core_physical_coord.y)},
+             {"number_of_dest", static_cast<uint32_t>(core_range.num_cores())}}),
     };
 
-    desc.kernels.push_back(std::move(coordinator_desc));
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    for (const auto& cr : core_range.ranges()) {
+        for (const auto& core : cr) {
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {{"coordinator_core_physical_coord_x", static_cast<uint32_t>(coordinator_core_physical_coord.x)},
+                 {"coordinator_core_physical_coord_y", static_cast<uint32_t>(coordinator_core_physical_coord.y)}});
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"coordinator_core_physical_coord_x", static_cast<uint32_t>(coordinator_core_physical_coord.x)},
+                 {"coordinator_core_physical_coord_y", static_cast<uint32_t>(coordinator_core_physical_coord.y)}});
+        }
+    }
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(coordinator_run_args));
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.tensor_args.emplace(INPUT_PARAM, input_mesh_tensor);
+    run_args.tensor_args.emplace(VALUE_PARAM, value_mesh_tensor);
+    run_args.tensor_args.emplace(INDEX_PARAM, index_mesh_tensor);
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 }  // namespace ttnn::prim
