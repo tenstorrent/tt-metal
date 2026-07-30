@@ -468,6 +468,32 @@ which a fused kernel that reads `v` once has already collapsed.
 > directly, because it requires an L1-resident input and gathers scores through the MoE
 > routing convention.
 
+> **Amended a fourth time 2026-07-30 (Phase 10 — the mixture kernel exists, and it is worth
+> 1.24× of the 3.8×).** `ttnn.experimental.fast_weighted_reduce_nc` was written and measured.
+> The paragraph above is the specification it was built to and it held: the technique lifted,
+> the op did not, and the layout worry was misplaced — a `[1, C, N, 1]` weight is *already*
+> what `BroadcastType::COL` consumes, so no permute was needed and no L1 residency was
+> required.
+>
+> | | measured, traced, `(2,4)` |
+> |---|---|
+> | the mixture in isolation (79 MiB) | 687.1 → **257.3 µs**, **2.67×** |
+> | against an unweighted reduce over the same bytes | **1.13×** — the weighting costs 29 µs |
+> | a 12-layer block, split form, `S = 8`, per site | 1 386.3 → **991.2 µs**, **1.40×** |
+> | per forward, split form | 191.2 → **153.6 ms**, **1.24×** |
+>
+> **This section's structure was right; its headline was one number where there are two.** The
+> 10.8× floor-to-floor estimate splits into a piece that is a pure traffic problem and a piece
+> that is not, and only the first was cheap. Fusing the mixture removes the composed form's
+> *extra* pass (3V → 1.13V on one op), not the pass itself, so Amdahl caps it at 1.24× of a
+> read that still runs a stats pass, a collective, a softmax chain and a divide.
+>
+> The remaining **~3×** is the rest of this section's kernel — the two `d`-reductions and the
+> cross-candidate softmax folded into the same pass over `v`. It is not a continuation of the
+> same work: that kernel owns the statistics all-reduce and the fp32 score chain, which are
+> exactly the parts P7 spent four iterations getting right in composed form where they could
+> be inspected. Read §7 as two projects from here, one done.
+
 ---
 
 ## 8. What this memo does not know

@@ -283,7 +283,8 @@ def test_perf_read_by_candidate_count(mesh_device, request, num_sealed):
     "mesh_device, device_params", [((2, 4), FABRIC)], indirect=["mesh_device", "device_params"], ids=["mesh-2x4"]
 )
 @pytest.mark.parametrize("num_sealed", [1, 4, 8])
-def test_perf_block_split_vs_direct(mesh_device, num_sealed):
+@pytest.mark.parametrize("fused_mix", [False, True], ids=["composed-mix", "fused-mix"])
+def test_perf_block_split_vs_direct(mesh_device, num_sealed, fused_mix):
     """P5: the two read forms over a whole 12-layer block, traced.
 
     Phase 7 measured the split form 1.50x faster on one device by wall clock with
@@ -299,9 +300,16 @@ def test_perf_block_split_vs_direct(mesh_device, num_sealed):
 
     Both forms are captured whole, so the comparison is device time for the
     entire block and the per-site number is that divided by 24.
+
+    P10 added the `fused_mix` axis, which is where the whole-op price of the
+    fused mixture is read rather than extrapolated from P9's isolated 79 MiB
+    row. It belongs on this test and not on a new one: the mixture's share of a
+    block differs between the two read forms — 24 of the split form's 26 passes
+    against 1 of the direct form's per-site passes — so a single-form
+    measurement would answer for the wrong schedule.
     """
     prefix_sum, block_residual, query = _make_case(PRODUCTION_TOKENS, HIDDEN_SIZE, num_sealed)
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, fused_mix=fused_mix)
     tt_prefix, tt_block, tt_query = _place(op, prefix_sum, block_residual, query)
     queries = [tt_query] * READ_SITES
 
@@ -331,7 +339,12 @@ def test_perf_block_split_vs_direct(mesh_device, num_sealed):
             iterations=5,
             warmup=2,
         )
-        _report(f"block of {READ_SITES} sites, S={num_sealed}, {label}, traced", enqueue_us, total_us / READ_SITES)
+        mix_label = "fused mix" if fused_mix else "composed mix"
+        _report(
+            f"block of {READ_SITES} sites, S={num_sealed}, {label}, {mix_label}, traced",
+            enqueue_us,
+            total_us / READ_SITES,
+        )
 
         ttnn.release_trace(mesh_device, trace_id)
         for tensor in outputs:
@@ -388,7 +401,7 @@ HIFI = ttnn.WormholeComputeKernelConfig(
 )
 
 
-def _reduce_variants(v, q, weights):
+def _reduce_variants(v, q, weights, weights_fp32):
     """The ways to get one scalar per (token, candidate) out of `v`.
 
     Each entry reads `[1, C, N, d/tp]` and returns `[1, C, N, *]`. `mul-sum` is
@@ -442,6 +455,17 @@ def _reduce_variants(v, q, weights):
         "mix floor: fast_reduce_nc fp32acc": lambda: ttnn.experimental.fast_reduce_nc(
             v, dims=[1], compute_kernel_config=HIFI
         ),
+        # P10. The fused op the comment above said did not exist, because it did
+        # not: one pass over `v`, the weight MAC'd into the accumulator, no
+        # intermediate and no transpose. Read against `mix shaped: mul+sum` for
+        # what the fusion is worth and against the floor rows for what is left.
+        # The fp32 row is the one the op actually calls — its score chain runs in
+        # fp32 — and it prices a 4 KiB weight tile against a 2 KiB one on traffic
+        # that is 3% of the read.
+        "mix fused: weighted_reduce_nc": lambda: ttnn.experimental.fast_weighted_reduce_nc(v, weights, dim=1),
+        "mix fused: weighted_reduce_nc fp32 w": lambda: ttnn.experimental.fast_weighted_reduce_nc(
+            v, weights_fp32, dim=1
+        ),
     }
 
 
@@ -471,6 +495,8 @@ def _consume(intermediate, then):
         "mix shaped: mul+fast_reduce_nc",
         "mix floor: fast_reduce_nc(v, dim=1)",
         "mix floor: fast_reduce_nc fp32acc",
+        "mix fused: weighted_reduce_nc",
+        "mix fused: weighted_reduce_nc fp32 w",
     ],
     ids=[
         "floor",
@@ -486,6 +512,8 @@ def _consume(intermediate, then):
         "mix-shaped-frnc",
         "mix-floor-frnc",
         "mix-floor-frnc-fp32acc",
+        "mix-fused",
+        "mix-fused-fp32w",
     ],
 )
 def test_perf_d_reduction_by_form(mesh_device, variant):
@@ -528,8 +556,14 @@ def test_perf_d_reduction_by_form(mesh_device, variant):
     v = place(torch.randn(1, NUM_SEALED + 1, tokens_per_rank, width_per_rank))
     q = place(torch.randn(1, 1, 1, width_per_rank))
     weights = place(torch.randn(1, NUM_SEALED + 1, tokens_per_rank, 1))
+    weights_fp32 = ttnn.from_torch(
+        torch.randn(1, NUM_SEALED + 1, tokens_per_rank, 1),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+    )
 
-    body = _reduce_variants(v, q, weights)[variant]
+    body = _reduce_variants(v, q, weights, weights_fp32)[variant]
     ttnn.deallocate(body())
     ttnn.synchronize_device(mesh_device)
 
@@ -544,7 +578,7 @@ def test_perf_d_reduction_by_form(mesh_device, variant):
     _report(f"{variant} [{read_mib:.0f} MiB in] traced", enqueue_us, total_us)
 
     ttnn.release_trace(mesh_device, trace_id)
-    for tensor in (out, v, q, weights):
+    for tensor in (out, v, q, weights, weights_fp32):
         ttnn.deallocate(tensor)
 
 
