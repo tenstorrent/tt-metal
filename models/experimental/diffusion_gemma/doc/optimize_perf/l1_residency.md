@@ -82,6 +82,30 @@ same traced RUN-first argmax path (run-to-run block latency varies ~1.5%; the no
 > that was deleted in `7417bd7d69d`, so its 0.145 committed-match must be re-measured before it is
 > cited again either way.
 >
+> **FOLLOW-UP 2026-07-30 — the delta is FIXABLE, and cheaply, but it does not close the flag.**
+> `ttnn.rms_norm` accepts a `compute_kernel_config` and nothing in DiffusionGemma or gemma4 has ever
+> passed one, so every norm ran ttnn's default `fp32_acc = false`. Switching the accumulator (nothing
+> else — same grid, same block_w, same fidelity, same approx mode) was measured on QB2:
+>
+> | | bf16 accumulate (today) | fp32 accumulate |
+> |---|---|---|
+> | disagreement between the two row counts, (1,4) mesh, 96 device slices | **13.0%** of elements | **0 of 69,206,016** (rate < 1.4e-8) |
+> | accuracy vs an fp64 reference over the same bf16 inputs | rmse 5.43e-3 | **rmse 1.94e-3** (2.8x better) |
+> | per 256-row norm | 0.088 ms | **0.086 ms (-2.3%, i.e. free)** |
+>
+> It is free *here* because these configs land on `block_w=1` / `subblock_w=1`, so halving DST capacity
+> has nothing to take away; "fp32 is slow" is right for wide output blocks and wrong for this shape.
+>
+> **UNRESOLVED, and the reason nothing was flipped on:** with fp32 accumulation wired into both row
+> counts, a 10-question device pair still diverged completely (0/10 byte-identical, 91 vs 109 blocks),
+> even though the norm is bit-identical to <1.4e-8, the shape census shows the model only ever calls
+> it at 256x2816 with no fallback, and `DG_NORM_FULLCANVAS` has exactly one reader. Those three facts
+> cannot all hold, so a scope gap remains in the measurement — benign gaussian inputs were used, and
+> real activations are heavy-tailed where a sum of squares is outlier-dominated. Do not treat fp32 as
+> a route to flipping the flag until that contradiction is explained. The production patch is parked at
+> `/home/zni/dg_runs/fp32_norm_production.patch`; the measurements are in
+> `tests/test_device_norm_fullcanvas.py`.
+>
 > Separately fixed 2026-07-30: `_chunked_norm_forward` tested `with_scale is False` AFTER attempting
 > the full-canvas path, so with the flag on the MoE router's weightless norm was re-sharded from
 > 8 cores/`block_w=11` to 88 cores/`block_w=1`. That was never intended, but as the table shows it is

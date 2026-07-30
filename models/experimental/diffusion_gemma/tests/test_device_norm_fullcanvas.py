@@ -43,13 +43,12 @@ Run on QB2::
 """
 
 import os
-from types import SimpleNamespace
 
 import pytest
 import torch
 
 import ttnn
-from models.experimental.diffusion_gemma.tt.denoise_forward import _fullcanvas_norm
+from models.experimental.diffusion_gemma.tt.denoise_forward import _build_fullcanvas_norm_cfg
 from models.experimental.diffusion_gemma.tt.self_conditioning import _rms_norm_dram
 
 pytestmark = [
@@ -112,8 +111,16 @@ def test_scaleless_norm_topology_delta_is_what_the_flag_used_to_inject(device):
     x_dev = _to_device(x, device)
 
     chunked = _rms_norm_dram(x_dev, weight=None, epsilon=_EPS, chunk_size=32)
-    full = _fullcanvas_norm(SimpleNamespace(tt_weight=None, eps=_EPS), x_dev)
-    assert full is not None, "the full-canvas config must be available at the shipped hidden size"
+    # The 88-core/block_w=1 arm, built the way the flag builds it for a weightless norm. Built
+    # explicitly rather than through _fullcanvas_norm so this test keeps measuring the TOPOLOGY pair
+    # even if the dispatch around it changes.
+    memcfg, pc = _build_fullcanvas_norm_cfg(device, _S, _H)
+    assert memcfg is not None, "the full-canvas config must be available at the shipped hidden size"
+    x_sh = ttnn.to_memory_config(x_dev, memcfg)
+    full_sh = ttnn.rms_norm(x_sh, weight=None, epsilon=_EPS, program_config=pc, memory_config=memcfg)
+    full = ttnn.sharded_to_interleaved(full_sh, ttnn.DRAM_MEMORY_CONFIG)
+    x_sh.deallocate(True)
+    full_sh.deallocate(True)
 
     a = ttnn.to_torch(chunked)
     b = ttnn.to_torch(full)
@@ -176,3 +183,190 @@ def test_weighted_norm_block_h_8_vs_1_is_the_documented_mechanism(device):
     b = ttnn.to_torch(full)
     same, max_abs, max_rel = _report("weighted: block_h=1 x8  vs  block_h=8 (same 88-core grid)", a, b)
     print(f"[weighted] VERDICT: {'BIT-IDENTICAL -> the documented block_h mechanism does not exist' if same else f'differs by {max_rel:.3e} relative'}")
+
+
+@pytest.mark.parametrize(
+    "label, fp32, approx",
+    [
+        ("default (fp32_acc=False, approx=True)", False, True),
+        ("fp32_dest_acc_en=True", True, True),
+        ("fp32_dest_acc_en=True + approx off", True, False),
+    ],
+)
+def test_can_fp32_accumulation_make_the_two_paths_agree(device, label, fp32, approx):
+    """Is the flag FIXABLE? Raise the reduction precision and see if the paths converge.
+
+    `rmsnorm_default_compute_config` (ttnn/cpp/.../rmsnorm.cpp:16-20) is HiFi4 with
+    `approx_mode=true, fp32_acc=FALSE`, so every one of the 88 per-core partials is rounded to bf16
+    before the cross-core combine. That is what makes the summation TREE matter: block_h moves
+    `num_cores_all_to_all` (8 -> 64), regrouping the combine, and in bf16 that regrouping is worth
+    the few ULPs measured above.
+
+    If the partials accumulate in fp32 the regrouping should stop mattering to ~2^-24 and the two
+    paths should agree once the result is rounded back to bf16. If this comes out bit-identical,
+    DG_NORM_FULLCANVAS becomes a free win like the bounded sliding read; if it does not, the flag is
+    inherently decision-changing and only an absolute HF-vs-TT gate can clear it.
+
+    No DG caller passes a compute_kernel_config to any norm today, so this costs nothing to try.
+    """
+    from models.experimental.diffusion_gemma.tt.denoise_forward import _build_fullcanvas_norm_cfg
+
+    torch.manual_seed(1)
+    x = torch.randn(1, 1, _S, _H)
+    w = torch.randn(1, 1, 1, _H) * 0.1 + 1.0
+    x_dev = _to_device(x, device)
+    w_dev = ttnn.from_torch(w.reshape(1, 1, -1, ttnn.TILE_SIZE), dtype=ttnn.bfloat16,
+                            layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ckcfg = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=approx,
+        fp32_dest_acc_en=fp32,
+        packer_l1_acc=False,
+    )
+
+    def run(seq_rows):
+        memcfg, pc = _build_fullcanvas_norm_cfg(device, seq_rows, _H)
+        outs = []
+        for start in range(0, _S, seq_rows):
+            sl = ttnn.slice(x_dev, [0, 0, start, 0], [1, 1, start + seq_rows, _H],
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG) if seq_rows != _S else x_dev
+            sh = ttnn.to_memory_config(sl, memcfg)
+            o = ttnn.rms_norm(sh, weight=w_dev, epsilon=_EPS, program_config=pc,
+                              memory_config=memcfg, compute_kernel_config=ckcfg)
+            outs.append(ttnn.sharded_to_interleaved(o, ttnn.DRAM_MEMORY_CONFIG))
+            sh.deallocate(True)
+            o.deallocate(True)
+            if sl is not x_dev:
+                sl.deallocate(True)
+        return outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    full = ttnn.to_torch(run(_S))
+    chunked = ttnn.to_torch(run(ttnn.TILE_SIZE))
+    same, _, max_rel = _report(f"FIX PROBE [{label}]", chunked, full)
+    print(f"[fix probe] {label}: {'BIT-IDENTICAL -- the flag is fixable this way' if same else f'still differs, max_rel {max_rel:.3e}'}")
+
+
+def test_what_fp32_accumulation_actually_costs(device):
+    """Price the bit-identity fix. "fp32 is slow" is a general heuristic; this config may not pay it.
+
+    fp32_dest_acc_en halves DST capacity, which hurts when the per-core output block is large. Here
+    it is not: the full-canvas config lands on block_w=1 / subblock_w=1 (88 cores over 88 tile-cols),
+    so there is little DST pressure to lose. Measured rather than assumed -- the alternative to a
+    bit-identical fix is an absolute HF-vs-TT gate, which costs far more than any per-norm overhead.
+    """
+    import time
+    from models.experimental.diffusion_gemma.tt.denoise_forward import _build_fullcanvas_norm_cfg
+
+    torch.manual_seed(2)
+    x = torch.randn(1, 1, _S, _H)
+    w = torch.randn(1, 1, 1, _H) * 0.1 + 1.0
+    x_dev = _to_device(x, device)
+    w_dev = ttnn.from_torch(w.reshape(1, 1, -1, ttnn.TILE_SIZE), dtype=ttnn.bfloat16,
+                            layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    fp32_cfg = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True, fp32_dest_acc_en=True, packer_l1_acc=False)
+
+    def build(seq_rows):
+        memcfg, pc = _build_fullcanvas_norm_cfg(device, seq_rows, _H)
+        return memcfg, pc
+
+    def timed(seq_rows, ckcfg, iters=50):
+        memcfg, pc = build(seq_rows)
+        def once():
+            outs = []
+            for start in range(0, _S, seq_rows):
+                sl = ttnn.slice(x_dev, [0, 0, start, 0], [1, 1, start + seq_rows, _H],
+                                memory_config=ttnn.DRAM_MEMORY_CONFIG) if seq_rows != _S else x_dev
+                sh = ttnn.to_memory_config(sl, memcfg)
+                o = ttnn.rms_norm(sh, weight=w_dev, epsilon=_EPS, program_config=pc,
+                                  memory_config=memcfg, compute_kernel_config=ckcfg)
+                outs.append(ttnn.sharded_to_interleaved(o, ttnn.DRAM_MEMORY_CONFIG))
+                sh.deallocate(True)
+                o.deallocate(True)
+                if sl is not x_dev:
+                    sl.deallocate(True)
+            out = outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out.deallocate(True)
+        once()  # warm the program cache
+        ttnn.synchronize_device(device)
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            once()
+        ttnn.synchronize_device(device)
+        return (time.perf_counter() - t0) / iters * 1e3  # ms per 256-row norm
+
+    chunk_bf16 = timed(ttnn.TILE_SIZE, None)
+    full_bf16 = timed(_S, None)
+    full_fp32 = timed(_S, fp32_cfg)
+    chunk_fp32 = timed(ttnn.TILE_SIZE, fp32_cfg)
+
+    print(f"\n[cost] per 256-row norm, mean of 50 (includes slice/concat/sharding, i.e. what the model pays)")
+    print(f"  chunked 8x32, bf16 acc (TODAY'S DEFAULT) : {chunk_bf16:8.3f} ms")
+    print(f"  full-canvas,  bf16 acc (the flag)        : {full_bf16:8.3f} ms   {chunk_bf16/full_bf16:5.2f}x vs default")
+    print(f"  full-canvas,  fp32 acc (BIT-IDENTICAL)   : {full_fp32:8.3f} ms   {chunk_bf16/full_fp32:5.2f}x vs default"
+          f"   fp32 costs {100*(full_fp32/full_bf16-1):+.1f}% vs bf16 full-canvas")
+    print(f"  chunked 8x32, fp32 acc                   : {chunk_fp32:8.3f} ms")
+    print(f"[cost] VERDICT: the bit-identical option is "
+          f"{chunk_bf16/full_fp32:.2f}x faster than today's default." if full_fp32 < chunk_bf16 else
+          f"[cost] VERDICT: fp32 full-canvas is SLOWER than today's default -- the fix is not viable this way.")
+
+
+def test_is_fp32_accumulation_more_ACCURATE_or_merely_different(device):
+    """The crux for adopting fp32 accumulation: closer to the truth, or just a different bf16 point?
+
+    Bit-identity between full-canvas+fp32 and chunked+fp32 does NOT make a flip free on its own,
+    because today's shipped output is chunked+BF16. Adopting fp32 changes the norm once. That is only
+    worth doing if fp32 is more ACCURATE, not merely different -- so measure all three against an
+    fp32 torch reference of the same RMSNorm.
+    """
+    from models.experimental.diffusion_gemma.tt.denoise_forward import _build_fullcanvas_norm_cfg
+
+    torch.manual_seed(3)
+    x = torch.randn(1, 1, _S, _H)
+    w = torch.randn(1, 1, 1, _H) * 0.1 + 1.0
+    x_dev = _to_device(x, device)
+    w_dev = ttnn.from_torch(w.reshape(1, 1, -1, ttnn.TILE_SIZE), dtype=ttnn.bfloat16,
+                            layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    fp32_cfg = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True, fp32_dest_acc_en=True, packer_l1_acc=False)
+
+    # Reference from the SAME bf16 inputs the device sees, accumulated in fp64 -- so the only thing
+    # being measured is the device's accumulation, not the input quantisation.
+    xq = ttnn.to_torch(x_dev).double()
+    wq = ttnn.to_torch(w_dev).reshape(1, 1, 1, _H).double()
+    ref = xq / torch.sqrt(xq.pow(2).mean(-1, keepdim=True) + _EPS) * wq
+
+    def run(seq_rows, ckcfg):
+        memcfg, pc = _build_fullcanvas_norm_cfg(device, seq_rows, _H)
+        outs = []
+        for start in range(0, _S, seq_rows):
+            sl = ttnn.slice(x_dev, [0, 0, start, 0], [1, 1, start + seq_rows, _H],
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG) if seq_rows != _S else x_dev
+            sh = ttnn.to_memory_config(sl, memcfg)
+            o = ttnn.rms_norm(sh, weight=w_dev, epsilon=_EPS, program_config=pc,
+                              memory_config=memcfg, compute_kernel_config=ckcfg)
+            outs.append(ttnn.sharded_to_interleaved(o, ttnn.DRAM_MEMORY_CONFIG))
+            sh.deallocate(True); o.deallocate(True)
+            if sl is not x_dev:
+                sl.deallocate(True)
+        return ttnn.to_torch(outs[0] if len(outs) == 1 else
+                             ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)).double()
+
+    arms = {
+        "chunked bf16 (TODAY)": run(ttnn.TILE_SIZE, None),
+        "chunked fp32": run(ttnn.TILE_SIZE, fp32_cfg),
+        "fullcanvas bf16": run(_S, None),
+        "fullcanvas fp32": run(_S, fp32_cfg),
+    }
+    print("\n[accuracy] error vs an fp64 reference over the SAME bf16 inputs:")
+    denom = ref.abs().clamp_min(1e-30)
+    for name, got in arms.items():
+        rel = ((got - ref).abs() / denom)
+        print(f"  {name:<22} rel p50={float(rel.median()):.3e}  p99={float(rel.quantile(0.99)):.3e}  "
+              f"max={float(rel.max()):.3e}  rmse={float((got-ref).pow(2).mean().sqrt()):.3e}")
+    print("[accuracy] VERDICT: fp32 accumulation is an IMPROVEMENT if its p99/rmse are lower than "
+          "chunked bf16's; if they are equal, adopting it is a lateral move and needs its own gate.")
