@@ -50,6 +50,28 @@ class Semaphore {
     // Quasar (so DM reads/writes are coherent with NoC atomics landing at TL1).
     // DM_LOCAL_CACHED uses the cached alias (RISC-V AMOs require the cache and hang on
     // the uncached alias; DM cores are mutually coherent on the cached alias).
+    // ---- Cache discipline (why there are no flushes or invalidates in here) ----
+    //
+    // Each scope keeps a semaphore word in EXACTLY ONE view, so no party ever needs to reconcile two:
+    //   LOCAL_NONATOMIC / EXTERNAL: ring word, always through the UNCACHED alias. Plain stores and NoC
+    //     atomics both land at TL1 and uncached reads observe TL1 -- the cache is not in the path.
+    //   DM_LOCAL_CACHED: pool word, always through the CACHED alias -- up(), down()'s spin AND its
+    //     subtract, wait(), wait_min(), set() and value() all resolve to the same pool address. Every
+    //     reader and writer is a DM core, and Quasar DM cores are mutually coherent, so a flush would
+    //     publish to nobody and an invalidate would only risk discarding a live count.
+    // The pool is cached-only BY CONSTRUCTION (nothing NoC-writes it), which is what makes "no flush"
+    // correct rather than merely convenient; it also makes cross-program staleness a non-issue, since
+    // the next program's seed is itself a cached store in the same coherent domain and simply wins.
+    //
+    // The one cache op that IS mandatory lives in the generated pool seeder (genfiles.cpp): it reads the
+    // ring slot through the UNCACHED alias, because the dispatcher NoC-wrote that value and a cached
+    // read could return stale data.
+    //
+    // LOAD-BEARING ASSUMPTION: invalidate_l1_cache() is a documented NO-OP on Quasar DM cores
+    // (tt-2xx/risc_common.h). The calls below (and inside noc_semaphore_wait/wait_min) are therefore
+    // harmless on a cached semaphore. If that function ever becomes a real discard-without-writeback,
+    // those call sites would throw away a DIRTY pool line and silently lose increments -- so a cached
+    // semaphore must then read through a path that does not invalidate.
     static constexpr bool kUseUncachedLocalView = (Scope != SemScope::DM_LOCAL_CACHED);
 
     // Physical L1 offset of semaphore `id` for THIS scope. DM_LOCAL_CACHED semaphores live in
