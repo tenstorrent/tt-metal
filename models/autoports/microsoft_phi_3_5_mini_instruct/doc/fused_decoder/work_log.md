@@ -40,3 +40,6 @@ Date: 2026-07-30 UTC
 - Current-branch implementation/evidence checkpoint: `e7c887226e7`.
 - Current-branch metadata checkpoint reviewed before this provenance
   correction: `0e5ae20717c`.
+- Current independent rereview after provenance correction: `clean-pass`; see
+  `stage_review_current.md`. Provenance-fix checkpoint:
+  `ab87d0fee6280402444593bb5d0f437d8bc19782`.
