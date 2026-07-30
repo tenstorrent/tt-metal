@@ -581,6 +581,46 @@ jobs:
               "bench-num-warmups": 32,
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
+            },
+            {
+              "name": "[PERF][BH-QB-2] Qwen3.6-27B c8",
+              "model": "Qwen/Qwen3.6-27B",
+              "perf-profile": true,
+              "server-timeout": 35,
+              "benchmark-timeout": 30,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 1073741824, \"l1_small_size\": 24576}",
+              "additional-server-args": "--max_num_seqs 8 --max_model_len 65536 --async-scheduling",
+              "default-chat-template-kwargs": "{\"enable_thinking\": false}",
+              "bench-input-len": 1024,
+              "bench-output-len": 512,
+              "bench-num-prompts": 32,
+              "bench-max-concurrency": 8,
+              "bench-num-warmups": 8,
+              "multimodal": false,
+              "owner_id": "U08HL8X1ECD"
+            },
+            {
+              "name": "[PERF][BH-QB-2] Gemma4-31B c1",
+              "model": "google/gemma-4-31B-it",
+              "perf-profile": true,
+              "server-timeout": 25,
+              "benchmark-timeout": 30,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 536870912}",
+              "additional-server-args": "--max_model_len 32768 --max_num_seqs 1 --async-scheduling",
+              "gemma4-trace-prefill-seq-lens": 1024,
+              "bench-input-len": 1024,
+              "bench-output-len": 512,
+              "bench-num-prompts": 8,
+              "bench-max-concurrency": 1,
+              "bench-num-warmups": 1,
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
             }
           ]'
 
@@ -772,12 +812,15 @@ jobs:
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
 
-          # Gemma4 trace-region tuning for this benchmark (random-input-len 100,
-          # single-stream max_num_seqs=1):
+          # Gemma4 trace-region tuning for this benchmark (single-stream
+          # max_num_seqs=1):
           #   * The prefill trace bucket sweep (128..4096) is the dominant trace
           #     consumer — the 4096 bucket alone is ~0.5 GB on 26B-A4B — yet a
           #     100-token prompt only ever replays the 128 bucket. Limit it so the
-          #     trace region stays small and startup is fast.
+          #     trace region stays small and startup is fast. The bucket must
+          #     cover the benchmark's prompt length, so an entry that raises
+          #     bench-input-len must raise this too via
+          #     gemma4-trace-prefill-seq-lens.
           #   * Decode warmup captures one resident trace per sampling-param
           #     permutation; the full penalties×logprobs sweep is unused by the
           #     default-sampling benchmark. Warm only plain/greedy/None.
@@ -786,7 +829,7 @@ jobs:
           case "$HF_MODEL" in
             google/gemma-4-*)
               export TT_LEAN_DECODE_WARMUP=1
-              export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
+              export GEMMA4_TRACE_PREFILL_SEQ_LENS="${{ matrix.test-group.gemma4-trace-prefill-seq-lens || 128 }}"
               # 31B: with hybrid KV groups disabled every layer allocates a
               # full-length KV buffer, and the default all-user pool OOMs DRAM
               # on QB2/T3K. Cap the pool (the real DRAM lever, distinct from
