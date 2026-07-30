@@ -25,6 +25,16 @@ on:
         required: false
         default: prefill-worker-buildtest
         type: string
+      stub-migration-client:
+        description: >-
+          'true' (default) replaces the llm-build stage with a stub context holding a
+          fake _migration_client, so the whole pipeline can be validated WITHOUT a
+          token that can read the private tt-llm-engine. Set 'false' once such a
+          secret exists to do the real clone+compile. A stub build is tagged
+          '<test-tag>-stub' so it can never be mistaken for a real worker.
+        required: false
+        default: "true"
+        type: string
   push:
     branches-ignore:
       - main
@@ -72,6 +82,7 @@ jobs:
         env:
           BASE_VERSION: ${{ inputs.base-version || 'latest' }}
           TEST_TAG: ${{ inputs.test-tag || 'prefill-worker-buildtest' }}
+          STUB: ${{ inputs.stub-migration-client || 'true' }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
@@ -80,13 +91,19 @@ jobs:
           # real build does rather than hardcoding a hash.
           PLATFORM_DATA=$(.github/scripts/compute-platform-data.sh "${PLATFORM#ubuntu-}" "$GITHUB_REPOSITORY" --no-check-exists)
           BUILDER=$(echo "$PLATFORM_DATA" | jq -r '.dev_tag')
+          # A stubbed build must never share a tag with a real one.
+          if [ "$STUB" = "true" ]; then
+            TEST_TAG="${TEST_TAG}-stub"
+          fi
           OUT="ghcr.io/${GITHUB_REPOSITORY}/tt-metalium-${PLATFORM}-prefill-worker-amd64:${TEST_TAG}"
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "builder=$BUILDER" >> "$GITHUB_OUTPUT"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
+          echo "stub=$STUB" >> "$GITHUB_OUTPUT"
           echo "Base:    $BASE"
           echo "Builder: $BUILDER"
           echo "Output:  $OUT"
+          echo "Stubbed: $STUB"
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -105,6 +122,9 @@ jobs:
       - name: Probe candidate secrets for tt-llm-engine read access
         env:
           SELECTED_SECRET: VLLM_TT_PLUGIN_READ_TOKEN
+          # A stubbed build does no clone, so a missing/under-scoped token must not
+          # fail it - the probe still runs and reports, purely for information.
+          ADVISORY_ONLY: ${{ steps.refs.outputs.stub }}
           VLLM_TT_PLUGIN_READ_TOKEN: ${{ secrets.VLLM_TT_PLUGIN_READ_TOKEN }}
           TENSTORRENT_ORG_READ_TOKEN: ${{ secrets.TENSTORRENT_ORG_READ_TOKEN }}
           ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
@@ -148,13 +168,19 @@ jobs:
             echo "::warning::No candidate secret can read ${ENGINE_REPO}. A new token" \
               "with contents read on that repo has to be provisioned."
           fi
-          # Only the secret the build actually uses is fatal.
+          # Only the secret the build actually uses is fatal, and only for a real
+          # (non-stubbed) build.
           for name in "${WORKING[@]}"; do
             if [ "$name" = "$SELECTED_SECRET" ]; then
               echo "Selected secret ${SELECTED_SECRET} can read ${ENGINE_REPO} - proceeding."
               exit 0
             fi
           done
+          if [ "$ADVISORY_ONLY" = "true" ]; then
+            echo "Stubbed build: no clone happens, so ${SELECTED_SECRET} is not needed" \
+              "for this run. Continuing."
+            exit 0
+          fi
           echo "::error::Selected secret ${SELECTED_SECRET} cannot read ${ENGINE_REPO}." \
             "Point gh-token at one of the working secrets listed above (in" \
             ".github/workflows/publish-release-image.yaml and this file), or provision" \
@@ -171,12 +197,51 @@ jobs:
           fi
           echo "Base image found."
 
+      # A named build context whose name matches a Dockerfile STAGE replaces that
+      # stage wholesale, so pointing `llm-build` at a local directory skips the
+      # engine clone and the nanobind compile entirely - no token needed. Paths in
+      # `COPY --from=llm-build` then resolve inside this directory, so the tree
+      # mirrors the real stage's layout. The fake module satisfies the Dockerfile's
+      # import check, which is the point: everything downstream of the compile
+      # (COPY, import check, push, attestation, digest, retag) gets exercised.
+      - name: Create stub migration-client context
+        id: stub
+        if: ${{ steps.refs.outputs.stub == 'true' }}
+        run: |
+          set -euo pipefail
+          # MUST live under the workspace, not $RUNNER_TEMP: `bake` enforces
+          # filesystem entitlements and rejects a local-directory context outside the
+          # bake project root with "ERROR: additional privileges requested" unless
+          # --allow=fs.read=<path> is passed. A path under the repo root needs no
+          # entitlement, which avoids teaching the shared manual-docker-bake action
+          # an --allow passthrough just for this temporary test.
+          STUB_DIR="${GITHUB_WORKSPACE}/.tmp-stub-llm-build"
+          MOD_DIR="${STUB_DIR}/src/ttllm/disaggregation/migration/build_RelWithDebInfo/python"
+          mkdir -p "$MOD_DIR"
+          # printf, not a heredoc: a heredoc body inside a YAML block scalar has to
+          # stay at the block's indentation, which makes python indentation unreadable.
+          {
+            printf '%s\n' '# STUB - not the real nanobind _migration_client. Exists only so a'
+            printf '%s\n' '# token-free CI run can validate the image pipeline. Any image built'
+            printf '%s\n' "# with this is tagged '*-stub' and must never be deployed."
+            printf '%s\n' 'class MigrationLayerClient:'
+            printf '%s\n' '    def __init__(self, *args, **kwargs):'
+            printf '%s\n' '        raise RuntimeError("stub _migration_client - not a real build")'
+          } > "${MOD_DIR}/_migration_client.py"
+          python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "${MOD_DIR}/_migration_client.py"
+          echo "stub-dir=${STUB_DIR}" >> "$GITHUB_OUTPUT"
+          echo "::warning::Stubbed build: _migration_client is a FAKE python module." \
+            "This validates the pipeline only; the resulting '-stub' image is not deployable."
+          find "$STUB_DIR" -type f
+
       - name: Prepare bake overrides
         id: bake
         env:
           BASE: ${{ steps.refs.outputs.base }}
           BUILDER: ${{ steps.refs.outputs.builder }}
           OUT: ${{ steps.refs.outputs.out }}
+          STUB: ${{ steps.refs.outputs.stub }}
+          STUB_DIR: ${{ steps.stub.outputs.stub-dir }}
           PROXY_HTTP: ${{ env.PROXY_HTTP }}
           PROXY_HTTPS: ${{ env.PROXY_HTTPS }}
           PROXY_NO_PROXY: ${{ env.PROXY_NO_PROXY }}
@@ -185,6 +250,10 @@ jobs:
           SET=""
           SET+="prefill-worker.contexts.release-base=docker-image://${BASE}"$'\n'
           SET+="prefill-worker.contexts.llm-build-base=docker-image://${BUILDER}"$'\n'
+          if [ "$STUB" = "true" ]; then
+            # Overrides the llm-build STAGE, so llm-build-base above goes unused.
+            SET+="prefill-worker.contexts.llm-build=${STUB_DIR}"$'\n'
+          fi
           SET+="prefill-worker.tags=${OUT}"$'\n'
           SET+="prefill-worker.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
           if [ -n "$PROXY_HTTP" ]; then
