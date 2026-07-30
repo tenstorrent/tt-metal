@@ -189,7 +189,7 @@ skus:
   # exabox.tenstorrent.com/power=14kw.
   bh_sc1_high_power:
     runs_on:
-      - exabox-multihost-ci-sc1-high-power
+      - exabox-multihost-ci-sc1-hp
 
   bh_sc4:
     runs_on:
