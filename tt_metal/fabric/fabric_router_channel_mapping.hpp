@@ -61,16 +61,15 @@ struct InternalReceiverChannelMapping {
  * FabricRouterChannelMapping
  *
  * Defines the mapping from logical channels (VC + relative channel index within VC) to internal builder channels.
- * This mapping is computed based on topology, the router's facing direction and its edge's
- * capability, and tensix extension mode. There is no router variant: the Z-facing intermesh
- * boundary family is exactly the (direction == Z, capability == INTERMESH) case, and every other
- * router is a mesh-like router whose shape comes from the wiring rules.
+ * This is layout only: how many channels each VC has, and where each VC starts in the flat index
+ * space, are decided once by RouterConnectionMapping::router_vc_shape() next to the wiring rules
+ * that produce them. This class places entries at the indices that shape hands it and answers
+ * counts by reading it back. It classifies nothing and re-derives no count.
  *
  * Channel indices are relative to each VC:
  * - VC0 (1D): [0] = local worker, [1] = forwarding from upstream
- * - VC0 (2D): [0] = local worker, [1-3] = forwarding from upstream routers
- * - VC1 (2D): [0-2] = intermesh channels (standard 2D)
- * - VC1 (Z boundary): [0-3] = Z→mesh channels (4 sender channels mapping to 2-4 mesh routers)
+ * - VC0 (2D): [0] = local worker, [1-4] = forwarding from upstream routers
+ * - VC1 (2D): [0-3] = intermesh channels
  */
 class FabricRouterChannelMapping {
 public:
@@ -105,25 +104,14 @@ public:
 
     std::vector<InternalSenderChannelMapping> get_all_sender_mappings() const;
 
-    /**
-     * Check if this is the Z-facing intermesh boundary family (direction == Z and the edge
-     * crosses a mesh boundary): the 5/4 channel shape with the from-Z VC1 fanout.
-     */
-    bool is_intermesh_z_boundary() const;
-
 private:
     Topology topology_;
     bool downstream_is_tensix_builder_;
-    RoutingDirection direction_;
-    EdgeCapability edge_capability_;
-    // This mesh has express chords, so a mesh router's VC0 gains a fifth sender for the express
-    // producer alongside the worker and its cardinal ingresses.
-    bool express_routing_enabled_ = false;
 
     // The per-VC shape, computed once at construction from the same facts the connection map
-    // reads (including the intermesh VC config and the chip's intermesh Z edge, which are
-    // constructor inputs to it, not class state). Everything below is layout driven by it;
-    // nothing here re-derives a count or a base.
+    // reads. The router's facing direction, its edge capability, its chip's intermesh Z edge, and
+    // the mesh's express state are inputs to that derivation only -- they are deliberately not
+    // retained, so nothing here can re-answer a question the shape already settled.
     RouterConnectionMapping::RouterVcShape shape_;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;

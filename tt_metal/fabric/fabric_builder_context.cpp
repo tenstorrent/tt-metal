@@ -17,6 +17,29 @@
 
 namespace tt::tt_fabric {
 
+namespace {
+
+// Does any intermesh edge in this fabric sit on a Z direction?
+//
+// Only such an edge produces the Z-facing intermesh boundary shape, whose channel counts the
+// fabric-wide maximum below has to cover. Deliberately local to that maximum: no router's shape is
+// derived from it -- each is derived from its own facing and edge capability -- so it is a property
+// of the fabric being sized, not a configuration fact worth carrying in IntermeshVCConfig.
+bool fabric_has_intermesh_z_edge(const MeshGraph& mesh_graph) {
+    for (const auto& mesh_connections : mesh_graph.get_inter_mesh_connectivity()) {
+        for (const auto& chip_connections : mesh_connections) {
+            for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
+                if (router_edge.port_direction == RoutingDirection::Z) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 void FabricBuilderContext::compute_max_channel_counts() {
     // Create channel mappings for all router types that exist in this fabric
     const auto topology = fabric_context_.get_fabric_topology();
@@ -49,7 +72,13 @@ void FabricBuilderContext::compute_max_channel_counts() {
     // the same chips, whose VC1 gains the from-Z slot (4 VC0 / 4 VC1 in the non-express case).
     // The boundary family's 9 dominates the maximum today, but the enumeration is the contract:
     // every family present in the fabric is represented here.
-    if (intermesh_vc_config_.has_intermesh_z_router) {
+    //
+    // Gated on VC1 as well as on the edge: the boundary family's entire shape is its from-boundary
+    // VC1 fanout, so without VC1 it cannot be constructed at all (router_vc_shape rejects it). That
+    // also reproduces the condition under which the intermesh config was enabled in the first place.
+    const bool has_intermesh_z_boundary =
+        intermesh_vc_config_.requires_vc1 && fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
+    if (has_intermesh_z_boundary) {
         possible_mappings.emplace_back(
             topology,
             false,  // no tensix
@@ -286,25 +315,6 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         }
 
         if (total_intermesh_connections > 0) {
-            // Detect Z vs XY intermesh by checking for Z-direction connections in inter-mesh connectivity
-            bool has_z_routers = false;
-            for (const auto& mesh_connections : inter_mesh_connectivity) {
-                for (const auto& chip_connections : mesh_connections) {
-                    for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
-                        if (router_edge.port_direction == RoutingDirection::Z) {
-                            has_z_routers = true;
-                            break;
-                        }
-                    }
-                    if (has_z_routers) {
-                        break;
-                    }
-                }
-                if (has_z_routers) {
-                    break;
-                }
-            }
-
             // Default to FULL_MESH when intermesh exists
             // TODO: Implement detection logic for:
             //   - EDGE_ONLY: Check if workload only needs edge nodes (optimization)
@@ -318,11 +328,6 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
             config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
                                              : IntermeshVCConfig::full_mesh();
-
-            // Record whether any intermesh edge sits on a Z direction, so the fabric-wide maximum
-            // channel counts cover the Z-facing intermesh boundary shape. Per-router shapes are
-            // derived from facing and capability downstream, not from this flag.
-            config.has_intermesh_z_router = has_z_routers;
         }
     }
 

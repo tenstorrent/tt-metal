@@ -177,31 +177,69 @@ TEST_F(BuilderConnectionMappingTest, ZRouter_ChannelAndConnectionMapping_Consist
 }
 
 // ============================================================================
-// Family Detection Tests (capability-based, not direction-keyed)
+// Template Selection Tests (capability-based, not direction-keyed)
 // ============================================================================
 
-TEST_F(BuilderConnectionMappingTest, FamilyDetection_CardinalDirectionsAreNotZBoundary) {
-    // Cardinal-facing routers are never the Z-facing intermesh boundary family
-    auto intermesh_config = IntermeshVCConfig::full_mesh();
-    for (auto dir : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
-        FabricRouterChannelMapping mapping(
-            Topology::Mesh, false, dir, EdgeCapability::INTRAMESH_CARDINAL, &intermesh_config);
-        EXPECT_FALSE(mapping.is_intermesh_z_boundary())
-            << "Direction " << static_cast<int>(dir) << " must not derive the Z boundary family";
+TEST_F(BuilderConnectionMappingTest, TemplateSelection_ZBoundaryVsExpressChord) {
+    // Both routers face Z. Facing alone does not select the intermesh boundary template -- the
+    // edge's capability does. The distinction is observable in the wiring, which is where it lives:
+    // there is no predicate to ask.
+    auto boundary = RouterConnectionMapping::for_mesh_router(
+        Topology::Torus,
+        RoutingDirection::Z,
+        /*has_z=*/false,
+        /*enable_vc1=*/true,
+        /*enable_mesh_pass_through=*/false,
+        /*express_routing_enabled=*/false,
+        EdgeCapability::INTERMESH);
+
+    // The boundary's whole shape is its VC1 from-boundary fanout: nothing forwards off its VC0
+    // receiver, and VC1 fans out to all four mesh directions.
+    EXPECT_FALSE(boundary.has_targets(0, 0));
+    auto boundary_targets = boundary.get_downstream_targets(1, 0);
+    ASSERT_EQ(boundary_targets.size(), 4);
+    for (const auto& target : boundary_targets) {
+        EXPECT_EQ(target.type, ConnectionType::Z_TO_MESH);
+    }
+
+    // A same-mesh Z is an express chord, i.e. an ordinary mesh-like forwarding direction: its VC0
+    // receiver forwards to all four cardinals as INTRA_MESH.
+    auto chord = RouterConnectionMapping::for_mesh_router(
+        Topology::Torus,
+        RoutingDirection::Z,
+        /*has_z=*/false,
+        /*enable_vc1=*/false,
+        /*enable_mesh_pass_through=*/false,
+        /*express_routing_enabled=*/true,
+        EdgeCapability::INTRAMESH_EXPRESS,
+        /*has_intramesh_express=*/true);
+
+    auto chord_targets = chord.get_downstream_targets(0, 0);
+    ASSERT_EQ(chord_targets.size(), 4);
+    for (const auto& target : chord_targets) {
+        EXPECT_EQ(target.type, ConnectionType::INTRA_MESH);
     }
 }
 
-TEST_F(BuilderConnectionMappingTest, FamilyDetection_ZBoundaryRequiresIntermesh) {
-    // The Z boundary family is the (Z, INTERMESH) case -- direction alone does not select it.
-    auto intermesh_config = IntermeshVCConfig::full_mesh();
-    FabricRouterChannelMapping boundary(
-        Topology::Mesh, false, RoutingDirection::Z, EdgeCapability::INTERMESH, &intermesh_config);
-    EXPECT_TRUE(boundary.is_intermesh_z_boundary());
+TEST_F(BuilderConnectionMappingTest, TemplateSelection_ZBoundaryWinsUnderExpress) {
+    // Enabling express on the mesh must not pull an intermesh Z edge onto the shared express maps:
+    // the boundary is a different edge and keeps its capability-specific template.
+    auto boundary = RouterConnectionMapping::for_mesh_router(
+        Topology::Torus,
+        RoutingDirection::Z,
+        /*has_z=*/false,
+        /*enable_vc1=*/true,
+        /*enable_mesh_pass_through=*/false,
+        /*express_routing_enabled=*/true,
+        EdgeCapability::INTERMESH,
+        /*has_intramesh_express=*/true);
 
-    // A same-mesh Z is an express chord: still Z-facing, but not the boundary family.
-    FabricRouterChannelMapping chord(
-        Topology::Torus, false, RoutingDirection::Z, EdgeCapability::INTRAMESH_EXPRESS, nullptr, false, true);
-    EXPECT_FALSE(chord.is_intermesh_z_boundary());
+    EXPECT_FALSE(boundary.has_targets(0, 0));
+    auto targets = boundary.get_downstream_targets(1, 0);
+    ASSERT_EQ(targets.size(), 4);
+    for (const auto& target : targets) {
+        EXPECT_EQ(target.type, ConnectionType::Z_TO_MESH);
+    }
 }
 
 // ============================================================================

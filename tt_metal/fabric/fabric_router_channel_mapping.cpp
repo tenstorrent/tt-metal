@@ -22,11 +22,22 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
     bool express_routing_enabled) :
     topology_(topology),
     downstream_is_tensix_builder_(downstream_is_tensix_builder),
-    direction_(direction),
-    edge_capability_(edge_capability),
-    express_routing_enabled_(express_routing_enabled),
     shape_(RouterConnectionMapping::router_vc_shape(
         topology, direction, edge_capability, has_intermesh_z_edge, express_routing_enabled, intermesh_config)) {
+    // Logged here rather than during layout: these are the inputs to the shape derivation, and this
+    // is the only point at which they are in scope. None is retained.
+    log_debug(
+        LogFabric,
+        "FabricRouterChannelMapping: direction={}, capability={}, intermesh_z_edge={}, express={}, senders per VC = "
+        "{}/{}/{}",
+        static_cast<int>(direction),
+        to_string(edge_capability),
+        has_intermesh_z_edge,
+        express_routing_enabled,
+        shape_.sender_counts[0],
+        shape_.sender_counts[1],
+        shape_.sender_counts[2]);
+
     initialize_mappings();
 }
 
@@ -44,14 +55,6 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
         // construction: 5 for the Z-facing boundary and express families, 4 for legacy mesh, and
         // everything downstream (bases, stream assignment, CT args) reads the same fact.
         const auto num_sender_channels = shape_.sender_counts[0];
-
-        log_debug(
-            LogFabric,
-            "initialize_vc0_mappings: direction={}, z_boundary={}, express={}, num_sender_channels={}",
-            static_cast<int>(direction_),
-            is_intermesh_z_boundary(),
-            express_routing_enabled_,
-            num_sender_channels);
 
         for (uint32_t i = 0; i < num_sender_channels; ++i) {
             // When mux extension is enabled, ALL VC0 channels go to TENSIX mux
@@ -80,14 +83,8 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
 }
 
 void FabricRouterChannelMapping::initialize_vc1_mappings() {
-    const bool is_2d = is_2D_topology(topology_);
-    if (!is_2d) {
-        // VC1 (intermesh) only exists for 2D topologies and Z routers
-        return;
-    }
-
     if (!is_2D_topology(topology_) || shape_.sender_counts[1] == 0) {
-        // 1D topologies and VC1-disabled configurations create no VC1 mappings. The boundary's
+        // VC1 only exists on 2D topologies, and only when the VC is enabled. The boundary family's
         // VC1 requirement is enforced upstream, in the shape derivation.
         return;
     }
@@ -121,12 +118,6 @@ void FabricRouterChannelMapping::initialize_vc2_mappings() {
         receiver_channel_map_[LogicalReceiverChannelKey{2, 0}] =
             InternalReceiverChannelMapping{BuilderType::ERISC, shape_.receiver_flat_base[2]};
     }
-}
-
-bool FabricRouterChannelMapping::is_intermesh_z_boundary() const {
-    // The Z-facing intermesh boundary family: a Z-facing router whose edge crosses a mesh
-    // boundary. Derived from facing and capability, not a variant tag.
-    return direction_ == RoutingDirection::Z && edge_capability_ == EdgeCapability::INTERMESH;
 }
 
 InternalSenderChannelMapping FabricRouterChannelMapping::get_sender_mapping(

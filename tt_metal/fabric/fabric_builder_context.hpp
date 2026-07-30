@@ -47,11 +47,6 @@ class FabricContext;
  */
 struct IntermeshVCConfig {
     IntermeshVCMode mode = IntermeshVCMode::DISABLED;
-    // True when some intermesh edge sits on a Z direction, meaning Z-facing intermesh boundary
-    // routers exist in this fabric and the fabric-wide maximum channel counts must cover their
-    // (direction,capability)-derived 5/4 shape. Informational only -- per-router shapes are derived
-    // from facing and capability, not from this flag.
-    bool has_intermesh_z_router = false;
     bool requires_vc1 = false;                      // True if VC1 needed for intermesh
     bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through

@@ -176,7 +176,6 @@ TEST_F(RouterArchetypesTest, CreateMeshRouterArchetype_1D_NoZ) {
 
     // Verify channel mapping
     EXPECT_EQ(router.channel_mapping.get_num_virtual_channels(), 1);
-    EXPECT_FALSE(router.channel_mapping.is_intermesh_z_boundary());
 
     // Verify connection mapping: receiver channel 0 has 1 target
     EXPECT_EQ(router.connection_mapping.get_total_sender_count(), 1);
@@ -196,7 +195,6 @@ TEST_F(RouterArchetypesTest, CreateMeshRouterArchetype_2D_WithZ) {
 
     // Verify channel mapping
     EXPECT_EQ(router.channel_mapping.get_num_virtual_channels(), 1);
-    EXPECT_FALSE(router.channel_mapping.is_intermesh_z_boundary());
 
     // Verify connection mapping: receiver channel 0 has 4 targets (3 INTRA_MESH + 1 MESH_TO_Z)
     EXPECT_EQ(router.connection_mapping.get_total_sender_count(), 4);
@@ -217,7 +215,6 @@ TEST_F(RouterArchetypesTest, CreateZRouterArchetype) {
 
     // Verify channel mapping
     EXPECT_EQ(router.channel_mapping.get_num_virtual_channels(), 2);
-    EXPECT_TRUE(router.channel_mapping.is_intermesh_z_boundary());
 
     // Verify VC1 has 4 sender channels
     EXPECT_EQ(router.channel_mapping.get_num_sender_channels_for_vc(1), 4);
