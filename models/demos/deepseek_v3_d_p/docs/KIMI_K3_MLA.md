@@ -226,6 +226,80 @@ and `g ⊙ (attn @ W_b2) ≠ (g ⊙ attn) @ W_b2`.
 > Every K3 branch is flag-gated on `mla_use_nope` / `mla_use_output_gate`, and the K2.6 / V3 / GLM
 > PCCs are bit-identical before and after.
 
+### 5.1 Accuracy at production depth, and the one config that broke it
+
+The op-level and shallow-module PCCs above all top out at 3,840 tokens, which turned out to hide a
+failure. Measured over a **56,320-token chunked prefill** (`test_mla_chunked_prefill[k3-depth56k-1u]`:
+44 chunks of 1,280 on 2x4, so `S_loc=640` and the tuned configs are engaged), with Kimi-K2.6 run at
+identical geometry as a control:
+
+| kv_actual | 0 | 3,840 | 8,960 | 19,200 | 29,440 | 39,680 | 55,040 | full-measured |
+|---|---|---|---|---|---|---|---|---|
+| Kimi-K2.6 | 0.99808 | ~0.9942 | — | — | — | — | **0.98589** | 0.99282 |
+| K3, as first shipped | 0.99765 | **0.97860 ✗** | — | — | — | — | — | — |
+| **K3, fixed** | 0.99880 | 0.99321 | 0.99025 | 0.98786 | 0.98671 | 0.98606 | **0.98550** | 0.99243 |
+
+As first shipped, K3 **failed the 0.98 threshold at kv_actual=3,840** — 1/14th of production depth.
+A bisect isolated it to a single tuned config:
+
+| variant under test | kv=3,840 | 44 chunks |
+|---|---|---|
+| all K3 tuned configs | 0.97860 | ✗ |
+| SDPA `k_chunk` 640→32, matmuls tuned | 0.97876 | ✗ |
+| SDPA `k_chunk`=640, matmuls untuned | 0.99316 | ✓ |
+| **`kv_a_proj_with_mqa` dropped, other 6 + k=640 kept** | **0.99321** | **✓** |
+| only `kv_a_proj_with_mqa` kept, other 6 dropped | 0.97841 | ✗ |
+
+**`kv_a_proj_with_mqa` alone was necessary and sufficient.** It is the only tuned matmul on the
+KV-cache path (`kv_a_proj → slice → rms_norm → kvpe.pack`); every later chunk re-reads that cache, so
+its error compounds with depth rather than staying local to one chunk. The tell is the cache PCC:
+0.999877 with the default tiling vs 0.999810 with the tuned one. The tiling is dimensionally valid —
+just less accurate — and this is the one place in the layer where that is cumulative.
+
+Fix: K3 does not retag that entry and uses the untuned default there (~2% of the layer's matmul
+FLOPs). **`k_chunk=640` is retained** — it is accuracy-neutral (0.99316 vs 0.99442 untuned) and keeps
+the 2.36× win from F2. The other six tuned matmuls are retained. A tripwire test
+(`test_kimi_k3_mla_matmuls.py::test_k3_expected_untuned_weights`) fails if a tuned candidate is added
+back there, and asserts the K3 opt-out did not remove K2.6's own config.
+
+**Open item for Kimi-K2.6.** K2.6 runs that same tuned `kv_a_proj_with_mqa` config and shows the same
+degraded cache PCC (0.999810), asymptoting to 0.98589 against a 0.98 threshold. It passes, but with
+less margin than it needs — K3 with the accurate default now beats it on cache PCC (0.999877) and is
+within 0.0004 of it on output. Re-tuning that entry would likely recover ~0.0005 for K2.6 at depth.
+Not changed here: out of scope for the K3 work.
+
+**Cost of the fix: +1.7 % device time**, all of it in the matmul bucket, measured on the same 2x4
+`chunk1280` case between the `MLA_START`/`MLA_END` signposts:
+
+| | Matmul | CCL | SDPA | Other | Total |
+|---|---|---|---|---|---|
+| tuned `kv_a_proj` (fails at depth) | 1,357 µs | 2,002 µs | 1,704 µs | 812 µs | 5,875 µs |
+| default `kv_a_proj` (passes) | 1,443 µs | 2,013 µs | 1,709 µs | 812 µs | **5,977 µs** |
+| Δ | **+6.3 %** | +0.6 % | +0.3 % | −0.1 % | **+1.7 %** |
+
+**Other accuracy coverage, all passing on 2x4 after the fix** (random weights):
+
+| | line | fabric2d |
+|---|---|---|
+| single-shot seq5k `max_sl` / `scaled_sl` | 0.99787 / 0.99920 | pass |
+| chunked `chunk1280-full` | 0.99817 | 0.99817 (identical) |
+| chunked `maxedge-1u` (chunk 5120) | — | 0.99685 |
+| multi-user `fullchunk-2u` | u0 0.99686 / u1 0.99687 | same |
+| multi-user `maxedge-2u` | u0 0.99685 / u1 0.99686 | same |
+
+Multi-user is the load-bearing one for the KV slot map (`cache_user_id * layer_num + cache_layer_idx`):
+both users land within 2e-5 of the single-user PCC, i.e. no cross-user contamination.
+
+`FABRIC_1D_RING` (the `ring` id) cannot run on an 8-chip 2x4 box at all — it fails fabric routing
+(`fabric.cpp:161`, no forwarding direction D0→D3) for **every** variant including untouched K2.6, so
+`-k` selectors there need a `line` / `fabric2d` qualifier.
+
+**Depth verification is cheap now.** `cpu_mla_reference` is disk-cached (content-hashed on weights,
+input and the math-affecting config fields), so the ~7 min 56,320-token reference is paid once —
+measured 397 s at 96 heads, 264 s at 64 heads on a 16-core EPYC without AMX. Every re-run and every
+bisect after that is device-time only (~20-40 s). Note the input must be part of the key: the chunked
+driver seeds `hidden` per user, so two users can share a length with different inputs.
+
 **F1 — Immediate hard break: `rope_scaling` carries no `"factor"`.** `mla.py:330` unconditionally
 derefs `config.rope_scaling["factor"]` / `["mscale"]`. K3 raises before anything else runs. The fix
 is not just a guard: the correct K3 scale is plain `qk_head_dim**-0.5`, where K2.6 multiplies by

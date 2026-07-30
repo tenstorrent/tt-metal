@@ -938,6 +938,20 @@ _CHUNKED_SCENARIOS = (
         # Rotated: iter0 fills one chip of a 2-SP mesh, iter1 starts mid-slab.
         ("chunk1280-rot", dict(iters_isl=[640, 1280], chunk_size_global=1280)),
     ]
+    # PCC-vs-KV-depth at the production token count. 44 x 1280 = 56320, the same total the 8x4 Galaxy
+    # reaches with 11 chunks of 5120 -- and at chunk 1280 a 2-SP box lands S_loc=640, so the
+    # num_heads-tagged 640 matmul/SDPA configs are actually engaged (chunk 5120 on 2 SP gives S_loc
+    # 2560, which has no tuned entry at all and would exercise a different path).
+    #
+    # This is the case that answers "does accuracy hold at depth": every iteration is asserted, so one
+    # CPU reference yields 44 depth points. The reference is ~7 min at this length on a 16-core host
+    # and is disk-cached by cpu_mla_reference, so only the first run pays it.
+    #
+    # Named depth56k-*, NOT chunk1280-*, so `-k chunk1280` keeps selecting only the two short cases
+    # above rather than silently pulling a 44-iteration run.
+    + [
+        ("depth56k-1u", dict(iters_isl=[1280] * 44, chunk_size_global=1280)),
+    ]
 )
 
 

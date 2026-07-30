@@ -361,10 +361,28 @@ def _retag_for_k3(cfg: dict) -> dict:
     return {**cfg, "num_heads": _K3_HEADS}
 
 
-# q_a_proj / kv_a_proj_with_mqa: per-device shape is identical (K = hidden/tp = 1792 either way).
+# q_a_proj: per-device shape is identical (K = hidden/tp = 1792 either way).
 # o_proj: K widens 2048 -> 3072, but N is the full 7168 for both (K-sharded via mapper_tp0) and
 # in0_block_w=8 divides K_t=64 and K_t=96 alike -- so the tiling is valid unchanged.
-for _name in ("q_a_proj", "kv_a_proj_with_mqa", "o_proj"):
+#
+# kv_a_proj_with_mqa is deliberately NOT retagged, even though its per-device shape is also identical.
+# Its K2.6 tiling is dimensionally fine for K3 but measurably less accurate than the untuned default,
+# and it is the ONE tuned matmul on the KV-cache path (kv_a_proj -> slice -> rms_norm -> kvpe.pack).
+# Every later chunk re-reads that cache, so the loss compounds with KV depth instead of staying local
+# to one chunk. Measured on 2x4 at S_loc=640 over 44 chunks to 56320 tokens
+# (test_mla_chunked_prefill[k3-depth56k-1u]):
+#
+#   K3 candidate present : KV cache k_nope 0.999810 -> output PCC FAILS 0.98 at kv_actual=3840
+#   K3 candidate absent  : KV cache k_nope 0.999877 -> passes all 44, 0.98550 at kv_actual=55040
+#
+# A bisect isolated it: dropping this one candidate and keeping the other six (plus the k_chunk=640
+# SDPA entry) passes; keeping only this one and dropping the other six still fails. The cost of using
+# the default here is small -- kv_a_proj is ~2% of the layer's matmul FLOPs (K=1792, N=576).
+#
+# NOTE for the K2.6 side: K2.6 runs this same tuned config and shows the same degraded KV-cache PCC
+# (0.999810), asymptoting to 0.98589 against a 0.98 threshold. It passes, but the margin is thinner
+# than it needs to be; re-tuning this entry would likely buy K2.6 back ~0.0005 at depth.
+for _name in ("q_a_proj", "o_proj"):
     _k26 = MLA_MATMUL_CONFIG[_name][640]
     MLA_MATMUL_CONFIG[_name][640] = [_k26, _retag_for_k3(_k26)]
 

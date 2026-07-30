@@ -143,11 +143,26 @@ def _k3_mla_stub():
     return mla
 
 
+# Weights that deliberately have NO Kimi-K3 tuned config and run the untuned default instead.
+# kv_a_proj_with_mqa: its K2.6 tiling is dimensionally valid for K3 but measurably less accurate, and
+# it is the only tuned matmul on the KV-cache path, so the loss compounds with KV depth -- it failed
+# the 0.98 output PCC at kv_actual=3840 over a 56320-token chunked prefill. See the comment in
+# mla_config.py and test_k3_expected_untuned_weights below.
+K3_EXPECTED_UNTUNED = {"kv_a_proj_with_mqa"}
+
+
 def _build_cases():
     stub = _k3_mla_stub()
     cases = []
     for name, batch, m, k, n in K3_MM_SHAPES:
         cfg = stub._select_cfg(MLA_MATMUL_CONFIG.get(name, {}).get(S_LOC))
+        if name in K3_EXPECTED_UNTUNED:
+            assert cfg is None, (
+                f"{name!r} now HAS a Kimi-K3 tuned config, but it is in K3_EXPECTED_UNTUNED because a "
+                f"tuned tiling there cost enough KV-cache accuracy to fail the 0.98 depth PCC. Re-run "
+                f"test_mla_chunked_prefill[k3-depth56k-1u] before removing it from that set."
+            )
+            continue
         assert cfg is not None, f"no Kimi-K3 tuned config for {name!r} at seq_len_local={S_LOC}"
         pc = cfg["program_config"]
         fused = getattr(pc, "fused_activation", None)
@@ -192,6 +207,32 @@ def _build_cases():
 
 
 K3_MM_CASES = _build_cases()
+
+
+def test_k3_expected_untuned_weights():
+    """Weights we deliberately leave untuned for K3 must stay untuned, and everything else tuned.
+
+    This is a tripwire, not a preference. ``kv_a_proj_with_mqa`` feeds the KV cache, which every later
+    chunk re-reads, so a tuned tiling there degrades accuracy cumulatively rather than locally: with it
+    the chunked output PCC fell below 0.98 at kv_actual=3840 of a 56320-token prefill; without it the
+    same run passes all 44 chunks (0.98550 at kv_actual=55040). A bisect pinned it to that one config —
+    the other six tuned matmuls and the k_chunk=640 SDPA entry are all fine.
+
+    If someone adds a tuned candidate there, this fails and points at the depth test to re-run.
+    """
+    stub = _k3_mla_stub()
+    for name, *_ in K3_MM_SHAPES:
+        cfg = stub._select_cfg(MLA_MATMUL_CONFIG.get(name, {}).get(S_LOC))
+        if name in K3_EXPECTED_UNTUNED:
+            assert cfg is None, f"{name!r} unexpectedly has a K3 tuned config; re-verify the depth PCC first"
+        else:
+            assert cfg is not None, f"{name!r} lost its K3 tuned config"
+    # K2.6 must keep its own tuned kv_a_proj config -- this is a K3-only opt-out, not a removal.
+    k26 = object.__new__(ttMLA)
+    k26.num_heads, k26.q_lora_rank, k26.is_chunked, k26._is_dsa_family = 64, Q_LORA_RANK, True, False
+    assert (
+        k26._select_cfg(MLA_MATMUL_CONFIG["kv_a_proj_with_mqa"][S_LOC]) is not None
+    ), "the K3 opt-out must not have removed Kimi-K2.6's own kv_a_proj tuned config"
 
 
 def test_k3_g_proj_config_fuses_sigmoid():
