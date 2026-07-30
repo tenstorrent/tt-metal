@@ -208,7 +208,10 @@ def main():
         )
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
+    # PREFILL_TRACE_POOL needs a DRAM trace region to hold one captured trace per KV-length bucket;
+    # default 0 leaves the eager path byte-identical (no region reserved).
+    _trace_region = int(os.getenv("PREFILL_TRACE_REGION", "0"))
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols), trace_region_size=_trace_region)
     print(f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:
         model_args = ModelArgs(mesh_device=mesh)  # HF_MODEL
@@ -288,6 +291,99 @@ def main():
 
         print(f"[prefill-pcc] compiling ({num_layers}L, SP=8 × TP=4 + EP=32) ...", flush=True)
         runtime.compile(kv_cache)
+
+        # --- Full per-chunk trace POOL (PREFILL_TRACE_POOL=1): capture one trace per chunk index, then
+        # replay the whole sequence R times. This is the pipeline design's correctness gate in isolation
+        # (single galaxy, no D2D): the replayed KV must match the golden as well as eager does, since the
+        # pool traces ARE the eager forward. Amortization shows as pass>=1 (post-capture) tok/s.
+        if os.getenv("PREFILL_TRACE_POOL") == "1":
+            padded = token_ids + [0] * (total - n_tokens)
+            runtime.capture_prefill_trace_pool(kv_cache, slot_id=0, n_chunks=n_chunks, token_ids=padded)
+            repeats = int(os.getenv("PREFILL_TRACE_POOL_REPEATS", "3"))
+            passes = []
+            for r in range(repeats):
+                t0 = time.perf_counter()
+                for c in range(n_chunks):
+                    runtime.update_chunk_input(c, tokens=padded[c * chunk : (c + 1) * chunk])
+                    runtime.replay_chunk(c)
+                ttnn.synchronize_device(mesh)
+                passes.append(time.perf_counter() - t0)
+                print(
+                    f"[prefill-pcc] TRACE_POOL pass {r}: {passes[-1] * 1000:.1f} ms "
+                    f"({n_chunks * chunk / passes[-1]:.0f} tok/s, {n_chunks} chunks)",
+                    flush=True,
+                )
+            steady = statistics.median(passes[1:]) if repeats > 1 else passes[0]
+            print(
+                f"[prefill-pcc] TRACE_POOL steady-state (pass>=1): {steady * 1000:.1f} ms/seq "
+                f"({n_chunks * chunk / steady:.0f} tok/s)",
+                flush=True,
+            )
+            if os.environ.get("PREFILL_SKIP_PCC") == "1":
+                print("[prefill-pcc] PREFILL_SKIP_PCC=1 -> skipping KV PCC (perf only)", flush=True)
+            else:
+                check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
+            runtime.release_trace_pool()
+            print("[prefill-pcc] DONE", flush=True)
+            return 0
+
+        # --- Device-only per-chunk rate via execute_trace (PREFILL_TRACE_REPLAY=1). Captures ONE chunk's
+        # forward and replays it, so per-op HOST dispatch is paid once at capture, not per iter — the replay
+        # wall is ~pure device time. This separates the device-collective cost (what a traced production run
+        # pays) from eager host-dispatch, which the eager loop below conflates. A trace is fixed to its
+        # captured KV offset (cached_len is host-side), so one capture serves one depth only:
+        #   default        -> capture at cached_len=0 (Cold-5k device rate)
+        #   TRACE_AT_LAST=1 -> eagerly pre-fill chunks 0..n-2 to build the KV, then capture the LAST chunk at
+        #                      cached_len=(n_chunks-1)*chunk (the true 5k@50k depth rate).
+        if os.getenv("PREFILL_TRACE_REPLAY") == "1":
+            padded = token_ids + [0] * (total - n_tokens)
+            at_last = os.getenv("PREFILL_TRACE_AT_LAST") == "1"
+            a_cap = (n_chunks - 1) * chunk if at_last else 0
+            if at_last:
+                for c in range(n_chunks - 1):  # eager pre-fill to build the accumulated KV up to a_cap
+                    a = c * chunk
+                    inp = runtime.make_chunk_input(padded[a : a + chunk])
+                    runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
+                ttnn.synchronize_device(mesh)
+            tokens = runtime.make_chunk_input(padded[a_cap : a_cap + chunk])  # persistent; embed reads, never frees
+
+            def _fwd():
+                x = runtime._embed_tokens(tokens)
+                return runtime.model.prefill_forward(
+                    x,
+                    rot_mats_global=runtime.rope_indexed,
+                    kv_cache=kv_cache,
+                    cached_len=a_cap,
+                    user_id=0,
+                    get_last_token=-1,
+                    skip_lm_head=True,
+                    indexed_rope=True,
+                    on_layer_complete=None,
+                )
+
+            o = _fwd()  # warmup after compile (stabilizes allocations before capture)
+            ttnn.synchronize_device(mesh)
+            if o is not None:
+                o.deallocate(True)
+            tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+            o = _fwd()
+            ttnn.end_trace_capture(mesh, tid, cq_id=0)
+            ttnn.synchronize_device(mesh)
+            tr = []
+            for i in range(tps_iters):
+                t0 = time.perf_counter()
+                ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+                tr.append(time.perf_counter() - t0)
+            ttnn.synchronize_device(mesh)
+            m = statistics.median(tr)
+            print(
+                f"[prefill-pcc] TRACED CHUNK over {tps_iters} iters: {chunk} tok @ {a_cap} cache, {num_layers}L, "
+                f"SP={rows}×TP={cols} EP={rows * cols}, median {chunk / m:.1f} tok/s; "
+                f"wall median {m * 1000:.2f} ms [min {min(tr) * 1000:.2f}, max {max(tr) * 1000:.2f}]",
+                flush=True,
+            )
+            print("[prefill-pcc] DONE", flush=True)
+            return 0
 
         # --- throughput. Each iteration re-fills slot 0 (valid for the PCC check after the loop) and
         # times two distinct full-prefill passes, each with syncs placed so it pays for no extra barrier:
