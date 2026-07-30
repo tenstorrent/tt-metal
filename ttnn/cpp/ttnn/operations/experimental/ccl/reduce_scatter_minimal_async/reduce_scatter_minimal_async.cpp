@@ -136,13 +136,8 @@ std::vector<ttnn::Tensor> reduce_scatter_minimal_async_create_intermediate_buffe
 
     // fp32 inputs default to fp32 dest-acc (see reduce_scatter_minimal_async); this affects tile_granularity
     // and therefore the staging page size, so it must be resolved the same way here.
-    auto resolved_compute_kernel_config = compute_kernel_config;
-    if (!resolved_compute_kernel_config.has_value() && input_tensor.dtype() == DataType::FLOAT32) {
-        resolved_compute_kernel_config = ttnn::DeviceComputeKernelConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
-        };
-    }
+    auto resolved_compute_kernel_config =
+        ttnn::ccl::resolve_fp32_acc_compute_kernel_config(compute_kernel_config, input_tensor.dtype());
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(resolved_compute_kernel_config);
 
     auto stage_spec = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_spec(
