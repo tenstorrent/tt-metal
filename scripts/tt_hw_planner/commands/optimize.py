@@ -398,8 +398,16 @@ def _run_matmul_sweep_prepass(args, run_root: Path, run_demo: Path, node: str = 
     to --perf-test; the per-module path passes each module's own PCC test node (which runs that
     module's forward, so its matmuls are what get swept). If no node can be resolved it warns and
     skips. Any failure is reported and swallowed so the optimize run still proceeds."""
+    # Whether the CALLER supplied a node has to be captured BEFORE the fallback overwrites it.
+    # `case = case if node else args.case` asked the question one line too late: by then `node` had
+    # already been reassigned from --perf-test and was always truthy, so args.case was unreachable
+    # and the full-pipeline sweep enumerated the whole perf test -> 0 matmul shapes (issue #14).
+    _caller_supplied_node = node is not None
     node = node or getattr(args, "perf_test", None)
-    case = case if node else getattr(args, "case", None)
+    # Fall back to --case ONLY when the caller supplied neither half of the selection. An argument
+    # the caller passed explicitly must never lose to a namespace default.
+    if case is None and not _caller_supplied_node:
+        case = getattr(args, "case", None)
     if not node:
         print("  [optimize/matmul-sweep] no node to sweep (need --perf-test or a per-module PCC node); skipping")
         return

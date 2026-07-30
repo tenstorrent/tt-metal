@@ -65,3 +65,79 @@ def test_full_pipeline_path_still_wires_the_sweep():
 
     src = inspect.getsource(optimize.cmd_optimize)
     assert "_run_matmul_sweep_prepass" in src
+
+
+# --------------------------------------------------------------------------- issue #14
+# `--matmul-sweep` ignored `-k/--case` on the full-pipeline path, so the sweep enumerated the whole
+# perf test instead of the selected case and came back with 0 matmul shapes.
+#
+#     node = node or getattr(args, "perf_test", None)     # node is now TRUTHY
+#     case = case if node else getattr(args, "case", None)  # ...so args.case is unreachable
+#
+# The `if node` was meant to ask "did the CALLER supply a node?", but line 1 already overwrote the
+# answer. The per-module path (node=..., no case) must keep behaving as before.
+
+
+def _stub_root(tmp_path):
+    """A run_root whose cc_optimize/matmul_sweep.py records the kwargs it was called with, so these
+    tests assert the value that actually REACHES the sweep rather than a log string (the log line
+    prints after the module-not-found guard, so a bogus root never reaches it)."""
+    d = tmp_path / "models" / "experimental" / "perf_automation" / "cc_optimize"
+    d.mkdir(parents=True)
+    (d / "matmul_sweep.py").write_text(
+        "import json, os\n"
+        "def run_prepass(node, **kw):\n"
+        "    kw['node'] = node\n"
+        "    kw.pop('repo_root', None)\n"
+        "    with open(os.environ['SWEEP_CALL_LOG'], 'w') as f:\n"
+        "        json.dump(kw, f)\n"
+        "    return {'shapes': 0, 'seeded': 0, 'improved': 0}\n"
+    )
+    return tmp_path
+
+
+def _call(tmp_path, monkeypatch, args, **kw):
+    log = tmp_path / "call.json"
+    monkeypatch.setenv("SWEEP_CALL_LOG", str(log))
+    optimize._run_matmul_sweep_prepass(args, _stub_root(tmp_path), tmp_path, **kw)
+    assert log.is_file(), "the sweep was never invoked; node resolution bailed out"
+    import json
+
+    return json.loads(log.read_text())
+
+
+def test_full_pipeline_passes_case_through_to_the_sweep(tmp_path, monkeypatch):
+    got = _call(
+        tmp_path,
+        monkeypatch,
+        _Args(perf_test="models/demos/y/tests/test_perf.py::test_p", case="decode_bsz1"),
+    )
+    assert got["node"] == "models/demos/y/tests/test_perf.py::test_p"
+    assert got["case"] == "decode_bsz1", (
+        "issue #14: --case was dropped on the full-pipeline path, so the sweep enumerates the whole "
+        f"perf test and finds 0 matmul shapes. Got case={got['case']!r}"
+    )
+
+
+def test_per_module_path_keeps_its_own_case_semantics(tmp_path, monkeypatch):
+    """The per-module caller passes a node and deliberately NO case (the module's PCC node already
+    runs only that module). args.case must NOT leak in and narrow it to nothing."""
+    got = _call(
+        tmp_path,
+        monkeypatch,
+        _Args(perf_test="models/demos/y/tests/test_perf.py::test_p", case="decode_bsz1"),
+        node="models/demos/x/tests/pcc/test_mod.py::test_x",
+    )
+    assert got["node"] == "models/demos/x/tests/pcc/test_mod.py::test_x"
+    assert got["case"] is None, f"args.case leaked into the per-module sweep: {got['case']!r}"
+
+
+def test_caller_supplied_case_wins(tmp_path, monkeypatch):
+    got = _call(
+        tmp_path,
+        monkeypatch,
+        _Args(perf_test="models/demos/y/tests/test_perf.py::test_p", case="from_args"),
+        node="models/demos/x/tests/pcc/test_mod.py::test_x",
+        case="from_caller",
+    )
+    assert got["case"] == "from_caller"

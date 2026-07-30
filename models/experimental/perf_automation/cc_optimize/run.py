@@ -944,6 +944,39 @@ def _bridge_depth_env(
     return env
 
 
+def _cov_ladder(model_root, model_id: str = "") -> list:
+    """The coverage-search rungs, BOUNDED BY THE MODEL'S DECLARED DEPTH.
+
+    The ladder used to be the literal default "2,4,8,16" with no idea how deep the model actually
+    is. On llama3_1_8b_p150 (32 layers) that meant the search topped out at 16 with 2 op types still
+    uncovered, returned 16 anyway as "measured", and the run wore a false "(16 layers)" label from
+    then on. The rung that would have covered those 2 op types is the FULL depth, where coverage is
+    total by construction -- and the model declares that number in its own config.
+
+    layer_depth.full_depth_from_config() reads it without building or running anything, but it had
+    zero production callers; this is that caller. When nothing declares a depth it returns None and
+    we keep the plain ladder rather than inventing a bound.
+
+    Also drops rungs deeper than the model: probing 16 on a 6-layer model burns device time and
+    yields two rungs that measure the identical thing.
+    """
+    raw = os.environ.get("PERF_MCP_COV_LADDER", "2,4,8,16")
+    rungs = [int(x) for x in raw.split(",") if x.strip().isdigit()]
+    full = None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from agent.layer_depth import full_depth_from_config
+
+        full = full_depth_from_config(model_id=model_id, model_dir=model_root)
+    except Exception:  # noqa: BLE001
+        full = None
+    if not isinstance(full, int) or full <= 0:
+        return rungs
+    out = [d for d in rungs if d < full]
+    out.append(full)
+    return out
+
+
 def _measure_cov(repo_root: Path, mcp_env: dict, devices: str, node, case, full_types, model_root, base_knob=None):
     base = dict(base_knob) if base_knob else (_llm_depth_env(model_root, 2) if model_root is not None else {})
     if not base:
@@ -953,7 +986,7 @@ def _measure_cov(repo_root: Path, mcp_env: dict, devices: str, node, case, full_
     want = set(full_types or [])
     if not want:
         return None
-    ladder = [int(x) for x in (os.environ.get("PERF_MCP_COV_LADDER", "2,4,8,16")).split(",") if x.strip().isdigit()]
+    ladder = _cov_ladder(model_root)
     got = set()
     for d in ladder:
         env = dict(base)
@@ -2116,6 +2149,35 @@ def _comparable(value, stored_depth: str, want_depth: str):
     return Reading(value, depth=stored_depth).comparable_to(Reading(value, depth=want_depth))
 
 
+def _depth_scoped_throughput(snap, want_depth: str):
+    """Drop the depth-SENSITIVE part of a roofline snapshot, keep the depth-invariant part.
+
+    The snapshot mixes two kinds of quantity and only one of them cares about the profiled window:
+
+      * ``modeled_floor_ms`` is a SUM OVER THE PROFILED OPS, so a 2-layer floor rendered against a
+        16-layer measurement is meaningless -- the 832.93-vs-1088.15 headline.
+      * ``theoretical_rate`` / ``band`` / ``active_bytes`` / ``bw_fraction`` / ``unit`` are per-unit
+        model physics (bytes per token over bandwidth). The window never entered the arithmetic.
+
+    This used to be inline in _emit_summary and set the whole snapshot to None, so a depth mismatch
+    also deleted the ceiling. llama3_1_8b_p150 wrote its snapshot at TT_PERF_LAYERS=16 and finalized
+    the report at `all`, so the computed 54.577 tok/s/u ceiling (band 32.75-43.66) was discarded and
+    the report printed NO_BAND. The log line already said "omitting the FLOOR" -- the code just did
+    more than the message claimed.
+
+    An UNSTAMPED snapshot also loses its floor: per _comparable, no stamp means the window is
+    unknown, and assuming it matches is exactly how a 2-layer number once anchored a 16-layer run.
+    """
+    if not isinstance(snap, dict):
+        return None
+    stored = str(snap.get("perf_layers", "")).strip()
+    if stored and _comparable(1.0, stored, want_depth).is_pass:
+        return snap
+    scoped = dict(snap)  # copy: the caller still holds the original
+    scoped["modeled_floor_ms"] = None
+    return scoped
+
+
 def _prune_legacy_reports(demo_dir: Path) -> None:
     for legacy in ("E2E_REPORT.md", "summary.md"):
         try:
@@ -2214,15 +2276,17 @@ def _emit_summary(
             _throughput = json.loads(_tp.read_text())
             # The roofline floor sums per-op floors over the PROFILED window, so it is only
             # comparable to a measurement taken at the same depth. This snapshot survives between
-            # runs; drop it when the window moved rather than render a floor from a different scope.
+            # runs; drop THE FLOOR when the window moved -- but keep the ceiling, which is per-unit
+            # physics and never depended on the window.
             _wl = (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
             _sl = str((_throughput or {}).get("perf_layers", "")).strip()
-            if _sl and not _comparable(1.0, _sl, _wl).is_pass:
+            _throughput = _depth_scoped_throughput(_throughput, _wl)
+            if (_throughput or {}).get("modeled_floor_ms") is None:
                 print(
                     "  [optimize/cc] roofline snapshot was computed at TT_PERF_LAYERS=%s but this run "
-                    "uses %s; omitting the floor rather than comparing across depths" % (_sl, _wl)
+                    "uses %s; omitting the floor rather than comparing across depths (the ceiling is "
+                    "per-unit and is kept)" % (_sl or "<unstamped>", _wl)
                 )
-                _throughput = None
     except Exception:  # noqa: BLE001
         _throughput = None
     text = mod.render_summary(
