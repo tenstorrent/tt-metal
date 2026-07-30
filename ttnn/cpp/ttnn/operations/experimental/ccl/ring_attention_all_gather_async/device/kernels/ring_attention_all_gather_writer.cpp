@@ -14,6 +14,8 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ring_attention_all_gather_metadata.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -110,26 +112,18 @@ void kernel_main() {
         const uint32_t chunk_local_tiles = get_arg_val<uint32_t>(arg_idx++);
         Noc meta_noc;
         CircularBuffer cb_meta(cb_meta_id);
-        const auto s_meta = TensorAccessor(meta_args, kv_actual_isl_addr);
-        meta_noc.async_read(s_meta, CoreLocalMem<uint8_t>(cb_meta.get_write_ptr()), 4, {.page_id = 0}, {});
-        meta_noc.async_read_barrier();
-        // Fixed-address reused tensor (host updates it in place between trace replays); async_read_barrier
-        // orders the DMA but not the RISC data cache, so refetch the fresh value. Mirrors the SDPA reader.
-        invalidate_l1_cache();
-        CoreLocalMem<volatile uint32_t> meta(cb_meta.get_write_ptr());
-        const uint32_t kv_actual = meta[0];  // kv_actual_isl (tile-aligned)
-        const uint32_t chunk_global_tiles = chunk_local_tiles * ring_size;
-        const uint32_t logical_nt_local = (kv_actual >> 5) + chunk_global_tiles;
-        const uint32_t valid_slabs = (logical_nt_local + chunk_global_tiles - 1) / chunk_global_tiles;
-        const uint32_t gather_valid_Ht = valid_slabs * chunk_local_tiles;
-        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            const uint32_t valid_Ht =
-                gather_valid_Ht < input_tensor_Ht[input_idx] ? gather_valid_Ht : input_tensor_Ht[input_idx];
-            const uint32_t valid_pages = valid_Ht * input_tensor_Wt[input_idx];
-            if (valid_pages < input_tile_id_end[input_idx]) {
-                input_tile_id_end[input_idx] = valid_pages;
-            }
-        }
+        // Shared read protocol (async_read page 0 -> barrier -> invalidate_l1_cache -> volatile load). The
+        // invalidate is required, not cosmetic: this tensor is at a fixed DRAM address the host refreshes in
+        // place between trace replays, so a cached L1 line would return the prior chunk's kv_actual_isl and
+        // silently clamp the gather to the wrong prefix.
+        const uint32_t kv_actual = trace_metadata::read_metadata_scalar_u32(
+            meta_noc, meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());  // kv_actual_isl (tile-aligned)
+        // Same formula the reader uses -- both MUST clamp to the same slab prefix or the cb_output
+        // producer/consumer page counts drift (see the header's KEEP IN SYNC note).
+        const uint32_t gather_valid_Ht =
+            ring_attention_all_gather::compute_gather_valid_Ht(kv_actual, chunk_local_tiles, ring_size);
+        ring_attention_all_gather::clamp_input_ranges_to_gather_extent(
+            gather_valid_Ht, input_tensor_Ht, input_tensor_Wt, input_tile_id_end);
     }
 
     size_t arg_for_fab = arg_idx;

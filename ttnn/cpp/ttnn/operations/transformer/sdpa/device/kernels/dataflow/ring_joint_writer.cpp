@@ -11,6 +11,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
+#include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
@@ -503,13 +504,15 @@ void kernel_main() {
         // kv_actual_isl is a 1-element uint32 DRAM tensor (was metadata[1]); its DRAM address is common
         // runtime arg 0. Read its page 0 (4B).
         const uint32_t kv_actual_isl_addr = get_common_arg_val<uint32_t>(0);
-        const auto s_meta = TensorAccessor(meta_args, kv_actual_isl_addr);
         CircularBuffer cb_meta_scratch(cb_out);
         const uint32_t meta_l1 = cb_meta_scratch.get_write_ptr();
-        noc.async_read(s_meta, CoreLocalMem<uint32_t>(meta_l1), 4, {.page_id = 0}, {});
-        noc.async_read_barrier();
-        CoreLocalMem<volatile uint32_t> meta(meta_l1);
-        const uint32_t kv_actual_isl = meta[0];
+        // Shared read protocol (async_read page 0 -> barrier -> invalidate_l1_cache -> volatile load). The
+        // invalidate matters here for the same reason it does in the reader, and was previously missing on
+        // this path: the tensor is at a FIXED DRAM address the host refreshes in place between trace
+        // replays, so without it the writer can derive logical_nt / the ring masks from the PRIOR chunk's
+        // kv_actual_isl while the reader uses the fresh one -- a silent reader/writer disagreement.
+        const uint32_t kv_actual_isl =
+            trace_metadata::read_metadata_scalar_u32(noc, meta_args, kv_actual_isl_addr, meta_l1);
         logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
         const auto masks = ring_joint::build_ring_work_masks_device(
             fused_op_receiver.seq.ring_index,

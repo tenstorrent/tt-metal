@@ -10,6 +10,8 @@
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ring_attention_all_gather_metadata.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -169,7 +171,6 @@ void kernel_main() {
     // matching ring_attention_all_gather_async_detail::input_batch_base_pages. The slot_id and
     // kv_actual_isl DRAM addresses are the next two runtime args (emitted before the optional signaler args).
     if constexpr (has_metadata) {
-        constexpr uint32_t kMetadataReadBytes = 4;  // 1-element uint32 page
         // Two 1-element uint32 DRAM tensors: slot_id (was metadata[0]) and kv_actual_isl (was
         // metadata[1]). Each gets its OWN accessor (meta_args / kv_meta_args): they are separately
         // allocated and can land in different DRAM banks, so a shared accessor reads the wrong bank for
@@ -193,54 +194,42 @@ void kernel_main() {
         // the real output CB (as the proven SDPA ring_joint_reader does with cb_q_in) is reliable.
         //
         // Scope of the empirical workarounds here (read-into-output-CB + single-read below): they hold for
-        // the tested configuration -- full worker core grids, ring sizes 1..8, on Blackhole, single dispatch.
-        // The two KNOWN root causes are handled deterministically, not empirically: the wrong-DRAM-bank read
-        // is fixed by kv_meta_args (its own accessor, above), and cross-chunk L1 staleness under trace by the
-        // invalidate_l1_cache() calls after each barrier. The remaining empirical part is the op-start NoC
+        // the tested configuration -- full worker core grids, ring sizes 1..8, on Blackhole, single dispatch
+        // and captured-trace replay. The two KNOWN root causes are handled deterministically, not
+        // empirically: the wrong-DRAM-bank read is fixed by kv_meta_args (its own accessor, above), and
+        // cross-chunk L1 staleness under trace by the invalidate_l1_cache() inside
+        // read_metadata_scalar_u32. The remaining empirical part is the op-start NoC
         // drop-to-zero on the FIRST read; a change to core allocation / ring size / dispatch timing could
         // resurface it, so it is not guaranteed outside the above envelope and wants a silicon root-cause
         // before this path is relied on under those changes.
         CircularBuffer cb_meta(cb_output_id);
         const uint32_t meta_l1 = cb_meta.get_write_ptr();
-        auto mv = CoreLocalMem<volatile uint32_t>(meta_l1);
-        const auto s_slot = TensorAccessor(meta_args, slot_id_addr);
-        meta_noc.async_read(s_slot, CoreLocalMem<uint8_t>(meta_l1), kMetadataReadBytes, {.page_id = 0}, {});
-        meta_noc.async_read_barrier();
-        // The metadata tensor is at a fixed DRAM address reused every chunk (the host updates it in place
-        // between trace replays); async_read_barrier orders the DMA but does NOT invalidate the RISC data
-        // cache, so without this the read can return the prior chunk's stale slot. Mirrors the SDPA reader.
-        invalidate_l1_cache();
-        const uint32_t slot_id = mv[0];
+        // read_metadata_scalar_u32 is the shared protocol (async_read page 0 -> barrier ->
+        // invalidate_l1_cache -> volatile load); the invalidate matters because this tensor sits at a
+        // fixed DRAM address the host refreshes in place between trace replays, so a cached L1 line would
+        // hand back the prior chunk's slot.
+        const uint32_t slot_id = trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, meta_l1);
         const uint32_t cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             input_batch_base[input_idx] = cache_batch_idx * input_batch_head_count[input_idx] *
                                           input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
         }
-        // Now read kv_actual_isl (reusing meta_l1) and clamp the gather extent.
-        // gather_valid_Ht = ceil(logical_n / chunk_global) * chunk_local_tiles, mirroring the host
-        // compute_gather_valid_Ht. logical_nt = kv_actual/32 + chunk_global_tiles; chunk_global_tiles =
-        // chunk_local_tiles * ring_size. TILE_HEIGHT = 32.
+        // Now read kv_actual_isl (reusing meta_l1) and clamp the gather extent. kv_actual_isl has its OWN
+        // accessor (kv_meta_args): it is a separately-allocated single-page tensor that can land in a
+        // different DRAM bank than slot_id, and a shared accessor's dspec bakes page 0's bank from one
+        // buffer -- reusing meta_args here silently returned the wrong bank's data.
+        //
         // Only the slot read (the kernel's FIRST NoC read, issued at peak op-start contention) suffers the
         // drop-to-zero corruption; this kv read runs a few instructions later once the storm subsides and
         // is reliable with a single read (verified: the rotation tests, which exercise kv_actual != 0, pass
         // with a single read and regress under the max-of-K re-read).
-        const auto s_kv_actual = TensorAccessor(kv_meta_args, kv_actual_isl_addr);
-        meta_noc.async_read(s_kv_actual, CoreLocalMem<uint8_t>(meta_l1), kMetadataReadBytes, {.page_id = 0}, {});
-        meta_noc.async_read_barrier();
-        invalidate_l1_cache();             // fixed-address reused tensor -> refetch the fresh value (see the slot read)
-        const uint32_t kv_actual = mv[0];  // kv_actual_isl (tile-aligned)
-        const uint32_t chunk_global_tiles = chunk_local_tiles * ring_size;
-        const uint32_t logical_nt_local = (kv_actual >> 5) + chunk_global_tiles;
-        const uint32_t valid_slabs = (logical_nt_local + chunk_global_tiles - 1) / chunk_global_tiles;
-        const uint32_t gather_valid_Ht = valid_slabs * chunk_local_tiles;
-        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            const uint32_t valid_Ht =
-                gather_valid_Ht < input_tensor_Ht[input_idx] ? gather_valid_Ht : input_tensor_Ht[input_idx];
-            const uint32_t valid_pages = valid_Ht * input_tensor_Wt[input_idx];
-            if (valid_pages < input_tile_id_end[input_idx]) {
-                input_tile_id_end[input_idx] = valid_pages;
-            }
-        }
+        const uint32_t kv_actual = trace_metadata::read_metadata_scalar_u32(
+            meta_noc, kv_meta_args, kv_actual_isl_addr, meta_l1);  // kv_actual_isl (tile-aligned)
+        // Shared with the writer, which must clamp to the same prefix (see the header's KEEP IN SYNC note).
+        const uint32_t gather_valid_Ht =
+            ring_attention_all_gather::compute_gather_valid_Ht(kv_actual, chunk_local_tiles, ring_size);
+        ring_attention_all_gather::clamp_input_ranges_to_gather_extent(
+            gather_valid_Ht, input_tensor_Ht, input_tensor_Wt, input_tile_id_end);
     }
 
     OpSignaler op_signaler;

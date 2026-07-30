@@ -11,6 +11,7 @@
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
+#include "metadata_scalar_read.hpp"
 #include "chain_link.hpp"
 #include "fused_op_receiver.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
@@ -383,14 +384,13 @@ void kernel_main() {
         constexpr uint32_t kKvDstOffset = 0;
         if constexpr (slot_from_metadata) {
             const uint32_t slot_id_addr = get_common_arg_val<uint32_t>(0);
-            const auto s_slot = TensorAccessor(meta_args, slot_id_addr);
-            meta_noc.async_read(s_slot, CoreLocalMem<uint32_t>(meta_l1 + kSlotDstOffset), 4, {.page_id = 0}, {});
-            meta_noc.async_read_barrier();
-            // Metadata tensor is at a FIXED DRAM address reused every chunk; the RISC data cache may hold
-            // the prior chunk's value for this L1 line (barrier orders the DMA, volatile still reads cache).
-            // Force a refetch of the freshly-DMA'd value, else an intermittently stale slot read corrupts.
-            invalidate_l1_cache();
-            const uint32_t slot_id = CoreLocalMem<volatile uint32_t>(meta_l1 + kSlotDstOffset)[0];
+            // read_metadata_scalar_u32 is the shared read protocol: async_read page 0 -> barrier ->
+            // invalidate_l1_cache -> volatile load. The invalidate is load-bearing -- the metadata tensor is
+            // at a FIXED DRAM address reused every chunk, so the RISC data cache may still hold the prior
+            // chunk's value for this L1 line (the barrier orders the DMA; a volatile load still reads cache),
+            // and an intermittently stale slot read corrupts the gather.
+            const uint32_t slot_id =
+                trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, meta_l1 + kSlotDstOffset);
             // The KV-cache batch dim is (user, layer)-major:
             //   cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx
             // (matches update_padded_kv_cache's writer: batch_idx = slot_idx * num_layers + layer_idx).
@@ -408,11 +408,11 @@ void kernel_main() {
             // (compute can't NoC-read DRAM). chunk_size_t == q_chunk_group_tile_count (ring_size *
             // q_local_padded_Nt).
             const uint32_t kv_actual_isl_addr = get_common_arg_val<uint32_t>(3);
-            const auto s_kv_actual = TensorAccessor(kv_meta_args, kv_actual_isl_addr);
-            meta_noc.async_read(s_kv_actual, CoreLocalMem<uint32_t>(meta_l1 + kKvDstOffset), 4, {.page_id = 0}, {});
-            meta_noc.async_read_barrier();
-            invalidate_l1_cache();  // fresh-metadata refetch (fixed DRAM addr reused per chunk; see slot read above)
-            const uint32_t kv_actual_isl = CoreLocalMem<volatile uint32_t>(meta_l1 + kKvDstOffset)[0];
+            // Its OWN accessor (kv_meta_args): slot_id and kv_actual_isl are separately allocated and can
+            // land in different DRAM banks, and a shared accessor's dspec bakes page 0's bank from one of
+            // them -- sharing silently returned the wrong bank's data.
+            const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
+                meta_noc, kv_meta_args, kv_actual_isl_addr, meta_l1 + kKvDstOffset);
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
             const uint32_t chunk_global = chunk_size_t * 32;
             logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_global, 32);
