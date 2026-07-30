@@ -10,15 +10,18 @@ one op launch costs in the regime the harness runs in. Both changed the conclusi
 
 > **Phase 9 has since measured it.** The original text is kept intact — a pre-committed
 > roofline is only worth anything if it can be caught being wrong — with dated amendment
-> blocks in §4, §6, §7 and §8. Scorecard: §3's DRAM floor holds at **1.43×** (the composed
+> blocks in §2, §4, §6, §7 and §8. Scorecard: §3's DRAM floor holds at **1.43×** (the composed
 > op runs at 70% of it), §5's algorithm rule holds exactly, §4's fabric term is **off
 > 2.7×**, and §6's verdict **inverts**. Read a section and its amendment together, in that
 > order.
 >
-> §4's **touch model is the part that held up best** — P7 measured 12.7V and 8.9V against
+> §2's **touch model is the part that held up best** — P7 measured 12.7V and 8.9V against
 > its 12V and 7V, and the 1.9V residual turned out to name a specific inefficiency rather
 > than absorb the error. It is also the section that mattered least at the time and got
-> amended last, which is its own lesson about which parts of a roofline to trust.
+> amended last, which is its own lesson about which parts of a roofline to trust. P8 then
+> found the remaining win by counting the same touches over a *block* instead of a read, and
+> §7's claim that the block split "does not compound with fusion" is the one line in this
+> memo that P9 made **more** wrong rather than less.
 
 ---
 
@@ -114,6 +117,25 @@ because `prefix_sum` and `block_residual` are separate buffers, and each of the 
 > rather than noise. Note also what the ratio does *not* say: 12V → 7V predicts 1.71× and the
 > read measured **1.40×** at the peak shape, because a read is not all `V` — there is a
 > ~230 µs constant term per read, and it does not care how many passes the reductions take.
+>
+> **Amended again 2026-07-30 (P8 — the same model, counted per block instead of per read).**
+> This table counts one read. The split form's unit is a 12-layer block of 24 read sites, and
+> counting *its* touches of the sealed set is what located the last composed-form win: one
+> RMS pass, then 24 dots and 24 mixtures inside the loop — **49 passes to serve 24 sites**.
+> Measured against one pass over the sealed tensor (219.1 µs at `S = 8`), in floor-passes:
+>
+> | | RMS | dots | mixture | total | per site |
+> |---|---|---|---|---|---|
+> | before | 1.0 | 42.3 | 67.9 | 111.2 | 4.63 |
+> | after | 1.0 | 1.8 | 67.9 | 70.7 | 2.95 |
+>
+> The model predicted 1.57× on the sealed half and the block measured **1.26×** on the whole
+> read, for the same reason the P7 row over-predicted: the constant term. Two readings the
+> per-read table cannot show. First, **the loops were not 24V each but 42V and 68V** — a
+> matvec costs ~1.8 passes and a `mul` + `sum` mixture ~2.8, so counting iterations
+> underestimates by ~2.4×; the floor-pass unit is what makes them comparable. Second, after
+> batching, **the mixture is 96% of what is left** (67.9 of 70.7), so the touch model now
+> points at a single op rather than a distribution.
 
 **Arithmetic intensity.** Those 12 touches carry ~6 flops per element of `v`
 (three multiplies, three accumulate steps), so 6 flops per 24 bytes = **0.25
@@ -411,6 +433,31 @@ which a fused kernel that reads `v` once has already collapsed.
 > `_mix` reads it a third time (791 µs against a 228 µs floor) with no one-op form available
 > at the current layout. No composed op can produce two different reductions from one pass —
 > that gap, ~3V of the remaining 7V, is Phase 10's actual mandate rather than the whole 10.8×.
+
+> **Amended a third time 2026-07-30 (P8 — and the paragraph above about the split form is
+> now wrong).** This section says the `inter_block` split "does not compound with this one"
+> because a fused kernel that reads `v` once has already collapsed the amortization. That is
+> true of the *reciprocal-RMS* pass and it was the only thing being amortized when the
+> sentence was written. P8 batched the dots as well: the split form now reads the sealed set
+> **26 times per 12-layer block instead of 49**, and its cost per read site fits
+> `506.0 + 96.9·(S+1) µs` against the direct form's `209.4 + 225.6·(S+1)` — **191.2 ms per
+> forward against 265.0**. So Phase 10's realizable win is **~3.8×**, measured against the
+> form the model would actually run.
+>
+> The split form does compound, in the one way that matters: it changes *what* the fused
+> kernel has to be. Of the 26 remaining passes, **24 are the mixture** — 96% of the sealed
+> half's traffic — and P8 proved that one cannot be batched in composed primitives at all,
+> because its contracted axis is the candidate axis and reaching it with a matmul means
+> promoting `S = 8` to a tile axis and paying 4× padding on 70 MiB in both directions
+> (measured: 1.09×, all of a 3.2× arithmetic win spent on conversions). Phase 10's mandate
+> is no longer "the two reductions plus the mixture" — the reductions are down to 2 of 26
+> passes. **It is the mixture, and a weighted sum that MACs into its accumulator rather than
+> materializing a product is the whole kernel.** `deepseek_moe_fast_reduce_nc_fused` is the
+> in-tree existence proof that the Blackhole compute engine does this
+> (`init_bcast<ELWMUL, BroadcastType::COL>` with MATH's `acc_to_dest=1`, so
+> `mul_tiles_bcast_cols` performs `dst0 += act·score` in one pass); it is not reusable
+> directly, because it requires an L1-resident input and gathers scores through the MoE
+> routing convention.
 
 ---
 

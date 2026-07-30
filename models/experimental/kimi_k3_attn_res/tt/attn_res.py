@@ -13,11 +13,13 @@ divergences from the torch API, both forced by ttnn:
     ttnn has no zero-extent dimension. The read is the identity there anyway.
 
 Both forms of the read live here. `forward` is direct. `inter_block` + `merge`
-split the mixture so the sealed half amortizes across a whole 12-layer block; in
-this composed form only the reciprocal-RMS pass actually amortizes, which is one
-of the two passes over the sealed set. Batching the weighted sum across read
-sites needs a token-batched matmul over the candidate axis — see the Phase-5
-learnings in `bringup_log.md`.
+split the mixture so the sealed half amortizes across a whole 12-layer block: the
+reciprocal-RMS pass and the dots each collapse to a single pass over the sealed
+set for all 24 read sites, which leaves the weighted sum as the only per-site
+traffic over it. That one does not batch in composed form — it contracts over the
+candidate axis, and reaching it with a matmul means making that axis a tile axis,
+whose two permutes over the sealed set cost what the matmul saves
+(`bringup_log.md` P8).
 
 Distribution follows `DISTRIBUTION.md`: the stream stays sharded `[1, 1, T/R,
 d/C]` exactly as the analog leaves it, the sequence axis communicates nothing,
@@ -333,6 +335,62 @@ class TtAttnRes(LightweightModule):
         ttnn.deallocate(column)
         return dots
 
+    def _local_dots_by_site(self, v, queries):
+        """[1, C, N, d/tp] against R folded queries -> [1, C, N, R]. Rank-local.
+
+        R matvecs are R passes over `v`, which is the only large tensor in the op.
+        Stacking the queries as columns makes them one matmul over one pass: at a
+        12-layer block's 24 read sites that is 42x the one-pass floor down to 1.8x
+        (`bringup_log.md` P8). The 24-wide output also idles 8 of 32 tile columns
+        instead of the lone matvec's 31.
+
+        Nothing has to be transposed to get here — the dots contract over `d`,
+        which is already the last axis. The mixture contracts over candidates and
+        is not so lucky, which is why only this half batches.
+        """
+        if not self.one_pass_stats:
+            per_site = [self._local_dots(v, q) for q in queries]
+            return self._concat_sites(per_site)
+
+        columns = [ttnn.permute(q, [0, 1, 3, 2]) for q in queries]
+        stacked = self._concat_sites(columns)
+        dots = ttnn.matmul(v, stacked, compute_kernel_config=STATS_FIDELITY)
+        ttnn.deallocate(stacked)
+        return dots
+
+    def _dots_by_site(self, v, queries):
+        """[1, C, N, d/tp] against R queries -> [1, C, N, R], globally summed.
+
+        One collective for the whole block. The site axis lands in the last dim,
+        which the collective pads to a tile either way, so R <= 32 sites cross on
+        the payload a single site would have cost unfolded. `fold_stats` therefore
+        does not apply here and is not missed — it exists to fill that padding,
+        and the sites have already filled it."""
+        return self._reduce_stats(self._local_dots_by_site(v, queries))
+
+    @staticmethod
+    def _concat_sites(per_site):
+        """Stack per-site tensors along the last dim, consuming them. R == 1 is
+        the identity — `ttnn.concat` of one tensor would be a copy."""
+        if len(per_site) == 1:
+            return per_site[0]
+        stacked = ttnn.concat(per_site, dim=3)
+        for tensor in per_site:
+            ttnn.deallocate(tensor)
+        return stacked
+
+    @staticmethod
+    def _site_column(stacked, site):
+        """One read site's column out of a `[..., R]` batch, owned by the caller.
+
+        A `ttnn.slice` that spans its input hands back a fresh handle onto the
+        *same* device buffer, so at `R == 1` the column would die with the batch.
+        Copy in that one case; a narrower slice already writes its own."""
+        shape = list(stacked.shape)
+        if shape[-1] == 1:
+            return ttnn.clone(stacked)
+        return ttnn.slice(stacked, [0, 0, 0, site], shape[:3] + [site + 1])
+
     def _to_reciprocal_rms(self, sum_squares):
         """Globally summed squares -> `rsqrt(mean + eps)`. Consumes its input.
 
@@ -350,10 +408,6 @@ class TtAttnRes(LightweightModule):
         One collective. `inter_block` calls this once per 12-layer block, so the
         sealed set's share of the communication amortizes with its arithmetic."""
         return self._to_reciprocal_rms(self._reduce_stats(self._local_sum_squares(v)))
-
-    def _dots(self, v, q):
-        """[1, C, N, d/tp] . [1, 1, 1, d/tp] -> [1, C, N, 1], globally summed."""
-        return self._reduce_stats(self._local_dots(v, q))
 
     def _scores(self, v, q):
         """[1, C, N, d/tp] -> [1, C, N, 1]. Scores the normalized key against `q`
@@ -428,9 +482,16 @@ class TtAttnRes(LightweightModule):
     def inter_block(self, block_residual, queries):
         """Sealed-snapshot half of the mixture, for every read site in a block.
 
-        The reciprocal-RMS pass runs once and is reused across read sites: a
-        sealed snapshot is write-once, so its RMS is loop-invariant. On a TP mesh
-        that amortizes a collective too — one per block instead of one per read.
+        Everything that does not depend on the read site runs once for the whole
+        block. The reciprocal-RMS pass is loop-invariant because a sealed snapshot
+        is write-once, and the scores batch because the site axis fits in the last
+        dim: one matmul, one collective, and one elementwise chain cover all of
+        them. Only the mixture stays per site.
+
+        Batching is free in the temporaries as well as the arithmetic. Every
+        intermediate here carries one scalar per (token, candidate, site), so a
+        1-wide last dim tile-pads to 32 and R <= 32 read sites occupy exactly what
+        one site already paid for.
 
         Args:
             block_residual: `[1, S, N, d/tp_factor]`. Not None — `S == 0` has no
@@ -443,23 +504,29 @@ class TtAttnRes(LightweightModule):
             in the online-softmax convention `e_i = exp(s_i - m)`.
         """
         reciprocal_rms = self._reciprocal_rms(block_residual)
-        partials, shifts, masses = [], [], []
-
-        for q in queries:
-            dots = self._dots(block_residual, q)
-            scores = ttnn.mul(dots, reciprocal_rms)
-            ttnn.deallocate(dots)
-
-            shift = ttnn.max(scores, dim=1, keepdim=True)
-            exponentials = ttnn.exp(ttnn.sub(scores, shift))
-            ttnn.deallocate(scores)
-
-            masses.append(ttnn.sum(exponentials, dim=1, keepdim=True))
-            partials.append(self._mix(block_residual, exponentials))
-            shifts.append(shift)
-            ttnn.deallocate(exponentials)
-
+        dots = self._dots_by_site(block_residual, queries)
+        scores = ttnn.mul(dots, reciprocal_rms)
+        ttnn.deallocate(dots)
         ttnn.deallocate(reciprocal_rms)
+
+        site_shifts = ttnn.max(scores, dim=1, keepdim=True)
+        centered = ttnn.sub(scores, site_shifts)
+        ttnn.deallocate(scores)
+        exponentials = ttnn.exp(centered)
+        ttnn.deallocate(centered)
+        site_masses = ttnn.sum(exponentials, dim=1, keepdim=True)
+
+        partials, shifts, masses = [], [], []
+        for site in range(len(queries)):
+            weights = self._site_column(exponentials, site)
+            partials.append(self._mix(block_residual, weights))
+            ttnn.deallocate(weights)
+            shifts.append(self._site_column(site_shifts, site))
+            masses.append(self._site_column(site_masses, site))
+
+        ttnn.deallocate(exponentials)
+        ttnn.deallocate(site_shifts)
+        ttnn.deallocate(site_masses)
         return partials, shifts, masses
 
     def merge(self, partial, shift, mass, prefix_sum, q):

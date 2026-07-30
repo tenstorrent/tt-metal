@@ -282,19 +282,25 @@ def test_perf_read_by_candidate_count(mesh_device, request, num_sealed):
 @pytest.mark.parametrize(
     "mesh_device, device_params", [((2, 4), FABRIC)], indirect=["mesh_device", "device_params"], ids=["mesh-2x4"]
 )
-def test_perf_block_split_vs_direct(mesh_device):
+@pytest.mark.parametrize("num_sealed", [1, 4, 8])
+def test_perf_block_split_vs_direct(mesh_device, num_sealed):
     """P5: the two read forms over a whole 12-layer block, traced.
 
     Phase 7 measured the split form 1.50x faster on one device by wall clock with
-    no profiler. On a TP mesh it issues 49 collectives per block against the
-    direct form's 24 — one for the sealed RMS, one per site for the sealed dots,
-    one per site inside `merge` — so the question is whether amortizing the
-    sealed half survives paying twice the collectives.
+    no profiler. On a TP mesh the question is whether amortizing the sealed half
+    survives the extra collectives — 26 per block against the direct form's 24,
+    one for the sealed RMS, one for the batched sealed dots, one per site inside
+    `merge`.
+
+    Swept over `S` because the split form's saving is the sealed half, which is
+    the part that grows with it: at `S = 1` there is almost nothing to amortize.
+    The schedule's blocks run `S = 0..7`, so a single peak-shape number would
+    flatter the form the model actually runs.
 
     Both forms are captured whole, so the comparison is device time for the
     entire block and the per-site number is that divided by 24.
     """
-    prefix_sum, block_residual, query = _make_case(PRODUCTION_TOKENS, HIDDEN_SIZE, NUM_SEALED)
+    prefix_sum, block_residual, query = _make_case(PRODUCTION_TOKENS, HIDDEN_SIZE, num_sealed)
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
     tt_prefix, tt_block, tt_query = _place(op, prefix_sum, block_residual, query)
     queries = [tt_query] * READ_SITES
@@ -325,7 +331,7 @@ def test_perf_block_split_vs_direct(mesh_device):
             iterations=5,
             warmup=2,
         )
-        _report(f"block of {READ_SITES} sites, {label}, traced", enqueue_us, total_us / READ_SITES)
+        _report(f"block of {READ_SITES} sites, S={num_sealed}, {label}, traced", enqueue_us, total_us / READ_SITES)
 
         ttnn.release_trace(mesh_device, trace_id)
         for tensor in outputs:
@@ -540,4 +546,117 @@ def test_perf_read_by_reduction_form(mesh_device, num_sealed, one_pass_stats):
 
     ttnn.release_trace(mesh_device, trace_id)
     for tensor in (out, tt_prefix, tt_block, tt_query):
+        ttnn.deallocate(tensor)
+
+
+NUM_SITES = 24
+
+
+def _inter_block_variants(sealed, queries, sites):
+    """`inter_block` reads the sealed tensor once per read site, twice over.
+
+    The split form's whole premise is that a sealed snapshot is write-once, so
+    work over it is loop-invariant across the 12 layers of a block. The
+    reciprocal-RMS pass is hoisted on exactly that argument — but the dots and the
+    mixture are not: both run inside the `for q in queries` loop, so the sealed
+    tensor is read **48 times per block** to serve 24 read sites.
+
+    Both loops are one contraction each, and they differ in where the contracted
+    axis sits. The dots contract over `d`, already the last axis, so stacking the
+    24 queries into a `[1, 1, d/tp, R]` matrix turns 24 matvecs into one matmul
+    with no layout change at all — and it fixes the matvec's other problem, since
+    a 24-wide output wastes 8 of 32 columns instead of 31. The mixture contracts
+    over the *candidate* axis, which has to become a tile axis for a matmul to
+    reach it, and `S = 8` tile-pads to 32: a 4x tax on every byte of the sealed
+    tensor. That tax is fatal at one read site and cheap across 24.
+    """
+    stacked = ttnn.concat([ttnn.permute(q, [0, 1, 3, 2]) for q in queries], dim=3)  # [1, 1, d/tp, R]
+    weights = ttnn.ones(
+        [1, sealed.shape[1], sealed.shape[2], 1], dtype=sealed.dtype, layout=ttnn.TILE_LAYOUT, device=sealed.device()
+    )
+    # Built here, not inside `mix_batched`: `ttnn.ones` writes from host, and a
+    # write inside a trace capture is fatal. Stand-in for the mixture weights,
+    # which a real caller would already hold on device.
+    selector = ttnn.ones(
+        [1, sealed.shape[2], sites, sealed.shape[1]],
+        dtype=sealed.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=sealed.device(),
+    )
+
+    def dots_per_site():
+        return [ttnn.matmul(sealed, ttnn.permute(q, [0, 1, 3, 2]), compute_kernel_config=HIFI) for q in queries]
+
+    def dots_batched():
+        return [ttnn.matmul(sealed, stacked, compute_kernel_config=HIFI)]
+
+    def mix_per_site():
+        return [ttnn.sum(ttnn.mul(sealed, weights), dim=1, keepdim=True) for _ in range(sites)]
+
+    def mix_batched():
+        transposed = ttnn.permute(sealed, [0, 2, 1, 3])  # [1, N, S, d/tp] — S tile-pads 8 -> 32
+        stacked_out = ttnn.matmul(selector, transposed, compute_kernel_config=HIFI)  # [1, N, R, d/tp]
+        ttnn.deallocate(transposed)
+        # Both conversions are charged. The matmul alone beats the loop; the
+        # question P6 settled is whether it still does once the caller is handed
+        # partials in the layout it consumes, one per site on dim 1.
+        out = ttnn.permute(stacked_out, [0, 2, 1, 3])
+        ttnn.deallocate(stacked_out)
+        return [out]
+
+    return {
+        "floor: one pass over sealed": lambda: [ttnn.sum(sealed, dim=1, keepdim=True)],
+        "dots: x24 (today)": dots_per_site,
+        "dots: batched matmul": dots_batched,
+        "mix: x24 (today)": mix_per_site,
+        "mix: batched matmul": mix_batched,
+    }, (stacked, weights, selector)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [((2, 4), FABRIC)], indirect=["mesh_device", "device_params"], ids=["mesh-2x4"]
+)
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "floor: one pass over sealed",
+        "dots: x24 (today)",
+        "dots: batched matmul",
+        "mix: x24 (today)",
+        "mix: batched matmul",
+    ],
+    ids=["floor", "dots-x24", "dots-batched", "mix-x24", "mix-batched"],
+)
+def test_perf_inter_block_batching(mesh_device, variant):
+    """P8: the 48 reads of the sealed tensor per block, and whether 2 will do.
+
+    Priced per *block* of 12 layers (24 read sites), not per read, because that is
+    the scope `inter_block` is hoisted to. The floor is one pass over the sealed
+    tensor — 70 MiB at `S = 8` — so every row here reads in multiples of it.
+    """
+    tokens_per_rank = PRODUCTION_TOKENS // 2
+    width_per_rank = HIDDEN_SIZE // 4
+    torch.manual_seed(0)
+    place = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    sealed = place(torch.randn(1, NUM_SEALED, tokens_per_rank, width_per_rank))
+    queries = [place(torch.randn(1, 1, 1, width_per_rank)) for _ in range(NUM_SITES)]
+
+    variants, held = _inter_block_variants(sealed, queries, NUM_SITES)
+    body = variants[variant]
+    for tensor in body():
+        ttnn.deallocate(tensor)
+    ttnn.synchronize_device(mesh_device)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    outputs = body()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    enqueue_us, total_us = _bench(
+        mesh_device, lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    )
+    sealed_mib = NUM_SEALED * tokens_per_rank * width_per_rank * 2 / 1024**2
+    _report(f"{variant} [{sealed_mib:.0f} MiB sealed] traced", enqueue_us, total_us)
+
+    ttnn.release_trace(mesh_device, trace_id)
+    for tensor in (*outputs, *held, sealed, *queries):
         ttnn.deallocate(tensor)

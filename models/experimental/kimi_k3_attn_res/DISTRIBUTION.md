@@ -191,6 +191,24 @@ into one `[1, 24(S+1), T/R, 1]` reduction and come down to 26.
 > (146.8 µs per site vs 41.7), because the direct form's one collective carries all 18
 > stats planes while the split form's two carry ~10 between them — this section's "worse on
 > collectives" is also *why* the fold has less to give it.
+>
+> **Retired 2026-07-30 (P8 — the batching landed).** `inter_block` now takes all 24 sites'
+> dots in one matmul and one reduction, so the split form issues **26** collectives per block
+> against the direct form's 24. "Worse on collectives" is down to 8% more of them, and the
+> paragraph's framing no longer decides anything either way: 1 741.4 → 1 386.5 µs per site at
+> `S = 8`, **1.61× the direct form**, 191.2 ms per forward against 265.0.
+>
+> The batched reduction's shape is *not* the `[1, 24(S+1), T/R, 1]` this section proposed. The
+> site axis goes in the **last** dim — `[1, S, T/R, 24]` — because the dots come out of the
+> matmul that way and because a 1-wide last dim tile-pads to 32 regardless: up to 32 sites
+> ride inside the padding one site already paid for, which is `fold_stats`' argument applied
+> to a second axis. Stacking on dim 1 instead would have multiplied the payload by 24.
+>
+> One thing the sweep found that a per-site cost model would not: **the split form is 9%
+> slower at `S = 1`** (710.9 µs against direct's 649.6), because its second collective and
+> `merge`'s own statistics pass are fixed costs and there is not yet enough sealed work to
+> amortize them. Crossover at `S+1 = 2.30`. On a mesh the read form is therefore an `S`
+> decision, not a global one — 24 of the schedule's 186 reads sit on the direct side of it.
 
 **Per-axis topology.** `topology` is one `ttnn.Topology` per mesh axis, not a scalar —
 Galaxy prefill is `[LINE, RING]`. This is not a precaution: the analog already carries the
@@ -268,3 +286,11 @@ halves per device and the call count does not.
 > dividing work — and the production mesh is on the right side of the line, while the
 > single-device path this bring-up validated against is on the wrong one. Worth remembering
 > when a future op is benchmarked on one device and declared slow.
+
+> **And the dot-batching question, closed (P8).** The paragraph above answered "does the split
+> form need rescuing" — no — and left the batching as an unmeasured optimization. It is worth
+> **1.26×** on the read and 49 collectives per block down to **26**, so the prediction this
+> section got right was that the batching exists; what it got wrong is the shape (the site
+> axis belongs in the last dim, not dim 1) and the sign at small `S`. The mixture, batched the
+> same way, is worth **1.09×** and is rejected — see the amendment in §"The split form is
+> worse on collectives".
