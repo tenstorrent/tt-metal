@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 75b977e1a04ee7a14df5d8039393c7844f33fdae. Remaining status is reconciled through commit 307951cc8dc from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
+  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 75b977e1a04ee7a14df5d8039393c7844f33fdae and fixed-line migration at code commit 261e322ed2284175e3b4b7b80f98e947b569fe10. Remaining status is reconciled through commit 307951cc8dc from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
   "host_bindings": [
     {
       "id": "weights-mcast:conv2d-sharded:single-sender-rect",
@@ -42,17 +42,22 @@
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp"
       ],
       "migration_unit": "conv2d-weights-fixed-line",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "261e322ed2284175e3b4b7b80f98e947b569fe10",
       "validation_set": [
-        "CONV-BLOCK",
-        "test_conv_dram"
+        "build_metal.sh: passed",
+        "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
+        "CONV-BLOCK: 49 passed, 16 expected skips",
+        "test_conv_dram: 14 passed",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": null,
+      "last_verified": "2026-07-30",
       "flags": [
-        "verify-zero-anchored-dense-grid"
+        "tier:2",
+        "fully-end-to-end"
       ]
     },
     {
@@ -491,16 +496,22 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "fad21b929d1ce1da74b3647dce90382cc8e738cc",
+      "commit": "261e322ed2284175e3b4b7b80f98e947b569fe10",
       "validation_set": [
+        "build_metal.sh: passed",
+        "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
         "CONV-BLOCK: 49 passed, 16 expected skips",
         "test_conv_dram: 14 passed",
-        "JIT artifact 15303758245318226173"
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "V9 migrated; weights and bias send handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
-      "flags": [],
+      "last_verified": "2026-07-30",
+      "census_note": "Fully end-to-end at v9. Host Mcast1D owns PerRow/PerColumn fixed-line geometry and the CT/RT wire over the dense zero-anchored output grid; McastArgs decodes the sender face. Weights and bias send handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
+      "flags": [
+        "tier:2",
+        "fully-end-to-end"
+      ],
       "migration_unit": "conv2d-weights-fixed-line"
     },
     {
@@ -510,16 +521,22 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "fad21b929d1ce1da74b3647dce90382cc8e738cc",
+      "commit": "261e322ed2284175e3b4b7b80f98e947b569fe10",
       "validation_set": [
+        "build_metal.sh: passed",
+        "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
         "CONV-BLOCK: 49 passed, 16 expected skips",
         "test_conv_dram: 14 passed",
-        "JIT artifact 16874227300215685254"
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "V9 migrated; weights and bias receive handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
-      "flags": [],
+      "last_verified": "2026-07-30",
+      "census_note": "Fully end-to-end at v9. Host Mcast1D emits each receiver's fixed sender coordinate for both PerRow and PerColumn topologies, and McastArgs decodes the receiver face. Weights and bias receive handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
+      "flags": [
+        "tier:2",
+        "fully-end-to-end"
+      ],
       "migration_unit": "conv2d-weights-fixed-line"
     },
     {

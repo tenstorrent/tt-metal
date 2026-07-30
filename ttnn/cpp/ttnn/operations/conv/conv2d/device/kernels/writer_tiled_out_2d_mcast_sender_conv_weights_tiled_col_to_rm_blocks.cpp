@@ -76,8 +76,7 @@ void kernel_main() {
     constexpr auto s_weight_args = TensorAccessorArgs<ct_arg_idx>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
     constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
-    constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(mcast_sem_args_base);
-    constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(mcast_sem_args_base + 1);
+    constexpr auto weights_mcast_args = dataflow_kernel_lib::McastArgs<mcast_sem_args_base, 4>();
 
     uint32_t i = 0;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i++);
@@ -86,10 +85,6 @@ void kernel_main() {
     const uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i++);
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
 
-    // mcast args
-    const McastRect mcast_rect = {
-        get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++)};
-
     // Experimental API objects
     Noc noc;
     DataflowBuffer dfb_weight_obj(cb_id_weight);
@@ -97,6 +92,7 @@ void kernel_main() {
     DataflowBuffer dfb_reader_indices_obj(cb_reader_indices);
     DataflowBuffer dfb_sharded_act_obj(cb_id_sharded_act);
 
+    i = weights_mcast_args.next_runtime_args_offset();
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
     const bool skip_work = get_arg_val<uint32_t>(i++) > 0;
 
@@ -133,15 +129,7 @@ void kernel_main() {
     const uint32_t act_l1_read_addr = split_reader_enabled ? dfb_sharded_act_obj.get_read_ptr() : 0;
 
 #ifndef SKIP_MCAST
-    dataflow_kernel_lib::SenderPipe<
-        noc_index,
-        weights_mcast_receiver_sem_id,
-        /*PRE_HANDSHAKE=*/true,
-        weights_mcast_sender_sem_id>
-        weights_pipe(
-            noc,
-            dataflow_kernel_lib::McastRect<>{
-                mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end});
+    auto weights_pipe = weights_mcast_args.sender(noc);
 #endif
 
     // read in bias if enabled (done only once for all batches)

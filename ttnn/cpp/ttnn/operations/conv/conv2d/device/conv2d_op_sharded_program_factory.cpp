@@ -690,15 +690,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // override needed.
     emit_cb_descriptors(cb_info, desc, all_cores, a.buffer(), output.buffer(), conv_reader_indices_buffer);
 
-    const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
-    const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
-
     const CoreCoord top_left_core = {(std::size_t)0, (std::size_t)0};
-    const CoreCoord top_left_core_plus_one = {(std::size_t)1, (std::size_t)1};
-    const CoreCoord bottom_right_core = {(std::size_t)in_num_cores_x - 1, (std::size_t)in_num_cores_y - 1};
     const CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    const CoreCoord top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
-    const CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
     CoreRangeSet mcast_sender_cores =
         CoreRangeSet(CoreRange(top_left_core, top_left_core));  // If single core, this kernel doesn't do mcasting
@@ -775,12 +768,33 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const tt::tt_metal::NOC reader_noc =
         writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
+    // The block-sharded output grid is produced by determine_output_parallel_config as one dense,
+    // zero-anchored rectangle. The weights channel uses one fixed sender per row/column of that output
+    // grid; input-only split-reader cores run the sender kernel with skip_work and do not participate.
+    std::optional<ttnn::kernel_lib::host::Mcast1D> weights_mcast_1d;
+    if (block_sharded) {
+        const auto output_bbox = output_cores.bounding_box();
+        TT_FATAL(
+            output_cores.size() == 1 && output_bbox.start_coord == CoreCoord(0, 0),
+            "Block-sharded Conv2D weights multicast requires one dense, zero-anchored output grid");
+        weights_mcast_1d.emplace(
+            device,
+            output_cores,
+            transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
+                            : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
+            0,
+            ttnn::kernel_lib::host::McastConfig{
+                .noc = writer_mcast_noc,
+                .sem_ids =
+                    std::vector<uint32_t>{weights_mcast_receiver_semaphore_id, weights_mcast_sender_semaphore_id}});
+    }
+
     // The height-sharded/default weights channel is one sender at (0,0) broadcasting to the full
     // rectangular grid. Some rectangle members are noop cores, so only active receivers acknowledge.
     // Adopt the factory-owned semaphore ids; the helper owns the shared host/device wire and geometry.
-    std::optional<ttnn::kernel_lib::host::Mcast2D> weights_mcast;
+    std::optional<ttnn::kernel_lib::host::Mcast2D> weights_mcast_2d;
     if (!block_sharded) {
-        weights_mcast.emplace(
+        weights_mcast_2d.emplace(
             device,
             all_cores,
             top_left_core,
@@ -1057,17 +1071,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
-    if (block_sharded) {
-        // The separate fixed-line weights kernels retain their existing two-word semaphore ABI.
-        writer_compile_time_args.push_back(weights_mcast_sender_semaphore_id);
-        writer_compile_time_args.push_back(weights_mcast_receiver_semaphore_id);
-    } else {
-        const auto weights_mcast_compile_time_args = weights_mcast->compile_time_args();
-        writer_compile_time_args.insert(
-            writer_compile_time_args.end(),
-            weights_mcast_compile_time_args.begin(),
-            weights_mcast_compile_time_args.end());
-    }
+    const auto weights_mcast_compile_time_args =
+        block_sharded ? weights_mcast_1d->compile_time_args() : weights_mcast_2d->compile_time_args();
+    writer_compile_time_args.insert(
+        writer_compile_time_args.end(), weights_mcast_compile_time_args.begin(), weights_mcast_compile_time_args.end());
 
     const bool check_skip_compute = input_cores != output_cores;
 
@@ -1344,42 +1351,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
             if (block_sharded) {
                 const bool is_sender_core = input_cores.contains(core);
-                // 2D multicast setup
-                if (transpose_mcast) {
-                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
-                    CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
-                    TT_FATAL(core.x == 0, "Expected core.x to be 0 for sender in 2D mcast setup");
-
-                    std::vector<uint32_t> mcast_coords = setup_mcast_args(
-                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                        top_left_core_plus_one_physical.x,
-                        right_core_physical.y,
-                        bottom_right_core_physical.x,
-                        right_core_physical.y);
-
-                    sender_rt_args.append(mcast_coords);
-                    sender_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
-                    sender_rt_args.push_back(uint32_t{0});  // skip_work
-                    writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
-                } else {
-                    CoreCoord top_core = {(std::size_t)core.x, 0};
-                    CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
-                    TT_FATAL(core.y == 0, "Expected core.y to be 0 for sender in 2D mcast setup");
-                    std::vector<uint32_t> mcast_coords = setup_mcast_args(
-                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                        top_core_physical.x,
-                        top_left_core_plus_one_physical.y,
-                        top_core_physical.x,
-                        bottom_right_core_physical.y);
-
-                    sender_rt_args.append(mcast_coords);
-                    sender_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
-                    sender_rt_args.push_back(uint32_t{0});  // skip_work
-                    writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
-                }
+                sender_rt_args.append(weights_mcast_1d->runtime_args(core));
+                sender_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
+                sender_rt_args.push_back(uint32_t{0});  // skip_work
+                writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
             } else {
                 // 1D multicast setup
-                sender_rt_args.append(weights_mcast->runtime_args(core));
+                sender_rt_args.append(weights_mcast_2d->runtime_args(core));
                 if (enable_activation_reuse) {
                     uint32_t writer_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
@@ -1398,29 +1376,16 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // Setup receiver args second
     if (create_writer_mcast_receiver) {
         for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
-            // Helper lambda to create receiver runtime args
-            auto create_receiver_args = [&](uint32_t sender_noc_x, uint32_t sender_noc_y) {
-                return std::vector<uint32_t>{sender_noc_x, sender_noc_y};
-            };
-
             for (const CoreCoord& core : core_range) {
                 std::vector<uint32_t> receiver_args;
                 if (block_sharded) {
-                    if (transpose_mcast) {
-                        CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
-                        CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
-                        receiver_args = create_receiver_args(top_left_core_physical.x, right_core_physical.y);
-                    } else {
-                        CoreCoord top_core = {(std::size_t)core.x, 0};
-                        CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
-                        receiver_args = create_receiver_args(top_core_physical.x, top_left_core_physical.y);
-                    }
+                    receiver_args = weights_mcast_1d->runtime_args(core);
                     const bool is_sender_core = input_cores.contains(core);
                     receiver_args.push_back(static_cast<uint32_t>(is_sender_core));
                 } else {
                     bool is_no_op_core = !input_cores.contains(core);
                     receiver_args.push_back(static_cast<uint32_t>(is_no_op_core));
-                    const auto weights_mcast_runtime_args = weights_mcast->runtime_args(core);
+                    const auto weights_mcast_runtime_args = weights_mcast_2d->runtime_args(core);
                     receiver_args.insert(
                         receiver_args.end(), weights_mcast_runtime_args.begin(), weights_mcast_runtime_args.end());
                     if (enable_activation_reuse) {
