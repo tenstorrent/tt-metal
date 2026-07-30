@@ -21,6 +21,10 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+// pipeline_get_forwarding_direction: which way the fabric routes src -> dst. The assignment of movements
+// to producers must agree with it, because a producer can only inject on its own cable.
+#include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/assert.hpp>
 #include "ttnn/distributed/types.hpp"
@@ -46,6 +50,16 @@ constexpr uint32_t TELEMETRY_OFF = 0x0800;
 constexpr uint32_t TELEMETRY_SIZE = 0x0400;
 constexpr uint32_t PROD_BUF_OFF = 0x1000;  // the reader -> producer token ring
 constexpr uint32_t L1_SLACK = 0x1000;      // keep clear of whatever sits at the very top of L1
+// Every ring slot carries the token plus a fixed metadata tail the reader fills in for the producer.
+// 64 rather than the 32 currently used keeps the slot stride DRAM-aligned (14336 + 64 = 64 * 225), which
+// is what lets phase 9 point a fabric write straight at a (token_size + 64)-byte forwarding-buffer page.
+// Tail layout, all uint64_t so the producer can consume it without sub-word loads:
+//   [ 0.. 7] final destination DRAM address on the FINAL destination chip
+//   [ 8..15] final destination chip id
+//   [16..23] command word: 1 = write to the address at [24..31], 2 = forward (phase 9)
+//   [24..31] the address this hop writes to
+//   [32..63] reserved
+constexpr uint32_t CMBF2D_SLOT_TAIL_BYTES = 64;
 static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
 static_assert(DRAIN_SINK_OFF < TELEMETRY_OFF, "telemetry region overlaps the drain sink");
 static_assert(TELEMETRY_OFF + TELEMETRY_SIZE <= PROD_BUF_OFF, "telemetry region overlaps the token ring");
@@ -329,8 +343,8 @@ L1Layout compute_l1_layout(
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.telemetry = base + TELEMETRY_OFF;
     l.ring = base + PROD_BUF_OFF;
-    // One prebuilt header per ring slot, past the ring itself.
-    l.pkt_hdr_ring = l.ring + num_l1_slots * token_size_bytes;
+    // One prebuilt header per ring slot, past the ring itself. A slot is the token plus its metadata tail.
+    l.pkt_hdr_ring = l.ring + num_l1_slots * (token_size_bytes + CMBF2D_SLOT_TAIL_BYTES);
     const uint32_t hdr_ring_bytes =
         num_l1_slots * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     const uint32_t end = l.pkt_hdr_ring + hdr_ring_bytes;
@@ -351,15 +365,206 @@ bool same_coord(const std::vector<uint32_t>& a, const ttnn::MeshCoordinate& b) {
     return a.size() == bc.size() && std::equal(a.begin(), a.end(), bc.begin());
 }
 
-// Per-coordinate program: one producer kernel per fabric eth core of this device, on a worker core in
-// that eth core's physical column, each owning that eth channel's single fabric connection and executing
-// exactly one of the caller's movement descriptors.
+// ---------------------------------------------------------------------------------------------
+// Movement -> producer assignment
 //
-// This is where the ONLY coupling between the caller's movement list and the op's internals lives: a
-// movement whose `dst` is chip D must go to a producer whose cable reaches D. With num_links cables per
-// neighbour there are num_links equally valid producers for each such movement, and which one gets which
-// is arbitrary — we take them in the deterministic order both maps iterate in. Nothing outside this
-// function depends on that choice.
+// One unit of work a single producer executes: a contiguous run of THIS chip's input tokens copied to a
+// contiguous run of the FINAL destination chip's output tokens. "Final" matters — the destination may be
+// several hops away, and how the tokens get there is the kernels' business, not this struct's.
+// ---------------------------------------------------------------------------------------------
+struct ProducerAssignment {
+    uint32_t in_base_token = 0;
+    uint32_t out_base_token = 0;
+    uint32_t num_tokens = 0;
+    uint32_t dst_chip_id = 0;
+    uint32_t dst_mesh_id = 0;
+    uint32_t ring_offset = 0;  // hops from this chip along +axis (R-k means k hops backward)
+    bool halved = false;       // this is one half of a movement shared with the opposite-direction producer
+};
+
+// Ring offset from `from` to `to` along `axis`, in [0, extent).
+uint32_t ring_offset(const ttnn::MeshCoordinate& from, const ttnn::MeshCoordinate& to, uint32_t axis, uint32_t extent) {
+    return (to[static_cast<int32_t>(axis)] + extent - from[static_cast<int32_t>(axis)]) % extent;
+}
+
+// Split this device's movements across its producers.
+//
+// A producer can only inject into ITS OWN cable, and `fabric_set_unicast_route` stamps a route decoded
+// from a precomputed per-destination path (tt_fabric_api.h: routing_info->paths[dst_dev_id]). That path
+// describes the journey FROM THIS CHIP, so a packet injected on a cable that is not the path's first hop
+// arrives at a chip that then executes the remaining route from the wrong origin — and lands somewhere
+// else entirely. Measured: assigning the diametrically-opposite chip to both directions corrupted exactly
+// the 64 offset-extent/2 movements, because half of them went the way the routing table did not choose.
+//
+// So the direction of every movement is the FABRIC's decision, not ours: we ask
+// ControlPlane::get_forwarding_direction which way it routes each destination and hand the movement to a
+// producer whose cable points that way. Consequence for the diametrically-opposite chip (equally far
+// either way): all of its traffic goes whichever way the routing table picked, so per plane one producer
+// gets H assignments and the other H-1 instead of H each. That imbalance is inherent to letting the fabric
+// forward; phase 9 takes forwarding over and can then split it evenly, because the direction becomes ours
+// to choose.
+//
+// Within one ring offset there are `num_links` interchangeable movements (one per plane); which plane
+// claims which is arbitrary, so we index the bucket by link_idx. Nothing outside this function depends
+// on that choice — only that every movement is claimed exactly once, which the caller asserts.
+std::map<CoreCoord, std::vector<ProducerAssignment>> assign_movements_to_producers(
+    const CombineFabric2dParams& args,
+    const ttnn::MeshCoordinate& coord,
+    const DevicePlacement& self_placement,
+    const std::map<CoreCoord, ttnn::MeshCoordinate>& far_coord_by_eth,
+    const std::map<ttnn::MeshCoordinate, tt::tt_fabric::FabricNodeId>& node_by_coord,
+    uint32_t axis,
+    uint32_t extent) {
+    const uint32_t half = extent / 2;
+    const auto self_node = node_by_coord.at(coord);
+
+    // Bucket this device's movements by ring offset to their destination.
+    std::map<uint32_t, std::vector<const CombineFabric2dMovement*>> by_offset;
+    for (const auto& m : args.movements) {
+        if (!same_coord(m.src, coord)) {
+            continue;
+        }
+        bool found = false;
+        for (const auto& c : ttnn::MeshCoordinateRange(args.device->shape())) {
+            if (same_coord(m.dst, c)) {
+                const uint32_t off = ring_offset(coord, c, axis, extent);
+                TT_FATAL(off != 0, "combine_fabric2d {}: a movement names this very device as its destination", coord);
+                // Off-axis destinations can never be reached: every cable this op uses runs along `axis`.
+                for (uint32_t d = 0; d < args.device->shape().dims(); d++) {
+                    if (d == axis) {
+                        continue;
+                    }
+                    TT_FATAL(
+                        c[static_cast<int32_t>(d)] == coord[static_cast<int32_t>(d)],
+                        "combine_fabric2d {}: movement destination {} differs from the source on mesh dim {}, "
+                        "but this op only sends along axis {}",
+                        coord,
+                        movement_coord_str(m.dst),
+                        d,
+                        axis);
+                }
+                by_offset[off].push_back(&m);
+                found = true;
+                break;
+            }
+        }
+        TT_FATAL(
+            found,
+            "combine_fabric2d {}: movement names destination {}, which is not a coordinate of this {} mesh",
+            coord,
+            movement_coord_str(m.dst),
+            args.device->shape());
+    }
+    TT_FATAL(
+        by_offset.size() == extent - 1,
+        "combine_fabric2d {}: movements cover {} of the {} other chips on axis {}. Every device must send to "
+        "every other device on the axis.",
+        coord,
+        by_offset.size(),
+        extent - 1,
+        axis);
+    for (const auto& [off, bucket] : by_offset) {
+        TT_FATAL(
+            bucket.size() == args.num_links,
+            "combine_fabric2d {}: ring offset {} has {} movement(s) but num_links is {}. Each destination needs "
+            "exactly one movement per link so the planes can be served independently.",
+            coord,
+            off,
+            bucket.size(),
+            args.num_links);
+    }
+
+    // Ask the fabric which way it forwards each destination. This is the authority — see the note above.
+    std::map<uint32_t, tt::tt_fabric::RoutingDirection> dir_by_offset;
+    for (const auto& [off, bucket] : by_offset) {
+        ttnn::MeshCoordinate dst_coord = coord;
+        dst_coord[static_cast<int32_t>(axis)] = (coord[static_cast<int32_t>(axis)] + off) % extent;
+        const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(self_node, node_by_coord.at(dst_coord));
+        TT_FATAL(
+            dir.has_value(),
+            "combine_fabric2d {}: the fabric reports no forwarding direction to {} (ring offset {}), so that "
+            "destination is unreachable",
+            coord,
+            dst_coord,
+            off);
+        dir_by_offset.emplace(off, *dir);
+    }
+
+    // Label each producer with the direction its own cable points, by asking the same question about its
+    // immediate neighbour. Keeps us out of the business of mapping mesh axes onto N/E/S/W ourselves.
+    std::map<CoreCoord, tt::tt_fabric::RoutingDirection> dir_by_eth;
+    for (const auto& [eth_logical, wp] : self_placement.by_eth_logical) {
+        const auto fit = far_coord_by_eth.find(eth_logical);
+        TT_FATAL(fit != far_coord_by_eth.end(), "combine_fabric2d {}: no far coord resolved for an eth core", coord);
+        const uint32_t step = ring_offset(coord, fit->second, axis, extent);
+        TT_FATAL(
+            step == 1 || step == extent - 1,
+            "combine_fabric2d {}: eth core ({},{}) cables to a chip {} hops away along axis {}; the op needs "
+            "every cable to reach an immediate ring neighbour",
+            coord,
+            eth_logical.x,
+            eth_logical.y,
+            step,
+            axis);
+        const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(self_node, node_by_coord.at(fit->second));
+        TT_FATAL(
+            dir.has_value(),
+            "combine_fabric2d {}: the fabric reports no forwarding direction to our own cable neighbour {}",
+            coord,
+            fit->second);
+        dir_by_eth.emplace(eth_logical, *dir);
+    }
+
+    std::map<CoreCoord, std::vector<ProducerAssignment>> out;
+    for (const auto& [eth_logical, wp] : self_placement.by_eth_logical) {
+        const auto my_dir = dir_by_eth.at(eth_logical);
+        auto& list = out[eth_logical];
+
+        // Offsets the fabric routes out of THIS cable, nearest first. P9.3 experiments with this order,
+        // which is why it is expressed here rather than baked into the kernels.
+        std::vector<uint32_t> my_offsets;
+        for (uint32_t k = 1; k <= half; k++) {
+            for (uint32_t off : {k, extent - k}) {
+                if (off == 0 || off >= extent) {
+                    continue;
+                }
+                if (dir_by_offset.at(off) == my_dir &&
+                    std::find(my_offsets.begin(), my_offsets.end(), off) == my_offsets.end()) {
+                    my_offsets.push_back(off);
+                }
+            }
+        }
+
+        for (uint32_t off : my_offsets) {
+            const CombineFabric2dMovement* m = by_offset.at(off).at(wp.link_idx);
+            ttnn::MeshCoordinate dst_coord = coord;
+            dst_coord[static_cast<int32_t>(axis)] = (coord[static_cast<int32_t>(axis)] + off) % extent;
+            const auto& dst_node = node_by_coord.at(dst_coord);
+            list.push_back(ProducerAssignment{
+                .in_base_token = m->in_base_token,
+                .out_base_token = m->out_base_token,
+                .num_tokens = args.tokens_per_movement,
+                .dst_chip_id = static_cast<uint32_t>(dst_node.chip_id),
+                .dst_mesh_id = *dst_node.mesh_id,
+                .ring_offset = off,
+                .halved = false});
+        }
+        TT_FATAL(
+            !list.empty(),
+            "combine_fabric2d {}: eth core ({},{}) got no assignments — the fabric routes nothing out of it",
+            coord,
+            eth_logical.x,
+            eth_logical.y);
+    }
+    return out;
+}
+
+// Per-coordinate program: one reader+producer pair per fabric eth core of this device, on a worker core
+// in that eth core's physical column, each owning that eth channel's single fabric connection.
+//
+// Each producer executes SEVERAL assignments now (see assign_movements_to_producers): its plane's share
+// of the movements to every other chip on the axis. This is where the ONLY coupling between the caller's
+// movement list and the op's internals lives.
 tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const CombineFabric2dParams& args,
     const ttnn::MeshCoordinate& coord,
@@ -377,49 +582,17 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const auto self_node = mesh->get_fabric_node_id(coord);
     const uint32_t dram_out_addr = static_cast<uint32_t>(dram_out_buf->address());
     const uint32_t dram_in_addr = static_cast<uint32_t>(dram_in_buf->address());
+    const uint32_t axis = args.axis;
+    const uint32_t extent = mesh->shape()[static_cast<int32_t>(axis)];
 
     const auto& self_placement = placements.get(coord);
 
-    // This device's movements, bucketed by destination coordinate. Each bucket is consumed in order as
-    // the matching producers are walked below.
-    std::map<ttnn::MeshCoordinate, std::vector<const CombineFabric2dMovement*>> pending_by_dst;
-    uint32_t mine = 0;
-    for (const auto& m : args.movements) {
-        if (!same_coord(m.src, coord)) {
-            continue;
-        }
-        mine++;
-        bool placed = false;
-        for (const auto& c : ttnn::MeshCoordinateRange(mesh->shape())) {
-            if (same_coord(m.dst, c)) {
-                pending_by_dst[c].push_back(&m);
-                placed = true;
-                break;
-            }
-        }
-        TT_FATAL(
-            placed,
-            "combine_fabric2d {}: movement src {} names destination {}, which is not a coordinate of this {} mesh",
-            self_node,
-            coord,
-            movement_coord_str(m.dst),
-            mesh->shape());
-    }
-    TT_FATAL(
-        mine == self_placement.by_eth_logical.size(),
-        "combine_fabric2d {} {}: got {} movement(s) for this device but it has {} fabric cable(s). Every cable "
-        "needs exactly one movement (2 directions x num_links {}).",
-        coord,
-        self_node,
-        mine,
-        self_placement.by_eth_logical.size(),
-        args.num_links);
-
-    std::string summary;
+    // ---- Phase A: resolve, for every eth core, the chip at the far end of its cable and the worker there.
+    // Cable truth, not plane-index arithmetic: our producer writes into this eth core's EDM, so a
+    // single-hop packet physically emerges at the far end of THIS cable.
+    std::map<CoreCoord, ttnn::MeshCoordinate> far_coord_by_eth;
+    std::map<CoreCoord, CoreCoord> peer_virtual_by_eth;
     for (const auto& [eth_logical, wp] : self_placement.by_eth_logical) {
-        // Peer = the worker serving the eth core at the far end of THIS eth core's cable. Cable truth,
-        // not plane-index arithmetic: our producer writes into this eth core's EDM, so for a
-        // single-hop destination the packet physically emerges at the far end of this cable.
         const auto far = dev->get_connected_ethernet_core(eth_logical);
         const uint32_t far_chip = static_cast<uint32_t>(std::get<0>(far));
         const CoreCoord far_eth_logical = std::get<1>(far);
@@ -445,27 +618,52 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             far_eth_logical.x,
             far_eth_logical.y,
             mesh->get_fabric_node_id(cit->second));
-        const CoreCoord peer_virtual = pit->second.worker_virtual;
+        far_coord_by_eth.emplace(eth_logical, cit->second);
+        peer_virtual_by_eth.emplace(eth_logical, pit->second.worker_virtual);
+    }
 
-        // Claim a movement bound for the chip this cable actually reaches. Cable truth again: the packets
-        // this producer sends can only emerge at the far end of its own cable, so a movement is only
-        // assignable here if its `dst` is that far chip.
-        const ttnn::MeshCoordinate& far_coord = cit->second;
-        auto bucket = pending_by_dst.find(far_coord);
+    // ---- Phase B: split this device's movements across its producers.
+    std::map<ttnn::MeshCoordinate, tt::tt_fabric::FabricNodeId> node_by_coord;
+    for (const auto& c : ttnn::MeshCoordinateRange(mesh->shape())) {
+        node_by_coord.emplace(c, mesh->get_fabric_node_id(c));
+    }
+    const auto assignments =
+        assign_movements_to_producers(args, coord, self_placement, far_coord_by_eth, node_by_coord, axis, extent);
+
+    // Every movement of this device must be claimed exactly once, counting the offset-extent/2 one as two
+    // halves. Cheap to check and it is the property the whole subdivision exists to preserve.
+    {
+        std::map<uint32_t, uint32_t> tokens_claimed_by_in_base;
+        uint32_t total_claimed = 0;
+        for (const auto& [eth, list] : assignments) {
+            for (const auto& a : list) {
+                total_claimed += a.num_tokens;
+                tokens_claimed_by_in_base[a.in_base_token] += a.num_tokens;
+            }
+        }
+        uint32_t mine = 0;
+        for (const auto& m : args.movements) {
+            if (same_coord(m.src, coord)) {
+                mine++;
+            }
+        }
         TT_FATAL(
-            bucket != pending_by_dst.end() && !bucket->second.empty(),
-            "combine_fabric2d {} {}: eth core ({},{}) cables to {}, but no (remaining) movement asks to send there. "
-            "Movements must name a destination for every cable, {} per neighbour.",
+            total_claimed == mine * args.tokens_per_movement,
+            "combine_fabric2d {}: producers claim {} token(s) but this device's {} movement(s) hold {}. The "
+            "subdivision must cover every movement exactly once.",
             coord,
-            self_node,
-            eth_logical.x,
-            eth_logical.y,
-            far_coord,
-            args.num_links);
-        const CombineFabric2dMovement& mv = *bucket->second.back();
-        bucket->second.pop_back();
+            total_claimed,
+            mine,
+            mine * args.tokens_per_movement);
+    }
 
-        // ---- Producer (writer RISC, NOC_1): drains the L1 ring to the peer chip's DRAM over fabric.
+    std::string summary;
+    for (const auto& [eth_logical, wp] : self_placement.by_eth_logical) {
+        const ttnn::MeshCoordinate& far_coord = far_coord_by_eth.at(eth_logical);
+        const CoreCoord peer_virtual = peer_virtual_by_eth.at(eth_logical);
+        const auto& my_assignments = assignments.at(eth_logical);
+
+        // ---- Producer (writer RISC, NOC_1): drains the L1 ring to the destination chips' DRAM over fabric.
         tt::tt_metal::KernelDescriptor prod;
         prod.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
@@ -473,9 +671,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         prod.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         prod.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
         prod.compile_time_args = {
-            args.tokens_per_movement,
             args.num_l1_slots,
             args.token_size_bytes,
+            CMBF2D_SLOT_TAIL_BYTES,
             static_cast<uint32_t>(wp.peer_node.chip_id),
             *wp.peer_node.mesh_id,
             static_cast<uint32_t>(peer_virtual.x),
@@ -486,15 +684,22 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             l1.drain_sink,
             l1.telemetry,
             args.stall_telemetry,
-            mv.out_base_token,
             dram_out_addr,
             batch,
             ring_filled_addr,
             ring_freed_addr,
             static_cast<uint32_t>(wp.worker_virtual.x),
             static_cast<uint32_t>(wp.worker_virtual.y),
+            static_cast<uint32_t>(my_assignments.size()),
         };
-        // 20+: TensorAccessorArgs for the interleaved output buffer (compile-time config).
+        // Per-assignment block: [out_base_token, num_tokens, dst_chip_id, dst_mesh_id] x num_assignments.
+        for (const auto& a : my_assignments) {
+            prod.compile_time_args.push_back(a.out_base_token);
+            prod.compile_time_args.push_back(a.num_tokens);
+            prod.compile_time_args.push_back(a.dst_chip_id);
+            prod.compile_time_args.push_back(a.dst_mesh_id);
+        }
+        // TensorAccessorArgs for the interleaved output buffer (compile-time config).
         tt::tt_metal::TensorAccessorArgs(dram_out_buf).append_to(prod.compile_time_args);
         prod.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -504,7 +709,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         auto prod_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(prod));
 
-        // ---- Reader (reader RISC, NOC_0): streams the movement's tokens from local DRAM into the ring.
+        // ---- Reader (reader RISC, NOC_0): streams each assignment's tokens from local DRAM into the ring.
         // Separate NoC from the producer's eth sends, so the two do not contend.
         tt::tt_metal::KernelDescriptor rdr;
         rdr.kernel_source =
@@ -513,9 +718,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
         rdr.compile_time_args = {
-            args.tokens_per_movement,
             args.num_l1_slots,
             args.token_size_bytes,
+            CMBF2D_SLOT_TAIL_BYTES,
             batch,
             l1.ring,
             ring_filled_addr,
@@ -523,10 +728,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             static_cast<uint32_t>(wp.worker_virtual.x),
             static_cast<uint32_t>(wp.worker_virtual.y),
             l1.telemetry,
-            mv.in_base_token,
             dram_in_addr,
+            static_cast<uint32_t>(my_assignments.size()),
         };
-        // 12+: TensorAccessorArgs for the interleaved input buffer (compile-time config).
+        // Per-assignment block: [in_base_token, num_tokens] x num_assignments.
+        for (const auto& a : my_assignments) {
+            rdr.compile_time_args.push_back(a.in_base_token);
+            rdr.compile_time_args.push_back(a.num_tokens);
+        }
+        // TensorAccessorArgs for the interleaved input buffer (compile-time config).
         tt::tt_metal::TensorAccessorArgs(dram_in_buf).append_to(rdr.compile_time_args);
         rdr.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -545,9 +755,21 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             desc.kernels[prod_id].emplace_runtime_args(wp.worker_logical, rt);
         }
 
+        std::string alist;
+        for (const auto& a : my_assignments) {
+            alist += fmt::format(
+                "{}off{}{} in[{},{}) out[{},{}) chip{}",
+                alist.empty() ? "" : ",",
+                a.ring_offset,
+                a.halved ? "/2" : "",
+                a.in_base_token,
+                a.in_base_token + a.num_tokens,
+                a.out_base_token,
+                a.out_base_token + a.num_tokens,
+                a.dst_chip_id);
+        }
         summary += fmt::format(
-            "{}[eth({},{}) phys_x {} link {} -> worker logical ({},{}) phys ({},{}){} peer {} virt ({},{}) "
-            "in[{},{}) -> {} out[{},{})]",
+            "{}[eth({},{}) phys_x {} link {} -> worker logical ({},{}) phys ({},{}){} nbr {} virt ({},{}) | {}]",
             summary.empty() ? "" : " ",
             eth_logical.x,
             eth_logical.y,
@@ -558,14 +780,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             wp.worker_physical.x,
             wp.worker_physical.y,
             wp.in_eth_column ? "" : " RELOCATED",
-            wp.peer_node,
+            far_coord,
             peer_virtual.x,
             peer_virtual.y,
-            mv.in_base_token,
-            mv.in_base_token + args.tokens_per_movement,
-            far_coord,
-            mv.out_base_token,
-            mv.out_base_token + args.tokens_per_movement);
+            alist);
     }
 
     log_info(

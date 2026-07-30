@@ -2,8 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader kernel (reader RISC, NOC_0). Streams this movement's input tokens out of DRAM into the L1 ring
-// the producer sends from. The producer writes L1 -> eth over NOC_1, so the two directions do not contend.
+// Reader kernel (reader RISC, NOC_0). Streams this producer's assigned input tokens out of DRAM into the
+// L1 ring the producer sends from. The producer writes L1 -> eth over NOC_1, so the two do not contend.
+//
+// This core serves SEVERAL assignments — its plane's share of the movements to every other chip on the
+// axis (see assign_movements_to_producers in the program factory). The assignments are walked in order and
+// their tokens form ONE continuous stream through the ring: `read`, `filled` and `freed` never restart at
+// an assignment boundary. That is why no per-assignment handshake is needed — both sides hold the same
+// compile-time assignment table, so the stream is self-describing by position, and the producer switches
+// destination when its own running count crosses the boundary.
 //
 // The ring is hand-rolled rather than a metal CB because the op's telemetry and packet headers live at
 // fixed offsets from the L1 allocator base — where a CB would be allocated — and the host telemetry
@@ -33,9 +40,9 @@ inline uint64_t wall_clock() {
 }
 
 void kernel_main() {
-    constexpr uint32_t num_tokens = get_compile_time_arg_val(0);
-    constexpr uint32_t num_l1_slots = get_compile_time_arg_val(1);
-    constexpr uint32_t token_size_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t num_l1_slots = get_compile_time_arg_val(0);
+    constexpr uint32_t token_size_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t slot_tail_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t batch = get_compile_time_arg_val(3);
     constexpr uint32_t ring_addr = get_compile_time_arg_val(4);
     constexpr uint32_t filled_addr = get_compile_time_arg_val(5);
@@ -43,9 +50,16 @@ void kernel_main() {
     constexpr uint32_t my_noc_x = get_compile_time_arg_val(7);
     constexpr uint32_t my_noc_y = get_compile_time_arg_val(8);
     constexpr uint32_t telemetry_addr = get_compile_time_arg_val(9);
-    constexpr uint32_t in_base_page = get_compile_time_arg_val(10);
-    constexpr uint32_t dram_in_base_addr = get_compile_time_arg_val(11);
-    constexpr auto dram_in_args = TensorAccessorArgs<12>();
+    constexpr uint32_t dram_in_base_addr = get_compile_time_arg_val(10);
+    constexpr uint32_t num_assignments = get_compile_time_arg_val(11);
+    // The per-assignment table starts here: [in_base_token, num_tokens] each. Read through
+    // kernel_compile_time_args (a constexpr std::array) rather than get_compile_time_arg_val, because the
+    // latter needs a literal index and this table is walked by a loop variable.
+    constexpr uint32_t ASSIGN_BASE = 12;
+    constexpr uint32_t ASSIGN_WORDS = 2;
+    constexpr auto dram_in_args = TensorAccessorArgs<ASSIGN_BASE + ASSIGN_WORDS * num_assignments>();
+    // A ring slot is the token plus the metadata tail the producer reads its routing from.
+    constexpr uint32_t slot_stride = token_size_bytes + slot_tail_bytes;
 
     // Written only by the producer; we just read it.
     volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_addr);
@@ -59,24 +73,32 @@ void kernel_main() {
     telem[TELEM_T_START_LO] = (uint32_t)(t_start & 0xFFFFFFFFu);
     telem[TELEM_T_START_HI] = (uint32_t)(t_start >> 32);
 
-    uint32_t read = 0;  // tokens read from DRAM and published to the producer
-    while (read < num_tokens) {
-        const uint32_t n = (num_tokens - read) < batch ? (num_tokens - read) : batch;
-        // Wait for n free slots. `read - freed` is what we have published but the producer has not
-        // released yet, so free = num_l1_slots - (read - freed).
-        while (true) {
-            invalidate_l1_cache();
-            if (read - *freed + n <= num_l1_slots) {
-                break;
+    // `read` counts tokens published across ALL assignments — the ring and both counters are continuous,
+    // so an assignment boundary is invisible to the flow control.
+    uint32_t read = 0;
+    for (uint32_t a = 0; a < num_assignments; a++) {
+        const uint32_t in_base_page = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 0];
+        const uint32_t assignment_tokens = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 1];
+        uint32_t done = 0;
+        while (done < assignment_tokens) {
+            const uint32_t n = (assignment_tokens - done) < batch ? (assignment_tokens - done) : batch;
+            // Wait for n free slots. `read - freed` is what we have published but the producer has not
+            // released yet, so free = num_l1_slots - (read - freed).
+            while (true) {
+                invalidate_l1_cache();
+                if (read - *freed + n <= num_l1_slots) {
+                    break;
+                }
             }
+            for (uint32_t i = 0; i < n; i++) {
+                const uint32_t slot = (read + i) % num_l1_slots;
+                noc_async_read(
+                    dram_in.get_noc_addr(in_base_page + done + i), ring_addr + slot * slot_stride, token_size_bytes);
+            }
+            noc_async_read_barrier();  // the data is in L1 before we say it is
+            read += n;
+            done += n;
+            noc_semaphore_inc(my_filled_noc, n);
         }
-        for (uint32_t i = 0; i < n; i++) {
-            const uint32_t slot = (read + i) % num_l1_slots;
-            noc_async_read(
-                dram_in.get_noc_addr(in_base_page + read + i), ring_addr + slot * token_size_bytes, token_size_bytes);
-        }
-        noc_async_read_barrier();  // the data is in L1 before we say it is
-        read += n;
-        noc_semaphore_inc(my_filled_noc, n);
     }
 }
