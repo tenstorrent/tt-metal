@@ -26,7 +26,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host, prime_decode_trace, unpack_rope
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.tt_transformers.tt.generator import Generator
@@ -74,7 +74,7 @@ def _reference_decode(model, page_table, pf):
     return dec
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_rope_pack_roundtrip(device):
     # Mirrors the decode flow: pack on host, copy to device, unpack on device.
@@ -88,7 +88,7 @@ def test_rope_pack_roundtrip(device):
     assert tuple(s2.shape) == (1, 1, 64)
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_generator_decode_matches_reference(device):
     """Generator-driven (untraced) decode must match the model-owned decode_paged reference."""
@@ -116,7 +116,7 @@ def test_generator_decode_matches_reference(device):
         tok = torch.tensor([[int(dl.argmax())]], dtype=torch.long)
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_generator_decode_traced_matches_reference(device):
     """Generator-driven TRACED decode must match the model-owned decode_paged reference
@@ -150,7 +150,7 @@ def test_generator_decode_traced_matches_reference(device):
         tok = torch.tensor([[int(dl.argmax())]], dtype=torch.long)
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_chunk_seq_flag_selects_chunk_outer(device):
     """The demo's chunk-outer trace selection must be driven by the GDN weights'
