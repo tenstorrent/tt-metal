@@ -166,7 +166,11 @@ class ProgramConfig:
             out_subblock_h=1,
             out_subblock_w=out_subblock_w,
             out_block_h=1,
-            out_block_w=1,
+            # out_block_w must be derived from out_subblock_w: in1_num_subblocks =
+            # out_block_w / out_subblock_w, so a hardcoded 1 makes that 0 for any
+            # out_subblock_w > 1 (the PR #51514 deadlock). Same fix Lucas Chin
+            # applied to moe_sparse_matmul_sweep.py.
+            out_block_w=out_subblock_w,
             per_core_M=max(32, m) // 32,
             per_core_N=per_core_N,
             fuse_batch=False,
