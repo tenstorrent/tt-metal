@@ -138,7 +138,7 @@ class TtPrefillTransformer(LightweightModule):
         is_first_rank: bool = True,
         is_last_rank: bool = True,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
-        attn_norm_output_memcfg: Optional[ttnn.MemoryConfig] = None,
+        attn_norm_output_memcfg: Optional[ttnn.MemoryConfig] = ttnn.L1_MEMORY_CONFIG,
     ):
         super().__init__()
         self.mesh_device = mesh_device

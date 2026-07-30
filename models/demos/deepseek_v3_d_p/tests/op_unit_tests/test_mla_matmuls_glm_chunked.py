@@ -222,28 +222,34 @@ SWEEP = [
 
 
 def _reconstruct(tt_output, mesh_device, tp_out_mode):
-    """Rebuild the global (unsharded) torch tensor from the (SP, TP) mesh output. Devices are stacked
-    device-major (row-major id = sp*TP + tp), reshaped to [SP, TP, Y, SEQ, N], TP shards reduced per
-    mode, then SP shards concatenated on the sequence axis."""
+    """Rebuild the global (unsharded) torch tensor from the (sp, tp) mesh output. Devices are stacked
+    device-major (row-major id = sp*tp + tp), reshaped to [sp, tp, Y, SEQ, N], TP shards reduced per
+    mode, then SP shards concatenated on the sequence axis. sp/tp are read from the live mesh (per-chip
+    seq stays 640, so this works on the 2x4 proxy and the production 8x4 alike)."""
+    sp, tp = mesh_device.shape[0], mesh_device.shape[1]
     stacked = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     _, y, m, n = stacked.shape
-    stacked = stacked.reshape(SP, TP, y, m, n)
+    stacked = stacked.reshape(sp, tp, y, m, n)
     if tp_out_mode == "sum":
         tp_red = stacked.to(torch.float32).sum(dim=1)
     elif tp_out_mode == "replicated":
         tp_red = stacked[:, 0]
     elif tp_out_mode == "shard_n":
-        tp_red = torch.cat([stacked[:, t] for t in range(TP)], dim=-1)
+        tp_red = torch.cat([stacked[:, t] for t in range(tp)], dim=-1)
     elif tp_out_mode == "shard_heads":
-        tp_red = torch.cat([stacked[:, t] for t in range(TP)], dim=1)
+        tp_red = torch.cat([stacked[:, t] for t in range(tp)], dim=1)
     else:
         raise ValueError(tp_out_mode)
-    out = torch.cat([tp_red[s] for s in range(SP)], dim=1)
+    out = torch.cat([tp_red[s] for s in range(sp)], dim=1)
     return out.unsqueeze(0)
 
 
 def _run(mesh_device, name, prog_config, act_mem_config, out_mem_config, out_dtype):
     (in0_shape, in0_tp_sharded, in0_tp_dim, in1_shape, in1_tp_sharded, in1_tp_dim, _dd, tp_out_mode) = SHAPES[name]
+    # in0 is always SP-sharded on the seq dim (2); set global seq = sp * SEQ_LOCAL from the live mesh so
+    # per-chip M stays 640 on any sp (2x4 proxy: 1280/2; production 8x4: 5120/8). The SHAPES seq is nominal.
+    sp = mesh_device.shape[0]
+    in0_shape = (*in0_shape[:2], sp * SEQ_LOCAL, in0_shape[3])
     torch.manual_seed(42)
     hidden_states = torch.randn(*in0_shape, dtype=torch.bfloat16)
     weight = torch.randn(*in1_shape, dtype=torch.bfloat16) * 0.02
@@ -302,7 +308,7 @@ def _run(mesh_device, name, prog_config, act_mem_config, out_mem_config, out_dty
     assert passing, f"{name} matmul PCC {pcc} < {PCC_REQUIRED}"
 
 
-@pytest.mark.parametrize("mesh_device", [(SP, TP)], ids=[f"{SP}x{TP}"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("name", list(SHAPES.keys()), ids=list(SHAPES.keys()))
 def test_glm_mla_mm(mesh_device, name):
@@ -310,7 +316,7 @@ def test_glm_mla_mm(mesh_device, name):
     _run(mesh_device, name, prog_config, act_mem_config, out_mem_config, out_dtype)
 
 
-@pytest.mark.parametrize("mesh_device", [(SP, TP)], ids=[f"{SP}x{TP}"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     "variant_id, base_name, prog_config, act_mem_config, out_mem_config, out_dtype",

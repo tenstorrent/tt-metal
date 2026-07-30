@@ -1719,10 +1719,11 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 )
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
-@pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
-)
+# TEMP (local): high-power guard commented out to run the perf test on this box.
+# @pytest.mark.skipif(
+#     not is_high_power(),
+#     reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+# )
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer_chunked_no_pcc(
     variant,

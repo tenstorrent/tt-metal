@@ -848,11 +848,11 @@ def test_sparse_mla_chunked(
     )
 
 
-# seq_len=5120 ("5k", matching the production 8x4 chunk size) -> chunk=1280 at this box's anchor mesh
-# (2,4) gives per-chip seq_len_local=640 (chunk_local = chunk/sp = 1280/2) every chunk -- the exact
-# shape op_unit_tests/test_mla_matmuls_glm_chunked.py hand-tuned and mla_config.py/indexer.py wire in
-# for GLM at seq_len_local=640 (see GLM52_MLA_MATMUL_TUNING.md), run over 4 chunks (5120/1280) to
-# reproduce the production 8x4/chunk-5120/sp8/local-640 scenario scaled onto this 2x4 (sp2) loudbox.
+# seq_len=5120 ("5k", the production 8x4 chunk size). The test body sets chunk = 640*sp so chunk_local =
+# chunk/sp = 640 (the tuned per-chip shape) on any box: the 2x4 (sp2) loudbox proxy -> chunk 1280 / 4
+# chunks; the production 8x4 (sp8) Galaxy -> chunk 5120 / 1 chunk. Both reproduce seq_len_local=640 --
+# the exact shape op_unit_tests/test_mla_matmuls_glm_chunked.py hand-tuned and mla_config.py/indexer.py
+# wire in for GLM (see GLM52_MLA_MATMUL_TUNING.md).
 # Nothing else in this file hits that per-chip shape (SPARSE_ANCHOR_CASES / test_sparse_mla_chunked
 # run seq=5120/chunk=1024 -> local=512), so this is the only end-to-end exercise of the wired
 # program_configs against a CPU reference.
@@ -868,14 +868,12 @@ SPARSE_MM_TUNED_CASES = _sparse_cases([5120], anchor_only=True)
 
 @pytest.mark.parametrize("variant, mesh_device, seq_len", SPARSE_MM_TUNED_CASES, indirect=["variant", "mesh_device"])
 @pytest.mark.parametrize("device_params", SPARSE_DEVICE_PARAMS, ids=SPARSE_DEVICE_IDS, indirect=True)
-@pytest.mark.parametrize("chunk", [1280], ids=["c1280"])
 @pytest.mark.parametrize("cache_format", [MlaKvCacheFormat.BF16_RM], ids=["kv_bf16"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_chunked_mm_tuned_shape(
     mesh_device,
     seq_len,
-    chunk,
     cache_format,
     device_params,
     variant,
@@ -885,6 +883,9 @@ def test_sparse_mla_chunked_mm_tuned_shape(
     ds_repo,
     ds_input,
 ):
+    # chunk = 640 * sp so chunk_local = chunk/sp = 640 (the tuned per-chip shape) on ANY box: 2x4 (sp2)
+    # -> chunk 1280 / 4 chunks; production 8x4 (sp8) -> chunk 5120 / 1 chunk. Both reproduce local-640.
+    chunk = 640 * mesh_device.shape[0]
     run_sparse_mla_chunked_case(
         variant,
         config_only,
