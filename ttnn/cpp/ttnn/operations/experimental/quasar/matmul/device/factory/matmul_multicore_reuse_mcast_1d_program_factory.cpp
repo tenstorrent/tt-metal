@@ -7324,15 +7324,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     // forces a single 14-M-tile in0 block (out_block_h==per_core_M to dodge the multi-M-block output-
     // transpose bug; num_blocks==1 to dodge the K-spill accumulate) -> trailing-unpacker-pop / large
     // single-block Quasar trap. Remove once the sliced stem conv is healthy.
+    // NOTE: split into 3 log_debug calls (<=12 args each). A single ~30-arg log_debug overflows tt-logger's
+    // TT_LOG_UNUSED_EACH FOR-EACH macro (~16-arg cap) in the compiled-out path on older pinned tt-logger
+    // versions ("undeclared identifier TT_LOG_FOR_EACH_AGAIN"). Keep each call small so it builds on any pin.
     log_debug(
         tt::LogOp,
-        "[QSR-MM-IN1 #48552] mcast_in1 in0-reader geom: arch={} in0_is_sharded={} extract_shard_sub_blocks={} | "
+        "[QSR-MM-IN1a #48552] mcast_in1 in0-reader geom: arch={} in0_is_sharded={} extract_shard_sub_blocks={} | "
         "tiles M={} N={} K={} | per_core_M={} per_core_N={} | in0_block_w={} in0_block_h={} "
-        "in0_block_num_tiles(reader=w*h)={} in0_block_num_tiles(compute)={} in0_CB_tiles={} | "
-        "num_blocks_inner(K)={} num_blocks_h(M)={} num_blocks_w(N)={} | "
-        "in0_shard_h_tiles={} in0_shard_w_tiles={} in0_last_ktile_w={} in0_last_ktile_h={} | "
-        "grid=({}x{}) num_cores={} in1_mcast_receiver_num_cores={} in1_SKIP_MCAST={} | "
-        "bbox_logical=[({},{})..({},{})] in1_mcast_rect_phys=[({},{})..({},{})]",
+        "in0_block_num_tiles(reader=w*h)={}",
         (int)device->arch(),
         in0_is_sharded,
         extract_shard_sub_blocks,
@@ -7343,7 +7342,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         per_core_N,
         in0_block_w,
         in0_block_h,
-        (uint32_t)(in0_block_w * in0_block_h),
+        (uint32_t)(in0_block_w * in0_block_h));
+    log_debug(
+        tt::LogOp,
+        "[QSR-MM-IN1b #48552] in0_block_num_tiles(compute)={} in0_CB_tiles={} | "
+        "num_blocks_inner(K)={} num_blocks_h(M)={} num_blocks_w(N)={} | "
+        "in0_shard_h_tiles={} in0_shard_w_tiles={} in0_last_ktile_w={} in0_last_ktile_h={} | grid=({}x{})",
         in0_block_num_tiles,
         in0_CB_tiles,
         num_blocks,
@@ -7354,7 +7358,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         (uint32_t)in0_last_ktile_w,
         (uint32_t)in0_last_ktile_h,
         compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
+        compute_with_storage_grid_size.y);
+    log_debug(
+        tt::LogOp,
+        "[QSR-MM-IN1c #48552] num_cores={} in1_mcast_receiver_num_cores={} in1_SKIP_MCAST={} | "
+        "bbox_logical=[({},{})..({},{})] in1_mcast_rect_phys=[({},{})..({},{})]",
         num_cores,
         in1_mcast_receiver_num_cores,
         (in1_mcast_receiver_num_cores == 1),
