@@ -4,6 +4,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_unary/clamp.h"
@@ -93,7 +94,8 @@ void kernel_main() {
     CircularBuffer acc_cb(cb_acc_id);
     CircularBuffer wtmp_cb(cb_wtmp_id);
 
-    mm_init(cb_input_id, cb_weights_id, cb_mm_id);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_input_id, cb_weights_id, cb_mm_id);
+    matmul_init(cb_input_id, cb_weights_id);
 
     // ===================================================================================
     // PHASE 1: gate_up matmul + SwiGLU for ALL experts (SwiGLU cores only). Each expert's
@@ -107,7 +109,7 @@ void kernel_main() {
             w_cb.wait_front(slice_tiles);
 
             // ---- gate + up matmul -> cb_mm (gate tiles 0,1; up tiles 2,3). ----
-            mm_init_short(cb_input_id, cb_weights_id);
+            matmul_init(cb_input_id, cb_weights_id);
             reconfig_data_format(cb_weights_id, cb_input_id);
             pack_reconfig_data_format(cb_mm_id);
             mm_cb.reserve_back(2 * kOutTilesPerCore);
@@ -204,7 +206,7 @@ void kernel_main() {
         down_w_cb.wait_front(down_slice_tiles);
 
         // ---- down matmul -> cb_mm staging (reuses the dead Phase-1 gate_up staging buffer). ----
-        mm_init_short(cb_act_id, cb_down_w_id);
+        matmul_init(cb_act_id, cb_down_w_id);
         reconfig_data_format(cb_down_w_id, cb_act_id);
         pack_reconfig_data_format(cb_mm_id);
         mm_cb.reserve_back(kOutTilesPerCore);
