@@ -134,10 +134,23 @@ the eth-completion reap and not the bench. Prime suspects, in order:
    `h2d_memcpy` fill didn't take, slot>0 gathers bad memory → the ETH send errors/drops → no transmit.
 2. **Landing-ring gather for slot>0** — `gsge[1].addr = land_base + slot*tt_plen`, `lkey = tt_pay_mkey`.
 
-**Next session (focused):** (a) pinpoint gather-vs-else: temporarily gather from **slot 0 always** (both SGEs) +
-single-slot requester, keep the async no-wait — if it then transmits many, the per-slot ring gather is the bug
-(fix the header/landing ring mmap/mkey coverage or addressing); if it still stalls at 1, it's the async
-eth-completion/no-wait. (b) Check the ETH send **CQE status** for slot>0 (log `ce` error bits — `DOCA_DPA_DEV_COMP_
+**★★ PINPOINTED (2026-07-30): it's the async eth-completion / no-wait, NOT the ring gather.** Ran the slot-0
+isolation (gather slot 0 always + single-slot requester, async no-wait kept): **still stalls at ~2 frames
+(p0 tx +2).** So the per-slot ring gather is **fine** — the bug is purely the **async ETH-send completion
+handling**. The sync kernel worked because it *blocked* on each eth CQE (`while(!get_completion(eth)); ack(1)`),
+which both paced the SQ and reaped every completion; the async non-blocking drain
+(`while(get_completion(eth)){ack;eth_done++}`) reaps only ~1 then `eth_done` sticks → the ETH SQ stops
+transmitting (only ~2 frames egress) → backpressure deadlock. This is exactly the critic's flagged open-Q.
+**THE FIX is in the eth-completion path** (`kernels_dev.c` drain + `sample.c` eth_completion setup) — try, in order:
+1. **`doca_dpa_dev_completion_request_notification(eth_comp_handle)`** re-arm after each drain pass (the flagged
+   fix — the unattached ETH CQ likely needs re-arming to keep delivering under polling).
+2. If not, a **blocking-drain-one per iteration** hybrid (reap exactly one eth CQE each loop like the sync kernel,
+   but keep the recv side pipelined) — guarantees the SQ drains 1:1 while still overlapping recv processing.
+3. Check the eth CQE **error bits** on the reaped completion (is send #1 SUCCESS and #2 never-arrives, or are
+   #2+ erroring?). Load the `doca-verbs`/`doca-dpa` skill for ETH-SQ completion semantics.
+Ring gather (header + landing) and recv/deep-RQ paths are CONFIRMED WORKING — do not touch them.
+
+**(superseded) earlier gather-vs-else framing:** (b) Check the ETH send **CQE status** for slot>0 (log `ce` error bits — `DOCA_DPA_DEV_COMP_
 SEND_ERR`) to see if slot>0 sends error vs silently don't transmit. (c) Verify the DPA-heap header-ring mmap
 (`tt_hdr_dpa_mmap`, `memrange_len=TT_RING*TT_FRAME_HDR`) and the per-slot `h2d_memcpy` loop actually populated all
 slots (d2h read-back a couple slots). Load the `doca-verbs`/`doca-dpa` skill for ETH-SQ gather + completion
