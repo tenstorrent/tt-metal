@@ -1380,3 +1380,40 @@ observability for the sweep harnesses, which is a weaker justification than it h
 policy-selected path is real value, but it belongs in a deliberate check, not in a gating assertion.**
 
 **Final state: 111 correctness + 29 audit + 10 golden perf = 150 tests, all passing.**
+
+### S10. SHIPPED: reduce-scatter now supports ALL fusions directly -- no chain fallback
+
+Previously the reduce-scatter gate excluded bias / activation / addcmul / chunked output, so any fused shape fell
+back to the linear chain. Two things blocked it, and both are now fixed:
+
+1. **CB collision.** The ring's send/recv buffers sat at c_4/c_5, which are the fusion operand CBs. The ring
+   moved to **c_8/c_9**, with a new **c_10** scratch for the slice while the epilogue is applied to it.
+2. **Runtime-arg collision.** Fusion/chunk args and reduce-scatter args both started at writer index 17. The
+   writer now uses ONE running index consumed in the order the factory pushes: bias, ternary, chunk info, then
+   reduce-scatter -- so all three can be active at once.
+
+**How the epilogue stays "exactly once per output tile".** Each owner ends the ring holding one fully reduced
+slice, and applies the epilogue to that slice only. The writer feeds that owner ONLY its slice's operands, in
+SLICE ORDER (`feed_fused_slice`), so compute indexes every operand 0..nt-1 -- no modular arithmetic, no row
+streaming, and no Pk-fold duplicate residual reads. `rs_epilogue_slice` then does
+`out = ta + scalar * act(acc + bias) * tb`, each stage compiled in only when its define is set.
+
+**Two bugs found while validating, one of which was a FALSE PASS -- worth remembering:**
+- My first version reasoned "operands are index-aligned, so no broadcast is needed". Wrong for `[1,N]` operands:
+  bias and a broadcast gate hold values only in ROW 0 of their tile, the other 31 rows being tile padding. The
+  gate failed loudly (PCC 0.18) but **bias silently "passed" at 0.999759** -- a bias applied to 1 row in 32 barely
+  moves PCC. Fixed with `add_tiles_bcast<ROW>` / `mul_tiles_bcast<ROW>` (elementwise retained for the true [M,N]
+  residual and full gate). After the fix that same case reads PCC 1.000000. **A weak operand cannot be validated
+  by PCC alone -- scale it up until a wrong answer must show.** The probe now uses bias x40 and gate x3.
+- An uneven partition desynchronised the scratch CB: the caller pushes `max_chunk` while the epilogue popped
+  `nt`, and nt < max_chunk for some owners when Pk does not divide the sub-block. The epilogue now takes both --
+  `nt` for the tile loops, `slot` for all CB bookkeeping.
+
+**Validated:** 40/40 fused reduce-scatter cases correct across bias / activation / bias+activation / addcmul /
+bias+addcmul / bias+chunks / bias+addcmul+chunks, on Pk=4 even, **uneven slices (9-over-4 -> 3,2,2,2 and
+6-over-4 -> 2,2,1,1)**, Pk=6 deep-K with Sm=2, mesh and in1-near placement, tails (Kt=190/Nt=145), and both
+explicit and auto configs. Reduce-scatter was confirmed SELECTED (not silently falling back) in 35 of the 40 --
+the config log shows 21 reduce-scatter/in1-near and 14 reduce-scatter/mesh. (Two further combinations are
+rejected by a pre-existing, correct validation: N=4640 with chunks=2 is not tile-aligned per chunk.)
+
+Full suites after the change: 111 correctness + 29 audit + 10 golden perf, all passing.
