@@ -575,6 +575,7 @@
     export PREFILL_CHUNK_SIZE=5120
     export PREFILL_TPS_ITERS=5
     export PREFILL_SKIP_PCC=1
+    export PREFILL_REQUIRE_HIGH_POWER=1
     export PREFILL_EXPECTED_TPS=3600
     export PREFILL_PERF_MARGIN=0.05
     mpirun --pernode --tag-output bash -lc '

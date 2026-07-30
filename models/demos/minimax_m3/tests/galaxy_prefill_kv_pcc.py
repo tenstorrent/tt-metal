@@ -17,6 +17,8 @@ Env:
   PREFILL_EXPECTED_TPS  whole-sequence tok/s baseline; when set, assert measured median is
                         within +/- PREFILL_PERF_MARGIN of this value                           [default: unset]
   PREFILL_PERF_MARGIN fraction tolerance around PREFILL_EXPECTED_TPS (e.g. 0.05 = +/-5%)     [default 0.05]
+  PREFILL_REQUIRE_HIGH_POWER  "1" -> require is_high_power() (>=130W TDP via tt-smi); skip
+                        otherwise. Used by the Blaze perf job; leave unset for accuracy/KV PCC   [default 0]
   PREFILL_STANDALONE_CHUNKED_PCC  min K/V/index_k PCC gate (fail below this)                 [default 0.88]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs; also auto-sets
                       M3_LOAD_NLAYERS so only those layers' weight shards are read)          [default: all]
@@ -150,6 +152,20 @@ def main():
     from models.demos.minimax_m3.tt.weight_cache import weight_cache_is_complete
 
     _raise_nproc_limit()  # tt-metal parallel kernel JIT needs a high process limit (see fn docstring)
+
+    # Perf CI only: same guard as Kimi/GLM no_pcc / ring-joint SDPA (pytest skipif is_high_power).
+    # Accuracy/KV-PCC leaves PREFILL_REQUIRE_HIGH_POWER unset so bh_sc1 hosts are fine.
+    if os.getenv("PREFILL_REQUIRE_HIGH_POWER", "0") == "1":
+        from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max, is_high_power
+
+        if not is_high_power():
+            tdp = get_tdp_limit_max()
+            print(
+                f"[prefill-pcc] SKIP: PREFILL_REQUIRE_HIGH_POWER=1 but host is not high-power "
+                f"(TDP_LIMIT_MAX={tdp}; need >=130W). Guards exabox.tenstorrent.com/power=14kw.",
+                flush=True,
+            )
+            return 0
 
     golden_dir = os.environ.get("PREFILL_TRACE_DIR")
     if not golden_dir:
