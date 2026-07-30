@@ -267,16 +267,10 @@ jobs:
           TTRUN_DIR=/etc/ttop
           PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
-          # AllToAll*_short, not *_short: this leg replaced test_bh_glx_superpod_short_running.yaml,
-          # which held only the four AllToAll tests. SequentialNeighborExchangeLatency came from the
-          # single-galaxy suite (test_bh_glx_2d_torus_short_running.yaml -> Galaxy health / upstream
-          # vanilla), and it does not run on this multi-host quad -- a plain *_short here fails with
-          # "Could not find latency sender device" / "Could not find responder device with node_id 124".
-          # This glob selects exactly the superpod set; health and vanilla keep the full *_short.
           tt-run --skip-mgd-check --skip-executable-check \
             --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
             --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
-            /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_stability.yaml --filter 'name.AllToAll*_short'
+            /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_stability.yaml --filter 'name.*_short'
 
   cleanup:
     name: Cleanup
