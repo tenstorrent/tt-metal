@@ -34,24 +34,46 @@ namespace ckernel::sfpu {
 // must be re-inited before its next use.
 inline void situ_init() { tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>(); }
 
-// Newton reciprocal carrying its 2.0 as a literal. sfpu_reciprocal_iter reads that
-// constant from vConstFloatPrgm0, which situ_init has loaded with a Sollya tanh
-// coefficient -- borrowing it here would silently corrupt both halves.
+// Newton reciprocal, structurally identical to sfpu_reciprocal_iter but carrying
+// its 2.0 as a literal. That function reads the constant from vConstFloatPrgm0,
+// which situ_init has loaded with a Sollya tanh coefficient -- borrowing it here
+// would silently corrupt both halves. Keep the two in sync when recip.h changes.
 template <int MAX_ITER>
 sfpi_inline sfpi::vFloat _situ_reciprocal_(const sfpi::vFloat x) {
+    // SFPARECIP: a 7-bit-mantissa seed from a 128-entry LUT indexed by the top 7
+    // mantissa bits, so 0.9944/x < seed < 1.0054/x. One Newton step below takes
+    // that to ~14 bits (past bf16's 8), two to ~28 (past fp32's 24) -- which is
+    // where MAX_ITER's 1-vs-2 comes from.
+    //
+    // Outside 2**-126 <= |x| < 2**126 the instruction returns a saturated value
+    // rather than an approximation: +inf for |x| < 2**-126 (ALL subnormals, not
+    // just zero) and 0 for |x| >= 2**126 (~8.5e37, note that is below FLT_MAX).
+    // Both are already exactly 1/x, and the guard below leaves them unrefined.
     sfpi::vFloat y = sfpi::approx_recip(x);
 
-    // t carries the negation of (2 - x*y) so the NaN produced on Blackhole when x
-    // and y are 0/inf is caught by a plain sign check.
+    // Normally t = 2.0 - x * y, but we negate it (and negate again via y = y * -t
+    // below). On Blackhole x=0 with y=inf (and vice versa) gives t=+NaN regardless
+    // of operand signs; negating the meaning of t turns NaN detection into a
+    // trivial sign check, since every comparison against NaN is false and the
+    // degenerate cases then keep the already-correct seed. v_if (t >= 2.0) on the
+    // un-negated form would be equivalent, but SFPI has no SFPLE/SFPGT.
+    //
+    // The trailing `- 0.0f` on each y update is instruction shape, not arithmetic:
+    // SFPMAD is a fused multiply-ADD with no bare-multiply form. Subtracting zero
+    // rather than adding it also preserves a signed zero result.
     sfpi::vFloat t = x * y - 2.0f;
     if constexpr (MAX_ITER > 1) {
         sfpi::vFloat y1 = y * -t - 0.0f;
+        // If t=NaN then t>=0. This check consumes the SFPNOP slot of the preceding
+        // SFPMAD, so the predicate is free here.
         v_if(t < 0) {
             t = x * y1 - 2.0f;
             y = y1 * -t - 0.0f;
         }
         v_endif;
     } else {
+        // If t=NaN then t>=0. Unlike the two-iteration form above this check cannot
+        // hide in an SFPNOP slot -- it depends on the immediately preceding SFPMAD.
         v_if(t < 0) { y = y * -t - 0.0f; }
         v_endif;
     }
@@ -74,12 +96,23 @@ sfpi_inline sfpi::vFloat _situ_sigmoid_(sfpi::vFloat x) {
 // beta * tanh(x / beta), unrounded.
 //
 // Always the Sollya polynomial, never _sfpu_tanh_fp32_accurate_, in BOTH dst
-// modes. The accurate expm1 form leaves too little LReg headroom to coexist with
-// the gate half's sigmoid: the pair overruns the register file and the SFPU has no
-// spill path, so the compiler aborts with "cannot store sfpu register". Dropping
-// to the polynomial costs ~2.3e-3 relative, below both a bf16 pack and the ~4e-3
-// the alternative (a cheaper sigmoid exp) would have cost. Callers needing
-// fp32-grade tanh should use tanh_tile.
+// modes and for BOTH ops. The SFPU has no spill path, so exceeding the LReg file
+// is a hard compile abort ("cannot store sfpu register"), not a slowdown. Two
+// independent things each exhaust it:
+//
+//   * the accurate expm1 tanh together with the gate half's sigmoid;
+//   * the accurate expm1 tanh together with runtime beta, on its own. Measured:
+//     softcap alone at fp32 dst compiles with beta as a constexpr and aborts with
+//     beta and 1/beta as live vFloats. The two pinned registers are the whole
+//     margin, so making this dst-mode-dependent is not available while beta is a
+//     runtime parameter -- which it must be for a public ttnn op.
+//
+// Reproducing either needs -O3 WITHOUT -flto; under LTO codegen is deferred and
+// the abort moves to link time or disappears.
+//
+// The polynomial costs ~2.3e-3 relative, below a bf16 pack and below the ~4e-3 a
+// cheaper sigmoid exp would have cost instead. Callers needing fp32-grade tanh
+// should use tanh_tile.
 sfpi_inline sfpi::vFloat _situ_softcap_(sfpi::vFloat x, sfpi::vFloat beta, sfpi::vFloat inv_beta) {
     return _sfpu_tanh_polynomial_(x * inv_beta) * beta;
 }
