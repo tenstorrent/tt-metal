@@ -165,6 +165,43 @@ slots (d2h read-back a couple slots). Load the `doca-verbs`/`doca-dpa` skill for
 semantics. Stage-2 source backed up in scratchpad `stage2_backup/`; gw/dpa_rehead_verbs/*.c were **untracked**
 before — the Stage-2 commit added `kernels_dev.c`+`common_defs.h` to tracking.
 
+## ★★★ STAGE 2 RESOLVED — E2E on silicon (2026-07-30): 4096/4096 processed, exactly-once, byte-exact
+
+The blocker was **two independent bugs**, not one — and the earlier "it's the async completion, NOT the ring
+gather" pinpoint was **WRONG** (the old async drain's own soft-deadlock masked the second bug). Fixed both:
+
+1. **eth-completion pacing (the real completion fix).** Replaced the async non-blocking drain + `ETH_MAX_INFLIGHT`
+   backpressure with **blocking-drain-one-per-iteration**: reap exactly one ETH send CQE per posted frame
+   (Stage-1 sync pacing), recv side still pipelined via the deep pre-posted RQ. Also a fresh zero-init `send_wr`
+   + `gsge` per post (send_wr-reuse hardening) and a free CQE-status diagnostic (`get_completion_type` +
+   `error_syndrome`, logs `SEND_ERR`). Frame 1 then reaped clean (`eth_posted=1 eth_done=1 type=0`=SUCCESS).
+
+2. **DPA-heap header-ring gather at a non-zero offset never completes (the hidden second bug).** With (1) in,
+   the pipeline still stalled after frame 1. Two silicon isolations nailed it: `slot=0` always → 16/16 egress;
+   header pinned to slot 0 while the **landing** MR SGE varies by 256 B → 16/16 egress; but **any varying
+   header SGE0 address — even 64 B-aligned — stalls after frame 1** (frame 2's ETH CQE never arrives). So the
+   **host landing MR** gathers fine at varying offsets, but the **DPA-heap header mmap** (`MMAP_TYPE_DPA`,
+   `dpa_mmap_handle`) does **not** support an ETH-SQ gather at a non-zero offset. It is **not** alignment (64 B
+   stride still stalled) — the DPA mmap handle only addresses its base.
+   **Fix:** use a **single DPA-heap header slot** (offset 0, seq re-patched per frame) + keep the **landing
+   RING** (host MR, varies by slot). Safe because blocking-drain-one holds only ONE eth send in flight, so
+   frame N's send completes before frame N+1 re-patches the shared header — no alias. The header ring in
+   `sample.c` is now a harmless superset (only slot 0 is gathered).
+
+**E2E result (host RoCEv2 WRITE_IMM → SF RC → single-thread DPA re-head → p0 → BH drainer pool, dev1 ext, 8
+workers, stride 288):** requester **4096/4096 WRITE_IMM ok**; steering flow egressed all 4096 (delta matched N,
+was +1 before the fix); pool **processed=4096 == delivered=4096 (100% kept up), exactly-once HOLDS, lapped=0**;
+land-zone dump = the requester `buf[i]=(char)i` pattern (byte-exact); `valid=11.1%` == the known-good source
+ratio (the roff=0 dense-stream accounting artifact, §1.4). **P-GW1 (e) Stage-2 pipeline datapath: CLOSED.**
+
+Files: `dpa_rehead_verbs/{common_defs.h(+TT_HDR_STRIDE note),kernels_dev.c(blocking-drain+single-header+diag),
+sample.c(header-ring stride)}`. Requester `TT_RING 1024→256` to match the target. Build: dpacc `-Werror` clean;
+DPU `~/doca_samples/.../build` rebuilt + md5-synced to repo. **Bench left idle-clean.**
+**Follow-ups:** (a) requester `burst` must be ≤ `TT_PREPOST` (48) or writes RNR-stall (separate from the fix —
+default `burst=64` hangs; use `-b 32`); (b) throughput is 1-eth-in-flight (~0.3 Mpps) by design — N-EU + true
+eth pipelining is Stage 3, and would need the DPA-heap-offset limitation solved (per-EU single header, or a
+host-MR header ring since host MR gathers at offset fine).
+
 ## Stage 2 implementation plan (scoped 2026-07-30 — port the async-ring onto the DBR-fixed base)
 
 The `async_ring_wip` **kernel** (`async_ring_wip_kernels_dev.c` `target_thread_kernel`) IS the pipelined design and

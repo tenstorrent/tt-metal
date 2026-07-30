@@ -1087,13 +1087,13 @@ static doca_error_t create_tt_egress_engine(struct verbs_resources* r) {
     /* DPA-heap header RING (pf_dpa_ctx): TT_RING slots, each pre-filled with the host template; the kernel
      * patches only the per-frame seq into slot (seq%TT_RING). mmap covers the whole ring for the ETH gather
      * SGE0 mkey. A ring (not one slot) is what lets the kernel pipeline without a header alias. */
-    status = doca_dpa_mem_alloc(r->pf_dpa_ctx, (size_t)TT_RING * TT_FRAME_HDR, &r->tt_hdr_dpa_addr);
+    status = doca_dpa_mem_alloc(r->pf_dpa_ctx, (size_t)TT_RING * TT_HDR_STRIDE, &r->tt_hdr_dpa_addr);
     if (status != DOCA_SUCCESS) {
         return status;
     }
     for (uint32_t i = 0; i < TT_RING; i++) {
         status = doca_dpa_h2d_memcpy(
-            r->pf_dpa_ctx, r->tt_hdr_dpa_addr + (uint64_t)i * TT_FRAME_HDR, r->tt_hdr_buf, TT_FRAME_HDR);
+            r->pf_dpa_ctx, r->tt_hdr_dpa_addr + (uint64_t)i * TT_HDR_STRIDE, r->tt_hdr_buf, TT_FRAME_HDR);
         if (status != DOCA_SUCCESS) {
             return status;
         }
@@ -1105,7 +1105,7 @@ static doca_error_t create_tt_egress_engine(struct verbs_resources* r) {
     r->tt_hdr_dpa_mmap.permissions =
         DOCA_ACCESS_FLAG_LOCAL_READ_WRITE | DOCA_ACCESS_FLAG_RDMA_WRITE | DOCA_ACCESS_FLAG_RDMA_READ;
     r->tt_hdr_dpa_mmap.memrange_addr = (void*)r->tt_hdr_dpa_addr;
-    r->tt_hdr_dpa_mmap.memrange_len = (size_t)TT_RING * TT_FRAME_HDR;
+    r->tt_hdr_dpa_mmap.memrange_len = (size_t)TT_RING * TT_HDR_STRIDE;
     status = doca_mmap_obj_init(&r->tt_hdr_dpa_mmap);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG_ERR("TT: failed to mmap DPA-heap header ring: %s", doca_error_get_descr(status));

@@ -11,10 +11,11 @@
  * doorbell, no flexio_window -> dissolves the A3.3b doorbell serializer). Egress leg is the proven P1.4a
  * doca_verbs 2-SGE gather (`gw/dpa_rehead_verbs/`).
  *
- * Header handling: the host pre-builds a single 46B TT frame-header TEMPLATE in tt_hdr_buf (dmac=BH,
- * smac=uplink, ethertype 0x1AF6, opcode/ver/plen/rkey/roff/imm fixed, seq=0). The DPA patches ONLY the 4-byte
- * seq field per frame (frame offset 14 + 8 = 22). Because we wait for the ETH-SQ send CQE before the next
- * iteration, the single-slot template is safe to reuse (a header RING would allow pipelining -> perf follow-up).
+ * Header handling: the host pre-builds a 46B TT frame-header TEMPLATE and replicates it across a TT_RING-slot
+ * DPA-heap header ring (dmac=BH, smac=uplink, ethertype 0x1AF6, opcode/ver/plen/rkey/roff/imm fixed, seq=0).
+ * The DPA patches ONLY the 4-byte seq field of the per-frame slot (frame offset 14 + 8 = 22). Stage-2 pipelines
+ * the recv side via a deep pre-posted RQ but paces the ETH SQ 1:1 (reap one send CQE per posted frame) so the
+ * SQ always drains; the per-slot ring keeps each in-flight frame's header independent.
  */
 
 #include <doca_dpa_dev.h>
@@ -69,14 +70,11 @@ __dpa_global__ void target_thread_kernel(uint64_t arg) {
     struct dpa_thread_arg* ta = (struct dpa_thread_arg*)arg;
     doca_dpa_dev_completion_element_t ce;
     struct doca_dpa_dev_verbs_recv_wr recv_wr;
-    struct doca_dpa_dev_verbs_send_wr send_wr;
     struct doca_dpa_dev_verbs_sge rsge;      /* RC recv landing SGE (dummy for WRITE_IMM — data lands at the
                                               * requester's remote addr = ring slot, not this SGE) */
-    struct doca_dpa_dev_verbs_sge gsge[2];   /* ETH gather: [DPA-heap hdr slot] + [landed payload slot] */
     uint8_t* hdr = (uint8_t*)ta->tt_hdr_buf; /* DPA-heap header RING base (seq-patchable per slot) */
     uint64_t seq = 0;
     uint64_t eth_posted = 0, eth_done = 0;
-    const uint64_t ETH_MAX_INFLIGHT = 128; /* < ETH SQ depth (256) and < TT_RING */
 
     if (ta->dpa_ctx_handle) {
         doca_dpa_dev_device_set(ta->dpa_ctx_handle);
@@ -86,26 +84,33 @@ __dpa_global__ void target_thread_kernel(uint64_t arg) {
     rsge.lkey = ta->local_dpa_buff_addr_mmap_handle;
     rsge.length = ta->tt_plen;
 
-    /* Stage-2 ASYNC RING: TT_PREPOST recvs were pre-posted by the trigger RPC. Frame i lands at + gathers
-     * from ring slot (i%TT_RING) (the requester WROTE base+slot*plen); seq is patched into header slot
-     * (i%TT_RING). Post the ETH send but do NOT wait its CQE per frame -- drain ETH CQEs opportunistically,
-     * block only at ETH_MAX_INFLIGHT. This removes the per-frame serializer and pipelines one EU toward the
-     * WQE-issue ceiling. */
+    /* Stage-2 RING + 1:1 ETH pacing: TT_PREPOST recvs were pre-posted by the trigger RPC. Frame i lands at +
+     * gathers from ring slot (i%TT_RING) (the requester WROTE base+slot*plen); seq is patched into header slot
+     * (i%TT_RING). The recv side is pipelined via the deep RQ, but each posted ETH send is reaped 1:1 in the
+     * same iteration so the ETH SQ always drains (the earlier no-wait async drain deadlocked at eth_done=1).
+     * ETH throughput scaling past this 1-in-flight pacing is the Stage-3 N-EU concern. */
     while (1) {
         /* HW event: a RoCE WRITE_IMM completed on the SF RC QP. */
         while (!doca_dpa_dev_get_completion(ta->dpa_comp_handle, &ce));
         doca_dpa_dev_completion_ack(ta->dpa_comp_handle, 1);
-        if (seq < 3 || seq % 500 == 0) {
-            DOCA_DPA_DEV_LOG_INFO("DBG recv#%lu eth_posted=%lu eth_done=%lu\n", seq, eth_posted, eth_done);
-        }
 
         tt_post_recv(ta->dpa_verbs_qp_handle, &recv_wr, &rsge); /* re-arm one RQ slot */
 
-        uint32_t slot = (uint32_t)(seq % TT_RING);
-        uint8_t* hslot = hdr + (uint64_t)slot * ta->tt_frame_hdr;
+        uint32_t slot = (uint32_t)(seq % TT_RING); /* LANDING ring slot (host MR gather — varies safely) */
+        /* SINGLE header slot (DPA-heap offset 0). A DPA-heap gather at a non-zero offset never completes on this
+         * silicon (proven: constant SGE0 egresses; any varying SGE0 — even 64B-aligned — stalls after frame 1;
+         * the host-MR landing SGE1 varies fine). Safe to reuse one slot because blocking-drain-one keeps just
+         * ONE eth send in flight: frame N's send completes before frame N+1 re-patches seq. */
+        uint8_t* hslot = hdr;
         seq++;
         tt_put32_le(hslot + TT_SEQ_OFFSET, (uint32_t)seq); /* distinct seq per in-flight frame */
 
+        /* Fix (send_wr-reuse): build a FRESH, zero-initialized WR + gather SGE list every iteration. The
+         * async loop re-posts without waiting between posts, so a single reused struct risks being mutated
+         * while a prior post still references it, and any field the setters don't touch would carry over
+         * stale. A per-iteration struct removes that hazard. */
+        struct doca_dpa_dev_verbs_send_wr send_wr = {0};
+        struct doca_dpa_dev_verbs_sge gsge[2] = {0}; /* ETH gather: [DPA-heap hdr slot] + [landed payload slot] */
         gsge[0].addr = (uint64_t)hslot;
         gsge[0].length = ta->tt_frame_hdr;
         gsge[0].lkey = ta->tt_hdr_mkey;
@@ -122,17 +127,25 @@ __dpa_global__ void target_thread_kernel(uint64_t arg) {
         doca_dpa_dev_verbs_eth_sq_commit_send(ta->eth_sq_handle);
         eth_posted++;
 
-        /* Reclaim completed ETH CQEs without blocking (pipeline stays full). */
-        while (doca_dpa_dev_get_completion(ta->eth_comp_handle, &ce)) {
-            doca_dpa_dev_completion_ack(ta->eth_comp_handle, 1);
-            eth_done++;
-        }
-        /* Flow control: only block if too many ETH sends are outstanding. */
-        while (eth_posted - eth_done >= ETH_MAX_INFLIGHT) {
-            if (doca_dpa_dev_get_completion(ta->eth_comp_handle, &ce)) {
-                doca_dpa_dev_completion_ack(ta->eth_comp_handle, 1);
-                eth_done++;
-            }
+        /* Fix (blocking-drain-one-per-iteration): reap EXACTLY ONE ETH send CQE this iteration, matching
+         * the Stage-1 sync kernel's 1:1 post:reap pacing so the ETH SQ always drains. The prior async
+         * non-blocking drain reaped ~1 CQE then eth_done stuck (the SQ stopped transmitting after ~2
+         * frames -> backpressure deadlock). The recv side stays pipelined via the deep pre-posted RQ
+         * (TT_PREPOST), so this is not the Stage-1 full serializer. */
+        while (!doca_dpa_dev_get_completion(ta->eth_comp_handle, &ce));
+        doca_dpa_dev_completion_type_t eth_ct = doca_dpa_dev_get_completion_type(ce);
+        uint32_t eth_syn =
+            (eth_ct == DOCA_DPA_DEV_COMP_SEND_ERR) ? doca_dpa_dev_completion_element_get_error_syndrome(ce) : 0;
+        doca_dpa_dev_completion_ack(ta->eth_comp_handle, 1); /* read type/syndrome BEFORE ack recycles the CE */
+        eth_done++;
+
+        /* Diagnostic (free): confirm the ETH send actually SUCCEEDED. A SEND_ERR completion means a bad
+         * WQE (gather addr/mkey/opcode), not a pacing/drain problem — surface it + its syndrome at once. */
+        if (eth_ct == DOCA_DPA_DEV_COMP_SEND_ERR) {
+            DOCA_DPA_DEV_LOG_INFO("ERR eth SEND_ERR seq=%lu syndrome=0x%x\n", seq, eth_syn);
+        } else if (seq <= 3 || seq % 500 == 0) {
+            DOCA_DPA_DEV_LOG_INFO(
+                "DBG recv#%lu eth_posted=%lu eth_done=%lu type=%d\n", seq, eth_posted, eth_done, (int)eth_ct);
         }
     }
     doca_dpa_dev_thread_finish();

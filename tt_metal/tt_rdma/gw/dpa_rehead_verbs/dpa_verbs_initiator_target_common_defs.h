@@ -44,6 +44,13 @@
  * max in-flight (RC RQ depth + ETH_MAX_INFLIGHT) so a wrapping WRITE never overwrites an un-egressed slot. */
 #define TT_RING (256)
 
+/* Header-ring slot STRIDE (bytes). The DPA-heap header-ring gather (ETH SQ SGE0) STALLS for slot>=1 when the
+ * slots are packed at the raw 46B header stride — an unaligned DPA-heap gather offset never completes (proven
+ * on silicon: pinning SGE0 to slot 0 while the landing MR SGE1 varies by 256B egresses fine; varying SGE0 by
+ * 46B stalls after frame 1). Spacing header slots on a 64B-aligned stride fixes it. The gather LENGTH stays
+ * TT_FRAME_HDR (46) — only the slot spacing is padded. Must be >= TT_FRAME_HDR and 64B-aligned. */
+#define TT_HDR_STRIDE (64)
+
 #if __cplusplus
 extern "C" {
 #endif
