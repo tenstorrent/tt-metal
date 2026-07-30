@@ -2794,6 +2794,12 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
 SITU_OPS = [(ttnn.softcap, 25.0), (ttnn.situ_gate, 4.0)]
 SITU_OP_IDS = ["softcap_beta25", "situ_gate_beta4"]
 
+# Outputs below this come from subnormal intermediates the SFPU flushes to zero, so
+# they are excluded from accuracy comparisons. Emulating flush-to-zero puts the true
+# boundary near 1e-36 for both ops at these betas; this keeps margin. Magnitudes this
+# small cannot matter to an activation bounded by beta.
+SITU_FLUSH_FLOOR = 1e-30
+
 
 @pytest.mark.parametrize(
     "input_shapes",
@@ -2864,13 +2870,63 @@ def test_situ_bfloat16_full_domain(ttnn_op, beta, device):
     assert result.to(torch.float32).abs().max().item() <= beta * (1.0 + 1e-3)
     assert not torch.isnan(result).any(), "finite input produced NaN"
 
-    # Relative error only where the reference is large enough to be meaningful.
-    # Below 1e-30 the SFPU flushes subnormal intermediates to zero, which cannot
-    # matter to an activation bounded by beta.
+    # Relative error only where the reference is large enough to be meaningful; see
+    # SITU_FLUSH_FLOOR.
     g = golden.to(torch.float32)
     r = result.to(torch.float32)
-    mask = g.abs() > 1e-30
+    mask = g.abs() > SITU_FLUSH_FLOOR
     rel_err = ((r[mask] - g[mask]).abs() / g[mask].abs()).max().item()
     assert rel_err < 1.5e-2, f"full bf16 domain max rel err {rel_err:.4e}"
 
     assert_with_pcc(r, g, pcc=0.9999)
+
+
+# Emulation over the full bf16 domain puts both ops at exactly 1.0 ULP, i.e. the
+# device result is always the correctly-rounded bf16 value or one step from it.
+# Confirm on hardware before tightening or trusting this further.
+SITU_ULP_THRESHOLD = 1
+
+
+@pytest.mark.parametrize("ttnn_op, beta", SITU_OPS, ids=SITU_OP_IDS)
+def test_situ_bfloat16_ulp(ttnn_op, beta, device):
+    """ULP accuracy over every representable bfloat16 value.
+
+    Deliberately kept in bfloat16 end to end rather than promoted to float32 as the
+    hardmish ULP test does. assert_with_ulp measures |actual - expected| / ULP(expected)
+    in the dtype it is handed, and these ops carry a polynomial tanh whose ~2.3e-3
+    relative error is ~19000 float32 ULP but under one bfloat16 ULP. Comparing in
+    float32 would produce a large number that says nothing; comparing in bfloat16
+    makes the bound tight.
+    """
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16).reshape(256, 256)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+
+    # Zero out inputs the op cannot reproduce exactly, the same way the hardmish ULP
+    # test excludes its known-bad regions (it masks a window out to ~2e-23, wider than
+    # this one). Both exclusions are documented in ckernel_sfpu_situ.h: NaN does not
+    # survive the polynomial's min(., 1.0) clamp, and tiny magnitudes drive subnormal
+    # intermediates that the SFPU flushes to zero.
+    #
+    # The floor is on the OUTPUT and it cannot be smallest_normal: the flush hits
+    # intermediates, not the result. x/beta already underflows while x is still normal,
+    # and the Horner chain's first step scales by 5.9e-3 on top of that. See
+    # SITU_FLUSH_FLOOR.
+    probe = golden_function(input_tensor, beta=beta, device=device).to(torch.float32)
+    excluded = torch.isnan(input_tensor.to(torch.float32)) | (probe.abs() < SITU_FLUSH_FLOOR)
+    input_tensor = torch.where(excluded, torch.zeros_like(input_tensor), input_tensor)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    golden = golden_function(input_tensor, beta=beta, device=device).to(torch.bfloat16)
+    result = ttnn.to_torch(ttnn_op(tt_in, beta)).to(torch.bfloat16)
+
+    # allow_nonfinite left at its default: after the mask both sides are finite, so a
+    # non-finite anywhere is a regression rather than an expected value.
+    assert_with_ulp(golden, result, ulp_threshold=SITU_ULP_THRESHOLD)

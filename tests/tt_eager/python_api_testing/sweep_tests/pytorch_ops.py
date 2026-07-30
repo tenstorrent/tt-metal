@@ -364,6 +364,15 @@ def hardmish(x, *args, **kwargs):
     return x * (x + 2.8).clamp(0.0, 5.0) / 5
 
 
+def softcap(x, *args, beta, **kwargs):
+    return beta * torch.tanh(x.to(torch.float32) / beta)
+
+
+def situ_gate(x, *args, beta, **kwargs):
+    xf = x.to(torch.float32)
+    return beta * torch.tanh(xf / beta) * torch.sigmoid(xf)
+
+
 def recip(x, *args, **kwargs):
     return torch.reciprocal(x)
 

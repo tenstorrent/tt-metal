@@ -522,6 +522,40 @@ def eltwise_hardmish(
     return ttnn_tensor_to_torch(t1)
 
 
+def eltwise_softcap(
+    x,
+    *args,
+    beta,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.softcap(t0, beta, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_situ_gate(
+    x,
+    *args,
+    beta,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.situ_gate(t0, beta, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
+
+
 def eltwise_multigammaln(
     x,
     *args,
