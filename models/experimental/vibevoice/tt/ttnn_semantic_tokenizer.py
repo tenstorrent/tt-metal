@@ -450,20 +450,25 @@ class TTConv1d:
             # act_block_h stays at the full per-core height (single block) while the work spreads
             # over many cores — no oversized act_block_h_override and none of its "not a valid
             # override" spam.  It only fits the wide-output stages: high-channel/tiny-width stages
-            # (out_w < VV_CONV_HS_MIN_OUTW) overflow L1 under HEIGHT_SHARDED, so they keep the
-            # act_block_h_override pin.  VV_CONV_HS_MAX_OUTW>0 caps the HS set, so HS coverage can be
+            # (out_w < VV_CONV_HS_MIN_OUTW) overflow L1 under HEIGHT_SHARDED, so they stay on auto
+            # (see the sub-threshold note below).  VV_CONV_HS_MAX_OUTW>0 caps the HS set, so HS coverage can be
             # made identical to the override pin's — isolating the layout mechanism from the pinned-set
             # change.  Default flipped on after the 4p_climate_100min traced render (0/81 anomalous
             # minutes, 0% clipping) validated it.
             _hs_max = int(os.environ.get("VV_CONV_HS_MAX_OUTW", "0"))
-            _hs = (
-                os.environ.get("VV_CONV_HS", "1") == "1"
-                and out_w >= int(os.environ.get("VV_CONV_HS_MIN_OUTW", "128"))
-                and (_hs_max == 0 or out_w <= _hs_max)
-            )
+            _hs_min = int(os.environ.get("VV_CONV_HS_MIN_OUTW", "128"))
+            _hs = os.environ.get("VV_CONV_HS", "1") == "1" and out_w >= _hs_min and (_hs_max == 0 or out_w <= _hs_max)
+            # Below the HS threshold the override pin is inert, so it is never passed: those outputs
+            # are a few tiles at most, conv2d spreads them one tile per core, and act_block_h
+            # collapses to that per-core height — a single act block either way, the same config auto
+            # picks.  An override wider than the per-core height only costs a "not a valid override"
+            # info line per shard-layout candidate per call (24/frame from the two outw=40 depthwise
+            # stages: acoustic-decoder stage 2 and semantic-encoder stage 4).  Verified bit-exact
+            # against the pinned path (streaming decode+encode SHA-256 equal over 8 frames, traced
+            # post-diffusion PCC 1.0, byte-identical demo wav), so there is no A/B switch.
             if _hs:
                 _conv_cfg = ttnn.Conv2dConfig(shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
-            elif out_w <= _sb_cap:
+            elif _hs_min <= out_w <= _sb_cap:
                 _conv_cfg = ttnn.Conv2dConfig(act_block_h_override=abh)
             if os.environ.get("VV_CONV_DBG") == "1":
                 print(
