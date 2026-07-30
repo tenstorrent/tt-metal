@@ -133,6 +133,21 @@ someone wants it: fold the candidate axis into the last dim (`[1, 1, T/R, 2(S+1)
 read. Trading two launches for bytes that are not the bottleneck is the wrong direction
 until Phase 9 says otherwise, and a fused kernel packs statistics tightly anyway.
 
+> **Amended 2026-07-30 (Phase 9, P4 — measured, traced).** Phase 9 says otherwise. The
+> percentage above is correct and irrelevant: the collective does not charge per useful
+> byte, it charges per **padded** byte, at exactly the same rate. Measured on `(2, 4)`,
+> `[1, 18, 2560, 1]` (184 KiB useful in a 5 760 KiB envelope) and `[1, 18, 2560, 32]`
+> (5 760 KiB all useful) both cost **348 µs** at `num_links = 1`. The folded layout costs
+> **46.8 µs** — 7.4×, ~300 µs per read, and it stops scaling with `S` altogether because
+> `2(S+1) ≤ 32` fits one tile column for every `S` this model uses.
+>
+> The two `ttnn.permute` calls cost ~40–120 µs of *device* time traced, not two launches
+> of host time. So "trading two launches for bytes that are not the bottleneck" was the
+> right analysis in the untraced regime — where the two extra launches at 152 µs cancel the
+> saving almost exactly — and the wrong one in the traced regime the model ships in. The
+> fix is on the backlog with that price on it; the fused-kernel argument in the last clause
+> still stands, and this is the cheaper of the two.
+
 **Statistics reduce in fp32.** `ttnn.all_reduce` reduces in bf16 unless the input is fp32
 (`all_reduce_nanobind.cpp:48`). Measured over 186 chained reads at `d = 7168` on `(2,4)`:
 fp32 stats 0.9999500, bf16 stats 0.9999401. The bf16 number lands on the single-device
@@ -162,6 +177,14 @@ site still needs its own dot against the sealed set. Phase 7 measured the split 
 faster on one device; whether that survives 2× the collectives is a Phase-9 measurement,
 not a claim to make here. If it needs saving, `inter_block` can batch its 24 dot tensors
 into one `[1, 24(S+1), T/R, 1]` reduction and come down to 26.
+
+> **Amended 2026-07-30 (Phase 9, P5 — measured, traced, `(2, 4)`).** It survives:
+> **1.47×**, 3 274.6 → 2 228.3 µs per read site over a full 24-site block, against 1.50× on
+> one device. Amortizing the sealed half's RMS pass is worth ~1 047 µs per site and the
+> extra collective costs ~350 µs, so this section's framing — the split form is *worse* on
+> collectives — is true and does not decide anything. It needs no saving; batching the 24
+> dot tensors into one reduction (49 → 26) is now an optimization on top of a win, and P4's
+> fold would cut the same cost by more.
 
 **Per-axis topology.** `topology` is one `ttnn.Topology` per mesh axis, not a scalar —
 Galaxy prefill is `[LINE, RING]`. This is not a precaution: the analog already carries the
@@ -218,3 +241,12 @@ collectives at ~9 ms per forward untraced, which is the largest single lever mea
 far; whether the 31-of-32 wasted stats columns ever show up (§4 says 0.595 %, so probably
 not); `num_links=1` → 2. Left to Galaxy: `(8,4)` with `[LINE, RING]`, where the payload
 halves per device and the call count does not.
+
+> **Answered 2026-07-30 (Phase 9).** All three, and I got two of the three predictions
+> backwards. The split form survives at **1.47×** without any rescue, so batching the dots
+> is an optimization rather than the largest lever. The 31-of-32 wasted columns **do** show
+> up — 7.4× on the collective, ~300 µs per read traced — because padding is billed at the
+> same rate as payload; "so probably not" was reasoning from a byte ratio about a cost that
+> is not proportional to useful bytes. And `num_links = 1 → 2` is worth 1.48× only while
+> the padding is there, so it and the fold are alternatives. Full record:
+> `bringup_log.md` §Phase 9 perf loop.
