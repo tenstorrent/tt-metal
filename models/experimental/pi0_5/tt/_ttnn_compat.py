@@ -125,7 +125,30 @@ def kv_sdpa(
             kwargs["prefix_valid_tiles"] = list(prefix_valid_tiles)
         return ttnn.kv_sdpa(q, k, v, **kwargs)
 
+    # ---- Masked fallback at a tiny tile: run the attention at the PREFIX's tile height -------------
+    # kv_sdpa reads a 32x32 prefix and a 16x32 suffix as SEPARATE operands, but the general SDPA needs
+    # one concatenated K/V and imposes two constraints the tiny-tile geometry violates:
+    #   "All TILE-layout concat inputs must share the same tile shape (got 16x32 vs 32x32)"
+    #   "Inputs to SDPA must have the same tile size"
+    # So promote q / suffix-k / suffix-v / mask to the prefix tile, run SDPA there (exactly the geometry
+    # the TILE_HEIGHT=32 path already validates), then bring the output back down. Only the suffix-sized
+    # tensors are retiled -- the 1024-row prefix is reused as-is, which is what keeps this affordable.
+    q_tile_in = tuple(q.get_tile().tile_shape)
+    q_rows = q.shape[-2]
+    promoted = False
     if past_k is not None and past_v is not None:
+        p_tile = tuple(past_k.get_tile().tile_shape)
+        if q_tile_in != p_tile:
+            tgt = ttnn.Tile((int(p_tile[0]), int(p_tile[1])))
+            q = ttnn.tilize(q, tile=tgt, dtype=q.dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+            k = ttnn.tilize(k, tile=tgt, dtype=k.dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+            v = ttnn.tilize(v, tile=tgt, dtype=v.dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+            if attn_mask is not None and tuple(attn_mask.get_tile().tile_shape) != p_tile:
+                # SDPA requires the mask in DRAM ("When mask is provided to SDPA, it must be in DRAM").
+                attn_mask = ttnn.tilize(
+                    attn_mask, tile=tgt, dtype=attn_mask.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+            promoted = True
         k = ttnn.concat([past_k, k], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         v = ttnn.concat([past_v, v], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -137,7 +160,19 @@ def kv_sdpa(
     }
     if compute_kernel_config is not None:
         kwargs["compute_kernel_config"] = compute_kernel_config
-    return ttnn.transformer.scaled_dot_product_attention(q, k, v, **kwargs)
+    out = ttnn.transformer.scaled_dot_product_attention(q, k, v, **kwargs)
+    if promoted:
+        # Back to the model tile, trimming the rows the promotion padded (those q rows are independent,
+        # so whatever they computed is simply discarded).
+        out = ttnn.tilize(
+            out,
+            tile=ttnn.Tile((int(q_tile_in[0]), int(q_tile_in[1]))),
+            dtype=out.dtype,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        if out.shape[-2] != q_rows:
+            out = ttnn.slice(out, [0, 0, 0, 0], [out.shape[0], out.shape[1], q_rows, out.shape[-1]])
+    return out
 
 
 def decode_all_supported() -> bool:
