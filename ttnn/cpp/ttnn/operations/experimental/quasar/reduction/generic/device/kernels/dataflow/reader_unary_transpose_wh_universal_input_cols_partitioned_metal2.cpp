@@ -18,6 +18,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "experimental/kernel_args.h"
+#include "api/debug/dprint.h"  // [DIAG avgpool x1.15] remove after
 
 void kernel_main() {
     uint32_t col_start_tile_id = get_arg(args::col_start_tile_id);
@@ -39,6 +40,38 @@ void kernel_main() {
 
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
+
+    // [DIAG avgpool x1.15 -- remove after] What scaler did the DM actually generate into GAPOOL's SrcB CB?
+    // The DM sees its own L1 writes (unlike the stale TRISC read), so this is the reliable readout, and it's
+    // a plain DPRINT (no tile-writing, which is unsupported on Quasar). Decode:
+    //   scaler_bits (fp32): 1065353216 = 1.0   | 1017589509 = 1/49 (0x3ca72f05)
+    //   cb halfwords (bf16): 16256 = 1.0        | 15527 = 1/49 (0x3ca7)
+    // prepare_reduce_scaler writes the scaler to ROW 0 of each face (offsets 0 / 256 / 512 / 768 for a
+    // 4-face bf16 tile). The front may hold tile metadata, so dump both the first halfwords and the
+    // per-face row-0 offsets. Quasar-gated to avoid perturbing WH.
+#ifdef ARCH_QUASAR
+    {
+        DataflowBuffer scaler_cb_diag(dfb::scaler);
+        volatile tt_l1_ptr uint16_t* sp = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scaler_cb_diag.get_read_ptr());
+        DPRINT("PRS scaler_bits={}\n", (uint32_t)scaler_bits);
+        DPRINT(
+            "PRS cb0-7={} {} {} {} {} {} {} {}\n",
+            (uint32_t)sp[0],
+            (uint32_t)sp[1],
+            (uint32_t)sp[2],
+            (uint32_t)sp[3],
+            (uint32_t)sp[4],
+            (uint32_t)sp[5],
+            (uint32_t)sp[6],
+            (uint32_t)sp[7]);
+        DPRINT(
+            "PRS faceRow0 f0={} f1={} f2={} f3={}\n",
+            (uint32_t)sp[0],
+            (uint32_t)sp[256],
+            (uint32_t)sp[512],
+            (uint32_t)sp[768]);
+    }
+#endif
 
     const auto tensor_accessor = TensorAccessor(tensor::input);
 
