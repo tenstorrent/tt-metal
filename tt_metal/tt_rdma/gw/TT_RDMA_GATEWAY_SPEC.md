@@ -260,10 +260,20 @@ HW-offloaded eswitch flow → p0.`
 - Code: `dpa_rehead_verbs/dpa_verbs_initiator_target_{sample,kernels_dev}.c`. Requester
   `tt_p15_requester.c`. Steering `tt_gw_steer.sh` (pre-warm the offloaded flow).
 
-**Remaining P-GW1:** (c) measure added latency (single WRITE_IMM RTT vs native RoCE; target single-digit µs)
-and bandwidth (timed run; single-EU DPA ETH-SQ ≈ 0.95 Mpps ≈ 7.8 G @1KB — bandwidth needs (d)); (d) raise
-bandwidth to line rate via the A+B hybrid (DPA EU writes a compact HW-TX/`doca_eth_txq` descriptor, NIC HW
-gathers) and/or N-EU fan-out; (e) BH-pool byte-exact landing (bring up the drainer pool, confirm write_ok=N).
+**Remaining P-GW1:** (c) DONE (§10 above: p50 3.45µs, ~0.3 Mpps single-EU); (d) raise
+bandwidth to line rate via N-EU DPA-Verbs ETH-SQ fan-out (the A+B `doca_eth_txq` hybrid is ruled out — §11 gate);
+(e) **DONE — BH-pool byte-exact landing VALIDATED on silicon (2026-07-29).**
+
+**(e) result — full P-GW1 event-driven path, live drainer pool:** `host tt_p15_requester (single-slot, TT_RING=1)
+50000 WRITE_IMM 256B → SF RC terminate → DPA event-driven re-head → p0 (HW-offloaded steer) → BH 8-worker pool`:
+requester **50000/50000 completed**; pool **processed=50000 / delivered=50000 (100% kept up), lapped=0, eth
+drop=0, exactly-once HOLDS**; landing zone `core(1,3):0x70000 = 03020100 07060504 0b0a0908 0f0e0d0c` = the exact
+ramp payload `00 01 02 … 0f` → **byte-exact**. (Pool "LAND FAIL" = the `TTWR`-magic assertion, documented
+non-failure.) **Gotcha:** the stock `tt_p15_requester` uses a ring offset `(i%TT_RING)*plen` (TT_RING=1024) that
+overruns the target's single-slot MR → "remote access error wr_id=1" + inflated delivered; rebuild single-slot
+(`sed 's/#define TT_RING 1024/#define TT_RING 1/'`). DPU target launched detached via
+`systemd-run --unit=ttgw` (one-shot per connection; a plain `nohup &` over ssh gets SIGHUP'd). This closes the
+correctness linchpin: the gateway datapath is byte-exact + exactly-once end to end.
 
 ## 11. Reconciled roadmap (from `BW_PLAN.md` + `E2E_TEST_PLAN.md`)
 
