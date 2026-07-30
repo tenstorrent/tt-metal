@@ -4,15 +4,15 @@
   "workflows_sampled": ["pr-gate.yaml", "runtime-unit-tests.yaml"],
   "in_flight_prs": [
     {
-      "branch": "silencer/matmul-allowed-worker-cores-spam",
-      "pattern": "allowed_worker_cores not populated",
+      "branch": "silencer/matmul-normalize-program-config",
+      "pattern": "allowed_worker_cores not populated / normalize_program_config missing in CCL matmul ops",
       "issue": "#48660",
       "status": "pr-opening",
-      "commit": "4c427c67"
+      "commit": "05bbb615"
     }
   ],
   "backlog_cursor": {
-    "next_category": 1,
-    "note": "Scan compile warnings next - issue #47891 was closed, check for remaining compile warnings in latest runs"
+    "next_category": 2,
+    "note": "Next: scan compile warnings (JIT/device-kernel) - check for SFPU deprecated warnings from LLK level"
   }
 }
