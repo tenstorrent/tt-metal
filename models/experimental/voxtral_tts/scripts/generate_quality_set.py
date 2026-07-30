@@ -8,11 +8,14 @@ serving does and what no per-block PCC or `compare_codes()` can tell you. Everyt
 appears after tens of autoregressive steps (drift, repetition, early or absent [END_AUDIO])
 is visible here and nowhere else.
 
-    HF_MODEL=<export dir> python .../scripts/generate_quality_set.py --out <dir>
+    HF_MODEL=<export dir> python .../scripts/generate_quality_set.py
     ... --cases 2,3            # just those fixture cases
     ... --max-frames 700       # override the per-case budget
+    ... --out <dir>            # default is voxtral_tts/generated/
 
-Writes one WAV per case plus `results.json`, which `score_quality_set.py` consumes.
+Writes one WAV per case plus `results.json`, which `score_quality_set.py` consumes. Output defaults
+to `voxtral_tts/generated/`, which is gitignored -- the clips are large and derive from CC BY-NC
+weights, so they stay local.
 
 THE FRAME BUDGET IS A MEASUREMENT TRAP. Frames are 12.5 Hz and speech runs ~18 chars/s, so the
 676-char fixture paragraphs need ~460 frames. Capping at 200 truncates them mid-sentence and the
@@ -33,8 +36,11 @@ import ttnn
 from models.experimental.voxtral_tts.reference import voxtral_pipeline_ref as pref
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import FRAME_RATE, TtVoxtralPipeline
 
-FIXTURE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "tests", "prompt_fixture.json")
+_HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FIXTURE = os.path.join(_HERE, "tests", "prompt_fixture.json")
+# `generated/` is gitignored (voxtral_tts/.gitignore) -- audio is large and derives from CC BY-NC
+# weights, so it must never be committed. Default here so the clips are easy to find and play.
+DEFAULT_OUT = os.path.join(_HERE, "generated")
 
 
 def frame_budget(text):
@@ -75,7 +81,7 @@ def artifacts(wav):
 @torch.no_grad()
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="/tmp/voxtral_quality")
+    ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--cases", default="all", help='"all" or e.g. "0,1,2"')
     ap.add_argument("--max-frames", type=int, default=0, help="0 = derive from text length")
     ap.add_argument("--tag", default="", help="suffix for WAV/results filenames")
