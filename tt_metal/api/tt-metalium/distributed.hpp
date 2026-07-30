@@ -113,15 +113,17 @@ void Synchronize(
     ttsl::optional_reference<MeshCommandQueue> mesh_cq,
     ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
-[[deprecated("Use BeginTraceCapture(MeshCommandQueue&) instead. Pass the command queue object, not a raw id.")]]
+[[deprecated(
+    "Use BeginTraceCapture(MeshCommandQueue&) instead. BeginTraceCapture(MeshDevice*, uint8_t) will be removed after "
+    "September 9th, 2026.")]]
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
 // Takes the device by pointer, so the reference-taking overload above is the only candidate for a MeshDevice lvalue
 // and this one the only candidate for a MeshDevice*. That keeps Synchronize(device, std::nullopt, ...) unambiguous
 // without any tie-breaking machinery.
 [[deprecated(
-    "Use Synchronize(MeshDevice&, ttsl::optional_reference<MeshCommandQueue>, ...) instead. Pass the device by "
-    "reference and the command queue object (or std::nullopt for all queues), not a raw id.")]]
+    "Use Synchronize(MeshDevice&, ttsl::optional_reference<MeshCommandQueue>, ...) instead, passing std::nullopt for "
+    "all queues. Synchronize(MeshDevice*, std::optional<uint8_t>, ...) will be removed after September 9th, 2026.")]]
 void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids = {});
