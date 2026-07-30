@@ -56,9 +56,7 @@ protected:
 
 TEST_F(SimulatorFixture, SimulatorDeviceInitialization) {
     // Verify that all devices are properly initialized in simulator mode
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = devices_.at(id);
-
+    for (auto& mesh_device : this->devices_) {
         // Check that device is valid
         EXPECT_NE(mesh_device, nullptr);
 
@@ -85,8 +83,7 @@ TEST_F(SimulatorFixture, QuasarStaticTlbReadWrite) {
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     constexpr uint32_t value32 = 0xDEADBEEF;
 
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        const auto mesh_device = devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         const ChipId chip_id = mesh_device->get_devices()[0]->id();
         const auto& sdesc = cluster.get_soc_desc(chip_id);
 
