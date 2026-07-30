@@ -6,11 +6,13 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
 #include <cstdint>
 #include <utility>
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
+namespace sched = ttnn::ccl::schedule;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -76,212 +78,137 @@ void kernel_main() {
     uint32_t sem_target = 0;
     uint32_t sem2_target = 0;
 
-    for (uint32_t b = 0; b < input_tensor_B; ++b) {
+    // The ring schedule — slice walk, per-step flags, even/odd chunk split and the tile-id walkers —
+    // comes from the shared header, so this reader, the compute kernel and the writer are driven by
+    // ONE definition. Previously each carried its own copy; the reader's and the compute kernel's
+    // step state machines were byte-identical, and a divergence between any two of them shows up as
+    // a CB-wait deadlock or silently mis-reduced output.
+    static_assert(
+        sched::is_supported_scatter_dim(dim), "ring reduce-scatter supports dim 1, 2 or 3 (dim 0 is dim_zero_*)");
+    sched::RingRsSchedule schedule(
+        ring_size, input_tensor_B, slice_C, tile_granularity, start_tiles_read, start_tiles_to_read, direction);
+    sched::SliceRowWalker input_walker(slice_Wt, input_tensor_Wt);
+    sched::SliceRowWalker interm_walker(slice_Wt, input_tensor_Wt);
+    sched::SequentialTileWalker output_walker;
+
+    while (schedule.next_batch()) {
+        const uint32_t b = schedule.batch_idx();
         if constexpr (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
         }
         uint32_t batch_offset = input_batch_num_pages * b;
+        // Per-batch: every batch restarts the ring walk at the same first slice.
+        sched::RingSliceCursor slice_cursor(my_chip_id, ring_size, direction);
 
-        // Loop over the slices, starting from the chip half-way across the ring, and working backwards
-        // until we get to ourselves.
-        //
-        // In some iters we process a full tensor slice, and sometimes only half slice.
-        // In the 1st iter we don't perform a reduction, in other iters we reduce 2 tensors.
-        // In the last iter we reduce 3 tensors (local + remote from fwd device + remote from bwd device).
-        // In the last iter the writer outputs to local output tensor, in other iters it sends to next chip.
-        // These behaviors are controlled by a "state machine" to avoid code duplication in the loop body.
-        constexpr uint32_t ring_size_by_2 = ring_size / 2;
-        int slice_idx = my_chip_id + ring_size_by_2;  // start with slice belonging to device half-way across in ring
-        uint32_t num_iters = ring_size_by_2 + 1;
-        for (uint32_t i = 0; i < num_iters; ++i) {
-            // State machine for control variables
-            bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, reduce_output;
-            if (i == 0) {
-                even_chunks = direction;     // process the even chunks (half the tensor slice)
-                odd_chunks = !direction;     // process the odd chunks (other half of tensor slice)
-                reduce_even_chunks = false;  // (input_tensor + interm_tensor) or (input_tensor)
-                reduce_odd_chunks = false;   // (input_tensor + interm_tensor) or (input_tensor)
-                reduce_output =
-                    false;  // (input_tensor + interm_tensor + output_tensor) or (input_tensor + interm_tensor)
-            } else if (i == ring_size_by_2) {
-                even_chunks = direction;
-                odd_chunks = !direction;
-                reduce_even_chunks = even_chunks;
-                reduce_odd_chunks = odd_chunks;
-                reduce_output = true;
-            } else if (i == 1) {
-                even_chunks = true;
-                odd_chunks = true;
-                reduce_even_chunks = direction;
-                reduce_odd_chunks = !direction;
-                reduce_output = false;
-            } else {
-                even_chunks = true;
-                odd_chunks = true;
-                reduce_even_chunks = even_chunks;
-                reduce_odd_chunks = odd_chunks;
-                reduce_output = false;
-            }
+        // Walk the slices, starting from the chip half-way across the ring and working back to
+        // ourselves. Some steps process a full tensor slice, some only half. Step 0 performs no
+        // reduction; middle steps reduce 2 tensors; the last reduces 3 (local + remote from the fwd
+        // device + remote from the bwd device) and the writer lands it in the local output tensor
+        // rather than sending it on. All of that now comes from schedule.flags().
+        while (schedule.next_step()) {
+            const bool reduce_output = schedule.flags().reduce_output;
+            const uint32_t slice_idx = slice_cursor.wrap();
 
-            // below code does 'slice_idx = slice_idx % ring_size'
-            if (slice_idx < 0) {
-                slice_idx += ring_size;
-            } else if (slice_idx >= (int)ring_size) {
-                slice_idx = (uint32_t)slice_idx - ring_size;
-            }
-
-            // address incrementer for input_tensor and interm_tensor
-            uint32_t input_tile_id_start, interm_tile_id_start;
-            if constexpr (dim == 3) {
-                input_tile_id_start = slice_idx * slice_Wt + batch_offset;
-                interm_tile_id_start = slice_idx * slice_Wt;
-            } else if constexpr (dim == 2) {
-                input_tile_id_start = slice_idx * slice_Ht * slice_Wt + batch_offset;
-                interm_tile_id_start = slice_idx * slice_Ht * slice_Wt;
-            } else if constexpr (dim == 1) {
-                input_tile_id_start = slice_idx * slice_C * slice_Ht * slice_Wt + batch_offset;
-                interm_tile_id_start = slice_idx * slice_C * slice_Ht * slice_Wt;
-            } else {
-                ASSERT(false);
-            }
-            uint32_t input_pages_read_in_row = start_pages_read_in_row,
-                     interm_pages_read_in_row = start_pages_read_in_row;
-            uint32_t input_row_offset = start_row_offset, interm_row_offset = start_row_offset;
-            auto get_next_input_tile_id = [&]() -> uint32_t {
-                uint32_t tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
-                ++input_pages_read_in_row;
-                if (input_pages_read_in_row == slice_Wt) {
-                    input_row_offset += input_tensor_Wt;
-                    input_pages_read_in_row -= slice_Wt;
-                }
-                return tile_id;
-            };
-            auto get_next_interm_tile_id = [&]() -> uint32_t {
-                uint32_t tile_id = interm_tile_id_start + interm_row_offset + interm_pages_read_in_row;
-                ++interm_pages_read_in_row;
-                if (interm_pages_read_in_row == slice_Wt) {
-                    interm_row_offset += input_tensor_Wt;
-                    interm_pages_read_in_row -= slice_Wt;
-                }
-                return tile_id;
-            };
-
-            // address incrementer for output_tensor
-            uint32_t output_tile_id_start = b * output_batch_num_pages;
-            uint32_t output_tiles_read = start_tiles_read;
-            auto get_next_output_tile_id = [&]() -> uint32_t { return output_tile_id_start + (output_tiles_read++); };
+            const uint32_t slice_offset = sched::slice_tile_offset(dim, slice_idx, slice_C, slice_Ht, slice_Wt);
+            input_walker.set_base(slice_offset + batch_offset);
+            interm_walker.set_base(slice_offset);
+            output_walker.set_base(b * output_batch_num_pages);
 
             uint32_t chunk_count = 0;
-            for (uint32_t c = 0; c < slice_C; ++c) {
+            while (schedule.next_channel()) {
                 // reset addr counters
-                input_pages_read_in_row = interm_pages_read_in_row = start_pages_read_in_row;
-                input_row_offset = interm_row_offset = start_row_offset;
-                output_tiles_read = start_tiles_read;
-                uint32_t tiles_read = start_tiles_read;
-                uint32_t total_tiles_to_read = start_tiles_to_read;
+                input_walker.reset_offsets(start_pages_read_in_row, start_row_offset);
+                interm_walker.reset_offsets(start_pages_read_in_row, start_row_offset);
+                output_walker.reset_offsets(start_tiles_read);
 
                 /**
                  * Interleave forward and backward ring reads
                  * forward handles even chunks, backward handles odd chunks (1 chunk = tile_granularity tiles)
                  * after ring_size-1 steps, we've transferred all tiles
                  */
-                bool is_even_chunk = true;
-                while (tiles_read < total_tiles_to_read) {
-                    uint32_t tiles_to_read = 0;
-                    uint32_t tiles_remaining = total_tiles_to_read - tiles_read;
-                    if (is_even_chunk) {
-                        tiles_to_read = std::min(tiles_remaining / 2, tile_granularity);
-                    } else {
-                        tiles_to_read = std::min(tiles_remaining, tile_granularity);
+                while (schedule.next_chunk()) {
+                    const uint32_t tiles_to_read = schedule.tiles_this_chunk();
+
+                    if (schedule.skip()) {
+                        // Not this worker's parity this step: keep the walkers in step with the
+                        // schedule and move on.
+                        input_walker.advance(tiles_to_read);
+                        interm_walker.advance(tiles_to_read);
+                        output_walker.advance(tiles_to_read);
+                        continue;
                     }
 
-                    if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
-                        // Skip this chunk
-                        tiles_read += tiles_to_read;
-                        for (uint32_t k = 0; k < tiles_to_read; ++k) {
-                            get_next_input_tile_id();
-                            get_next_interm_tile_id();
-                            get_next_output_tile_id();
-                        }
-                    } else {
-                        const bool reduce_interm =
-                            (is_even_chunk && reduce_even_chunks) || (!is_even_chunk && reduce_odd_chunks);
-                        const uint32_t cb_in =
-                            reduce_interm ? cb_input_id : cb_reader_output_id;  // to compute or writer
+                    const bool reduce_interm = schedule.reduce_interm();
+                    const uint32_t cb_in = reduce_interm ? cb_input_id : cb_reader_output_id;  // to compute or writer
 
-                        // Wait for intermediate_tensor data to be available
-                        if (reduce_interm) {
-                            if (chunk_count == 0) {
+                    // Wait for intermediate_tensor data to be available
+                    if (reduce_interm) {
+                        if (chunk_count == 0) {
+                            noc_semaphore_wait_min(
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                            ++sem_target;
+                            if (reduce_output) {
                                 noc_semaphore_wait_min(
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
-                                ++sem_target;
-                                if (reduce_output) {
-                                    noc_semaphore_wait_min(
-                                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem),
-                                        sem2_target + 1);
-                                    ++sem2_target;
-                                }
+                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem), sem2_target + 1);
+                                ++sem2_target;
                             }
-                            chunk_count = (chunk_count == chunks_per_sync - 1) ? 0 : (chunk_count + 1);
                         }
+                        chunk_count = (chunk_count == chunks_per_sync - 1) ? 0 : (chunk_count + 1);
+                    }
 
-                        cb_reserve_back(cb_in, tile_granularity);
-                        uint32_t l1_write_addr = get_write_ptr(cb_in);
-                        uint32_t interm_l1_write_addr, interm2_l1_write_addr;
+                    cb_reserve_back(cb_in, tile_granularity);
+                    uint32_t l1_write_addr = get_write_ptr(cb_in);
+                    uint32_t interm_l1_write_addr, interm2_l1_write_addr;
+                    if (reduce_interm) {
+                        cb_reserve_back(cb_interm_id, tile_granularity);
+                        interm_l1_write_addr = get_write_ptr(cb_interm_id);
+                        if (reduce_output) {
+                            cb_reserve_back(cb_interm2_id, tile_granularity);
+                            interm2_l1_write_addr = get_write_ptr(cb_interm2_id);
+                        }
+                    }
+                    for (uint32_t j = 0; j < tiles_to_read; ++j) {
+                        auto input_tile_id = input_walker.next();
+                        auto interm_tile_id = interm_walker.next();
+                        auto output_tile_id = output_walker.next();
+
+                        // input_tensor from reader -> compute or writer
+                        uint64_t noc_read_addr = input_tensor_accessor.get_noc_addr(input_tile_id);
+                        noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                        l1_write_addr += page_size;
+
                         if (reduce_interm) {
-                            cb_reserve_back(cb_interm_id, tile_granularity);
-                            interm_l1_write_addr = get_write_ptr(cb_interm_id);
-                            if (reduce_output) {
-                                cb_reserve_back(cb_interm2_id, tile_granularity);
-                                interm2_l1_write_addr = get_write_ptr(cb_interm2_id);
-                            }
-                        }
-                        for (uint32_t j = 0; j < tiles_to_read; ++j) {
-                            auto input_tile_id = get_next_input_tile_id();
-                            auto interm_tile_id = get_next_interm_tile_id();
-                            auto output_tile_id = get_next_output_tile_id();
-
-                            // input_tensor from reader -> compute or writer
-                            uint64_t noc_read_addr = input_tensor_accessor.get_noc_addr(input_tile_id);
-                            noc_async_read(noc_read_addr, l1_write_addr, page_size);
-                            l1_write_addr += page_size;
-
-                            if (reduce_interm) {
-                                // interm_tensor from reader -> compute
-                                uint64_t interm_noc_read_addr = interm_tensor_accessor.get_noc_addr(interm_tile_id);
-                                noc_async_read(interm_noc_read_addr, interm_l1_write_addr, page_size);
-                                interm_l1_write_addr += page_size;
-
-                                if (reduce_output) {
-                                    // output_tensor from reader -> compute
-                                    uint64_t output_noc_read_addr = output_tensor_accessor.get_noc_addr(output_tile_id);
-                                    noc_async_read(output_noc_read_addr, interm2_l1_write_addr, page_size);
-                                    interm2_l1_write_addr += page_size;
-                                }
-                            }
-                        }
-                        tiles_read += tiles_to_read;
-                        noc_async_read_barrier();
-                        cb_push_back(cb_in, tile_granularity);
-                        if (reduce_interm) {
-                            cb_push_back(cb_interm_id, tile_granularity);
+                            // interm_tensor from reader -> compute
+                            uint64_t interm_noc_read_addr = interm_tensor_accessor.get_noc_addr(interm_tile_id);
+                            noc_async_read(interm_noc_read_addr, interm_l1_write_addr, page_size);
+                            interm_l1_write_addr += page_size;
 
                             if (reduce_output) {
-                                cb_push_back(cb_interm2_id, tile_granularity);
+                                // output_tensor from reader -> compute
+                                uint64_t output_noc_read_addr = output_tensor_accessor.get_noc_addr(output_tile_id);
+                                noc_async_read(output_noc_read_addr, interm2_l1_write_addr, page_size);
+                                interm2_l1_write_addr += page_size;
                             }
                         }
-                    }  // if skip or process
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_in, tile_granularity);
+                    if (reduce_interm) {
+                        cb_push_back(cb_interm_id, tile_granularity);
 
-                    is_even_chunk = !is_even_chunk;
-                }  // while total_tiles_to_read
+                        if (reduce_output) {
+                            cb_push_back(cb_interm2_id, tile_granularity);
+                        }
+                    }
+                }  // while chunks
 
-                input_tile_id_start += input_channel_num_pages;
-                interm_tile_id_start += input_channel_num_pages;
-                output_tile_id_start += output_channel_num_pages;
+                input_walker.bump_base(input_channel_num_pages);
+                interm_walker.bump_base(input_channel_num_pages);
+                output_walker.bump_base(output_channel_num_pages);
             }
 
             // Next slice idx
-            slice_idx = direction ? (slice_idx - 1) : (slice_idx + 1);
+            slice_cursor.advance();
         }
 
         // Reset the semaphore before the next batch
