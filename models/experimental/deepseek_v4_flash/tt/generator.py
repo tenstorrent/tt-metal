@@ -265,21 +265,21 @@ class DeepSeekV4Generator:
         return list(self.tokenizer(rendered)["input_ids"])
 
     # -- decode ----------------------------------------------------------------- #
-    def step(self, sid: int | None, token_id: int, pos: int) -> ttnn.Tensor:
+    def step(self, sid: int | None, token_id: int, pos: int) -> torch.Tensor:
         """Feed ``token_id`` at absolute position ``pos`` of ``sid``'s sequence and
-        return the device logits ``[1, 1, vocab]``.
+        return the host logits ``[1, 1, vocab]``.
 
-        The returned tensor is the trace's persistent output buffer and is overwritten
-        by the next step, so consume it before decoding the following token.
+        Traced steps stream their logits back over the model's D2H socket, so this call
+        is where the step synchronizes.
         """
         self.activate_session(sid)
         if self.traced:
             return self.model.decode_traced(int(token_id), int(pos))
-        return self.lm_head(self.model.decode(int(token_id), int(pos), self.rope))
+        return ttnn.to_torch(self.lm_head(self.model.decode(int(token_id), int(pos), self.rope)))
 
     def logits(self, sid: int | None, token_id: int, pos: int) -> torch.Tensor:
-        """:meth:`step` read back to host as ``[vocab]`` float32 (this is the sync)."""
-        return ttnn.to_torch(self.step(sid, token_id, pos)).reshape(-1).float()
+        """:meth:`step`'s logits as a flat ``[vocab]`` float32 row."""
+        return self.step(sid, token_id, pos).reshape(-1).float()
 
     def step_argmax(self, sid: int | None, token_id: int, pos: int) -> int:
         return int(self.logits(sid, token_id, pos).argmax().item())

@@ -109,8 +109,9 @@ class UserSession:
     pos: int = 0
     next_token: int = 0
     done: bool = False
-    # Device-side argmax of the step already in flight, read back a round later.
-    pending: ttnn.Tensor | None = None
+    # Whether this user has a step in flight, to be read off the output socket a round
+    # later. Reads are FIFO, so users must be awaited in the order they were scheduled.
+    pending: bool = False
 
     @property
     def prompt_len(self) -> int:
@@ -125,26 +126,27 @@ def _tokenize_prompt(tokenizer, text: str) -> list[int]:
 def _decode(model, session: UserSession, token_id: int, pos: int) -> int:
     """One blocking traced step for ``session`` (``lm_head`` is folded into the trace)."""
     model.activate_session(session.sid)
-    logits = ttnn.to_torch(model.decode_traced(int(token_id), int(pos))).reshape(1, -1).float()
+    logits = model.decode_traced(int(token_id), int(pos)).reshape(1, -1).float()
     return int(logits[0].argmax().item())
 
 
-def _schedule(model, session: UserSession, token_id: int, pos: int) -> ttnn.Tensor:
-    """Enqueue one traced step plus its on-device ``argmax`` without waiting for it.
+def _schedule(model, session: UserSession, token_id: int, pos: int) -> None:
+    """Enqueue one traced step without waiting for its output.
 
-    ``decode_traced`` replays the traces with ``blocking=False`` and the argmax is
-    enqueued on the same command queue, so it is ordered after the traces and reads
-    the logits before the *next* caller overwrites that persistent buffer. Returns the
-    (still in-flight) ``[1, 1, 1]`` token tensor to be read back later.
+    The traces replay with ``blocking=False`` and stream their logits back over the D2H
+    socket, so several steps can be in flight at once; :func:`_await` picks them up in
+    dispatch order.
     """
     model.activate_session(session.sid)
-    logits = model.decode_traced(int(token_id), int(pos))  # [1, 1, vocab]
-    return ttnn.argmax(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True)
+    model.decode_traced_async(int(token_id), int(pos))
 
 
-def _await(token_tt: ttnn.Tensor) -> int:
-    """Read back a scheduled step's sampled id (syncs the queue up to this point)."""
-    return int(ttnn.to_torch(token_tt).reshape(-1)[0].item())
+def _await(model) -> int:
+    """Read back the oldest scheduled step's logits and sample from them.
+
+    The socket read blocks until that step's output has landed, so this is the sync.
+    """
+    return int(model.read_decoded_output().reshape(1, -1).float()[0].argmax().item())
 
 
 @pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
@@ -236,9 +238,9 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
             break
         t0 = time.perf_counter()
         for session in active:
-            if session.pending is not None:
-                session.next_token = _await(session.pending)
-                session.pending = None
+            if session.pending:
+                session.next_token = _await(model)
+                session.pending = False
                 session.generated.append(session.next_token)
                 if session.next_token == eos_id:
                     logger.info(f"user {session.user_id} hit EOS at pos {session.pos}; stopping")
@@ -248,10 +250,11 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
                 logger.warning(f"user {session.user_id} hit max_seq {max_seq}; stopping")
                 session.done = True
                 continue
-            session.pending = _schedule(model, session, session.next_token, session.pos)
+            _schedule(model, session, session.next_token, session.pos)
+            session.pending = True
             session.pos += 1
         elapsed = time.perf_counter() - t0
-        scheduled = sum(1 for s in active if s.pending is not None)
+        scheduled = sum(1 for s in active if s.pending)
         decode_time += elapsed
         decode_tokens += scheduled
         total_time += elapsed
@@ -269,11 +272,11 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
 
     # Drain the last in-flight step of every user.
     for session in sessions:
-        if session.pending is not None:
+        if session.pending:
             t0 = time.perf_counter()
-            session.next_token = _await(session.pending)
+            session.next_token = _await(model)
             total_time += time.perf_counter() - t0
-            session.pending = None
+            session.pending = False
             session.generated.append(session.next_token)
 
     for session in sessions:

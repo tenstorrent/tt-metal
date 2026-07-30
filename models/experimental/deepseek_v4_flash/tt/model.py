@@ -149,6 +149,39 @@ _PKT_FIFO_BYTES = 64 * _PKT_PCIE_ALIGNMENT
 # cross-submesh direct sockets use.
 _PKT_SOCKET_CORE = (0, 2)
 
+# --- Device -> host output socket (``send_async_d2h``) ------------------------- #
+# The step's output (logits, or the pre-head hidden when no lm_head is folded in) is
+# streamed back over a D2H PCIe socket by an op inside the last submesh's trace, so
+# the host reads it off the socket instead of issuing a ``to_torch`` readback.
+_OUT_SOCKET_CORE = (0, 3)
+# The FIFO lives in physically-contiguous pinned host memory. Without an IOMMU the
+# driver pins a single system page at a time, so the FIFO is one 4 KB page minus the
+# trailing bytes_acked counter, PCIe-aligned. A whole output does not have to fit:
+# both sides move one page at a time, and the sender kernel waits for the host to
+# drain when it runs ahead.
+_OUT_FIFO_BYTES = 4032
+# So one output row — which *is* one socket page — has to fit the FIFO. The output is
+# reshaped into rows of at most this size (see :func:`_d2h_page_plan`) rather than sent
+# as one enormous vocab-wide page.
+_OUT_PAGE_CAP_BYTES = _OUT_FIFO_BYTES
+
+
+def _d2h_page_plan(numel: int, elem_bytes: int) -> tuple[int, int]:
+    """``(rows, cols)`` to reshape a flat ``numel`` output into for a D2H socket.
+
+    ``send_async_d2h`` streams whole tensor pages, and a row-major tensor's page is
+    one row, so the row width *is* the socket page size: it has to be PCIe-aligned
+    and divide the output evenly. Returns the widest such row up to
+    ``_OUT_PAGE_CAP_BYTES``.
+    """
+    for cols in range(min(numel, _OUT_PAGE_CAP_BYTES // elem_bytes), 0, -1):
+        if numel % cols == 0 and (cols * elem_bytes) % _PKT_PCIE_ALIGNMENT == 0:
+            return numel // cols, cols
+    raise ValueError(
+        f"cannot page a {numel}-element ({elem_bytes} B/elem) output for a D2H socket: no row width "
+        f"divides it into {_PKT_PCIE_ALIGNMENT} B-aligned pages of at most {_OUT_PAGE_CAP_BYTES} B"
+    )
+
 
 class DeepSeekV4Model(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4Model`` (prefill).
@@ -344,9 +377,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.kv_caches: list[_StaticLayerCache] = []
         # Paged multi-session decode (traced path; see :meth:`prepare_static_decode`).
         self._paged: Optional[PagedKVManager] = None
-        # H2D socket carrying the per-step input packet into the traced decode
-        # (allocated by :meth:`prepare_static_decode`).
+        # H2D socket carrying the per-step input packet into the traced decode, and the
+        # D2H socket carrying the step output back out (both allocated by
+        # :meth:`prepare_static_decode`).
         self._pkt_socket = None
+        self._out_socket = None
+        self._out_plan: Optional[tuple[int, int]] = None  # (rows, cols) of one output
+        self._out_torch_dtype: Optional[torch.dtype] = None
         self._paged_groups: dict[str, PagedGroup] = {}
         self._external_pools: Optional[dict[int, ttnn.Tensor]] = None
         self._active_sid: Optional[int] = None
@@ -1212,9 +1249,20 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 sm["pkt_in"] = _dev_zeros([1, 1, 1, self._pkt_w], device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             self.submeshes_io.append(sm)
         # Where the global-last layer (num_layers-1) landed: its trace produces the final
-        # head output consumed by :meth:`decode_traced`.
+        # head output, which it streams to the host over the D2H socket below.
         self._output_sm_index = self.pipeline_submesh_ids.index(ids[self.num_layers - 1])
         self._traced_captured = False
+
+        # The step output's return path. The page size is only known once the trace
+        # builds the output tensor, so it is set on first use (see
+        # :meth:`_send_output`). Created here because the socket allocates L1 on its
+        # sender core, which is unsafe once a trace exists.
+        if self._out_socket is None:
+            self._out_socket = ttnn.D2HSocket(
+                self.submeshes_io[self._output_sm_index]["device"],
+                ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(*_OUT_SOCKET_CORE)),
+                _OUT_FIFO_BYTES,
+            )
 
         # Every session's held-aside compressor buffers, allocated now: once a trace
         # exists on a device, allocating buffers there can corrupt it, so
@@ -1420,6 +1468,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 if self._lm_head_traced is not None:
                     streams = self._lm_head_traced(streams)
                 out = streams
+                # Stream the step's output back to the host from inside the trace, so
+                # the host reads it off the socket instead of dispatching a readback
+                # (see :meth:`read_decoded_output`).
+                self._send_output(out)
             elif ids[li + 1] != k:
                 # Send the residual streams + fused packet to the submesh holding the
                 # next layer. Captured inside the trace, so dispatched on device at
@@ -1458,6 +1510,38 @@ class DeepSeekV4Model(DeepSeekV4Module):
         by exactly one compile run or trace replay, and vice versa.
         """
         self._pkt_socket.write_tensor(self._build_packet(token_id, pos))
+
+    def _send_output(self, out: ttnn.Tensor) -> None:
+        """Push one step's output tensor into the D2H socket (inside the trace).
+
+        ``send_async_d2h`` streams whole pages out of a row-major tensor, so ``out`` is
+        untilized and reshaped into PCIe-aligned rows first — one vocab-wide row would
+        be a quarter-megabyte page for the sender kernel to stage in L1.
+
+        The socket's page size is fixed on the first call, when the output's real shape
+        and dtype are finally known; the op re-checks it against the tensor on every
+        program-cache miss.
+        """
+        out_rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        if self._out_plan is None:
+            numel = math.prod(tuple(out_rm.shape))
+            self._out_plan = _d2h_page_plan(numel, out_rm.element_size())
+            self._out_torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[out_rm.dtype]
+            self._out_socket.set_page_size(self._out_plan[1] * out_rm.element_size())
+        ttnn.experimental.send_async_d2h(ttnn.reshape(out_rm, list(self._out_plan)), self._out_socket)
+
+    def read_decoded_output(self) -> torch.Tensor:
+        """Read the oldest in-flight step output off the D2H socket, as ``[1, 1, N]``.
+
+        Blocks until the device has pushed every page of that step, so this is where a
+        traced step synchronizes. Outputs are read in the order they were dispatched,
+        and each read returns its own buffer, so several steps may be in flight at once
+        (see :meth:`decode_traced_async`).
+        """
+        rows, cols = self._out_plan
+        out = torch.empty(rows, cols, dtype=self._out_torch_dtype)
+        self._out_socket.read_tensor(out)
+        return out.reshape(1, 1, rows * cols)
 
     def _capture_traces(self, token_id: int, pos: int) -> None:
         """Capture the decode traces: per submesh, one variant per (SDPA mode, phase).
@@ -1539,6 +1623,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     f"({len(sm['layers'])} layers) phase {phase_idx} pool={flags} causal={causal}"
                 )
                 compile_outs.append(self._decode_submesh_static(sm, flags, causal))  # JITs the programs
+            # The run also *sends* an output, so drain it: an unread output would sit in
+            # the socket FIFO and eventually backpressure the sender kernel. Discarded —
+            # the real per-step outputs all come from the replay loop.
+            self.read_decoded_output()
             for out in compile_outs:
                 out.deallocate(True)
 
@@ -1561,20 +1649,33 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 sm["tids"][variant], sm["outputs"][variant] = sm["traces"][self._sm_pool_key(sm, flags, causal)]
         self._traced_captured = True
 
-    def decode_traced(self, token_id: int, pos: int) -> ttnn.Tensor:
-        """One traced decode step: feed ``token_id`` at absolute position ``pos``.
+    def decode_traced(self, token_id: int, pos: int) -> torch.Tensor:
+        """One traced decode step: feed ``token_id`` at absolute position ``pos`` and
+        return the step's output, read back to host.
 
-        Requires a prior :meth:`prepare_static_decode`. Captures the per-submesh traces
-        lazily on the first call, then (every call) pushes this step's input packet onto
-        the H2D socket and replays each submesh's trace in order. Both the packet
-        receive and the residual-stream handoffs between submeshes happen from *inside*
-        the traces, so a step dispatches no device ops from the host at all.
-        Returns the persistent output tensor of the submesh holding the global-last
-        layer — logits ``[1,1,vocab]`` if an ``lm_head`` was passed to
-        :meth:`prepare_static_decode`, else the pre-head hidden ``[1, 1, 1, hidden]``.
+        Requires a prior :meth:`prepare_static_decode`. Equivalent to
+        :meth:`decode_traced_async` followed by :meth:`read_decoded_output`, i.e. it
+        blocks until the output has arrived. The result is ``[1, 1, vocab]`` logits if
+        an ``lm_head`` was passed to :meth:`prepare_static_decode`, else the pre-head
+        hidden ``[1, 1, hidden]``; its dtype is the device dtype (bf16), so cast before
+        doing host math on it.
+        """
+        self.decode_traced_async(token_id, pos)
+        return self.read_decoded_output()
 
-        The returned tensor is overwritten by the next call, so consume it (e.g.
-        ``ttnn.to_torch``) before decoding the following token.
+    def decode_traced_async(self, token_id: int, pos: int) -> None:
+        """Dispatch one traced decode step without waiting for its output.
+
+        Captures the per-submesh traces lazily on the first call, then (every call)
+        pushes this step's input packet onto the H2D socket and replays each submesh's
+        trace in order. The packet receive, the residual-stream handoffs between
+        submeshes and the output send all happen from *inside* the traces, so a step
+        dispatches no device ops from the host at all — the only host work is the two
+        socket transfers.
+
+        Nothing is returned: the output is in flight to the host, to be picked up by
+        :meth:`read_decoded_output`. Every dispatched step must be read back exactly
+        once, in dispatch order.
 
         In paged mode the step belongs to whichever session is active (see
         :meth:`activate_session`), and its blocks are grown here as the compressor
@@ -1593,9 +1694,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         variant = self._variant_key(pos)
         for sm in self.submeshes_io:
             ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)
-        # Under round-robin the global-last layer (and thus the head output) does not
-        # land on the last submesh in the list, but on ``(num_layers-1) % S``.
-        return self.submeshes_io[self._output_sm_index]["outputs"][variant]
 
     def decode_sampled_burst(self, first_token_id: int, start_pos: int, n_steps: int) -> list[int]:
         """Unsupported while the per-step packet arrives over the H2D socket.
