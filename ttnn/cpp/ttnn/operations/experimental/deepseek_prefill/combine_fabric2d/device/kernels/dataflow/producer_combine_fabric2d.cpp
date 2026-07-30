@@ -67,9 +67,20 @@ constexpr uint32_t TELEM_ISSUE_CY_LO = 18;
 constexpr uint32_t TELEM_ISSUE_CY_HI = 19;
 constexpr uint32_t TELEM_RING_WAIT_CY_LO = 20;
 constexpr uint32_t TELEM_RING_WAIT_CY_HI = 21;
-constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0005u;
+// Whole-kernel span: entry (before anything, including the fabric connection open) to exit (after the
+// connection teardown). t_last_send - t_first_send is the send loop alone; this is what total-time
+// optimisation is measured against.
+constexpr uint32_t TELEM_T_KERNEL_START_LO = 22;
+constexpr uint32_t TELEM_T_KERNEL_START_HI = 23;
+constexpr uint32_t TELEM_T_KERNEL_END_LO = 24;
+constexpr uint32_t TELEM_T_KERNEL_END_HI = 25;
+constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0006u;
 
 void kernel_main() {
+    // First thing the kernel does, so the fabric connection open and the header prebuild below are both
+    // inside the kernel-total window.
+    const uint64_t t_kernel_start = wall_clock();
+
     // The movement this producer was assigned, plus the ring geometry it shares with the reader.
     constexpr uint32_t num_tokens = get_compile_time_arg_val(0);
     constexpr uint32_t num_l1_slots = get_compile_time_arg_val(1);
@@ -256,9 +267,20 @@ void kernel_main() {
     telem[TELEM_ISSUE_CY_HI] = (uint32_t)(issue_cy >> 32);
     telem[TELEM_RING_WAIT_CY_LO] = (uint32_t)(ring_wait_cy & 0xFFFFFFFFu);
     telem[TELEM_RING_WAIT_CY_HI] = (uint32_t)(ring_wait_cy >> 32);
-    // Magic last: a reader that sees it knows every field above is committed.
-    telem[TELEM_MAGIC] = TELEMETRY_MAGIC;
+    telem[TELEM_T_KERNEL_START_LO] = (uint32_t)(t_kernel_start & 0xFFFFFFFFu);
+    telem[TELEM_T_KERNEL_START_HI] = (uint32_t)(t_kernel_start >> 32);
 
     noc_async_writes_flushed();
     fabric_connections.close();
+
+    // Stamped after the teardown so the kernel-total window really covers the whole kernel.
+    const uint64_t t_kernel_end = wall_clock();
+    telem[TELEM_T_KERNEL_END_LO] = (uint32_t)(t_kernel_end & 0xFFFFFFFFu);
+    telem[TELEM_T_KERNEL_END_HI] = (uint32_t)(t_kernel_end >> 32);
+    // Magic last: a reader that sees it knows every field above is committed.
+    telem[TELEM_MAGIC] = TELEMETRY_MAGIC;
+    // Kept from the original tail. These are plain local L1 stores, so this is not known to be required
+    // for the host readback to see them — it is retained because it costs nothing at kernel exit and the
+    // previously working version had it.
+    noc_async_writes_flushed();
 }
