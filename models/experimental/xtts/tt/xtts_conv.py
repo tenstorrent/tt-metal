@@ -430,6 +430,22 @@ class TtConv2d(LightweightModule):
             # caller typically opens the device with (bank_manager OOM on the 1760 B
             # allocation). DRAM costs nothing measurable — they are read once per conv.
             config_tensors_in_dram=True,
+            # Double-buffer both operand streams. Pure scheduling — it changes how the conv is
+            # streamed, not the math — and it is worth the most exactly where the conv has least
+            # to work with. Measured per speaker-encoder stage against the defaults: layer1
+            # -0.1us, layer2 -1.0us, layer3 -4.5us, layer4 -14.8us. Layer4 dominates because its
+            # 3x3 256->256 on a 101x8 image has only 216 output tiles to spread over cores (a
+            # block shard caps at 8x9=72: grid_x is bounded by the 8 channel tiles, grid_y must
+            # divide the 27 row tiles) against a 72-tile-deep K, so it is starved of overlap
+            # rather than of parallelism.
+            #
+            # ``full_inner_dim=True`` belongs here on paper and is worth a further -7us at
+            # layer4, but it SILENTLY COMPUTES THE WRONG ANSWER on small spatial extents: the
+            # speaker encoder scores PCC 0.20-0.34 for mel_len < 128 with it on (0.999 without),
+            # while mel_len >= 128 is unaffected. It is a scheduling flag, so that is a ttnn bug
+            # rather than a numerics trade — do not re-enable it without a shape sweep.
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
