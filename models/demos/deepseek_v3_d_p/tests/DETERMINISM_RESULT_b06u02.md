@@ -1,11 +1,13 @@
 # b06u02 — non-determinism confirmed (Blackhole Galaxy, 2026-07-29)
 
-**Logical Tensix core (6,8) — physical (7,10) per the mesh translation — on physical device 14
-(PCI `0000:47:00.0`, mesh shard 21) has an intermittently wrong matmul FPU path. DRAM and SFPU
-on the same die are bit-exact. Not a tt-metal bug — but not proven to be a bad die either: this
-box runs fw `19.8.1.0` / KMD `2.8.0`, and both known-passing boxes run the newer pair. Firmware
-owns the operating point, so it can be the trigger and the weakest core the place it shows. See
-"Caveat and open items".**
+**Logical Tensix core (6,8) — physical (7,10) per the mesh translation — on mesh device 14
+(on b06u02 PCI `0000:47:00.0`, mesh shard 21, row 5 col 1) has an intermittently wrong matmul
+FPU path. DRAM and SFPU on the same die are bit-exact. Not a tt-metal bug. Firmware does NOT
+fix it: a second box on fw `19.12.0` / KMD `2.10.0` (`c10u08`) reproduced the identical fault
+at the same mesh position on rerun (2026-07-30, below). The fault is intermittent — c10u08
+passed the whole matmul subset once and failed it 15 min later, so a single clean run is a
+false negative, not a cleared box. See "fw 19.12 / KMD 2.10 does NOT fix it" and "Caveat and
+open items".**
 
 Host `bh-glx-b06u02`, HEAD `da6f15e849a`, driver `tenstorrent 2.8.0`, fw bundle `19.8.1.0`,
 32 Blackhole boards.
@@ -110,48 +112,79 @@ cd /data/nmilicevic/tt-metal && source python_env/bin/activate && export TT_META
 
 Full suite: drop the `-k`. The 18 CCL tests are the slow half and pass on the bad box too.
 
-## fw 19.12 / KMD 2.10 on a fresh box — clean (2026-07-30)
+## fw 19.12 / KMD 2.10 does NOT fix it — intermittent, same mesh position (2026-07-30)
 
 Host `bh-glx-110-c10u08`, fw `19.12.0.0`, KMD `2.10.0` — the newer pair. Same repo, same test
-file (identical to the pushed branch tip). Matmul-compute subset, **8 passed in 5:37**:
+file (identical to the pushed branch tip). The matmul subset was run **twice, ~15 min apart**:
+
+| run | verdict | core sweep |
+|---|---|---|
+| first | **8 passed** in 5:37 | all 120 cores bit-exact |
+| rerun | **8 failed** in 4:17 | `matmul is core-dependent: {(6, 8): {21: 43}}` |
+
+The rerun signature is identical to b06u02 — logical core (6,8), shard 21, every shape incl.
+the seq640 chunk:
 
 ```
-all 120 cores bit-exact across 10 iterations and all 32 chips   # test_matmul_core_sweep
-local matmul1 seq=3200 / matmul2 seq=3200 / matmul1 seq=640 / matmul2 seq=640  -> bit-exact
-matmul 3200x4608 / 3200x2304 / 1600x4608 (core_locality)                       -> bit-exact
+local matmul1 seq3200 {21: 2683}  matmul2 seq3200 {21: 294390}
+local matmul1 seq640  {21: 159}   matmul2 seq640  {21: 26982}
+core_locality base/halfN/halfM: all shard 21
 ```
 
-The sweep names no core. Core (6,8) is bit-exact here, and so is the seq640 chunked shape —
-the smallest signal, the one a PCC gate would miss first. Log: `/data/nmilicevic/c10u08_matmul_fw1912.log`.
+Two things follow, and they overturn the earlier "clean box" reading:
 
-The firmware correlation now has two boxes on each side: **fail on 19.8.1 / KMD 2.8** (b06u02
-and the other reported box), **pass on 19.12 / KMD 2.10** (b07u08, c10u08). It is still a
-correlation across *different silicon* — a fresh healthy box passes whether the fix is the
-firmware or the silicon lottery, so this does not yet establish cause. The one experiment that
-separates them is unchanged: bring b06u02 itself to the newer pair and rerun.
+- **fw 19.12 / KMD 2.10 does not immunize.** The same box reproduced the fault on the newer
+  firmware. So the earlier fw correlation (fail on 19.8.1, pass on 19.12) was under-sampled:
+  b07u08's 27/27 and c10u08's first 8/8 were each *one* run, and this fault is intermittent
+  enough to pass a whole run. A single clean pass does not clear a box — a box is only cleared
+  by many runs. Any "pass" in this investigation that rests on one run is now suspect.
+- **Same mesh position on two independent boxes.** The mesh mapping is byte-identical across
+  b06u02, b07u08 and c10u08 (row 5 = shard `[20,21,22,23]` → device `[10,14,22,18]`), so shard
+  21 = mesh device 14 = row 5 col 1 on all three. The fault lands at that exact position on two
+  different physical boxes. That is hard to explain as a random bad-core lottery; it points at
+  something systematic about that topological slot (row 5 col 1) or the harvest pattern that
+  maps a marginal core there — and it needs the *per-die physical* coordinate on each box to
+  confirm whether it is the same physical slot or the same logical position landing on
+  different dies.
+
+The model-level CI case fails too. The original Blaze "Transformer Determinism" test —
+`test_ds_prefill_transformer` with `with_determinism`, 5 layers, isl 25600, random weights, the
+exact command this investigation started from — was re-run on c10u08 and **failed** (2 variants,
+`mesh-8x4` and `fabric2d-mesh-8x4`; `-k mesh-8x4` selects both by substring). Per-layer
+determinism PCC drops with depth as the marginal per-core perturbation accumulates:
+
+```
+mesh-8x4:          layer_0 0.999970 -> layer_4 0.997489  norm 0.997486  logits 0.998720
+fabric2d-mesh-8x4: layer_0 0.999956 -> layer_4 0.997377  norm 0.997374  logits 0.995651
+```
+
+So both the ~3-min matmul probe and the full 24-min model test reproduce on fw 19.12 — the CI
+failure this whole investigation started from is present on the newer firmware, not just the old.
+
+Logs: `/data/nmilicevic/c10u08_matmul_fw1912.log` (matmul rerun, failing),
+`/data/nmilicevic/c10u08_ci_transformer_det_fw1912.log` (CI model test, failing),
+`/data/nmilicevic/c10u08_device_mapping.log` (mapping).
 
 ## Caveat and open items
 
-- **Firmware/KMD is the leading candidate for the *cause*, and it is uncontrolled.** b06u02 is
-  on fw `19.8.1.0` / KMD `2.8.0`, the passing boxes b07u08 and c10u08 on `19.12.0` / `2.10.0`,
-  and the two reported-failing boxes are both on the older pair. Firmware owns AICLK, VDD, DVFS and harvesting, so a core
-  that is marginal at 19.8.1's operating point and fine at 19.12.0's produces exactly this
-  signature. These tests establish *where* the fault manifests, not why. Three constraints:
-  a uniform firmware cannot select 1 chip of 32 by itself (all 32 report `fw_bundle 19.8.1.0`,
-  `asic_fmax 1350`, `vdd 0.70-0.90`, `THERM_TRIP_COUNT 0x0`, `GDDR_UNCORR_ERRS 0x0`), so the
-  mechanism has to be firmware interacting with something per-chip; the KMD code itself is
-  unlikely, since readback and eltwise are bit-exact on the same die so host DMA/MMIO is clean;
-  and **harvesting** is the one firmware-only mechanism that would fully exonerate the silicon
-  — `ENABLED_TENSIX_COL` is per-chip (dev 14 = `0x3ffd`, 13 of 14 columns enabled), so a
-  different harvest under 19.12.0 could simply stop mapping the marginal core.
-  Close it in this order: (1) flash 19.12.0 + KMD 2.10 here and rerun the 8-test subset — one
-  variable, same silicon (`fw_pack-19.8.1.fwbundle` is kept for rollback); (2) run the subset
-  on b07u02 and record *which* shard fails; (3) diff `tt-smi -s --snapshot_no_tty` against a
-  passing box on `ENABLED_TENSIX_COL`, `asic_fmax`, and the VDD limits.
-- Confirm the logical → physical translation of core (6,8) against device 14 itself rather than
-  the mesh handle, since harvesting is per chip and a harvest request needs the die's own
-  coordinate. The Python `MeshDevice` binding exposes `get_device_id` but no per-device handle,
-  so this needs the C++ API or `tt-triage`.
+- **Firmware/KMD is no longer the leading candidate — the c10u08 rerun demoted it.** The
+  earlier ordering (fail on 19.8.1, pass on 19.12) rested on single runs; a fw-19.12 box has now
+  reproduced the fault, so 19.12 does not immunize. What survives is a *positional, intermittent*
+  signal: mesh device 14 / row 5 col 1, on two independent boxes and both fw pairs, present on
+  some runs and not others. Firmware may still modulate how often it trips (operating point,
+  DVFS), but it is not the on/off switch. The old telemetry constraints still hold and still
+  matter: a uniform firmware cannot select 1 chip of 32 by itself (on b06u02 all 32 report
+  identical `asic_fmax 1350`, `vdd 0.70-0.90`, `THERM_TRIP_COUNT 0x0`, `GDDR_UNCORR_ERRS 0x0`),
+  and readback/eltwise are bit-exact on the same die so host DMA/MMIO is clean — the mechanism is
+  something per-position interacting with the matmul FPU path, not the KMD.
+  Reordered next steps: (1) **characterize the hit-rate** — run the sweep-only test N times on
+  c10u08 and on b06u02 and report *fails/N*, so "pass" stops meaning "one lucky run"; (2) get the
+  **per-die physical** coordinate of core (6,8) on each box (C++ API or `tt-triage`, since the
+  Python `MeshDevice` binding has no per-device handle) and check whether row 5 col 1 is the same
+  physical slot fleet-wide or the same logical position landing on different dies; (3) diff
+  `tt-smi -s --snapshot_no_tty` at that slot against a slot that never fails, on
+  `ENABLED_TENSIX_COL` (dev 14 = `0x3ffd`), `asic_fmax`, and VDD limits. Flashing b06u02 to
+  19.12 is no longer decisive — 19.12 already fails on c10u08.
 - **A wedged board is a no-result, not a failure.** If every test errors in ~20 s with
   `MMIO per-op timeout: 4B load took N us (budget=2 ms)` at `distributed.py:671`, the box failed
   at `open_mesh_device` before any kernel ran. `tt-smi -glx_reset_auto` clears it — do not use
