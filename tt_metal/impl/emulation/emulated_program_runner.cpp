@@ -930,12 +930,20 @@ static std::function<void()> jit_compile_kernel(
     }
     std::string abs_kernel = std::filesystem::absolute(kernel_src_path).string();
 
-    // 2. Create temp directory
-    char tmpdir[] = "/tmp/tt_emule_jit_XXXXXX";
-    if (!mkdtemp(tmpdir)) {
+    // 2. Create temp directory. Honor $TMPDIR so the JIT scratch can be placed on a
+    // reaper-safe filesystem (a /tmp cleanup reaper wiping these dirs mid-compile
+    // causes "named_args_generated.h not found" / "ld: cannot open output" failures).
+    std::string tmpl = (std::getenv("TMPDIR") ? std::string(std::getenv("TMPDIR")) : std::string("/tmp"));
+    if (!tmpl.empty() && tmpl.back() == '/') {
+        tmpl.pop_back();
+    }
+    tmpl += "/tt_emule_jit_XXXXXX";
+    std::vector<char> tmpdir(tmpl.begin(), tmpl.end());
+    tmpdir.push_back('\0');
+    if (!mkdtemp(tmpdir.data())) {
         throw std::runtime_error("jit_compile_kernel: mkdtemp failed");
     }
-    std::string dir(tmpdir);
+    std::string dir(tmpdir.data());
 
     // 2b. Preprocess the kernel source for x86: rewrite RISC-V inline asm
     // (mhartid, fence) and raw L1 arg-val pointer casts. -I kernel_dir (below)
