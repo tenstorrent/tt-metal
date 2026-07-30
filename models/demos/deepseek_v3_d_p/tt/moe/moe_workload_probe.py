@@ -184,12 +184,18 @@ def _out_prefix() -> str:
 def write_captured_routing() -> str | None:
     """Write the captured routing as ``<prefix>_expert_routing.safetensors``.
 
-    Layout matches what :func:`load_captured_routing` expects: one flat int32 tensor per key
-    ``expert_ids_layer_{N}``, read back as ``view(dispatch_group_size, seq_len_per_chip, top_k)``.
-    Chunks are concatenated along each chip's token axis, so ``seq_len_per_chip`` ends up
-    ``n_chunks * chunk_tokens_per_chip`` (11 chunks x 640 = 7040 for an 8x4 mesh at CHUNK=5120).
-    Slice it down to a worker's expected token count with
-    ``scripts/build_captured_routing.py --tokens N``.
+    One key per **dispatch invocation** — ``expert_ids_layer_{L}_chunk_{C}`` — because a chunked
+    prefill calls dispatch once per (layer, chunk) and the column load differs sharply between
+    chunks (the first chunk of a run is far more skewed than the steady-state ones). Collapsing
+    the chunk axis would average that away.
+
+    Each value is a flat int32 tensor laid out chip-major, matching how
+    :func:`load_captured_routing` reads it: ``view(dispatch_group_size, seq_len_per_chip, top_k)``
+    with ``seq_len_per_chip`` = tokens per chip in one chunk (640 for an 8x4 mesh at CHUNK=5120).
+
+    ``scripts/build_captured_routing.py`` consumes this directly: it ranks every
+    (layer, chunk, col) and emits a loader-compatible ``expert_ids_layer_{N}`` file for a chosen
+    chunk (``--chunk C``) or for the chunks concatenated (``--chunk all``).
     """
     if not capture_enabled() or not _captured:
         return None
@@ -201,19 +207,23 @@ def write_captured_routing() -> str | None:
     out = f"{_out_prefix()}_expert_routing.safetensors"
     tensors: dict[str, torch.Tensor] = {}
     for layer, per_chunk in sorted(_captured.items()):
-        # [rows, tokens_per_chunk, top_k] per chunk -> concat on the token axis -> flat, chip-major.
-        stacked = torch.cat([per_chunk[c] for c in sorted(per_chunk)], dim=1)
-        tensors[f"expert_ids_layer_{layer}"] = stacked.reshape(-1).to(torch.int32).contiguous()
+        for chunk, picks in sorted(per_chunk.items()):
+            # [rows, tokens_per_chunk_per_chip, top_k] -> flat, chip-major.
+            tensors[f"expert_ids_layer_{layer}_chunk_{chunk}"] = picks.reshape(-1).to(torch.int32).contiguous()
+    if not tensors:
+        return None
     try:
         os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
         save_file(tensors, out)
     except Exception as e:
         logger.warning(f"[moe-workload-probe] routing capture write failed: {e!r}")
         return None
+    n_layers = len(_captured)
+    n_chunks = max(len(v) for v in _captured.values())
     any_key = next(iter(tensors))
     logger.success(
-        f"[moe-workload-probe] wrote routing capture: {len(tensors)} layers, "
-        f"{tensors[any_key].numel()} ids/layer -> {out}"
+        f"[moe-workload-probe] wrote routing capture: {n_layers} layers x {n_chunks} chunks "
+        f"= {len(tensors)} dispatch invocations, {tensors[any_key].numel()} ids each -> {out}"
     )
     return out
 

@@ -1560,9 +1560,14 @@ def run_chunked_transformer_no_pcc(
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+# The power gate gets in the way of routing capture, which is not a timing measurement: at
+# num_iters=1 print_duration_table bails ("need num_iters >= 2") so nothing is asserted against a
+# baseline and host TDP is irrelevant. TT_DS_ALLOW_LOW_POWER=1 opts a capture run out; CI, which
+# never sets it, keeps the gate.
 @pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+    not is_high_power() and os.environ.get("TT_DS_ALLOW_LOW_POWER", "0") != "1",
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label "
+    "(set TT_DS_ALLOW_LOW_POWER=1 for a non-timing routing-capture run)",
 )
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_no_pcc(
