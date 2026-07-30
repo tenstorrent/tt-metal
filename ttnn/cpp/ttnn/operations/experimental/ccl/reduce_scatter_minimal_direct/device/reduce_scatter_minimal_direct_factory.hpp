@@ -15,7 +15,7 @@
 
 namespace ttnn::experimental::prim {
 
-// Page-space geometry of the scatter, for ANY scatter dim.
+// Page-space geometry of the scatter, for ANY scatter dim and ANY rank.
 //
 // The tiled input buffer is a row-major array of pages over [d0, ..., d_{rank-3}, Ht, Wt]. Slicing it on
 // dim `d` cuts a middle axis of that array, so slice j of every "outer" index (the product of the dims
@@ -25,6 +25,11 @@ namespace ttnn::experimental::prim {
 // chunking, staging, the output write -- only ever sees the resulting linear page order of a slice.
 // The last dim is the degenerate case with stride == one row and run == the slice's width in tiles;
 // dim 0 is the other degenerate case with a single run (outer == 1), so the stride is never taken.
+//
+// This is also why the op needs no ND -> canonical-4D collapse (the (B, C, Ht, Wt) + normalized_dim
+// mapping the ring ops carry, whose kernels are a fixed 4-level nested loop): the pair above already IS
+// that collapse. Everything below the scatter dim folds into `inner_pages` and everything above folds
+// into the outer count, for any rank >= 2 -- rank never reaches a kernel.
 struct ReduceScatterDirectGeometry {
     uint32_t single_tile_bytes;        // bytes per tile
     uint32_t tile_granularity;         // tiles per chunk (compute/CB granularity)

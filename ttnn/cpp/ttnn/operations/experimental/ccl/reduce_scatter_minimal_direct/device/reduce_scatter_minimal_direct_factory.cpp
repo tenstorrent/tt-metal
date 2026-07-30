@@ -8,7 +8,6 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
 
 #include <algorithm>
 #include <set>
@@ -80,21 +79,25 @@ ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
     TT_FATAL(
         num_input_pages % num_devices == 0, "input pages {} must divide num_devices {}", num_input_pages, num_devices);
 
-    // Chunking / packet sizing is shared with the ring ops (a chunk = tile_granularity tiles stored
-    // contiguously, so one contribution chunk is one coalesced fabric write). Only the size fields are
-    // taken from there: its chunk COUNTS are per-4D-channel, which this op does not need -- a slice is
-    // chunked as one flat page run regardless of how many batches/channels it spans.
-    const auto sp = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_params(
-        input_tensor, ttnn::ccl::Topology::Ring, dim, num_devices, fp32_dest_acc_en);
+    // Chunk / packet sizing, matching the ring ops' contiguous path (a chunk = tile_granularity tiles
+    // stored contiguously, so one contribution chunk is one coalesced fabric write; the granularity is
+    // capped by what DST can hold for the reduce). Computed here rather than taken from
+    // reduce_scatter_ring_interm_staging_params: that helper's chunk COUNTS are per-4D-channel, so
+    // consuming it would drag this op's ND support back through a canonical-4D mapping it does not need.
+    const uint32_t single_tile_bytes = input_tensor.buffer()->page_size();
+    const uint32_t interm_tiles_per_packet =
+        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes()) / single_tile_bytes;
+    const uint32_t max_dst_size = fp32_dest_acc_en ? 4u : 8u;
+    const uint32_t tile_granularity = std::min(4u * std::min(4u, interm_tiles_per_packet), max_dst_size);
 
     const uint32_t pages_per_slice = num_input_pages / num_devices;
     return ReduceScatterDirectGeometry{
-        .single_tile_bytes = sp.single_tile_bytes,
-        .tile_granularity = sp.tile_granularity,
-        .interm_tiles_per_packet = sp.interm_tiles_per_packet,
-        .page_bytes = sp.page_bytes,
+        .single_tile_bytes = single_tile_bytes,
+        .tile_granularity = tile_granularity,
+        .interm_tiles_per_packet = interm_tiles_per_packet,
+        .page_bytes = tile_granularity * single_tile_bytes,
         .pages_per_slice = pages_per_slice,
-        .chunks_per_slice = (pages_per_slice + sp.tile_granularity - 1) / sp.tile_granularity,
+        .chunks_per_slice = (pages_per_slice + tile_granularity - 1) / tile_granularity,
         .slice_run_pages = (dim_size_pages / num_devices) * inner_pages,
         .stride_pages = dim_size_pages * inner_pages,
     };

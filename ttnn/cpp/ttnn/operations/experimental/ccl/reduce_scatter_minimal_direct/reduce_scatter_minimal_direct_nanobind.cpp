@@ -29,7 +29,7 @@ void bind_reduce_scatter_minimal_direct(nb::module_& mod) {
         ~2.3x the link traffic: a latency play for small/medium shapes.
 
         Args:
-            input_tensor (ttnn.Tensor): multi-device tensor.
+            input_tensor (ttnn.Tensor): multi-device tensor, TILE layout, any rank >= 2.
             dim (int): Dimension to scatter. Any dim, provided it splits into `num_devices` whole
                 slices in tile/page units (the two innermost dims are counted in tiles).
 

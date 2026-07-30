@@ -22,8 +22,9 @@ namespace ttnn::experimental {
 // fabric traversal instead of the ring's N/2 store-and-forward steps, at ~2.3x the link traffic -- a
 // latency play for small/medium shapes, not a bandwidth play.
 //
-// Minimal-first: Ring, TILE layout, any scatter dim (divisible by the ring size in tile/page units), one
-// worker core per link (which owns that link's forward and backward connection), no mux.
+// Minimal-first: Ring, TILE layout, any rank >= 2 and any scatter dim (divisible by the ring size in
+// tile/page units), one worker core per link (which owns that link's forward and backward connection),
+// no mux.
 //
 // persistent_buffers, when provided, must be exactly {output, staging} as produced by
 // reduce_scatter_minimal_direct_create_persistent_buffers.
