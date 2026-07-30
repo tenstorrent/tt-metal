@@ -860,3 +860,44 @@ Implementation sketch:
 Residual sub-tile masking (partial `lang_masks`, or a non-32-aligned `prefix_len`) still needs either the
 fused mask path or the general-SDPA fallback -- but it is not on the LIBERO path, so the guard can stay
 for it.
+
+## R12 — tile-16 LIBERO: fixed, validated, and NOT the fast config (2026-07-30, `96336a1c26c`)
+
+tile-16 now runs masked workloads. `test_l1_single_layer_pcc` at `PI05_TILE_HEIGHT=16
+PI05_PASS_EXPERT_MASK=1` → PCC(active)=**0.999892**; LIBERO 40 episodes (libero_spatial, 10 tasks × 4)
+→ **40/40 (100%)**, every task 4/4, matching the tile-32 reference of 40/40.
+
+Mechanism: the compat shim's masked fallback promotes q / suffix-K / suffix-V / mask to the *prefix's*
+32-row tile, runs the general SDPA at that geometry, then retiles the output down and slices to `q_rows`.
+Only suffix-sized tensors are retiled; the 1024-row prefix is reused as-is. This SIDE-STEPS the tiny-tile
+mask bug rather than fixing it — the broken 16-row mask path is never entered.
+
+Three stacked TT_FATALs, each revealed by fixing the previous one:
+  concat needs one tile shape → "Inputs to SDPA must have the same tile size" → "When mask is provided
+  to SDPA, it must be in DRAM" (so the mask retile targets DRAM, not L1).
+
+### Perf: the fix is expensive, and it inverts the tile-height recommendation
+16-chip e2e trace+2CQ, N_CAMS=3, steps=5:
+
+| config | e2e | LIBERO-capable? |
+|---|---|---|
+| tile-16, maskless | 26.74 ms | **no** |
+| tile-32 + mask | 32.32 ms | yes (40/40) |
+| tile-16 + mask | **43.15 ms** | yes (40/40) |
+
+**tile-16 + mask is 34% slower than tile-32 + mask.** The retile round-trip costs more than the tiny tile
+saves. ⇒ **tile-32 is the production config for real workloads;** tile-16 + mask is a correctness escape
+hatch. Tiny tile's ~5% win exists only on the maskless path, which cannot run LIBERO.
+
+### Two corrections to the recorded SDPA tiny-tile mask bug
+* **It is not a bf8 problem.** bf8 q/k/v + bf8 dense mask + 16-row tile measures PCC **0.99987**
+  standalone in every call ordering. **bfloat16** is the broken one (~0.03). The docstring on
+  `test_sdpa_bf8_mask_corrupts` has it exactly backwards.
+* **Standalone numbers are not reproducible across harnesses** — the same nominal config gives 0.0106
+  under pytest's `mesh_device` fixture and 0.99987 under `ttnn.open_device`. It is L1-layout /
+  device-params sensitive; never characterise it from one standalone measurement.
+
+### Process note
+The 16-chip perf gate feeds all 3 cameras present, so no `img_mask` is ever 0 and only the maskless fast
+path runs. It stayed green straight through the merge's loss of the kv_sdpa mask path. **A perf test is
+not a capability test.**
