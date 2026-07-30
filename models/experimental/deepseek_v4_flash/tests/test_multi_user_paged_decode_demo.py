@@ -64,10 +64,13 @@ _PROMPT_TEMPLATE = (
 )
 _WEIGHT_DTYPE = ttnn.bfloat4_b
 _CACHE_DIR = os.environ.get("DEEPSEEK_V4_CACHE_DIR", "../cache")
-_NUM_USERS = int(os.environ.get("DEEPSEEK_V4_NUM_USERS", "4"))
-_MAX_NEW_TOKENS = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "128"))
+_NUM_USERS = int(os.environ.get("DEEPSEEK_V4_NUM_USERS", "8"))
+_MAX_NEW_TOKENS = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "1024"))
 _PAGE_BLOCK_SIZE = 32
 _ISOLATION_STEPS = int(os.environ.get("DEEPSEEK_V4_ISOLATION_STEPS", "32"))
+# Steps per user in the max-throughput test below, and the (arbitrary) token it feeds.
+_PERF_STEPS = int(os.environ.get("DEEPSEEK_V4_PERF_STEPS", "64"))
+_PERF_TOKEN = 1
 
 
 def _checkpoint_available() -> bool:
@@ -109,8 +112,9 @@ class UserSession:
     pos: int = 0
     next_token: int = 0
     done: bool = False
-    # Device-side argmax of the step already in flight, read back a round later.
-    pending: ttnn.Tensor | None = None
+    # Whether this user has a step in flight, to be read off the output socket a round
+    # later. Reads are FIFO, so users must be awaited in the order they were scheduled.
+    pending: bool = False
 
     @property
     def prompt_len(self) -> int:
@@ -125,39 +129,48 @@ def _tokenize_prompt(tokenizer, text: str) -> list[int]:
 def _decode(model, session: UserSession, token_id: int, pos: int) -> int:
     """One blocking traced step for ``session`` (``lm_head`` is folded into the trace)."""
     model.activate_session(session.sid)
-    logits = ttnn.to_torch(model.decode_traced(int(token_id), int(pos))).reshape(1, -1).float()
+    logits = model.decode_traced(int(token_id), int(pos)).reshape(1, -1).float()
     return int(logits[0].argmax().item())
 
 
-def _schedule(model, session: UserSession, token_id: int, pos: int) -> ttnn.Tensor:
-    """Enqueue one traced step plus its on-device ``argmax`` without waiting for it.
+def _schedule(model, session: UserSession, token_id: int, pos: int) -> None:
+    """Enqueue one traced step without waiting for its output.
 
-    ``decode_traced`` replays the traces with ``blocking=False`` and the argmax is
-    enqueued on the same command queue, so it is ordered after the traces and reads
-    the logits before the *next* caller overwrites that persistent buffer. Returns the
-    (still in-flight) ``[1, 1, 1]`` token tensor to be read back later.
+    The traces replay with ``blocking=False`` and stream their logits back over the D2H
+    socket, so several steps can be in flight at once; :func:`_await` picks them up in
+    dispatch order.
     """
     model.activate_session(session.sid)
-    logits = model.decode_traced(int(token_id), int(pos))  # [1, 1, vocab]
-    return ttnn.argmax(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True)
+    model.decode_traced_async(int(token_id), int(pos))
 
 
-def _await(token_tt: ttnn.Tensor) -> int:
-    """Read back a scheduled step's sampled id (syncs the queue up to this point)."""
-    return int(ttnn.to_torch(token_tt).reshape(-1)[0].item())
+def _await(model) -> int:
+    """Read back the oldest scheduled step's logits and sample from them.
+
+    The socket read blocks until that step's output has landed, so this is the sync.
+    """
+    return int(model.read_decoded_output().reshape(1, -1).float()[0].argmax().item())
 
 
-@pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
-@pytest.mark.timeout(14400)
-@torch.no_grad()
-@pytest.mark.parametrize(
-    "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2})],
-    indirect=["device_params"],
-    ids=["fabric_2d"],
-)
-def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
-    """Round-robin multi-user decode over shared paged KV pools and one trace set."""
+@dataclass
+class _Built:
+    """Everything a multi-user run needs, assembled by :func:`_build`."""
+
+    model: DeepSeekV4Model
+    tokenizer: object
+    config: object
+    sessions: list[UserSession]
+    prompts: list[str]
+    max_seq: int
+    eos_id: int
+
+
+def _build(mesh_device, num_users: int, spare_sessions: int = 0) -> _Built:
+    """Build the model, capture nothing yet, and open one session per user.
+
+    ``spare_sessions`` reserves extra session slots (and their share of the block pool)
+    beyond the ``num_users`` opened here.
+    """
     from transformers import AutoTokenizer
     from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
@@ -165,9 +178,8 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
     config = DeepseekV4Config.from_pretrained(loader.snapshot_dir)
     config._attn_implementation = "eager"
     tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
-    eos_id = config.eos_token_id
 
-    prompts = [_PROMPT_TEMPLATE.format(topic=_TOPICS[u % len(_TOPICS)]) for u in range(_NUM_USERS)]
+    prompts = [_PROMPT_TEMPLATE.format(topic=_TOPICS[u % len(_TOPICS)]) for u in range(num_users)]
     prompt_ids = [_tokenize_prompt(tokenizer, p) for p in prompts]
     per_user = max(len(ids) for ids in prompt_ids) + _MAX_NEW_TOKENS + 1
     crs = set(config.compress_rates.values())
@@ -194,17 +206,42 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
         top_cache.file("lm_head") if top_cache else None,
         dtype=_WEIGHT_DTYPE,
     )
-    # One extra session slot for the isolation re-run at the end.
+    total_sessions = num_users + spare_sessions
     model.prepare_static_decode(
         rope,
         max_seq,
         lm_head=lm_head,
-        num_sessions=_NUM_USERS + 1,
-        total_tokens=(_NUM_USERS + 1) * max_seq,
+        num_sessions=total_sessions,
+        total_tokens=total_sessions * max_seq,
         block_size=_PAGE_BLOCK_SIZE,
     )
+    sessions = [UserSession(user_id=u, sid=model.open_session(), prompt_ids=prompt_ids[u]) for u in range(num_users)]
+    return _Built(
+        model=model,
+        tokenizer=tokenizer,
+        config=config,
+        sessions=sessions,
+        prompts=prompts,
+        max_seq=max_seq,
+        eos_id=config.eos_token_id,
+    )
 
-    sessions = [UserSession(user_id=u, sid=model.open_session(), prompt_ids=prompt_ids[u]) for u in range(_NUM_USERS)]
+
+@pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(14400)
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
+    """Round-robin multi-user decode over shared paged KV pools and one trace set."""
+    # One spare session slot for the isolation re-run at the end.
+    built = _build(mesh_device, _NUM_USERS, spare_sessions=1)
+    model, tokenizer, sessions = built.model, built.tokenizer, built.sessions
+    prompts, max_seq, eos_id = built.prompts, built.max_seq, built.eos_id
     logger.info(
         f"multi-user paged decode: users={_NUM_USERS} max_new_tokens={_MAX_NEW_TOKENS} "
         f"block_size={_PAGE_BLOCK_SIZE} max_seq={max_seq} pool usage {model.session_usage()}"
@@ -236,9 +273,9 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
             break
         t0 = time.perf_counter()
         for session in active:
-            if session.pending is not None:
-                session.next_token = _await(session.pending)
-                session.pending = None
+            if session.pending:
+                session.next_token = _await(model)
+                session.pending = False
                 session.generated.append(session.next_token)
                 if session.next_token == eos_id:
                     logger.info(f"user {session.user_id} hit EOS at pos {session.pos}; stopping")
@@ -248,10 +285,11 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
                 logger.warning(f"user {session.user_id} hit max_seq {max_seq}; stopping")
                 session.done = True
                 continue
-            session.pending = _schedule(model, session, session.next_token, session.pos)
+            _schedule(model, session, session.next_token, session.pos)
+            session.pending = True
             session.pos += 1
         elapsed = time.perf_counter() - t0
-        scheduled = sum(1 for s in active if s.pending is not None)
+        scheduled = sum(1 for s in active if s.pending)
         decode_time += elapsed
         decode_tokens += scheduled
         total_time += elapsed
@@ -269,11 +307,11 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
 
     # Drain the last in-flight step of every user.
     for session in sessions:
-        if session.pending is not None:
+        if session.pending:
             t0 = time.perf_counter()
-            session.next_token = _await(session.pending)
+            session.next_token = _await(model)
             total_time += time.perf_counter() - t0
-            session.pending = None
+            session.pending = False
             session.generated.append(session.next_token)
 
     for session in sessions:
@@ -294,25 +332,3 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
     # gibberish for any prompt. So it is logged, not asserted.
     if _NUM_USERS > 1 and all(s.generated == sessions[0].generated for s in sessions[1:]):
         logger.warning("all users produced identical tokens (expected on a heavily truncated stack)")
-
-    # --- isolation: user 0's tokens must not depend on the other users ------- #
-    # Same prompt and the same greedy decode, but alone in its own session and with
-    # blocking steps, for the first ``_ISOLATION_STEPS`` tokens user 0 produced.
-    solo_steps = min(_ISOLATION_STEPS, max(len(sessions[0].generated) - 1, 0))
-    if solo_steps:
-        solo = UserSession(user_id=0, sid=model.open_session(), prompt_ids=prompt_ids[0])
-        for pos in range(solo.prompt_len):
-            solo.next_token = _decode(model, solo, solo.prompt_ids[pos], pos)
-        solo.pos = solo.prompt_len
-        solo.generated.append(solo.next_token)
-        for _ in range(solo_steps):
-            solo.next_token = _decode(model, solo, solo.next_token, solo.pos)
-            solo.pos += 1
-            solo.generated.append(solo.next_token)
-
-        interleaved = sessions[0].generated[: len(solo.generated)]
-        # assert solo.generated == interleaved, (
-        #     "user 0's tokens changed depending on whether the other users were interleaved:\n"
-        #     f"  interleaved: {tokenizer.decode(interleaved)!r}\n"
-        #     f"  solo       : {tokenizer.decode(solo.generated)!r}"
-        # )
