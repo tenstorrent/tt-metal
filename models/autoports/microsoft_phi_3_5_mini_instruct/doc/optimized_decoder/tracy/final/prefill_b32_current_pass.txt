@@ -1,0 +1,281 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_PREFILL_B32'.
+Using operations until 'PERF_PREFILL_B32_END'.
+Detected data from 1 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID   Total %  Bound  OP Code                                           Device   Device Time  Op-to-Op Gap  Cores  DRAM     DRAM %  FLOPs        FLOPs %  Math Fidelity
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+179    0.4 %         LayerNormDeviceOperation                                3        73 μs                   32                                               BF16, BF16 => BF16
+180   11.5 %   SLOW  MatmulDeviceOperation b={32} x 32 x 3072 x 9216         3     2,264 μs         11 μs     96  17 GB/s   3.4 %  25.6 TFLOPs    4.8 %  LoFi BF16 x BFP4 => BF16
+181    0.7 %         NlpCreateHeadsDeviceOperation                           3       129 μs          1 μs     32                                                     BF16 => BF16
+182    0.0 %         SliceDeviceOperation                                    3         1 μs          1 μs      3                                                     BF16 => BF16
+183    0.0 %         SliceDeviceOperation                                    3         1 μs          1 μs      3                                                     BF16 => BF16
+184    0.1 %         SliceDeviceOperation                                    3        23 μs          0 μs    110                                                     BF16 => BF16
+185    0.2 %         UntilizeDeviceOperation                                 3        45 μs          1 μs    103                                                     BF16 => BF16
+186    0.9 %         SliceDeviceOperation                                    3       167 μs          1 μs    110                                                     BF16 => BF16
+187    0.4 %         TilizeWithValPaddingDeviceOperation                     3        72 μs          1 μs    103                                                     BF16 => BF16
+188    0.1 %         UnaryDeviceOperation                                    3        22 μs          1 μs    110                                                     BF16 => BF16
+189    0.5 %         UntilizeWithUnpaddingDeviceOperation                    3        93 μs          1 μs    103                                                     BF16 => BF16
+190    0.5 %         UntilizeWithUnpaddingDeviceOperation                    3        93 μs          1 μs    103                                                     BF16 => BF16
+191    0.7 %         PermuteDeviceOperation                                  3       131 μs          1 μs    110                                                     BF16 => BF16
+192    0.7 %         PermuteDeviceOperation                                  3       133 μs          0 μs    110                                                     BF16 => BF16
+193    1.8 %         ConcatDeviceOperation                                   3       358 μs          1 μs    110                                               BF16, BF16 => BF16
+194    1.1 %         PermuteDeviceOperation                                  3       218 μs          0 μs    110                                                     BF16 => BF16
+195    0.4 %         TilizeWithValPaddingDeviceOperation                     3        73 μs          1 μs    103                                                     BF16 => BF16
+196    0.4 %         BinaryNgDeviceOperation                                 3        70 μs          1 μs    110                                               BF16, BF16 => BF16
+197    0.4 %         BinaryNgDeviceOperation                                 3        69 μs          0 μs    110                                               BF16, BF16 => BF16
+198    0.2 %         BinaryNgDeviceOperation                                 3        48 μs          0 μs    110                                               BF16, BF16 => BF16
+199    0.1 %         SliceDeviceOperation                                    3        23 μs          0 μs    110                                                     BF16 => BF16
+200    0.2 %         UntilizeDeviceOperation                                 3        46 μs          1 μs    103                                                     BF16 => BF16
+201    0.9 %         SliceDeviceOperation                                    3       168 μs          1 μs    110                                                     BF16 => BF16
+202    0.4 %         TilizeWithValPaddingDeviceOperation                     3        72 μs          0 μs    103                                                     BF16 => BF16
+203    0.1 %         UnaryDeviceOperation                                    3        22 μs          0 μs    110                                                     BF16 => BF16
+204    0.5 %         UntilizeWithUnpaddingDeviceOperation                    3        93 μs          1 μs    103                                                     BF16 => BF16
+205    0.5 %         UntilizeWithUnpaddingDeviceOperation                    3        92 μs          1 μs    103                                                     BF16 => BF16
+206    0.7 %         PermuteDeviceOperation                                  3       130 μs          1 μs    110                                                     BF16 => BF16
+207    0.7 %         PermuteDeviceOperation                                  3       131 μs          0 μs    110                                                     BF16 => BF16
+208    1.8 %         ConcatDeviceOperation                                   3       358 μs          1 μs    110                                               BF16, BF16 => BF16
+209    1.1 %         PermuteDeviceOperation                                  3       216 μs          1 μs    110                                                     BF16 => BF16
+210    0.4 %         TilizeWithValPaddingDeviceOperation                     3        72 μs          1 μs    103                                                     BF16 => BF16
+211    0.4 %         BinaryNgDeviceOperation                                 3        71 μs          1 μs    110                                               BF16, BF16 => BF16
+212    0.4 %         BinaryNgDeviceOperation                                 3        69 μs          0 μs    110                                               BF16, BF16 => BF16
+213    0.2 %         BinaryNgDeviceOperation                                 3        47 μs          0 μs    110                                               BF16, BF16 => BF16
+214    0.1 %         TypecastDeviceOperation                                 3        26 μs          1 μs    110                                                     BF16 => BFP8
+215    0.1 %         TypecastDeviceOperation                                 3        25 μs          1 μs    110                                                     BF16 => BFP8
+216    0.0 %         SliceDeviceOperation                                    3         2 μs          0 μs     96                                                     BFP8 => BFP8
+217    0.0 %         SliceDeviceOperation                                    3         2 μs          1 μs     96                                                     BFP8 => BFP8
+218    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          1 μs     32                                               BFP8, BFP8 => BFP8
+219    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          1 μs     32                                               BFP8, BFP8 => BFP8
+220    0.0 %         SliceDeviceOperation                                    3         2 μs          1 μs     96                                                     BFP8 => BFP8
+221    0.0 %         SliceDeviceOperation                                    3         2 μs          1 μs     96                                                     BFP8 => BFP8
+222    0.0 %         PagedFillCacheDeviceOperation                           3         2 μs          1 μs     32                                               BFP8, BFP8 => BFP8
+223    0.0 %         PagedFillCacheDeviceOperation                           3         2 μs          1 μs     32                                               BFP8, BFP8 => BFP8
+224    0.0 %         SliceDeviceOperation                                    3         2 μs          1 μs     96                                                     BFP8 => BFP8
+225    0.0 %         SliceDeviceOperation                                    3         1 μs          5 μs     96                                                     BFP8 => BFP8
+226    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+227    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+228    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+229    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+230    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+231    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+232    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+233    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+234    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+235    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+236    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+237    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+238    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+239    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+240    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+241    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+242    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+243    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+244    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+245    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+246    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+247    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+248    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+249    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+250    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+251    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+252    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+253    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+254    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+255    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+256    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+257    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+258    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+259    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+260    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+261    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+262    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+263    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+264    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+265    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+266    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+267    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+268    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+269    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+270    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+271    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+272    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+273    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+274    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+275    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+276    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+277    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+278    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+279    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+280    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+281    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+282    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+283    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+284    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+285    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+286    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+287    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+288    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+289    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+290    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+291    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+292    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+293    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+294    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+295    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+296    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+297    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+298    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+299    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+300    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+301    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+302    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+303    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+304    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+305    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+306    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+307    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+308    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+309    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+310    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+311    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+312    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+313    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+314    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+315    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+316    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+317    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+318    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+319    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+320    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+321    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+322    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+323    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+324    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+325    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+326    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+327    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+328    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+329    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+330    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+331    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+332    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+333    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+334    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+335    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+336    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+337    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+338    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+339    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+340    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+341    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+342    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+343    0.0 %         PagedFillCacheDeviceOperation                           3         1 μs          3 μs     32                                               BFP8, BFP8 => BFP8
+344    0.3 %         SDPAOperation                                           3        59 μs          5 μs    110                                               BF16, BF16 => BF16
+345    0.2 %         NLPConcatHeadsDeviceOperation                           3        45 μs          1 μs     32                                                     BF16 => BF16
+346   11.0 %   SLOW  MatmulDeviceOperation b={32} x 32 x 3072 x 3072         3     2,169 μs          0 μs     96   8 GB/s   1.6 %   8.9 TFLOPs    1.7 %  LoFi BF16 x BFP4 => BF16
+347    0.2 %         BinaryNgDeviceOperation                                 3        48 μs          1 μs    110                                               BF16, BF16 => BF16
+348    0.4 %         LayerNormDeviceOperation                                3        74 μs          1 μs     32                                               BF16, BF16 => BF16
+349   23.6 %   SLOW  MatmulDeviceOperation b={32} x 32 x 3072 x 16384        3     4,652 μs          1 μs    103  19 GB/s   3.8 %  22.2 TFLOPs    3.9 %  LoFi BF16 x BFP8 => BF16
+350    0.5 %         SliceDeviceOperation                                    3        89 μs          1 μs    110                                                     BF16 => BF16
+351    0.4 %         SliceDeviceOperation                                    3        88 μs          1 μs    110                                                     BF16 => BF16
+352    0.7 %         BinaryNgDeviceOperation                                 3       131 μs          1 μs    110                                               BF16, BF16 => BF16
+353   29.3 %   SLOW  MatmulDeviceOperation b={32} x 32 x 8192 x 3072         3     5,772 μs          0 μs     96   8 GB/s   1.6 %   8.9 TFLOPs    1.7 %  LoFi BF16 x BFP8 => BF16
+354    0.2 %         BinaryNgDeviceOperation                                 3        48 μs          1 μs    110                                               BF16, BF16 => BF16
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+     100.0 %         176 device ops, 0 host ops, 0 signposts                      19,066 μs        637 μs         10 GB/s   2.0 %
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+180   11.5 %   SLOW  MatmulDeviceOperation b={32} x 32 x 3072 x 9216         3     2,264 μs         11 μs     96  17 GB/s   3.4 %  25.6 TFLOPs    4.8 %  LoFi BF16 x BFP4 => BF16
+228    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+229    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+232    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+233    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+236    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+237    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+240    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+241    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+244    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+245    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+248    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+249    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+252    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+253    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+256    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+257    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+260    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+261    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+264    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+265    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+268    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+269    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+272    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+273    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+276    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+277    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+280    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+281    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+284    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+285    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+288    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+289    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+292    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+293    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+296    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+297    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+300    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+301    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+304    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+305    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+308    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+309    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+312    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+313    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+316    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+317    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+320    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+321    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+324    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+325    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+328    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+329    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+332    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+333    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+336    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+337    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+340    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+341    0.0 %         SliceDeviceOperation                                    3         1 μs          7 μs     96                                                     BFP8 => BFP8
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 47 μs (0.2% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.
+
+Matmul Optimization
+-------------------
+180   11.5 %   SLOW  MatmulDeviceOperation b={32} x 32 x 3072 x 9216         3     2,264 μs         11 μs     96  17 GB/s   3.4 %  25.6 TFLOPs    4.8 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 1x3 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+346   11.0 %   SLOW  MatmulDeviceOperation b={32} x 32 x 3072 x 3072         3     2,169 μs          0 μs     96   8 GB/s   1.6 %   8.9 TFLOPs    1.7 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+349   23.6 %   SLOW  MatmulDeviceOperation b={32} x 32 x 3072 x 16384        3     4,652 μs          1 μs    103  19 GB/s   3.8 %  22.2 TFLOPs    3.9 %  LoFi BF16 x BFP8 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 1x5 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+353   29.3 %   SLOW  MatmulDeviceOperation b={32} x 32 x 8192 x 3072         3     5,772 μs          0 μs     96   8 GB/s   1.6 %   8.9 TFLOPs    1.7 %  LoFi BF16 x BFP8 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
