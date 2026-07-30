@@ -15,6 +15,32 @@
 
 namespace ttnn::experimental::prim {
 
+// Page-space geometry of the scatter, for ANY scatter dim.
+//
+// The tiled input buffer is a row-major array of pages over [d0, ..., d_{rank-3}, Ht, Wt]. Slicing it on
+// dim `d` cuts a middle axis of that array, so slice j of every "outer" index (the product of the dims
+// before d) is a CONTIGUOUS run of `slice_run_pages` pages starting at j * slice_run_pages, and
+// consecutive runs sit `stride_pages` apart. That is the only thing the scatter dim changes: the reader
+// walks (run, stride) instead of a hardcoded (slice_Wt, width_tiles) pair, and everything downstream --
+// chunking, staging, the output write -- only ever sees the resulting linear page order of a slice.
+// The last dim is the degenerate case with stride == one row and run == the slice's width in tiles;
+// dim 0 is the other degenerate case with a single run (outer == 1), so the stride is never taken.
+struct ReduceScatterDirectGeometry {
+    uint32_t single_tile_bytes;        // bytes per tile
+    uint32_t tile_granularity;         // tiles per chunk (compute/CB granularity)
+    uint32_t interm_tiles_per_packet;  // max tiles carried in one fabric packet
+    uint32_t page_bytes;               // staging row width == tile_granularity * single_tile_bytes
+    uint32_t pages_per_slice;          // tiles in one slice (== output tiles)
+    uint32_t chunks_per_slice;         // ceil(pages_per_slice / tile_granularity)
+    uint32_t slice_run_pages;          // contiguous pages of a slice, per outer index
+    uint32_t stride_pages;             // input pages between the starts of consecutive runs
+};
+
+// Single source of truth for the geometry above, shared by compute_output_specs (which sizes staging
+// from it) and the program factory (which wires it into the kernels), so the two can never disagree.
+ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
+    const ReduceScatterMinimalDirectParams& args, const ttnn::Tensor& input_tensor, bool fp32_dest_acc_en);
+
 // Worker-core selection: one core per link, each owning that link's fwd + bwd connection. Factored out
 // so the resolved link count and the core placement are defined in exactly one place.
 uint32_t reduce_scatter_direct_num_links(const ReduceScatterMinimalDirectParams& args, uint32_t chunks_per_slice);

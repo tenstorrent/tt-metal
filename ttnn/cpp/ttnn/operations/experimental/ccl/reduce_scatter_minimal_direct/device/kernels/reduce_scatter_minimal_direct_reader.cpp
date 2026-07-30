@@ -37,8 +37,11 @@ void kernel_main() {
     constexpr uint32_t chunks_per_slice = get_compile_time_arg_val(2);
     // Whole-slice tile count; this core's tile budget arrives as a runtime arg (tile_count) instead.
     [[maybe_unused]] constexpr uint32_t pages_per_slice = get_compile_time_arg_val(3);
-    constexpr uint32_t slice_Wt = get_compile_time_arg_val(4);     // slice width in tiles (per-row run)
-    constexpr uint32_t width_tiles = get_compile_time_arg_val(5);  // input row width in tiles
+    // Slice walk in page space: a slice is `slice_run_pages` contiguous input pages every `stride_pages`.
+    // Scattering the last dim gives run = the slice's width in tiles and stride = the full row; any other
+    // dim just changes these two numbers (see ReduceScatterDirectGeometry on the host side).
+    constexpr uint32_t slice_run_pages = get_compile_time_arg_val(4);
+    constexpr uint32_t stride_pages = get_compile_time_arg_val(5);
     constexpr uint32_t num_devices = get_compile_time_arg_val(6);
     constexpr uint32_t cb_send_id = get_compile_time_arg_val(7);
     constexpr uint32_t cb_reduce_id = get_compile_time_arg_val(8);
@@ -83,19 +86,19 @@ void kernel_main() {
     const uint32_t half_off_bytes = (invocation & 1u) * half_stride_tiles * tile_bytes;
 
     // Where this core's tile range starts in the per-slice input walk: tile tile_start of a slice sits
-    // at row tile_start/slice_Wt, column tile_start%slice_Wt (loop-invariant, so hoisted).
-    const uint32_t in_row_off_init = (tile_start / slice_Wt) * width_tiles;
-    const uint32_t in_page_in_row_init = tile_start % slice_Wt;
+    // in run tile_start/slice_run_pages, at offset tile_start%slice_run_pages (loop-invariant, hoisted).
+    const uint32_t in_run_off_init = (tile_start / slice_run_pages) * stride_pages;
+    const uint32_t in_page_in_run_init = tile_start % slice_run_pages;
 
     // Reads this core's tile range of local input slice `j`, chunk `k`, into L1 at `l1` (per tile: the
     // input is bank-interleaved and a slice is strided). Walk state is carried by the caller.
-    auto read_local_chunk = [&](uint32_t j, uint32_t& row_off, uint32_t& page_in_row, uint32_t l1, uint32_t tiles) {
-        const uint32_t tile_id_start = j * slice_Wt;
+    auto read_local_chunk = [&](uint32_t j, uint32_t& run_off, uint32_t& page_in_run, uint32_t l1, uint32_t tiles) {
+        const uint32_t tile_id_start = j * slice_run_pages;
         for (uint32_t t = 0; t < tiles; ++t) {
-            const uint32_t tid = tile_id_start + row_off + page_in_row;
-            if (++page_in_row == slice_Wt) {
-                row_off += width_tiles;
-                page_in_row = 0;
+            const uint32_t tid = tile_id_start + run_off + page_in_run;
+            if (++page_in_run == slice_run_pages) {
+                run_off += stride_pages;
+                page_in_run = 0;
             }
             noc.async_read(input_acc, CoreLocalMem<uint32_t>(l1), tile_bytes, {.page_id = tid}, {}, {});
             l1 += tile_bytes;
@@ -107,13 +110,13 @@ void kernel_main() {
     // stay aligned and no read ever wraps the CB); only tiles_in_chunk tiles are valid in a partial chunk.
     for (uint32_t dst = 0; dst < num_dests; ++dst) {
         const uint32_t j = get_arg_val<uint32_t>(dest_slices + dst);
-        uint32_t row_off = in_row_off_init;
-        uint32_t page_in_row = in_page_in_row_init;
+        uint32_t run_off = in_run_off_init;
+        uint32_t page_in_run = in_page_in_run_init;
         uint32_t tiles_done = 0;
         for (uint32_t k = 0; k < chunk_count; ++k) {
             const uint32_t tiles_in_chunk = std::min(tile_granularity, tile_count - tiles_done);
             cb_send.reserve_back(tile_granularity);
-            read_local_chunk(j, row_off, page_in_row, cb_send.get_write_ptr(), tiles_in_chunk);
+            read_local_chunk(j, run_off, page_in_run, cb_send.get_write_ptr(), tiles_in_chunk);
             noc.async_read_barrier();
             cb_send.push_back(tile_granularity);
             tiles_done += tiles_in_chunk;
@@ -122,8 +125,8 @@ void kernel_main() {
 
     // ---- Phase 2: feed the reducer num_devices blocks per chunk ----
     {
-        uint32_t row_off = in_row_off_init;
-        uint32_t page_in_row = in_page_in_row_init;
+        uint32_t run_off = in_run_off_init;
+        uint32_t page_in_run = in_page_in_run_init;
         uint32_t tiles_done = 0;
         for (uint32_t k = 0; k < chunk_count; ++k) {
             const uint32_t tiles_in_chunk = std::min(tile_granularity, tile_count - tiles_done);
@@ -134,7 +137,7 @@ void kernel_main() {
 
             // block 0: our own contribution, straight out of the input tensor. Issued before the arrival
             // waits below so it lands while we spin.
-            read_local_chunk(device_idx, row_off, page_in_row, base, tiles_in_chunk);
+            read_local_chunk(device_idx, run_off, page_in_run, base, tiles_in_chunk);
 
             if (k == 0) {
                 // Every remote contribution to our own slice has landed (whole tile range, all chunks).

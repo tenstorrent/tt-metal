@@ -30,7 +30,8 @@ void bind_reduce_scatter_minimal_direct(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
-            dim (int): Dimension to scatter (must be the last dim).
+            dim (int): Dimension to scatter. Any dim, provided it splits into `num_devices` whole
+                slices in tile/page units (the two innermost dims are counted in tiles).
 
         Keyword Args:
             cluster_axis (int, optional): mesh axis to run the collective on. Defaults to the active axis.
