@@ -1,0 +1,80 @@
+{
+  "cell_tag": "challenger/nofuse-noadvise/google_gemma_4_26b_a4b_it",
+  "commit": "d4aa3329538f25255d671824b87d4f1d15b2221a",
+  "decoder_sha256": "c3097938ef5162426d3f8684a9de9fdc3bccdbe0db51aa583aaeb4a9067fc37c",
+  "harness": "models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_decoder_perf_profile",
+  "decode_batch": 1,
+  "requested_decode_batch": 1,
+  "sequence_length": 1024,
+  "layer_counts": {
+    "sliding_attention": 25,
+    "full_attention": 5
+  },
+  "layer_kind_repeats_ms": {
+    "sliding_attention": [
+      1.2701544910669327,
+      1.2792916968464851,
+      1.2700725346803665
+    ],
+    "full_attention": [
+      1.271044835448265,
+      1.267709769308567,
+      1.2730490416288376
+    ]
+  },
+  "aggregation": "(25 * sliding_attention_ms + 5 * full_attention_ms) / 30",
+  "repeats_ms": [
+    1.2703028817971547,
+    1.2773613755901654,
+    1.2705686191717784
+  ],
+  "incumbent_ms": 1.2703028817971547,
+  "noise_floor_ms": 0.007058493793010711,
+  "measured_at": "2026-07-30T18:38:00Z",
+  "shipped_policy_source": "doc/optimized_decoder/tracy_final_retry/decode_perf_report.csv and doc/optimized_decoder/tracy_full_final/decode_perf_report.csv, cross-checked against candidate_runs/final_selected_policy_perf.json",
+  "shipped_policy": {
+    "activation_dtype": "bfloat16",
+    "attention_weight_dtype_by_kind": {
+      "sliding_attention": "bfloat16",
+      "full_attention": "bfloat8_b"
+    },
+    "mlp_weight_dtype": "bfloat8_b",
+    "mlp_down_weight_dtype": "bfloat8_b",
+    "expert_weight_dtype": "bfloat8_b",
+    "prefill_expert_weight_dtype": "bfloat8_b",
+    "attention_math_fidelity": "HiFi4",
+    "full_attention_math_fidelity": "LoFi",
+    "mlp_math_fidelity": "LoFi",
+    "expert_gate_math_fidelity": "LoFi",
+    "expert_math_fidelity": "LoFi",
+    "packed_dense_gate_up": true,
+    "expert_decode_input_l1": true,
+    "expert_gate_in0_block_w": 11,
+    "expert_down_in0_block_w": 11,
+    "expert_gate_per_core_n": 2,
+    "expert_down_per_core_n": 2,
+    "dram_in0_block_w": 11,
+    "dram_sharded_roles_by_kind": {
+      "sliding_attention": [
+        "packed_mlp_gate_up",
+        "mlp_down"
+      ],
+      "full_attention": [
+        "o_proj",
+        "packed_mlp_gate_up",
+        "mlp_down"
+      ]
+    },
+    "residual_shard_cores": 0
+  },
+  "shipped_weight_dtypes": {
+    "sliding_attention.qkv": "BFLOAT16",
+    "sliding_attention.o_proj": "BFLOAT16",
+    "full_attention.qkv": "BFLOAT8_B",
+    "full_attention.o_proj": "BFLOAT8_B",
+    "dense_mlp.gate_up": "BFLOAT8_B",
+    "dense_mlp.down": "BFLOAT8_B",
+    "experts.gate_up": "BFLOAT8_B",
+    "experts.down": "BFLOAT8_B"
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "generated_by": ".agents/skills/advisor-challenger/scripts/reconcile.py plus schema-compatible shape reconciliation",
+  "stock_reconcile_result": {
+    "sliding_attention": "/tmp/gemma4-reconciliation-sliding.json",
+    "full_attention": "/tmp/gemma4-reconciliation-full.json",
+    "issue": "The stock parser did not recognize the current final_ir.mlir layout declarations or tt-perf-report Device Time column, and incorrectly produced a zero measured window. Rows below are matched by traced weight shape to the same shapes in the incumbent CSV."
+  },
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, NOT per-op",
+  "incumbent_perf_reports": {
+    "sliding_attention": "tracy/incumbent_sliding_attention_ops.csv",
+    "full_attention": "tracy/incumbent_full_attention_ops.csv"
+  },
+  "chains": [
+    {
+      "chain": "sliding_attention_projections",
+      "layer_kind": "sliding_attention",
+      "ops": [
+        "qkv",
+        "o_proj"
+      ],
+      "summed_window_share_pct": 17.36569648880403,
+      "measured_ms": 1.3098111376166344,
+      "verdict": "rejected",
+      "reason": "0.039508 ms slower than the frozen incumbent, well outside the 0.007058 ms noise floor",
+      "candidate_artifact": "measurements/advisor_screen_sliding_attention_chain.json"
+    },
+    {
+      "chain": "full_attention_qkv",
+      "layer_kind": "full_attention",
+      "ops": [
+        "qkv"
+      ],
+      "summed_window_share_pct": 7.345704474144184,
+      "measured_ms": 1.279798336327076,
+      "verdict": "rejected",
+      "reason": "0.009495 ms slower than the frozen incumbent, outside the 0.007058 ms noise floor",
+      "candidate_artifact": "measurements/advisor_screen_full_attention_chain.json"
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "qkv",
+      "chain": "sliding_attention_projections",
+      "layer_kind": "sliding_attention",
+      "weight_shape": [
+        2816,
+        8192
+      ],
+      "advised_layout": "DRAM-sharded weight with L1 width-sharded activation/output",
+      "shipped_layout": "DRAM interleaved weight/input",
+      "device_us": 122.624,
+      "window_share_pct": 10.156542481819537,
+      "measured_ms": 1.3098111376166344,
+      "verdict": "rejected",
+      "reason": "measured as part of the material attention projection chain"
+    },
+    {
+      "op": "o_proj",
+      "chain": "sliding_attention_projections",
+      "layer_kind": "sliding_attention",
+      "weight_shape": [
+        4096,
+        2816
+      ],
+      "advised_layout": "DRAM-sharded weight with L1 width-sharded activation/output",
+      "shipped_layout": "DRAM interleaved weight/input",
+      "device_us": 87.039,
+      "window_share_pct": 7.209154007984495,
+      "measured_ms": 1.3098111376166344,
+      "verdict": "rejected",
+      "reason": "measured as part of the material attention projection chain"
+    },
+    {
+      "op": "qkv",
+      "chain": "full_attention_qkv",
+      "layer_kind": "full_attention",
+      "weight_shape": [
+        2816,
+        10240
+      ],
+      "advised_layout": "DRAM-sharded weight with L1 width-sharded activation/output",
+      "shipped_layout": "DRAM interleaved weight/input",
+      "device_us": 89.221,
+      "window_share_pct": 7.345704474144184,
+      "measured_ms": 1.279798336327076,
+      "verdict": "rejected",
+      "reason": "measured as the full material chain for this kind"
+    }
+  ],
+  "already_shipped_matches": [
+    "sliding and full packed dense gate/up are already DRAM-sharded",
+    "sliding and full dense down are already DRAM-sharded",
+    "full-attention o_proj is already DRAM-sharded"
+  ],
+  "uncapturable": {
+    "op_family": "ttnn.sparse_matmul",
+    "scope": "routed expert gate/up and down in every decoder layer",
+    "layers": 30,
+    "total_layers": 30,
+    "layer_share_pct": 100.0,
+    "measured_window_share_pct_by_kind": {
+      "sliding_attention": 18.317541040634786,
+      "full_attention": 18.226314649831508
+    },
+    "verdict": "terminal tracer boundary; not silently treated as advice or a rejection"
+  }
+}

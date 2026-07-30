@@ -1086,11 +1086,11 @@ class OptimizedDecoder(FunctionalDecoder):
             num_kv_heads=kind.num_kv_heads,
             memory_config=head_mem_config,
         )
-        q_mem_config, k_mem_config, v_mem_config = (
-            q_heads.memory_config(),
-            k_heads.memory_config(),
-            v_heads.memory_config(),
-        )
+        # The head split explicitly produces this layout.  Keep the declared
+        # phase config instead of querying traced tensor state: during shard
+        # analysis the optimizer owns that state and cannot resolve
+        # ``Tensor.memory_config()`` yet.
+        q_mem_config = k_mem_config = v_mem_config = head_mem_config
         q_heads = ttnn.to_memory_config(q_heads, ttnn.L1_MEMORY_CONFIG, dtype=q_heads.dtype)
         k_heads = ttnn.to_memory_config(k_heads, ttnn.L1_MEMORY_CONFIG, dtype=k_heads.dtype)
         v_heads = ttnn.to_memory_config(v_heads, ttnn.L1_MEMORY_CONFIG, dtype=v_heads.dtype)

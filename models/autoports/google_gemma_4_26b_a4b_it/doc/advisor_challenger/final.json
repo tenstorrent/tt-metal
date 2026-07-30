@@ -1,0 +1,78 @@
+{
+  "changed": false,
+  "shipped_change": false,
+  "outcome": "NO-CHANGE",
+  "incumbent_ms": 1.2703028817971547,
+  "final_ms": 1.2703028817971547,
+  "noise_floor_ms": 0.007058493793010711,
+  "delta_ms": 0.0,
+  "delta_pct": 0.0,
+  "best_single_ms": 1.279798336327076,
+  "winning_config": "frozen shipped policy from incumbent.json",
+  "oracle": "tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode at PCC >= 0.995 for sliding attention and both full-attention cache views",
+  "oracle_passed": true,
+  "oracle_artifact": "measurements/advisor_final_incumbent_oracle.json",
+  "combination": {
+    "best_set": [
+      "incumbent"
+    ],
+    "measured_sets": [
+      {
+        "set": [
+          "incumbent"
+        ],
+        "measured_ms": 1.2703028817971547,
+        "oracle_passed": true
+      },
+      {
+        "set": [
+          "sliding_attention_projections"
+        ],
+        "measured_ms": 1.3098111376166344,
+        "oracle_passed": false,
+        "oracle_reason": "not promoted to oracle because it was already 0.039508 ms slower than incumbent"
+      },
+      {
+        "set": [
+          "full_attention_qkv"
+        ],
+        "measured_ms": 1.279798336327076,
+        "oracle_passed": false,
+        "oracle_reason": "not promoted to oracle because it was already 0.009495 ms slower than incumbent"
+      },
+      {
+        "set": [
+          "sliding_attention_projections",
+          "full_attention_qkv"
+        ],
+        "measured_ms": 1.3167657889425755,
+        "oracle_passed": false,
+        "oracle_results": {
+          "sliding_decode_pcc": 0.99327698165809,
+          "full_decode_pcc": 0.9832345956311233,
+          "threshold": 0.995
+        }
+      }
+    ]
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial post-incumbent capture at the shipped policy for both layer kinds",
+      "captures": {
+        "sliding_attention": 1,
+        "full_attention": 1
+      },
+      "screened_chains": [
+        "sliding_attention_projections",
+        "full_attention_qkv"
+      ],
+      "result": "no screened winner; stop without re-profile or re-capture"
+    }
+  ],
+  "invariants": {
+    "final_lte_incumbent_within_noise": true,
+    "final_lte_best_single_within_noise": true,
+    "ties_go_to_incumbent": true
+  }
+}
