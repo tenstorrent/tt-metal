@@ -1,0 +1,66 @@
+{
+  "operations": {
+    "ttnn::slice": {
+      "configurations": [
+        {
+          "config_id": "cfg-slice-1",
+          "config_hash": "abc123",
+          "arguments": {
+            "arg0": {
+              "Tensor": {
+                "tensor_spec": {
+                  "logical_shape": [1, 1, 224, 224],
+                  "tensor_layout": {
+                    "dtype": "DataType::BFLOAT16",
+                    "memory_config": {
+                      "memory_layout": "TensorMemoryLayout::HEIGHT_SHARDED",
+                      "buffer_type": "BufferType::L1",
+                      "shard_spec": {"shard_shape": [224, 32], "grid": [{"x": 0, "y": 0}, {"x": 7, "y": 0}], "orientation": "ShardOrientation::ROW_MAJOR"}
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "executions": [
+            {"source": "tests/models/demos/llama3/test_llama.py [HF_MODEL:meta-llama/Llama-3.1-8B]", "count": 4, "trace_uid": "t1", "pytest_args": "-k slice"}
+          ],
+          "sweep_source_hash": "sh1"
+        }
+      ]
+    },
+    "ttnn::transpose": {
+      "configurations": [
+        {
+          "config_id": "cfg-transpose-1",
+          "config_hash": "def456",
+          "arguments": {
+            "arg0": {
+              "Tensor": {
+                "tensor_spec": {
+                  "logical_shape": [1, 1, 224, 224],
+                  "tensor_layout": {
+                    "dtype": "DataType::BFLOAT16",
+                    "memory_config": {"memory_layout": "TensorMemoryLayout::HEIGHT_SHARDED", "buffer_type": "BufferType::L1"}
+                  }
+                }
+              }
+            }
+          },
+          "executions": [
+            {"source": "tests/models/demos/stable_diffusion/test_sd.py [HF_MODEL:stabilityai/sd-2.1]", "count": 2, "trace_uid": "t2", "pytest_args": ""}
+          ],
+          "sweep_source_hash": "sh2"
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "trace_uid": "mini-trace",
+    "models": ["meta-llama/Llama-3.1-8B", "stabilityai/sd-2.1"],
+    "unique_operations": 2,
+    "total_configurations": 2,
+    "operations_summary": {},
+    "last_updated": "2026-07-24"
+  }
+}

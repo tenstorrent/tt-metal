@@ -34,6 +34,13 @@ on:
         required: false
         type: boolean
         default: false
+      run-reshard-analysis:
+        # Opt-in, single-card only (N150/N300/P100a/P150b). Builds a profiler-capable
+        # artifact, emits ops_perf CSVs during tracing, and ranks reshard-tax gaps.
+        description: "Profile the trace and rank reshard-tax gaps (opt-in; single-card runners only)"
+        required: false
+        type: boolean
+        default: false
       timeout-minutes:
         description: "Timeout per tracing leg (minutes)"
         required: false
@@ -209,6 +216,10 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
       build-wheel: true
+      # Build a profiler-capable (ENABLE_TRACY=ON) artifact only when reshard analysis
+      # is requested AND on a single-card runner. Left false/omitted otherwise so the
+      # default build is byte-identical to before (--disable-profiler).
+      tracy: ${{ inputs.run-reshard-analysis && (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P100a' || inputs.runner-label == 'P150b') }}
       platform: ${{ needs.validate-inputs.outputs.platform }}
 
   trace-model:
@@ -392,6 +403,33 @@ jobs:
           if [[ -n "$TRACE_UID" ]]; then
             echo "trace_uid=$TRACE_UID" >> $GITHUB_OUTPUT
           fi
+
+      - name: Run reshard profiling pass (opt-in, single-card only)
+        id: reshard_profile
+        if: >-
+          always() && steps.trace.outcome == 'success'
+          && inputs.run-reshard-analysis
+          && (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P100a' || inputs.runner-label == 'P150b')
+        timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
+        env:
+          TEST_PATH: ${{ matrix.test_path }}
+        run: |
+          # A second, dedicated pass purely for Tracy device profiling -- separate from the
+          # "Run model trace" step above, which captures op configs via generic_ops_tracer.py.
+          #
+          # Why a second pass instead of wrapping generic_ops_tracer.py itself in `python -m
+          # tracy`: generic_ops_tracer.py runs pytest as a CHILD subprocess (subprocess.run),
+          # not in-process. Tracy's host-side op-name/zone capture attaches to the process it
+          # directly launches; ttnn's op zones fire one process further down, across that
+          # subprocess boundary, so tracy never sees them as named ops. The result (verified
+          # against a real run) is process_ops_logs.py falling back to its device-only report
+          # path (raw hardware timing keyed by GLOBAL CALL COUNT, no OP CODE/INPUTS/OUTPUTS --
+          # see get_device_data_generate_report's docstring: "no host metadata") instead of the
+          # rich merged report analyze_reshard_tax.py needs. Every working `python -m tracy -r`
+          # example in this repo wraps pytest DIRECTLY (`-m pytest <test>`), so we do the same
+          # here for the profiling-only pass, at the cost of running the test's device work
+          # twice on this leg. Opt-in and single-card only, so this is bounded.
+          python3 -m tracy -p -r --check-exit-code -m pytest "$TEST_PATH" -v -s --timeout=0
 
       - name: Write pytest results to job summary
         if: always()
@@ -585,6 +623,20 @@ jobs:
           name: model-trace-leg-${{ matrix.slug }}
           path: /work/model_tracer/traced_operations/ttnn_operations_master.json
           retention-days: 1
+
+      - name: Upload profiler CSV (reshard analysis)
+        # Only when the dedicated profiling pass ran and succeeded. if-no-files-found:warn
+        # so a leg that produced no device ops does not fail the whole job.
+        if: >-
+          always() && steps.reshard_profile.outcome == 'success'
+          && inputs.run-reshard-analysis
+          && (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P100a' || inputs.runner-label == 'P150b')
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: model-trace-perf-csv-${{ matrix.slug }}
+          path: /work/generated/profiler/reports/**/ops_perf_results*.csv
+          retention-days: 1
+          if-no-files-found: warn
 
       - name: Upload leg status sidecar
         if: always()
@@ -877,6 +929,112 @@ jobs:
           else
             echo "::notice::No changes to trace_selection_registry.yaml — skipping PR"
           fi
+
+  analyze-reshard-tax:
+    name: Analyze reshard tax
+    needs: [validate-inputs, trace-model]
+    # Opt-in, additive analysis. Mirrors homogenize-and-load's gating idiom. Pure Python,
+    # no hardware, so it runs on ubuntu-latest. Restricted to single-card runners (the only
+    # ones that build Tracy + emit CSVs); multi-chip labels are excluded so no empty job runs.
+    if: ${{ inputs.run-reshard-analysis && (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P100a' || inputs.runner-label == 'P150b') && always() && needs.trace-model.result != 'cancelled' && needs.trace-model.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download profiler CSV artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: model-trace-perf-csv-*
+          path: downloaded_perf
+          merge-multiple: false
+
+      - name: Flatten profiler CSVs
+        id: flatten_csv
+        run: |
+          mkdir -p perf_csvs
+          CSV_COUNT=0
+
+          echo "::group::downloaded_perf contents"
+          find downloaded_perf -maxdepth 8 -print 2>/dev/null || echo "(downloaded_perf does not exist)"
+          echo "::endgroup::"
+
+          # download-artifact nests each artifact under its own directory and preserves the
+          # workspace-relative report path, so the CSVs can be several levels deep. The
+          # analyzer globs 'ops_perf_results*.csv' only in the directory it is pointed at
+          # (non-recursive), so flatten every CSV into one dir with slug-tagged names.
+          if [[ -d downloaded_perf ]]; then
+            while IFS= read -r src; do
+              rel="${src#downloaded_perf/}"
+              slug=$(echo "$rel" | grep -oE 'model-trace-perf-csv-[^/]+' | head -1 | sed 's/^model-trace-perf-csv-//' || true)
+              if [[ -z "$slug" ]]; then
+                slug="leg-$((CSV_COUNT + 1))"
+              fi
+              base="ops_perf_results_${slug}.csv"
+              dest="perf_csvs/${base}"
+              n=1
+              while [[ -e "$dest" ]]; do
+                dest="perf_csvs/ops_perf_results_${slug}-${n}.csv"
+                n=$((n + 1))
+              done
+              cp "$src" "$dest"
+              CSV_COUNT=$((CSV_COUNT + 1))
+            done < <(find downloaded_perf -type f -name 'ops_perf_results*.csv' 2>/dev/null)
+          fi
+
+          echo "csv_count=$CSV_COUNT" >> $GITHUB_OUTPUT
+          if [[ "$CSV_COUNT" -eq 0 ]]; then
+            echo "::warning::No profiler CSVs found; reshard-tax analysis has nothing to rank."
+          else
+            echo "Collected $CSV_COUNT profiler CSV(s):"
+            ls -1 perf_csvs/
+          fi
+
+      - name: Set up Python
+        if: steps.flatten_csv.outputs.csv_count != '0'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.10"
+
+      - name: Run reshard-tax analysis
+        if: steps.flatten_csv.outputs.csv_count != '0'
+        run: |
+          # CSV-only correlation is the documented primary path; master-file enrichment is
+          # optional and skipped here (the per-leg master JSONs would need homogenizing first).
+          python3 model_tracer/analyze_reshard_tax.py \
+            --ops-perf-csv perf_csvs \
+            --output reshard_tax.json | tee reshard_tax_stdout.txt
+
+          {
+            echo "## Reshard tax analysis"
+            echo ""
+            echo '```'
+            cat reshard_tax_stdout.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Note absence of profiler data
+        if: steps.flatten_csv.outputs.csv_count == '0'
+        run: |
+          {
+            echo "## Reshard tax analysis"
+            echo ""
+            echo "> No profiler CSVs were produced by the traced leg(s), so there is nothing to rank."
+            echo "> This is non-fatal: device profiling may have emitted no ops for the requested model(s)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reshard-tax report
+        if: steps.flatten_csv.outputs.csv_count != '0'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: reshard-tax-report
+          path: reshard_tax.json
+          retention-days: 1
+          if-no-files-found: warn
 
   trigger-validation:
     name: Trigger validation
