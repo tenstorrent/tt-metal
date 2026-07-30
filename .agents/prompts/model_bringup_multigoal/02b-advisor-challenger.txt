@@ -4,15 +4,15 @@ You are given a FINISHED optimized_decoder.py from an optimize stage that never 
 .agents/skills/advisor-challenger/SKILL.md FIRST and follow it — it has the detail and traps. Use $shard-advise for SETUP and capture mechanics only; this
 stage replaces its "how to incorporate" part.
 
-Ship a NEW optimized decoder measured to be the best of the incumbent and everything the advisor
-suggested. A NO-CHANGE outcome is a valid, publishable result — record it with numbers rather than
-manufacturing a change.
+Ship a NEW decoder measured to be the best of the incumbent and everything the advisor suggested. A
+NO-CHANGE outcome is a valid result — record it with numbers; do not manufacture a change.
 
 HARD REQUIREMENTS — the gate 02b-advisor-challenger.check.sh enforces every one:
 
-0. BATCH. Every capture and every measurement runs at decode batch DECODE_BATCH. Record it as
-   decode_batch in incumbent.json and capture_batch in each report.json; the gate asserts both equal
-   DECODE_BATCH. Advice judged at another batch can flip sign (+12.3% at b1 vs -8.8% at b32, same advice).
+0. BATCH + ORDER. Everything runs at decode batch DECODE_BATCH. In incumbent.json record decode_batch,
+   requested_decode_batch (both = DECODE_BATCH) and measured_at; in each report.json record capture_batch
+   and captured_at. The gate asserts the three batches agree and that captured_at is AFTER measured_at --
+   the incumbent must be frozen before the advisor runs. Advice judged at another batch can flip sign.
 
 1. FREEZE THE INCUMBENT FIRST, before running the advisor. Its own perf harness at DECODE_BATCH, >=3
    repeats, into doc/advisor_challenger/incumbent.json. incumbent_ms = the BEST repeat;
@@ -21,17 +21,16 @@ HARD REQUIREMENTS — the gate 02b-advisor-challenger.check.sh enforces every on
    resolved_policy.constructor_defaults — those are class defaults, not what executed.
 
 2. CAPTURE ONCE PER LAYER KIND, AT THE SHIPPED PRECISION, constructing the target with the shipped policy
-   (template: scripts/capture_template.py; advise_qwen.py is the only correct example). Pass --pipeline-options allow-bf16-dram-sharded-matmul=true if any traced weight
-   is bf16. Record traced_weight_dtypes and dram_sharded_considered; if considered is 0 set
+   (template: scripts/capture_template.py; advise_qwen.py is the only correct example). Pass
+   --pipeline-options allow-bf16-dram-sharded-matmul=true if any traced weight is bf16. Record traced_weight_dtypes and dram_sharded_considered; if considered is 0 set
    dram_sharded_zero_cause to wrong_precision_capture or bf16_eligibility_default. Note any uncapturable
    layer kind (sparse_matmul and SSM/gated-delta ops are terminal in the tracer) and its share of layers.
 
 3. RECONCILE THEN MEASURE, IN CHAINS. Run scripts/reconcile.py. It groups
    advised ops into chains and thresholds on the chain's SUMMED window share. MEASURE EACH MATERIAL CHAIN
-   AS ONE UNIT first; split per-op only after the chain has a number. An op resharded alone pays its edge
-   conversions; only the whole L1-resident chain pays off (OPT-003). A per-op bar previously shredded one
-   RoPE chain into 9 sub-threshold pieces, dropped unmeasured, summing to 5.86% of the window. Every chain
-   ends with a measured number or below_threshold plus its summed share. No prose-only rejections.
+   AS ONE UNIT first; split per-op only after the chain has a number. An op resharded alone pays its edge conversions;
+   only the whole L1-resident chain pays off (OPT-003). Every chain ends with a measured number or
+   below_threshold plus its summed share. No prose-only rejections.
 
 4. ONE VARIABLE PER MEASUREMENT. Every kept change re-runs the incumbent's own test suite at its own PCC
    bar; record the oracle. Prefer a real-weight oracle where one exists and say so when only synthetic do.

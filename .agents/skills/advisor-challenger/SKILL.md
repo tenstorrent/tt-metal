@@ -158,6 +158,36 @@ incumbent unchanged and say so with the numbers. That is the honest answer to "d
 cost on this model", and it is the outcome the invariant is designed to make safe. Do not manufacture a
 change to look productive.
 
+## Running this as an ordinary pipeline stage
+
+The gate `02b-advisor-challenger.check.sh` is self-contained: it reads only committed-or-working-tree
+artifacts under `doc/advisor_challenger/`, takes either `<model_dir>` or `models/autoports/<model_dir>`,
+and needs **no environment from any orchestrator**. An earlier revision required a `CHALLENGER_DECODE_BATCH`
+env var that only one experiment's driver exported, which made the stage fail for everyone else — a gate
+that cannot pass in the pipeline is a wall, not a gate. The batch now comes from the stage's own
+`requested_decode_batch`, and an orchestrator that *does* export `CHALLENGER_DECODE_BATCH` gets one extra
+cross-check for free.
+
+**What the gate enforces on its own:** the three batches agree; the incumbent was frozen *before* the
+capture (`captured_at` after `measured_at`); traced dtypes equal shipped dtypes; `dram_sharded_considered`
+of 0 is classified; every material chain has a measured number; `final_ms <= incumbent_ms` with ties to the
+incumbent; the oracle passed; iterations are capped and triggered.
+
+**What it cannot enforce, and therefore what an orchestrator must add.** The gate may run *during* the
+stage, when artifacts are still uncommitted, so it cannot use git history. Git-level freshness — that this
+run built its own artifacts instead of recovering a previous attempt's — has to come from whatever launches
+the stage. A previous re-run in this project passed a clean-working-tree preflight and then cherry-picked
+its predecessor's commits out of the object store two minutes later, so this is not hypothetical. The three
+checks worth wiring in, in the orchestrator:
+
+1. every commit touching `doc/advisor_challenger/` authored inside this stage's own window — cherry-pick and
+   rebase preserve author dates, so inherited history is visible;
+2. no `cherry-pick` or `rebase` entry in the work branch's reflog;
+3. no byte-identical artifact shared with a parked copy of the same cell — this is what catches files
+   copied by hand, which have fresh commits but stale content.
+
+`skillexp-logs/run_challenger.sh` implements all three as `challenger_is_fresh()` if you want a reference.
+
 ## What this cannot reach — state it, do not discover it
 
 The largest single win in the reference corpus is **not reachable by this skill**: gemma's routed

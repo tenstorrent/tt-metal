@@ -141,21 +141,36 @@ r = json.load(open(rep))
 try: i = json.load(open(inc))
 except Exception: i = {}
 cb, ib = r.get("capture_batch"), i.get("decode_batch")
+# The requested batch is read from the ARTIFACT, not the environment. An earlier version required an env
+# var that only the experiment's own driver exported, which made the gate fail for anyone running this as
+# an ordinary pipeline stage -- a gate that cannot pass in the pipeline is not a gate, it is a wall. The
+# stage records what the prompt asked for (requested_decode_batch); the env var, when present, is an
+# optional third cross-check from the orchestrator.
+rb = i.get("requested_decode_batch")
 bad = []
 if cb is None: bad.append("report.json records no capture_batch")
 if ib is None: bad.append("incumbent.json records no decode_batch")
+if rb is None:
+    bad.append("incumbent.json records no requested_decode_batch -- record the prompt's DECODE_BATCH so "
+               "the batch actually measured can be checked against the batch asked for")
 if cb is not None and ib is not None and int(cb) != int(ib):
     bad.append(f"capture_batch {cb} != incumbent decode_batch {ib}: the advice was judged at a batch it "
                "was not captured at, which can flip its sign")
-if want:
-    if cb is not None and int(cb) != int(want):
-        bad.append(f"capture_batch {cb} != requested DECODE_BATCH {want}")
-    if ib is not None and int(ib) != int(want):
-        bad.append(f"incumbent decode_batch {ib} != requested DECODE_BATCH {want}")
-else:
-    bad.append("CHALLENGER_DECODE_BATCH not exported, so the requested batch cannot be verified -- the "
-               "driver must set it")
-for b in bad: print(f"CRITICAL: {kind}: BATCH: {b}", file=sys.stderr)
+for nm, v in (("incumbent decode_batch", ib), ("capture_batch", cb)):
+    if v is not None and rb is not None and int(v) != int(rb):
+        bad.append(f"{nm} {v} != requested_decode_batch {rb}")
+if want and rb is not None and int(want) != int(rb):
+    bad.append(f"orchestrator asked for DECODE_BATCH {want} but the stage recorded "
+               f"requested_decode_batch {rb}")
+# ORDERING: the incumbent must be frozen BEFORE the advisor runs, or `final <= incumbent` is comparing
+# against a number the advisor could already have influenced. This is the only in-repo way to check it.
+ma, ca = i.get("measured_at"), r.get("captured_at")
+if not ma: bad.append("incumbent.json records no measured_at")
+if not ca: bad.append(f"report.json records no captured_at")
+if ma and ca and str(ca) < str(ma):
+    bad.append(f"captured_at {ca} PRECEDES incumbent measured_at {ma}: the incumbent was not frozen "
+               "before the advisor ran, so the invariant compares against a contaminated baseline")
+for b in bad: print(f"CRITICAL: {kind}: BATCH/ORDER: {b}", file=sys.stderr)
 sys.exit(1 if bad else 0)
 PY
 
