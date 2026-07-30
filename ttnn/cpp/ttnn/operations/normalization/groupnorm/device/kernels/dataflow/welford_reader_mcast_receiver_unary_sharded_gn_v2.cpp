@@ -14,24 +14,21 @@
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
-    constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
+    using MidMcastArgs = dataflow_kernel_lib::McastArgs<0, 0>;
+    constexpr MidMcastArgs mid_mcast_args;
 
-    constexpr uint32_t num_batches = get_compile_time_arg_val(2);
+    constexpr uint32_t num_batches = get_compile_time_arg_val(15);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(3);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(4);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(5);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(6);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(7);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(16);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(17);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(18);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(19);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(20);
 
     // These are numbers in absolute terms, on a per group, per batch without tiling
-    constexpr uint32_t block_hw = get_compile_time_arg_val(8);
-    constexpr uint32_t num_groups = get_compile_time_arg_val(9);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(10);
-
-    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(1);
+    constexpr uint32_t block_hw = get_compile_time_arg_val(21);
+    constexpr uint32_t num_groups = get_compile_time_arg_val(22);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(23);
 
     constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t cb_ex_global_id = tt::CBIndex::c_15;
@@ -41,12 +38,7 @@ void kernel_main() {
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
 
     Noc noc;
-    const uint32_t reduce_sender_coords[2] = {mcast_sender_noc_x, mcast_sender_noc_y};
-    dataflow_kernel_lib::ReceiverPipe<
-        reduce_sender_semaphore_id,
-        /*PRE_HANDSHAKE=*/true,
-        reduce_receiver_semaphore_id>
-        reduce_pipe(noc, reduce_sender_coords);
+    auto reduce_pipe = mid_mcast_args.receiver(noc);
 
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_ex_global(cb_ex_global_id);
