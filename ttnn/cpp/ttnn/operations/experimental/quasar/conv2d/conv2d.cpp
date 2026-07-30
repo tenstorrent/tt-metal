@@ -612,9 +612,7 @@ Result conv2d_L1(
         // per_core_M WITHOUT per-conv act_block_h_override (needed for the uniform model wiring). Remove once
         // the reader-indices / read_activation_data path handles > 4 M-tiles per gather.
         constexpr uint32_t kQuasarReaderMaxActBlockHTiles = 4;
-        if (hi > kQuasarReaderMaxActBlockHTiles) {
-            hi = kQuasarReaderMaxActBlockHTiles;
-        }
+        hi = std::min(hi, kQuasarReaderMaxActBlockHTiles);
         // Keep act_block_h a multiple of the (already-valid) out_subblock height AND a divisor of the per-core
         // output height, so the compute subblocking stays valid (factory asserts act_block_h % out_subblock_h
         // == 0) and no partial M-block is produced. out_subblock_h divides the per-core height, so it is
