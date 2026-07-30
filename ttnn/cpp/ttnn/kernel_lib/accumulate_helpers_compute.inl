@@ -23,6 +23,18 @@ ALWI BlockAccumulate BlockAccumulate::arm(uint32_t cb_a, uint32_t cb_b, uint32_t
     return BlockAccumulate(cb_a, cb_b, cb_out, granularity);
 }
 
+ALWI void BlockAccumulate::rearm() {
+    // Restoring the op init alone is NOT enough. add_tiles_init issues state_configure (the
+    // ComputeKernelSentinel tracker), the math binary init and llk_unpack_AB_init — but NOT
+    // reconfig_data_format. An interleaved op that touched the unpack/pack data-format registers
+    // therefore leaves them pointing at ITS operands, so the formats must be re-established explicitly
+    // or the next add_tiles unpacks this accumulator's CBs through the wrong format.
+    reconfig_data_format(cb_a_, cb_b_);
+    pack_reconfig_data_format(cb_out_);
+    add_tiles_init(cb_a_, cb_b_, false);
+    programmed_seeded_ = false;
+}
+
 ALWI void BlockAccumulate::ensure_mode(bool seeded) {
     if (programmed_seeded_ != seeded) {
         // acc_to_dest distinguishes "DST = a + b" from "DST += a + b"; only re-program on a real change.
@@ -109,7 +121,11 @@ ALWI void BlockAccumulate::run_chunked(uint32_t num_tiles, uint32_t out_capacity
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(i, cb_out_, base + i);
+            // In the default in-order pack mode the output tile index is IGNORED: pack_tile writes to
+            // the next slot and its internal pointer is reset only by cb_push_back, which happens once
+            // after the whole loop. So successive passes append naturally and passing `base + i` here
+            // would be dead arithmetic implying a placement guarantee this mode does not offer.
+            pack_tile(i, cb_out_);
         }
         tile_regs_release();
     }

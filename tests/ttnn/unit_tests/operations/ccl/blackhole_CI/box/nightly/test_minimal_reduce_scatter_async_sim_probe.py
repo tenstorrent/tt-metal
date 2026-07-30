@@ -1,6 +1,6 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX - FileCopyrightText : © 2026 Tenstorrent USA, Inc.
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX - License - Identifier : Apache - 2.0
 
 """
 craq-sim verification probe for reduce_scatter_minimal_async's RING writer on 8 Blackhole chips.
@@ -47,19 +47,21 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.parametrize(
     "rs_input_shape, dim",
     [
-        # dim=3 over a [1,1,32,8*256] input scatters 256 columns to each of the 8 ring members.
+        # dim = 3 over a[1, 1, 32, 8 * 256] input scatters 256 columns to each of the 8 ring members.
         ([1, 1, 32, 2048], 3),
         # Same scatter, but input_tensor_B = 2 so the schedule's per-batch ring restart is exercised.
         ([2, 1, 32, 2048], 3),
+        # dim = 0 selects a DIFFERENT kernel triple(dim_zero_ring_*), so it needs its own case.
+        ([8, 1, 32, 256], 0),
     ],
-    ids=["b1", "b2"],
+    ids=["b1", "b2", "dim0"],
 )
 @pytest.mark.parametrize("rs_input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("mem_config_input", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
 @pytest.mark.parametrize("mem_config_rs", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
 @pytest.mark.parametrize("num_iters", [2])  # >1 so the program-cache-hit path is exercised too
-# use_barrier=True drives the multicast-inc barrier channel; the batch-ready multicast inc runs either way.
+# use_barrier = True drives the multicast - inc barrier channel; the batch - ready multicast inc runs either way.
 @pytest.mark.parametrize("use_barrier", [True])
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -100,4 +102,64 @@ def test_reduce_scatter_async_ring_8dev_sim(
         num_iters=num_iters,
         enable_trace=False,  # trace replay is a separate concern from the dataflow migration
         use_barrier=use_barrier,
+    )
+
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
+# LINE topology.Ring and Line select entirely different kernel triples
+# (line_reduce_scatter_minimal_async_{reader, writer } + line_reduction.cpp, or the dim_zero_line_ *
+# variants when dim == 0), so covering Ring above says nothing about these.Same two dim cases.
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
+@pytest.mark.parametrize("num_devices", [8])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "rs_input_shape, dim",
+    [
+        ([1, 1, 32, 2048], 3),
+        ([8, 1, 32, 256], 0),
+    ],
+    ids=["dim3", "dim0"],
+)
+@pytest.mark.parametrize("rs_input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("mem_config_input", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
+@pytest.mark.parametrize("mem_config_rs", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
+@pytest.mark.parametrize("num_iters", [2])
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456},
+            ttnn.Topology.Linear,
+        )
+    ],
+    indirect=["device_params"],
+    ids=["fabric_line"],
+)
+def test_reduce_scatter_async_line_8dev_sim(
+    bh_1d_mesh_device,
+    num_devices,
+    rs_input_shape,
+    dim,
+    num_links,
+    rs_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_rs,
+    rs_topology,
+    num_iters,
+):
+    run_reduce_scatter_impl(
+        bh_1d_mesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology,
+        num_iters=num_iters,
+        enable_trace=False,
     )

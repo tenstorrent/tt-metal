@@ -19,8 +19,7 @@ using tt::tt_fabric::common::experimental::UnicastWriteUpdateMask;
 // The invariant fields a fused write+inc arms once (the inc value, the flush flag and a nominal
 // payload size) and the fields each issue re-programs (both destinations + this packet's size).
 // Named here so the masks appear exactly once and no op ever spells one out.
-inline constexpr auto kFusedArmMask = UnicastFusedAtomicIncUpdateMask::Val |
-                                      UnicastFusedAtomicIncUpdateMask::Flush |
+inline constexpr auto kFusedArmMask = UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush |
                                       UnicastFusedAtomicIncUpdateMask::PayloadSize;
 inline constexpr auto kFusedIssueMask = UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
                                         UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
@@ -51,7 +50,13 @@ FORCE_INLINE DirectConn::DirectConn(size_t& conn_arg_idx, bool is_forward) :
           FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx)),
     is_forward_(is_forward) {}
 
-FORCE_INLINE void DirectConn::open() {
+FORCE_INLINE void DirectConn::open() { open_finish(); }
+
+// No-op: the ctor's BUILD_AND_OPEN_CONNECTION_START_ONLY already started the handshake, so a
+// DirectConn is always mid-open by construction (MuxConn::open_start() does the real work).
+FORCE_INLINE void DirectConn::open_start() {}
+
+FORCE_INLINE void DirectConn::open_finish() {
     conn_.open_finish();
     dir_ = is_forward_ ? &conn_.get_forward_connection() : &conn_.get_backward_connection();
 }
@@ -113,6 +118,21 @@ template <uint8_t NumBuffers>
 FORCE_INLINE void MuxConn<NumBuffers>::open() {
     if (valid_) {
         tt::tt_fabric::fabric_client_connect(mux_);
+    }
+}
+
+// Split open — start the mux handshake without waiting; pair with open_finish() before any issue.
+template <uint8_t NumBuffers>
+FORCE_INLINE void MuxConn<NumBuffers>::open_start() {
+    if (valid_) {
+        tt::tt_fabric::fabric_client_connect_start(mux_);
+    }
+}
+
+template <uint8_t NumBuffers>
+FORCE_INLINE void MuxConn<NumBuffers>::open_finish() {
+    if (valid_) {
+        tt::tt_fabric::fabric_client_connect_finish(mux_);
     }
 }
 
@@ -420,10 +440,7 @@ FORCE_INLINE void MulticastWriteChannel<ConnT>::write(uint64_t dst_noc_addr, uin
 
 template <typename ConnT>
 FORCE_INLINE MulticastFusedWriteIncChannel<ConnT> FabricStream<ConnT>::arm_multicast_fused_write_inc(
-    const ccl_routing_utils::line_multicast_route_info_t& route,
-    uint32_t page_size_bytes,
-    uint32_t val,
-    bool flush) {
+    const ccl_routing_utils::line_multicast_route_info_t& route, uint32_t page_size_bytes, uint32_t val, bool flush) {
     if (mcast_fused_hdr_ == nullptr) {
         mcast_fused_hdr_ = PacketHeaderPool::allocate_header();
     }
@@ -554,9 +571,54 @@ FORCE_INLINE DuplexScatterWriteChannel<C, ConnT> FabricDuplexStream<C, ConnT>::a
         conn_, scatter_hdr_[DuplexConn::kForward], scatter_hdr_[DuplexConn::kBackward], chunk_size_bytes);
 }
 
+template <Cast C, typename ConnT>
+FORCE_INLINE DuplexIncChannel<C, ConnT> FabricDuplexStream<C, ConnT>::arm_inc(uint32_t val, bool flush) {
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader arm_hdr{0, val, flush};
+    for (uint32_t d = 0; d < DuplexConn::kNumDirections; ++d) {
+        if (!conn_->has(d)) {
+            continue;
+        }
+        if (inc_hdr_[d] == nullptr) {
+            inc_hdr_[d] = PacketHeaderPool::allocate_header();
+        }
+        if constexpr (C == Cast::Multicast) {
+            linear_fabric::fabric_multicast_noc_unicast_atomic_inc_set_state<
+                UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+                inc_hdr_[d],
+                static_cast<uint8_t>(mcast_route_[d].start_distance_in_hops),
+                static_cast<uint8_t>(mcast_route_[d].range_hops),
+                arm_hdr);
+            ccl_routing_utils::fabric_set_line_multicast_route(inc_hdr_[d], mcast_route_[d]);
+        } else {
+            linear_fabric::fabric_unicast_noc_unicast_atomic_inc_set_state<
+                UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+                inc_hdr_[d], static_cast<uint8_t>(uni_route_[d].distance_in_hops), arm_hdr);
+            ccl_routing_utils::fabric_set_line_unicast_route(inc_hdr_[d], uni_route_[d]);
+        }
+    }
+    return DuplexIncChannel<C, ConnT>(conn_, inc_hdr_[DuplexConn::kForward], inc_hdr_[DuplexConn::kBackward]);
+}
+
 // ----------------------------------------------------------------------------
 // Duplex channels — issues fan out over every connected direction
 // ----------------------------------------------------------------------------
+
+template <Cast C, typename ConnT>
+FORCE_INLINE void DuplexIncChannel<C, ConnT>::inc(uint64_t remote_sem_noc_addr) {
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader issue_hdr{remote_sem_noc_addr, 0};
+    for (uint32_t d = 0; d < DuplexConn::kNumDirections; ++d) {
+        if (!conn_->has(d)) {
+            continue;
+        }
+        if constexpr (C == Cast::Multicast) {
+            linear_fabric::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                conn_->sender(d), hdr_[d], issue_hdr);
+        } else {
+            linear_fabric::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                conn_->sender(d), hdr_[d], issue_hdr);
+        }
+    }
+}
 
 template <Cast C, typename ConnT>
 FORCE_INLINE void DuplexWriteChannel<C, ConnT>::write(
@@ -615,8 +677,7 @@ FORCE_INLINE void DuplexWriteChannel<C, ConnT>::write_page(
 template <Cast C, typename ConnT>
 FORCE_INLINE void DuplexFusedWriteIncChannel<C, ConnT>::write_fused(
     uint64_t dst_noc_addr, uint32_t src_l1_addr, uint64_t remote_sem_noc_addr, uint32_t payload_size_bytes) {
-    const tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader issue_hdr{
-        dst_noc_addr, remote_sem_noc_addr, 0, false};
+    const tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader issue_hdr{dst_noc_addr, remote_sem_noc_addr, 0, false};
     for (uint32_t d = 0; d < DuplexConn::kNumDirections; ++d) {
         if (!conn_->has(d)) {
             continue;
