@@ -11,6 +11,40 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+#ifdef ELTWISE_BROADCAST_TYPE
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    EltwiseBinaryReuseDestType binary_reuse_dest,
+    BroadcastType broadcast_type>
+ALWI void binary_dest_reuse_broadcast_tiles_init(uint32_t icb0) {
+    state_configure(icb0, __builtin_LINE());
+#ifndef ARCH_QUASAR
+    UNPACK(constexpr bool acc_to_dest = true);
+#else
+    UNPACK(constexpr bool acc_to_dest = false);
+#endif
+    UNPACK((llk_unpack_A_init<broadcast_type, acc_to_dest, binary_reuse_dest>(false, false, icb0)));
+    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, broadcast_type, MATH_FIDELITY, binary_reuse_dest>(
+        icb0, icb0, false /* acc_to_dest */)));
+}
+
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    EltwiseBinaryReuseDestType binary_reuse_dest,
+    BroadcastType broadcast_type>
+ALWI void binary_dest_reuse_broadcast_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+#ifndef ARCH_QUASAR
+    UNPACK(constexpr bool acc_to_dest = true);
+#else
+    UNPACK(constexpr bool acc_to_dest = false);
+#endif
+    UNPACK((llk_unpack_A<broadcast_type, acc_to_dest, binary_reuse_dest>(in_cb_id, in_tile_index)));
+    MATH(
+        (llk_math_eltwise_binary<eltwise_binary_type, broadcast_type, DST_ACCUM_MODE, MATH_FIDELITY, binary_reuse_dest>(
+            in_cb_id, in_cb_id, dst_tile_index, true /* clear_fp32_dst_acc */)));
+}
+#endif
+
 void kernel_main() {
     uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
     uint32_t per_core_block_size = get_arg(args::per_core_block_size);
@@ -58,12 +92,22 @@ void kernel_main() {
 #endif
 
 #ifdef ELTWISE_DEST_REUSE_TYPE
+#ifdef ELTWISE_BROADCAST_TYPE
+        binary_dest_reuse_broadcast_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE, ELTWISE_BROADCAST_TYPE>(
+            dfb::in0);
+#else
         binary_dest_reuse_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(dfb::in0);
+#endif
 #endif
 
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
 #ifdef ELTWISE_DEST_REUSE_TYPE
+#ifdef ELTWISE_BROADCAST_TYPE
+            binary_dest_reuse_broadcast_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE, ELTWISE_BROADCAST_TYPE>(
+                dfb::in0, i, i);
+#else
             binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(dfb::in0, i, i);
+#endif
 #else
             ELTWISE_OP(dfb::in0, dfb::in1, i, i, i);
 #endif

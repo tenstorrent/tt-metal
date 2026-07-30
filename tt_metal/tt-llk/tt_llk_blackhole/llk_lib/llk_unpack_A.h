@@ -107,9 +107,16 @@ inline void _llk_unpack_A_mop_config_(
     {
         if constexpr (acc_to_dest)
         {
+            // Destination reuse moves the retained DEST face into SrcA. The dummy SrcA unpack
+            // must wait for that move before clearing the unpacker bank.
+            static constexpr std::uint32_t unpack_srca_reuse =
+                (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+                    ? TT_OP_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1 /* wait like UNPACR */, 0, 0, p_unpacr_nop::UNP_ZEROSRC)
+                    : unpack_srca_set_dvalid;
+
             constexpr std::uint32_t innerloop = 1;
             constexpr std::uint32_t outerloop = 2; // TODO: add support for num_faces, add support for dest to srcB
-            ckernel_template tmp(outerloop, innerloop, unpack_srca_set_dvalid, unpack_srca_set_dvalid);
+            ckernel_template tmp(outerloop, innerloop, unpack_srca_reuse, unpack_srca_reuse);
             tmp.set_start_op(unpack_srcb);
             tmp.set_end_op(srcb_set_z_2);
             tmp.program();

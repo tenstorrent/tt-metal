@@ -85,6 +85,8 @@ struct SingleCoreBinaryConfig {
     bool full_init = true;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     BinaryDestReuseType dest_reuse_type = BinaryDestReuseType::SrcA;
+    bool col_broadcast = false;
+    bool enable_32_bit_dest = false;
     tt::tt_metal::Tile tile = tt::tt_metal::Tile({32, 32});
 };
 
@@ -135,6 +137,10 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
     auto input0 = unpack_vector<bfloat16, uint32_t>(s.packed_input0);
     auto input1 = unpack_vector<bfloat16, uint32_t>(s.packed_input1);
     auto input2 = unpack_vector<bfloat16, uint32_t>(s.packed_input2);
+    if (test_config.col_broadcast) {
+        std::fill(input0.begin(), input0.end(), bfloat16(0.5f));
+        s.packed_input0 = pack_vector<uint32_t, bfloat16>(input0);
+    }
 
     std::vector<float> temp_golden(input0.size());
     uint16_t srca_fid_mask = 0xFFFF;
@@ -252,6 +258,9 @@ static std::map<std::string, std::string> build_binary_defines(const SingleCoreB
         defines["ELTWISE_DEST_REUSE_TYPE"] = test_config.dest_reuse_type == BinaryDestReuseType::SrcA
                                                  ? "EltwiseBinaryReuseDestType::DEST_TO_SRCA"
                                                  : "EltwiseBinaryReuseDestType::DEST_TO_SRCB";
+        if (test_config.col_broadcast) {
+            defines["ELTWISE_BROADCAST_TYPE"] = "BroadcastType::COL";
+        }
     } else {
         defines["ELTWISE_OP"] = binary_op_name_to_op_kernel.at(test_config.binary_op);
         if (test_config.full_init) {
@@ -391,10 +400,12 @@ bool single_core_binary(
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .fpu_math_fidelity = test_config.math_fidelity,
+            .enable_32_bit_dest = test_config.enable_32_bit_dest,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
             .fpu_math_fidelity = test_config.math_fidelity,
+            .enable_32_bit_dest = test_config.enable_32_bit_dest,
         };
     }
     experimental::KernelSpec compute_spec{
@@ -721,6 +732,30 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config, 2));
         }
+    }
+}
+
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileColBroadcastWithDestReuse) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "Broadcast destination reuse is not supported on Quasar";
+    }
+
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .num_tiles = 4,
+        .block_size = 4,
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "mul_with_dest_reuse",
+        .math_fidelity = MathFidelity::HiFi4,
+        .dest_reuse_type = unit_tests::compute::binary::BinaryDestReuseType::SrcA,
+        .col_broadcast = true,
+        .enable_32_bit_dest = true,
+    };
+
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config, 2));
     }
 }
 
