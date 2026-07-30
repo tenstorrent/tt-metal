@@ -241,7 +241,7 @@ def sweep_matmuls(mesh_device, matmuls: List[dict], pcc_threshold: float = _DEFA
 # the operator can then hand to / seed the optimize run with. Kept fully self-contained on purpose.
 # --------------------------------------------------------------------------------------------------
 _CC_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _CC_DIR.parent.parent.parent
+_REPO_ROOT = _CC_DIR.parent.parent.parent.parent
 
 
 def enumerate_matmul_sigs(node: str, case: Optional[str] = None, repo_root: Optional[Path] = None) -> List[str]:
@@ -302,6 +302,18 @@ def run_prepass(
     sigs = enumerate_matmul_sigs(node, case, repo_root)
     matmuls = parse_matmul_sigs(sigs)
     if not matmuls:
+        # An empty enumeration must never clobber a good table: a probe that crashes or a node that
+        # fails to resolve returns zero, and overwriting a previous 76-shape table with that erases
+        # every seed. Keep any existing non-empty table and report it instead of writing zeros over it.
+        prior = None
+        if out_path:
+            try:
+                prior = json.loads(Path(out_path).read_text())
+            except Exception:  # noqa: BLE001
+                prior = None
+        if isinstance(prior, dict) and prior.get("shapes"):
+            prior["note"] = "no matmul ops enumerated this pass; kept prior table"
+            return prior
         result = {"ok": True, "shapes": 0, "seeded": 0, "note": "no matmul ops enumerated"}
         _write(out_path, result)
         return result
@@ -360,9 +372,16 @@ def main(argv=None) -> int:
     ap.add_argument("--pcc", type=float, default=_DEFAULT_PCC, help="min PCC to accept a config (default 0.99)")
     ap.add_argument("--iters", type=int, default=5, help="timed reps per config (default 5)")
     ap.add_argument("--max-shapes", type=int, default=0, help="cap distinct shapes swept (0 = all)")
+    ap.add_argument("--repo-root", default=None, help="repo root the perf-test node is relative to (default: derived)")
     a = ap.parse_args(argv)
     summary = run_prepass(
-        a.node, case=a.case, out_path=a.out, pcc_threshold=a.pcc, iters=a.iters, max_shapes=a.max_shapes
+        a.node,
+        case=a.case,
+        out_path=a.out,
+        pcc_threshold=a.pcc,
+        iters=a.iters,
+        max_shapes=a.max_shapes,
+        repo_root=a.repo_root,
     )
     print(json.dumps({k: v for k, v in summary.items() if k != "table"}, indent=2))
     return 0 if summary.get("ok") else 1

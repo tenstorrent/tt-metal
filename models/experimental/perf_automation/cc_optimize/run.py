@@ -1058,6 +1058,8 @@ def _invoke_matmul_sweep(*, node, case, out_path, pcc_threshold, iters, max_shap
         str(iters),
         "--max-shapes",
         str(max_shapes),
+        "--repo-root",
+        str(repo_root),
     ]
     if case:
         cmd += ["--case", case]

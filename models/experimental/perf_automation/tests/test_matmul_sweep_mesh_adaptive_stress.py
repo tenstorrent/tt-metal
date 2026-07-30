@@ -228,3 +228,42 @@ def test_s7_source_has_no_1x1_hardcode_and_wires_resolver():
     assert "resolve_mesh_shape" in src, "run_prepass must derive its topology from resolve_mesh_shape"
     # the fabric guard must be present so single-chip standalone stays fabric-free
     assert "FabricConfig.FABRIC_1D" in src and "FabricConfig.DISABLED" in src, "fabric enable/disable guard missing"
+
+
+# --------------------------------------------------------------------------- s8
+def test_s8_repo_root_resolves_to_actual_repo():
+    """_REPO_ROOT is the fallback the CLI uses when no --repo-root is passed. It must be the REPO
+    root (parent of models/), not models/ itself: a relative perf-test node resolved against models/
+    points at models/models/... which does not exist, so the op-sig probe enumerates ZERO matmuls
+    (the exact 0-shapes regression). Off-by-one here silently empties the sweep."""
+    m = _load_sweep()
+    assert m._REPO_ROOT.name != "models", f"_REPO_ROOT points at models/ (off-by-one): {m._REPO_ROOT}"
+    assert (m._REPO_ROOT / "models" / "experimental" / "perf_automation").is_dir(), m._REPO_ROOT
+
+
+# --------------------------------------------------------------------------- s9
+def test_s9_empty_enumeration_keeps_prior_table(monkeypatch, tmp_path):
+    """A probe that crashes / a node that fails to resolve enumerates zero. That must NEVER overwrite
+    a previously-good table -- doing so erases every seed. Keep the prior non-empty table."""
+    import json
+
+    m = _load_sweep()
+    monkeypatch.setattr(m, "enumerate_matmul_sigs", lambda *a, **k: [])
+    monkeypatch.setattr(m, "parse_matmul_sigs", lambda sigs: [])
+    out = tmp_path / "matmul_sweep.json"
+    prior = {"ok": True, "shapes": 76, "seeded": 76, "improved": 54, "seeds": [{"m": 32}]}
+    out.write_text(json.dumps(prior))
+    res = m.run_prepass("n::t", out_path=str(out))
+    assert res.get("shapes") == 76, f"empty pass did not keep prior table: {res}"
+    assert json.loads(out.read_text()).get("shapes") == 76, "prior table on disk was clobbered by zeros"
+
+
+def test_s9_empty_enumeration_writes_zero_when_no_prior(monkeypatch, tmp_path):
+    import json
+
+    m = _load_sweep()
+    monkeypatch.setattr(m, "enumerate_matmul_sigs", lambda *a, **k: [])
+    monkeypatch.setattr(m, "parse_matmul_sigs", lambda sigs: [])
+    out = tmp_path / "matmul_sweep.json"  # nothing prior
+    res = m.run_prepass("n::t", out_path=str(out))
+    assert res.get("shapes") == 0 and json.loads(out.read_text()).get("shapes") == 0, res

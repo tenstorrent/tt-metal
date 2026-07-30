@@ -103,6 +103,16 @@ def test_s2_case_forwarded_when_given(monkeypatch, tmp_path, case):
     assert "--case" in cmd and cmd[cmd.index("--case") + 1] == case, cmd
 
 
+def test_s2_repo_root_forwarded(monkeypatch, tmp_path):
+    """The CLI must receive --repo-root: matmul_sweep.py's main() would otherwise fall back to a
+    derived root, and the perf-test node is a RELATIVE path -- a wrong root means the op-sig probe
+    runs from the wrong dir, collects no test, and enumerates ZERO matmuls."""
+    m, calls = _wire(monkeypatch, write_summary={"shapes": 1})
+    _invoke(m, tmp_path)
+    cmd = calls["cmd"]
+    assert "--repo-root" in cmd and cmd[cmd.index("--repo-root") + 1] == str(tmp_path), cmd
+
+
 # --------------------------------------------------------------------------- s3
 def test_s3_child_env(monkeypatch, tmp_path):
     m, calls = _wire(monkeypatch, write_summary={"shapes": 1})
