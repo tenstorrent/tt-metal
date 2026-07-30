@@ -15,12 +15,18 @@ Branch: `lserbedzija/voxtral-tts-ttnn` (pushed). All work is under
 |---|---|
 | CPU reference, 3 blocks + tokenizer + end-to-end pipeline | **done**, 30/30 vs upstream |
 | Block 3 — codec decoder on TTNN | **CLOSED**, 242x real-time, see §4 |
-| Block 1 — 3.4B AR backbone on TTNN | **not started** ← the next piece, see §7 |
-| Block 2 — flow-matching transformer on TTNN | **not started** |
+| Block 1 — 3.4B AR backbone on TTNN | **done** — prefill + decode on `tt_transformers` |
+| Block 2 — flow-matching transformer on TTNN | **done** — velocity PCC 0.9999989 |
+| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works**, 0.0% WER on natural text |
 | Codec **encoder** | **impossible** — weights absent from the public release |
 
 The model is 4 networks but only 3 are portable. 118 tests pass, 96 of them with no device
 (the reference suite runs weight-free off a vendored tensor manifest).
+
+**All three blocks now run on device and the pipeline generates real speech**, free-running, with
+natural `[END_AUDIO]` termination on all 15 fixture prompts and 0.0% WER on every natural-language
+one — including two 125-word paragraphs of 36–39 s. See §3. What remains is **performance**
+(RTF ≈ 2.2–3.5, so ~2–3x slower than real time) and the licensing wall in §6.
 
 **Block 3 is closed, not merely paused.** Six independent optimization attempts were measured and
 all rejected (§4). The single remaining known win is worth ~0.1% end-to-end. Do not reopen it
@@ -52,6 +58,16 @@ python -m pytest models/experimental/voxtral_tts/tests/test_common_ref.py \
 # expect: 118 passed
 ```
 Passing the directory instead of the file list collects nothing — pass the files.
+
+**End-to-end on device, and the quality numbers in §3.1:**
+```bash
+python models/experimental/voxtral_tts/scripts/export_backbone_hf.py --out /tmp/hf_backbone
+export HF_MODEL=/tmp/hf_backbone                      # tt_transformers refuses to load without it
+python models/experimental/voxtral_tts/scripts/generate_quality_set.py --out /tmp/vq
+python models/experimental/voxtral_tts/scripts/score_quality_set.py /tmp/vq/results.json
+```
+All 15 fixture prompts take ~20 min on one N150. `--cases 0,1` for a quick check. The WAVs land in
+`--out` and are the only way to actually *hear* the model — no metric substitutes for that.
 
 **Opening a device for anything with convs** needs `l1_small_size`, or you get
 `Out of Memory: ... bank size is 0 B`:
@@ -95,6 +111,60 @@ paragraph in a single pass** (469 frames, 37.5 s), and French via `fr_female`.
 fixture (`tests/real_frames_fixture.pt`, 6.4 KB of genuine Block 1+2 output) that asserts **both**
 PCC > 0.9999 **and** worst sample < 2% of peak. Default config measures PCC 0.999984 / worst 1.16%.
 That worst-sample bound is the gate that matters — see trap #9.
+
+**Blocks 1 and 2 on device, per block:**
+
+| | vs fp32 reference |
+|---|---|
+| Block 1 prefill (last position, real prompts) | PCC 0.99956–0.99958 |
+| Block 1 decode | PCC 0.981 |
+| Block 2 velocity | PCC 0.9999989; semantic codes exact, 73/74 frame codes exact |
+
+### 3.1 End-to-end on device — the numbers that actually matter
+
+Per-block PCC cannot tell you whether the audio is good, and neither can a teacher-forced code
+comparison. These runs are **free-running**: the model is fed its own codes, which is what serving
+does. Harness: `scripts/generate_quality_set.py` then `scripts/score_quality_set.py`.
+
+- **Intelligibility — 1.17% WER over 341 natural-text words, and every deviation is a scoring
+  artefact.** 12 of 12 natural-text cases: English (4, incl. two paragraphs), French, German,
+  Italian, Portuguese, Hindi all exactly **0.0%**. The two non-zero ones are not TTS errors —
+  Spanish 50% is the model correctly reading "42" aloud as "cuarenta y dos" against a reference
+  containing the digits (3 phantom errors on a 6-word clip), and Arabic 33% is one grapheme
+  (`حالك`→`حاله`) on a 3-word clip. This matches the reference's own 0.0% baseline, so
+  **Block 1's bf16 weight floor costs nothing measurable in intelligibility**.
+- **Long-form is the strong result.** The 676-char (125-word) paragraph: **0.0% WER at 459 frames
+  / 36.7 s** (`neutral_male`) and **0.0% at 489 frames / 39.1 s** (`casual_female`). 459 steps of
+  autoregressive decode with no drift, no repetition, no collapse. The reference generates the same
+  paragraph in 469 frames / 37.5 s — within 2% of the device's duration, independently.
+- **Termination: 15/15 prompts stop on `[END_AUDIO]` naturally.** Nothing runs away.
+- **Artifacts: clean.** Across all 15 — 0.000% clipped samples everywhere, |DC offset| < 3e-4,
+  0 clicks on 13/15 (2 on one German clip), peak 0.10–0.71 so nothing is near full scale.
+- **Voice identity carries through all three blocks.** Fixture cases 0 and 2 are the same
+  `neutral_male` preset reading *different* text, which is a positive control: their long-term
+  spectra match at **0.984** cosine, the highest pair by a clear margin (next is 0.882), and median
+  F0 separates cleanly — males 110.6 / 106.7 Hz vs females 205.1 / 192.0 Hz, with the two male
+  readings agreeing within 4 Hz on unrelated text.
+
+**Not measured:** a listening pass. Nobody has heard these clips; the artifact metrics catch
+gross defects (clipping, clicks, DC, silence) but not prosody, naturalness or accent quality.
+WAVs are written to the `--out` directory for exactly that.
+
+Three fixture texts are deliberately adversarial — emoji, `!@#$%^&*()`, literal `\t`/`\n`. The
+model tries to **vocalise** them (it renders `1234567890` correctly as "1 2 3 4 5 6 7 8 9 0", then
+speaks the symbol run), so there is no well-defined reference transcript and they are reported
+separately rather than folded into the headline WER.
+
+**These are a model limitation, not a port defect — checked, not assumed.** Running the fp32 CPU
+reference on the same two prompts: on the emoji text it collapses into a repetition loop
+("emoji test kalinsan keep on faith i can say i can say i can say…", 6257% WER) where the device
+at least keeps "and caps and mixed" (71%); on the symbol text both produce comparable nonsense
+(reference 333%, device 450%). Duration agrees to within 2 frames on the symbol text (reference
+242, device 240) and diverges on the emoji text (121 vs 64) — expected, since free-running
+generation is chaotic and one differing code sends the two down different trajectories. **Do not
+read the device being "better" on case 11 as a quality claim**; both outputs are unusable, and the
+lesson is that the model is brittle on non-speech input. Sanitising or spelling out such text
+belongs upstream of the model.
 
 ---
 
@@ -216,6 +286,30 @@ single fixed-precision step inside the fused pipeline. Pinning it further needs 
     forces the legacy v1 kernel. Holding it `True` in every test meant streaming v2 was never
     exercised for a long time.
 
+12. **RANDOM ACTIVATIONS ARE A PESSIMISTIC PROXY FOR WEIGHT PRECISION — this one cost the most
+    time on Block 1.** Feeding `randn * 0.02` embeddings through 26 layers reported PCC 0.892 for
+    BFP8 MLP weights vs 0.969 for bf16, which looked like a crisis and drove a long precision hunt.
+    On **real tokenized prompts** the same two configs score 0.99938 and 0.99970 — the entire
+    spread is 3e-4, and every variant clears 0.999. Random embeddings are off-manifold, so
+    activations do not sit in the range the weights were trained for, and block-float (one shared
+    exponent per block) is punished hardest by an inflated dynamic range. Never quote a
+    low-precision-vs-fp32 PCC from synthetic activations; use `tests/prompt_fixture.json`.
+
+13. **A too-small frame budget is indistinguishable from a model that will not terminate.** Frames
+    are 12.5 Hz and speech runs ~18 chars/s, so the 676-char fixture paragraphs need ~460 frames.
+    Run them at `max_frames=200` and they stop mid-sentence and report "no natural stop" — which
+    reads as a generation bug and sent me looking for one in the KV-cache padding. It also
+    correlated with prefill length purely because the long texts are the long prompts.
+    `generate_quality_set.py` derives the budget from text length for this reason.
+
+14. **Three ASR-harness traps, all of which fake a bad TTS result.** Whisper's encoder is a fixed
+    30 s window, so a plain `generate` call on a 37 s clip silently transcribes the first 30 s and
+    charges the rest as deletions (~20% phantom WER); an `[^a-z0-9' ]` normaliser erases Hindi and
+    Arabic and scores them 100% on perfect audio; and a voice-name prefix is not a language —
+    fixture case 4 is English "Hello." spoken by `ar_male`, and forcing Arabic decoding made
+    Whisper hallucinate a filler and report 100% WER on one word. All three are handled and
+    documented in `scripts/score_quality_set.py`.
+
 ---
 
 ## 6. Open items
@@ -238,11 +332,25 @@ single fixed-precision step inside the fused pipeline. Pinning it further needs 
   for a ~1% speed gain. The knob exists for experiments; do not ship it.
 - Minor: the suite tests to T=469; T=1500 is measured by hand but not pinned.
 
-### Block 1 — the next big piece
+### Block 1 — DONE, on `tt_transformers`
 3.4B params, 26 layers, dim 3072, GQA 32/8, head_dim 128, SwiGLU 9216, RMSNorm, RoPE θ=1e6, tied
 embeddings, **`n_heads*head_dim` (4096) != `dim` (3072)** so wq/wo are not square.
 
-**Risks investigated and CLEARED** (all in `models/tt_transformers/tt/`):
+Implemented in `tt/ttnn_voxtral_backbone.py` on top of `models/tt_transformers`, fed by an HF-format
+export (`scripts/export_backbone_hf.py`). Prefill + decode share one KV cache. Read that module's
+docstring before touching precision — it carries the measured table and the L1 constraint that
+forces FF1_FF3 to BFP8.
+
+**Still open on Block 1:**
+- **It dominates runtime.** ~0.17 s per decode step is essentially all of the frame budget, so it
+  is where the RTF fix has to come from. Nothing here is traced yet.
+- Decode PCC 0.981 is well below prefill's 0.9996. It does not hurt WER, but it is unexplained and
+  worth a look before trusting Block 1 in a different configuration.
+- Prefill is capped near 512 by L1 (see the module docstring). Prompts beyond ~1024 tokens would
+  need real chunked prefill, which needs paged attention — `MAX_PREFILL_CHUNK_SIZE` cannot help
+  because its unit is 1024.
+
+**Risks investigated and CLEARED before the port** (all in `models/tt_transformers/tt/`):
 - `head_dim=128` is honoured: `model_config.py:2678` reads it from config, falling back to
   `dim // n_heads` (which would give a wrong 96).
 - The non-square `wo` is handled: `model_config.py:1983` uses `k_dim = n_heads * head_dim`.
@@ -254,7 +362,8 @@ embeddings, **`n_heads*head_dim` (4096) != `dim` (3072)** so wq/wo are not squar
 - RoPE convention: `use_hf_rope` defaults to `False` (Meta/interleaved), which matches our
   bit-exact reference. Do not let a default flip it to HF half-split.
 
-**New constraint found:** `tt_transformers` **requires HF-format checkpoints** —
+**Constraint found and now handled by `scripts/export_backbone_hf.py`:** `tt_transformers`
+**requires HF-format checkpoints** —
 `model_config.py:588` raises unless `HF_MODEL` is set, and the Meta `consolidated.00.pth` path is
 vestigial. Ours is Mistral-native `consolidated.safetensors` + `params.json`. So the shim is bigger
 than a config-add: a `config.json` **plus a checkpoint transcription to HF parameter names**.
@@ -268,13 +377,16 @@ single-N150. Memory: 3.03B params in the 26 layers + 402M embedding = 3.43B →
 **bf16 6.86 GB, bfp8 3.64 GB**, plus ~218 MB KV cache at seq 2048 and ~260 MB for Block 3, against
 ~11 GB usable. bf16 fits with headroom; start there and only drop to bfp8 if speed demands it.
 
-### Block 2 — smaller but more novel
+### Block 2 — DONE, and the accuracy is not the problem
 390M, 3 layers, **3-token sequence**, bidirectional (no RoPE, no mask), 7 Euler steps per frame with
-CFG batched to 2B. Fixed shapes and a fixed step count make it an ideal trace target — upstream's
-own CUDA-graph version of exactly this gave them 47% latency / 2.5x RTF. Note Block 3's tracing null
-result does **not** transfer: that was a long chain of ~30 us device-bound ops, whereas Block 2's
-ops are tiny, which is exactly the regime where host dispatch can become exposed. Read trap #1
-before writing trace code.
+CFG batched to 2B. Implemented in `tt/ttnn_voxtral_flow.py` at fp32/HiFi4: velocity PCC 0.9999989,
+semantic codes exact. Semantic argmax and FSQ quantise stay on host (see that module's docstring).
+
+**Still open:** the 7-step ODE is **untraced**, and it is the clearest remaining perf win. Fixed
+shapes and a fixed step count make it an ideal trace target — upstream's own CUDA-graph version of
+exactly this gave them 47% latency / 2.5x RTF. Block 3's tracing null result does **not** transfer:
+that was a long chain of ~30 us device-bound ops, whereas Block 2's ops are tiny, which is exactly
+the regime where host dispatch becomes exposed. Read trap #1 before writing trace code.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
@@ -287,30 +399,38 @@ before writing trace code.
 
 ## 7. Suggested order when resuming
 
-1. Re-read this file and `reference/PROVENANCE.md`. Recreate the two venvs (§2).
-2. Run the 118 tests to confirm the environment before changing anything.
-3. **The sdpa compounding probe — do this first, it is ~1 hour and needs no checkpoint.**
-   Block 1 escapes sdpa's *minor* problem (the `attn_mask`/`is_causal` exclusivity: its attention is
-   causal + RoPE with no additive bias, so the native fast path works and no mask tensor is needed)
-   but **inherits the major one** — the mask-independent 3.7–10.7x worst-case penalty in §4.1, which
-   was proven with an all-zero mask. Chain 26 sdpa attentions at Block 1's real shapes (GQA 32/8,
-   head_dim 128, dim 3072, causal, seq ~500) with random weights against an fp64 reference, and
-   report PCC **and worst-sample per layer**, to see whether the error compounds or stays bounded.
-   Cover **both** kernels: `sdpa` for prefill and **`sdpa_decode`** for decode — a separate code
-   path, and the XTTS-v2 work hit an odd-tile bug there needing the KV-cache length rounded to a
-   multiple of 64.
-   - If bounded: proceed with sdpa. `tt_transformers` ships it for Llama 3.1 8B, Mistral 7B, Qwen
-     and Gemma at production scale, so a worst-case attention penalty is evidently tolerable for LLM
-     hidden states — and Block 1's output feeds more processing rather than your ears, unlike
-     Block 3's.
-   - If not: that is a finding worth escalating, because it would affect every model in the repo.
-4. Block 1 via `tt_transformers` — the `params.json`→`config.json` shim plus the checkpoint
-   transcription (§6), validated on CPU against our reference (bit-exact RoPE, PCC 0.99999988 on the
-   full stack) before any device work.
-5. Wire it up: our embeddings into `forward(x=...)`, keep the final norm, skip `lm_head`. Gate on
-   PCC **and** worst-sample.
-6. Block 2, with the 7-step ODE in a single trace.
-7. `pipeline.py` end-to-end on device, then revisit Block 3's `bucket` for the real chunk size.
+**All three blocks work and the audio is good (§3.1). The open work is performance, and the order
+is set by where the time actually goes: Block 1's decode step is ~0.17 s and Block 2's untraced
+7-step ODE is next; Block 3 is 242x real-time and irrelevant to RTF.**
 
-The end-to-end performance question is decided by Block 1: 87% of the parameters and 12.5 sequential
-steps per second of audio. Block 3 is done and should be left alone.
+1. Re-read this file and `reference/PROVENANCE.md`. Recreate the two venvs (§2).
+2. Run the 118 tests, then `generate_quality_set.py --cases 0,1` to confirm the device path still
+   produces speech before changing anything.
+3. **Trace Block 2's 7-step ODE.** Fixed shapes, fixed step count, tiny ops — the regime where
+   dispatch is exposed. Upstream's CUDA-graph version of exactly this was worth 47% latency. Read
+   trap #1 first: a failed trace capture wedges the device.
+4. **Attack Block 1's decode step**, which is essentially the whole frame budget. Start by finding
+   out where the 0.17 s goes (device vs host dispatch) before optimizing anything —
+   `tt_transformers` has its own trace/prefetcher machinery that we are not using.
+5. Re-run §3.1's harness after each change. Trap #6 is that synthetic gates let the audible path
+   rot; WER is the gate that matters.
+
+**Deferred and still worth doing:**
+- A **listening pass**. Never done. Everything in §3.1 is objective metrics and ASR.
+- Block 1 **decode PCC 0.981** vs prefill's 0.9996 — unexplained, harmless so far.
+- **The sdpa compounding probe** — ~1 hour, needs no checkpoint. Block 1 currently does *not* use
+  sdpa, so this is a latent perf lever rather than a blocker. Block 1 escapes sdpa's *minor*
+  problem (the `attn_mask`/`is_causal` exclusivity: its attention is causal + RoPE with no additive
+  bias, so the native fast path works and no mask tensor is needed) but would **inherit the major
+  one** — the mask-independent 3.7–10.7x worst-case penalty in §4.1, proven with an all-zero mask.
+  Chain 26 sdpa attentions at Block 1's real shapes (GQA 32/8, head_dim 128, dim 3072, causal,
+  seq ~500) against an fp64 reference and report PCC **and worst-sample per layer**, to see whether
+  the error compounds or stays bounded. Cover **both** kernels — `sdpa` for prefill and
+  `sdpa_decode` for decode are separate code paths, and the XTTS-v2 work hit an odd-tile bug in the
+  latter needing the KV-cache length rounded to a multiple of 64. If it comes back unbounded, that
+  is worth escalating: it would affect every model in the repo.
+- **Prefill beyond ~1024 tokens** needs paged-attention chunked prefill (§6, Block 1).
+- Block 3's `bucket` for the real streaming chunk size (§6).
+
+The performance question is decided by Block 1: 87% of the parameters and 12.5 sequential steps per
+second of audio. Block 3 is done and should be left alone.
