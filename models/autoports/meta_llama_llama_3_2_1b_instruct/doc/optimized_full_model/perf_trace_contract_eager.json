@@ -1,0 +1,30 @@
+{
+  "model": "meta-llama/Llama-3.2-1B-Instruct",
+  "scope": "reduced eager full-model profiling variant with real weights and split greedy terminal path",
+  "mesh_shape": [
+    1,
+    8
+  ],
+  "fabric_config": "FABRIC_1D_RING",
+  "num_layers": 1,
+  "prompt_len": 128,
+  "prefill_signposts": [
+    "PERF_FULL_MODEL_PREFILL",
+    "PERF_FULL_MODEL_PREFILL_END"
+  ],
+  "decode_signposts": [
+    "PERF_FULL_MODEL_EAGER_DECODE",
+    "PERF_FULL_MODEL_EAGER_DECODE_END"
+  ],
+  "host_wall_ms": {
+    "reduced_prefill": 7.58742168545723,
+    "reduced_eager_decode": 9.435590356588364
+  },
+  "sampling": {
+    "greedy": true,
+    "force_argmax_enabled": false,
+    "pad_logits_to_power_of_2": true,
+    "local_logits_width": 16032
+  },
+  "status": "passed"
+}

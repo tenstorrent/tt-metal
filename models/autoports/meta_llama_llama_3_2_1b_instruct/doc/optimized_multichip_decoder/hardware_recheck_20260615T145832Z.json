@@ -1,0 +1,8 @@
+{
+  "status": "hardware_still_blocked",
+  "timestamp_utc": "2026-06-15T14:58:32Z",
+  "command": "timeout 30 tt-smi -ls --local",
+  "exit_code": 124,
+  "stdout": "",
+  "interpretation": "T3K discovery is still unhealthy after the earlier watcher ETH/fabric failure. Watcher, mesh tests, Tracy, and tt-perf-report collection remain unsafe to run."
+}

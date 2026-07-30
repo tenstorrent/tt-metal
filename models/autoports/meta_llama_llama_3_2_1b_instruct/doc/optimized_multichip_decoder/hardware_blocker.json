@@ -1,0 +1,51 @@
+{
+  "status": "hardware_blocked",
+  "date_utc": "2026-06-15",
+  "stage": "optimized_multichip_decoder",
+  "model": "meta-llama/Llama-3.2-1B-Instruct",
+  "target_mesh": [1, 8],
+  "blocker_summary": "Watcher collection failed before a clean watcher pass could be produced. After the retry, tt-smi discovery timed out, so profiler and watcher collection were stopped to avoid further T3K instability.",
+  "failed_commands": [
+    {
+      "command": "TT_METAL_WATCHER=10 MD_MULTICHIP_ARTIFACT_DIR=models/autoports/meta_llama_llama_3_2_1b_instruct/doc/optimized_multichip_decoder pytest --timeout=900 --confcutdir=models/autoports/meta_llama_llama_3_2_1b_instruct/tests -q -s models/autoports/meta_llama_llama_3_2_1b_instruct/tests/test_multichip_decoder.py::test_runtime_fallback_audit_measured_multichip_prefill_and_traced_decode",
+      "result": "failed before decoder execution",
+      "signature": "idle_erisc.elf segment[0] overflows region:0 limit of 0x54c0 bytes"
+    },
+    {
+      "command": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 MD_MULTICHIP_ARTIFACT_DIR=models/autoports/meta_llama_llama_3_2_1b_instruct/doc/optimized_multichip_decoder pytest --timeout=900 --confcutdir=models/autoports/meta_llama_llama_3_2_1b_instruct/tests -q -s models/autoports/meta_llama_llama_3_2_1b_instruct/tests/test_multichip_decoder.py::test_runtime_fallback_audit_measured_multichip_prefill_and_traced_decode",
+      "result": "failed during mesh open/fabric configuration",
+      "signature": "Timeout waiting for Ethernet core service remote IO request flush; watcher read invalid watcher.enable"
+    },
+    {
+      "command": "timeout 30 tt-smi -ls --local",
+      "result": "exit code 124",
+      "signature": "tt-smi discovery timed out"
+    }
+  ],
+  "rechecks": [
+    {
+      "timestamp_utc": "2026-06-15T14:58:32Z",
+      "command": "timeout 30 tt-smi -ls --local",
+      "result": "exit code 124",
+      "signature": "tt-smi discovery still timed out on the next goal continuation"
+    },
+    {
+      "timestamp_utc": "2026-06-15T15:00:35Z",
+      "command": "timeout 30 tt-smi -ls --local",
+      "result": "exit code 124",
+      "signature": "tt-smi discovery still timed out on the third consecutive blocker turn"
+    }
+  ],
+  "preserved_artifacts": {
+    "watcher_log": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/optimized_multichip_decoder/watcher/watcher_failed_after_eth_retry.log",
+    "watcher_pytest_xml": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/optimized_multichip_decoder/watcher/watcher_eth_retry_pytest_failure.xml",
+    "kernel_elf_paths": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/optimized_multichip_decoder/watcher/kernel_elf_paths_failed.txt",
+    "kernel_names": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/optimized_multichip_decoder/watcher/kernel_names_failed.txt"
+  },
+  "not_completed_due_to_blocker": [
+    "clean watcher evidence for the optimized multichip path",
+    "final Tracy capture for the BFP8-CCL optimized default",
+    "final tt-perf-report tables and CSV/provenance logs for the BFP8-CCL optimized default",
+    "post-profile advice review on the final BFP8-CCL optimized default"
+  ]
+}

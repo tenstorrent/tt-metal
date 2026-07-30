@@ -1,0 +1,31 @@
+{
+  "model": "meta-llama/Llama-3.2-1B-Instruct",
+  "mesh_shape": [
+    1,
+    8
+  ],
+  "fabric_config": "FABRIC_1D_RING",
+  "guarded_python_bridges": [
+    "ttnn.from_torch",
+    "ttnn.to_torch",
+    "ttnn.copy_host_to_device_tensor",
+    "ttnn.synchronize_device"
+  ],
+  "guarded_steps": 2,
+  "counter_deltas": {
+    "model_trace_captures": 0,
+    "model_trace_replays": 2,
+    "sampling_trace_captures_or_replays": 2,
+    "token_refreshes": 0,
+    "current_position_refreshes": 0,
+    "rope_index_refreshes": 0,
+    "page_table_refreshes": 0,
+    "synchronizations": 0,
+    "readbacks": 0,
+    "host_argmax_decode_steps": 0,
+    "full_logits_decode_readbacks": 0,
+    "device_position_advances": 2,
+    "device_token_feedback_steps": 2
+  },
+  "status": "passed"
+}

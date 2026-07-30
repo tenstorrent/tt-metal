@@ -1,0 +1,26 @@
+{
+  "mesh_shape": [
+    1,
+    8
+  ],
+  "prefill_seq_len": 8192,
+  "decode_current_pos": 8192,
+  "prefill_signposts": [
+    "PERF_MULTICHIP_PREFILL",
+    "PERF_MULTICHIP_PREFILL_END"
+  ],
+  "decode_signposts": [
+    "PERF_MULTICHIP_DECODE",
+    "PERF_MULTICHIP_DECODE_END"
+  ],
+  "decode_measurement": "single warmed ttnn.execute_trace replay on 1x8 Ring",
+  "host_wall_ms": {
+    "multichip_prefill": 16.001302748918533,
+    "multichip_traced_decode_replay": 0.6563551723957062
+  },
+  "single_chip_baseline_device_us_from_existing_artifact": {
+    "prefill": null,
+    "traced_decode_replay": null
+  },
+  "status": "passed"
+}

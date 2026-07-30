@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+  "architecture": "dense Llama-3.2-1B decoder, 16 layers, 1x8 T3K tensor-parallel full model",
+  "layer_range": {
+    "default": "0-15",
+    "first_layer": 0,
+    "last_layer": 15
+  },
+  "layer_exceptions": [],
+  "activation_residual": {
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "mul_dtype": "bfloat16"
+  },
+  "compute_fidelities": {
+    "attention_qkv_decode": "HiFi2 fp16 accumulate",
+    "attention_wo_decode": "HiFi2 fp16 accumulate",
+    "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+    "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+    "attention_wo_prefill": "HiFi2 fp16 accumulate",
+    "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+    "mlp_gate_up": "HiFi2 fp16 accumulate",
+    "mlp_down": "HiFi2 fp16 accumulate",
+    "rmsnorm": "HiFi2 fp16 accumulate",
+    "lm_head": "HiFi2 fp16 accumulate"
+  },
+  "logits_sampling": {
+    "lm_head_weight_dtype": "bfloat8_b",
+    "lm_head_output_dtype": "bfloat16",
+    "local_logits_sampler_input_dtype": "bfloat16",
+    "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+  },
+  "default_consumption": {
+    "env_override": "MD_LLAMA32_PRECISION_CONFIG",
+    "default_selected_config": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/selected_precision_config.json",
+    "fallback_override": "MD_LLAMA32_PRECISION_CONFIG=none"
+  },
+  "config_id": "cfg05_bfp8_attn_bfp4_gateup_bf16_down_bfp8_kv_ccl",
+  "description": "Restore FF2/down projection to BF16 while keeping BFP4 gate/up, BFP8 attention, KV, and CCL.",
+  "policy": {
+    "attention_weight_dtype": "bfloat8_b",
+    "mlp_ff1_ff3_weight_dtype": "bfloat4_b",
+    "mlp_ff2_weight_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "norm_weight_dtype": "bfloat16",
+    "mul_dtype": "bfloat16",
+    "use_qk_fused_decode": false
+  },
+  "weight_groups": {
+    "tok_embeddings": {
+      "dtype": "bfloat16",
+      "layers": "global"
+    },
+    "attention_qkv": {
+      "dtype": "bfloat8_b",
+      "layers": "0-15"
+    },
+    "attention_wo": {
+      "dtype": "bfloat8_b",
+      "layers": "0-15"
+    },
+    "mlp_gate_up_ff1_ff3": {
+      "dtype": "bfloat4_b",
+      "layers": "0-15"
+    },
+    "mlp_down_ff2": {
+      "dtype": "bfloat16",
+      "layers": "0-15"
+    },
+    "rmsnorm": {
+      "dtype": "bfloat16",
+      "layers": "0-15 plus final norm"
+    },
+    "lm_head": {
+      "dtype": "bfloat8_b",
+      "layers": "global tied embedding transpose"
+    }
+  },
+  "kv_cache": {
+    "dtype": "bfloat8_b",
+    "layout": "paged local one-KV-head cache per chip"
+  },
+  "ccl": {
+    "all_gather_dtype": "bfloat8_b",
+    "reduce_scatter_dtype": "bfloat8_b",
+    "persistent_buffers": true,
+    "runtime_env_overrides": {
+      "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat8_b",
+      "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat8_b",
+      "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+    }
+  }
+}

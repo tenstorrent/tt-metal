@@ -1,0 +1,12 @@
+{
+  "target_model": "meta-llama/Llama-3.2-1B-Instruct",
+  "target_max_position_embeddings": 131072,
+  "pcc_verified_prefill_seq_len": 32768,
+  "real_weight_decode_current_pos": 8192,
+  "reason_full_context_hf_vs_ttnn_was_not_run": "The acceptance harness compares against the HuggingFace decoder layer, whose dense causal attention reference requires O(sequence_length^2) host tensors.",
+  "causal_mask_float32_bytes_at_131072": 68719476736,
+  "causal_mask_float32_gib_at_131072": 64,
+  "attention_scores_bfloat16_bytes_32_heads_at_131072": 1099511627776,
+  "attention_scores_bfloat16_gib_32_heads_at_131072": 1024,
+  "note": "The TTNN Attention1D module advertises a 128K token cache bound, but this functional-decoder PCC harness was reduced to the longest feasible HF-vs-TTNN comparison run."
+}

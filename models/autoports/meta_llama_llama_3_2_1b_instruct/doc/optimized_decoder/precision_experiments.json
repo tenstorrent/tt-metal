@@ -1,0 +1,108 @@
+{
+  "target_model": "meta-llama/Llama-3.2-1B-Instruct",
+  "layer_idx": 0,
+  "weights": "real safetensors layer weights",
+  "prefill_seq_len": 128,
+  "decode_current_pos": 128,
+  "threshold": 0.995,
+  "results": {
+    "default_bfp8_weights_bfp8_kv": {
+      "status": "passed",
+      "policy": {
+        "attention_weight_dtype": "BFLOAT8_B",
+        "mlp_ff1_ff3_weight_dtype": "BFLOAT8_B",
+        "mlp_ff2_weight_dtype": "BFLOAT8_B",
+        "kv_cache_dtype": "BFLOAT8_B",
+        "activation_dtype": "BFLOAT16",
+        "residual_dtype": "BFLOAT16",
+        "norm_weight_dtype": "BFLOAT16",
+        "mul_dtype": "BFLOAT16",
+        "use_qk_fused_decode": false
+      },
+      "prefill_pcc": 0.9999827282339901,
+      "traced_decode_replay_pcc": 0.9999873137911823,
+      "repeated_trace_replay_pcc": 0.999999999999992
+    },
+    "mlp_ff1_ff3_bfp4": {
+      "status": "passed",
+      "policy": {
+        "attention_weight_dtype": "BFLOAT8_B",
+        "mlp_ff1_ff3_weight_dtype": "BFLOAT4_B",
+        "mlp_ff2_weight_dtype": "BFLOAT8_B",
+        "kv_cache_dtype": "BFLOAT8_B",
+        "activation_dtype": "BFLOAT16",
+        "residual_dtype": "BFLOAT16",
+        "norm_weight_dtype": "BFLOAT16",
+        "mul_dtype": "BFLOAT16",
+        "use_qk_fused_decode": false
+      },
+      "prefill_pcc": 0.9996774554273565,
+      "traced_decode_replay_pcc": 0.9996738808909221,
+      "repeated_trace_replay_pcc": 1.0
+    },
+    "mlp_ff2_bfp4": {
+      "status": "passed",
+      "policy": {
+        "attention_weight_dtype": "BFLOAT8_B",
+        "mlp_ff1_ff3_weight_dtype": "BFLOAT8_B",
+        "mlp_ff2_weight_dtype": "BFLOAT4_B",
+        "kv_cache_dtype": "BFLOAT8_B",
+        "activation_dtype": "BFLOAT16",
+        "residual_dtype": "BFLOAT16",
+        "norm_weight_dtype": "BFLOAT16",
+        "mul_dtype": "BFLOAT16",
+        "use_qk_fused_decode": false
+      },
+      "prefill_pcc": 0.9998274366121231,
+      "traced_decode_replay_pcc": 0.999828837191449,
+      "repeated_trace_replay_pcc": 0.999999999999991
+    },
+    "mlp_all_bfp4": {
+      "status": "passed",
+      "policy": {
+        "attention_weight_dtype": "BFLOAT8_B",
+        "mlp_ff1_ff3_weight_dtype": "BFLOAT4_B",
+        "mlp_ff2_weight_dtype": "BFLOAT4_B",
+        "kv_cache_dtype": "BFLOAT8_B",
+        "activation_dtype": "BFLOAT16",
+        "residual_dtype": "BFLOAT16",
+        "norm_weight_dtype": "BFLOAT16",
+        "mul_dtype": "BFLOAT16",
+        "use_qk_fused_decode": false
+      },
+      "prefill_pcc": 0.9995243742058108,
+      "traced_decode_replay_pcc": 0.9995351105303524,
+      "repeated_trace_replay_pcc": 0.9999999999999999
+    },
+    "qk_fused_decode": {
+      "status": "error",
+      "policy": {
+        "attention_weight_dtype": "BFLOAT8_B",
+        "mlp_ff1_ff3_weight_dtype": "BFLOAT8_B",
+        "mlp_ff2_weight_dtype": "BFLOAT8_B",
+        "kv_cache_dtype": "BFLOAT8_B",
+        "activation_dtype": "BFLOAT16",
+        "residual_dtype": "BFLOAT16",
+        "norm_weight_dtype": "BFLOAT16",
+        "mul_dtype": "BFLOAT16",
+        "use_qk_fused_decode": true
+      },
+      "error_type": "RuntimeError",
+      "error": "TT_FATAL @ /localdev/moconnor/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation.cpp:103: cos_sin_batch_size == (q_batch_size + k_batch_size)\ninfo:\nCos and Sin are repeated for Q and K, so they must have the same batch size as the sum of Q and K batch sizes\nbacktrace:\n --- /localdev/moconnor/tt-metal/build_Release/lib/_ttnncpp.so(+0x6e9ed9) [0x7f94c5fd4ed9]\n --- ttnn::experimental::prim::RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(ttnn::experimental::prim::RotaryEmbeddingLlamaFusedQkParams const&, ttnn::experimental::prim::RotaryEmbeddingLlamaFusedQkInputs const&)\n --- /localdev/moconnor/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim42RotaryEmbeddingLlamaFusedQKDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1bd) [0x7f94c6bd3a1d]\n --- /localdev/moconnor/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim42RotaryEmbeddingLlamaFusedQKDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x35a) [0x7f94c6bd272a]\n --- ttnn::prim::rotary_embedding_llama_fused_qk(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::MemoryConfig const&, tt::tt_metal::MemoryConfig const&, ttnn::ComputeKernelConfig const&, bool)\n --- ttnn::experimental::rotary_embedding_llama_fused_qk(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<ttnn::ComputeKernelConfig const>)\n --- /localdev/moconnor/tt-metal/ttnn/ttnn/_ttnn.so(+0x494c1c) [0x7f94c781fc1c]\n --- /localdev/moconnor/tt-metal/ttnn/ttnn/_ttnn.so(+0x2b48b5) [0x7f94c763f8b5]\n --- python(_PyObject_Call_Prepend+0x9a) [0x1686f1a]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]\n --- python(_PyObject_Call_Prepend+0x9a) [0x1686f1a]\n --- python() [0x1686e59]\n --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]\n --- python(PyEval_EvalCode+0xe2) [0x1684e62]\n --- python() [0x16a4982]\n --- python() [0x17aebff]\n --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]\n --- python(_PyRun_AnyFileObject+0x42) [0x17af282]\n --- python(PyRun_AnyFileExFlags+0x34) [0x494fc4]\n --- python() [0x4a085c]\n --- python() [0x195e433]\n --- python() [0x17406fa]\n --- python() [0x17404ed]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f95326bad90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f95326bae40]\n --- python(_start+0x29) [0x1795ced]\n",
+      "traceback_tail": [
+        " --- python() [0x17aebff]",
+        " --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]",
+        " --- python(_PyRun_AnyFileObject+0x42) [0x17af282]",
+        " --- python(PyRun_AnyFileExFlags+0x34) [0x494fc4]",
+        " --- python() [0x4a085c]",
+        " --- python() [0x195e433]",
+        " --- python() [0x17406fa]",
+        " --- python() [0x17404ed]",
+        " --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f95326bad90]",
+        " --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f95326bae40]",
+        " --- python(_start+0x29) [0x1795ced]",
+        ""
+      ]
+    }
+  }
+}

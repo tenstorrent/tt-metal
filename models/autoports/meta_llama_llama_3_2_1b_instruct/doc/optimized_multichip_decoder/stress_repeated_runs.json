@@ -1,0 +1,17 @@
+{
+  "iterations": 5,
+  "mesh_shape": [
+    1,
+    8
+  ],
+  "prefill_seq_len": 128,
+  "prefill_pccs_vs_single_chip": [
+    0.9999904966442884,
+    0.9999904966442884,
+    0.9999904966442884,
+    0.9999904966442884,
+    0.9999904966442884
+  ],
+  "threshold": 0.995,
+  "status": "passed"
+}
