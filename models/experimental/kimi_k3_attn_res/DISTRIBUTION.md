@@ -185,6 +185,12 @@ into one `[1, 24(S+1), T/R, 1]` reduction and come down to 26.
 > collectives — is true and does not decide anything. It needs no saving; batching the 24
 > dot tensors into one reduction (49 → 26) is now an optimization on top of a win, and P4's
 > fold would cut the same cost by more.
+>
+> **Re-measured 2026-07-30 (P6).** With the fold shipped on by default the pair is
+> 3 127.8 → 2 186.6, so **1.43×**. The fold is worth 3.5× more to the direct form
+> (146.8 µs per site vs 41.7), because the direct form's one collective carries all 18
+> stats planes while the split form's two carry ~10 between them — this section's "worse on
+> collectives" is also *why* the fold has less to give it.
 
 **Per-axis topology.** `topology` is one `ttnn.Topology` per mesh axis, not a scalar —
 Galaxy prefill is `[LINE, RING]`. This is not a precaution: the analog already carries the
@@ -243,10 +249,12 @@ not); `num_links=1` → 2. Left to Galaxy: `(8,4)` with `[LINE, RING]`, where th
 halves per device and the call count does not.
 
 > **Answered 2026-07-30 (Phase 9).** All three, and I got two of the three predictions
-> backwards. The split form survives at **1.47×** without any rescue, so batching the dots
-> is an optimization rather than the largest lever. The 31-of-32 wasted columns **do** show
-> up — 7.4× on the collective, ~300 µs per read traced — because padding is billed at the
-> same rate as payload; "so probably not" was reasoning from a byte ratio about a cost that
-> is not proportional to useful bytes. And `num_links = 1 → 2` is worth 1.48× only while
-> the padding is there, so it and the fold are alternatives. Full record:
-> `bringup_log.md` §Phase 9 perf loop.
+> backwards. The split form survives at **1.47×** without any rescue (1.43× after the fold
+> landed), so batching the dots is an optimization rather than the largest lever. The
+> 31-of-32 wasted columns **do** show up — 7.4× on the bare collective, **147.6 µs per read
+> once the fold's two permutes are charged for** (P6) — because padding is billed at the same
+> rate as payload; "so probably not" was reasoning from a byte ratio about a cost that is not
+> proportional to useful bytes. And `num_links = 1 → 2` is worth 1.48× only while the padding
+> is there, so it and the fold are alternatives: with the fold in, the second link buys
+> 4.7 µs, and **`num_links` stays at 1** — the opposite of what this section expected. Full
+> record: `bringup_log.md` §Phase 9 perf loop.
