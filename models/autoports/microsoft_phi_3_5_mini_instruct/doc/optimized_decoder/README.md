@@ -90,7 +90,7 @@ The selected values are the largest legal K-tile divisors for the 16-way output 
 
 ## Profiler conclusion and roofline
 
-Final Tracy CSV: `tracy/final/ops_perf_results.csv`. Its signposts cover prefill and decode at both batch 1 and 32. The profile verifies BFP4/LoFi matmuls and no host fallback. Most projection rows report 80 active worker cores, with partial tail rows at 79/74/69. Steady decode means are QKV 55.5 us, O 22.3 us, gate 49.6 us, up 49.6 us, and down 47.6 us. `tt-perf-report` flags the projections as bandwidth-bound and suggests higher fidelity for accuracy; measured HiFi2 was slower and final PCC exceeds the bar. It finds no valid output subblock recommendation for this DRAM-sharded family.
+Final Tracy CSV: `tracy/final/ops_perf_results.csv.gz` (gzip-compressed). Its signposts cover prefill and decode at both batch 1 and 32. The profile verifies BFP4/LoFi matmuls and no host fallback. Most projection rows report 80 active worker cores, with partial tail rows at 79/74/69. Steady decode means are QKV 55.5 us, O 22.3 us, gate 49.6 us, up 49.6 us, and down 47.6 us. `tt-perf-report` flags the projections as bandwidth-bound and suggests higher fidelity for accuracy; measured HiFi2 was slower and final PCC exceeds the bar. It finds no valid output subblock recommendation for this DRAM-sharded family.
 
 One layer reads about 56.6 MB of BFP4 weights plus about 0.8 MB of BFP8 K/V at context 128. At the report's 512 GB/s Blackhole bandwidth reference, the bandwidth-only lower bound is about 0.112 ms. The traced end-to-end 0.481 ms includes SDPA, norms, transforms, and trace synchronization; the five steady projection kernels total about 0.225 ms.
 
