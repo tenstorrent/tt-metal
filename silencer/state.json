@@ -3,13 +3,16 @@
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
+    "30515701001",
     "30582544934",
-    "30515701001"
+    "30586242428",
+    "30587963164"
   ],
   "workflows_sampled": [
+    "merge-gate.yaml",
     "pr-gate.yaml",
     "runtime-unit-tests.yaml",
-    "merge-gate.yaml"
+    "sanity-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -23,7 +26,7 @@
     }
   ],
   "backlog_cursor": {
-    "next_category": 6,
-    "note": "Opened issue for UMD cluster.cpp lifecycle info-spam (tt-umd submodule, out-of-repo fix). Next: continue scanning for category 1/3/5 patterns in host code (not vendored)."
+    "next_category": 5,
+    "note": "Fixed Unknown motherboard log spam (physical_system_discovery.cpp) via per-name log-once latch. Next: continue scanning host runtime/test logs (t3000, galaxy, models) for category 1/3/5 patterns; histogram from this scan showed UMD/Metal info-level lines (Cluster lifecycle, Profiler started) as lower-frequency repeats worth revisiting if they recur more broadly."
   }
 }
