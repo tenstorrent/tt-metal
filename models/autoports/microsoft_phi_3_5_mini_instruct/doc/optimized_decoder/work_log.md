@@ -3,6 +3,7 @@
 ## Baseline and audit
 
 - Starting commit: `199234c4b31`.
+- Clean-pass implementation checkpoint: `d1b837b94ea`.
 - Confirmed a single dense decoder-layer kind, packed QKV, packed gate/up, paged KV cache, LongRoPE, non-aligned prefill, and batch-1/batch-32 trace paths.
 - Final same-harness functional baseline: prefill b1/b32 1.761852/37.714475 ms; traced decode b1/b32 1.049735/1.269351 ms.
 - Profiled the functional topology before choosing precision, sharding, packed projections, SDPA, and program candidates.
@@ -47,4 +48,4 @@
 - [x] Stress/repeated replay and watcher-clean correctness coverage exist.
 - [x] Scope excludes multichip, full model, LM head, MoE, CCL, and serving.
 - [x] Fresh stage review returned clean-pass after two evidence/documentation remediation rounds.
-- [ ] Local stage commit (completed after this log entry).
+- [x] Local stage commit: `d1b837b94ea` (never pushed).
