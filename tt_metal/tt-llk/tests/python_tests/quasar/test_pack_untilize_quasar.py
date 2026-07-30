@@ -55,8 +55,8 @@ def pack_untilize_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-def pack_untilize_input_dimensions(*, is_perf=False):
-    return [32, 32] if is_perf else None
+def pack_untilize_perf_input_dimensions():
+    return [32, 32]
 
 
 def generate_pack_untilize_combinations(
@@ -94,7 +94,7 @@ def generate_pack_untilize_combinations(
         return (DestAccumulation.No, DestAccumulation.Yes)
 
     dest_sync_modes = pack_untilize_dest_sync_modes(is_perf=is_perf)
-    perf_dimensions = pack_untilize_input_dimensions(is_perf=is_perf)
+    perf_dimensions = pack_untilize_perf_input_dimensions()
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format

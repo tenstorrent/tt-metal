@@ -143,17 +143,27 @@ uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
 void RemapperIndexAllocator::reset() { next_index_.clear(); }
 
 std::vector<uint8_t> TxnIdAllocator::allocate(uint8_t count) {
-    // IDs are drawn from [1, 31]; id 0 is implicitly reserved (NOC_V2_TRID_STATIC).
+    // DFB pool is [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], allocated top-down so user
+    // kernels can keep constexpr trids in [0, USER_TXN_ID_MAX].
+    const uint8_t remaining =
+        (next_id_ >= DFB_TXN_ID_BASE) ? static_cast<uint8_t>(next_id_ - DFB_TXN_ID_BASE + 1) : static_cast<uint8_t>(0);
     TT_FATAL(
-        next_id_ + count <= 32,
-        "TxnIdAllocator exhausted: requested {} IDs at next_id_={}, but only [1, 31] are available",
+        count <= remaining,
+        "TxnIdAllocator exhausted: requested {} IDs but only {} remain in DFB pool [{}, {}] "
+        "(user kernels own [0, {}]; id 0 is NOC_V2_TRID_STATIC)",
         count,
-        next_id_);
+        remaining,
+        DFB_TXN_ID_BASE,
+        HW_TXN_ID_MAX,
+        USER_TXN_ID_MAX);
+    // Hand out a contiguous ascending block from the top of the remaining pool.
+    const uint8_t first = static_cast<uint8_t>(next_id_ - count + 1);
     std::vector<uint8_t> ids;
     ids.reserve(count);
     for (uint8_t i = 0; i < count; i++) {
-        ids.push_back(next_id_++);
+        ids.push_back(static_cast<uint8_t>(first + i));
     }
+    next_id_ = static_cast<uint8_t>(first - 1);
     return ids;
 }
 
