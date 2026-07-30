@@ -270,7 +270,7 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(12);
 
     // Pick the core that will collate the intermediate outputs
-    constexpr uint32_t reduce_core_id = (bool)get_compile_time_arg_val(13);
+    constexpr uint32_t reduce_core_id = get_compile_time_arg_val(13);
 
     constexpr uint32_t reduce_core_x = get_compile_time_arg_val(14);
     constexpr uint32_t reduce_core_y = get_compile_time_arg_val(15);
