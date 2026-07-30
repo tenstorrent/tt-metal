@@ -1,14 +1,16 @@
 {
-  "last_scan_date": "2026-07-29",
+  "last_scan_date": "2026-07-30",
   "scanned_run_ids": ["30387358745", "30493606319"],
   "workflows_sampled": ["pr-gate.yaml", "runtime-unit-tests.yaml"],
   "in_flight_prs": [
     {
+      "number": 51548,
       "branch": "silencer/matmul-normalize-program-config",
       "pattern": "allowed_worker_cores not populated / normalize_program_config missing in CCL matmul ops",
       "issue": "#48660",
-      "status": "pr-opening",
-      "commit": "05bbb615"
+      "status": "ci-passed",
+      "asan_build_run_id": "30501808830",
+      "note": "asan-build ASan ubuntu 24.04 conclusion=success on run 30501808830. All other checks success/skipped, no failures. Ready for maintainer review."
     }
   ],
   "backlog_cursor": {
