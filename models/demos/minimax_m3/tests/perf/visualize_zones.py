@@ -537,6 +537,20 @@ def main():
     ap = argparse.ArgumentParser(description="Visualize a MiniMax-M3 prefill zone profile")
     ap.add_argument("csv", help="ops_perf_results_*.csv produced by run_prefill_profile.sh")
     ap.add_argument("-o", "--out", help="HTML output path (default: alongside the CSV)")
+    ap.add_argument(
+        "--open",
+        dest="do_open",
+        action="store_true",
+        help="serve the report over HTTP and print the URL. Use this — the output is an HTML page, and "
+        "opening the file in an editor shows you its source instead of the report.",
+    )
+    ap.add_argument("--port", type=int, default=8090, help="port for --open (default 8090)")
+    ap.add_argument(
+        "--bind",
+        default="127.0.0.1",
+        help="interface for --open. 127.0.0.1 (default) is reachable from your laptop through the "
+        "editor's port forwarding or an SSH tunnel; 0.0.0.0 also lets colleagues open the URL directly.",
+    )
     args = ap.parse_args()
 
     acc, summary, byclass = collect(args.csv)
@@ -563,7 +577,66 @@ def main():
     with open(out, "w") as f:
         f.write(build_html(byclass, summary, acc, acct, args.csv))
     print(f"\n[visualize] HTML report -> {out}")
+    if args.do_open:
+        serve(out, args.port, args.bind)
+    else:
+        print(f"[visualize] to view it:  {sys.argv[0]} <csv> --open")
     return 0
+
+
+def serve(path, port, bind):
+    """Serve the report over HTTP until interrupted, and print how to reach it.
+
+    The report is a single self-contained file, so this serves the same bytes for every path — no
+    directory listing, nothing else on the box exposed.
+    """
+    import http.server
+    import socket
+
+    body = open(path, "rb").read()
+    name = os.path.basename(path)
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = None
+    for p in range(port, port + 10):
+        try:
+            srv = http.server.ThreadingHTTPServer((bind, p), Handler)
+            port = p
+            break
+        except OSError:
+            continue
+    if srv is None:
+        print(f"[visualize] could not bind a port in {port}..{port+9}; pass --port")
+        return
+
+    host, user = socket.gethostname(), os.environ.get("USER", "you")
+    print("")
+    print("=" * 78)
+    print(f"  REPORT: http://localhost:{port}/{name}")
+    print("=" * 78)
+    if bind == "127.0.0.1":
+        print("  In VS Code / Cursor over SSH: a notification offers to open the forwarded port —")
+        print(f"  accept it, or use the Ports panel to forward {port}. Otherwise, from your laptop:")
+        print(f"      ssh -NL {port}:127.0.0.1:{port} {user}@{host}")
+        print("  To let colleagues open it directly instead, re-run with --bind 0.0.0.0")
+    else:
+        print(f"  Reachable on the lab network — send colleagues:  http://{host}:{port}/{name}")
+    print(f"  Ctrl-C to stop. The file itself is at {path} (self-contained; scp it anywhere).")
+    print("")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[visualize] stopped")
 
 
 if __name__ == "__main__":

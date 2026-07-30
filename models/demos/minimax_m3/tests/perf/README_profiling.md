@@ -4,29 +4,58 @@ Per-zone device-kernel time for one prefill chunk attending an existing KV cache
 "5k attended to 25k / 55k" case — split into the parts we care about: `ring_joint_sdpa` and the dense
 MLP on the dense layers (0-2), and the full MSA + MoE breakdown on the sparse layers (3-59).
 
-## Two steps
+## Two commands
 
-**1. Capture** — prints the CSV path when it finishes.
-
-```bash
-LEVEL=1 LAYERS=8 CACHE=25600 ./run_prefill_profile.sh
-```
-
-**2. Render** — table on stdout, self-contained HTML on disk.
+**1. Capture.** Prints the CSV path when it finishes.
 
 ```bash
-python3 models/demos/minimax_m3/tests/perf/visualize_zones.py <that csv> -o report.html
+LEVEL=2 LAYERS=6 CACHE=25600 ./run_prefill_profile.sh
 ```
 
-Rendering is separate because the capture is the expensive part (~20 min) and you will want to look at
-it more than once.
+**2. View.** Renders the report and serves it — `--open` prints a URL you can click.
+
+```bash
+python3 models/demos/minimax_m3/tests/perf/visualize_zones.py \
+    "$(ls -t generated/profiler/reports/*/ops_perf_results_*.csv | head -1)" --open
+```
+
+```
+==============================================================================
+  REPORT: http://localhost:8090/zone_report.html
+==============================================================================
+```
+
+In VS Code / Cursor over SSH a notification offers to open the forwarded port — accept it. Otherwise
+tunnel it yourself: `ssh -NL 8090:127.0.0.1:8090 <you>@<host>`.
+
+The `ls -t | head -1` picks the newest capture, so there is no path to copy by hand. Pass the CSV
+explicitly if you want an older one.
+
+Rendering is a separate command because the capture is the expensive part (~20 min at 6 layers) and
+you will want to look at it more than once.
+
+### Sharing it
+
+The report is a single self-contained HTML file — no external assets — so any of these work:
+
+```bash
+# let colleagues open it directly off the lab box
+python3 .../visualize_zones.py <csv> --open --bind 0.0.0.0     # then send http://<host>:8090/...
+
+# or just hand them the file
+scp <you>@<host>:<path>/zone_report.html .
+```
+
+Without `--open` the report is written next to the CSV as `zone_report.html` (or wherever `-o` points).
+Opening that path in an editor shows you HTML source, not the report — it needs a browser.
 
 ### Capture flags
 
 | flag | meaning | default |
 |---|---|---|
 | `LEVEL=1\|2\|3` | zone detail — see below | 2 |
-| `LAYERS=N` | build only the first N layers. 0-2 are dense, 3+ sparse, so N≥4 covers both; N=8 gives 5 sparse samples for the per-chip view | all 60 |
+| `LAYERS=N` | build only the first N layers. 0-2 are dense, 3+ sparse, so N≥4 covers both; N=6 gives 3+3, N=8 gives 5 sparse samples for the per-chip view | all 60 |
+| `LAYER_IDS=a,b` | explicit global layer indices instead of the first N. `LAYER_IDS=0,3` is the fastest useful run: one dense + one sparse, ~10 min | — |
 | `CACHE=N` | tokens already cached before the profiled chunk | runs both 25600 and 56320 |
 | `CHUNK=N` | tokens in the profiled chunk | 5120 |
 | `EXPERT_DTYPE=bf4\|bf8` | MoE routed-expert weight dtype | bf4 |
@@ -48,6 +77,23 @@ level accounts for 100% of the chunk, just in fewer buckets. Levels also buy hea
 The wrapper follows `run_prefill_perf.sh` conventions: venv activate, `tt-smi -glx_reset` per run, real
 tokens tiled from a long golden trace, `LOGURU_LEVEL=INFO` + DEBUG filter, logs in
 `prefill_profile_logs/`.
+
+### How long, and which to run
+
+| purpose | command | time |
+|---|---|---|
+| smoke test the pipeline | `LEVEL=1 LAYER_IDS=0,3 CACHE=5120 SKIP_PREFIX=1 ./run_prefill_profile.sh` | ~4 min |
+| quick iteration on compute | `LEVEL=2 LAYER_IDS=0,3 CACHE=25600 ./run_prefill_profile.sh` | ~10 min |
+| **standard: 3 dense + 3 sparse** | `LEVEL=2 LAYERS=6 CACHE=25600 ./run_prefill_profile.sh` | **~20 min** |
+| collectives + per-chip imbalance | `LEVEL=2 LAYERS=8 CACHE=25600 ./run_prefill_profile.sh` | ~33 min |
+
+Compute zones (`ring_joint_sdpa`, `sparse_sdpa`, the matmuls) reproduce to within a few percent at any
+layer count. The collectives (`moe_reduce`, `combine`, `dispatch`) swing a lot between individual
+layers, so a 1-sparse-layer run gives you one draw from that distribution rather than a typical value —
+use 6 or 8 layers when the answer depends on them.
+
+Do not scale past ~8 layers: capture volume grows with layers x chunks, and at 60 the intermediate CSV
+reached 129 GB and OOM-killed the run.
 
 ## How it works
 

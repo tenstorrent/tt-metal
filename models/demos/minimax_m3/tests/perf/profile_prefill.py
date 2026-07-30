@@ -42,6 +42,8 @@ Env:
                       DOWN to a multiple of PROFILE_CHUNK                            [default 25600]
   PROFILE_NUM_LAYERS  build/run only the first N layers (keep >=4 to cover both
                       classes; also sets M3_LOAD_NLAYERS)                            [default: all 60]
+  PROFILE_LAYER_IDS   explicit global layer indices, e.g. "0,3" = one dense + one sparse. The fastest
+                      way to cover both classes; overrides PROFILE_NUM_LAYERS. Cache-only.
   PROFILE_READ_EVERY  call ttnn.ReadDeviceProfiler every N layers (<1000 ops/read!)   [default 1]
   PROFILE_SKIP_PREFIX "1" -> skip the prefix fill and attend a ZEROED cache. Shapes (and op costs)
                       are identical but MoE routing is not representative — bring-up only  [default 0]
@@ -140,7 +142,7 @@ def plan(chunk: int, cache: int):
     return n_chunks, cache_aligned, n_chunks * chunk
 
 
-def build_runtime(mesh, chunk, total, num_layers_override):
+def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None):
     """Build the real-weights model + KV cache. Returns (runtime, kv_cache, hf_config, num_layers)."""
     from models.demos.minimax_m3.tt.attention import allocate_kv_caches
     from models.demos.minimax_m3.tt.model_config import ModelArgs
@@ -152,7 +154,16 @@ def build_runtime(mesh, chunk, total, num_layers_override):
     model_args = ModelArgs(mesh_device=mesh)  # HF_MODEL
     hf_config = model_args.hf_config
     num_layers = hf_config.num_hidden_layers
-    if num_layers_override:
+    if layer_ids:
+        # Explicit layer selection, e.g. [0, 3] = one dense + one sparse. The layers keep their real
+        # global indices (so weights, cache keys and the dense/sparse decision are the real ones) but
+        # are stacked back to back, which makes a 2-layer run cover both classes. Needs the tilized
+        # cache: a non-contiguous index may not live in the shards M3_LOAD_NLAYERS would read.
+        num_layers = len(layer_ids)
+        hf_config.num_hidden_layers = num_layers
+        os.environ.setdefault("M3_WEIGHTS_FROM_CACHE", "1")
+        print(f"[zone-prof] PROFILE_LAYER_IDS={layer_ids}: building global layers {layer_ids}", flush=True)
+    if num_layers_override and not layer_ids:
         num_layers = int(num_layers_override)
         hf_config.num_hidden_layers = num_layers
         os.environ.setdefault("M3_LOAD_NLAYERS", str(num_layers))
@@ -189,6 +200,7 @@ def build_runtime(mesh, chunk, total, num_layers_override):
         num_users=1,
         expert_weight_dtype=expert_dtype,
         weight_cache_path=cache_path,
+        layer_indices=layer_ids,
     )
     runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
     del state_dict
@@ -229,6 +241,7 @@ def main():
     cache_req = int(os.getenv("PROFILE_CACHE", "25600"))
     read_every = int(os.getenv("PROFILE_READ_EVERY", "1"))
     num_layers_override = os.getenv("PROFILE_NUM_LAYERS")
+    layer_ids = [int(x) for x in os.getenv("PROFILE_LAYER_IDS", "").split(",") if x.strip()] or None
 
     n_chunks, cache, total = plan(chunk, cache_req)
     print(
@@ -248,7 +261,7 @@ def main():
     try:
         from models.demos.minimax_m3.utils.profiler_utils import COARSE, ZONES_ENABLED, read_profiler, zone
 
-        runtime, kv_cache, hf_config, num_layers = build_runtime(mesh, chunk, total, num_layers_override)
+        runtime, kv_cache, hf_config, num_layers = build_runtime(mesh, chunk, total, num_layers_override, layer_ids)
         cache_traffic_note(hf_config, num_layers, total)
 
         # Per-layer ReadDeviceProfiler for the UN-profiled phases only (warmup + prefix). The device

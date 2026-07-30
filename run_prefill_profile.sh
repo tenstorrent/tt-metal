@@ -18,6 +18,8 @@
 #                   real time (~20), 3 = everything incl. norms and sub-splits (~35).   [default 2]
 #   LAYERS=N        build/run only the first N layers. Layers 0-2 are dense and 3+ sparse, so N>=4
 #                   covers both classes; 8 gives 5 sparse samples for the per-chip view. [default all 60]
+#   LAYER_IDS=a,b   explicit global layer indices instead of the first N. LAYER_IDS=0,3 is the fastest
+#                   useful run: one dense + one sparse layer, ~10 min end to end.
 #   CACHE=N         tokens already cached before the profiled chunk (rounded down to a
 #                   whole number of chunks). Unset runs both 25600 and 56320.
 #   CHUNK=N         tokens in the profiled chunk.                                     [default 5120]
@@ -55,6 +57,7 @@ LOG="$LOGDIR/prefill_profile_${EXPERT_DTYPE}_${STAMP}.log"
 CHUNK="${CHUNK:-${PROFILE_CHUNK:-5120}}"
 export M3_PROFILE_LEVEL="${LEVEL:-${M3_PROFILE_LEVEL:-2}}"
 [ -n "${LAYERS:-}" ] && export PROFILE_NUM_LAYERS="$LAYERS"
+[ -n "${LAYER_IDS:-}" ] && export PROFILE_LAYER_IDS="$LAYER_IDS"
 [ -n "${CACHE:-}" ] && PROFILE_CACHE="$CACHE"
 [ -n "${SKIP_PREFIX:-}" ] && export PROFILE_SKIP_PREFIX="$SKIP_PREFIX"
 
@@ -108,6 +111,7 @@ run_cfg () {  # $1=label  $2=cache_tokens
   tt-smi -glx_reset
   env PROFILE_CHUNK="$CHUNK" PROFILE_CACHE="$cache" PREFILL_TRACE_DIR="$trace" \
     ${PROFILE_NUM_LAYERS:+PROFILE_NUM_LAYERS="$PROFILE_NUM_LAYERS"} \
+    ${PROFILE_LAYER_IDS:+PROFILE_LAYER_IDS="$PROFILE_LAYER_IDS"} \
     ${PROFILE_READ_EVERY:+PROFILE_READ_EVERY="$PROFILE_READ_EVERY"} \
     ${PROFILE_SKIP_PREFIX:+PROFILE_SKIP_PREFIX="$PROFILE_SKIP_PREFIX"} \
     python3 -m tracy "${TRACY_OPTS[@]}" "$HARNESS" 2>&1 |
@@ -131,7 +135,7 @@ echo "logging to $LOG"
 {
   echo "MiniMax-M3 prefill zone profile"
   echo "  HF_MODEL=$HF_MODEL  EXPERT_DTYPE=$EXPERT_DTYPE  CHUNK=$CHUNK  NOC_TRACES=${NOC_TRACES:-0}"
-  echo "  LAYERS=${PROFILE_NUM_LAYERS:-all}  ZONE LEVEL=$M3_PROFILE_LEVEL  SKIP_PREFIX=${PROFILE_SKIP_PREFIX:-0}"
+  echo "  LAYERS=${PROFILE_LAYER_IDS:-${PROFILE_NUM_LAYERS:-all}}  ZONE LEVEL=$M3_PROFILE_LEVEL  SKIP_PREFIX=${PROFILE_SKIP_PREFIX:-0}"
 } | tee "$LOG"
 
 if [ -n "${PROFILE_CACHE:-}" ]; then
