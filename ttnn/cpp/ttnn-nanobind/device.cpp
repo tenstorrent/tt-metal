@@ -608,9 +608,9 @@ void device_module(nb::module_& m_device) {
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
             if (cq_id.has_value()) {
                 tt::tt_metal::distributed::Synchronize(
-                    device, device->mesh_command_queue(cq_id->get()), sub_device_ids);
+                    *device, device->mesh_command_queue(cq_id->get()), sub_device_ids);
             } else {
-                tt::tt_metal::distributed::Synchronize(device, std::nullopt, sub_device_ids);
+                tt::tt_metal::distributed::Synchronize(*device, std::nullopt, sub_device_ids);
             }
         },
         synchronize_device_doc.data(),
