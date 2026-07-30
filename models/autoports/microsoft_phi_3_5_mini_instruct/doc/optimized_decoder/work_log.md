@@ -81,7 +81,7 @@ tt-perf-report doc/optimized_decoder/tracy/ops_perf_results.csv \
 - [x] context contract preserved
 - [x] stage-owned docs and artifacts
 - [x] independent stage rereview: clean-pass
-- [ ] local stage commit (SHA recorded after commit)
+- [x] local stage commit: `23417b72b85`
 
 Limitations: this is a single-device decoder-layer stage, not multichip,
 full-model, generator, or vLLM work. BF16 KV cache remains intentionally
