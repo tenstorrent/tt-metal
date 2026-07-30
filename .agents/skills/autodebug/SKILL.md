@@ -27,7 +27,7 @@ After the script exits:
 
 Options:
 
-- `--agent codex` uses `codex exec` with `gpt-5.5` and `xhigh` reasoning by
+- `--agent codex` uses `codex exec` with `gpt-5.6` and `xhigh` reasoning by
   default.
 - `--agent claude` uses `claude -p` with `opus` and `xhigh` effort by default.
 - `--model MODEL` and `--effort LEVEL` override those defaults.

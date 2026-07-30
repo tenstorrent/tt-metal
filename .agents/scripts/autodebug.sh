@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROMPT_TEMPLATE="$SCRIPT_DIR/AUTODEBUG_PROMPT.md"
 AGENT="${AUTODEBUG_AGENT:-codex}"
-CODEX_MODEL="${AUTODEBUG_CODEX_MODEL:-gpt-5.5}"
+CODEX_MODEL="${AUTODEBUG_CODEX_MODEL:-gpt-5.6}"
 CLAUDE_MODEL="${AUTODEBUG_CLAUDE_MODEL:-opus}"
 EFFORT="${AUTODEBUG_EFFORT:-xhigh}"
 RUN_DIR="$(pwd -P)"
@@ -20,7 +20,7 @@ write ./AUTODEBUG.md. After the run finishes, read that report and act on it.
 Options:
   --agent codex|claude     Agent CLI to run. Default: codex.
   --model MODEL            Override the model for the selected agent.
-                           Defaults: codex=gpt-5.5, claude=opus.
+                           Defaults: codex=gpt-5.6, claude=opus.
   --effort LEVEL           Reasoning/thinking effort. Default: xhigh.
   --prompt-template PATH   Prompt template to render. Default:
                            .agents/scripts/AUTODEBUG_PROMPT.md.
