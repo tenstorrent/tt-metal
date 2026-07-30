@@ -23,6 +23,12 @@ _CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-rando
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
 _CMD_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and kimi and func and 8x4 and fabric2d'"
 
+# Kimi K3 chunked prefill (NoPE + output gate, 96 heads). chunk_size_global=1280 so a 2-SP box lands
+# chunk_local=640 per chip -- the same per-device geometry the 8x4 Galaxy reaches at chunk 5120, and
+# what the num_heads=96 chunked-only 640 configs are tuned for. 'k3' not 'kimi' in the -k: the ids are
+# deliberately disjoint so this selector and the K2.6 one above cannot cross-match.
+_CMD_K3_CHUNKED_2X4 = f"pytest {_CHUNKED_TEST_PATH} -k 'chunk1280-full and k3 and func and 2x4 and fabric2d'"
+
 
 @pytest.mark.timeout(0)
 def test_deepseek_v3_mla_perf_loudbox():
@@ -81,4 +87,38 @@ def test_kimi_mla_chunked_perf_galaxy():
         # weight-load tilize/typecast at construction (dispatched before MLA_START).
         between_signposts=("MLA_START", "MLA_END"),
         comments="kimi_chunked_50k+5k_glx_8x4_ground_truth",
+    )
+
+
+@pytest.mark.timeout(0)
+def test_kimi_k3_mla_chunked_perf_loudbox():
+    """Kimi-K3 chunked-prefill MLA perf on a 2x4 Blackhole loudbox (SP2xTP4).
+
+    Per-device geometry is identical to the 8x4 Galaxy's (H_loc=24, D_loc=1792, S_loc=640) -- only the
+    ring size differs, 2 vs 8 -- so this exercises exactly the num_heads=96 tuned 640 matmul/SDPA
+    configs. Functional reference (no PCC), so the timed region is a single forward.
+
+    Deliberately NOT run through run_mla_perf_with_approximation: that helper predicts Galaxy by
+    scaling only RingJointSDPADeviceOperation by 4x, and its TP_OPS/SDPA sets do not know about K3's
+    new g_proj matmul or the all-gather feeding it, so the extrapolation would be optimistic. This
+    asserts the 2x4 measurement on its own terms; a Galaxy ground-truth test needs a Galaxy run to
+    calibrate (mirror test_kimi_mla_chunked_perf_galaxy with a 'chunk1280 and k3' or 5120-chunk -k).
+
+    Measured breakdown at calibration: Matmul 1,357 us / CCL 2,002 us / SDPA 1,704 us / Other 812 us.
+    CCL is the largest bucket, and the gate adds one TP all-gather -- worth watching if this regresses.
+    """
+    margin = adjust_margin_for_ddr_speed(0.03)
+
+    run_model_device_perf_test_with_merge(
+        command=_CMD_K3_CHUNKED_2X4,
+        expected_device_perf_ns_per_iteration=5_875_364,  # Calibrated 2026-07-30 on BH LoudBox 2x4, FABRIC_2D.
+        subdir="kimi_k3_mla",
+        model_name="kimi_k3_mla_chunked_lb_2x4",
+        num_iterations=1,
+        batch_size=1,
+        margin=margin,
+        # Time only the forward: ops between MLA_START/MLA_END, excluding the one-time weight-load
+        # tilize/typecast dispatched at construction.
+        between_signposts=("MLA_START", "MLA_END"),
+        comments="kimi_k3_chunked_1280_lb_2x4_ground_truth",
     )

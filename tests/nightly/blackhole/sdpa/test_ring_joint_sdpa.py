@@ -3705,6 +3705,35 @@ RING_MLA_CHUNKED_MODEL_CONFIGS = {
     name: replace(cfg, d_v=RING_MLA_CHUNKED_LATENT_D_V) for name, cfg in CHUNKED_PREFILL_MODEL_CONFIGS.items()
 }
 
+# Kimi-K3 MLA. Same latent geometry as Kimi-K2.6 (d_q = d_k = kv_lora_rank + qk_rope_head_dim = 576,
+# latent d_v = kv_lora_rank = 512, single MQA-collapsed KV head) -- only the Q head count differs:
+# 96 heads / TP=4 = 24 per device. See models/demos/deepseek_v3_d_p/docs/KIMI_K3_MLA.md.
+#
+# nhq is pinned to the production 24 rather than following CHUNKED_PREFILL_HEADS_PER_RING's
+# galaxy/non-galaxy split (16/14, tuned for per-core work balance). That split is deliberate for the
+# K2.6 entry, but here the head count IS the thing under test: mla_config.py's tuned 640 SDPA entry
+# declares dense_head_cap_non_dsa=64, which makes a 96-head non-DSA model fall back to k_chunk=32, and
+# the reason given for that cap ("L1 footprint scales with head count") is not borne out by
+# exp_ring_joint_sdpa_program_factory.cpp, where every CB is sized from Sq_chunk_t/Sk_chunk_t/DHt with
+# no num_heads term. The k_chunk_sizes sweep below is how that gets settled by measurement: if 640
+# fits and is fastest at 24 heads, K3's tuned config should carry no cap.
+KIMI_K3_HEADS_PER_DEVICE = 24
+RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
+    name="kimi_k3",
+    nhq=KIMI_K3_HEADS_PER_DEVICE,
+    nhk=1,
+    nhv=KIMI_K3_HEADS_PER_DEVICE,
+    d_q=576,
+    d_k=576,
+    d_v=RING_MLA_CHUNKED_LATENT_D_V,
+    is_causal=True,
+    q_dtype=ttnn.bfloat16,
+    kv_dtype=ttnn.bfloat8_b,
+    q_chunk_sizes=[32],
+    k_chunk_sizes=[32, 128, 256, 512, 640],
+    seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
+)
+
 # Minimax3 production chunked-prefill GQA shape. The full model is 64 Q heads and 4 K/V
 # heads. With TP=4, each chip sees one KV head; keep the config per-ring so the generic
 # TP scaling produces 64Q/4KV globally on Galaxy and still exercises one-KV-head GQA locally.

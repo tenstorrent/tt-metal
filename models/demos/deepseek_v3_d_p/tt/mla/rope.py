@@ -134,6 +134,12 @@ class RotarySetup:
         self.sp_axis = sp_axis
         self.is_balanced = is_balanced
         self.sp_factor = mesh_device.shape[sp_axis]
+        # NoPE (Kimi-K3): there is no rotary embedding, and the config carries no YaRN fields for
+        # get_cos_sin_matrix to read. Both getters short-circuit to {} so callers that build rope
+        # tensors unconditionally -- TtPrefillTransformer.__init__/forward, and the shared
+        # run_mla_inference test driver -- keep working without a per-caller guard. ttMLA binds
+        # _apply_rope_none for such models, so the dict is never indexed.
+        self.use_nope = bool(getattr(hf_config, "mla_use_nope", False))
 
     def get_rope_tensors(self, seq_len: int) -> dict[str, ttnn.Tensor]:
         """Get cos, sin, and transformation matrices sharded over SP axis.
@@ -143,7 +149,12 @@ class RotarySetup:
 
         Always Meta-style interleaved cos/sin + a trans_matrix (rotary_embedding_llama) — the
         MLA's own RoPE layout.
+
+        NoPE models get ``{}`` -- an empty dict rather than None-valued keys, so an unexpected
+        consumer raises KeyError instead of feeding None into a device op.
         """
+        if self.use_nope:
+            return {}
         cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config, interleave=True)
 
         assert (
@@ -208,6 +219,8 @@ class RotarySetup:
             * ``chunk_size_global % (TILE_SIZE * sp_factor) == 0``
             * ``cache_seq_len_global % chunk_size_global == 0``
         """
+        if self.use_nope:
+            return {}  # see get_rope_tensors
         assert not self.is_balanced, "indexed rotated rope is incompatible with is_balanced"
         sp = self.sp_factor
         assert (

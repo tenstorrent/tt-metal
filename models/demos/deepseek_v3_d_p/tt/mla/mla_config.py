@@ -338,6 +338,134 @@ MLA_MATMUL_CONFIG = {
 }
 
 
+# ---------------------------------------------------------------------------------------------------
+# Kimi-K3 chunked-prefill (seq_len_local = 640) matmul configs.
+#
+# K3 is 96 heads (K2.6 is 64), so every K2.6 `640` entry above is rejected for it by the `num_heads`
+# tag. A slot can hold a LIST of candidates (see ttMLA._select_cfg) and the first tag match wins, so
+# each `640` entry below becomes [K2.6 candidate, K3 candidate]. Order is priority order; both are
+# fully tagged and mutually exclusive, so it does not matter here.
+#
+# Verified per-op at the exact per-device shapes (S_loc=640, tp=4, H_loc=24) by
+# tests/op_unit_tests/test_kimi_k3_mla_matmuls.py -- all PCC 0.9999 on a 2x4 Blackhole box.
+# See models/demos/deepseek_v3_d_p/docs/KIMI_K3_MLA.md §3 for the shape audit.
+_K3_HEADS = 96
+
+
+def _retag_for_k3(cfg: dict) -> dict:
+    """Reuse a K2.6 program config for K3 verbatim, changing only the head-count tag.
+
+    Valid only where the per-device shape is unchanged. Deriving instead of copy-pasting keeps the
+    two candidates from drifting apart, and makes "this config transfers unchanged" explicit.
+    """
+    return {**cfg, "num_heads": _K3_HEADS}
+
+
+# q_a_proj / kv_a_proj_with_mqa: per-device shape is identical (K = hidden/tp = 1792 either way).
+# o_proj: K widens 2048 -> 3072, but N is the full 7168 for both (K-sharded via mapper_tp0) and
+# in0_block_w=8 divides K_t=64 and K_t=96 alike -- so the tiling is valid unchanged.
+for _name in ("q_a_proj", "kv_a_proj_with_mqa", "o_proj"):
+    _k26 = MLA_MATMUL_CONFIG[_name][640]
+    MLA_MATMUL_CONFIG[_name][640] = [_k26, _retag_for_k3(_k26)]
+
+# q_b_proj: N widens 3072 -> 4608 per device (N_t 96 -> 144), so per_core_N must cover 144 over 11
+# columns: 14 (154 >= 144). K_t = 48, in0_block_w = 8 divides it; out_subblock_w = 7 divides 14.
+MLA_MATMUL_CONFIG["q_b_proj"][640] = [
+    MLA_MATMUL_CONFIG["q_b_proj"][640],
+    {
+        "num_heads": _K3_HEADS,
+        "q_lora_rank": 1536,
+        "chunked_only": True,
+        "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=COMPUTE_GRID,
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=7,
+            per_core_M=2,
+            per_core_N=14,
+            transpose_mcast=False,
+            fuse_batch=False,
+            fused_activation=None,
+        ),
+        "act_mem_config": ttnn.L1_MEMORY_CONFIG,
+        "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+        "out_dtype": ttnn.bfloat16,
+    },
+]
+
+# wkv_b1 / wkv_b2: batched per-head matmuls whose batch IS the local head count, 16 -> 24. These are
+# the only entries the head increase genuinely breaks: MatmulMultiCoreReuse distributes
+# batch * (M_t/per_core_M) * (N_t/per_core_N) blocks over cores, so K2.6's per_core_M=4 asks for
+# 24 * (20/4) * 1 = 120 blocks on a 110-core grid. per_core_M=5 gives 24 * 4 = 96.
+MLA_MATMUL_CONFIG["wkv_b1"][640] = [
+    MLA_MATMUL_CONFIG["wkv_b1"][640],
+    {
+        "num_heads": _K3_HEADS,
+        "q_lora_rank": 1536,
+        "chunked_only": True,
+        "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=COMPUTE_GRID,
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=5,
+            per_core_N=16,
+        ),
+        "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+        "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+        "out_dtype": ttnn.bfloat16,
+    },
+]
+MLA_MATMUL_CONFIG["wkv_b2"][640] = [
+    MLA_MATMUL_CONFIG["wkv_b2"][640],
+    {
+        "num_heads": _K3_HEADS,
+        "q_lora_rank": 1536,
+        "chunked_only": True,
+        "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=COMPUTE_GRID,
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=5,
+            per_core_N=4,
+        ),
+        "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+        "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+        "out_dtype": ttnn.bfloat8_b,
+    },
+]
+
+# g_proj (Kimi-K3 output gate) -- new op, no K2.6 counterpart. ttMLA all-gathers hidden_states to the
+# full hidden size and N-shards this weight (mapper_tp1), so K = 7168 (K_t = 224) and N = 12288/tp =
+# 3072 (N_t = 96 -> per_core_N = 9 covers it on 11 columns). Because g is complete per device, sigmoid
+# fuses here instead of costing a separate eltwise pass; ttMLA keys off this fused_activation
+# (_gate_sigmoid_fused) to decide whether to apply a standalone ttnn.sigmoid, so REMOVING it silently
+# changes nothing but ADDING a second sigmoid elsewhere would double-apply.
+# SIGMOID needs both params: VecMode::RC (=4) and approx (0 = accurate).
+MLA_MATMUL_CONFIG["g_proj"] = {
+    640: {
+        "num_heads": _K3_HEADS,
+        "q_lora_rank": 1536,
+        "chunked_only": True,
+        "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=COMPUTE_GRID,
+            in0_block_w=8,
+            out_subblock_h=2,
+            out_subblock_w=3,
+            per_core_M=2,
+            per_core_N=9,
+            transpose_mcast=False,
+            fuse_batch=False,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4.0, 0.0),
+        ),
+        "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+        "out_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+        "out_dtype": ttnn.bfloat16,
+    },
+}
+
+
 MLA_SDPA_CONFIG = {
     # Tuned for the Galaxy balanced MLA PCC path. The 8x4 max-sl cases hit the issue #45521 fallback.
     # 128k total seq_len → 16384 per device on 8x4
@@ -360,29 +488,53 @@ MLA_SDPA_CONFIG = {
         "q_chunk_size": 160,
         "k_chunk_size": 320,
     },
-    # 5k total seq_len → 640 per device on 8x4
-    640: {
-        "q_chunk_size": 32,
-        "k_chunk_size": 640,
-        "num_heads": None,
-        "dense_head_cap_non_dsa": 64,
-        "chunked_only": True,
-    },
+    # 5k total seq_len → 640 per device on 8x4.
+    # Two candidates (first tag match wins, see ttMLA._select_cfg):
+    #   1. the original catch-all, kept exactly as-is, with its empirical non-DSA head cap;
+    #   2. Kimi-K3 at 96 heads, which the cap would otherwise send to the k=32 default.
+    # K3 carries NO cap because it was measured, not assumed: test_ring_mla_chunked_accuracy
+    # [kimi_k3-q32-k{32,128,256,512,640}] all pass at 24 heads/device with zero L1 OOM, and the
+    # final-chunk PCC goes 0.99590 (k=32) → 0.99919 (128) → 0.99936 (256) → 0.99937 (512) →
+    # 0.99938 (640). So the fallback to k=32 was costing ~0.0035 PCC and protecting nothing here.
+    # (The cap's stated "L1 scales with head count" rationale does not hold — see
+    # ttMLA._get_sdpa_program_config and docs/KIMI_K3_MLA.md §0.5.) Accuracy saturates by k=256;
+    # 640 matches K2.6's validated tiling.
+    640: [
+        {
+            "q_chunk_size": 32,
+            "k_chunk_size": 640,
+            "num_heads": None,
+            "dense_head_cap_non_dsa": 64,
+            "chunked_only": True,
+        },
+        {
+            "q_chunk_size": 32,
+            "k_chunk_size": 640,
+            "num_heads": 96,
+            "chunked_only": True,
+        },
+    ],
 }
 
 
-def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | None:
-    """Get optimal matmul config for a given weight and local sequence length (per-device).
+def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | list | None:
+    """Raw matmul entry for a given weight and local sequence length (per-device).
 
-    Returns None if no config is found for the given weight_name/seq_len_local combination.
+    Returns None if there is no entry. **A slot may hold a LIST of candidates** (one per model
+    flavour sharing this seq_len — e.g. Kimi-K2.6 and Kimi-K3 both at 640), and this accessor does
+    NOT apply the gating tags. ``ttMLA`` deliberately reads the dicts directly and resolves through
+    ``_select_cfg`` / ``_cfg_matches``, which is the only place that knows the live model's head
+    count, q_lora_rank and chunked mode. Any new caller should do the same rather than assume the
+    return value is a single usable config.
     """
     return MLA_MATMUL_CONFIG.get(weight_name, {}).get(seq_len_local)
 
 
-def get_sdpa_config(seq_len_local: int) -> dict | None:
-    """Get optimal SDPA chunk sizes for a given local sequence length (per-device).
+def get_sdpa_config(seq_len_local: int) -> dict | list | None:
+    """Raw SDPA entry for a given local sequence length (per-device).
 
-    Returns None if no config is found for the given seq_len_local.
+    Returns None if there is no entry. May be a list of candidates and does not apply the gating
+    tags — see ``get_matmul_config``.
     """
     return MLA_SDPA_CONFIG.get(seq_len_local)
 

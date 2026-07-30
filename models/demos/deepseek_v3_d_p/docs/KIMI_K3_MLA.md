@@ -9,6 +9,55 @@ Sources: `config.json`, `configuration_kimi_k3.py` and `modeling_kimi_linear.py`
 (`DeepseekV3ForCausalLM`). TT-side line references are against `models/demos/deepseek_v3_d_p/`
 at the time of writing (branched off `5700827bc39`).
 
+> **§0 — corrections and additions from implementation.** The audit below is the original analysis;
+> these points were established while implementing it and supersede it where they conflict.
+>
+> 1. **The checkpoint config is a multimodal wrapper.** `architectures` is
+>    `["KimiK3ForConditionalGeneration"]` with `text_config` (`model_type: kimi_linear`) +
+>    `vision_config`. Every field below lives under `text_config`. `unwrap_multimodal_config`
+>    (`tt/runners/adapters/mla.py:39`) and `_unwrap_multimodal_config` (`tests/conftest.py:589`)
+>    already handle this, so it costs nothing.
+> 2. **F1's failure mode depends on how the config was built, and an `is not None` guard is not
+>    enough.** `rope_scaling` is absent from `text_config`'s JSON, and `KimiLinearConfig` defaults it
+>    to `None` — but `PretrainedConfig.__init__` on transformers ≥ 5 *synthesizes*
+>    `{"rope_theta": 10000.0, "rope_type": "default"}` for any config whose JSON omits it. So a real
+>    `AutoConfig`-loaded K3 raises **`KeyError: 'factor'`** at `mla.py:330`, while a hand-built
+>    `SimpleNamespace(rope_scaling=None)` raises `TypeError`. The guard must therefore test for the
+>    **`"factor"` key**, not for `None` (verified: transformers 5.12.1 does this to
+>    `DeepseekV3Config()` too). K2.6/GLM-5.2/V3.2 scales are bit-identical under the key-based guard.
+> 3. **The MLA weights are not quantized.** The checkpoint is MXFP4 (`compressed-tensors`, 4-bit,
+>    `group_size: 32`), but `quantization_config.ignore` contains `re:.*self_attn.*` — so every MLA
+>    weight, `g_proj` included, is plain bf16. No dequant work in the MLA scope. Only the MoE routed
+>    experts are quantized.
+> 4. **`full_attn_layers` is 1-indexed.** `KimiLinearConfig.is_kda_layer` tests
+>    `(layer_idx + 1) in kda_layers`, so the 0-indexed MLA layers are `[3, 7, …, 87, 91, 92]`.
+>    **91 and 92 are adjacent** — the 3:1 pattern breaks at the tail, so a stride-4 map is wrong.
+>    See `KimiK3Config.mla_layer_ids()` / `mla_kv_slot()`.
+> 5. **F2's stated rationale does not hold, and the cap does not apply to K3.** Every CB in
+>    `exp_ring_joint_sdpa_program_factory.cpp:358-365` is sized from `Sq_chunk_t`, `Sk_chunk_t` and
+>    `DHt` — there is no `num_heads` term. Head count changes the number of work units (runtime), not
+>    per-core L1, and K3's K/V is the same MQA-collapsed 1-head 576-wide latent as K2.6's. Measured:
+>    every `k_chunk` from 32 to 640 fits at 24 heads/device, and the k=32 fallback the cap forces
+>    costs **2.36× device time**. K3's entry carries no cap — see the table under F2. (What the cap
+>    empirically protects is V3.1 at 128 heads; the comment at `mla.py:665-672` describing it as an
+>    L1-footprint-per-head effect is misleading and has been corrected in place.)
+> 6. **`ring_mla` imposes no head-count constraint** — checked every `TT_FATAL` in
+>    `exp_ring_joint_sdpa_device_operation.cpp`. 24 heads/device is fine.
+> 7. **One tuned config per `(weight, seq_len)`** — a constraint the original audit missed.
+>    `MLA_MATMUL_CONFIG[name][seq_len]` and `MLA_SDPA_CONFIG[seq_len]` each held a single dict, and the
+>    gating tags only *reject* that one candidate — they cannot choose among several. K2.6 and K3 both
+>    want the `640` slot, so those slots now accept a **list of candidates**; `ttMLA._select_cfg` takes
+>    the first whose tags match (`_cfg_matches`, shared by the matmul and SDPA resolvers).
+> 8. **Upstream `modeling_kimi_linear.py` cannot be vendored whole**: it raises
+>    `ImportError("Plese run 'pip install -U fla-core'")` at module import, and `fla` is a triton/GPU
+>    library needed only by the KDA layers. `reference/kimi_k3/modeling_kimi_k3_mla.py` is a trimmed
+>    MLA-only copy (also dropping the `ALL_ATTENTION_FUNCTIONS` indirection, whose surface moves
+>    between transformers majors).
+> 9. **Local mesh equivalence.** SP2×TP4 on an 8-chip 2x4 Blackhole box reproduces every per-device
+>    shape in §3 (`H_loc=24`, `D_loc=1792`, `S_loc=640`); only `ring_size` changes 8→2. Note the
+>    chunked-prefill driver derives `S_loc = chunk_size_global // sp`, so reaching `S_loc=640` at
+>    sp=2 needs `chunk_size_global=1280`, not the default 5120.
+
 ## 1. What K2.6 support looks like today
 
 `tt/runners/adapters/kimi_k2_6.py` contains **no MLA-specific code**. It is a 71-line
@@ -77,6 +126,22 @@ attn_output = self.o_proj(attn_output)
 work**. Across the model, attention GEMMs land roughly even with K2.6 (24 × 464 vs 61 × 202
 MFLOP/token) — the gate eats most of what the 3:1 hybrid saves.
 
+**Measured**, one MLA layer's forward at the same per-device geometry (S_loc=640, tp=4, chunk 1280 on
+a 2x4 Blackhole box; between the `MLA_START`/`MLA_END` signposts, tuned configs active):
+
+| | Matmul | CCL | SDPA | Other | **Total** |
+|---|---|---|---|---|---|
+| Kimi-K2.6 (64 heads, no gate) | 708 µs | 1466 µs | 1369 µs | 645 µs | **4188 µs** |
+| Kimi-K3 (96 heads, gated) | 1357 µs | 2002 µs | 1704 µs | 812 µs | **5875 µs** |
+| delta | **+92 %** | +37 % | +24 % | +26 % | **+40 %** |
+
+The matmul near-doubling is the 1.5× head count *and* `g_proj` together, consistent with the ~38 %
+GEMM estimate above. CCL is the single largest bucket in both, and K3 adds one TP all-gather to it.
+
+Per *model*, though, the hybrid wins outright rather than breaking even: 24 × 5875 µs ≈ 141 ms vs
+61 × 4188 µs ≈ 255 ms, i.e. K3's whole MLA stack costs **~55 %** of K2.6's. (Layer-count scaling of a
+single-layer measurement — indicative, not a model-level benchmark.)
+
 ### 2.3 Capacity
 
 | | KiB/token/user | 128k | 256k | 1M |
@@ -144,19 +209,58 @@ and `g ⊙ (attn @ W_b2) ≠ (g ⊙ attn) @ W_b2`.
 
 ## 5. Findings / action items
 
-**F1 — Immediate hard break: `rope_scaling` is `null`.** `mla.py:330` unconditionally derefs
-`config.rope_scaling["factor"]` / `["mscale"]`. K3 raises before anything else runs. The fix is
-not just a guard: the correct K3 scale is plain `qk_head_dim**-0.5`, where K2.6 multiplies by
+> **Status.** F1–F4 are **implemented and tested**; F5–F6 remain open (they need the hybrid layer
+> schedule, which is out of scope for the MLA module). What landed:
+>
+> | | |
+> |---|---|
+> | `reference/kimi_k3_config.py` | `KimiK3Config` + `kimi_k3_hf_config()`; `mla_layer_ids()` / `mla_kv_slot()` for F5 |
+> | `reference/kimi_k3/` | trimmed upstream `KimiMLAAttention` (unabsorbed truth model, no `fla` dep) |
+> | `reference/mla_reference.py` | `MLAReference` now config-driven for NoPE + gate |
+> | `tt/mla/mla.py` | scale guard, NoPE rope bind, `g_proj` plumbing, `_output_gate` + gated `_o_proj_epilogue`, multi-candidate config resolution |
+> | `tt/mla/mla_config.py` | K3 `640` candidates for all 6 matmuls + `g_proj`; uncapped K3 SDPA entry |
+> | `tt/mla/rope.py` | `RotarySetup` short-circuits to `{}` under NoPE |
+> | `tt/runners/adapters/kimi_k3.py` | test-only adapter (`build_runtime`/`allocate_kv_cache` raise, pointing at F5/F6) |
+> | tests | `tests/torch/test_kimi_k3_mla_reference.py`, `tests/op_unit_tests/test_kimi_k3_mla_matmuls.py`, `test_kimi_k3_gate.py`, `test_mla_config_resolution.py`, `test_mla.py::test_kimi_k3_mla`, `kimi_k3` in `test_mla_chunked_prefill` (+ `chunk1280` scenarios), `tests/cache/test_mla_cache.py` (+ a runnable 2x4 case), `tests/perf/test_mla_perf.py::test_kimi_k3_mla_chunked_perf_loudbox`, `kimi_k3` in `test_ring_joint_sdpa.py` |
+>
+> Every K3 branch is flag-gated on `mla_use_nope` / `mla_use_output_gate`, and the K2.6 / V3 / GLM
+> PCCs are bit-identical before and after.
+
+**F1 — Immediate hard break: `rope_scaling` carries no `"factor"`.** `mla.py:330` unconditionally
+derefs `config.rope_scaling["factor"]` / `["mscale"]`. K3 raises before anything else runs. The fix
+is not just a guard: the correct K3 scale is plain `qk_head_dim**-0.5`, where K2.6 multiplies by
 `mscale² ≈ 2.0` (`mla.py:333-336`). Getting this wrong is a silent 2× SDPA-scale error.
+See §0.2 — the guard must key on the `"factor"` key, not on `rope_scaling is None`. **Fixed.**
 
 **F2 — SDPA k_chunk cliff (biggest perf item).** The tuned 640 SDPA entry carries
 `dense_head_cap_non_dsa: 64` (`mla_config.py:368`), and `_get_sdpa_program_config`
 (`mla.py:673-675`) discards the config when `num_heads > cap and not _is_dsa_family`. K3 is
-96 heads and non-DSA, so **k_chunk drops 640 → 32 and q_chunk → 32**. The cap exists because the
-dense path holds full-context K over every head, so L1 footprint scales with head count: K2.6 at
-64 heads sat exactly at the ceiling, and 96 heads will genuinely OOM at k=640. K3 needs its own
-sweep for the largest L1-safe k_chunk at 24 heads/device; that number will dominate MLA prefill
-time.
+96 heads and non-DSA, so **k_chunk drops 640 → 32 and q_chunk → 32**. K3 needs its own sweep for the
+largest L1-safe k_chunk at 24 heads/device; that number will dominate MLA prefill time.
+
+*Revised (§0.5): the original rationale here — "the dense path holds full-context K over every head,
+so L1 footprint scales with head count" — is not supported by the program factory, which sizes every
+CB from `Sq_chunk_t`/`Sk_chunk_t`/`DHt` alone.*
+
+**MEASURED, and the cap does not apply to K3.** `test_ring_mla_chunked_accuracy[kimi_k3-q32-k*]`
+(24 heads/device, `d_q=d_k=576`, latent `d_v=512`, 11 chunks of 5120 to 56320 on a 2x4 Blackhole box):
+
+| k_chunk | 32 | 128 | 256 | 512 | 640 |
+|---|---|---|---|---|---|
+| final-chunk PCC | 0.99590 | 0.99919 | 0.99936 | 0.99937 | **0.99938** |
+| L1 OOM | no | no | no | no | **no** |
+| total device time (11 chunks) | 141.4 ms | 77.6 ms | 67.7 ms | 63.9 ms | **60.0 ms** |
+| final-chunk math util | 27.9 % | 50.9 % | 58.5 % | 63.8 % | **65.9 %** |
+
+(perf from `test_ring_mla_create_chunked_perf_table[kimi_k3-q32-k*]`, 100 SDPA cores)
+
+Every value fits, k=640 included — so the `dense_head_cap_non_dsa` fallback is not protecting K3 from
+anything, and it is expensive: **k=32 costs 2.36× the device time** of k=640 (141.4 vs 60.0 ms) and
+less than half the math utilization, *plus* ~0.0035 PCC. Larger k_chunk wins monotonically on both
+axes here. **K3's tuned entry therefore carries no cap and uses k=640**, matching K2.6's tiling.
+
+This makes F2 a one-line config fix rather than the sweep-for-a-safe-smaller-value exercise the
+original text implies — and it was indeed the largest single perf item on the MLA side.
 
 **F3 — `num_heads = 96` silently disables every tuned matmul config.** `_resolve_mm_cfg`
 (`mla.py:579`) drops any config whose declared `num_heads` doesn't match, and all six tuned
@@ -164,10 +268,29 @@ time.
 kv_a_proj, wkv_b1, wkv_b2 and o_proj. Graceful by design, but the whole 640 set needs re-sweeping
 — which is required anyway since q_b (4608) and o_proj (K=3072) change width.
 
+*Revised: "the whole 640 set needs re-sweeping" overstates the work — most of it is re-tagging.*
+Measured at the per-device shapes with `test_kimi_k3_mla_matmuls.py` (all PCC 0.9999 on a 2x4 box):
+
+| weight | per-device shape change | outcome |
+|---|---|---|
+| `q_a_proj` | none (K = hidden/tp = 1792 for both) | K2.6's config **transfers verbatim** |
+| `kv_a_proj_with_mqa` | none | K2.6's config **transfers verbatim** |
+| `o_proj` | K 2048 → 3072; N is the full 7168 either way | K2.6's config **transfers** (`in0_block_w=8` divides K_t 64 and 96) |
+| `q_b_proj` | N 3072 → **4608** (N_t 96 → 144) | new: `per_core_N=14`, subblock 1×7 |
+| `wkv_b1` / `wkv_b2` | batch (= `H_loc`) 16 → **24** | new: K2.6's `per_core_M=4` needs `24 × (20/4) = 120` blocks on a 110-core grid → **overflows**; `per_core_M=5` gives 96 |
+| `g_proj` | new op, `[7168, 3072]` per device | new: `per_core_N=9`, subblock 2×3, `fused_activation=sigmoid` |
+
+So only `q_b_proj`, `wkv_b1`/`wkv_b2` and `g_proj` needed real work; the batched pair is the one
+place the head-count increase is genuinely not free.
+
 **F4 — New weight plumbing.** Add `g_proj` to the prefetch/`as_tensor` block
 (`mla.py:131-209`; `mapper_tp0` for option A / `mapper_tp1` for option B, `bfloat8_b`, new
 `_cache_name` entry), to `MM_DEFAULT_DTYPES`, and a tuned `mla_config.py` entry. No
 `_BATCHED_MM_DIMS` entry — `g_proj` is a plain 2D matmul.
+**Done** (option B, `mapper_tp1`), except the tuned `mla_config.py` entry, which is blocked on §0.7.
+One site the original list missed: `MLA_WEIGHT_NAMES` drives `check_cache_complete`, so `g_proj`
+must be appended *conditionally* (`ttMLA.weight_names(has_output_gate)`) or every existing non-gated
+weight cache starts reporting itself incomplete.
 
 **F5 — KV slot mapping for 24-of-93 layers.** Cache geometry is unchanged (576/token), but the
 kvpe cache is a single `num_users × num_layers` user-major slot array indexed by

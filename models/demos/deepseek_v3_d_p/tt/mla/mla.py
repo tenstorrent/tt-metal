@@ -37,16 +37,29 @@ class ttMLA:
     ]
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, cache_name_prefix: str, has_indexer: bool = False) -> bool:
+    def weight_names(has_output_gate: bool = False) -> list[str]:
+        """Cache-file stems for this MLA flavour.
+
+        ``g_proj`` is appended only for gated MLA (Kimi-K3). It must NOT join
+        ``MLA_WEIGHT_NAMES`` unconditionally: that list drives ``check_cache_complete``, so every
+        already-populated non-gated cache (DeepSeek-V3, Kimi-K2.6/2.7, GLM) would start reporting
+        itself incomplete and get needlessly rebuilt."""
+        return ttMLA.MLA_WEIGHT_NAMES + (["g_proj"] if has_output_gate else [])
+
+    @staticmethod
+    def check_cache_complete(
+        cache_path: Path, cache_name_prefix: str, has_indexer: bool = False, has_output_gate: bool = False
+    ) -> bool:
         """Check that the dense MLA weight cache files exist, plus the indexer tensorbins when sparse.
 
         Dense by default (preserves existing callers). When ``has_indexer=True`` the indexer cache
         (``{prefix}.indexer_*``) must also be complete — a disjoint prefix space from the dense MLA
         names, so the dense loop here never matches indexer files and vice versa
-        (see ``TtIndexer.check_cache_complete``)."""
+        (see ``TtIndexer.check_cache_complete``). ``has_output_gate=True`` additionally requires
+        ``g_proj`` (Kimi-K3)."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
-        for name in ttMLA.MLA_WEIGHT_NAMES:
+        for name in ttMLA.weight_names(has_output_gate):
             if not pattern_exists(f"{cache_name_prefix}.{name}*.tensorbin", "MLA"):
                 logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}")
                 return False
@@ -90,6 +103,7 @@ class ttMLA:
         q_lora_rank = config.q_lora_rank
         hidden_size = config.hidden_size
         qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
+        use_gate = bool(getattr(config, "mla_use_output_gate", False))
 
         def _cache_name(name):
             return str(cache_path / f"layer_{layer_idx}.mla.{name}") if cache_path else None
@@ -105,6 +119,8 @@ class ttMLA:
             wkv_b1 = kv_b[..., :qk_nope_head_dim, :].transpose(-2, -1).transpose(-2, -1)
             wkv_b2 = kv_b[..., qk_nope_head_dim:, :].transpose(-2, -1)
             o_proj = state_dict["o_proj.weight"].transpose(-2, -1)
+            # Kimi-K3 output gate: [hidden, num_heads * v_head_dim], same size as o_proj transposed.
+            g_proj = state_dict["g_proj.weight"].transpose(-2, -1) if use_gate else None
         else:
             q_a_ln = torch.empty(1, 1, q_lora_rank // ttnn.TILE_SIZE, ttnn.TILE_SIZE)
             kv_a_ln = torch.empty(1, 1, kv_lora_rank // ttnn.TILE_SIZE, ttnn.TILE_SIZE)
@@ -114,6 +130,7 @@ class ttMLA:
             wkv_b1 = torch.empty(1, num_heads, qk_nope_head_dim, kv_lora_rank)
             wkv_b2 = torch.empty(1, num_heads, kv_lora_rank, v_head_dim)
             o_proj = torch.empty(num_heads * v_head_dim, hidden_size)
+            g_proj = torch.empty(hidden_size, num_heads * v_head_dim) if use_gate else None
 
         # Mesh mappers
         shard_dims_tp0 = [None, None]
@@ -207,6 +224,21 @@ class ttMLA:
                     ),
                 }
             )
+            if use_gate:
+                # Kimi-K3 output gate. mapper_tp1 (N-shard the 12288) so each device owns the same
+                # contiguous head range q_b_proj's mapper_tp1 assigns — nlp_concat_heads emits
+                # head-major over the last dim, so the gate multiply needs no reshape. The activation
+                # is all-gathered to the full 7168 first (see _output_gate), which also lets sigmoid
+                # fuse into this matmul instead of costing a separate eltwise pass.
+                result["g_proj"] = ttnn.as_tensor(
+                    g_proj,
+                    device=device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=mem,
+                    mesh_mapper=mapper_tp1,
+                    cache_file_name=_cache_name("g_proj"),
+                )
 
         if device is None:
             for v in result.values():
@@ -314,6 +346,9 @@ class ttMLA:
                 "kv_a_proj_with_mqa",
                 "wkv_b2",
                 "o_proj",
+                # Kimi-K3 only; MLA_MATMUL_CONFIG has no entry yet -> {} -> untuned default. Listed
+                # unconditionally because _resolve_mm_cfg indexes self.mm_configs with a bare [].
+                "g_proj",
             ]
         }
         self.sdpa_configs = MLA_SDPA_CONFIG
@@ -327,13 +362,35 @@ class ttMLA:
         self.qk_rope_head_dim = config.qk_rope_head_dim
         self.v_head_dim = config.v_head_dim
         self.qk_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim
-        rope_factor = config.rope_scaling["factor"]
-        mscale = config.rope_scaling["mscale"]
+
+        # Kimi-K3 MLA flags. Both absent (-> False) on every other variant, so their branches below
+        # leave the existing paths bit-identical.
+        #  * mla_use_nope: no rotary embedding at all (see the rope bind further down). The 64
+        #    qk_rope_head_dim columns still exist and are still cached; they are never rotated.
+        #  * mla_use_output_gate: sigmoid(g_proj(hidden)) gates attn_out before o_proj.
+        self._use_nope = bool(getattr(config, "mla_use_nope", False))
+        self._use_gate = bool(getattr(config, "mla_use_output_gate", False))
+
+        # YaRN mscale, keyed on the PRESENCE of "factor" rather than on `rope_scaling is not None`.
+        # Two ways a non-YaRN model gets here with a non-None rope_scaling:
+        #   - transformers >= 5 synthesizes `{"rope_theta": ..., "rope_type": "default"}` for any
+        #     config whose json omits rope_scaling (which is exactly K3's case), so an
+        #     `is not None` guard passes and then ["factor"] raises KeyError;
+        #   - a hand-built SimpleNamespace config may set rope_scaling=None outright.
+        # Both must land on the plain qk_head_dim**-0.5 scale. Getting this wrong is a silent 2x
+        # SDPA-scale error, not a crash.
+        rope_scaling = getattr(config, "rope_scaling", None) or {}
+        rope_factor = rope_scaling.get("factor")
 
         self.scale = self.qk_head_dim**-0.5
-        if rope_factor > 1.0:
+        if rope_factor is not None and rope_factor > 1.0:
+            mscale = rope_scaling["mscale"]
             mscale = 0.1 * mscale * math.log(rope_factor) + 1.0
             self.scale = self.scale * mscale * mscale
+        assert not (self._use_nope and self.scale != self.qk_head_dim**-0.5), (
+            f"mla_use_nope=True but rope_scaling carries a YaRN factor ({rope_factor}) that scaled "
+            f"softmax to {self.scale}; a NoPE model has no positional scaling to compensate for"
+        )
 
         self.default_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -443,6 +500,8 @@ class ttMLA:
             self.wkv_b1_weight = weights["wkv_b1"]
             self.wkv_b2_weight = weights["wkv_b2"]
             self.o_proj_weight = weights["o_proj"]
+            if self._use_gate:
+                self.g_proj_weight = weights["g_proj"]
         logger.info(f"Loaded {len(weights)} weights in MLA layer {layer_idx} (kv_only={kv_only})")
 
         # DSA indexer (v3.2 / GLM): self._has_indexer was resolved above (before the buffer alloc). The
@@ -495,9 +554,19 @@ class ttMLA:
         # (block-cyclic) op — single-shot is folded onto the block-cyclic path as one full-seq chunk at
         # offset 0 — so its key cache persists layer-stacked (migratable to decode). Dense: chunked ->
         # indexed, single-shot -> rotary_embedding_llama.
-        self._apply_rope = (
-            self._apply_rope_padded if (self.is_chunked or self._has_indexer) else self._apply_rope_one_shot
-        )
+        # NoPE (Kimi-K3) binds a pass-through instead: the op is dropped, but the nope/rope SLICES in
+        # _q_stem / _kv_stem stay — they are dimension-driven, and the 64 rope columns are still
+        # concatenated into the 576-wide cached latent. rope_tensors simply goes unused.
+        if self._use_nope:
+            assert not self._has_indexer, (
+                "mla_use_nope with a DSA indexer is not supported: TtIndexer applies its own rope to "
+                "the indexer queries/keys, so the rope tensors cannot be dropped wholesale"
+            )
+            self._apply_rope = self._apply_rope_none
+        else:
+            self._apply_rope = (
+                self._apply_rope_padded if (self.is_chunked or self._has_indexer) else self._apply_rope_one_shot
+            )
 
         # Bind the attention core once, by config. Sparse ALWAYS uses the block-cyclic
         # _sparse_chunked_attn (single-shot = one full-seq chunk); dense splits by chunking. forward()
@@ -551,6 +620,7 @@ class ttMLA:
         "kv_a_proj_with_mqa": ttnn.bfloat16,
         "wkv_b2": ttnn.bfloat8_b,
         "o_proj": ttnn.bfloat16,
+        "g_proj": ttnn.bfloat16,  # Kimi-K3; this dict is a KeyError not a fallback (see _get_mm_kwargs)
     }
 
     # Matmul dimensions for batched matmuls (wkv_b1 / wkv_b2) keyed by weight name.
@@ -560,36 +630,61 @@ class ttMLA:
         "wkv_b2": ("kv_lora_rank", "v_head_dim"),
     }
 
-    def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
-        """Resolve the tuned matmul config for this weight/seq_len, applying head-count and
-        chunked-mode gating. Returns None when no tuned config applies (caller falls back to defaults).
+    def _cfg_matches(self, cfg: dict) -> bool:
+        """Do this tuned config's declared gating tags match this live ttMLA?
 
-        The gating *tags* (num_heads / q_lora_rank / chunked_only) are declared in the config
-        (mla_config.py); only the *match* is resolved here at runtime, because it depends on this live
-        ttMLA. chunked_only in particular is a per-instance property (single-shot vs chunked runner) that
-        the static, shared config can't know — so keeping all three checks together at this single
-        consume-time point is more cohesive than splitting head/q_lora filtering into the config and
-        leaving chunked here.
+        The tags are declared in the config (mla_config.py); only the *match* is resolved here at
+        runtime, because it depends on this instance. ``chunked_only`` in particular is a per-instance
+        property (single-shot vs chunked runner) that the static, shared config can't know — so
+        keeping all the checks together at this single consume-time point is more cohesive than
+        splitting head/q_lora filtering into the config and leaving chunked here.
+
+        Shared by the matmul and SDPA resolvers so a new tag can't be honoured by one and ignored by
+        the other.
         """
-        cfg = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
         # Some tuned configs are head-count specific (the chunked-prefill 640 set was tuned for Kimi's
         # 64 heads; several program_configs overflow the grid at DeepSeek's 128). A config may declare
         # the num_heads it was tuned for; when it doesn't match this model, fall back so a different
         # variant at the same seq_len_local doesn't pick up a dimensionally-invalid program_config.
-        if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
-            cfg = None
+        if cfg.get("num_heads") not in (None, self.num_heads):
+            return False
         # Some of those configs are additionally q_lora_rank-specific: the 640 set's program_configs are
         # dimensionally valid at Kimi's q_lora_rank (1536) but overflow the grid at GLM-5.1's (2048), even
         # though both have 64 heads. When a config declares a q_lora_rank that doesn't match this model,
         # fall back so a same-heads/same-seq variant doesn't pick up an invalid program_config.
-        if cfg is not None and cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
-            cfg = None
+        if cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
+            return False
         # The chunked-prefill 640 set is only dimensionally valid in chunked mode (e.g. wkv_b1/wkv_b2
         # are true batched per-head matmuls over the per-head SDPA output; the single-shot path applies
         # them to a batch=1 latent). Fall back to defaults when this ttMLA was not built for chunked.
-        if cfg is not None and cfg.get("chunked_only") and not self.is_chunked:
-            cfg = None
-        return cfg
+        if cfg.get("chunked_only") and not self.is_chunked:
+            return False
+        # Dense-path head ceiling: above dense_head_cap_non_dsa, non-DSA models fall back rather than
+        # use this tiling. Empirically derived (V3.1 at 128 heads); DSA-family models are exempt.
+        cap = cfg.get("dense_head_cap_non_dsa")
+        if cap is not None and self.num_heads > cap and not self._is_dsa_family:
+            return False
+        return True
+
+    def _select_cfg(self, entry) -> dict | None:
+        """Pick the first tuned config whose tags match, from a single dict or a list of candidates.
+
+        A ``(weight, seq_len_local)`` slot may hold SEVERAL candidates because different model
+        variants share a seq_len: Kimi-K2.6 (64 heads) and Kimi-K3 (96) both want ``640``, and the
+        gating tags only *reject* a candidate — they cannot choose between alternatives. Order in the
+        list is priority order; put the most specific (most tags) first.
+        """
+        if entry is None:
+            return None
+        candidates = entry if isinstance(entry, (list, tuple)) else (entry,)
+        return next((cfg for cfg in candidates if self._cfg_matches(cfg)), None)
+
+    def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
+        """Resolve the tuned matmul config for this weight/seq_len, applying the gating tags.
+        Returns None when no tuned config applies (caller falls back to defaults)."""
+        if not is_blackhole():
+            return None
+        return self._select_cfg(self.mm_configs[weight_name].get(seq_len_local))
 
     def _get_act_mem_config(self, weight_name: str, seq_len_local: int) -> ttnn.MemoryConfig:
         """Memory config for the activation (in0) feeding this weight's matmul, as tuned in the mm
@@ -657,25 +752,21 @@ class ttMLA:
 
     def _get_sdpa_program_config(self, seq_len_local: int) -> ttnn.SDPAProgramConfig:
         """Get SDPA program config, falling back to default chunk sizes."""
-        cfg = self.sdpa_configs.get(seq_len_local)
-        # Like the matmul configs, an SDPA config may be head-count specific (the chunked 640 entry
-        # was tuned for Kimi's 64 heads). Fall back to defaults when it doesn't match this model.
-        if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
-            cfg = None
-        # The 640 tiling's shape is head-agnostic, but its dense-path L1 footprint (full-context K over
-        # every head) only fits large head counts for the DSA family. This config is consumed ONLY on
-        # the dense path (ring_mla / ring_joint SDPA); sparse V3.2/GLM go through sparse_sdpa and never
-        # reach here. The dense consumers are pure-dense V3.1 (128 heads) and Kimi (64), plus a
-        # dense-run V3.2 benchmark (128 heads, DSA family). V3.1 and V3.2 are dimensionally identical,
-        # so num_heads can't separate them — key on the DSA family. Above dense_head_cap_non_dsa,
-        # non-DSA models (V3.1) OOM L1 at k=640, so fall back to the k=32 default; DSA-family V3.2 is
-        # exempt (validated dense) and Kimi stays under the cap.
-        cap = cfg.get("dense_head_cap_non_dsa") if cfg is not None else None
-        if cap is not None and self.num_heads > cap and not self._is_dsa_family:
-            cfg = None
-        # The 640 chunk tiling drives ring joint attention and is only valid in chunked mode.
-        if cfg is not None and cfg.get("chunked_only") and not self.is_chunked:
-            cfg = None
+        # Same gating tags as the matmul configs, via the shared _cfg_matches; a slot may hold several
+        # candidates (e.g. one per head count at seq_len_local=640).
+        #
+        # On dense_head_cap_non_dsa: this config is consumed ONLY on the dense path (ring_mla /
+        # ring_joint SDPA); sparse V3.2/GLM go through sparse_sdpa and never reach here. The dense
+        # consumers are pure-dense V3.1 (128 heads), Kimi-K2.6 (64) and Kimi-K3 (96), plus a dense-run
+        # V3.2 benchmark (128 heads, DSA family). V3.1 and V3.2 are dimensionally identical, so
+        # num_heads can't separate them — hence keying the exemption on the DSA family.
+        # NOTE: the cap is an EMPIRICAL guard (V3.1 OOMs L1 at k=640 above it), not a derivable one.
+        # It is sometimes described as "L1 footprint scales with head count", but that is not what the
+        # program factory does: exp_ring_joint_sdpa_program_factory.cpp sizes every CB from
+        # Sq_chunk_t / Sk_chunk_t / DHt with no num_heads term. Do not extend the cap to a new model on
+        # that reasoning — measure it (see tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py's
+        # k_chunk_sizes sweeps).
+        cfg = self._select_cfg(self.sdpa_configs.get(seq_len_local))
         q_chunk_size = cfg["q_chunk_size"] if cfg else 32
         k_chunk_size = cfg["k_chunk_size"] if cfg else 32
         return ttnn.SDPAProgramConfig(
@@ -699,6 +790,11 @@ class ttMLA:
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
+
+    def _apply_rope_none(self, t: ttnn.Tensor, rope_tensors: dict, kv_actual_isl: Optional[int] = None) -> ttnn.Tensor:
+        """NoPE (Kimi-K3): identity. Position information comes from the KDA layers instead, so the
+        MLA layer's 64 'rope' columns are a shared-across-heads, non-positional key channel."""
+        return t
 
     def _apply_rope_one_shot(
         self, t: ttnn.Tensor, rope_tensors: dict, kv_actual_isl: Optional[int] = None
@@ -1002,9 +1098,57 @@ class ttMLA:
             cluster_axis=self.sp_axis,
         )
 
-    def _o_proj_epilogue(self, attn_out: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
-        """Shared nlp_concat_heads -> o_proj -> TP reduce-scatter epilogue."""
+    def _output_gate(self, hidden_states: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        """Kimi-K3 gated MLA: sigmoid(g_proj(hidden_states)), head-sharded to match concat_heads.
+
+        hidden_states is TP-fractured on the feature dim, and g_proj is full-rank, so one collective
+        is unavoidable. We all-gather the activation to the full hidden_size and N-shard the weight
+        (mapper_tp1) rather than K-sharding the weight and reduce-scattering the 12288-wide partial:
+        less traffic (hidden_size vs num_heads*v_head_dim per token), no wide intermediate to
+        materialize, and g is complete per-device so sigmoid can fuse into the matmul.
+        """
+        h = self._all_gather(hidden_states, dim=3, cluster_axis=self.tp_axis)
+        g = ttnn.linear(
+            h,
+            self.g_proj_weight,
+            compute_kernel_config=self.default_compute_kernel_config,
+            **self._get_mm_kwargs("g_proj", seq_len_local),
+        )
+        if h is not hidden_states:
+            ttnn.deallocate(h)
+        # Fused only when a tuned config supplied fused_activation; otherwise a standalone sigmoid.
+        # Keyed off the resolved config so the two paths can't silently drift into double-sigmoid.
+        if not self._gate_sigmoid_fused(seq_len_local):
+            g = ttnn.sigmoid(g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return g
+
+    def _gate_sigmoid_fused(self, seq_len_local: int) -> bool:
+        """True when the tuned g_proj config already applies sigmoid via fused_activation.
+
+        getattr, not attribute access: only the multicast program-config classes expose
+        ``fused_activation`` (``MatmulMultiCoreReuseProgramConfig``, for instance, does not), so a
+        future g_proj config on a different class must fall back rather than crash.
+        """
+        cfg = self._resolve_mm_cfg("g_proj", seq_len_local)
+        if cfg is None:
+            return False
+        return getattr(cfg.get("program_config"), "fused_activation", None) is not None
+
+    def _o_proj_epilogue(
+        self, attn_out: ttnn.Tensor, seq_len_local: int, hidden_states: Optional[ttnn.Tensor] = None
+    ) -> ttnn.Tensor:
+        """Shared nlp_concat_heads -> (K3 gate) -> o_proj -> TP reduce-scatter epilogue.
+
+        The gate multiply sits AFTER nlp_concat_heads so g never needs a head split: concat_heads
+        emits head-major over the last dim, matching g_proj's mapper_tp1 head ranges. It cannot move
+        before wkv_b2 either — it acts in v_head_dim space, and g*(attn @ W_b2) != (g*attn) @ W_b2.
+        """
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self._use_gate:
+            assert hidden_states is not None, "gated MLA needs hidden_states to compute g_proj"
+            g = self._output_gate(hidden_states, seq_len_local)
+            v_out = ttnn.multiply(v_out, g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(g)
         v_out = ttnn.linear(
             v_out,
             self.o_proj_weight,
@@ -1128,7 +1272,7 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
         )
 
-        out = self._o_proj_epilogue(attn_out, seq_len_local)
+        out = self._o_proj_epilogue(attn_out, seq_len_local, hidden_states=hidden_states)
         signpost(header="MLA_END")
         # ``indices`` survives _sparse_mla (it deallocs only re-sharded copies), so it is safe to return
         # for a "full" layer to hand to downstream "shared" layers (GLM-5.2 reuse).
