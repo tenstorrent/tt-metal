@@ -1343,4 +1343,33 @@ After the audit the two suites together cover **all six** reduction x placement 
 No bug was found -- every added test passed first time. The finding is that a shipped path was correct but
 unverified by the suite that gates changes to it.
 
-**Final state: 111 correctness + 29 audit + 10 golden perf = 150 tests, all passing.**
+### 3b. The audit gap is CLOSED, and the closure is itself guarded
+
+Two corrections to the first pass at this, both found by re-reading my own claims:
+
+1. **I documented a guarantee I had not implemented.** The audit file's header said "each test asserts the path
+   it intends to cover is really taken" -- no test did. Coverage was correct the day it was written (verified
+   via the config log) but would have rotted SILENTLY: if a gate change moved those shapes back to the chain,
+   every test would still pass while the reduce-scatter coverage quietly vanished. Exactly the decay the
+   sentence claimed to prevent.
+2. `test_audit_path_coverage_guard` now implements it: it asserts every `_RSCATTER` case still selects
+   `reduction=reduce-scatter`, every `_MESH` case still selects `placement=mesh`, and the audit set as a whole
+   still spans both reductions and all three placements -- read from the factory's own log, which is ground
+   truth. A failure names the shape and what it switched to.
+
+Implementation notes worth keeping:
+- A first attempt ran the probe in a SUBPROCESS. It passed alone and timed out (>300 s) inside the full file:
+  pytest already holds a device, so the child could not open one. The `device` fixture is FUNCTION-scoped, so
+  each test gets a fresh device and therefore a fresh PROGRAM CACHE -- every case in the guard is a cache miss
+  and logs exactly once. So the guard runs in-process with `capfd` capturing the C++ logger at fd level. No
+  subprocess, no device contention. (The perf suite genuinely needs subprocesses, for a different reason: the
+  profiler CSV only lands at device close. It gets away with it because no test in that file takes the fixture.)
+- **The guard was verified to have teeth**, not assumed: temporarily forcing `rscatter = rs_gate && false` and
+  rebuilding made it fail with
+  `COVERAGE ROT: shallowK_sm1 (64x2048x1024 cfg=4,2,1,2,2) now selects reduction=chain, not reduce-scatter`.
+  Gate restored and rebuilt afterwards. A guard that cannot fail is worth nothing.
+- This is also why `TT_REGIME_A_LOG_CFG` was kept in the cleanup: the guard depends on it, so the one surviving
+  env var now has a test that fails if the logging is removed.
+
+**Final state: 111 correctness + 30 audit (incl. the coverage guard) + 10 golden perf = 151 tests, all
+passing.**
