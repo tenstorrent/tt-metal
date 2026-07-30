@@ -1343,33 +1343,40 @@ After the audit the two suites together cover **all six** reduction x placement 
 No bug was found -- every added test passed first time. The finding is that a shipped path was correct but
 unverified by the suite that gates changes to it.
 
-### 3b. The audit gap is CLOSED, and the closure is itself guarded
+### 3b. The audit gap is CLOSED; coverage is re-checked deliberately, NOT pinned by a test
 
-Two corrections to the first pass at this, both found by re-reading my own claims:
+Two rounds here, and the second reversed part of the first.
 
-1. **I documented a guarantee I had not implemented.** The audit file's header said "each test asserts the path
-   it intends to cover is really taken" -- no test did. Coverage was correct the day it was written (verified
-   via the config log) but would have rotted SILENTLY: if a gate change moved those shapes back to the chain,
-   every test would still pass while the reduce-scatter coverage quietly vanished. Exactly the decay the
-   sentence claimed to prevent.
-2. `test_audit_path_coverage_guard` now implements it: it asserts every `_RSCATTER` case still selects
-   `reduction=reduce-scatter`, every `_MESH` case still selects `placement=mesh`, and the audit set as a whole
-   still spans both reductions and all three placements -- read from the factory's own log, which is ground
-   truth. A failure names the shape and what it switched to.
+**Round 1.** I noticed the audit file's header claimed "each test asserts the path it intends to cover is really
+taken" while no test did, so I added `test_audit_path_coverage_guard`: it read the factory's own config log and
+asserted every reduce-scatter case still selected reduce-scatter and every mesh case still selected mesh. I
+verified it had teeth rather than assuming -- forcing `rscatter = rs_gate && false` and rebuilding made it fail
+with `COVERAGE ROT: shallowK_sm1 (64x2048x1024 cfg=4,2,1,2,2) now selects reduction=chain, not reduce-scatter`.
 
-Implementation notes worth keeping:
-- A first attempt ran the probe in a SUBPROCESS. It passed alone and timed out (>300 s) inside the full file:
-  pytest already holds a device, so the child could not open one. The `device` fixture is FUNCTION-scoped, so
-  each test gets a fresh device and therefore a fresh PROGRAM CACHE -- every case in the guard is a cache miss
-  and logs exactly once. So the guard runs in-process with `capfd` capturing the C++ logger at fd level. No
-  subprocess, no device contention. (The perf suite genuinely needs subprocesses, for a different reason: the
-  profiler CSV only lands at device close. It gets away with it because no test in that file takes the fixture.)
-- **The guard was verified to have teeth**, not assumed: temporarily forcing `rscatter = rs_gate && false` and
-  rebuilding made it fail with
-  `COVERAGE ROT: shallowK_sm1 (64x2048x1024 cfg=4,2,1,2,2) now selects reduction=chain, not reduce-scatter`.
-  Gate restored and rebuilt afterwards. A guard that cannot fail is worth nothing.
-- This is also why `TT_REGIME_A_LOG_CFG` was kept in the cleanup: the guard depends on it, so the one surviving
-  env var now has a test that fails if the logging is removed.
+**Round 2: that guard was REMOVED at the user's direction, and the reasoning is right.** Asserting which shape
+lands on which reduction/placement pins picker/gate POLICY into the test suite. That policy is a tuning
+decision we expect to keep revising -- S8/S9 already moved it twice -- and a test that fails whenever it changes
+inverts the relationship: it makes the tests an obstacle to tuning rather than a check on correctness. So the
+audit tests now assert CORRECTNESS ONLY, which must hold on whatever path the gates pick.
 
-**Final state: 111 correctness + 30 audit (incl. the coverage guard) + 10 golden perf = 151 tests, all
-passing.**
+The cost is explicit and documented in the file header: coverage can now drift silently: a policy change can
+reroute these shapes and the tests still pass while no longer covering the path they were written for. Coverage
+is therefore re-checked DELIBERATELY instead of continuously, with the one-liner in the header:
+
+    TT_REGIME_A_LOG_CFG=1 pytest .../test_regime_a_matmul_audit.py \
+        | grep -o 'reduction=\S* placement=\S*' | sort | uniq -c
+
+Re-run after removing the guard, it still reports all six combinations -- 11 reduce-scatter/in1-near,
+7 chain/mesh, 6 chain/bank-local, 5 reduce-scatter/bank-local, 4 chain/in1-near, 3 reduce-scatter/mesh
+(19 reduce-scatter, 17 chain). The wording of the section comments was also made policy-neutral ("reached this
+path under the policy in force when written" rather than "the gate needs ..."), and
+`test_audit_reduce_scatter_gate_yields_to_fusion` was renamed `test_audit_reduce_scatter_shape_with_fusion`
+since its point is that the numbers are right on whichever path is chosen, not that a particular fallback happens.
+
+Consequence to note: `TT_REGIME_A_LOG_CFG` no longer has a test depending on it. It survives purely as
+observability for the sweep harnesses, which is a weaker justification than it had a moment ago.
+
+**LESSON: a test should pin the contract (correctness), not the policy (which heuristic fires). Coverage of a
+policy-selected path is real value, but it belongs in a deliberate check, not in a gating assertion.**
+
+**Final state: 111 correctness + 29 audit + 10 golden perf = 150 tests, all passing.**
