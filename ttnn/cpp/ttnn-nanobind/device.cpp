@@ -606,7 +606,6 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "synchronize_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            // A specific queue finishes just that one; no queue (nullopt) finishes all queues on the device.
             if (cq_id.has_value()) {
                 tt::tt_metal::distributed::Synchronize(
                     device, device->mesh_command_queue(cq_id->get()), sub_device_ids);

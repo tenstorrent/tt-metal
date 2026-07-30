@@ -164,12 +164,11 @@ public:
     SystemMemoryManager& sysmem_manager() override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
-    // Prefer the MeshCommandQueue& overloads; pass the command queue object directly instead of a raw id.
     MeshTraceId begin_mesh_trace(MeshCommandQueue& cq);
     void begin_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id);
     void end_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id);
     void replay_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id, bool blocking);
-    // Deprecated raw-id overloads. If cq_id is not provided, the current command queue is used from the thread.
+    // If cq_id is not provided, the current command queue is returned from the current thread
     [[deprecated("Use begin_mesh_trace(MeshCommandQueue&) instead. Pass the command queue object, not a raw id.")]]
     MeshTraceId begin_mesh_trace(uint8_t cq_id);
     [[deprecated(
