@@ -14,104 +14,43 @@
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
-    constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
+    using MidMcastArgs = dataflow_kernel_lib::McastArgs<0, 0>;
+    using FirstMcastArgs = dataflow_kernel_lib::
+        McastArgs<MidMcastArgs::next_compile_time_args_offset(), MidMcastArgs::next_runtime_args_offset()>;
+    using LastMcastArgs = dataflow_kernel_lib::
+        McastArgs<FirstMcastArgs::next_compile_time_args_offset(), FirstMcastArgs::next_runtime_args_offset()>;
+    constexpr MidMcastArgs mid_mcast_args;
+    constexpr FirstMcastArgs first_mcast_args;
+    constexpr LastMcastArgs last_mcast_args;
 
-    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(2);
-    constexpr uint32_t num_batches = get_compile_time_arg_val(3);
+    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(15);
+    constexpr uint32_t num_batches = get_compile_time_arg_val(16);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(4);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(5);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(6);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(9);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(17);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(18);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(19);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(21);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(22);
 
     // These are numbers in absolute terms, on a per group, per batch, per core with tiling
-    constexpr uint32_t block_hw = get_compile_time_arg_val(10);
-    constexpr uint32_t num_groups = get_compile_time_arg_val(11);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(12);
+    constexpr uint32_t block_hw = get_compile_time_arg_val(23);
+    constexpr uint32_t num_groups = get_compile_time_arg_val(24);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(25);
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16, and the cross-core stride
     // is in fp32 elements.
-    constexpr bool stats_is_fp32 = get_compile_time_arg_val(13) != 0;
+    constexpr bool stats_is_fp32 = get_compile_time_arg_val(26) != 0;
 
-    const bool has_mcast_first_group = get_arg_val<uint32_t>(0);
-    const bool has_mcast_last_group = get_arg_val<uint32_t>(1);
-
-    // mid mcast group
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(2);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(3);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(4);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(5);
-    const uint32_t num_mcast_cores_mid_group = get_arg_val<uint32_t>(6);
-
-    // first mcast group
-    uint32_t mcast_first_group_dest_noc_start_x;
-    uint32_t mcast_first_group_dest_noc_start_y;
-    uint32_t mcast_first_group_dest_noc_end_x;
-    uint32_t mcast_first_group_dest_noc_end_y;
-    // last mcast group
-    uint32_t mcast_last_group_dest_noc_start_x;
-    uint32_t mcast_last_group_dest_noc_start_y;
-    uint32_t mcast_last_group_dest_noc_end_x;
-    uint32_t mcast_last_group_dest_noc_end_y;
-
-    tt_l1_ptr uint32_t* noc_coord_x;
-    tt_l1_ptr uint32_t* noc_coord_y;
-
-    // number of cores in mcast groups
-    uint32_t num_mcast_cores_first_group;
-    uint32_t num_mcast_cores_last_group;
-
-    // first and last group noc addrs are specified inline via coordinates in multicast write calls
-
-    if (has_mcast_first_group and has_mcast_last_group) {
-        mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(7);
-        mcast_first_group_dest_noc_start_y = get_arg_val<uint32_t>(8);
-        mcast_first_group_dest_noc_end_x = get_arg_val<uint32_t>(9);
-        mcast_first_group_dest_noc_end_y = get_arg_val<uint32_t>(10);
-        num_mcast_cores_first_group = get_arg_val<uint32_t>(11);
-
-        mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
-        mcast_last_group_dest_noc_start_y = get_arg_val<uint32_t>(13);
-        mcast_last_group_dest_noc_end_x = get_arg_val<uint32_t>(14);
-        mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(15);
-        num_mcast_cores_last_group = get_arg_val<uint32_t>(16);
-
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(17));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(17 + num_mcast_cores));
-
-    } else if (has_mcast_first_group and not has_mcast_last_group) {
-        mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(7);
-        mcast_first_group_dest_noc_start_y = get_arg_val<uint32_t>(8);
-        mcast_first_group_dest_noc_end_x = get_arg_val<uint32_t>(9);
-        mcast_first_group_dest_noc_end_y = get_arg_val<uint32_t>(10);
-        num_mcast_cores_first_group = get_arg_val<uint32_t>(11);
-
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(12));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_mcast_cores));
-
-    } else if (not has_mcast_first_group and has_mcast_last_group) {
-        mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(7);
-        mcast_last_group_dest_noc_start_y = get_arg_val<uint32_t>(8);
-        mcast_last_group_dest_noc_end_x = get_arg_val<uint32_t>(9);
-        mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(10);
-        num_mcast_cores_last_group = get_arg_val<uint32_t>(11);
-
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(12));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_mcast_cores));
-
-    } else {
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(7 + num_mcast_cores));
-    }
+    tt_l1_ptr uint32_t* noc_coord_x =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(LastMcastArgs::next_runtime_args_offset()));
+    tt_l1_ptr uint32_t* noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(
+        get_arg_addr(LastMcastArgs::next_runtime_args_offset() + num_mcast_cores));
 
     Noc noc;
 
-    const dataflow_kernel_lib::McastRect<> mid_rect{
-        mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y};
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_semaphore_id, /*PRE_HANDSHAKE=*/false> mid_pipe(
-        noc, mid_rect);
+    Semaphore<> reduce_receiver_sem(MidMcastArgs::consumer_ready);
+    auto mid_pipe = mid_mcast_args.sender(noc);
+    auto first_pipe = first_mcast_args.sender(noc);
+    auto last_pipe = last_mcast_args.sender(noc);
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
@@ -226,30 +165,8 @@ void kernel_main() {
             // mcast to other cores
             if constexpr (num_mcast_cores > 1) {
                 mid_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
-
-                if (has_mcast_first_group) {
-                    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_semaphore_id, /*PRE_HANDSHAKE=*/false>
-                        first_pipe(
-                            noc,
-                            dataflow_kernel_lib::McastRect<>{
-                                mcast_first_group_dest_noc_start_x,
-                                mcast_first_group_dest_noc_start_y,
-                                mcast_first_group_dest_noc_end_x,
-                                mcast_first_group_dest_noc_end_y});
-                    first_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
-                }
-
-                if (has_mcast_last_group) {
-                    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_semaphore_id, /*PRE_HANDSHAKE=*/false>
-                        last_pipe(
-                            noc,
-                            dataflow_kernel_lib::McastRect<>{
-                                mcast_last_group_dest_noc_start_x,
-                                mcast_last_group_dest_noc_start_y,
-                                mcast_last_group_dest_noc_end_x,
-                                mcast_last_group_dest_noc_end_y});
-                    last_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
-                }
+                first_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
+                last_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
             }
 
             local_means_ptr += local_stride_per_group;

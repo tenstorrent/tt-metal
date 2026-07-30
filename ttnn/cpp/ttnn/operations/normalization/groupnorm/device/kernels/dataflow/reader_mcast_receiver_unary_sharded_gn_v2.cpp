@@ -14,19 +14,16 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
+    using MidMcastArgs = dataflow_kernel_lib::McastArgs<0, 0>;
+    constexpr MidMcastArgs mid_mcast_args;
 
-    constexpr uint32_t num_batch_group = get_compile_time_arg_val(2);
+    constexpr uint32_t num_batch_group = get_compile_time_arg_val(15);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(3);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(4);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(5);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(6);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(7);
-
-    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(1);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(16);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(17);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(18);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(19);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(20);
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
@@ -47,12 +44,7 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
     const DataFormat data_format = get_dataformat(dfb_ex_partial_id);
 
-    const uint32_t reduce_sender_coords[2] = {mcast_sender_noc_x, mcast_sender_noc_y};
-    dataflow_kernel_lib::ReceiverPipe<
-        reduce_sender_semaphore_id,
-        /*PRE_HANDSHAKE=*/true,
-        reduce_receiver_semaphore_id>
-        reduce_pipe(noc, reduce_sender_coords);
+    auto reduce_pipe = mid_mcast_args.receiver(noc);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
