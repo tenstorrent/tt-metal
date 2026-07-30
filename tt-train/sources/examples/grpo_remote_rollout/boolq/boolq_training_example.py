@@ -291,14 +291,17 @@ def _ttt_main() -> None:
 
 
 if __name__ == "__main__":
-    world_size = int(os.environ.get("OMPI_COMM_WORLD_SIZE", "0"))
+    if not ttnn.distributed_context_is_initialized():
+        ttnn.init_distributed_context()
+
+    world_size = int(ttnn.distributed_context_get_size())
     if world_size != 2:
         raise RuntimeError(
             f"boolq_training_example must run under tt-run with world_size == 2 (got {world_size}). "
             "Use boolq/runner.sh."
         )
 
-    rank = int(os.environ["OMPI_COMM_WORLD_RANK"])
+    rank = int(ttnn.distributed_context_get_rank())
     if rank == TTML_RANK:
         _ttml_main()
     elif rank == TTT_RANK:
