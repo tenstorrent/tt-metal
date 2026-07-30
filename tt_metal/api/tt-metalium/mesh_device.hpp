@@ -214,24 +214,7 @@ public:
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
-    // Prefer the MeshCommandQueue& overload; pass the command queue object directly instead of a raw id.
-    CoreCoord virtual_program_dispatch_core(const MeshCommandQueue& cq) const;
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#elif defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-    [[deprecated(
-        "Use virtual_program_dispatch_core(const MeshCommandQueue&) instead. Pass the command queue object, not a raw "
-        "id.")]]
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#elif defined(__GNUC__)
-#pragma GCC diagnostic pop
-#endif
     const std::vector<SubDeviceId>& get_sub_device_ids() const override;
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
     void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
