@@ -88,6 +88,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
@@ -147,6 +148,24 @@ public:
      * @param out_capacity  Tiles to reserve/push on @c cb_out (>= num_tiles).
      */
     ALWI void run_chunked(uint32_t num_tiles, uint32_t out_capacity);
+
+    /**
+     * @brief Re-establish this accumulator's init after the CALLER ran other compute ops on the same
+     *        core, invalidating the cached mode.
+     *
+     * The mode tracking in @c programmed_seeded_ assumes nothing else reprogrammed the unpack/math
+     * state between runs. A kernel that fuses an epilogue — @c strided_reduce_scatter_async's addcmul
+     * issues @c mul_tiles_init / @c add_tiles_init / @c reconfig_data_format of its own — breaks that
+     * assumption, and the next @c run() would then skip an init it actually needs. Call this after any
+     * such interleaved op.
+     *
+     * Restores the unpack/pack DATA FORMATS as well as the op init, because @c add_tiles_init does not
+     * (its @c state_configure call is the ComputeKernelSentinel tracker, not a hardware reconfigure).
+     * That closes a pre-existing hazard: @c strided_reduce_scatter_async's normal ring step never
+     * re-issued any init, so after a fused final step it ran with the addcmul operands' formats still
+     * programmed — benign only while those CBs happen to share a data format with the reduce operands.
+     */
+    ALWI void rearm();
 
 private:
     ALWI BlockAccumulate(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint32_t granularity) :

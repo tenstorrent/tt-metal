@@ -55,9 +55,10 @@
  *          | arm_write(page_size)                     -> DuplexWriteChannel
  *          | arm_fused_write_inc(page_size, val)      -> DuplexFusedWriteIncChannel
  *          | arm_scatter_write(chunk, n)              -> DuplexScatterWriteChannel
+ *          | arm_inc(val)                             -> DuplexIncChannel
  *          v
  *     <duplex channel handle>        // ARMED: each issue fans out to every connected direction.
- *          write() | write_with_local_copy() | write_fused() | write_scatter()
+ *          write() | write_with_local_copy() | write_fused() | write_scatter() | inc()
  *
  *   What this rules out at compile time:
  *     1. arm or issue before open() — arm_* live only on FabricStream, which only open() yields.
@@ -115,8 +116,9 @@
  *     constraint between them. The pool holds several headers per RISC (8 on Wormhole/Blackhole)
  *     and is reset every kernel launch; a unidirectional stream arms at most six, well within
  *     budget. A DUPLEX channel draws TWO headers (one per direction), so a duplex stream arming
- *     all three of its channels draws six — still within the per-RISC budget, but a duplex op that
- *     also needs several unidirectional channels should count them. Ops that previously carved
+ *     all FOUR of its channels draws eight — the whole per-RISC budget on Wormhole/Blackhole. A duplex
+ *     op therefore should not arm channels it never issues on, and one that also needs unidirectional
+ *     channels must count them. Ops that previously carved
  *     packet headers out of their OWN reserved CB (the reduction collectives' historical
  *     @c reserved_packet_header_cb_id) no longer need to: the pool owns header storage, and that CB
  *     plus its @c num_packet_headers_storable arg become dead once the op is migrated.
@@ -168,7 +170,13 @@ public:
               FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx)),
         is_forward_(is_forward) {}
     /// Finish opening + bind the forward/backward direction.
-    FORCE_INLINE void open() {
+    FORCE_INLINE void open() { open_finish(); }
+    /// No-op: the ctor's BUILD_AND_OPEN_CONNECTION_START_ONLY already started this handshake, so a
+    /// DirectConn is always mid-open by construction. Present so FabricStreamSender's split-open path
+    /// works uniformly across connection policies (MuxConn::open_start() does real work).
+    FORCE_INLINE void open_start() {}
+    /// Complete the handshake + bind the direction.
+    FORCE_INLINE void open_finish() {
         conn_.open_finish();
         dir_ = is_forward_ ? &conn_.get_forward_connection() : &conn_.get_backward_connection();
     }
@@ -259,6 +267,34 @@ public:
     FORCE_INLINE void open() {
         if (valid_) {
             tt::tt_fabric::fabric_client_connect(mux_);
+        }
+    }
+
+    /**
+     * @brief Split open — start the mux connection handshake WITHOUT waiting for it.
+     *
+     * @c open() is the combined blocking form. The mux handshake has real latency, and a worker that
+     * has independent setup to do (address-generator construction, a local semaphore reset, reading
+     * the rest of its runtime args) can overlap that work with the handshake by calling
+     * @c open_start(), doing the work, then @c open_finish() before the first issue.
+     * @c line_reduce_scatter_minimal_async_writer hand-rolled exactly this with
+     * @c fabric_client_connect_start / @c _finish, which is why it could not adopt the helper while
+     * only the combined form existed.
+     *
+     * @warning @c open_finish() MUST be called before any issue on a stream opened this way. Nothing
+     *   in the type system enforces the pairing — unlike the sender->stream->channel progression, both
+     *   halves live on the connection policy, below the stage types. Prefer @c open() unless the
+     *   overlap is measurable.
+     */
+    FORCE_INLINE void open_start() {
+        if (valid_) {
+            tt::tt_fabric::fabric_client_connect_start(mux_);
+        }
+    }
+    /// Complete a handshake begun by @c open_start(). No-op for a worker with no link.
+    FORCE_INLINE void open_finish() {
+        if (valid_) {
+            tt::tt_fabric::fabric_client_connect_finish(mux_);
         }
     }
     /// Disconnect, then the mux termination handshake (master waits for all clients then signals
@@ -591,6 +627,28 @@ public:
         return FabricStream<ConnT>(&conn_, alignment_, route);
     }
 
+    /**
+     * @brief Split open: begin the connection handshake, do unrelated setup, then finish.
+     *
+     * @c open_start() starts the handshake and returns immediately; @c open_finish(route) completes it
+     * and yields the stream. Between them, do work that does not touch the fabric — build address
+     * generators, reset a local semaphore, read remaining runtime args — so the handshake latency
+     * overlaps it. This exists because @c line_reduce_scatter_minimal_async_writer hand-rolls exactly
+     * that overlap with @c fabric_client_connect_start / @c _finish and could not otherwise adopt the
+     * helper without regressing.
+     *
+     * @warning Unlike the sender->stream->channel progression, this pairing is NOT enforced by the
+     *   type system: @c open_start() returns void, so nothing stops a caller from forgetting
+     *   @c open_finish() and issuing on a half-open connection. Use plain @c open() unless the overlap
+     *   is worth that. Never call both @c open() and this pair on one sender.
+     */
+    FORCE_INLINE void open_start() { conn_.open_start(); }
+    /// Complete a handshake begun by @c open_start(), bind @c route, and yield the opened stream.
+    FORCE_INLINE FabricStream<ConnT> open_finish(const ccl_routing_utils::line_unicast_route_info_t& route) {
+        conn_.open_finish();
+        return FabricStream<ConnT>(&conn_, alignment_, route);
+    }
+
     /// One-shot: send exactly one fabric atomic-inc of @c val to @c remote_sem_noc_addr along
     /// @c route, then tear down. Collapses open() -> arm_inc() -> inc() -> close() for the common
     /// ready/done handshake. Terminal — do not also call open() on this sender afterwards.
@@ -756,6 +814,34 @@ private:
     uint32_t payload_size_;
 };
 
+/**
+ * @brief Armed duplex atomic-inc channel: bump a remote semaphore on EVERY connected direction.
+ *
+ * The duplex counterpart of AtomicIncChannel. A duplex worker that must announce readiness or
+ * completion to BOTH of its neighbours previously issued two hand-routed incs, or re-derived
+ * has_forward/has_backward at the call site; here the direction set is the one resolved at open() and
+ * a forgotten direction cannot happen.
+ *
+ * @note The WAITING half stays op-owned (a local @c noc_semaphore_wait_min), exactly as for the
+ *   unidirectional channels — the split documented in the file banner is unchanged. Note also that a
+ *   duplex inc lands TWO increments (one per direction) when both are connected and one at the end of
+ *   a line, so the op's wait threshold must be derived from its own topology, not assumed.
+ */
+template <Cast C, typename ConnT>
+class DuplexIncChannel {
+public:
+    /// Atomically increment @c remote_sem_noc_addr by the armed value on every connected direction.
+    FORCE_INLINE void inc(uint64_t remote_sem_noc_addr);
+
+private:
+    friend class FabricDuplexStream<C, ConnT>;
+    FORCE_INLINE DuplexIncChannel(
+        ConnT* conn, volatile PACKET_HEADER_TYPE* fwd_hdr, volatile PACKET_HEADER_TYPE* bwd_hdr) :
+        conn_(conn), hdr_{fwd_hdr, bwd_hdr} {}
+    ConnT* conn_;
+    volatile PACKET_HEADER_TYPE* hdr_[DuplexConn::kNumDirections];
+};
+
 /// Armed duplex scatter-write channel (<=4 destinations per packet), fanned out over every connected
 /// direction. Replaces @c scatter_write_and_advance_local_read_address_for_fabric_write.
 template <Cast C, typename ConnT>
@@ -800,6 +886,7 @@ public:
             write_hdr_[d] = o.write_hdr_[d];
             fused_hdr_[d] = o.fused_hdr_[d];
             scatter_hdr_[d] = o.scatter_hdr_[d];
+            inc_hdr_[d] = o.inc_hdr_[d];
         }
         o.closed_ = true;
     }
@@ -814,6 +901,9 @@ public:
         uint32_t page_size_bytes, uint32_t val = 1, bool flush = false);
     /// Arm the duplex scatter-write channel (2..4 chunks per packet, per direction).
     FORCE_INLINE DuplexScatterWriteChannel<C, ConnT> arm_scatter_write(uint32_t chunk_size_bytes, uint32_t num_chunks);
+    /// Arm the duplex atomic-inc channel: program each connected direction's route + increment value
+    /// (+ flush) onto that direction's own pooled header (set_state, Val|Flush).
+    FORCE_INLINE DuplexIncChannel<C, ConnT> arm_inc(uint32_t val = 1, bool flush = false);
 
     /// Drain outstanding local NoC writes + fabric atomic-incs. Optional — close() drains.
     FORCE_INLINE void drain();
@@ -834,6 +924,7 @@ private:
     volatile PACKET_HEADER_TYPE* write_hdr_[DuplexConn::kNumDirections] = {nullptr, nullptr};
     volatile PACKET_HEADER_TYPE* fused_hdr_[DuplexConn::kNumDirections] = {nullptr, nullptr};
     volatile PACKET_HEADER_TYPE* scatter_hdr_[DuplexConn::kNumDirections] = {nullptr, nullptr};
+    volatile PACKET_HEADER_TYPE* inc_hdr_[DuplexConn::kNumDirections] = {nullptr, nullptr};
     bool closed_ = false;
 };
 
