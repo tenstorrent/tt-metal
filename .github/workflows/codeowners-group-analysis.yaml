@@ -969,10 +969,9 @@ jobs:
               team=$(echo "$team_entry" | cut -d':' -f1)
               clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_RESPONSE=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API")
-              MEMBERS_HTTP_CODE=$(echo "$MEMBERS_RESPONSE" | tail -n1)
-              MEMBERS_DATA=$(echo "$MEMBERS_RESPONSE" | sed '$d')
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API")
               if [ "$MEMBERS_HTTP_CODE" = "200" ]; then
+                MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API" 2>/dev/null)
                 TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
                 [ -n "$TEAM_MEMBER_LOGINS" ] && TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|" || TEAM_MEMBERS="$TEAM_MEMBERS$team:no-members|"
               elif [ "$MEMBERS_HTTP_CODE" = "404" ]; then
@@ -1357,53 +1356,40 @@ jobs:
           if [ "$CREATE_NEW" = "true" ]; then
             # Create new comment
             echo "Creating new comment..."
-            COMMENT_RESPONSE=$(curl -s -w '\n%{http_code}' -X POST \
+            curl -s -X POST \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
               --data-binary @"$TEMP_JSON_FILE" \
-              "$COMMENTS_API")
-            COMMENT_HTTP_CODE=$(echo "$COMMENT_RESPONSE" | tail -n1)
-            if [ "$COMMENT_HTTP_CODE" != "201" ]; then
-              echo "❌ Failed to create comment (HTTP $COMMENT_HTTP_CODE): $(echo "$COMMENT_RESPONSE" | sed '$d')"
-            fi
+              "$COMMENTS_API"
           elif [ -z "$EXISTING_COMMENT_ID" ] || [ "$EXISTING_COMMENT_ID" = "null" ]; then
             # No existing comment found - create new for all commands except explicit "new"
             if [ "$CREATE_NEW" = "false" ]; then
               echo "No existing CodeOwners analysis found. Creating new summary comment..."
               # Create new comment for bare commands and ping commands
-              COMMENT_RESPONSE=$(curl -s -w '\n%{http_code}' -X POST \
+              curl -s -X POST \
                 -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                 -H "Accept: application/vnd.github.v3+json" \
                 -H "Content-Type: application/json" \
                 --data-binary @"$TEMP_JSON_FILE" \
-                "$COMMENTS_API")
-              COMMENT_HTTP_CODE=$(echo "$COMMENT_RESPONSE" | tail -n1)
-              if [ "$COMMENT_HTTP_CODE" = "201" ]; then
-                echo "Created new CodeOwners summary comment"
-              else
-                echo "❌ Failed to create CodeOwners summary comment (HTTP $COMMENT_HTTP_CODE): $(echo "$COMMENT_RESPONSE" | sed '$d')"
-              fi
+                "$COMMENTS_API"
+              echo "Created new CodeOwners summary comment"
             else
               echo "No existing comment found and CREATE_NEW=true - this shouldn't happen"
             fi
           else
             # Edit existing comment
             echo "Updating existing comment (ID: $EXISTING_COMMENT_ID)..."
-            COMMENT_RESPONSE=$(curl -s -w '\n%{http_code}' -X PATCH \
+            curl -s -X PATCH \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
               --data-binary @"$TEMP_JSON_FILE" \
-              "https://api.github.com/repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID")
-            COMMENT_HTTP_CODE=$(echo "$COMMENT_RESPONSE" | tail -n1)
-            if [ "$COMMENT_HTTP_CODE" != "200" ]; then
-              echo "❌ Failed to update comment (HTTP $COMMENT_HTTP_CODE): $(echo "$COMMENT_RESPONSE" | sed '$d')"
-            fi
+              "https://api.github.com/repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID"
           fi
 
           rm -f "$TEMP_JSON_FILE"
-          echo "Comment update attempt finished for PR #$PR_NUMBER"
+          echo "Comment updated for PR #$PR_NUMBER"
 
           # If we updated an existing comment, post an acknowledgment (but not for manual workflow runs)
           if [ "$CREATE_NEW" = "false" ] && [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
@@ -1745,7 +1731,7 @@ jobs:
                     SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
                     echo "✅ Found Slack user: $USER_NAME -> $SLACK_USER_ID"
                   else
-                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME (@$clean_item)"
+                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME"
                     echo "⚠️  Slack user not found for: $USER_NAME (@$clean_item), using full name fallback"
                   fi
                 fi
@@ -1903,11 +1889,13 @@ jobs:
           # Get members of thirdparty-moreh team to exclude from selection (they're not in Slack)
           MOREH_TEAM_MEMBERS=""
           MOREH_MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/thirdparty-moreh/members"
-          MOREH_RESPONSE=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+          MOREH_MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$MOREH_MEMBERS_API" 2>/dev/null)
-          MOREH_HTTP_CODE=$(echo "$MOREH_RESPONSE" | tail -n1)
-          MOREH_MEMBERS_DATA=$(echo "$MOREH_RESPONSE" | sed '$d')
+
+          MOREH_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                                   -H "Accept: application/vnd.github.v3+json" \
+                                   "$MOREH_MEMBERS_API")
 
           if [ "$MOREH_HTTP_CODE" = "200" ] && [ -n "$MOREH_MEMBERS_DATA" ] && [ "$MOREH_MEMBERS_DATA" != "null" ]; then
             MOREH_TEAM_MEMBERS=$(echo "$MOREH_MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
@@ -2563,47 +2551,6 @@ jobs:
           CHANGED_FILES_COUNT="${{ needs.analyze-codeowners.outputs.changed-files-count || 0 }}"
           REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author || '' }}"
           REQUESTER_NAME="$REQUESTER_LOGIN"
-          RATE_LIMIT_HIT=false
-
-          # Checking quota does not itself count against the rate limit.
-          RATE_LIMIT_INFO=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                                 -H "Accept: application/vnd.github.v3+json" \
-                                 "https://api.github.com/rate_limit")
-          echo "GitHub API quota (CODEOWNERS_GROUP_ANALYSIS_PAT): $(echo "$RATE_LIMIT_INFO" | jq -r '.resources.core.remaining // -1')/$(echo "$RATE_LIMIT_INFO" | jq -r '.resources.core.limit // -1') remaining, resets at $(echo "$RATE_LIMIT_INFO" | jq -r '.resources.core.reset // 0')"
-
-          # Look up a GitHub user's display name, retrying with the default Actions
-          # token (a separate rate-limit bucket from the shared PAT) if the PAT is
-          # exhausted. Sets RATE_LIMIT_HIT=true when both tokens are rate limited, so
-          # callers can treat this as a real ping error instead of silently falling
-          # back to a name that was never actually resolved.
-          lookup_github_user_name() {
-            local login="$1"
-            local response http_code body
-
-            response=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                           -H "Accept: application/vnd.github.v3+json" \
-                           "https://api.github.com/users/$login" 2>/dev/null)
-            http_code=$(echo "$response" | tail -n1)
-            body=$(echo "$response" | sed '$d')
-
-            if [ "$http_code" = "403" ] && echo "$body" | grep -qi "rate limit"; then
-              echo "⚠️  PAT rate-limited looking up $login, retrying with default Actions token" >&2
-              response=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ github.token }}" \
-                             -H "Accept: application/vnd.github.v3+json" \
-                             "https://api.github.com/users/$login" 2>/dev/null)
-              http_code=$(echo "$response" | tail -n1)
-              body=$(echo "$response" | sed '$d')
-            fi
-
-            if [ "$http_code" = "403" ] && echo "$body" | grep -qi "rate limit"; then
-              echo "❌ GitHub API rate limit exceeded on both tokens looking up $login" >&2
-              RATE_LIMIT_HIT=true
-              echo ""
-              return
-            fi
-
-            echo "$body" | jq -r '.name // empty' 2>/dev/null
-          }
 
           # Load Slack users from file (set in Setup for notifications step)
           ALL_SLACK_USERS=$(cat "${RUNNER_TEMP}/slack_users.json")
@@ -2760,12 +2707,20 @@ jobs:
 
             # Add individual user mentions
             SLACK_USER_MENTIONS=""
+            PING_RATE_LIMITED=false
             if [ -n "$SELECTED_OWNERS" ]; then
               IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
               for owner in "${SELECTED_ARRAY[@]}"; do
                 if [ -n "$owner" ]; then
                   # Get full name for this owner
-                  USER_NAME=$(lookup_github_user_name "$owner")
+                  USER_API="https://api.github.com/users/$owner"
+                  USER_RESPONSE=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                                 -H "Accept: application/vnd.github.v3+json" \
+                                 "$USER_API" 2>/dev/null)
+                  USER_HTTP_CODE=$(echo "$USER_RESPONSE" | tail -n1)
+                  USER_DATA=$(echo "$USER_RESPONSE" | sed '$d')
+                  [ "$USER_HTTP_CODE" = "403" ] && PING_RATE_LIMITED=true
+                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                   if [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ]; then
                     USER_NAME="$owner"
                   fi
@@ -2777,7 +2732,7 @@ jobs:
                     SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
                     echo "✅ Found Slack user: $USER_NAME -> $SLACK_USER_ID"
                   else
-                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME (@$owner)"
+                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME"
                     echo "⚠️  Slack user not found for: $USER_NAME (@$owner), using full name fallback"
                   fi
                 fi
@@ -2789,7 +2744,11 @@ jobs:
             # Get PR author Slack ID
             PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"
             if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
-              AUTHOR_FULL_NAME=$(lookup_github_user_name "$PR_AUTHOR_LOGIN")
+              AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
+              AUTHOR_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                                     -H "Accept: application/vnd.github.v3+json" \
+                                     "$AUTHOR_USER_API" 2>/dev/null)
+              AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
               if [ -n "$AUTHOR_FULL_NAME" ] && [ "$AUTHOR_FULL_NAME" != "null" ]; then
                 PR_AUTHOR_FULL_NAME="$AUTHOR_FULL_NAME"
               fi
@@ -2807,7 +2766,11 @@ jobs:
             # Add author and requested by information (combine on same line if different)
             if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
               # Get full name for requester if available
-              REQUESTER_FULL_NAME=$(lookup_github_user_name "$REQUESTER_LOGIN")
+              REQUESTER_USER_API="https://api.github.com/users/$REQUESTER_LOGIN"
+              REQUESTER_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                                     -H "Accept: application/vnd.github.v3+json" \
+                                     "$REQUESTER_USER_API" 2>/dev/null)
+              REQUESTER_FULL_NAME=$(echo "$REQUESTER_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
               if [ -n "$REQUESTER_FULL_NAME" ] && [ "$REQUESTER_FULL_NAME" != "null" ]; then
                 REQUESTER_NAME="$REQUESTER_FULL_NAME"
               fi
@@ -2872,7 +2835,11 @@ jobs:
                     fi
 
                     # Get full name from GitHub API
-                    USER_NAME=$(lookup_github_user_name "$clean_username")
+                    USER_API="https://api.github.com/users/$clean_username"
+                    USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                                   -H "Accept: application/vnd.github.v3+json" \
+                                   "$USER_API" 2>/dev/null)
+                    USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                     if [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ]; then
                       USER_NAME="$clean_username"
                     fi
@@ -2929,26 +2896,6 @@ jobs:
 
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"Please review when you have a moment. Thank you! 🚀"
 
-            # A rate-limited username lookup means some names/mentions in the
-            # message above may be wrong or incomplete — surface that visibly on
-            # the PR itself with a ⚠️ warning comment (GitHub's reaction API has
-            # no "warning" content type, so a reply comment is the closest visible
-            # equivalent) rather than silently sending a broken-looking ping with
-            # no indication anything went wrong. The Slack message still goes out.
-            if [ "$RATE_LIMIT_HIT" = "true" ] && [ "${{ github.event_name }}" = "issue_comment" ]; then
-              echo "⚠️  GitHub API rate limit hit while resolving one or more usernames — posting a warning comment on the PR"
-              WARNING_BODY="⚠️ **CodeOwners Ping Warning**"$'\n\n'"GitHub API rate limit was hit while resolving one or more codeowner/author names for this ping. The Slack notification was still sent, but it may be missing a proper Slack mention or full name for some codeowners. Re-run \`/codeowners ping\` once the rate limit resets if anyone appears to have been missed."
-              WARNING_JSON_FILE=$(mktemp)
-              jq -n --arg body "$WARNING_BODY" '{"body": $body}' > "$WARNING_JSON_FILE"
-              curl -s -X POST \
-                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                -H "Accept: application/vnd.github.v3+json" \
-                -H "Content-Type: application/json" \
-                --data-binary @"$WARNING_JSON_FILE" \
-                "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments" > /dev/null
-              rm -f "$WARNING_JSON_FILE"
-            fi
-
             # Debug: Show the final message being sent (truncated for large messages)
             echo "🔍 Final Slack message:"
             echo "================================"
@@ -2993,6 +2940,21 @@ jobs:
 
             # Clean up temp file
             rm -f /tmp/slack_message.txt
+
+            # Let devs know on the PR itself when the ping hit a GitHub API rate
+            # limit while resolving names (GitHub's reactions API has no "warning"
+            # type, so a comment is the closest visible equivalent).
+            if [ "$PING_RATE_LIMITED" = "true" ] && [ "${{ github.event_name }}" = "issue_comment" ]; then
+              WARNING_JSON_FILE=$(mktemp)
+              jq -n --arg body "⚠️ CodeOwners ping hit a GitHub API rate limit while resolving names above — some may be inaccurate." '{"body": $body}' > "$WARNING_JSON_FILE"
+              curl -s -X POST \
+                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                -H "Content-Type: application/json" \
+                --data-binary @"$WARNING_JSON_FILE" \
+                "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments" > /dev/null
+              rm -f "$WARNING_JSON_FILE"
+            fi
 
           elif [ "$SEND_SLACK" = "true" ] && [ "$NO_OWNERS_AVAILABLE" = "true" ]; then
             echo "Slack notification enabled but no owners available for notification (only PR author is codeowner)"
