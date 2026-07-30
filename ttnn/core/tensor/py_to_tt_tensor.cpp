@@ -121,11 +121,7 @@ bool can_construct_on_single_device(
     // default alignment is used, the tensors of rank 5 and above are squeezed down to the rank 4 in
     // `build_ndiml_tilize`, which causes the padding loss, and subqequently the failure to validate
     // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
-    if (tensor_shape.rank() > 4) {
-        return false;
-    }
-
-    return true;
+    return tensor_shape.rank() <= 4;
 }
 
 // Estimates peak per-bank memory during the on-device conversion path and returns true when it
