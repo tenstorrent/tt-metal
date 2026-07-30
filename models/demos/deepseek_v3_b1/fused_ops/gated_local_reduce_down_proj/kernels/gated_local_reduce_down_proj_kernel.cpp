@@ -333,7 +333,7 @@ void kernel_main() {
     // Input Gather Group1: source cores -> (12,9) group1_cb
     // ========================================================================
     {
-        DeviceZoneScopedN("INPUT_GATHER_G1");
+        // DeviceZoneScopedN("INPUT_GATHER_G1");
         deepseek_b1_ops::Gather::Op<
             Core::is_input_gather_sender_g1,
             Core::is_gated_reduce_core,
@@ -347,7 +347,7 @@ void kernel_main() {
     // Input Gather Group2: source cores -> (12,9) group2_cb
     // ========================================================================
     {
-        DeviceZoneScopedN("INPUT_GATHER_G2");
+        // DeviceZoneScopedN("INPUT_GATHER_G2");
         deepseek_b1_ops::Gather::Op<
             Core::is_input_gather_sender_g2,
             Core::is_gated_reduce_core,
@@ -361,7 +361,7 @@ void kernel_main() {
     // Gated Local Reduce (TRISC on sender core)
     // ========================================================================
     {
-        DeviceZoneScopedN("GATED_REDUCE");
+        // DeviceZoneScopedN("GATED_REDUCE");
         deepseek_b1_ops::GatedReduce::Op<GatedReduceCTArgs, Core::is_gated_reduce_core> gated_reduce;
         gated_reduce(gated_reduce_args);
     }
@@ -379,7 +379,7 @@ void kernel_main() {
         mcast;
     mcast.init(mcast_args);
     {
-        DeviceZoneScopedN("MCAST1");
+        // DeviceZoneScopedN("MCAST1");
         mcast(mcast_args);
     }
 
@@ -395,7 +395,7 @@ void kernel_main() {
         /*pop_src=*/true>
         mcast2;
     {
-        DeviceZoneScopedN("MCAST2");
+        // DeviceZoneScopedN("MCAST2");
         mcast2(mcast2_args);
     }
     mcast.teardown(mcast_args);
@@ -404,7 +404,7 @@ void kernel_main() {
     // Matmul: [1, K] x [K, N_per_core] -> [1, N_per_core] on 112 cores
     // ========================================================================
     {
-        DeviceZoneScopedN("MATMUL");
+        // DeviceZoneScopedN("MATMUL");
         deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, /*pop_in0=*/true, /*pop_in1=*/false> matmul;
         matmul(matmul_args);
     }
@@ -425,7 +425,7 @@ void kernel_main() {
 #endif
     };
     {
-        DeviceZoneScopedN("ADD");
+        // DeviceZoneScopedN("ADD");
         deepseek_b1_ops::ResidualAdd::Op<ResidualAddCTArgs, Core::is_matmul_core> residual_add;
         residual_add(residual_add_args);
     }
@@ -435,7 +435,7 @@ void kernel_main() {
     // Reads from residual_add_out_cb (CB 12)
     // ========================================================================
     {
-        DeviceZoneScopedN("OUTPUT_GATHER");
+        // DeviceZoneScopedN("OUTPUT_GATHER");
         deepseek_b1_ops::Gather::Op<
             Core::is_matmul_core,
             Core::is_gather_receiver_core,

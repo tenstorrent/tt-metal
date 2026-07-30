@@ -56,7 +56,7 @@ FORCE_INLINE void mask_last_chunk(
     uint32_t cb_mask, uint32_t k_chunk_size, uint32_t cur_pos, uint32_t k_chunk_end, uint32_t k_num_chunks) {
     bool mask_last_chunk = k_chunk_end == k_num_chunks && (cur_pos + 1) % k_chunk_size != 0;
     if (mask_last_chunk) {
-        DeviceZoneScopedN("mask-last-chunk");
+        // DeviceZoneScopedN("mask-last-chunk");
         cb_reserve_back(cb_mask, 1);
         volatile tt_l1_ptr uint32_t* mask_write_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_mask));
@@ -321,30 +321,30 @@ struct FlashMLADecode {
             }
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
                 {
-                    DeviceZoneScopedN("reader-k-read");
+                    // DeviceZoneScopedN("reader-k-read");
 
                     cb_reserve_back(args.cb_k_in, k_chunk_tiles);
                     uint32_t k_write_ptr = get_write_ptr(args.cb_k_in);
 
                     if (is_mcast_sender && loop_iter < BRISC_MCAST_LOOPS) {
-                        DeviceZoneScopedN("mcast-sender-serialized-read-and-mcast");
+                        // DeviceZoneScopedN("mcast-sender-serialized-read-and-mcast");
                         const uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk;
                         uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
 
                         if (wait_for_kv_cache_ready && (k_chunk + args.num_cores_per_head) >= k_chunk_end) {
-                            DeviceZoneScopedN("wait-for-kv-cache-ready");
+                            // DeviceZoneScopedN("wait-for-kv-cache-ready");
                             noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
                             noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
                         }
 
                         {
-                            DeviceZoneScopedN("noc-read");
+                            // DeviceZoneScopedN("noc-read");
                             noc_async_read(k_src_noc_addr, k_write_ptr, k_chunk_total_size, READ_NOC_INDEX);
                             noc_async_read_barrier(READ_NOC_INDEX);
                         }
 
                         {
-                            DeviceZoneScopedN("noc-multicast");
+                            // DeviceZoneScopedN("noc-multicast");
                             noc_semaphore_wait(receiver_ready_semaphore_ptr, args.num_mcast_dests);
                             noc_semaphore_set(receiver_ready_semaphore_ptr, 0);
 
@@ -366,7 +366,7 @@ struct FlashMLADecode {
                             noc_async_writes_flushed(MCAST_NOC_INDEX);
                         }
                     } else if (is_mcast_sender) {
-                        DeviceZoneScopedN("mcast-sender-sharded-read");
+                        // DeviceZoneScopedN("mcast-sender-sharded-read");
                         const uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk;
                         uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
 
@@ -432,7 +432,7 @@ struct FlashMLADecode {
                         std::swap(ncrisc_brisc_sync_curr_ptr, ncrisc_brisc_sync_next_ptr);
                         std::swap(k_write_curr_ptr_shared, k_write_next_ptr_shared);
                     } else {
-                        DeviceZoneScopedN("mcast-receiver-signal-ready");
+                        // DeviceZoneScopedN("mcast-receiver-signal-ready");
                         unified_kernels::
                             unicast_atomic_inc_with_state<false, false, false, true, true, write_at_cmd_buf>(
                                 0, 0, 31, ATOMIC_NOC_INDEX);
@@ -484,7 +484,7 @@ struct FlashMLADecode {
                 cur_pos, args.cur_batch, args.core_num_in_reduce, args.num_cores_per_head, args.k_chunk_size);
 
             {
-                DeviceZoneScopedN("reader-q-read");
+                // DeviceZoneScopedN("reader-q-read");
                 if (is_output_core) {
                     cb_wait_front(args.cb_q_in, q_chunk_tiles);
                     if (is_mcast_sender) {
@@ -562,7 +562,7 @@ struct FlashMLADecode {
                 for (uint32_t k_chunk = k_chunk_start + BRISC_MCAST_LOOPS * args.num_cores_per_head;
                      k_chunk < k_chunk_end;
                      k_chunk += args.num_cores_per_head) {
-                    DeviceZoneScopedN("mcast-sender-multicast");
+                    // DeviceZoneScopedN("mcast-sender-multicast");
 
                     // Safe to pre-increment here since brisc signals that it's in flash mla
                     noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, 1);
@@ -643,7 +643,7 @@ struct FlashMLADecode {
 
             if (needs_reduction) {
                 for (uint32_t step = 0; step < args.num_tree_reduction_steps; ++step) {
-                    DeviceZoneScopedN("tree-reduction-step");
+                    // DeviceZoneScopedN("tree-reduction-step");
                     uint32_t role_code = args.tree_reduction_info[step * 4 + 0];
                     uint32_t partner_s_block_idx = args.tree_reduction_info[step * 4 + 1];
                     uint32_t partner_x = args.tree_reduction_info[step * 4 + 2];
@@ -654,7 +654,7 @@ struct FlashMLADecode {
                     }
 
                     if (role_code == 1) {
-                        DeviceZoneScopedN("tree-reduction-sender");
+                        // DeviceZoneScopedN("tree-reduction-sender");
                         uint32_t inc_value = step_semaphore_inc<bits_per_step>(step, ms_sub_bit);
                         uint64_t output_write_coord = get_noc_addr(partner_x, partner_y, 0, WRITE_NOC_INDEX);
                         uint64_t partner_semaphore_addr = output_write_coord | args.reducer_semaphore_addr;
@@ -686,7 +686,7 @@ struct FlashMLADecode {
                         break;
 
                     } else if (role_code == 2) {
-                        DeviceZoneScopedN("tree-reduction-receiver");
+                        // DeviceZoneScopedN("tree-reduction-receiver");
                         uint32_t shift_value = step_semaphore_shift<bits_per_step>(step, ms_sub_bit);
                         cb_reserve_back(args.cb_ms_in, 1);
                         uint32_t sem_val;

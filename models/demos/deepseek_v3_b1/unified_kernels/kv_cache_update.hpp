@@ -193,7 +193,7 @@ struct KVCacheUpdate {
                 cb_wait_front(args.kv_rmsnorm_output_cb, args.kv_rmsnorm_num_tiles);
 
                 {
-                    DeviceZoneScopedN("MCAST_RMSNORM");
+                    // DeviceZoneScopedN("MCAST_RMSNORM");
                     unified_kernels::noc_async_write_multicast_issue_txn</*posted=*/false>(
                         args.nope_mcast_num_dests, /*noc=*/MCAST_NOC_INDEX);
 
@@ -221,7 +221,7 @@ struct KVCacheUpdate {
                 }
             } else if constexpr (IsNopeCore) {
                 {
-                    DeviceZoneScopedN("RECEIVE_RMSNORM");
+                    // DeviceZoneScopedN("RECEIVE_RMSNORM");
                     volatile tt_l1_ptr uint32_t* receiver_sem_ptr =
                         (volatile tt_l1_ptr uint32_t*)args.nope_mcast_receiver_semaphore_addr;
                     cb_reserve_back(args.kv_rmsnorm_output_cb, args.kv_rmsnorm_num_tiles);
@@ -263,7 +263,7 @@ struct KVCacheUpdate {
                 uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
 
                 for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
-                    DeviceZoneScopedN("READ_FROM_DRAM");
+                    // DeviceZoneScopedN("READ_FROM_DRAM");
                     uint32_t tile_offset = chunk * CHUNK_SIZE;
                     cb_reserve_back(kv_cache_input_cb, CHUNK_SIZE);
                     uint32_t cb_addr = get_write_ptr(kv_cache_input_cb);
@@ -301,13 +301,13 @@ struct KVCacheUpdate {
                         src_addr, get_noc_addr(write_addr), num_bytes_per_chunk);
 
                     {
-                        DeviceZoneScopedN("WAIT_UNTILIZE");
+                        // DeviceZoneScopedN("WAIT_UNTILIZE");
                         cb_reserve_back(kv_cache_intermed_sync_cb, CHUNK_SIZE);
                         cb_wait_front(kv_cache_intermed_cb, CHUNK_SIZE);
                     }
 
                     {
-                        DeviceZoneScopedN("UPDATE_NEW_CACHE");
+                        // DeviceZoneScopedN("UPDATE_NEW_CACHE");
                         unified_kernels::noc_async_write_issue_txn<false>();
                         noc_async_write_barrier();
                     }
@@ -322,12 +322,12 @@ struct KVCacheUpdate {
 
                 for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
                     {
-                        DeviceZoneScopedN("WAIT_TILIZE");
+                        // DeviceZoneScopedN("WAIT_TILIZE");
                         cb_wait_front(kv_cache_output_cb, CHUNK_SIZE);
                     }
 
                     {
-                        DeviceZoneScopedN("WRITE_TO_DRAM");
+                        // DeviceZoneScopedN("WRITE_TO_DRAM");
                         uint32_t tile_offset = chunk * CHUNK_SIZE;
                         uint32_t cb_addr = get_read_ptr(kv_cache_output_cb);
                         for (uint32_t i = 0; i < CHUNK_SIZE; i++) {

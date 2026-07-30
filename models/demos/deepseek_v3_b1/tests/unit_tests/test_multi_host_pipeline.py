@@ -1285,7 +1285,8 @@ def test_passthrough_pipeline_block(mesh_device):
     config = create_passthrough_pipeline_configuration(SyntheticWeightProvider(), num_procs)
     pipeline = config.build_pipeline(mesh_device)
     try:
-        pipeline.setup_and_run()
+        pipeline.setup()
+        pipeline.run()
 
         if pipeline.my_mesh_id == 0:
             from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
@@ -1379,7 +1380,8 @@ def test_single_galaxy_deepseek_pipeline(mesh_device, use_fp32, device_params):
     )
     pipeline = config.build_pipeline(mesh_device, host_loopback=True)
     try:
-        pipeline.setup_and_run()
+        pipeline.setup()
+        pipeline.run()
 
         if pipeline.my_mesh_id == 0:
             torch_token = torch.zeros(1, TOKEN_META_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)

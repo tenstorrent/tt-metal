@@ -872,7 +872,7 @@ if constexpr (!Core::skip_ccl) {
     // ========================================================================
     if constexpr (!Core::skip_ccl) {
         {
-            DeviceZoneScopedN("CCL_BROADCAST");
+            // DeviceZoneScopedN("CCL_BROADCAST");
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
             bcast(bcast_args);
         }
@@ -900,7 +900,7 @@ if constexpr (!Core::skip_ccl) {
         true>
         mcast;
     {
-        DeviceZoneScopedN("MCAST_INIT");
+        // DeviceZoneScopedN("MCAST_INIT");
         mcast.init(mcast_args);
     }
 
@@ -922,13 +922,13 @@ if constexpr (!Core::skip_ccl) {
         // Input core: RMSNorm + Mcast send
         // ====================================================================
         {
-            DeviceZoneScopedN("RMSNORM");
+            // DeviceZoneScopedN("RMSNORM");
             deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
             rmsnorm(rmsnorm_args);
         }
 
         {
-            DeviceZoneScopedN("MCAST");
+            // DeviceZoneScopedN("MCAST");
             mcast(mcast_args);
         }
 
@@ -936,7 +936,7 @@ if constexpr (!Core::skip_ccl) {
         // Matmul operation
         // ====================================================================
         {
-            DeviceZoneScopedN("MATMUL");
+            // DeviceZoneScopedN("MATMUL");
             deepseek_b1_ops::KNSlicedMatmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
             matmul(matmul_args);
         }
@@ -945,7 +945,7 @@ if constexpr (!Core::skip_ccl) {
         // GatherReduce: matmul cores (senders) -> input core (receiver/reducer)
         // ====================================================================
         {
-            DeviceZoneScopedN("GATHER");
+            // DeviceZoneScopedN("GATHER");
             deepseek_b1_ops::GatherReduce::Op<Core::is_matmul_core, Core::is_input_core, Core::is_input_core, true>
                 gather_reduce;
             gather_reduce(gather_reduce_args);
@@ -955,7 +955,7 @@ if constexpr (!Core::skip_ccl) {
         // RMSNorm2
         // ====================================================================
         {
-            DeviceZoneScopedN("RMSNORM2");
+            // DeviceZoneScopedN("RMSNORM2");
             deepseek_b1_ops::RMSNorm::Op<RMSNorm2CTArgs, Core::is_input_core, true> rmsnorm2;
             rmsnorm2(rmsnorm2_args);
         }
@@ -964,7 +964,7 @@ if constexpr (!Core::skip_ccl) {
         // Mcast2: Broadcast rmsnorm2 output to matmul2 cores
         // ====================================================================
         {
-            DeviceZoneScopedN("MCAST2");
+            // DeviceZoneScopedN("MCAST2");
             deepseek_b1_ops::Mcast::
                 Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul2_core, true>
                     mcast2;
@@ -975,20 +975,20 @@ if constexpr (!Core::skip_ccl) {
         // Matmul2
         // ====================================================================
         {
-            DeviceZoneScopedN("MATMUL2");
+            // DeviceZoneScopedN("MATMUL2");
             deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
             matmul2(matmul2_args);
         }
 
         {
-            DeviceZoneScopedN("Q_HEADS") static_assert(
+            // DeviceZoneScopedN("Q_HEADS") static_assert(
                 !(Core::is_qnope_core && Core::is_qrope_core), "Core cannot be both QNOPE and QROPE");
 
             // ================================================================
             // Matmul3 (QNoPE)
             // ================================================================
             {
-                DeviceZoneScopedN("QNOPE/MATMUL3");
+                // DeviceZoneScopedN("QNOPE/MATMUL3");
                 deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
                 matmul3(matmul3_args);
             }
@@ -997,7 +997,7 @@ if constexpr (!Core::skip_ccl) {
             // RoPE (Qrope)
             // ================================================================
             {
-                DeviceZoneScopedN("QROPE");
+                // DeviceZoneScopedN("QROPE");
                 deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
                 rope.set_global_pos(qrope_args, cur_pos);
                 rope(qrope_args);
@@ -1007,7 +1007,7 @@ if constexpr (!Core::skip_ccl) {
             // CreateQHeads (all data movement on NCRISC)
             // ================================================================
             {
-                DeviceZoneScopedN("CREATE_Q_HEADS");
+                // DeviceZoneScopedN("CREATE_Q_HEADS");
                 constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
 #if defined(COMPILE_FOR_NCRISC)
                 deepseek_b1_ops::CreateQHeads::
@@ -1038,13 +1038,13 @@ if constexpr (!Core::skip_ccl) {
             kv_cache_update;
         kv_cache_update.set_pos_and_slot(kv_cache_update_args, local_cur_pos, metadata_ptr->slot_id);
         if (!skip_kv_cache_update) {
-            DeviceZoneScopedN("KV CACHE");
-            // ================================================================
-            // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
-            // ================================================================
+            // DeviceZoneScopedN("KV CACHE");
+            //  ================================================================
+            //  DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
+            //  ================================================================
             {
-                DeviceZoneScopedN("DKV_MATMUL");
-                // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+                // DeviceZoneScopedN("DKV_MATMUL");
+                //  pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
                 deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, false, false> dkv_matmul;
                 dkv_matmul(dkv_matmul_args);
             }
@@ -1054,7 +1054,7 @@ if constexpr (!Core::skip_ccl) {
             // NCRISC sends from knope grid, BRISC receives on rmsnorm grid
             // ================================================================
             {
-                DeviceZoneScopedN("DKV_GATHER");
+                // DeviceZoneScopedN("DKV_GATHER");
                 deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true, false, true>
                     dkv_gather;
                 dkv_gather(dkv_gather_args);
@@ -1064,7 +1064,7 @@ if constexpr (!Core::skip_ccl) {
             // RMSNorm: Apply RMSNorm to the gathered data
             // ================================================================
             {
-                DeviceZoneScopedN("KV_RMSNORM");
+                // DeviceZoneScopedN("KV_RMSNORM");
                 deepseek_b1_ops::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
                 kv_rmsnorm(kv_rmsnorm_args);
             }
@@ -1073,7 +1073,7 @@ if constexpr (!Core::skip_ccl) {
             // RoPE
             // ================================================================
             {
-                DeviceZoneScopedN("K_ROPE");
+                // DeviceZoneScopedN("K_ROPE");
                 deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
                 krope.set_global_pos(krope_args, cur_pos);
                 krope(krope_args);
@@ -1083,12 +1083,12 @@ if constexpr (!Core::skip_ccl) {
             // KV Cache Update: NOPE mcast + write results to DRAM
             // ================================================================
             {
-                DeviceZoneScopedN("KV_CACHE_UPDATE");
+                // DeviceZoneScopedN("KV_CACHE_UPDATE");
                 kv_cache_update(kv_cache_update_args);
             }
         }
         {
-            DeviceZoneScopedN("KV_CACHE_SIGNAL_READY");
+            // DeviceZoneScopedN("KV_CACHE_SIGNAL_READY");
             kv_cache_update.signal_cache_ready(kv_cache_update_args);
         }
 
@@ -1096,7 +1096,7 @@ if constexpr (!Core::skip_ccl) {
         // Flash MLA: Compute
         // ====================================================================
         {
-            DeviceZoneScopedN("FLASH_MLA");
+            // DeviceZoneScopedN("FLASH_MLA");
             deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core> flash_mla;
             flash_mla.set_pos_and_slot(flash_mla_args, local_cur_pos, metadata_ptr->slot_id);
             flash_mla(flash_mla_args);
@@ -1107,7 +1107,7 @@ if constexpr (!Core::skip_ccl) {
     // Mcast: Teardown persistent mcast
     // ====================================================================
     {
-        DeviceZoneScopedN("MCAST_TEARDOWN");
+        // DeviceZoneScopedN("MCAST_TEARDOWN");
         mcast.teardown(mcast_args);
     }
 }

@@ -66,7 +66,7 @@ void kernel_main() {
         }
         Worker::Op<ReaderCTArgs> op;
         {
-            DeviceZoneScopedN("SDPA_REDUCE_READER");
+            // DeviceZoneScopedN("SDPA_REDUCE_READER");
             op(reader_args);
         }
     } else {
@@ -87,7 +87,7 @@ void kernel_main() {
         };
         Fwd::Op<FwdCTArgs> op;
         {
-            DeviceZoneScopedN("SDPA_REDUCE_FORWARDER");
+            // DeviceZoneScopedN("SDPA_REDUCE_FORWARDER");
             op(fwd_args);
         }
     }
@@ -147,7 +147,7 @@ void kernel_main() {
         per_core_rta_arg_idx += WriterCTArgs::scatter_num_rows * 2;  // x, y value per dest
         Worker::Op<WriterCTArgs> op;
         {
-            DeviceZoneScopedN("SDPA_REDUCE_WRITER");
+            // DeviceZoneScopedN("SDPA_REDUCE_WRITER");
             op(writer_args);
         }
     } else {
@@ -168,7 +168,7 @@ void kernel_main() {
         };
         Fwd::Op<FwdCTArgs> op;
         {
-            DeviceZoneScopedN("SDPA_REDUCE_FORWARDER");
+            // DeviceZoneScopedN("SDPA_REDUCE_FORWARDER");
             op(fwd_args);
         }
     }
@@ -215,7 +215,7 @@ void kernel_main() {
         }
         Worker::Op<ComputeCTArgs> op;
         {
-            DeviceZoneScopedN("SDPA_REDUCE_COMPUTE");
+            // DeviceZoneScopedN("SDPA_REDUCE_COMPUTE");
             op(compute_args);
         }
     }

@@ -652,7 +652,7 @@ void kernel_main() {
             mcast;
     mcast.init(mcast_args);
     {
-        DeviceZoneScopedN("MCAST");
+        // DeviceZoneScopedN("MCAST");
         mcast(mcast_args);
     }
 
@@ -660,8 +660,8 @@ void kernel_main() {
     // 2. Matmul + Activation: Routing matmul on all matmul cores
     // ========================================================================
     {
-        DeviceZoneScopedN("MATMUL");
-        // pop_in0 = false (kept for DRAM matmul), pop_in1 = false (weights are persistent)
+        // DeviceZoneScopedN("MATMUL");
+        //  pop_in0 = false (kept for DRAM matmul), pop_in1 = false (weights are persistent)
         deepseek_b1_ops::Matmul::Op<GateMMCTArgs, Core::is_gate_mm_core, false, false> gate_mm;
         gate_mm(gate_mm_args);
     }
@@ -670,8 +670,8 @@ void kernel_main() {
     // 3. Gather: Collect matmul outputs from compute cores to sender core
     // ========================================================================
     {
-        DeviceZoneScopedN("GATHER");
-        // pop_src = true (matmul output consumed after gather)
+        // DeviceZoneScopedN("GATHER");
+        //  pop_src = true (matmul output consumed after gather)
         deepseek_b1_ops::Gather::Op<Core::is_gate_mm_core, Core::is_sender_core, true> gather;
         gather(gather_args);
     }
@@ -680,7 +680,7 @@ void kernel_main() {
     // 4. Gate: Top-K expert selection with normalized scores (on sender core only)
     // ========================================================================
     {
-        DeviceZoneScopedN("GATE");
+        // DeviceZoneScopedN("GATE");
         deepseek_b1_ops::DeepseekMoeGate::Op<GateCTArgs, Core::is_sender_core> gate;
         gate();
     }
@@ -689,7 +689,7 @@ void kernel_main() {
     // 5. Mcast Index: Broadcast expert indices from sender core to compute cores
     // ========================================================================
     {
-        DeviceZoneScopedN("MCAST_INDEX");
+        // DeviceZoneScopedN("MCAST_INDEX");
         deepseek_b1_ops::Mcast::Op<
             McastCTArgs,
             Core::is_sender_core,
@@ -705,7 +705,7 @@ void kernel_main() {
     // 5b. Mcast Expert Scale: Broadcast expert scale from sender core to compute cores
     // ========================================================================
     {
-        DeviceZoneScopedN("MCAST_EXPERT_SCALE");
+        // DeviceZoneScopedN("MCAST_EXPERT_SCALE");
         deepseek_b1_ops::Mcast::Op<
             McastCTArgs,
             Core::is_sender_core,
@@ -722,7 +722,7 @@ void kernel_main() {
     //    PopIn0=false to keep input for up_proj
     // ========================================================================
     {
-        DeviceZoneScopedN("GATE_PROJ");
+        // DeviceZoneScopedN("GATE_PROJ");
         deepseek_b1_ops::DRAMStreamingMatmul::Op<GateProjCTArgs, Core::is_gate_proj_core, false> gate_proj_mm;
         gate_proj_mm();
     }
@@ -733,7 +733,7 @@ void kernel_main() {
     //    Writes to intermediate CB (up_proj_cb_mm_out)
     // ========================================================================
     {
-        DeviceZoneScopedN("UP_PROJ");
+        // DeviceZoneScopedN("UP_PROJ");
         deepseek_b1_ops::DRAMStreamingMatmul::Op<UpProjCTArgs, Core::is_gate_proj_core, true, false> up_proj;
         up_proj();
     }
@@ -743,7 +743,7 @@ void kernel_main() {
     //    Both inputs viewed as 16x16 tiles (CB aliasing)
     // ========================================================================
     {
-        DeviceZoneScopedN("MUL");
+        // DeviceZoneScopedN("MUL");
         deepseek_b1_ops::EltwiseMul::Op<MulCTArgs, Core::is_gate_proj_core> mul_op;
         mul_op();
     }
@@ -753,9 +753,9 @@ void kernel_main() {
     //    for down_proj input
     // ========================================================================
     {
-        DeviceZoneScopedN("DOWN_PROJ_GATHER");
-        // pop_src = true (mul output consumed after gather)
-        // UsePerCoreSenderIdx = true (use explicit sender_idx for scattered optimal DRAM bank cores)
+        // DeviceZoneScopedN("DOWN_PROJ_GATHER");
+        //  pop_src = true (mul output consumed after gather)
+        //  UsePerCoreSenderIdx = true (use explicit sender_idx for scattered optimal DRAM bank cores)
         deepseek_b1_ops::Gather::Op<Core::is_gate_proj_core, Core::is_sender_core, true, true> down_proj_gather;
         down_proj_gather(down_proj_gather_args);
     }
@@ -765,7 +765,7 @@ void kernel_main() {
     //     Same mcast grid as input mcast
     // ========================================================================
     {
-        DeviceZoneScopedN("DOWN_PROJ_MCAST");
+        // DeviceZoneScopedN("DOWN_PROJ_MCAST");
         deepseek_b1_ops::Mcast::Op<
             McastCTArgs,
             Core::is_sender_core,
@@ -782,7 +782,7 @@ void kernel_main() {
     //     [1, hidden_dim] x [hidden_dim, K] -> [1, K]
     // ========================================================================
     {
-        DeviceZoneScopedN("DOWN_PROJ");
+        // DeviceZoneScopedN("DOWN_PROJ");
         deepseek_b1_ops::DRAMStreamingMatmul::Op<DownProjCTArgs, Core::is_gate_proj_core, true> down_proj;
         down_proj();
     }
@@ -792,7 +792,7 @@ void kernel_main() {
     //     Each core uses sender_index to offset into replicated fused_add
     // ========================================================================
     {
-        DeviceZoneScopedN("ELTWISE_ADD");
+        // DeviceZoneScopedN("ELTWISE_ADD");
         deepseek_b1_ops::EltwiseAdd::Op<AddCTArgs, Core::is_gate_proj_core> add_op;
         add_op();
     }
@@ -803,9 +803,9 @@ void kernel_main() {
     // ========================================================================
 #ifdef ENABLE_REDUCE_TO_ONE
     {
-        DeviceZoneScopedN("REDUCE_TO_ONE");
-        // SkipLocalCbPush=true: eltwise_add already pushed data to local_cb (add_cb_out)
-        // IsReduceCore includes both worker cores and fabric cores
+        // DeviceZoneScopedN("REDUCE_TO_ONE");
+        //  SkipLocalCbPush=true: eltwise_add already pushed data to local_cb (add_cb_out)
+        //  IsReduceCore includes both worker cores and fabric cores
         constexpr bool is_reduce_core = Core::is_reduce_worker_core || Core::is_reduce_fabric_core;
         deepseek_b1_ops::ReduceToOneB1::Op<ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
         reduce_op(reduce_rt_args);

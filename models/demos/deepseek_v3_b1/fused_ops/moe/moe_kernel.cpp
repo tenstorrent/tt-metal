@@ -1498,7 +1498,7 @@ void kernel_main() {
 #ifdef ENABLE_BCAST
         // Step -1: CCL Broadcast — receive data from fabric into intermediate tensor
         {
-            DeviceZoneScopedN("BCAST");
+            // DeviceZoneScopedN("BCAST");
 #if defined(COMPILE_FOR_NCRISC)
             using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
                 get_named_compile_time_arg_val("bcast_pkt_cb"),
@@ -1562,13 +1562,13 @@ void kernel_main() {
 
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
         {
-            DeviceZoneScopedN("RESIDUAL_MCAST");
+            // DeviceZoneScopedN("RESIDUAL_MCAST");
             residual_mcast(moe.routed.residual_mcast_args);
         }
 
         // 0b. RMSNorm: normalize input on sender core (residual_mcast_src → rmsnorm_output)
         {
-            DeviceZoneScopedN("RMSNORM");
+            // DeviceZoneScopedN("RMSNORM");
             deepseek_b1_ops::RMSNorm::Op<
                 Moe::Routed::RMSNormCTArgs,
                 Core::is_sender_core,
@@ -1579,7 +1579,7 @@ void kernel_main() {
 
         // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
         {
-            DeviceZoneScopedN("MCAST");
+            // DeviceZoneScopedN("MCAST");
             mcast(moe.routed.mcast_args);
         }
 
@@ -1635,7 +1635,7 @@ void kernel_main() {
 #ifdef ENABLE_ROUTING
         // 2. Matmul + Activation: Routing matmul on gate_mm cores
         {
-            DeviceZoneScopedN("MATMUL");
+            // DeviceZoneScopedN("MATMUL");
             deepseek_b1_ops::Matmul::Op<Moe::Routed::GateMMCTArgs, Core::Routed::is_gate_mm_core, false, false> gate_mm;
             gate_mm(moe.routed.gate_mm_args);
         }
@@ -1648,7 +1648,7 @@ void kernel_main() {
         //     Using is_gate_proj_streamer_core (not is_gate_proj_core) — otherwise K-senders
         //     pop cb_in0 here, leaving gate_proj_mm's cb_wait_front waiting on empty CB.
         {
-            DeviceZoneScopedN("SHARED_GU_MATMUL");
+            // DeviceZoneScopedN("SHARED_GU_MATMUL");
             deepseek_b1_ops::KNSlicedMatmul::Op<
                 Moe::Shared::GUMatmulCTArgs,
                 Core::Shared::is_compute_core,
@@ -1664,14 +1664,14 @@ void kernel_main() {
 #ifdef ENABLE_ROUTING
         // 3c. Gather: Collect matmul outputs from compute cores to sender core
         {
-            DeviceZoneScopedN("GATHER");
+            // DeviceZoneScopedN("GATHER");
             deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_mm_core, Core::is_sender_core, true> gather;
             gather(moe.routed.gather_args);
         }
 
         // 4. Gate: Top-K expert selection (on sender core only)
         {
-            DeviceZoneScopedN("GATE");
+            // DeviceZoneScopedN("GATE");
             deepseek_b1_ops::DeepseekMoeGate::Op<Moe::Routed::GateCTArgs, Core::is_sender_core> gate;
             gate();
         }
@@ -1696,7 +1696,7 @@ void kernel_main() {
         }
 
         {
-            DeviceZoneScopedN("MCAST_INDEX");
+            // DeviceZoneScopedN("MCAST_INDEX");
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -1755,7 +1755,7 @@ void kernel_main() {
         //     skipped too. Unpopped gate_output_cb pages on sender are
         //     re-anchored by RECONFIG_MOE_CBS at next iter's top.
         {
-            DeviceZoneScopedN("MCAST_EXPERT_SCALE");
+            // DeviceZoneScopedN("MCAST_EXPERT_SCALE");
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -1780,7 +1780,7 @@ void kernel_main() {
         //       MoeGather sender=BRISC; receiver=NCRISC on sender_core (= disjoint from
         //       sender_core BRISC's mcast queue).
         {
-            DeviceZoneScopedN("SHARED_GATE_GATHER");
+            // DeviceZoneScopedN("SHARED_GATE_GATHER");
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_gate_compute_core,
                 Core::Shared::is_gated_reduce_core,
@@ -1791,7 +1791,7 @@ void kernel_main() {
         }
 
         {
-            DeviceZoneScopedN("SHARED_UP_GATHER");
+            // DeviceZoneScopedN("SHARED_UP_GATHER");
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_up_compute_core,
                 Core::Shared::is_gated_reduce_core,
@@ -1807,7 +1807,7 @@ void kernel_main() {
         // below — having SHARED_GR done early lets SHARED_DOWN_MCAST fire as the first
         // down-side mcast on sender BRISC.
         {
-            DeviceZoneScopedN("SHARED_GATED_REDUCE");
+            // DeviceZoneScopedN("SHARED_GATED_REDUCE");
             deepseek_b1_ops::GatedReduce::Op<Moe::Shared::GatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
                 shared_gated_reduce;
             shared_gated_reduce(moe.shared.gated_reduce_args);
@@ -1838,7 +1838,7 @@ void kernel_main() {
         constexpr bool sram_gp_pop_in0 =
             Core::Shared::is_gate_compute_core && !Core::Routed::is_gate_proj_streamer_core;
         {
-            DeviceZoneScopedN("SRAM_GATE_PROJ");
+            // DeviceZoneScopedN("SRAM_GATE_PROJ");
             deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
                 Moe::Routed::SramGateProjCTArgs,
                 Core::Shared::is_gate_compute_core,
@@ -1856,7 +1856,7 @@ void kernel_main() {
         //   FALSE on streamer cores — DRAM up_proj pops there.
         constexpr bool sram_up_pop_in0 = Core::Shared::is_up_compute_core && !Core::Routed::is_gate_proj_streamer_core;
         {
-            DeviceZoneScopedN("SRAM_UP_PROJ");
+            // DeviceZoneScopedN("SRAM_UP_PROJ");
             deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
                 Moe::Routed::SramUpProjCTArgs,
                 Core::Shared::is_up_compute_core,
@@ -1877,7 +1877,7 @@ void kernel_main() {
         //        instead of waiting through the SRAM gather/GR/down phases.
         //        Skipped via dram_invoke_matmul when n_dram_active==0.
         {
-            DeviceZoneScopedN("GATE_PROJ");
+            // DeviceZoneScopedN("GATE_PROJ");
             constexpr uint32_t gp_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
             // pop_out=true on secondary streamer cores only (= streamer && !primary).
             // Senders' cb_out is internal (their NCRISC NOC-wrote real bytes to the
@@ -1898,7 +1898,7 @@ void kernel_main() {
         }
 
         {
-            DeviceZoneScopedN("UP_PROJ");
+            // DeviceZoneScopedN("UP_PROJ");
             constexpr uint32_t up_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
             // pop_in0=true on streamers: this is the last cb_in0 consumer on those
             // cores (SRAM_GATE/UP_PROJ ran first with pop_in0=false on streamers).
@@ -1919,7 +1919,7 @@ void kernel_main() {
         }
 
         {
-            DeviceZoneScopedN("MUL");
+            // DeviceZoneScopedN("MUL");
             deepseek_b1_ops::EltwiseMul::Op<Moe::Routed::MulCTArgs, Core::Routed::is_gate_proj_core> mul_op;
             deepseek_b1_ops::dram_invoke_eltwise_mul(mul_op, n_dram_active);
         }
@@ -1940,7 +1940,7 @@ void kernel_main() {
         // const = num_active × pages_per_expert) — receiver always advances
         // by full capacity to match GR's padded push count downstream.
         {
-            DeviceZoneScopedN("SRAM_GATE_GATHER");
+            // DeviceZoneScopedN("SRAM_GATE_GATHER");
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_gate_compute_core,
                 Core::Shared::is_gated_reduce_core,
@@ -1950,7 +1950,7 @@ void kernel_main() {
             deepseek_b1_ops::sram_invoke_moe_gather(sram_ag, moe.routed.sram_ag_args, n_sram_active);
         }
         {
-            DeviceZoneScopedN("SRAM_UP_GATHER");
+            // DeviceZoneScopedN("SRAM_UP_GATHER");
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_up_compute_core,
                 Core::Shared::is_gated_reduce_core,
@@ -1964,7 +1964,7 @@ void kernel_main() {
         // per active SRAM expert. TRISC k_num_tiles = n_sram_active. BRISC
         // handles the per-expert scalar copy (independent of n_sram_active).
         {
-            DeviceZoneScopedN("SRAM_GATED_REDUCE");
+            // DeviceZoneScopedN("SRAM_GATED_REDUCE");
             deepseek_b1_ops::GatedReduce::Op<Moe::Routed::SramGatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
                 sram_gated_reduce;
             deepseek_b1_ops::sram_invoke_gated_reduce(
@@ -1982,7 +1982,7 @@ void kernel_main() {
         // Fires right after MUL completes (gate_proj BRISC sends), independent of
         // sender BRISC's mcast queue.
         {
-            DeviceZoneScopedN("DOWN_PROJ_GATHER");
+            // DeviceZoneScopedN("DOWN_PROJ_GATHER");
             deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
                 down_proj_gather;
             deepseek_b1_ops::dram_invoke_moe_gather(down_proj_gather, moe.routed.down_proj_gather_args, n_dram_active);
@@ -1998,7 +1998,7 @@ void kernel_main() {
 
         // 9. Shared: Down Mcast — broadcast SHARED_GATED_REDUCE output to 112 receivers.
         {
-            DeviceZoneScopedN("SHARED_DOWN_MCAST");
+            // DeviceZoneScopedN("SHARED_DOWN_MCAST");
             deepseek_b1_ops::Mcast::Op<
                 Moe::Shared::DownMcastCTArgs,
                 Core::is_sender_core,
@@ -2011,7 +2011,7 @@ void kernel_main() {
 
         // SRAM down Mcast: SRAM_GATED_REDUCE output → 112 receivers.
         {
-            DeviceZoneScopedN("SRAM_DOWN_MCAST");
+            // DeviceZoneScopedN("SRAM_DOWN_MCAST");
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -2025,7 +2025,7 @@ void kernel_main() {
 
         // DRAM down Mcast: gathered MUL output → 16 down_proj streamer cores.
         {
-            DeviceZoneScopedN("DOWN_PROJ_MCAST");
+            // DeviceZoneScopedN("DOWN_PROJ_MCAST");
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -2039,7 +2039,7 @@ void kernel_main() {
 
         // 9b. Shared down matmul — 112-core TRISC, consumes SHARED_DOWN_MCAST data first.
         {
-            DeviceZoneScopedN("SHARED_DOWN_MATMUL");
+            // DeviceZoneScopedN("SHARED_DOWN_MATMUL");
             deepseek_b1_ops::Matmul::Op<
                 Moe::Shared::DownMatmulCTArgs,
                 Core::Shared::is_mcast_receiver_core,
@@ -2060,7 +2060,7 @@ void kernel_main() {
         // pop_index=false: index reused later by DRAM down_proj.
         // pop_in1=false: cb_in1 is overlay-backed (per-core L1 slabs) — never popped.
         {
-            DeviceZoneScopedN("SRAM_DOWN_PROJ");
+            // DeviceZoneScopedN("SRAM_DOWN_PROJ");
             deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
                 Moe::Routed::SramDownProjCTArgs,
                 Core::Shared::is_mcast_receiver_core,
@@ -2080,7 +2080,7 @@ void kernel_main() {
         // as the residual_add input). Always runs — copy path keeps the wiring
         // uniform for dense MLP / no-routing.
         {
-            DeviceZoneScopedN("SRAM_DOWN_MERGE");
+            // DeviceZoneScopedN("SRAM_DOWN_MERGE");
             deepseek_b1_ops::EltwiseAddOrCopy::
                 Op<Moe::Routed::SramDownMergeCTArgs, Core::Shared::is_mcast_receiver_core>
                     sram_down_merge;
@@ -2093,7 +2093,7 @@ void kernel_main() {
         //      the actual add so the residual is counted exactly once after the
         //      cross-device sum.  Non-root devices pass matmul output through.
         {
-            DeviceZoneScopedN("SHARED_RESIDUAL_ADD");
+            // DeviceZoneScopedN("SHARED_RESIDUAL_ADD");
 #ifdef ENABLE_REDUCE_TO_ONE
             constexpr bool skip_residual_add =
                 get_named_compile_time_arg_val("reduce_device_role") != deepseek_b1_ops::MESH_ROOT1;
@@ -2109,7 +2109,7 @@ void kernel_main() {
 
         // 9d. Shared: Output Gather — 112 matmul cores → sender core
         {
-            DeviceZoneScopedN("SHARED_OUTPUT_GATHER");
+            // DeviceZoneScopedN("SHARED_OUTPUT_GATHER");
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_mcast_receiver_core,  // IsSenderCore: 112 matmul cores
                 Core::is_sender_core,                  // IsReceiverCore: sender core
@@ -2121,7 +2121,7 @@ void kernel_main() {
 
         // 9e. Shared: Output Mcast — sender core → 130 cores (DRAM cores receive into add_cb_in1)
         {
-            DeviceZoneScopedN("SHARED_OUTPUT_MCAST");
+            // DeviceZoneScopedN("SHARED_OUTPUT_MCAST");
             deepseek_b1_ops::Mcast::Op<
                 Moe::Shared::OutputMcastCTArgs,
                 Core::is_sender_core,             // IsSenderCore
@@ -2148,7 +2148,7 @@ void kernel_main() {
         //     down_proj's pop_index would have drained cb_index on streamers, but
         //     RECONFIG_MOE_CBS at next iter's top re-anchors the rd/wr ptrs.
         {
-            DeviceZoneScopedN("DOWN_PROJ");
+            // DeviceZoneScopedN("DOWN_PROJ");
             constexpr uint32_t dp_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
             // pop_out=true on secondary streamer cores only. Senders' cb_out is
             // internal (their gather NOC write went to the primary's cb_out slot 0);
@@ -2171,7 +2171,7 @@ void kernel_main() {
         // 13. Eltwise Add: down_proj + shared_expert_output, or copy(shared_expert_output)
         //     when n_dram_active==0 (do_add patched at runtime).
         {
-            DeviceZoneScopedN("ELTWISE_ADD");
+            // DeviceZoneScopedN("ELTWISE_ADD");
             constexpr bool add_pop_output =
 #ifdef ENABLE_REDUCE_TO_ONE
                 false;  // reduce_local_cb aliases add_cb_out — reduce will consume it
@@ -2188,7 +2188,7 @@ void kernel_main() {
         //     Reduces final_output from all 8 devices to ROOT1 device
 #ifdef ENABLE_REDUCE_TO_ONE
         {
-            DeviceZoneScopedN("REDUCE_TO_ONE");
+            // DeviceZoneScopedN("REDUCE_TO_ONE");
 
             // IsReduceCore includes both worker cores and fabric cores
             constexpr bool is_reduce_core = Core::is_reduce_worker_core || Core::is_reduce_fabric_core;

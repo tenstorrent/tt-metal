@@ -68,7 +68,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     for (uint32_t i = 0; i < num_iterations; i++) {
         {
-            DeviceZoneScopedN("CCL_BROADCAST_TRANSPORT");
+            // DeviceZoneScopedN("CCL_BROADCAST_TRANSPORT");
             body();
         }
     }
@@ -76,7 +76,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_iterations; i++) {
         if constexpr (BcastCTArgs::is_root) {
             {
-                DeviceZoneScopedN("CCL_BROADCAST_READER");
+                // DeviceZoneScopedN("CCL_BROADCAST_READER");
                 body();
             }
         } else {

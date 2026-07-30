@@ -407,7 +407,7 @@ void kernel_main() {
         act_mcast;
     act_mcast.init(act_mcast_args);
     {
-        DeviceZoneScopedN("ACT_MCAST");
+        // DeviceZoneScopedN("ACT_MCAST");
         act_mcast(act_mcast_args);
     }
 
@@ -417,7 +417,7 @@ void kernel_main() {
     // B cores: activation[k_offset..k_offset+k_per_core] @ up_weights → 1 tile
     // ========================================================================
     {
-        DeviceZoneScopedN("GATE_UP_MATMUL");
+        // DeviceZoneScopedN("GATE_UP_MATMUL");
         deepseek_b1_ops::KNSlicedMatmul::
             Op<KNSlicedMatmulCTArgs, Core::is_compute_core, /*pop_act=*/true, /*pop_weights=*/false>
                 gu_matmul;
@@ -428,7 +428,7 @@ void kernel_main() {
     // Phase 3: Gate Gather (A) — 64 A cores → CB0 on (12,9)
     // ========================================================================
     {
-        DeviceZoneScopedN("GATE_GATHER");
+        // DeviceZoneScopedN("GATE_GATHER");
         deepseek_b1_ops::Gather::
             Op<Core::is_gate_compute_core, Core::is_gated_reduce_core, /*pop_src=*/true, Core::is_gate_compute_core>
                 gate_gather;
@@ -439,7 +439,7 @@ void kernel_main() {
     // Phase 3b: Up Gather (B) — 64 B cores → CB1 on (12,9)
     // ========================================================================
     {
-        DeviceZoneScopedN("UP_GATHER");
+        // DeviceZoneScopedN("UP_GATHER");
         deepseek_b1_ops::Gather::
             Op<Core::is_up_compute_core, Core::is_gated_reduce_core, /*pop_src=*/true, Core::is_up_compute_core>
                 up_gather;
@@ -451,7 +451,7 @@ void kernel_main() {
     // SiLU(sum(gate_partials)) * sum(up_partials) → [1, 256]
     // ========================================================================
     {
-        DeviceZoneScopedN("GATED_REDUCE");
+        // DeviceZoneScopedN("GATED_REDUCE");
         deepseek_b1_ops::GatedReduce::Op<GatedReduceCTArgs, Core::is_gated_reduce_core> gated_reduce;
         gated_reduce(gated_reduce_args);
     }
@@ -469,7 +469,7 @@ void kernel_main() {
         /*pop_src=*/true>
         mcast;
     {
-        DeviceZoneScopedN("MCAST1");
+        // DeviceZoneScopedN("MCAST1");
         mcast(mcast_args);
     }
 
@@ -492,7 +492,7 @@ void kernel_main() {
 #endif
 
     {
-        DeviceZoneScopedN("MCAST2");
+        // DeviceZoneScopedN("MCAST2");
         mcast(mcast2_args);
     }
     act_mcast.teardown(act_mcast_args);
@@ -501,7 +501,7 @@ void kernel_main() {
     // Phase 7: Down Proj Matmul — [1, K_down] x [K_down, N_per_core] on 112 cores
     // ========================================================================
     {
-        DeviceZoneScopedN("DOWN_MATMUL");
+        // DeviceZoneScopedN("DOWN_MATMUL");
         deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, /*pop_in0=*/true, /*pop_in1=*/false> matmul;
         matmul(matmul_args);
     }
@@ -521,7 +521,7 @@ void kernel_main() {
 #endif
     };
     {
-        DeviceZoneScopedN("ADD");
+        // DeviceZoneScopedN("ADD");
         deepseek_b1_ops::ResidualAdd::Op<ResidualAddCTArgs, Core::is_matmul_core> residual_add;
         residual_add(residual_add_args);
     }
@@ -530,7 +530,7 @@ void kernel_main() {
     // Phase 9: Output Gather — 112 matmul cores → (12,9)
     // ========================================================================
     {
-        DeviceZoneScopedN("OUTPUT_GATHER");
+        // DeviceZoneScopedN("OUTPUT_GATHER");
         deepseek_b1_ops::Gather::Op<
             Core::is_matmul_core,
             Core::is_gather_receiver_core,

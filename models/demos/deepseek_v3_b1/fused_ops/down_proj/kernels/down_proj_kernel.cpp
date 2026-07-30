@@ -238,7 +238,7 @@ void kernel_main() {
         mcast;
     mcast.init(mcast_args);
     {
-        DeviceZoneScopedN("MCAST1");
+        // DeviceZoneScopedN("MCAST1");
         mcast(mcast_args);
     }
 
@@ -254,7 +254,7 @@ void kernel_main() {
         true>                          // pop_src
         mcast2;
     {
-        DeviceZoneScopedN("MCAST2");
+        // DeviceZoneScopedN("MCAST2");
         mcast2(mcast2_args);
     }
     mcast.teardown(mcast_args);
@@ -264,8 +264,8 @@ void kernel_main() {
     // Input: mcast_dst_cb (CB 1), Weights: matmul_in1 (CB 2), Output: matmul_out (CB 3)
     // ========================================================================
     {
-        DeviceZoneScopedN("MATMUL");
-        // pop_in0 = true (mcast output consumed), pop_in1 = false (weights persistent)
+        // DeviceZoneScopedN("MATMUL");
+        //  pop_in0 = true (mcast output consumed), pop_in1 = false (weights persistent)
         deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, false> matmul;
         matmul(matmul_args);
     }
@@ -286,7 +286,7 @@ void kernel_main() {
 #endif
     };
     {
-        DeviceZoneScopedN("ADD");
+        // DeviceZoneScopedN("ADD");
         deepseek_b1_ops::ResidualAdd::Op<ResidualAddCTArgs, Core::is_matmul_core> residual_add;
         residual_add(residual_add_args);
     }
@@ -297,7 +297,7 @@ void kernel_main() {
     // Uses UsePerCoreSenderIdx=true for scattered (non-rectangular) core layout
     // ========================================================================
     {
-        DeviceZoneScopedN("GATHER");
+        // DeviceZoneScopedN("GATHER");
         deepseek_b1_ops::Gather::Op<
             Core::is_matmul_core,                  // IsSenderCore
             Core::is_gather_receiver_core,         // IsReceiverCore

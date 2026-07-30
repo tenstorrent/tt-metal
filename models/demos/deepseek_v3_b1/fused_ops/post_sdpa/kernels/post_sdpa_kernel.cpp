@@ -329,7 +329,7 @@ void kernel_main() {
     // The unified SdpaReduceForwarder::Op handles BRISC (FWD) and NCRISC (BWD)
     // ========================================================================
     {
-        DeviceZoneScopedN("SDPA_REDUCE_TO_ALL");
+        // DeviceZoneScopedN("SDPA_REDUCE_TO_ALL");
 
         // SDPA Worker cores: use unified SdpaReduceWorker::Op
         if constexpr (Core::is_sdpa_worker_core) {
@@ -525,7 +525,7 @@ void kernel_main() {
     // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
     // ========================================================================
     {
-        DeviceZoneScopedN("MATMUL4");
+        // DeviceZoneScopedN("MATMUL4");
         deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
         matmul4(matmul4_args);
     }
@@ -535,7 +535,7 @@ void kernel_main() {
     // Collects [1, 128] * 64 = [1, 8192]
     // ========================================================================
     {
-        DeviceZoneScopedN("GATHER2");
+        // DeviceZoneScopedN("GATHER2");
         deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
         gather2(gather2_args);
     }
@@ -552,7 +552,7 @@ void kernel_main() {
             mcast3;
     mcast3.init(mcast3_args);
     {
-        DeviceZoneScopedN("MCAST3");
+        // DeviceZoneScopedN("MCAST3");
         mcast3(mcast3_args);
     }
     mcast3.teardown(mcast3_args);
@@ -563,8 +563,8 @@ void kernel_main() {
     // Only runs on 112 active cores (is_matmul5_core=true), 18 inactive cores skip
     // ========================================================================
     {
-        DeviceZoneScopedN("MATMUL5");
-        // pop_in0 = true (mcast3 output consumed), pop_in1 = false (weights persistent)
+        // DeviceZoneScopedN("MATMUL5");
+        //  pop_in0 = true (mcast3 output consumed), pop_in1 = false (weights persistent)
         deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
         matmul5(matmul5_args);
     }
@@ -574,7 +574,7 @@ void kernel_main() {
     // Collects [1, 64] * 112 = [1, 7168]
     // ========================================================================
     {
-        DeviceZoneScopedN("GATHER3");
+        // DeviceZoneScopedN("GATHER3");
         deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_allreduce_sender_core, true, true> gather3;
         gather3(gather3_args);
     }
@@ -587,7 +587,7 @@ void kernel_main() {
     // ========================================================================
 #if defined(COMPILE_FOR_NCRISC)
     if constexpr (Core::is_allreduce_sender_core) {
-        DeviceZoneScopedN("CCL_SENDER_WRITER");
+        // DeviceZoneScopedN("CCL_SENDER_WRITER");
         deepseek_b1_ops::AllReduce::SenderArgs args{};
         args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
         args.dest_noc_x = get_common_arg_val<uint32_t>(1);
@@ -598,7 +598,7 @@ void kernel_main() {
         writer(args);
     }
     if constexpr (Core::is_allreduce_receiver_core) {
-        DeviceZoneScopedN("CCL_READER");
+        // DeviceZoneScopedN("CCL_READER");
         deepseek_b1_ops::AllReduce::ReceiverArgs args{};
         args.sem_bank_addr_0 = get_common_arg_val<uint32_t>(0);
         args.sem_bank_addr_1 = get_common_arg_val<uint32_t>(1);
@@ -621,7 +621,7 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_BRISC)
     if constexpr (Core::is_allreduce_sender_core) {
-        DeviceZoneScopedN("CCL_SENDER_WRITER");
+        // DeviceZoneScopedN("CCL_SENDER_WRITER");
         deepseek_b1_ops::AllReduce::SenderArgs args{};
         args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
         args.dest_noc_x = get_common_arg_val<uint32_t>(1);
@@ -634,7 +634,7 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_TRISC)
     if constexpr (Core::is_allreduce_receiver_core) {
-        DeviceZoneScopedN("CCL_COMPUTE");
+        // DeviceZoneScopedN("CCL_COMPUTE");
         deepseek_b1_ops::AllReduce::ComputeArgs args{};
         deepseek_b1_ops::AllReduce::Compute<AllReduceComputeCTArgs> compute;
         compute(args);

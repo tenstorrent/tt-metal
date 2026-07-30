@@ -66,7 +66,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
     if constexpr (Core::is_gather_core) {
-        DeviceZoneScopedN("ALLGATHER_GATHER");
+        // DeviceZoneScopedN("ALLGATHER_GATHER");
         deepseek_b1_ops::AllGather::GatherController<GatherCT> controller;
         controller(gather_args);
     }
@@ -74,7 +74,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     if constexpr (Core::is_transport_core) {
-        DeviceZoneScopedN("ALLGATHER_TRANSPORT");
+        // DeviceZoneScopedN("ALLGATHER_TRANSPORT");
         deepseek_b1_ops::AllGather::TransportSender<TransportCT> sender;
         sender.open_connections(transport_args);
         sender(transport_args);

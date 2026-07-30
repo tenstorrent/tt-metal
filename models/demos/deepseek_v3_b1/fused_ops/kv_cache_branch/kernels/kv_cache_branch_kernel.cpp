@@ -202,8 +202,8 @@ void kernel_main() {
     // DKV Matmul
     // ========================================================================
     {
-        DeviceZoneScopedN("DKV_MATMUL");
-        // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+        // DeviceZoneScopedN("DKV_MATMUL");
+        //  pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
         deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, true, false> dkv_matmul;
         dkv_matmul(dkv_matmul_args);
     }
@@ -212,7 +212,7 @@ void kernel_main() {
     // NCRISC sends from knope grid of dkv matmul cores, BRISC receives on rmsnorm grid, TRISC no-op
     // ========================================================================
     {
-        DeviceZoneScopedN("DKV_GATHER");
+        // DeviceZoneScopedN("DKV_GATHER");
         deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true, false, true> dkv_gather;
         dkv_gather(dkv_gather_args);
     }
@@ -220,7 +220,7 @@ void kernel_main() {
     // ========================================================================
     // RMSNorm: Apply RMSNorm to the gathered data
     {
-        DeviceZoneScopedN("KV_RMSNORM");
+        // DeviceZoneScopedN("KV_RMSNORM");
         deepseek_b1_ops::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
         kv_rmsnorm(kv_rmsnorm_args);
     }
@@ -229,7 +229,7 @@ void kernel_main() {
     // Rope: Apply Rope to the gathered data
     // ========================================================================
     {
-        DeviceZoneScopedN("K_ROPE");
+        // DeviceZoneScopedN("K_ROPE");
 #if defined(COMPILE_FOR_NCRISC)
         uint32_t metadata_addr = get_common_arg_val<uint32_t>(0);
         volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
@@ -250,7 +250,7 @@ void kernel_main() {
     // Unit testing the KV Cache write to DRAM.
     // Support 8 shards, one per DRAM core, each shard is 576x2 bytes (BFLOAT16)
     // KNOPE writes to first 512x2 bytes, each KROPE core writes to the remaining 64x2 bytes.
-    DeviceZoneScopedN("KV_CACHE_UPDATE");
+    // DeviceZoneScopedN("KV_CACHE_UPDATE");
     // Get runtime args: buffer address and starting tile ID
     uint32_t kv_cache_buffer_addr = get_common_arg_val<uint32_t>(0);
     uint32_t metadata_addr = get_common_arg_val<uint32_t>(1);

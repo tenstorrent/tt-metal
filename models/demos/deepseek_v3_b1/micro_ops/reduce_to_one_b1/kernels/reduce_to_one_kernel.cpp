@@ -113,7 +113,7 @@ void kernel_main() {
     if constexpr (!CTArgs::is_fabric_core && CTArgs::device_role != deepseek_b1_ops::MESH_LEAF) {
         for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
             {
-                DeviceZoneScopedN("REDUCE_TO_ONE_READER");
+                // DeviceZoneScopedN("REDUCE_TO_ONE_READER");
                 op(rt_args);
             }
         }
@@ -122,7 +122,7 @@ void kernel_main() {
     if constexpr (!CTArgs::is_fabric_core) {
         for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
             {
-                DeviceZoneScopedN("REDUCE_TO_ONE_WRITER");
+                // DeviceZoneScopedN("REDUCE_TO_ONE_WRITER");
                 op(rt_args);
             }
         }
@@ -130,7 +130,7 @@ void kernel_main() {
         // The standalone micro-op does not enable the fused persistent ROOT1 fabric signal path.
         for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
             {
-                DeviceZoneScopedN("REDUCE_TO_ONE_FORWARDER");
+                // DeviceZoneScopedN("REDUCE_TO_ONE_FORWARDER");
                 op(rt_args);
             }
         }
@@ -139,7 +139,7 @@ void kernel_main() {
     if constexpr (!CTArgs::is_fabric_core && CTArgs::device_role != deepseek_b1_ops::MESH_LEAF) {
         for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
             {
-                DeviceZoneScopedN("REDUCE_TO_ONE_COMPUTE");
+                // DeviceZoneScopedN("REDUCE_TO_ONE_COMPUTE");
                 op(rt_args);
             }
         }

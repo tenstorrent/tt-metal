@@ -99,7 +99,7 @@ struct GatherReduce {
         add_tiles_init(in_cb, in_cb);
         cb_wait_front(in_cb, 2 * num_tiles);
         {
-            DeviceZoneScopedN("add-tiles");
+            // DeviceZoneScopedN("add-tiles");
             cb_reserve_back(out_cb, num_tiles);
 
             tile_regs_acquire();

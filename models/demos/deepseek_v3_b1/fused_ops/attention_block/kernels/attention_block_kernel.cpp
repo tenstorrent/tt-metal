@@ -1365,7 +1365,7 @@ void kernel_main() {
         true>
         mcast;
     {
-        DeviceZoneScopedN("MCAST_INIT");
+        // DeviceZoneScopedN("MCAST_INIT");
         mcast.init(mcast_args);
     }
 
@@ -1382,7 +1382,7 @@ void kernel_main() {
         // ========================================================================
         if constexpr (!Core::skip_ccl) {
             {
-                DeviceZoneScopedN("CCL_BROADCAST");
+                // DeviceZoneScopedN("CCL_BROADCAST");
                 deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
                 bcast.open_connections(bcast_args);
                 bcast.run(bcast_args);
@@ -1401,7 +1401,7 @@ void kernel_main() {
 #endif
         // This first mcast is also used to synchronize downstream ccls, so must always run.
         {
-            DeviceZoneScopedN("METADATA_BROADCAST");
+            // DeviceZoneScopedN("METADATA_BROADCAST");
             mcast_metadata(mcast_metadata_args);
         }
 
@@ -1417,13 +1417,13 @@ void kernel_main() {
         // Input core: RMSNorm + Mcast send
         // ====================================================================
         {
-            DeviceZoneScopedN("RMSNORM");
+            // DeviceZoneScopedN("RMSNORM");
             deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, false> rmsnorm;
             rmsnorm(rmsnorm_args);
         }
 
         {
-            DeviceZoneScopedN("MCAST");
+            // DeviceZoneScopedN("MCAST");
             mcast(mcast_args);
         }
 
@@ -1466,7 +1466,7 @@ void kernel_main() {
             // Matmul operation
             // ====================================================================
             {
-                DeviceZoneScopedN("MATMUL");
+                // DeviceZoneScopedN("MATMUL");
                 deepseek_b1_ops::KNSlicedMatmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
                 matmul(matmul_args);
             }
@@ -1475,7 +1475,7 @@ void kernel_main() {
             // GatherReduce: matmul cores (senders) -> input core (receiver/reducer)
             // ====================================================================
             {
-                DeviceZoneScopedN("GATHER");
+                // DeviceZoneScopedN("GATHER");
                 deepseek_b1_ops::GatherReduce::Op<Core::is_matmul_core, Core::is_input_core, Core::is_input_core, true>
                     gather_reduce;
                 gather_reduce(gather_reduce_args);
@@ -1485,7 +1485,7 @@ void kernel_main() {
             // RMSNorm2
             // ====================================================================
             {
-                DeviceZoneScopedN("RMSNORM2");
+                // DeviceZoneScopedN("RMSNORM2");
                 deepseek_b1_ops::RMSNorm::Op<RMSNorm2CTArgs, Core::is_input_core, true> rmsnorm2;
                 rmsnorm2(rmsnorm2_args);
             }
@@ -1494,7 +1494,7 @@ void kernel_main() {
             // Mcast2: Broadcast rmsnorm2 output to matmul2 cores
             // ====================================================================
             {
-                DeviceZoneScopedN("MCAST2");
+                // DeviceZoneScopedN("MCAST2");
                 deepseek_b1_ops::Mcast::
                     Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul2_core, true>
                         mcast2;
@@ -1505,20 +1505,20 @@ void kernel_main() {
             // Matmul2
             // ====================================================================
             {
-                DeviceZoneScopedN("MATMUL2");
+                // DeviceZoneScopedN("MATMUL2");
                 deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
                 matmul2(matmul2_args);
             }
 
             {
-                DeviceZoneScopedN("Q_HEADS") static_assert(
+                // DeviceZoneScopedN("Q_HEADS") static_assert(
                     !(Core::is_qnope_core && Core::is_qrope_core), "Core cannot be both QNOPE and QROPE");
 
                 // ================================================================
                 // Matmul3 (QNoPE)
                 // ================================================================
                 {
-                    DeviceZoneScopedN("QNOPE/MATMUL3");
+                    // DeviceZoneScopedN("QNOPE/MATMUL3");
                     deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
                     matmul3(matmul3_args);
                 }
@@ -1527,7 +1527,7 @@ void kernel_main() {
                 // RoPE (Qrope)
                 // ================================================================
                 {
-                    DeviceZoneScopedN("QROPE");
+                    // DeviceZoneScopedN("QROPE");
                     deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
                     rope.set_global_pos(qrope_args, cur_pos);
                     rope(qrope_args);
@@ -1537,7 +1537,7 @@ void kernel_main() {
                 // CreateQHeads (all data movement on NCRISC)
                 // ================================================================
                 {
-                    DeviceZoneScopedN("CREATE_Q_HEADS");
+                    // DeviceZoneScopedN("CREATE_Q_HEADS");
                     constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
 #if defined(COMPILE_FOR_NCRISC)
                     deepseek_b1_ops::CreateQHeads::Op<
@@ -1573,13 +1573,13 @@ void kernel_main() {
                 kv_cache_update;
             kv_cache_update.set_pos_and_slot(kv_cache_update_args, local_cur_pos, metadata_ptr->slot_id);
             if (!skip_kv_cache_update) {
-                DeviceZoneScopedN("KV CACHE");
-                // ================================================================
-                // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
-                // ================================================================
+                // DeviceZoneScopedN("KV CACHE");
+                //  ================================================================
+                //  DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
+                //  ================================================================
                 {
-                    DeviceZoneScopedN("DKV_MATMUL");
-                    // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+                    // DeviceZoneScopedN("DKV_MATMUL");
+                    //  pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
                     deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, false, false> dkv_matmul;
                     dkv_matmul(dkv_matmul_args);
                 }
@@ -1589,7 +1589,7 @@ void kernel_main() {
                 // NCRISC sends from knope grid, BRISC receives on rmsnorm grid
                 // ================================================================
                 {
-                    DeviceZoneScopedN("DKV_GATHER");
+                    // DeviceZoneScopedN("DKV_GATHER");
                     deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true, false, true>
                         dkv_gather;
                     dkv_gather(dkv_gather_args);
@@ -1599,7 +1599,7 @@ void kernel_main() {
                 // RMSNorm: Apply RMSNorm to the gathered data
                 // ================================================================
                 {
-                    DeviceZoneScopedN("KV_RMSNORM");
+                    // DeviceZoneScopedN("KV_RMSNORM");
                     deepseek_b1_ops::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
                     kv_rmsnorm(kv_rmsnorm_args);
                 }
@@ -1608,7 +1608,7 @@ void kernel_main() {
                 // RoPE
                 // ================================================================
                 {
-                    DeviceZoneScopedN("K_ROPE");
+                    // DeviceZoneScopedN("K_ROPE");
                     deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
                     krope.set_global_pos(krope_args, cur_pos);
                     krope(krope_args);
@@ -1619,12 +1619,12 @@ void kernel_main() {
                 // BRISC handles writing from output CBs to DRAM
                 // ================================================================
                 {
-                    DeviceZoneScopedN("KV_CACHE_UPDATE");
+                    // DeviceZoneScopedN("KV_CACHE_UPDATE");
                     kv_cache_update(kv_cache_update_args);
                 }
             }
             {
-                DeviceZoneScopedN("KV_CACHE_SIGNAL_READY");
+                // DeviceZoneScopedN("KV_CACHE_SIGNAL_READY");
                 kv_cache_update.signal_cache_ready(kv_cache_update_args);
             }
 
@@ -1632,7 +1632,7 @@ void kernel_main() {
             // Flash MLA: Compute
             // ====================================================================
             {
-                DeviceZoneScopedN("FLASH_MLA");
+                // DeviceZoneScopedN("FLASH_MLA");
                 FlashMLAOp flash_mla;
                 flash_mla.set_pos_and_slot(flash_mla_args, local_cur_pos, metadata_ptr->slot_id);
                 flash_mla(flash_mla_args);
@@ -1651,7 +1651,7 @@ void kernel_main() {
         // Post SDPA: Reduce-to-All + Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
         // ========================================================================
         {
-            DeviceZoneScopedN("POST_SDPA");
+            // DeviceZoneScopedN("POST_SDPA");
             if constexpr (Core::is_sdpa_worker_core) {
                 deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
                 sdpa_reduce_worker.set_global_pos(sdpa_reduce_worker_args, cur_pos);
@@ -1693,7 +1693,7 @@ void kernel_main() {
         // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
         // ========================================================================
         {
-            DeviceZoneScopedN("MATMUL4");
+            // DeviceZoneScopedN("MATMUL4");
             deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
             matmul4(matmul4_args);
         }
@@ -1703,7 +1703,7 @@ void kernel_main() {
         // Collects [1, 128] * 64 = [1, 8192]
         // ========================================================================
         {
-            DeviceZoneScopedN("GATHER2");
+            // DeviceZoneScopedN("GATHER2");
             deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
             gather2(gather2_args);
         }
@@ -1718,7 +1718,7 @@ void kernel_main() {
             Op<McastCTArgs, Core::is_gather_receiver_core, Core::is_matmul5_core, Core::is_matmul5_core, true>
                 mcast3;
         {
-            DeviceZoneScopedN("MCAST3");
+            // DeviceZoneScopedN("MCAST3");
             mcast3(mcast3_args);
         }
 
@@ -1728,7 +1728,7 @@ void kernel_main() {
         // K-split: 2 halves of 56 cores, each core does [1, 4096] @ [4096, 32] -> [1, 32]
         // ========================================================================
         {
-            DeviceZoneScopedN("MATMUL5");
+            // DeviceZoneScopedN("MATMUL5");
             deepseek_b1_ops::KNSlicedMatmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
             matmul5(matmul5_args);
         }
@@ -1741,7 +1741,7 @@ void kernel_main() {
         // handshake overlaps the sync-sem wait).
         // ========================================================================
         if constexpr (!Core::is_allreduce_sender_core) {
-            DeviceZoneScopedN("GATHER3");
+            // DeviceZoneScopedN("GATHER3");
             deepseek_b1_ops::GatherReduce::
                 Op<Core::is_matmul5_core, Core::is_allreduce_sender_core, Core::is_allreduce_sender_core, true, true>
                     gather3;
@@ -1756,7 +1756,7 @@ void kernel_main() {
         // - Receiver core (12, 9): NCRISC reader + TRISC compute (with residual offset)
         // ========================================================================
         if constexpr (Core::is_allreduce_sender_core) {
-            DeviceZoneScopedN("CCL_SENDER_WRITER");
+            // DeviceZoneScopedN("CCL_SENDER_WRITER");
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             PacketHeaderPool::reset();
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -1773,7 +1773,7 @@ void kernel_main() {
 #endif
             // gather3 must run on ALL RISCs (TRISC does the reduce that feeds local_data_cb).
             {
-                DeviceZoneScopedN("GATHER3");
+                // DeviceZoneScopedN("GATHER3");
                 deepseek_b1_ops::GatherReduce::Op<
                     Core::is_matmul5_core,
                     Core::is_allreduce_sender_core,
@@ -1788,7 +1788,7 @@ void kernel_main() {
 
             // All-Gather: transport sender (BRISC=fwd, NCRISC=bwd)
             {
-                DeviceZoneScopedN("ALLGATHER_TRANSPORT");
+                // DeviceZoneScopedN("ALLGATHER_TRANSPORT");
                 allgather_sender(allgather_transport_args);
                 // R2 active waits for the other risc to finish, so it's safe to reset the semaphore here.
                 if constexpr (AllGatherTransportCT::r2_active) {
@@ -1806,7 +1806,7 @@ void kernel_main() {
         }
 
         if constexpr (Core::is_allreduce_receiver_core) {
-            DeviceZoneScopedN("CCL_RECEIVER");
+            // DeviceZoneScopedN("CCL_RECEIVER");
 #if defined(COMPILE_FOR_NCRISC)
             // TP4 outer-dim: NOC-copy the correct [1, per_device_out_w] slice of the
             // input tensor into the residual CB (2 tiles of 32x32) before AllReduce.
@@ -1832,7 +1832,7 @@ void kernel_main() {
             // All-Gather: gather controller — reads [1, per_device_out_w] from
             // ccl_output_cb and distributes across row ring into output tensor.
             {
-                DeviceZoneScopedN("ALLGATHER_GATHER");
+                // DeviceZoneScopedN("ALLGATHER_GATHER");
                 constexpr uint32_t out_cb = get_named_compile_time_arg_val("output_cb_id");
                 constexpr uint32_t out_num_tiles = get_named_compile_time_arg_val("output_num_tiles");
                 cb_wait_front(out_cb, out_num_tiles);
@@ -1866,7 +1866,7 @@ void kernel_main() {
     // Mcast: Teardown persistent mcast
     // ====================================================================
     {
-        DeviceZoneScopedN("MCAST_TEARDOWN");
+        // DeviceZoneScopedN("MCAST_TEARDOWN");
         mcast.teardown(mcast_args);
     }
 }
