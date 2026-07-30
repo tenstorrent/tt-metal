@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+#
+# Entry point for the kernel dojo. Sets up the tt-metal environment, then hands
+# off to the Python CLI. Run `./dojo list` to start.
+
+set -eo pipefail
+
+DOJO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$DOJO_DIR/.." && pwd)"
+
+export TT_METAL_HOME="${TT_METAL_HOME:-$REPO_ROOT}"
+
+# tt-metal logs cluster/fabric setup at info on every run, which buries the
+# grader's output. Overridable for when you actually want the detail.
+export TT_LOGGER_LEVEL="${TT_LOGGER_LEVEL:-error}"
+# ttnn's own Python-side logging goes through loguru.
+export LOGURU_LEVEL="${LOGURU_LEVEL:-WARNING}"
+
+# A mismatched circular buffer deadlocks the device, and tt-metal waits forever
+# by default. Wrong CB accounting is the single most common bug in this course,
+# so make it surface as an error instead of an unexplained freeze.
+export TT_METAL_OPERATION_TIMEOUT_SECONDS="${TT_METAL_OPERATION_TIMEOUT_SECONDS:-30}"
+
+# $DOJO_DIR/lib holds the dojo package. The rest makes an in-tree build
+# importable without `pip install -e .`:
+#   $REPO_ROOT/ttnn   -> the ttnn package (the repo dir of the same name is a
+#                        namespace package that would shadow it)
+#   $REPO_ROOT/tools  -> tracy, which ttnn's extension imports at load time
+#   $REPO_ROOT        -> tt_metal, models
+# These are appended, so a properly installed ttnn in the active environment
+# still takes precedence.
+export PYTHONPATH="$DOJO_DIR/lib:${PYTHONPATH:+$PYTHONPATH:}$REPO_ROOT/ttnn:$REPO_ROOT/tools:$REPO_ROOT"
+
+# The device profiler must be enabled before the process opens a device, so it
+# is a launch-time decision rather than a runtime one. Only `bench` needs it;
+# leaving it off elsewhere keeps `test` runs quick.
+case "${1:-}" in
+    bench)
+        export TT_METAL_DEVICE_PROFILER=1
+        export TT_METAL_PROFILER_MID_RUN_DUMP=1
+        export TT_METAL_PROFILER_CPP_POST_PROCESS=1
+        ;;
+esac
+
+# Prefer the repo's venv if the caller has not already activated one.
+if [[ -z "${VIRTUAL_ENV:-}" ]]; then
+    for candidate in "$REPO_ROOT/python_env/bin/activate" "$REPO_ROOT/.venv/bin/activate"; do
+        if [[ -f "$candidate" ]]; then
+            # shellcheck disable=SC1090
+            source "$candidate"
+            break
+        fi
+    done
+fi
+
+exec python3 -m dojo "$@"
