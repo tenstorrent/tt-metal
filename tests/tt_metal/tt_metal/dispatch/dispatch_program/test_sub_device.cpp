@@ -396,7 +396,8 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
         distributed::Finish(mesh_device->mesh_command_queue());
         mesh_device->reset_sub_device_stall_group();
         distributed::Synchronize(
-            mesh_device.get(), 0);  // Ensure this CQ is cleared. Each CQ can only work on 1 sub device
+            mesh_device.get(),
+            mesh_device->mesh_command_queue(0));  // Ensure this CQ is cleared. Each CQ can only work on 1 sub device
 
         // Check coordinates
         tt::tt_metal::verify_kernel_coordinates(
