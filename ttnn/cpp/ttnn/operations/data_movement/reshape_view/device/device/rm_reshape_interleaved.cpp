@@ -33,6 +33,9 @@ Runtime arguments
 #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
+// Make the current slot of the L1 staging ring safe to overwrite. Writes issued from the
+// ring are left in flight so several destination pages share one barrier; once every slot
+// has an outstanding write we must drain them all before reusing the oldest one.
 FORCE_INLINE void acquire_dest_slot(Noc noc, uint32_t& slots_in_flight, const uint32_t num_dest_write_slots) {
     if (slots_in_flight >= num_dest_write_slots) {
         noc.async_write_barrier();
@@ -40,6 +43,8 @@ FORCE_INLINE void acquire_dest_slot(Noc noc, uint32_t& slots_in_flight, const ui
     }
 }
 
+// Move to the next slot of the L1 staging ring after its write has been issued, and count
+// that write against the in-flight budget checked by acquire_dest_slot.
 FORCE_INLINE void advance_dest_slot(
     uint32_t& dest_slot, uint32_t& slots_in_flight, const uint32_t num_dest_write_slots) {
     slots_in_flight++;
