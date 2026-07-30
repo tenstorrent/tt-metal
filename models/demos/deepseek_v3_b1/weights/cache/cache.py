@@ -121,7 +121,12 @@ def build_mesh_mapper_for_target(target: TensorTarget, device):
             ]
         else:
             raise TypeError(f"Unknown mesh mapper config type: {type(mapper_config)}")
-        cfg = ttnn.MeshMapperConfig(placements, ttnn.MeshShape(*override))
+        offset = getattr(mapper_config, "mesh_offset_override", None)
+        cfg = ttnn.MeshMapperConfig(
+            placements,
+            ttnn.MeshShape(*override),
+            ttnn.MeshCoordinate(*offset) if offset is not None else None,
+        )
         return ttnn.create_mesh_mapper(device, cfg)
     if isinstance(mapper_config, ReplicateMeshMapper):
         return ttnn.ReplicateTensorToMesh(device)

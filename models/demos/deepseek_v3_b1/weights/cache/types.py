@@ -32,12 +32,21 @@ class SourceTensorSelection:
 # that leading block of coords (e.g. cols 0-1), reporting the full device as its
 # mesh. Used by the 4x4 forward-replicate attention stage to keep weights on the
 # left 4x2. None -> use the device's full mesh shape (default, unchanged behaviour).
+#
+# mesh_offset_override: anchor the SUBMESH at this coordinate within the device mesh
+# instead of the origin (e.g. (0, 2) places a (4,2) submesh on cols 2-3 of a 4x4).
+# Only meaningful together with mesh_shape_override and only valid in SUBMESH mode
+# (the sub-rectangle offset + shape must fit within the device per-dimension).
+# None -> anchor at the origin (default, unchanged behaviour). Participates in the
+# cache fingerprint so two configs with the same shape but different offsets do not
+# alias.
 @dataclass(frozen=True)
 class ReplicateMeshMapper:
     """Replicate the tensor on every device in the mesh."""
 
     strategy: Literal["replicate"] = "replicate"
     mesh_shape_override: tuple[int, int] | None = None
+    mesh_offset_override: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +56,7 @@ class ShardMeshMapper:
     dim: int
     strategy: Literal["shard"] = "shard"
     mesh_shape_override: tuple[int, int] | None = None
+    mesh_offset_override: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +66,7 @@ class Shard2dMeshMapper:
     dims: tuple[int | None, int | None]
     strategy: Literal["shard_2d"] = "shard_2d"
     mesh_shape_override: tuple[int, int] | None = None
+    mesh_offset_override: tuple[int, ...] | None = None
 
 
 MeshMapperConfig = Union[ReplicateMeshMapper, ShardMeshMapper, Shard2dMeshMapper]
