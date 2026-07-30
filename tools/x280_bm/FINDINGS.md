@@ -1585,6 +1585,12 @@ causes no stalls, but it is a large unexplained per-context cost worth its own i
 
 ## File map
 
+Docs alongside this one:
+| File | Purpose |
+|---|---|
+| `BANDWIDTH.md` | One page: every lever that carries the 1.5-1.8 GB/s, every lever that did not, and the ceilings |
+| `X280_PROFILER_OVERHEAD.md` | What profiling costs a real model end-to-end, and the method behind it |
+
 Firmware — `tools/x280_bm/`:
 | File | Purpose |
 |---|---|
