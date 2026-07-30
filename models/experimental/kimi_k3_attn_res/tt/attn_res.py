@@ -64,6 +64,14 @@ class TtAttnRes(LightweightModule):
             of DRAM traffic. bf16 stats land on the single-device number (0.9999408),
             which is the tell: fp32 here buys back the rounding the single-device
             path also takes, not something sharding introduced.
+        fold_stats: fold the candidate axis into the last dim before the
+            statistics all-reduce. A `[1, C, N, 1]` tensor tile-pads its 1-wide
+            last dim to 32 and the collective bills padded bytes at the payload
+            rate, so `[1, 1, N, C]` puts up to 32 candidates inside the column
+            the padding already paid for. Phase 9 P4: 348 us -> 47 us on `(2,4)`
+            at `C = 18`, and the cost stops scaling with the candidate count.
+            Costs two `ttnn.permute` calls, which is why it is off untraced —
+            there two extra launches cancel the saving exactly.
     """
 
     def __init__(
@@ -78,6 +86,7 @@ class TtAttnRes(LightweightModule):
         num_links=1,
         topology=None,
         stats_dtype=ttnn.float32,
+        fold_stats=True,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -88,6 +97,7 @@ class TtAttnRes(LightweightModule):
         self.tp_axis = tp_axis
         self.num_links = num_links
         self.stats_dtype = stats_dtype
+        self.fold_stats = fold_stats
 
         mesh_shape = tuple(mesh_device.shape)
         self.tp_factor = mesh_shape[tp_axis]
@@ -169,12 +179,7 @@ class TtAttnRes(LightweightModule):
             return stats
 
         wide = ttnn.typecast(stats, self.stats_dtype) if stats.dtype != self.stats_dtype else stats
-        reduced = ttnn.all_reduce(
-            wide,
-            cluster_axis=self.tp_axis,
-            num_links=self.num_links,
-            topology=self.topology[self.tp_axis],
-        )
+        reduced = self._collective(wide)
         if wide is not stats:
             ttnn.deallocate(wide)
         ttnn.deallocate(stats)
@@ -184,6 +189,44 @@ class TtAttnRes(LightweightModule):
         narrow = ttnn.typecast(reduced, self.dtype)
         ttnn.deallocate(reduced)
         return narrow
+
+    def _collective(self, wide):
+        """One all-reduce over the TP axis. Does not consume `wide`.
+
+        With `fold_stats`, the candidate axis rides in the last dim for the
+        crossing: `[1, C, N, 1]` -> `[1, 1, N, C]` -> reduce -> back. The
+        collective charges for tile padding at the payload rate, so a 1-wide
+        last dim pays for 32 columns and uses one; folding fills them.
+
+        The fold is not bit-neutral. On reduce-scatter it reassociates the partial
+        sums — measured against a replicated 4x reference it doubles the error,
+        7.8e-3 -> 1.6e-2 at `C = 18` — and at `N` of one tile row it can switch
+        `all_reduce` to the composite algorithm outright, because the candidate
+        axis was the only dim that could qualify for reduce-scatter and the folded
+        shape does not have it (`ROOFLINE.md` §5). Neither layout is exact to
+        begin with and both stay ~50x inside one bf16 ULP, so the gate is the
+        186-read depth PCC in `test_tp_depth_walk`, not exactness: measured there,
+        the two differ by <=5e-6 in *either* direction, which is reassociation
+        noise rather than a precision cost."""
+        if not (self.fold_stats and wide.shape[-1] == 1 and wide.shape[1] <= ttnn.TILE_SIZE):
+            return ttnn.all_reduce(
+                wide,
+                cluster_axis=self.tp_axis,
+                num_links=self.num_links,
+                topology=self.topology[self.tp_axis],
+            )
+
+        folded = ttnn.permute(wide, [0, 3, 2, 1])
+        crossed = ttnn.all_reduce(
+            folded,
+            cluster_axis=self.tp_axis,
+            num_links=self.num_links,
+            topology=self.topology[self.tp_axis],
+        )
+        ttnn.deallocate(folded)
+        unfolded = ttnn.permute(crossed, [0, 3, 2, 1])
+        ttnn.deallocate(crossed)
+        return unfolded
 
     def _reduce_stats_pair(self, first, second):
         """Reduce two `[1, C, N, 1]` statistics in **one** collective.
