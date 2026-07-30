@@ -608,7 +608,7 @@ single transfer.
 | Op | Type | Used for |
 |----|------|----------|
 | fused audio+token readback | D2H ×1 | one `to_torch` returns `[audio …, token_idx]`; the token half is what the AR loop blocks on, since a trace cannot branch |
-| `_emit_audio` (append, or disk write) | hostCPU | accumulate frame audio into the waveform, or stream it out under `VV_STREAM_AUDIO` |
+| `_emit_audio` (append) | hostCPU | accumulate frame audio into the waveform |
 | `_gen_tokens.append` / `valid_ids[idx]` | hostCPU | token record; map the constrained-argmax **local** index to the global id (kept local so it survives the bf16 cast into the fused tensor) |
 | host pos/neg mirror `+=1`, RoPE write ×4 | hostCPU + H2D ×4 | **only when `VV_FUSED_ROPE=0`** (the default): the mirrors exist solely to index the fp32 cos/sin tables. On the fused path the rows are gathered on device and none of this runs |
 
@@ -631,7 +631,7 @@ single transfer.
 | `reset_*_cache` | H2D | reset conv streaming caches for a fresh generation |
 | `torch.randn(max_steps,…)` | hostCPU | pre-draw all diffusion init noise, then upload once as a gather table (RNG-aligned; `ttnn.randn` on device under `VV_TTNN_RANDN=1`) |
 | first `_greedy_argmax` | D2H | first token after prefill |
-| `cat(audio_chunks)` / build `sequences` / output | hostCPU | assemble final waveform + token sequence. Peaks at ~2× the audio (~1.15 GB for a 100-min render) — set `VV_STREAM_AUDIO` to halve it |
+| `cat(audio_chunks)` / build `sequences` / output | hostCPU | assemble final waveform + token sequence. Peaks at ~2× the audio (~1.15 GB for a 100-min render) |
 
 The prefill embed scatter is **not** a host op: splicing the voice embeds into the text embeds' speech
 slots runs entirely on device as slice/concat over the mask's contiguous runs
@@ -677,8 +677,7 @@ repeated here — see [Model description](#model-description) and [Upstream refe
   `--chunks N`, which re-prefills each part with fresh KV caches and streaming conv state, so **each
   boundary costs roughly one garbled minute** of audio. The reference has no equivalent stitching, so
   this artifact is specific to this implementation.
-- **Host RAM peaks at ~1.15 GB for a 100-min render** (frame chunks + the concatenated copy). Set
-  `VV_STREAM_AUDIO=<path>` to bound it and to keep partial audio if the process dies.
+- **Host RAM peaks at ~1.15 GB for a 100-min render** (frame chunks + the concatenated copy).
 - **CI's long-form demo job can time out.** See the budget caveat under [CI](#ci).
 
 **Unvalidated optimizations (off by default)**
