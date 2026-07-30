@@ -243,7 +243,9 @@ overflowed the five-iteration device-profiler join. Raw Tracy `.logs` and
 
 ## Final gate and commits
 
-Stage review and local commit SHAs are appended after the independent review.
+- Independent stage review: `clean-pass`.
+- Optimized-decoder checkpoint: `9c5c2811eed260b60b5a85c87274309dd6668088`.
+- No push was performed.
 
 ## Independent projection-policy AutoFix continuation (2026-07-30)
 
