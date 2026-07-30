@@ -1,0 +1,39 @@
+{
+  "batch": 1,
+  "candidate": "default",
+  "command_result": "pass",
+  "kind": "linear",
+  "median_ms": 1.9391109943389893,
+  "min_ms": 1.9359449797775596,
+  "path": "optimized",
+  "pcc": [
+    "0.9999867287846206",
+    "0.9999882445943022",
+    "0.9999977166588515",
+    "0.9999962011877203",
+    "0.9999978825502507",
+    "0.9999970030144294",
+    "0.9999971564948368",
+    "0.9999970978463448",
+    "0.9999972910519442"
+  ],
+  "policy": {
+    "attention_weight_dtype": "DataType.BFLOAT4_B",
+    "cache_dtype": "DataType.BFLOAT8_B",
+    "down_in0_block_w": 17,
+    "gate_in0_block_w": 2,
+    "linear_outer_product": true,
+    "linear_packed_decode": true,
+    "linear_recurrent_fidelity": "MathFidelity.HiFi2",
+    "linear_recurrent_program": "grid4_w4",
+    "mlp_down_dtype": "DataType.BFLOAT4_B",
+    "mlp_gate_up_dtype": "DataType.BFLOAT4_B",
+    "o_fidelity": "MathFidelity.LoFi",
+    "o_in0_block_w": 3,
+    "qkv_fidelity": "MathFidelity.LoFi",
+    "qkv_in0_block_w": 2,
+    "sdpa_fidelity": "MathFidelity.LoFi",
+    "up_in0_block_w": 2
+  },
+  "steps": 10
+}

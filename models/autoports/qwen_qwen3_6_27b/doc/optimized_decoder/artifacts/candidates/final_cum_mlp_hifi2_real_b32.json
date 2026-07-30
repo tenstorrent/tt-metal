@@ -1,0 +1,9 @@
+{
+  "batch": 32,
+  "candidate": "final_cum_mlp_hifi2",
+  "kind": "full_attention",
+  "passed": true,
+  "path": "optimized",
+  "pcc": 0.9980950192619897,
+  "reference": "hf"
+}

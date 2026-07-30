@@ -1,0 +1,144 @@
+{
+  "hf_advertised_context": 262144,
+  "current_supported_context": 262144,
+  "schema_version": 1,
+  "model_id": "Qwen/Qwen3.6-27B",
+  "model_revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
+  "functional_decoder": {
+    "decode_supported_context": 262144,
+    "single_pass_prefill_supported_context": 192511,
+    "supported_context": 262144,
+    "largest_prefill_context_tested": 192511,
+    "largest_decode_position_tested": 262143,
+    "decode_batches_tested": [
+      1,
+      32
+    ],
+    "decode_token_mixer_trace_smoke_batches": [
+      1,
+      32
+    ],
+    "full_layer_nonzero_input_trace_batches": [
+      1,
+      32
+    ],
+    "numerical_tests": {
+      "linear_attention": {
+        "largest_target_shape_prefill_sequence": 192511,
+        "largest_reduced_state_sequence": 262145,
+        "largest_decode_position": 262143,
+        "decode_batches": [
+          1,
+          32
+        ],
+        "numerical_traced_decode_batches": [
+          1,
+          32
+        ],
+        "trace_updates_inputs_and_positions": true,
+        "real_weight_decode": true,
+        "advertised_prefill_failure": {
+          "sequence": 262143,
+          "reason": "hard device DRAM contiguous-allocation limit in full-layer MLP",
+          "requested_total_bytes": 9126805504,
+          "requested_bytes_per_bank": 1140850688,
+          "largest_free_block_bytes_per_bank": 856953216,
+          "artifact": "doc/functional_decoder/linear_prefill_target_262143_chunked.log"
+        }
+      },
+      "full_attention": {
+        "largest_prefill_sequence": 192511,
+        "largest_decode_position": 262143,
+        "decode_batches": [
+          1,
+          32
+        ],
+        "numerical_traced_decode_batches": [
+          1,
+          32
+        ],
+        "cache_dependent_prefill_decode_sequence": 65,
+        "cache_dependent_decode_position": 65,
+        "permuted_page_table_validated": true,
+        "real_weight_decode": false
+      }
+    },
+    "serving_decode_batch": 32,
+    "capability_reduction": {
+      "scope": "single-pass full-layer prefill on one Blackhole device",
+      "advertised_context_still_supported_for_decode": true,
+      "largest_feasible_prefill_tested": 192511,
+      "smallest_prefill_failure_tested": 194559,
+      "reason": "hard device DRAM contiguous-allocation limit",
+      "failure": {
+        "requested_total_bytes": 2390753280,
+        "requested_bytes_per_bank": 298844160,
+        "free_bytes_per_bank": 674703680,
+        "largest_free_block_bytes_per_bank": 283529088,
+        "artifact": "doc/functional_decoder/full_attention_prefill_194559.log"
+      }
+    },
+    "serving_batch_32_advertised_context_cache_bytes": 34359738368,
+    "serving_batch_32_note": "KV alone is 32 GiB before layer weights, RoPE tables, activations, and workspace; batch-32 traced execution is validated at context 64.",
+    "watcher_interval_seconds": 10,
+    "watcher_numerical_batches": [
+      32
+    ],
+    "status": "functional_decoder_complete_clean_pass"
+  },
+  "optimized_decoder": {
+    "supported_context": 262144,
+    "decode_supported_context": 262144,
+    "single_pass_prefill_supported_context": 192511,
+    "capability_reduction": false,
+    "full_attention_kv_dtype": "bfloat8_b",
+    "functional_full_attention_kv_dtype": "bfloat16",
+    "serving_batch_32_advertised_context_cache_bytes": 17179869184,
+    "cache_capacity_note": "BFP8 KV halves the functional decoder's cache bytes; advertised capability is preserved and not reduced.",
+    "long_prefill_note": "For sequence >32768, optimized full attention uses page-aligned K/V fill and bounded Q/gate/O plus MLP chunks; capacity-only S=192511 completed with nonzero output and populated cache.",
+    "linear_recurrent_state_dtype": "bfloat8_b",
+    "functional_linear_recurrent_state_dtype": "float32",
+    "linear_prefill_capacity_note": "The selected packed-decode default uses a persistent BFP8 recurrent state and passed optimized capacity-only S=192511 with 985656229 nonzero output elements and 129830 nonzero recurrent-state elements.",
+    "non_aligned_prefill_sequences_tested": [
+      5,
+      33,
+      65
+    ],
+    "prefill_batches_tested": [
+      1,
+      32
+    ],
+    "traced_decode_batches_tested": [
+      1,
+      32
+    ],
+    "representative_layers": {
+      "linear_attention": 0,
+      "full_attention": 3
+    },
+    "default_full_attention_policy": "BF16 HiFi2 QKV/O, HiFi4 SDPA, BFP4 LoFi MLP, BFP8 paged KV",
+    "default_linear_attention_policy": "BFP4 LoFi packed DRAM-sharded input width 5 and output width 12, broadcast recurrent outer update, explicit 4-core width-4 HiFi2 recurrent matmuls, persistent BFP8 recurrent state, BFP4 LoFi MLP",
+    "official_weight_decode_pcc": {
+      "full_attention_batch_1": 0.9976120123684317,
+      "full_attention_batch_32": 0.9980950192619897,
+      "linear_attention_batch_1": 0.9987165695638567
+    },
+    "status": "optimized_decoder_ready_for_stage_review"
+  },
+  "layer_kinds": {
+    "linear_attention": {
+      "representative_layer": 0,
+      "layer_count": 48,
+      "cache": "depthwise-convolution state plus gated-delta recurrent state"
+    },
+    "full_attention": {
+      "representative_layer": 3,
+      "layer_count": 16,
+      "cache": "paged key/value cache"
+    }
+  },
+  "notes": [
+    "current_supported_context (262144) relocated post-stage from functional_decoder.supported_context (the stage's explicit claim) so check_context_contract.py can read it. No capability claim changed.",
+    "SCOPED CAPABILITY REDUCTION -- single-pass full-layer prefill on one Blackhole device: hard device DRAM contiguous-allocation limit; largest feasible tested 192511. The top-level current_supported_context reflects the contract's overall supported context; see functional_decoder.capability_reduction for the path that does not reach it and its byte evidence."
+  ]
+}
