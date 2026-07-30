@@ -105,6 +105,26 @@ Why it matters: this title is the release-note line; <reason>.
 Suggested title: `<rewritten title>`
 ````
 
+## PR Description Completeness
+
+The description is the only place a reviewer learns *why* a change exists. Flag a PR
+whose body is still the unmodified template, or is missing any of:
+
+- **PR Category** — one of Feature / Performance / Bug fix / Cleanup / Test Only.
+- **Summary** — the motivation, not a restatement of the diff. Must be non-empty
+  and must not consist solely of the template's HTML comments.
+- **Issue link for bug fixes** — a `Closes #N` / `Fixes #N` / `Relates to #N` line
+  whenever the diff fixes a defect. If the tests or code comments cite an issue
+  number that the body does not link, flag the omission and name that number.
+- **User-visible behaviour changes** — any change to an op's output dtype, shape,
+  or accepted argument set must be stated explicitly, since it becomes the
+  release-note and migration signal.
+- **Perf/accuracy claims** — before/after numbers for any PR categorised
+  Performance, or any PR claiming an accuracy improvement.
+
+Use the standard finding format at 🟡 IMPORTANT. Do not attempt to write the
+Summary for the author; state what is missing and why a reviewer needs it.
+
 ## Testing Expectations
 
 - New public API → unit test in the nearest `tests/` target
