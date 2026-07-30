@@ -63,11 +63,13 @@ Passing the directory instead of the file list collects nothing — pass the fil
 ```bash
 python models/experimental/voxtral_tts/scripts/export_backbone_hf.py --out /tmp/hf_backbone
 export HF_MODEL=/tmp/hf_backbone                      # tt_transformers refuses to load without it
-python models/experimental/voxtral_tts/scripts/generate_quality_set.py --out /tmp/vq
-python models/experimental/voxtral_tts/scripts/score_quality_set.py /tmp/vq/results.json
+python models/experimental/voxtral_tts/scripts/generate_quality_set.py
+python models/experimental/voxtral_tts/scripts/score_quality_set.py \
+  models/experimental/voxtral_tts/generated/results.json
 ```
 All 15 fixture prompts take ~20 min on one N150. `--cases 0,1` for a quick check. The WAVs land in
-`--out` and are the only way to actually *hear* the model — no metric substitutes for that.
+**`generated/`** (gitignored — audio is large and CC BY-NC derived, so it never leaves the box) and
+are the only way to actually *hear* the model. No metric substitutes for that.
 
 **Opening a device for anything with convs** needs `l1_small_size`, or you get
 `Out of Memory: ... bank size is 0 B`:
@@ -146,9 +148,14 @@ does. Harness: `scripts/generate_quality_set.py` then `scripts/score_quality_set
   F0 separates cleanly — males 110.6 / 106.7 Hz vs females 205.1 / 192.0 Hz, with the two male
   readings agreeing within 4 Hz on unrelated text.
 
-**Not measured:** a listening pass. Nobody has heard these clips; the artifact metrics catch
-gross defects (clipping, clicks, DC, silence) but not prosody, naturalness or accent quality.
-WAVs are written to the `--out` directory for exactly that.
+**Listening pass: done, informally — verdict "sounds ok".** The long-form clips in `generated/`
+were listened to by the author (2026-07-30). That clears the bar of "no audible defect the metrics
+missed", which is what it was for. Read it as exactly that and no further: **it is not evidence of
+listener-facing naturalness.** WER measures intelligibility, and one developer saying "ok" is not a
+substitute for a MOS-style eval with real raters and a side-by-side against the fp32 reference
+(`generated/ref_current.wav` and the `case11_*_REF.wav` pair are there for that). If someone needs
+to claim naturalness — for a customer, a demo, or a comparison against another vendor — that eval
+has not been done.
 
 Three fixture texts are deliberately adversarial — emoji, `!@#$%^&*()`, literal `\t`/`\n`. The
 model tries to **vocalise** them (it renders `1234567890` correctly as "1 2 3 4 5 6 7 8 9 0", then
