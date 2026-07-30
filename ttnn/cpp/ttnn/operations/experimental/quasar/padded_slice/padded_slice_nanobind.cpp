@@ -55,11 +55,13 @@ void bind_padded_slice(nb::module_& mod) {
                 ttnn.Tensor: the output tensor.
 
             Example:
-                >>> tensor = ttnn.padded_slice(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device), [0, 0, 0, 0], [1, 1, 64, 16], [1, 1, 2, 1])
-                >>> print(tensor.shape)
-                [1, 1, 32, 16]
-                >>> input = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.padded_slice(input, [0, 0, 0, 0], [1, 1, 32, 32])
+                >>> input = ttnn.from_torch(
+                ...     torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                >>> shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+                >>> shard_spec = ttnn.ShardSpec(shard_grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
+                >>> memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+                >>> output = ttnn.experimental.quasar.padded_slice(
+                ...     input, [0, 0, 0, 0], [1, 1, 32, 32], memory_config=memory_config)
                 >>> print(output.shape)
                 [1, 1, 32, 32]
                 )doc";

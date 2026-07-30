@@ -46,6 +46,17 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to slice_write need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to slice_write need to be allocated in buffers on device!");
+    // Quasar partial port: only the SHARDED-input factories are ported to Metal-2 (ProgramSpec +
+    // QuasarDataMovementKernel) — RM-sharded and TILE-sharded — which is all ResNet needs. The
+    // non-sharded (interleaved) input path still routes to SliceWriteRMInterleavedProgramFactory, which
+    // builds its kernels via the legacy CreateKernel + Reader/WriterDataMovementConfig API that Quasar
+    // rejects, so an interleaved input would deterministically fail at program creation. Reject it up front
+    // with a clear message. Remove this guard once the interleaved factory is ported.
+    TT_FATAL(
+        input_tensor.is_sharded(),
+        "Quasar slice_write currently supports only sharded input; interleaved input is not yet ported "
+        "(the interleaved program factory still uses legacy data-movement kernels, which Quasar rejects). "
+        "Only the paths required by ResNet are ported.");
     TT_FATAL(
         input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR,
         "Input tensor layout must be TILE or ROW_MAJOR but got {}",

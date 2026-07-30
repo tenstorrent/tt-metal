@@ -26,6 +26,18 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input;
 
+    // Quasar partial port: only the ROW_MAJOR path is ported to Metal-2 (ProgramSpec +
+    // QuasarDataMovementKernel), which is all ResNet needs. The TILE program factory still creates its
+    // reader/writer via the legacy CreateKernel + Reader/WriterDataMovementConfig API, which Quasar
+    // rejects, so a TILE input would deterministically fail at program creation. Reject it up front with a
+    // clear message rather than routing to the un-ported factory. Remove this guard once the tiled factory
+    // is ported to ProgramSpec/QuasarDataMovementKernel.
+    TT_FATAL(
+        input_tensor_a.layout() == Layout::ROW_MAJOR,
+        "Quasar padded_slice currently supports only ROW_MAJOR input; TILE layout is not yet ported "
+        "(the tiled program factory still uses legacy data-movement kernels, which Quasar rejects). "
+        "Only the paths required by ResNet are ported.");
+
     // Validate step parameter early - padded_slice does not support strided slices
     const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
     TT_FATAL(!has_step, "Padded slice does not support strided slices");
