@@ -815,7 +815,7 @@
   model: sampling-common
   skus:
     wh_n150:
-      timeout: 25  # TODO: tune after first CI run
+      timeout: 10  # fits models unit_tier1 wh_n150 budget (110 min); tune with real runtime
       tier: 1
     wh_galaxy_perf:
       timeout: 20  # TODO: tune after first CI run
