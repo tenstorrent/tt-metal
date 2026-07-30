@@ -212,7 +212,47 @@ If the smoke fails before a request is sent because the TTI benchmark client ent
 
 ## Run The Release Workflow
 
-Run the full workflow only after the smoke passes. Keep the generated autoport vLLM server running and run TTI as a client. Never print tokens.
+Run the release workflow only after the smoke passes. Keep the generated autoport vLLM server running and run TTI as a client. Never print tokens.
+
+Before launching it, estimate the unrestricted model-specific eval runtime from
+the measured optimized-vLLM serving throughput, the selected eval tasks, their
+sample counts, and their generation limits. Record the estimate in
+`RUN_NOTES.md`.
+
+If the unrestricted eval suite would take a prohibitively long time for the
+experiment or available reservation window, it is acceptable to use TTI's CI
+configuration for Stage 10:
+
+```bash
+python3 run.py \
+  --model "$TTI_MODEL" \
+  --model-spec-json "$AUTOPORT_MODEL_SPEC" \
+  --device "$TTI_DEVICE" \
+  --workflow release \
+  --no-auth \
+  --skip-system-sw-validation \
+  --limit-samples-mode ci-nightly
+```
+
+Use the checkout's exact supported spelling from `run.py --help`. Verify in the
+written run spec and the actual eval commands that `ci-nightly` propagated; it
+normally becomes `--limit 0.05` for applicable eval tasks. Do not silently fall
+back to unrestricted evals.
+
+This exception reduces eval sampling only. It does not permit lowering the
+model context, aligning or shortening valid requests, changing benchmark
+prompt/completion lengths, skipping spec/API/benchmark workflows, or hiding a
+model failure. Record the projected unrestricted runtime, why it was
+prohibitive, the selected limit mode, and the effective per-task sample limits
+in `RUN_NOTES.md`. Label every resulting accuracy number as a CI-subset result;
+never present it as full-set accuracy or compare it directly with a full-set
+release threshold without that qualification.
+
+A justified, successfully completed `ci-nightly` release may satisfy Stage 10,
+but it establishes CI-subset readiness rather than unrestricted full-set
+release readiness.
+
+When the unrestricted suite is practical, use the normal release command:
 
 ```bash
 cd "$WORK_ROOT/tt-inference-server"
@@ -306,7 +346,8 @@ LongBench and other long-context rows may have legitimate release-harness issues
 
 The final status must say one of:
 
-- `release-readiness-pass`: all required rows passed or have row-specific issue waivers;
+- `release-readiness-pass`: the unrestricted release suite ran and all required rows passed or have row-specific issue waivers;
+- `release-readiness-ci-subset-pass`: a justified `ci-nightly` release ran, all required sampled rows passed or have row-specific issue waivers, and unrestricted full-set accuracy is explicitly not claimed;
 - `release-workflow-pass/readiness-fail`: the release workflow ran, but one or more required rows failed without a valid waiver;
 - `release-workflow-fail`: the release workflow itself did not complete.
 
@@ -363,6 +404,8 @@ Done means:
 - `meta_ifeval` and `meta_gpqa_cot` pass for text LLMs, or each failure has a current linked issue proving the correct canonical implementation fails the same eval in the same way.
 - Final release markdown is copied under `models/autoports/<model>/doc/tti_release/`.
 - `RUN_NOTES.md` records the exact server mode, host/session, repo tag, Docker image/version if Docker was used, command, env variables that mattered, reset/retry actions, copied artifacts, release-readiness status, failed rows, and waiver issue links where applicable.
+- If `ci-nightly` was used, `RUN_NOTES.md` records the projected unrestricted eval runtime, why it was prohibitive, the effective limit mode/sample fraction, and that all reported accuracy is CI-subset rather than full-set accuracy.
+- A justified `ci-nightly` run uses `release-readiness-ci-subset-pass`, never `release-readiness-pass`, when its required sampled rows pass.
 - The report is skimmed and the README/RUN_NOTES call out any failing accuracy, benchmark target, or API conformance checks with the classification above.
 - There is no leftover autoport vLLM server, TTI release tmux session, or `tt-inference-server` Docker container from this run.
 - The final response names the release report path and whether a Pushover or other requested notification was sent.
