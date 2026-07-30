@@ -252,6 +252,8 @@ Pointwise Unary
    ttnn.silu
    ttnn.sin
    ttnn.sinh
+   ttnn.situ_gate
+   ttnn.softcap
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign

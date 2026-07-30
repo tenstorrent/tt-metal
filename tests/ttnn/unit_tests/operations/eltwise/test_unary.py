@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import pytest
 
 pytestmark = pytest.mark.use_module_device
@@ -2794,11 +2796,23 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
 SITU_OPS = [(ttnn.softcap, 25.0), (ttnn.situ_gate, 4.0)]
 SITU_OP_IDS = ["softcap_beta25", "situ_gate_beta4"]
 
-# Outputs below this come from subnormal intermediates the SFPU flushes to zero, so
-# they are excluded from accuracy comparisons. Emulating flush-to-zero puts the true
-# boundary near 1e-36 for both ops at these betas; this keeps margin. Magnitudes this
-# small cannot matter to an activation bounded by beta.
-SITU_FLUSH_FLOOR = 1e-30
+# Inputs below this magnitude are excluded from accuracy comparisons. Both ops scale x
+# down twice before the tanh polynomial -- by 1/beta, then by the Horner chain's leading
+# 5.9e-3 -- so a normal input can drive a subnormal intermediate that the SFPU flushes to
+# zero. Emulating the flush puts the boundary near 1e-36 for both ops at these betas;
+# this keeps margin. Magnitudes this small cannot matter to an activation bounded by beta.
+#
+# This screens the INPUT. An output floor would also swallow every situ_gate input below
+# -70, where the result is tiny because sigmoid underflows rather than because anything
+# was flushed, dropping a third of the bfloat16 domain and with it the gate's defining
+# behavior.
+SITU_FLUSH_INPUT_FLOOR = 1e-30
+
+# situ_gate only: exp(-x) crosses 2**126 here, where approx_recip saturates to 0 (see
+# ckernel_sfpu_situ.h) so the sigmoid factor collapses while the reference is still a
+# bfloat16 normal. Three lanes on the bfloat16 grid are affected; below this window
+# exp(-x) overflows, the reference underflows to zero too, and the two agree exactly.
+SITU_RECIP_CLIFF = -126.0 * math.log(2.0)
 
 
 @pytest.mark.parametrize(
@@ -2870,26 +2884,34 @@ def test_situ_bfloat16_full_domain(ttnn_op, beta, device):
     assert result.to(torch.float32).abs().max().item() <= beta * (1.0 + 1e-3)
     assert not torch.isnan(result).any(), "finite input produced NaN"
 
-    # Relative error only where the reference is large enough to be meaningful; see
-    # SITU_FLUSH_FLOOR.
+    # Relative error only where the reference is large enough for a ratio to mean
+    # anything. The threshold is SITU_FLUSH_INPUT_FLOOR's value applied to the output
+    # instead of the input, which is the right screen for a ratio even though it is the
+    # wrong one for the ULP test's exact comparison.
     g = golden.to(torch.float32)
     r = result.to(torch.float32)
-    mask = g.abs() > SITU_FLUSH_FLOOR
+    mask = g.abs() > SITU_FLUSH_INPUT_FLOOR
     rel_err = ((r[mask] - g[mask]).abs() / g[mask].abs()).max().item()
     assert rel_err < 1.5e-2, f"full bf16 domain max rel err {rel_err:.4e}"
+
+    # The remaining lanes still have to be negligible rather than unchecked: flushing to
+    # zero is allowed, returning something the size of the activation is not.
+    tiny_max = r[~mask].abs().max().item()
+    assert tiny_max <= 4.0 * SITU_FLUSH_INPUT_FLOOR, f"negligible-reference region returned {tiny_max:.4e}"
 
     assert_with_pcc(r, g, pcc=0.9999)
 
 
-# Emulation over the full bf16 domain puts both ops at exactly 1.0 ULP, i.e. the
-# device result is always the correctly-rounded bf16 value or one step from it.
-# Confirm on hardware before tightening or trusting this further.
+# Both ops hold at 1.0 ULP on Blackhole over everything the mask below keeps, i.e. the
+# device result is the correctly-rounded bfloat16 value or one step from it. This is the
+# tightest bound the polynomial tanh supports; it has no headroom to absorb a change to
+# the tanh, the sigmoid, or the reciprocal iteration count.
 SITU_ULP_THRESHOLD = 1
 
 
 @pytest.mark.parametrize("ttnn_op, beta", SITU_OPS, ids=SITU_OP_IDS)
 def test_situ_bfloat16_ulp(ttnn_op, beta, device):
-    """ULP accuracy over every representable bfloat16 value.
+    """ULP accuracy over the bfloat16 domain, less the ~11% the mask below excludes.
 
     Deliberately kept in bfloat16 end to end rather than promoted to float32 as the
     hardmish ULP test does. assert_with_ulp measures |actual - expected| / ULP(expected)
@@ -2903,19 +2925,22 @@ def test_situ_bfloat16_ulp(ttnn_op, beta, device):
 
     golden_function = ttnn.get_golden_function(ttnn_op)
 
-    # Zero out inputs the op cannot reproduce exactly, the same way the hardmish ULP
-    # test excludes its known-bad regions (it masks a window out to ~2e-23, wider than
-    # this one). Both exclusions are documented in ckernel_sfpu_situ.h: NaN does not
-    # survive the polynomial's min(., 1.0) clamp, and tiny magnitudes drive subnormal
-    # intermediates that the SFPU flushes to zero.
-    #
-    # The floor is on the OUTPUT and it cannot be smallest_normal: the flush hits
-    # intermediates, not the result. x/beta already underflows while x is still normal,
-    # and the Horner chain's first step scales by 5.9e-3 on top of that. See
-    # SITU_FLUSH_FLOOR.
-    probe = golden_function(input_tensor, beta=beta, device=device).to(torch.float32)
-    excluded = torch.isnan(input_tensor.to(torch.float32)) | (probe.abs() < SITU_FLUSH_FLOOR)
+    # Zero out the inputs the op cannot reproduce exactly, the way the hardmish ULP test
+    # excludes its own known-bad window. Each exclusion is documented in
+    # ckernel_sfpu_situ.h and named by the constant it uses; zeroing rather than dropping
+    # keeps the tensor tile-shaped, and golden(0) == device(0) == 0 so those lanes
+    # compare trivially.
+    x32 = input_tensor.to(torch.float32)
+    excluded = torch.isnan(x32) | (x32.abs() < SITU_FLUSH_INPUT_FLOOR)
+    if ttnn_op is ttnn.situ_gate:
+        excluded |= (x32 <= SITU_RECIP_CLIFF) & (golden_function(input_tensor, beta=beta, device=device) != 0.0)
     input_tensor = torch.where(excluded, torch.zeros_like(input_tensor), input_tensor)
+
+    # The exclusions are narrow by construction and have to stay that way: a widening
+    # mask hollows out the domain this test claims to cover without failing anything.
+    # 11.05% is what the rules above account for at these betas.
+    excluded_frac = excluded.sum().item() / excluded.numel()
+    assert excluded_frac < 0.12, f"mask excludes {100 * excluded_frac:.2f}% of the bfloat16 domain"
 
     tt_in = ttnn.from_torch(
         input_tensor,

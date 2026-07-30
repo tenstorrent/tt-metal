@@ -28,6 +28,14 @@ namespace ckernel::sfpu {
 // MIN, whose magnitude compare picks 1.0 over NaN, so the result is finite
 // (+beta, or 0 for situ_gate at bf16 dst). Stock calculate_tanh behaves the same.
 //
+// Tiny inputs: x is scaled down twice ahead of the polynomial, by 1/beta and then
+// by the Horner chain's leading 5.9e-3, so |x| under ~1e-36 drives a subnormal
+// intermediate that the SFPU flushes and the result is 0 rather than ~x. situ_gate
+// has a second, unrelated limit on the same side: exp(-x) passes 2**126 at
+// x = -87.3, where SFPARECIP saturates to 0 (see _situ_reciprocal_) and the sigmoid
+// factor collapses to 0 while the true value is still ~1e-38. Both are far below
+// anything an activation bounded by beta can carry.
+//
 // One init serves both ops: tanh owns all three vConstFloatPrgm registers and the
 // sigmoid half borrows none of them (see _situ_reciprocal_). Any OTHER SFPU op in
 // the same kernel that owns those registers -- silu, sigmoid, exp, reciprocal --
