@@ -86,6 +86,20 @@
     ],
     "status": "functional_decoder_complete_clean_pass"
   },
+  "optimized_decoder": {
+    "status": "optimized_decoder_validated",
+    "supported_context": 262144,
+    "single_pass_prefill_supported_context": 192511,
+    "cache_layout_or_dtype_changed": false,
+    "persistent_weight_capacity_proof": "The fused path retains unpacked BF16 packed-projection sources plus its packed BF16 tensor. OptimizedDecoder releases the unused sources and keeps two phase-specific BFP4 packed tensors; two BFP4 copies require fewer bytes than the packed-plus-unpacked BF16 fused baseline. MLP and output projections likewise replace one BF16 copy with two BFP4 copies. Persistent material-weight storage therefore does not increase.",
+    "non_aligned_prefill_sequence_tested": 33,
+    "decode_batches_tested": [1, 32],
+    "watcher_batches_tested": [32],
+    "artifacts": {
+      "correctness_and_performance": "doc/optimized_decoder/logs/",
+      "final_profiler": "doc/optimized_decoder/tracy/final_w8_*"
+    }
+  },
   "layer_kinds": {
     "linear_attention": {
       "representative_layer": 0,

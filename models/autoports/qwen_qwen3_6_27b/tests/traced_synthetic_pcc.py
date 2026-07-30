@@ -27,6 +27,7 @@ from models.autoports.qwen_qwen3_6_27b.tests.linear_attention_synthetic_pcc impo
 from models.autoports.qwen_qwen3_6_27b.tests.linear_attention_synthetic_pcc import _state as linear_state
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, FunctionalDecoder, _to_device
 from models.autoports.qwen_qwen3_6_27b.tt.fused_decoder import FusedDecoder
+from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import POLICIES, OptimizedDecoder
 from models.common.utility_functions import comp_pcc
 
 
@@ -64,7 +65,7 @@ def _reference_steps(kind, layer, config, tokens):
 
 
 @torch.no_grad()
-def run(kind, batch, decoder_kind="functional", perf_iterations=10):
+def run(kind, batch, decoder_kind="functional", perf_iterations=10, optimization_policy="bfp4_all_dram_w8"):
     # Make any Python/host fallback in the measured TTNN path a hard failure.
     ttnn.CONFIG.throw_exception_on_fallback = True
     print("FALLBACK_AUDIT", f"throw_exception_on_fallback={ttnn.CONFIG.throw_exception_on_fallback}")
@@ -91,10 +92,14 @@ def run(kind, batch, decoder_kind="functional", perf_iterations=10):
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     trace_id = None
     try:
-        decoder_cls = FusedDecoder if decoder_kind == "fused" else FunctionalDecoder
+        decoder_classes = {
+            "functional": FunctionalDecoder,
+            "fused": FusedDecoder,
+            "optimized": OptimizedDecoder,
+        }
+        decoder_cls = decoder_classes[decoder_kind]
         print("DECODER_PATH", decoder_cls.__module__, decoder_cls.__name__)
-        decoder = decoder_cls.from_state_dict(
-            state,
+        decoder_kwargs = dict(
             hf_config=config,
             layer_idx=layer_idx,
             mesh_device=mesh,
@@ -102,6 +107,9 @@ def run(kind, batch, decoder_kind="functional", perf_iterations=10):
             max_context=64,
             page_size=64,
         )
+        if decoder_kind == "optimized":
+            decoder_kwargs["optimization_policy"] = optimization_policy
+        decoder = decoder_cls.from_state_dict(state, **decoder_kwargs)
         hidden_device = _to_device(tokens[0].reshape(1, 1, batch, -1), mesh_device=mesh)
         page_values = torch.arange(batch, dtype=torch.int32).reshape(batch, 1).flip(0)
         page_table = _to_device(
@@ -209,7 +217,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--kind", choices=("full", "linear"), required=True)
     parser.add_argument("--batch", type=int, choices=(1, 32), required=True)
-    parser.add_argument("--decoder", choices=("functional", "fused"), default="functional")
+    parser.add_argument("--decoder", choices=("functional", "fused", "optimized"), default="functional")
+    parser.add_argument("--optimization-policy", choices=tuple(POLICIES), default="bfp4_all_dram_w8")
     parser.add_argument("--perf-iterations", type=int, default=10)
     args = parser.parse_args()
-    run(args.kind, args.batch, args.decoder, args.perf_iterations)
+    run(args.kind, args.batch, args.decoder, args.perf_iterations, args.optimization_policy)
