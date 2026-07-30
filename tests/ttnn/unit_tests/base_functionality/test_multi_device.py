@@ -371,9 +371,7 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype, t
 
     ttnn_output_tensor = ttnn_input_a_tensor @ ttnn_input_b_tensor
 
-    ttnn_torch_output_tensor = ttnn.to_torch(
-        ttnn_output_tensor, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0)
-    )
+    ttnn_torch_output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))
     if dtype == ttnn.bfloat4_b:
         assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.87)
     else:
