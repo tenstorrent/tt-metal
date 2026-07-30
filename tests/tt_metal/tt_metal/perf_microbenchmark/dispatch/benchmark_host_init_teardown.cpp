@@ -103,7 +103,7 @@ std::vector<std::pair<std::string, MeshShape>> candidate_topologies(const MeshSh
 
     auto add = [&](const MeshShape& shape) {
         const size_t n = shape.mesh_size();
-        if (n == 0 || seen_sizes.count(n) != 0) {
+        if (n == 0 || seen_sizes.contains(n)) {
             return;
         }
         seen_sizes.insert(n);

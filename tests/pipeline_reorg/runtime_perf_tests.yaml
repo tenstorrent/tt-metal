@@ -74,8 +74,12 @@
 - name: runtime_perf_host_init_teardown
   cmd: |
     mkdir -p generated/test_reports
+    # Write under generated/test_reports so the per-SKU JSON is uploaded as a CI artifact
+    # (upload-artifact-with-job-uuid uploads that dir); the follow-up gate is armed by
+    # downloading this exact benchmark_out to replace the placeholder golden.
     ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_host_init_teardown \
-      --benchmark_out_format=json --benchmark_out=host_init_teardown_bench.json
+      --benchmark_out_format=json \
+      --benchmark_out=generated/test_reports/host_init_teardown_bench.json
     GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/host_init_teardown_golden.json
     if [ "$ARCH_NAME" = "blackhole" ]; then
       GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/host_init_teardown_blackhole_golden.json
@@ -85,7 +89,7 @@
     # gate by replacing the golden with a real CI benchmark_out JSON captured on this SKU, then
     # drop --ignore-times.
     ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_host_init_teardown_ci.py \
-      host_init_teardown_bench.json --golden "$GOLDEN" --ignore-times
+      generated/test_reports/host_init_teardown_bench.json --golden "$GOLDEN" --ignore-times
   skus:
     wh_n300_civ2:
       timeout: 10

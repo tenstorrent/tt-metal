@@ -84,6 +84,13 @@ def main():
 
     exit_code = 0
 
+    # Zero successful benchmarks means every probe-open failed and the binary registered nothing
+    # (a hardware/setup problem), not that the SKU legitimately ran a smaller topology set. This is
+    # always fatal, even in bring-up mode, so a broken SKU can't report green with zero coverage.
+    if not result_times:
+        print("Error: results contain no successful benchmarks (all topologies failed to open?)")
+        exit_code = 1
+
     # An errored benchmark is always fatal, even in bring-up mode.
     for name in result_errors:
         print(f"Error: Benchmark {name} gave unexpected error: {result_errors[name]}")
