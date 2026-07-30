@@ -84,10 +84,14 @@
     if [ "$ARCH_NAME" = "blackhole" ]; then
       GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/host_init_teardown_blackhole_golden.json
     fi
-    # BRING-UP: goldens ship with placeholder / single-SKU times, so --ignore-times validates
-    # structure only (no errored benchmarks; topology set is SKU-dependent) for now. Arm the
-    # gate by replacing the golden with a real CI benchmark_out JSON captured on this SKU, then
-    # drop --ignore-times.
+    # RECORD MODE: goldens now hold real per-SKU CI captures (min aggregate), but the job still
+    # runs --ignore-times (structure only: no errored/empty benchmarks; topology-set mismatches
+    # are advisories). Two reasons it is not gated yet: (1) goldens are single-run mins and some
+    # rows are jittery, so hard-gating risks false-fails on normal noise; (2) init single_chip /
+    # mesh_2 scale ~3-4x with box size (n300 vs T3K vs galaxy), so tight gating of those rows
+    # needs per-SKU wormhole goldens. FOLLOW-UP to arm the gate: capture a few runs per SKU, add
+    # per-SKU goldens (n300/T3K/galaxy) selected by SKU, set tolerances with margin, drop
+    # --ignore-times.
     ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_host_init_teardown_ci.py \
       generated/test_reports/host_init_teardown_bench.json --golden "$GOLDEN" --ignore-times
   skus:

@@ -1,18 +1,18 @@
 {
-  "_comment": "Host init/teardown CI golden (Blackhole). BRING-UP: real_time values are real measurements captured locally on a Blackhole (p100a), centers of three consecutive runs that agreed to ~1% (init) / ~0.15% (teardown); used as realistic placeholders but NOT gated yet. The runtime_perf_host_init_teardown CI job runs compare_host_init_teardown_ci.py with --ignore-times so only structure (no errored benchmarks) is validated. Arm the gate by replacing these with a real benchmark_out JSON captured on bh_p150_perf CI silicon, then drop --ignore-times. Metric = host-side real_time (ns) of the min aggregate: BM_host_init = MeshDevice open (~100ms), BM_host_teardown = MeshDevice close (~113ms). bh_p150_perf is a single-chip SKU, so only single_chip runs here; mesh_2, mesh_4, ... light up on multi-device SKUs (see the wormhole golden).",
+  "_comment": "Host init/teardown CI golden (Blackhole, bh_p150_perf). REAL CI captures (min aggregate, ns) from bh_p150_perf silicon. NOTE: Blackhole single-chip teardown is ~0.6 ms, ~200x cheaper than Wormhole single-chip teardown (~115 ms) - Wormhole pays a fabric/dispatch teardown cost that a single Blackhole chip does not - so the Blackhole golden is intentionally very different from the Wormhole one. Still NOT gated: the runtime_perf_host_init_teardown CI job runs compare_host_init_teardown_ci.py with --ignore-times (structure only, no errored benchmarks). Arm the gate by dropping --ignore-times once tolerances are confirmed. Metric = host-side real_time (ns) of the min aggregate: BM_host_init = MeshDevice open, BM_host_teardown = MeshDevice close. bh_p150_perf is a single-chip SKU, so only single_chip runs here; mesh_2, mesh_4, ... light up on multi-device SKUs (see the wormhole golden).",
   "benchmarks": [
     {
       "name": "BM_host_init/single_chip/iterations:3/repeats:3/manual_time_min",
       "run_type": "aggregate",
       "aggregate_name": "min",
-      "real_time": 100441253.0,
+      "real_time": 46304974.0,
       "time_unit": "ns"
     },
     {
       "name": "BM_host_teardown/single_chip/iterations:3/repeats:3/manual_time_min",
       "run_type": "aggregate",
       "aggregate_name": "min",
-      "real_time": 112900996.0,
+      "real_time": 584525.0,
       "time_unit": "ns"
     }
   ]
