@@ -10,8 +10,8 @@ description: |
     - log spam (the same message repeated many times)
     - over-verbose log messages that should be demoted to debug/trace severity
   Silencer works from CI logs, greps them on disk to stay token-frugal, root-causes
-  each pattern, and opens ready-for-review PRs validated through the existing
-  build-artifact.yaml CI (it cannot build tt-metal locally). Never merges its own PRs.
+  each pattern, and opens draft PRs (it cannot build tt-metal locally, and its PRs need a
+  maintainer's approval before CI runs anyway). Never merges its own PRs.
 
 on:
   # Scan on a daily cadence (warnings live in *successful* runs too, so we do not
@@ -66,11 +66,12 @@ tools:
 safe-outputs:
   mentions: false
   create-pull-request:
-    # Ready-for-review (not draft) so tt-metal's pr-gate.yaml runs build-artifact.yaml
-    # automatically. Draft PRs do not trigger pr-gate by design.
-    draft: false
+    # Draft: pr-gate.yaml does not run automatically on Silencer's PRs anyway (a
+    # maintainer must approve the workflow run for bot-authored PRs), so ready-for-review
+    # buys nothing here — draft signals accurately that CI has not validated this yet.
+    draft: true
     title-prefix: "[silencer] "
-    labels: [automation]
+    labels: [automation, silencer]
     # Scope patches to source-like files only: a mistaken or manipulated agent response
     # cannot touch unrelated files outside Silencer's noise-fix scope.
     allowed-files: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.py", "**/*.pyi", "**/*.cmake", "**/CMakeLists.txt"]
@@ -132,10 +133,13 @@ tt-metal requires **specialized Tenstorrent runners** and a long, heavy build. Y
 runner **cannot compile the project**. Do **not** run `cmake`, `./build_metal.sh`,
 `pip install .`, or device-kernel JIT compilation locally — they will fail or time out.
 
-You validate every change the same way a human PR does: **open a ready-for-review PR and let
-`pr-gate.yaml` run `build-artifact.yaml`** (see *Validating changes via CI*). This is also
-how you confirm a warning is actually gone: the fixed build's logs should no longer contain
-the pattern you targeted.
+Unlike a human PR, opening yours does **not** automatically run CI: `pr-gate.yaml` requires a
+maintainer to approve the workflow run for bot-authored PRs (see *Validating changes via CI*).
+Once approved and green, it only proves the code **compiles** — for the runtime-facing
+categories (3, 5, 6) that is necessary but not sufficient. The proof that a targeted warning
+or spam pattern is actually *gone* is its absence from a fresh run of the tracked workflow it
+came from, which a maintainer needs to re-run (see *Validating changes via CI* for why
+Silencer cannot currently trigger that run itself).
 
 ## Token discipline: grep logs on disk, never stream whole logs
 
@@ -643,38 +647,75 @@ it says here. Fresh log evidence always outranks this list.
 ## Validating changes via CI
 
 Because you cannot build locally, changes are validated through
-`.github/workflows/build-artifact.yaml`, invoked automatically on `pull_request` by
-`pr-gate.yaml`. At time of writing (`pr-gate.yaml:130-160`) the gate calls it with
-platform **Ubuntu 24.04**, toolchain `cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake`,
-build-type **ASan**, `tracy: true`, `build-wheel: false`, `skip-tt-train: false`,
-`checkout-filter: tree:0` — **not** the older Release/2204/skip-tt-train=true defaults.
-When reasoning about what your PR will be validated against, trust the current
-`pr-gate.yaml` contents, not this prose — it drifts.
+`.github/workflows/build-artifact.yaml`, invoked by `pr-gate.yaml` on `pull_request`. At time
+of writing (`pr-gate.yaml:130-160`) the gate calls it with platform **Ubuntu 24.04**, toolchain
+`cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake`, build-type **ASan**, `tracy: true`,
+`build-wheel: false`, `skip-tt-train: false`, `checkout-filter: tree:0` — **not** the older
+Release/2204/skip-tt-train=true defaults. When reasoning about what your PR will be validated
+against, trust the current `pr-gate.yaml` contents, not this prose — it drifts.
 
-- **Open the PR ready-for-review** (not draft) so `pr-gate.yaml` runs.
-- **Do not block waiting for the build** — tt-metal builds far exceed the 60-minute budget.
-  gh-aw creates the PR in the `safe_outputs` job *after* your agent turn, so on the current
-  run you cannot know the PR number or its build run ID: note under **Test Status** that
-  the build is queued, and record only the pattern + branch name in memory. Resolve the
-  actual PR number and run ID on the next invocation.
+**Two things this validation does *not* do, that you must not imply in a PR:**
+
+1. **It does not run automatically.** Unlike a human-authored PR, `pr-gate.yaml`'s
+   `pull_request` trigger does not fire on its own for Silencer's bot-authored PRs — a
+   maintainer has to approve the workflow run first (visible as a pending/"waiting for
+   approval" check on the PR). This is a deliberate human-in-the-loop control, not something
+   to work around. Since ready-for-review buys nothing here, Silencer opens its PRs as
+   **draft** — draft accurately reflects "not yet CI-validated," and a maintainer marks it
+   ready (or just approves the run) when they choose to review it.
+2. **Passing it only proves the code compiles** (ASan build, `tracy` on). For categories 1/2/4
+   (compile-time / JIT / deprecation warnings) that *is* the proof. For categories 3/5/6
+   (runtime warnings, log spam, over-verbose messages) it is not: `build-artifact.yaml` never
+   runs the model/perf/sanity suite whose logs the noise came from, so a green gate does not
+   mean the targeted pattern is actually gone.
+
+**What would close that gap, and why it isn't wired in yet:** the correct fix is to also
+launch the specific tracked workflow the noise pattern came from (not just build-artifact) via
+gh-aw's `dispatch-workflow` safe-output — it dispatches an allow-listed `workflow_dispatch`
+target through the same safe-outputs mechanism as `create-pull-request`, so it wouldn't need
+any elevated permission on your own turn. This was investigated and is **currently blocked**:
+`dispatch-workflow`'s same-repo file resolution (as of the `gh-aw v0.84.0` compiler pinned in
+this repo) only matches a bare workflow name to `.md`, `.lock.yml`, or `.yml` — **not
+`.yaml`**, and every tracked workflow in tt-metal (`pr-gate.yaml`, `sanity-tests.yaml`, all
+`t3000-*.yaml`/`galaxy-*.yaml`/etc.) uses `.yaml`. So there is currently no allow-listable
+target. Do not attempt to add a `dispatch-workflow` block yourself expecting it to work — it
+will fail to compile. Revisit once gh-aw resolves `.yaml` names (or some other mechanism is
+added); until then, this gap stays a known limitation, not a silent gap.
+
+Given that, the actual procedure:
+
+- **Do not block waiting for anything.** gh-aw creates the PR in the `safe_outputs` job
+  *after* your agent turn, so on the current run you cannot know the PR number. Note under
+  **Test Status** that the build requires maintainer approval before it will even start, and
+  that CI (once it runs) only validates compilation — the runtime pattern itself still needs a
+  maintainer to re-run the relevant tracked workflow (name it) on this branch to confirm.
+  Record only the pattern + branch name in memory; resolve the PR number and any run ID on the
+  next invocation.
 - **On a later run**, find the PR from the branch name with the `github` MCP tool —
   `search_pull_requests` (`query: "repo:${{ github.repository }} is:pr [silencer] <branch>"`) —
-  then check the build with `pull_request_read` (`method: "get_check_runs"`, `pullNumber: <pr>`)
-  and/or `actions_get` (`method: "get_workflow_run"`, `resource_id: "<run-id>"`). The `gh` CLI is
-  unauthenticated in this sandbox; do not reach for `gh pr checks` or `gh run view`. Then:
-  - Build **failed due to your change** → push a fix commit to the same branch (re-triggers
-    CI) and update **Test Status**. After a couple of failed attempts, stop, mark the PR
-    unverified, and explain.
-  - Build **succeeded** → confirm the targeted warning/message is **gone** from the new logs
-    (grep them the same token-frugal way), update **Test Status** to green, and invite review.
+  then check for a build with `pull_request_read` (`method: "get_check_runs"`, `pullNumber:
+  <pr>`) and/or `actions_get` (`method: "get_workflow_run"`, `resource_id: "<run-id>"`). The
+  `gh` CLI is unauthenticated in this sandbox; do not reach for `gh pr checks` or `gh run
+  view`. Then:
+  - **No check run yet** → the build is still awaiting maintainer approval (or the PR is still
+    draft). Leave **Test Status** as-is; this is expected, not a failure.
+  - Build **failed due to your change** → push a fix commit to the same branch and update
+    **Test Status**. After a couple of failed attempts, stop, mark the PR unverified, and
+    explain.
+  - Build **succeeded** → update **Test Status** to reflect compilation is confirmed, but
+    reiterate (for categories 3/5/6) that the runtime pattern itself is still unconfirmed
+    pending a maintainer re-running the source tracked workflow, and invite review.
   - **Infra failure** (no runner / transient) → mark unverified and ask a maintainer to re-run.
-- Always link the build run in **Test Status**. Nothing merges without a human reviewing the
-  green (or explained) build.
+- Always link whatever build run exists in **Test Status**, and be explicit about what it does
+  and does not prove. Nothing merges without a human reviewing the PR and its evidence.
 
 ## Pull request conventions
 
 - Branch name: `silencer/<category>-<short-desc>` (e.g. `silencer/unused-var-layernorm`).
-- Title prefixed `[silencer] ` (the safe-output adds this) and labelled `automation`.
+- Title prefixed `[silencer] ` (the safe-output adds this) and labelled `automation` and
+  `silencer` (the latter so these PRs are easy to filter/find later).
+- Opened as **draft** (see *Validating changes via CI* for why) — a maintainer marks it
+  ready when they choose to review/approve CI for it.
 - **One concern per PR.** Do not mix categories or unrelated files.
 - PR body must include:
   - **What noise this removes** — the exact warning/message and its **frequency** in the
@@ -683,10 +724,13 @@ When reasoning about what your PR will be validated against, trust the current
   - **Root cause** — *why* the noise was emitted, and why this fix removes it at the source.
   - **Why this is not suppression** — one sentence confirming you fixed the emitter (or, for
     the rare justified suppression, why the source is unreachable and the scope is minimal).
-  - **Test Status** — on PR creation, state that the CI build is **queued** and will be
-    linked on the next Silencer run (the PR and its build do not exist until gh-aw's
-    `safe_outputs` job runs after your agent turn, so no run ID is available yet). On
-    later runs, update with the actual build run link and its state.
+  - **Test Status** — on PR creation, state plainly that CI has not run: `pr-gate.yaml`
+    needs a maintainer's approval before it starts, and even once green it only confirms
+    compilation, not that the runtime pattern (categories 3/5/6) is gone — that needs a
+    maintainer to re-run the source tracked workflow on this branch. The PR and any build
+    do not exist until gh-aw's `safe_outputs` job runs after your agent turn, so no run ID
+    is available yet. On later runs, update with whatever build link/state exists, keeping
+    that same distinction explicit.
 - Follow `CONTRIBUTING.md` and match tt-metal's existing C++/Python style. **No new
   dependencies, no broad refactors, no behavior changes** — noise removal must be
   behavior-preserving (a demoted log still logs at lower severity; a removed unused variable
@@ -749,7 +793,8 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
 - **Root cause, never blind suppression.** This is the whole point. Silencing the messenger
   is a failure, not a fix — even when the log gets quieter.
 - **Behavior-preserving only.** Never change what the code *does* to make a warning go away.
-- **Small, focused, reviewable PRs** — one noise source each, ready-for-review so CI runs.
+- **Small, focused, reviewable PRs** — one noise source each, opened as draft since CI needs
+  a maintainer's approval to run regardless.
 - **Grep, don't read.** Keep logs on disk; put only aggregated summaries in context. This is
   a hard cost requirement, not a suggestion.
 - **Logs and CI state come from the `github` MCP tool, never the `gh` CLI.** `bash` has no
@@ -757,8 +802,10 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
   `search_pull_requests` / `pull_request_read` are the real tool names — do not invent methods.
 - **No logs retrieved means no scan.** Report `missing-tool` / `missing-data`, write nothing to
   repo memory, and stop. Never back-fill a "fix" from old issues or a source grep instead.
-- **Validate via CI, never locally.** Never claim a fix is verified without a build run; the
-  proof a warning is fixed is its absence from the *new* logs.
+- **Validate via CI, never locally.** Never claim a fix is verified without a build run, and
+  never claim a runtime/log-spam pattern (categories 3/5/6) is confirmed gone from a compile-
+  only build run — the proof is its absence from a fresh run of the *source tracked workflow*,
+  which currently needs a maintainer to trigger (see *Validating changes via CI*).
 - **Coordinate with `deprecations.json` / `deprecation-reaper.yml`** for deprecated-API work;
   migrate call sites, leave shim deletion to the reaper's schedule.
 - **When in doubt, do nothing / open an issue.** A wrong or noisy PR wastes maintainer
