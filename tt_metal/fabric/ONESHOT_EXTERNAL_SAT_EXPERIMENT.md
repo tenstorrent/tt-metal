@@ -216,3 +216,59 @@ hybrid keeps our CaDiCaL driving (encode / occupancy / cap / descent / decode / 
 and delegates each heavy SAT `solve()` to gimsatul (export tape + current assumption units → subprocess → parse
 model → import). Goal: measure *integrated* speed with warm solve + all features on. Being built on
 `ridvan/gen-rank-bindings-all-solutions`.
+
+---
+
+# COMPREHENSIVE sweep — CaDiCaL ablation vs gimsatul HYBRID (integrated, host cap ON)
+
+Full sweep 2026-07-30. All runs go through the real solve path with the **host cap applied**, ONE solve each, time =
+inter-mesh solve seconds, `occupied` = minimal host count reached (all correct). The gimsatul rows are the **HYBRID**:
+our CaDiCaL drives encode/occupancy/cap/descent/decode and delegates each heavy SAT solve to gimsatul (export tape +
+assumption units → subprocess → import model). So these are *integrated* numbers with all features intact, not
+standalone-on-a-flat-CNF. `gim_first` = gimsatul does only the warm feasible solve, then CaDiCaL runs the incremental
+descent warm-started from gimsatul's model (phase hints). Per-cell cap 1500s (TIMEOUT = did not finish in 25 min).
+
+## Table A — CaDiCaL ablation (2x4, seconds; host cap on)
+| stages | mode3 cold cap | mode1 warm+lock | mode0 warm+descent | mode3+fastsat | mode3+seed7 |
+|---:|--:|--:|--:|--:|--:|
+| 64  | 11.4 | 17.5 | 224.2 | 48.3 | 19.2 |
+| 96  | 32.6 | 190.9 | 839.7 | 186.0 | 630.1 |
+| 112 | 988.5 | 345.2 | 726.0 | 519.7 | 1459.6 |
+| 128 | 1345.6 | TIMEOUT | TIMEOUT | 855.8 | TIMEOUT |
+
+## Table B — gimsatul HYBRID (2x4, seconds; host cap on; thread-count sweep)
+| stages | gim t8 | gim t16 | gim t32 | gim_first t32 | best hybrid | best CaDiCaL | hybrid speedup |
+|---:|--:|--:|--:|--:|--:|--:|--:|
+| 64  | 5.6 | 9.6 | 12.6 | 39.8 | **5.6** (t8) | 11.4 | 2.0× |
+| 96  | 225.2 | 114.0 | 52.9 | 444.1 | 52.9 (t32) | **32.6** | 0.6× (CaDiCaL wins) |
+| 112 | 606.7 | 125.7 | 310.8 | 209.9 | **125.7** (t16) | 345.2 | 2.7× (vs best CaDiCaL) / 7.9× vs cad_mode3 |
+| 128 | 1283.9 | 515.1 | **72.9** | TIMEOUT | **72.9** (t32) | 855.8 | 11.7× (vs best CaDiCaL) / 18.5× vs cad_mode3 |
+
+## Table C — 4x4 (all configs ≈ 0.0–0.2 s)
+Every 4x4 case (32/48/64) solved in <0.2 s with `occupied == stages` (32→32, 48→48, 64→64). The cap is **not
+binding** — a 4x4 mesh fills a whole host, so there is no packing to do (trivial exact-fit). 4x4 is therefore not a
+useful stress case for host minimization; the interesting regime is 2x4 partial fills.
+
+## Findings
+1. **The integrated hybrid wins big on the HARD cases** (where it matters): 112 → 125.7s (gim t16) vs 988.5s
+   (cad_mode3), **7.9×**; 128 → **72.9s (gim t32) vs 1345.6s (cad_mode3), 18.5×** — and 128 is the case that
+   motivated the whole exercise. Target "2x4-128 with host cap well under 30 min" is met at **~1.2 min**, integrated,
+   all features intact (occupied=32 correct).
+2. **gimsatul is instance-dependent and NOT a blanket win.** On 96, pure CaDiCaL cold cap (32.6s) beats every hybrid
+   config. gimsatul only pays off once the capped solve gets genuinely hard (112, 128).
+3. **Best thread count is non-monotonic and instance-specific:** 64→t8, 96→t32, 112→t16, 128→t32. No single count
+   dominates — a production integration would need to race a couple counts or pick adaptively.
+4. **`gim_first` (gimsatul warm + CaDiCaL descent) is not the answer for the hard cases** — it TIMED OUT on 128,
+   because the *descent itself* is intractable there (cad_mode0/mode1 also timed out). Warm-starting CaDiCaL from
+   gimsatul's model doesn't rescue an intractable descent. It only helps mid-range (112: 209.9s).
+5. **Among CaDiCaL configs, cold cap (mode3) is the most robust**; the warm descent (mode0) is consistently the worst
+   and times out at 128. **fastsat is erratic** — it *hurts* at 64/96 but *helps* at 128 (855.8s vs 1345.6s). **seed
+   choice is high-variance** (seed7 times out at 128 while default solves in 1345.6s).
+6. **Bottom line:** the best single strategy for the hard host-cap solve is **cold-cap delegated to gimsatul at a
+   high thread count** (gim_mode3_t32) — 18× on 128 — but it must fall back to / race pure CaDiCaL cold cap on the
+   mid stages where gimsatul loses. The hybrid keeps every feature (preferred, symmetry, enumeration all remain on
+   CaDiCaL; only the heavy solve is delegated).
+
+Raw data: `oneshot_external_sat_scripts/RESULTS_full_sweep.txt`. Hybrid code (gimsatul_solve / delegated_solve /
+phase_hint_from_last_gimsatul_model, env TT_TOPO_SAT_GIMSATUL[_BIN|_THREADS] / TT_TOPO_SAT_GIM_FIRST) is on branch
+`ridvan/gen-rank-bindings-all-solutions` (depends on the min-host solver, which is not on main).
