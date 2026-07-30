@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 75b977e1a04ee7a14df5d8039393c7844f33fdae and fixed-line migration at code commit 261e322ed2284175e3b4b7b80f98e947b569fe10. Remaining status is reconciled through commit 307951cc8dc from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
+  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 75b977e1a04ee7a14df5d8039393c7844f33fdae, fixed-line migration at code commit 261e322ed2284175e3b4b7b80f98e947b569fe10, and matmul in1 multicast migration at code commit 2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd. Remaining status is reconciled through commit 307951cc8dc from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
   "host_bindings": [
     {
       "id": "weights-mcast:conv2d-sharded:single-sender-rect",
@@ -69,16 +69,22 @@
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
       "validation_set": [
-        "MM-IN1-ALL",
-        "MM-IN1-RECEIVER-2D"
+        "build_metal.sh: passed",
+        "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
-      "coverage_confidence": "high",
-      "last_verified": null,
-      "flags": []
+      "coverage_confidence": "medium",
+      "last_verified": "2026-07-30",
+      "flags": [
+        "tier:3",
+        "fully-end-to-end",
+        "legacy-runtime-coverage-gap"
+      ]
     },
     {
       "id": "matmul-in1-mcast:reuse-2d:descriptor",
@@ -89,16 +95,22 @@
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
       "validation_set": [
-        "MM-IN1-ALL",
-        "MM-IN1-RECEIVER-2D"
+        "build_metal.sh: passed",
+        "exact 2D transpose_mcast=false/true --dev nodes: passed; sender JIT 4616781822959825899, receiver JIT 4167676435791909128",
+        "MM-IN1-ALL/MM-IN1-RECEIVER-2D: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": null,
-      "flags": []
+      "last_verified": "2026-07-30",
+      "flags": [
+        "tier:3",
+        "fully-end-to-end"
+      ]
     },
     {
       "id": "matmul-in1-mcast:reuse-1d:mcast-in1:legacy",
@@ -109,15 +121,22 @@
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
       "validation_set": [
-        "MM-IN1-ALL"
+        "build_metal.sh: passed",
+        "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
-      "coverage_confidence": "high",
-      "last_verified": null,
-      "flags": []
+      "coverage_confidence": "medium",
+      "last_verified": "2026-07-30",
+      "flags": [
+        "tier:3",
+        "fully-end-to-end",
+        "legacy-runtime-coverage-gap"
+      ]
     },
     {
       "id": "matmul-in1-mcast:reuse-1d:mcast-in1:descriptor",
@@ -128,15 +147,22 @@
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 9,
+      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
       "validation_set": [
-        "MM-IN1-ALL"
+        "build_metal.sh: passed",
+        "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
+        "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": null,
-      "flags": []
+      "last_verified": "2026-07-30",
+      "flags": [
+        "tier:3",
+        "fully-end-to-end"
+      ]
     },
     {
       "id": "groupnorm-v2:sharded:legacy:mcast",
@@ -271,13 +297,18 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "ab73b1f5c73f447380790377944bd92d7ee6bad2",
+      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
       "validation_set": [
-        "MM-IN1-ALL: 302 passed, 188 expected skips, 490 collected"
+        "build_metal.sh: passed",
+        "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
+        "exact 2D transpose_mcast=false/true --dev nodes: passed; sender JIT 4616781822959825899, receiver JIT 4167676435791909128",
+        "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "V9 migrated; explicit active receiver acknowledgement count handles rectangles containing inactive cores.",
+      "last_verified": "2026-07-30",
+      "census_note": "V9 kernel and host wire migrated; explicit active receiver acknowledgement count handles rectangles containing inactive cores.",
       "flags": [],
       "migration_unit": "matmul-in1-mcast-padding-host"
     },
@@ -288,13 +319,18 @@
       "tag": "clean",
       "status": "migrated",
       "migrated_api_version": 9,
-      "commit": "ab73b1f5c73f447380790377944bd92d7ee6bad2",
+      "commit": "2d0280d3dacf8a2ba24882b35816c6a1fbffb7dd",
       "validation_set": [
-        "MM-IN1-ALL/MM-IN1-RECEIVER-2D: 302 passed, 188 expected skips, 490 collected"
+        "build_metal.sh: passed",
+        "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
+        "exact 2D transpose_mcast=false/true --dev nodes: passed; sender JIT 4616781822959825899, receiver JIT 4167676435791909128",
+        "MM-IN1-ALL/MM-IN1-RECEIVER-2D: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "V9 migrated; all in1 and optional bias multicast semaphore operations are pipe-owned.",
+      "last_verified": "2026-07-30",
+      "census_note": "V9 kernel and host wire migrated; all in1 and optional bias multicast semaphore operations are pipe-owned.",
       "flags": [],
       "migration_unit": "matmul-in1-mcast-padding-host"
     },
