@@ -1122,6 +1122,47 @@ def test_floor_div_int32_edge_cases(device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
+@pytest.mark.parametrize("scalar", [2, 3, -2, -3, 7, 1000])
+def test_floor_div_int32_scalar(scalar, device):
+    # The tensor-scalar overload used to compute input * (1.0f / scalar). multiply
+    # truncates a float scalar against an integer tensor, so 1/2 became 0 and the
+    # whole result collapsed to zero.
+    torch_input_tensor = torch.tensor(
+        [7, 6, 28, 100, 1, 0, -7, -6, -28, -100, -1, 12345678, -1000000007],
+        dtype=torch.int32,
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+
+    golden_function = ttnn.get_golden_function(ttnn.floor_div)
+    torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
+
+    output_tensor = ttnn.to_torch(ttnn.floor_div(input_tensor, scalar))
+
+    assert output_tensor.dtype == torch.int32
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_floor_div_int32_scalar_large_magnitude(device):
+    # Values above 2**24 are not representable exactly in float32, so the old
+    # reciprocal-multiply path could not have produced these even with a correct
+    # scalar.
+    torch_input_tensor = torch.tensor(
+        [16777217, 16777219, 33554435, 1073741831, 2147483647, -2147483648],
+        dtype=torch.int32,
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+
+    golden_function = ttnn.get_golden_function(ttnn.floor_div)
+
+    for scalar in (1, 3, 7):
+        torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
+        output_tensor = ttnn.to_torch(ttnn.floor_div(input_tensor, scalar))
+        assert output_tensor.dtype == torch.int32
+        assert torch.equal(output_tensor, torch_output_tensor)
+
+
 @pytest.mark.parametrize("b_dtype", [ttnn.float32, ttnn.bfloat16])
 def test_floor_div_int32_float_divisor_keeps_inf_guard(device, b_dtype):
     # An integer numerator with a float divisor can still divide by zero, so the
