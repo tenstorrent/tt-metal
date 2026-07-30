@@ -116,6 +116,37 @@ overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 
+// [#48552 HACK -- remove before merge] Install an identity route for Neo0/tc16 before releasing any TRISC.
+// This tests whether explicitly preserving the full 5-bit Tensix-only counter selector prevents tc16 updates
+// from leaking onto a DM-visible counter. Pair 0 is intentionally borrowed for this experiment; do not use
+// this with a program whose real DFB remapper configuration also owns pair 0.
+#ifndef DFB_HACK_REMAP_TC16_IDENTITY
+#define DFB_HACK_REMAP_TC16_IDENTITY 1
+#endif
+
+#if DFB_HACK_REMAP_TC16_IDENTITY
+inline void configure_tc16_identity_remap() {
+    constexpr uint32_t pair_idx = 0;
+    constexpr uint32_t neo0_client_id = static_cast<uint32_t>(overlay::NEO_0);
+    constexpr uint32_t tc_id = 16;
+
+    g_remapper_configurator.set_pair_index(pair_idx, /*auto_clear=*/true);
+    g_remapper_configurator.set_clientR_slot(/*slot=*/0, neo0_client_id, tc_id);
+    g_remapper_configurator.configure_clientL_all_fields(
+        neo0_client_id,
+        tc_id,
+        /*valid=*/0x1,
+        /*clientl_is_producer=*/1,
+        /*clientr_group=*/0,
+        /*distribute=*/0);
+    g_remapper_configurator.write_all_configs();
+    asm volatile("fence" : : : "memory");
+    g_remapper_configurator.enable_remapper();
+    while (!overlay::RemapperAPI::is_remapper_enabled()) {
+    }
+}
+#endif
+
 void device_setup() {
     // instn_buf
     // pc_buf
@@ -301,6 +332,10 @@ extern "C" uint32_t _start1() {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                 }
 
+#if DFB_HACK_REMAP_TC16_IDENTITY
+                // PACK can touch tc16 as soon as run_triscs() releases its GO signal.
+                configure_tc16_identity_remap();
+#endif
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
