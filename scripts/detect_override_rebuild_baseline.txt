@@ -1,0 +1,24 @@
+# Baseline for scripts/detect_override_rebuild.py
+#
+# Files that still rebuild a ProgramDescriptor inside override_runtime_arguments. The hook skips
+# them so it can block NEW violations without obstructing unrelated edits to these files.
+#
+# Every entry is a live per-dispatch cost: override_runtime_arguments runs on EVERY program-cache
+# hit, so calling create_descriptor() there pays the full cache-MISS host cost (work split,
+# CoreRangeSet construction, arch queries, TensorAccessorArgs, kernel-source strings, compile-time
+# arg vectors, a heap-allocated arg vector per core) on every dispatch. Fixing an op means deleting
+# its line here.
+#
+# For reference, the equivalent fix measured on the ops migrated in #49889 / #50338:
+#   rotary_embedding cache hit  35.1 -> 27.2 us
+#   uniform          cache hit  23.2 -> 13.8 us
+#
+# Format: one repo-relative path per line. Comments and blank lines ignored.
+
+ttnn/cpp/ttnn/operations/ccl/mesh_partition/device/mesh_partition_program_factory.cpp
+ttnn/cpp/ttnn/operations/data_movement/move/device/move_sharded_program_factory.cpp
+ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.cpp
+ttnn/cpp/ttnn/operations/data_movement/tilize/device/tilize_device_operation.cpp
+ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp
+ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/moreh_adam_program_factory.cpp
+ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/multi_core_program_factory.cpp
