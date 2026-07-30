@@ -92,6 +92,7 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::RowInvariant::cre
         // even though this op only ever selects MODE_SEQUENCED — get_named_compile_time_arg_val()
         // aborts (via __builtin_unreachable in a constant expression) on any name missing from the
         // map, regardless of which branch actually runs. Values below are never read at runtime.
+        {"elem_size", 2},
         {"tile_height", 32},
         {"tile_row_shift_bits", 0},
         {"num_pages_in_row", 1},
