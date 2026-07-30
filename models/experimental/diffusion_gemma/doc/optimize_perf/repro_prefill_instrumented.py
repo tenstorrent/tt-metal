@@ -42,6 +42,7 @@ P_MAX = int(os.getenv("DG_DENOISE_REVEAL_PMAX", "16384"))
 
 _armed = False
 _readbacks = []
+_allreduces = []
 
 
 def free_gib(mesh):
@@ -71,6 +72,39 @@ def trace_stats(wrapper):
                                   "adapter_rebinds") if k in s}
     except Exception:
         return {}
+
+
+def install_allreduce_probe(mesh):
+    """Time EVERY ttnn.all_reduce, and record program-cache entries around each one.
+
+    This is the decisive measurement. The live stack of a wedged prefill was
+    ``ttnn.all_reduce -> reduce_scatter -> ReduceScatterProgram::create_mesh_workload ->
+    create_global_semaphore -> GlobalSemaphore::setup_buffer -> reset_semaphore_value ->
+    enqueue_write_mesh_buffer -> FDMeshCommandQueue::finish_nolock``, i.e. a cache-missing
+    all_reduce mints a GlobalSemaphore whose setup does a synchronous device write that
+    drains the whole command queue. Prefill issues ~90 all_reduces (3/layer x 30 layers),
+    so this says directly whether the 8-12 s is 90 drains of ~100 ms or one 8 s stall --
+    and, by sampling the cache size across each call, whether entries GROW per all_reduce
+    (hash includes the semaphore identity) or stay flat (eviction / invalidation).
+
+    Patched at ``ttnn.all_reduce`` rather than at the three DG call sites
+    (diffusion_attention.py:491, expert_operations.py:53, concat_moe.py:376) because the
+    prefill forward runs the shared gemma4 model, whose collectives are not those sites.
+    """
+    original = ttnn.all_reduce
+
+    def timed(*args, **kwargs):
+        if not _armed:
+            return original(*args, **kwargs)
+        before = program_cache_entries(mesh)
+        t0 = time.perf_counter()
+        out = original(*args, **kwargs)
+        dt = time.perf_counter() - t0
+        _allreduces.append((dt, before, program_cache_entries(mesh)))
+        return out
+
+    ttnn.all_reduce = timed
+    return original
 
 
 def install_readback_probe():
@@ -125,6 +159,7 @@ def main():
         print(f"[instr] captured; free={free_gib(mesh)} pc_entries={program_cache_entries(mesh)}", flush=True)
 
         install_readback_probe()
+        install_allreduce_probe(mesh)
 
         # coarse spans inside prefill_prompt_tokens, without touching production code
         spans = {}
@@ -148,6 +183,7 @@ def main():
         for req in range(REQUESTS):
             _armed = FROM <= req <= TO
             _readbacks.clear()
+            _allreduces.clear()
             spans.clear()
 
             t0 = time.perf_counter()
@@ -171,6 +207,16 @@ def main():
                 **trace_stats(wrapper),
             }
             if _armed:
+                ar = sorted((d for d, _, _ in _allreduces), reverse=True)
+                growth = [(b, a) for _, b, a in _allreduces if b is not None and a is not None and a != b]
+                row.update({
+                    "ar_count": len(ar),
+                    "ar_sum_s": round(sum(ar), 4),
+                    "ar_max_s": round(ar[0], 4) if ar else None,
+                    "ar_top5_s": [round(x, 4) for x in ar[:5]],
+                    # how many all_reduces ADDED a program-cache entry -> hypothesis A
+                    "ar_grew_cache": len(growth),
+                })
                 rb = sorted(_readbacks, reverse=True)
                 row.update({
                     "rb_count": len(rb),
@@ -188,15 +234,24 @@ def main():
                 json.dump(rows, fh, indent=2)
             print(f"[instr] wrote {out}", flush=True)
 
+        print("\n[instr] program-cache entry curve (A=unbounded growth, B=plateau+evict, C=flat+miss):", flush=True)
+        print("    " + " ".join(f"{r['req']}:{r['pc_entries']}" for r in rows), flush=True)
+
         spiked = [r for r in rows if r["prefill_s"] > 2.0]
         print(f"\n[instr] spiked requests: {[r['req'] for r in spiked]}", flush=True)
         for r in spiked:
             if "rb_sum_s" in r:
-                share = 100.0 * r["rb_sum_s"] / max(r["prefill_s"], 1e-9)
-                print(f"[instr] req {r['req']}: prefill {r['prefill_s']:.3f}s, "
-                      f"{r['rb_count']} readbacks summing {r['rb_sum_s']:.3f}s ({share:.0f}% of prefill), "
-                      f"worst {r['rb_max_s']:.3f}s -> "
-                      f"{'ONE STALL' if r['rb_max_s'] > 0.5 * r['prefill_s'] else 'SPREAD'}", flush=True)
+                share_rb = 100.0 * r["rb_sum_s"] / max(r["prefill_s"], 1e-9)
+                share_ar = 100.0 * r.get("ar_sum_s", 0.0) / max(r["prefill_s"], 1e-9)
+                print(f"[instr] req {r['req']}: prefill {r['prefill_s']:.3f}s | "
+                      f"{r.get('ar_count')} all_reduce summing {r.get('ar_sum_s')}s ({share_ar:.0f}%), "
+                      f"worst {r.get('ar_max_s')}s, {r.get('ar_grew_cache')} grew the cache | "
+                      f"{r['rb_count']} readbacks summing {r['rb_sum_s']:.3f}s ({share_rb:.0f}%), "
+                      f"worst {r['rb_max_s']:.3f}s", flush=True)
+                if r.get("ar_max_s") and r["ar_max_s"] > 0.5 * r["prefill_s"]:
+                    print("[instr]   -> ONE all_reduce dominates: a single drain, not 90", flush=True)
+                elif r.get("ar_sum_s", 0) > 0.5 * r["prefill_s"]:
+                    print("[instr]   -> SPREAD across all_reduces: many drains", flush=True)
 
         wrapper.release_persistent_capture()
     finally:
