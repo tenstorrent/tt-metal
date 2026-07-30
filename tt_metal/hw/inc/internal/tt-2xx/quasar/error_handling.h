@@ -61,24 +61,25 @@ enum class TriscErrors : uint32_t {
 
 // Below: error_code[7:0], the error index within the block named by TriscErrors.
 
-// Index for TriscErrors::ERROR_TRISC0..3. Values come from
-// https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/461602877 via
-// https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/565445671.
-//
-// These are the bases of the old 22-26 / 31-34 / 40-44 ranges. Those ranges used to spread
-// across the TRISCs, they don't any more, so take the TRISC from error_code[13:8] and not from
-// the value here. Faulting PC lands in `ERR_DATA`.
+// Index for TriscErrors::ERROR_TRISC0..3. These are the bases of the old 22-26 / 31-34 / 40-44
+// ranges on https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/461602877. Those ranges used
+// to spread across the TRISCs, they don't any more, so take the TRISC from error_code[13:8] and
+// not from the value here. Note that page predates the current encoding, so treat the value
+// meanings below as the reference rather than its table. Reported PC lands in `ERR_DATA`.
 //
 // Only one gets reported, in this order:
-//   L1_ILLEGAL_ACCESS > STACK_OVERFLOW > MEM_ACCESS_HANG > TTI_BUFFER_HANG
-// so a lower one is invisible while a higher one is live. Watch out for 25 vs 22: a store to a
-// full instruction buffer stalls the load/store queue, so it can come back as 25 even though
-// it started as an instruction buffer problem. The PC is the way to tell.
+//   L1_ILLEGAL_ACCESS > STACK_OVERFLOW > MEM_READ_NO_RESPONSE > TTI_BUFFER_HANG
+// so a lower one is invisible while a higher one is live.
 enum class TriscRiscErrors : uint32_t {
-    TTI_BUFFER_HANG = 22,  // TT instruction buffer is full
-    // A load/store did not complete. Can also be a blocked instruction buffer push, since
-    // this outranks TTI_BUFFER_HANG.
-    MEM_ACCESS_HANG = 25,
+    // Instruction buffer sat idle for DBG_IBUFFER_TIMEOUT cycles. Opt-in: nothing is counted
+    // unless DBG_IBUFFER_CNT_EN is set, so this stays quiet on a normal run.
+    TTI_BUFFER_HANG = 22,
+    // A read went out and nothing answered within CSR_TIMEOUT_COUNT cycles (65536 after reset).
+    // Look at the target rather than the core: a bad NOC address, a core that isn't running,
+    // unmapped L1. Beware that the load still completes, with zero data, so the kernel carries
+    // on with a bogus value and whatever breaks next is a knock-on. Nothing to do with
+    // TTI_BUFFER_HANG despite sitting inside the old 22-26 range.
+    MEM_READ_NO_RESPONSE = 25,
     STACK_OVERFLOW = 31,     // stack pointer dropped below the stack limit
     L1_ILLEGAL_ACCESS = 40,  // L1 address check failed
 };

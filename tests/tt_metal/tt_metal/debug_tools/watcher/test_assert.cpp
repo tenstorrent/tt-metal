@@ -573,7 +573,8 @@ INSTANTIATE_TEST_SUITE_P(
         // These report the PC up front, same as the DM faults.
         HwFaultMessageParams{
             "Trisc0TtiBufferHang", 0x0016, 0x1234, {"at PC 0x00001234", "Neo 0 TRISC0", "TTI_BUFFER_HANG"}, {}},
-        HwFaultMessageParams{"Trisc1MemAccessHang", 0x0119, 0x1234, {"Neo 0 TRISC1", "MEM_ACCESS_HANG"}, {}},
+        HwFaultMessageParams{
+            "Trisc1MemReadNoResponse", 0x0119, 0x1234, {"Neo 0 TRISC1", "MEM_READ_NO_RESPONSE"}, {}},
         HwFaultMessageParams{"Trisc2StackOverflow", 0x021f, 0x1234, {"Neo 0 TRISC2", "STACK_OVERFLOW"}, {}},
         HwFaultMessageParams{"Trisc3L1IllegalAccess", 0x0328, 0x1234, {"Neo 0 TRISC3", "L1_ILLEGAL_ACCESS"}, {}},
         HwFaultMessageParams{"Neo3Trisc1", 0xc128, 0x1234, {"Neo 3 TRISC1", "L1_ILLEGAL_ACCESS"}, {}},
@@ -668,7 +669,7 @@ TEST(WatcherHwFaultMessage, ExactMessages) {
         // 0x19 and 0x16 are the pair that's easy to mix up, so pin both.
         {0x0119,
          0x00001234,
-         "hardware fault occurred at PC 0x00001234 on Neo 0 TRISC1 with cause: ERROR_TRISC1 (MEM_ACCESS_HANG), "
+         "hardware fault occurred at PC 0x00001234 on Neo 0 TRISC1 with cause: ERROR_TRISC1 (MEM_READ_NO_RESPONSE), "
          "error_code 0x0119"},
         {0x0016,
          0x00001234,

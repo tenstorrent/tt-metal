@@ -137,9 +137,9 @@ inline bool quasar_error_data_is_pc(TriscErrors block) {
 }
 
 // What's in ERR_DATA, which depends on the block. For the per-TRISC errors it's a PC, the last
-// instruction to commit. On a hang that's where the thread stopped rather than the actual
-// culprit, so disassemble around it: that's how you tell a MEM_ACCESS_HANG that was a blocked
-// instruction buffer push from one that was a load/store that never came back.
+// instruction to commit, so for a timeout it's roughly where the thread gave up rather than the
+// exact culprit. Disassemble around it: on a MEM_READ_NO_RESPONSE that points at the load whose
+// response never arrived.
 inline std::string_view get_quasar_error_data_name(TriscErrors block) {
     switch (block) {
         case TriscErrors::ERROR_TRISC0:
