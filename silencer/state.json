@@ -5,12 +5,12 @@
   "in_flight_prs": [
     {
       "number": 51548,
-      "branch": "silencer/matmul-normalize-program-config",
+      "branch": "silencer/matmul-normalize-program-config-2e13238793abc79d",
       "pattern": "allowed_worker_cores not populated / normalize_program_config missing in CCL matmul ops",
       "issue": "#48660",
-      "status": "ci-passed",
+      "status": "ci-passed-commented",
       "asan_build_run_id": "30501808830",
-      "note": "asan-build ASan ubuntu 24.04 conclusion=success on run 30501808830. All other checks success/skipped, no failures. Ready for maintainer review."
+      "note": "asan-build ASan ubuntu 24.04 conclusion=success on run 30501808830. Posted confirmation comment on 2026-07-30. Awaiting maintainer review/merge - no further Silencer action needed until reviewed."
     }
   ],
   "backlog_cursor": {
