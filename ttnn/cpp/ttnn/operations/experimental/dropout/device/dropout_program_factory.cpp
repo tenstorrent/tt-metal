@@ -230,6 +230,14 @@ inline void assign_per_core_runtime_args(
     });
 }
 
+namespace {
+// Kernel indices: positions in the `descriptor.kernels` push order at the end of create_descriptor
+// (reader, writer, compute group 1, then compute group 2 only when core_group_2 is non-empty).
+// Single-sourced here, next to the pushes that define the order, so the cache-miss push order and the
+// cache-hit GetRuntimeArgs indices in override_runtime_arguments stay one edit apart.
+enum : uint32_t { kReaderIdx, kWriterIdx, kComputeGroup1Idx, kComputeGroup2Idx };
+}  // namespace
+
 tt::tt_metal::ProgramDescriptor DropoutProgramFactory::create_descriptor(
     const DropoutParams& args, const DropoutInputs& tensor_args, Tensor& output) {
     using namespace tt;
@@ -321,11 +329,11 @@ tt::tt_metal::ProgramDescriptor DropoutProgramFactory::create_descriptor(
     // -------------------------------------------------------------------------
     // 6) Return the fully configured descriptor
     // -------------------------------------------------------------------------
-    descriptor.kernels.push_back(std::move(kernels.reader));
-    descriptor.kernels.push_back(std::move(kernels.writer));
-    descriptor.kernels.push_back(std::move(kernels.compute_group_1));
+    descriptor.kernels.push_back(std::move(kernels.reader));           // kReaderIdx
+    descriptor.kernels.push_back(std::move(kernels.writer));           // kWriterIdx
+    descriptor.kernels.push_back(std::move(kernels.compute_group_1));  // kComputeGroup1Idx
     if (kernels.compute_group_2.has_value()) {
-        descriptor.kernels.push_back(std::move(*kernels.compute_group_2));
+        descriptor.kernels.push_back(std::move(*kernels.compute_group_2));  // kComputeGroup2Idx
     }
 
     return descriptor;
@@ -350,13 +358,8 @@ void DropoutDeviceOperation::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     using namespace tt::tt_metal;
 
-    // Kernel indices are positions in create_descriptor's `descriptor.kernels` push order:
-    // reader(0), writer(1), compute group 1(2), compute group 2(3, only when core_group_2 is non-empty).
-    constexpr uint32_t kReaderIdx = 0;
-    constexpr uint32_t kWriterIdx = 1;
-    constexpr uint32_t kComputeGroup1Idx = 2;
-    constexpr uint32_t kComputeGroup2Idx = 3;
-
+    // Kernel indices (kReaderIdx/kWriterIdx/kComputeGroup{1,2}Idx) are shared with create_descriptor's
+    // `descriptor.kernels` push order -- see the enum defined next to those pushes.
     const auto& input = tensor_args.input;
 
     // `seed` is excluded from the program hash, so the cached program still carries the first miss's
