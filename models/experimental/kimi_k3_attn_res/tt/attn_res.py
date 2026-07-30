@@ -109,6 +109,15 @@ class TtAttnRes(LightweightModule):
             3 136 us read. Requires `STATS_FIDELITY`; see the note there. The
             squares half is width-gated and falls back on its own, so this stays
             a single knob for the caller — see `ONE_PASS_SQUARES_MAX_WIDTH`.
+        fused_mix: take the mixture with `ttnn.experimental.fast_weighted_reduce_nc`
+            instead of `mul` then `sum`. The composed form writes a full second
+            `[1, C, N, d/tp]` to DRAM and reads it back, so it moves 3x the bytes
+            of the reduction it is performing; the op MACs the weight into the
+            accumulator during the one pass that has to happen anyway. Phase 10 on
+            `(2,4)` at `C = 9`: 687 us -> 257 us, 2.67x, against a 228 us floor
+            measured as unweighted `fast_reduce_nc` over the same tensor. The 29 us
+            over that floor is what the weighting itself costs. Off is the composed
+            form, kept because it is the reference the op is gated against.
     """
 
     def __init__(
@@ -125,6 +134,7 @@ class TtAttnRes(LightweightModule):
         stats_dtype=ttnn.float32,
         fold_stats=True,
         one_pass_stats=True,
+        fused_mix=True,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -137,6 +147,7 @@ class TtAttnRes(LightweightModule):
         self.stats_dtype = stats_dtype
         self.fold_stats = fold_stats
         self.one_pass_stats = one_pass_stats
+        self.fused_mix = fused_mix
 
         mesh_shape = tuple(mesh_device.shape)
         self.tp_factor = mesh_shape[tp_axis]
@@ -427,7 +438,13 @@ class TtAttnRes(LightweightModule):
         is over `v`, not over the normalized key.
 
         Rank-local at every sharding: the weight is a per-(token, candidate)
-        scalar and the sum is over candidates, so no `d`-wide tensor moves."""
+        scalar and the sum is over candidates, so no `d`-wide tensor moves.
+
+        The fused op takes the fp32 `weights` directly — its weight operand
+        accepts fp32 precisely so this call site does not have to downcast the
+        score chain's output to hand it over. See `fused_mix`."""
+        if self.fused_mix:
+            return ttnn.experimental.fast_weighted_reduce_nc(v, weights, dim=1)
         weighted = ttnn.mul(v, weights)
         mixed = ttnn.sum(weighted, dim=1, keepdim=True)
         ttnn.deallocate(weighted)
