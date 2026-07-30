@@ -1033,22 +1033,41 @@ def _env_float(key: str, default: float) -> float:
 
 
 def _invoke_matmul_sweep(*, node, case, out_path, pcc_threshold, iters, max_shapes, repo_root):
-    """Load cc_optimize/matmul_sweep.py by path and run the pre-pass. Separate so the ordering logic
-    above it is testable without a device."""
-    import importlib.util as _ilu
+    """Run the sweep as a SUBPROCESS via matmul_sweep.py's CLI, NOT in-process.
 
-    spec = _ilu.spec_from_file_location("cc_matmul_sweep", str(Path(__file__).resolve().parent / "matmul_sweep.py"))
-    mod = _ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.run_prepass(
+    The sweep opens the device mesh to benchmark matmuls. A mesh opened in THIS engine process is not
+    released by close_mesh_device -- the UMD device cluster stays held until the process exits -- so
+    the op-sig probe CHILD the engine spawns next would deadlock opening the same chips it still holds
+    (reproduced: parent-opens-in-process then child-opens hangs at open_mesh_device; two subprocess
+    opens do not). A subprocess releases the mesh when it exits, so the probe and every round after
+    open cleanly. Reads the summary back from out_path, which the subprocess writes."""
+    sweep_py = Path(__file__).resolve().parent / "matmul_sweep.py"
+    pa_root = Path(__file__).resolve().parent.parent
+    env = dict(os.environ)
+    env["TT_METAL_HOME"] = str(repo_root)
+    env["PYTHONPATH"] = os.pathsep.join([str(pa_root), str(repo_root)])
+    cmd = [
+        sys.executable,
+        str(sweep_py),
         node,
-        case=case,
-        out_path=out_path,
-        pcc_threshold=pcc_threshold,
-        iters=iters,
-        max_shapes=max_shapes,
-        repo_root=Path(repo_root),
+        "--out",
+        str(out_path),
+        "--pcc",
+        str(pcc_threshold),
+        "--iters",
+        str(iters),
+        "--max-shapes",
+        str(max_shapes),
+    ]
+    if case:
+        cmd += ["--case", case]
+    subprocess.run(
+        cmd, cwd=str(repo_root), env=env, timeout=int(os.environ.get("PERF_MCP_MATMUL_SWEEP_TIMEOUT") or 3600)
     )
+    try:
+        return json.loads(Path(out_path).read_text())
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _matmul_sweep_after_discovery(demo_dir, repo_root, pipes, devices: str = "0") -> None:
