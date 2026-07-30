@@ -97,26 +97,39 @@ def _walk_torch(hidden_states, weights, q_pre, q_post, q_out, dtype):
     return out.float(), curve
 
 
-def _walk_device(mesh_device, hidden_states, weights, q_pre, q_post, q_out, hidden_size, record=None):
+def _walk_device(mesh_device, hidden_states, weights, q_pre, q_post, q_out, hidden_size, record=None, op=None):
     """`record` defaults to collecting the whole per-layer curve. At production `T`
-    that is 93 x [T, d] on the host, so the Phase-7 harness passes its own."""
-    to_tt = lambda t: ttnn.from_torch(
-        t.reshape(1, 1, -1, hidden_size), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
+    that is 93 x [T, d] on the host, so the Phase-7 harness passes its own.
+
+    `op` lets a caller supply a distributed `TtAttnRes`; its mappers then place
+    both the stream and the per-layer weight vectors, so the Phase-8 harness reuses
+    this walk instead of forking it."""
+    op = op or TtAttnRes(mesh_device, hidden_size=hidden_size, eps=EPS)
+    place = lambda t, mapper: ttnn.from_torch(
+        t.reshape(1, 1, -1, hidden_size),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=mapper,
     )
-    op = TtAttnRes(mesh_device, hidden_size=hidden_size, eps=EPS)
+    # The stream splits on tokens and hidden; a `[d]` module weight has no token
+    # axis to split, so it takes the same placement as a folded query.
+    to_tt = lambda t: place(t, op.stream_mapper)
+    to_vector = lambda t: place(t, op.vector_mapper)
+    from_tt = lambda t: ttnn.to_torch(t, mesh_composer=op.stream_composer).reshape(-1, hidden_size).float()
     stream = TtAttnResStream(op, to_tt(hidden_states), block_size=BLOCK_SIZE)
     curve = []
     out = _walk(
         stream,
-        [(to_tt(a), to_tt(m)) for a, m in weights],
+        [(to_vector(a), to_vector(m)) for a, m in weights],
         [op.to_query(q) for q in q_pre],
         [op.to_query(q) for q in q_post],
         op.to_query(q_out),
         ttnn.mul,
         ttnn.deallocate,
-        record or (lambda _, s: curve.append(ttnn.to_torch(s.prefix_sum).reshape(-1, hidden_size).float())),
+        record or (lambda _, s: curve.append(from_tt(s.prefix_sum))),
     )
-    result = ttnn.to_torch(out).reshape(-1, hidden_size).float()
+    result = from_tt(out)
     ttnn.deallocate(out)
     stream.deallocate()
     return result, curve
