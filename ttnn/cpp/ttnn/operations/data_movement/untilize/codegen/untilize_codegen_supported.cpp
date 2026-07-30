@@ -4,6 +4,8 @@
 
 #include "untilize_codegen_supported.hpp"
 
+#include <array>
+
 #include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -109,15 +111,22 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
 
 // Perf-demote ledger: shapes that supported_by_codegen() already accepts (correct under codegen)
 // but that a device-measured (DEVICE KERNEL DURATION, not e2e_perf) comparison found do not beat
-// native. Currently empty: the previous entries here (nightly/broaden_suite's bfloat8_b shapes)
-// were re-measured under DEVICE KERNEL DURATION and found 20-55% AHEAD of native on every one --
-// the prior list came from codegen_untilize.py's e2e_perf, which is dispatch-overhead-dominated for
-// these single-digit-microsecond kernels and doesn't reflect actual device time. Only bfloat8_b has
-// ever produced a demotion candidate, so the dtype gate stays; re-populate from a device
-// kernel-duration comparison, never from e2e_perf, if a future case regresses.
-bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& /*output_mem_config*/) {
-    if (input.dtype() != tt::tt_metal::DataType::BFLOAT8_B) {
-        return false;
+// native. The previous entries here (nightly/broaden_suite's bfloat8_b shapes) were re-measured
+// under DEVICE KERNEL DURATION and found 20-55% AHEAD of native on every one -- the prior list came
+// from codegen_untilize.py's e2e_perf, which is dispatch-overhead-dominated for these
+// single-digit-microsecond kernels and doesn't reflect actual device time. Re-populate from a
+// device kernel-duration comparison, never from e2e_perf, if a future case regresses.
+//
+// [6,4,102,93] bf16 DRAM: ungeneralized (no predicate found in this round's demotion analysis).
+// Non-tile-aligned bf16 into DRAM is otherwise in-scope and correct (build_with_unpadding); this
+// exact shape/output-config pair measured slower than native under auto, with no condition over
+// normalized attrs identified to explain why. The L1-output variant of the same shape was NOT
+// flagged, so the branch is scoped to DRAM only rather than generalized to the shape alone.
+bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    if (input.dtype() == tt::tt_metal::DataType::BFLOAT16 && input.layout() == tt::tt_metal::Layout::TILE &&
+        output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM && !output_mem_config.is_sharded() &&
+        input.logical_shape() == std::array<uint32_t, 4>{6, 4, 102, 93}) {
+        return true;
     }
     return false;
 }
