@@ -199,7 +199,7 @@ bool validate_bmm_result(
 
 }  // namespace
 
-TEST_F(FastDispatchMeshDeviceSingleCardFixture, Bmm) {
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     auto& mesh_device = *devices_[0];
     IDevice* dev = mesh_device.get_devices()[0];
 

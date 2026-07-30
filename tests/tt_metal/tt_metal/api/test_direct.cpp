@@ -588,7 +588,7 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderWriter) {
         ASSERT_TRUE(unit_tests::dram::direct::reader_writer(devices_.at(id), test_config));
     }
 }
-TEST_F(FastDispatchMeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
+TEST_F(AnyDispatchMeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
     unit_tests::dram::direct::ReaderDatacopyWriterConfig test_config = {
         .num_tiles = 1,
         .tile_byte_size = 2 * 32 * 32,

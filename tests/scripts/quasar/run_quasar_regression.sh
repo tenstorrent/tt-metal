@@ -828,7 +828,9 @@ run_test_invocation() {
     if [[ "$runner" == "pytest" ]]; then
         local f
         for f in "${filters[@]}"; do
-            node_ids+=("$(pytest_node_id "$group" "$f")")
+            # Use absolute $pyfile (same path as the existence check) so pytest
+            # collects correctly even when cwd is not TT_METAL_HOME.
+            node_ids+=("$(pytest_node_id "$pyfile" "$f")")
         done
         cmd_display="pytest ${node_ids[*]}"
         echo "  CMD: $cmd_display"
