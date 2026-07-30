@@ -81,6 +81,22 @@ inline void _llk_unpack_tilize_init_(
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
+    // Program Ch1.Z stride from unpack_dst_format's datum size, required by the
+    // UNPACR AddrMode 0b00010001 used on the 8-bit tilize path.
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(canonical_unpA_z_stride(unpack_dst_format));
+
+    // Clear Ch1.X and Ch1.Y start-counts once at init. Tilize's UNPACRs never
+    // increment Ch1.X or Ch1.Y (AddrMode 0b00010001 sets only Ch0.Z++/Ch1.Z++),
+    // so the counts stay at 0 through the whole tilize_block. With the counts at
+    // 0, Ch1.X/Y strides multiply out of the SrcA write address (SrcA_row =
+    // Ch1.Z*Zstride + Ch1.Y*Ystride + Ch1.X*Xstride + Base) and need not be
+    // programmed here.
+    TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1111);
+
+    // Program descriptor Z_dim = num_faces so Ch0 auto-addressing wraps at the
+    // correct face count. Mirrors the restore in _llk_unpack_tilize_uninit_.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
+
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
 
     // In case of 32-bit numbers, we have to unpack into dest register
