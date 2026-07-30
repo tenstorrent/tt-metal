@@ -1,0 +1,87 @@
+{
+  "cell_tag": "skillexp-cell/challenger/gemma4-noadvise",
+  "commit": "007163906d2df574667b2d4a537fa1217564372a",
+  "harness": "models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_decoder_perf_profile",
+  "exact_command": "env GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_FUNCTIONAL_DECODER_PERF=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\":true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py -k 'test_optimized_decoder_perf_profile and batch1'",
+  "decode_batch": 1,
+  "primary_layer_kind": "sliding_attention",
+  "repeats_ms": [
+    1.2698322534561157,
+    1.270894892513752,
+    1.2704934924840927
+  ],
+  "incumbent_ms": 1.2698322534561157,
+  "noise_floor_ms": 0.001062639057636261,
+  "configurations": {
+    "sliding_attention": {
+      "layer_idx": 0,
+      "layer_count": 25,
+      "repeats_ms": [
+        1.2698322534561157,
+        1.270894892513752,
+        1.2704934924840927
+      ],
+      "incumbent_ms": 1.2698322534561157,
+      "noise_floor_ms": 0.001062639057636261
+    },
+    "full_attention": {
+      "layer_idx": 5,
+      "layer_count": 5,
+      "repeats_ms": [
+        1.275571994483471,
+        1.272927038371563,
+        1.271294429898262
+      ],
+      "incumbent_ms": 1.271294429898262,
+      "noise_floor_ms": 0.004277564585208893
+    }
+  },
+  "shipped_policy": {
+    "weight_dtype": "BFLOAT16",
+    "activation_dtype": "BFLOAT16",
+    "attention_weight_dtype_by_layer_kind": {
+      "sliding_attention": "BFLOAT16",
+      "full_attention": "BFLOAT8_B"
+    },
+    "mlp_weight_dtype": "BFLOAT8_B",
+    "mlp_down_weight_dtype": "BFLOAT8_B",
+    "prefill_expert_weight_dtype": "BFLOAT8_B",
+    "expert_weight_dtype": "BFLOAT8_B",
+    "attention_math_fidelity": "HiFi4",
+    "full_attention_math_fidelity": "LoFi",
+    "mlp_math_fidelity": "LoFi",
+    "expert_gate_math_fidelity": "LoFi",
+    "expert_math_fidelity": "LoFi",
+    "packed_dense_gate_up": true,
+    "dram_in0_block_w": 11,
+    "dram_sharded_roles_by_layer_kind": {
+      "sliding_attention": [
+        "packed_mlp_gate_up",
+        "mlp_down"
+      ],
+      "full_attention": [
+        "o_proj",
+        "packed_mlp_gate_up",
+        "mlp_down"
+      ]
+    },
+    "expert_decode_input_l1": true,
+    "expert_gate_in0_block_w": 11,
+    "expert_down_in0_block_w": 11,
+    "expert_gate_per_core_n": 2,
+    "expert_down_per_core_n": 2
+  },
+  "shipped_weight_dtypes": {
+    "sliding_attention.qkv": "BFLOAT16",
+    "sliding_attention.o_proj": "BFLOAT16",
+    "full_attention.qkv": "BFLOAT8_B",
+    "full_attention.o_proj": "BFLOAT8_B",
+    "mlp_gate_up": "BFLOAT8_B",
+    "mlp_down": "BFLOAT8_B",
+    "prefill_experts": "BFLOAT8_B",
+    "decode_experts": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy_final_retry/decode_perf_report.csv; models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy_full_final/decode_perf_report.csv; models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/candidate_runs/final_selected_policy_perf.json",
+  "frozen_before_advisor": true,
+  "frozen_utc": "2026-07-30T13:27:00Z"
+}

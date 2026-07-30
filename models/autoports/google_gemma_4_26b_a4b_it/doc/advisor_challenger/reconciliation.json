@@ -1,0 +1,95 @@
+{
+  "threshold_pct": 1.0,
+  "source_command": "python .agents/skills/advisor-challenger/scripts/reconcile.py (run once for each layer kind; current final_ir symbol tables and Device Time CSV schema were then normalized into the rows below)",
+  "measured_windows_us": {
+    "sliding_attention": 1195.499,
+    "full_attention": 1202.962
+  },
+  "disagreements": [
+    {
+      "op": "rms_norm_residual_chain",
+      "layer_kind": "sliding_attention",
+      "advised_layout": "L1 width-sharded",
+      "shipped_layout": "interleaved, one core",
+      "device_us": 356.992,
+      "window_share_pct": 29.861,
+      "candidate": "coherent R11 residual/norm chain; fidelity explicitly retained from shipped policy",
+      "one_variable": "residual/norm sharding topology",
+      "measured_ms": 1.1695511639118195,
+      "incumbent_ms": 1.2698322534561157,
+      "verdict": "rejected",
+      "reason": "faster by 0.100281 ms, but the incumbent real-weight decode oracle failed",
+      "oracle": "real-weight test_optimized_real_weights_prefill_decode, PCC bar 0.995",
+      "oracle_passed": false,
+      "oracle_pcc": 0.9947948362024652
+    },
+    {
+      "op": "rms_norm_residual_chain",
+      "layer_kind": "full_attention",
+      "advised_layout": "L1 width-sharded",
+      "shipped_layout": "interleaved, one core",
+      "device_us": 366.009,
+      "window_share_pct": 30.426,
+      "candidate": "coherent R11 residual/norm chain; fidelity explicitly retained from shipped policy",
+      "one_variable": "residual/norm sharding topology",
+      "measured_ms": 1.3626804575324059,
+      "incumbent_ms": 1.271294429898262,
+      "verdict": "rejected",
+      "reason": "slower by 0.091386 ms"
+    },
+    {
+      "op": "qkv_linear",
+      "layer_kind": "sliding_attention",
+      "advised_layout": "DRAM-sharded weight, L1 width-sharded output",
+      "shipped_layout": "interleaved weight",
+      "device_us": 113.781,
+      "window_share_pct": 9.517,
+      "candidate": "add qkv to shipped DRAM-sharded roles; retain shipped MLP roles and all dtype/fidelity settings",
+      "one_variable": "qkv DRAM sharding",
+      "measured_ms": 1.3431021943688393,
+      "incumbent_ms": 1.2698322534561157,
+      "verdict": "rejected",
+      "reason": "slower by 0.073270 ms"
+    },
+    {
+      "op": "o_proj_linear",
+      "layer_kind": "sliding_attention",
+      "advised_layout": "DRAM-sharded weight, L1 width-sharded output",
+      "shipped_layout": "interleaved weight",
+      "device_us": 86.875,
+      "window_share_pct": 7.267,
+      "candidate": "add o_proj to shipped DRAM-sharded roles; retain shipped MLP roles and all dtype/fidelity settings",
+      "one_variable": "o_proj DRAM sharding",
+      "measured_ms": 1.2728888541460037,
+      "incumbent_ms": 1.2698322534561157,
+      "verdict": "rejected",
+      "reason": "slower by 0.003057 ms, outside the 0.001063 ms incumbent noise floor"
+    },
+    {
+      "op": "qkv_linear",
+      "layer_kind": "full_attention",
+      "advised_layout": "DRAM-sharded weight, L1 width-sharded output",
+      "shipped_layout": "interleaved weight",
+      "device_us": 82.739,
+      "window_share_pct": 6.878,
+      "candidate": "add qkv to shipped DRAM-sharded roles; retain shipped o_proj/MLP roles and all dtype/fidelity settings",
+      "one_variable": "qkv DRAM sharding",
+      "measured_ms": 1.3015633448958397,
+      "incumbent_ms": 1.271294429898262,
+      "verdict": "rejected",
+      "reason": "slower by 0.030269 ms"
+    }
+  ],
+  "agreements": [
+    "packed_mlp_gate_up DRAM sharding is already shipped for both layer kinds",
+    "mlp_down DRAM sharding is already shipped for both layer kinds",
+    "full_attention o_proj DRAM sharding is already shipped"
+  ],
+  "uncapturable": {
+    "op": "ttnn.sparse_matmul",
+    "component": "routed experts",
+    "layers_affected": 30,
+    "total_layers": 30,
+    "share_of_layers_pct": 100.0
+  }
+}

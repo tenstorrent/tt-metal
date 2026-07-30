@@ -1,0 +1,58 @@
+{
+  "outcome": "no_change",
+  "changed": false,
+  "shipped_change": false,
+  "final_ms": 1.2698322534561157,
+  "incumbent_ms": 1.2698322534561157,
+  "noise_floor_ms": 0.001062639057636261,
+  "delta_ms": 0.0,
+  "delta_pct": 0.0,
+  "winning_config": "frozen incumbent shipped policy",
+  "configurations": {
+    "sliding_attention": {
+      "final_ms": 1.2698322534561157,
+      "incumbent_ms": 1.2698322534561157,
+      "final_policy_rerun_ms": 1.2725479900836945,
+      "decision": "incumbent wins; the rerun does not replace the frozen best repeat"
+    },
+    "full_attention": {
+      "final_ms": 1.271294429898262,
+      "incumbent_ms": 1.271294429898262,
+      "final_policy_rerun_ms": 1.2687603011727333,
+      "decision": "same shipped policy; no advisor-derived change"
+    }
+  },
+  "oracle": "real-weight models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_real_weights_prefill_decode at PCC >= 0.995",
+  "oracle_type": "real weights",
+  "oracle_passed": true,
+  "oracle_results": {
+    "sliding_attention": {
+      "prefill_pcc": 0.9985449934874906,
+      "decode_pcc": 0.999616902015678
+    },
+    "full_attention_natural_cache": {
+      "prefill_pcc": 0.9968700037142196,
+      "decode_pcc": 0.9997537381107462
+    },
+    "full_attention_shared_cache": {
+      "prefill_pcc": 0.9968700037142196,
+      "decode_pcc": 0.9997537381107462
+    }
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "captures": {
+        "sliding_attention": 1,
+        "full_attention": 1
+      },
+      "trigger": "initial shipped-topology capture",
+      "topology_rewrite_since_previous_capture": false,
+      "result": "no correct material challenger beat the incumbent"
+    }
+  ],
+  "capture_count_by_layer_kind": {
+    "sliding_attention": 1,
+    "full_attention": 1
+  }
+}
