@@ -421,6 +421,149 @@ Test hygiene — two defects found in the mHC test wiring, do not repeat:
 
 ---
 
+## Phase 9 perf loop
+
+`tests/perf/test_attn_res_perf.py`. No timing assertions anywhere — the file measures and
+logs, the ledger holds the verdicts. Every row is `T = 5120`, 20 iterations after 3
+warmups, on an otherwise idle LoudBox. **Traced** rows replay a captured trace and are
+device time; **untraced** rows are Python-driven and include host.
+
+The method, and its one trap: time the host enqueue of R iterations with no readback,
+then time to `synchronize_device`. `enqueue ≈ total` is **ambiguous** — it means the
+device is idle *or* host and device are running alongside each other at the same rate.
+Only a traced run, where enqueue collapses to ~10 µs, reports device time on its own.
+P1 fell into this trap and P2 pulled it back out.
+
+`tests/perf/` sits under `tests/`, per the ladder and `deepseek_v3_d_p`'s layout, so the
+correctness sweep now has to exclude it — 30 device-heavy parametrizations with no gate:
+
+```
+correctness  pytest models/experimental/kimi_k3_attn_res/tests/ --ignore=models/experimental/kimi_k3_attn_res/tests/perf -q
+perf         pytest models/experimental/kimi_k3_attn_res/tests/perf/ -q -p no:randomly
+```
+
+The perf file carries no pytest marker on purpose. `models_device_performance_bare_metal`
+is what CI selects on, and claiming it for a harness with no assertions would put 30
+ungated tests into a regression job.
+
+### P1 — the launch term, untraced (`S = 8`, peak shape)
+
+*Hypothesis (`ROOFLINE.md` §6):* ~130 µs per launch × 22 launches = 2.86 ms of host
+against a 1.94 ms DRAM floor, so the composed op is launch-bound even at production shape.
+
+| placement | `num_links` | enqueue µs | total µs | µs per ttnn call |
+|---|---|---|---|---|
+| `(1, 1)` | — | 1 678 | **21 511** | 105 |
+| `(8, 1)` | 1 | 2 415 | 2 765 | 151 |
+| `(2, 4)` | 1 | 3 348 | 3 378 | 152 |
+| `(2, 4)` | 2 | 3 385 | 3 414 | 154 |
+
+The `(1, 1)` row is the control that validates the method: host finishes 12.8× early, and
+21.5 ms reproduces Phase 7's 21.6 ms independently. A launch costs **105 µs on one device
+and ~152 µs on eight** — so 8-device fan-out is ~46 µs of it, which `ROOFLINE.md` §8
+listed as unknown.
+
+*Verdict:* **refuted** — and I read my own table wrong first. On `(2, 4)` enqueue was 99%
+of total, which I labelled "host-bound". P2 shows the device needs 3 282 µs of that
+3 378 µs — the enqueue was **overlapped, not blocking**. Dispatch is pipelined: the cost
+is `max(host, device)`, never the sum. §6's per-read verdict is wrong at production shape,
+where the two terms are within 2% of each other.
+
+### P2 — traced, so device time alone (µs per read)
+
+| `S` | `(1, 1)` | `(8, 1)` | `(2, 4)` |
+|---|---|---|---|
+| 1 | 5 010 | 780 | 886 |
+| 4 | 12 218 | 1 571 | 1 934 |
+| 8 | 21 515 | 2 766 | 3 282 |
+
+Traced enqueue is 2.6–10 µs, a **345× reduction** in host time — and total moves ≤3% at
+`S = 8`. Fits: `(2, 4)` device ≈ **201 + 342·(S+1)** µs, `(8, 1)` ≈ 213 + 284·(S+1).
+Sequence sharding scales 8.3× on the slope — free, as M1 claimed.
+
+Against §3's 1 935 µs DRAM floor: `(8, 1)` runs at **70% of DRAM peak**, `(2, 4)` at 59%.
+So "DRAM-bound traced" is confirmed and now has a number — there is 1.43× of headroom in
+the composed form before Phase 10's rewrite is the only lever left.
+
+**TP costs 516 µs per read** at `S = 8` (18.7%), of which the standalone all-reduce at
+that exact payload is 348 µs (P4) and the remaining ~168 µs is the fp32 typecast pair,
+the candidate concat and the two slices.
+
+### P3 — the same sweep untraced, which is where the launch term actually lives
+
+`(1, 1)` untraced is 5 002 / 12 212 / 21 518 µs — within 0.2% of traced, because 16
+launches at 105 µs never approach 21 ms of device time. On eight devices the untraced
+totals **pin flat at a 2.2–3.6 ms host floor regardless of `S`**, so at `S = 1` the op
+burns 3.6× its device time waiting on Python.
+
+*Verdict:* **kept**, with the shape corrected. The launch term binds at the **schedule**,
+not at the peak shape. `S` ramps 0→8 across the 93 layers, mean `(S+1) = 5.39`, so most
+of the 186 reads sit in the small-`S` regime where host wins outright. Over the real
+schedule on `(2, 4)`:
+
+```
+traced    186·201 µs + 1002·342 µs  =  380 ms per forward   (device)
+untraced  186 · 22 · 152 µs         =  622 ms per forward   (host, and it wins)
+```
+
+**Tracing is worth 1.64× per forward** and ~1.00× at the peak shape. Measuring only the
+peak shape would have priced tracing at zero.
+
+### Profiler attribution — `(2, 4)`, `S = 8`, untraced
+
+650 device programs over 23 reads = **28.3 programs per read** (D10's decision text says
+~12; `ROOFLINE.md` §6 guessed ~25). 4 425 µs per read of device FW time, ~35% above the
+traced 3 282 µs, which is the profiler's own instrumentation cost.
+
+| what | µs | share |
+|---|---|---|
+| 7 big-tensor ops — concat 521, `mul(v,v)` 722, `sum` 319, `mul(v,q)` 604, `sum` 326, `mul(v,w)` 464, `FastReduceNC` mix 407 | 3 363 | **76%** |
+| ReduceScatter 263 (17 cores) + AllGather 342 (**2 cores**) | 605 | 13% |
+| fp32 typecast pair | 141 | 3% |
+
+The whole statistics path is **23% of device time for 0.6% of the bytes**
+(`ROOFLINE.md` §4). And `ttnn.max(dim=1)` is not native: FillPad 18.3 + Transpose 43.4 +
+Reduce 46.7 + Transpose 19.2 = **128 µs to take a max over 9 elements** — the price D12's
+hand-rolled softmax already pays and D18 should watch.
+
+### P4 — what the collective actually charges for (traced, `(2, 4)`)
+
+| shape | padded | useful | `links = 1` | `links = 2` |
+|---|---|---|---|---|
+| `[1, 18, 2560, 1]` — today's stats | 5 760 KiB | 184 KiB | **348.1** | **235.9** |
+| `[1, 18, 2560, 32]` | 5 760 KiB | 5 760 KiB | 348.2 | 235.5 |
+| `[1, 1, 2560, 18]` — folded stats | 320 KiB | 180 KiB | **46.8** | 50.2 |
+| `[1, 2, 2560, 1]` | 640 KiB | 20 KiB | 63.0 | 62.4 |
+
+Three readings, and the first two are the phase's most useful facts:
+
+1. **Padded bytes cost exactly what useful bytes cost.** 184 KiB of payload in a
+   5 760 KiB envelope costs the same 348 µs as 5 760 KiB of real data. The collective is
+   payload-bound at **~18 KiB/µs above a ~29 µs floor** — 18–25% of fabric peak, and
+   core-limited, since AllGather runs on **2 worker cores**.
+2. So **folding the candidate axis into the last dim is worth 7.4× on the collective** —
+   348 → 47 µs, ~300 µs per read, against two permutes worth ~40–120 µs traced.
+3. `num_links = 2` is worth **1.48×, but only at the big payload**, and is
+   neutral-to-negative at ≤640 KiB. The fold and `links = 2` are **alternatives, not
+   additive**: after the fold there is no payload left for the second link to help.
+
+*Verdict:* `ROOFLINE.md` §4's fabric model is **off by 2.7×** (88.5 µs predicted at
+`links = 2`, 235.9 measured) and its deferral of the padding fix is **refuted on device
+time** — correctly reasoned untraced, where two extra launches at 152 µs cancel the
+saving exactly, and wrong traced, where the fix is a clean 5–8% of the read.
+
+### P5 — does the split form survive 2× the collectives?
+
+The last open question from Phase 8. Traced, a full 24-site block on `(2, 4)`, per read
+site: direct **3 274.6 µs** vs split **2 228.3 µs**.
+
+*Verdict:* **kept. 1.47× on a TP mesh**, against 1.50× measured on one device in Phase 7,
+while issuing 49 collectives per block against the direct form's 24. Amortizing the sealed
+half's RMS pass across 12 layers is worth ~1 047 µs per site; the extra collective costs
+~350 µs. The split form is not a single-device artifact.
+
+---
+
 ## Learnings
 
 ### Phase 0 — environment
@@ -714,6 +857,49 @@ most was the control, not the subject: 481 µs for a reduction means nothing unt
 
 ---
 
+### Phase 9 — "the host finished first" is not "the device was idle"
+
+P1 timed 22 enqueues on `(2, 4)` at 3 348 µs and the synchronize at 3 378 µs, and I wrote
+down *host-bound*. P2 traced the same read and the device alone needed 3 282 µs. Both
+numbers are right; the inference was wrong. **Dispatch is pipelined**, so a host that
+finishes at the same moment as the device is a host that was keeping pace with it, not a
+host that was the bottleneck — the cost is `max(host, device)`, and `enqueue ≈ total` is
+exactly the case where a single untraced measurement cannot tell the two apart.
+
+The fix is structural, not analytical: only a **traced** run separates the terms, because
+tracing drops host time by 345× and leaves device time untouched. The harness now labels
+untraced verdicts "enqueue-limited" / "device-limited" rather than host / device, and
+`_report`'s docstring carries the ambiguity so the next reader does not repeat it.
+
+*Lesson: a perf harness that can only produce ambiguous readings will get read
+unambiguously anyway. Build the disambiguating configuration — here, tracing — into the
+same file as the ambiguous one, and never report the untraced number alone.*
+
+### Phase 9 — the launch term binds at the schedule, not at the shape
+
+`ROOFLINE.md` §6 asked whether dispatch or DRAM binds and answered it at the peak shape,
+`S = 8`. At the peak shape the two terms are within 2%, so the answer there is "neither,
+and it does not matter". But `S` ramps 0→8 across 93 layers and `mean(S+1) = 5.39`, and
+untraced device totals on eight devices **pin flat at a 2.2–3.6 ms host floor no matter
+what `S` is** — at `S = 1` that is 3.6× the device time, spent waiting on Python. Summed
+over the real 186-read schedule: 622 ms untraced against 380 ms traced, so **tracing is
+worth 1.64× per forward and 1.00× at the shape I would have measured**.
+
+Same trap on the fabric side, in the other direction. The collective is payload-bound at
+~18 KiB/µs and charges for tile padding at full price, so `[1, 18, 2560, 1]` — 184 KiB of
+statistics in a 5 760 KiB envelope — costs 348 µs, 7.4× what the folded layout costs.
+`ROOFLINE.md` §4 deferred that fix because two extra `permute` launches would cost 260 µs
+against 83 µs of modelled fabric saving. Untraced, that arithmetic is right and the
+deferral holds. Traced, the launches cost nothing and the saving is 300 µs. **The same
+decision inverts between the two regimes**, which is the strongest possible argument for
+§6's rule that no number gets reported without naming its regime.
+
+*Lesson: pick the measurement point from the workload's distribution, not from its
+maximum. Peak shape is the shape where fixed costs matter least, so it is the one shape
+guaranteed to hide the launch term — and a per-read table hides a ramp entirely.*
+
+---
+
 ## Backlog
 
 - [ ] Phase 1 — infra map with `file:line` citations and inherited thresholds.
@@ -725,27 +911,43 @@ most was the control, not the subject: 481 µs for a reduction means nothing unt
       decides whether the split form's remaining ~1.9× is reachable in composed ops.
 - [x] Phase 6 — device correctness + 93-layer depth harness.
 - [x] Phase 7 — remove host fallbacks; `T=5120`.
-- [ ] Verify D10's launch count (~12 ops/read, not ~90) with the Phase-9 profiler —
-      `ttnn.graph` cannot see op names, only buffer lifecycle.
+- [x] Verify D10's launch count with the Phase-9 profiler — **28.3 device programs per
+      read** on `(2,4)`, not the ~12 D10's text claims and not §6's ~25. D10's
+      conclusion stands (its rejected alternative was ~90 launches); its count does not.
 - [x] Phase 8 — `DISTRIBUTION.md`, TP on `(2,4)`, `ROOFLINE.md`.
-- [ ] Re-measure the split form's 1.50× on a mesh, where it costs 49 collectives per
-      24 read sites against the direct form's 24; if it needs saving, batch
-      `inter_block`'s 24 dot tensors into one reduction (49 → 26). `ROOFLINE.md` §6
-      prices the 23 saved collectives at ~9 ms per forward untraced.
+- [x] Re-measure the split form's 1.50× on a mesh — **1.47×** traced on `(2,4)` (P5),
+      3 274.6 → 2 228.3 µs per read site, with 49 collectives per block against 24.
+      It survives; batching `inter_block`'s 24 dot tensors (49 → 26) is now an
+      optimization, not a rescue.
 - [ ] Try fp32 statistics on the **single-device** path — the sharded measurement says
       they buy ~1e-5 of depth PCC for 1.5 MB per read.
-- [ ] Default `num_links` to 2, not 1 — production and the analog both use 2
-      (`test_sparse_mla_ccl_perf.py:38`), and at 1 the op pays double the fabric time
-      in `ROOFLINE.md` §4. Needs a mesh perf harness first, so Phase 9.
-- [ ] Hoist the collective's global semaphores out of the per-call path if Phase 9
-      confirms they are part of the ~130 µs — the analog does it with
-      `create_global_semaphores` (`tt_ccl.py`).
-- [ ] Phase 9 — perf harness + numbered perf loop. Measure the **launch term first**:
-      `ROOFLINE.md` §6 says it decides whether DRAM or dispatch binds, and the two
-      regimes are 100× apart.
+- [x] Phase 9 — perf harness + numbered perf loop. `tests/perf/test_attn_res_perf.py`,
+      five numbered iterations P1–P5 plus a tracy attribution, four refutations recorded
+      in §Phase 9 perf loop. Launch term measured first, as §6 demanded — and it refuted
+      §6.
+- [ ] Fold the statistics into `[1, 1, T/R, 2(S+1)]` — P4 prices it at **7.4× on the
+      collective**, 348 → 47 µs, ~300 µs per read traced, against two `ttnn.permute`
+      calls at ~40–120 µs. Pays only traced; untraced the two extra launches cancel it
+      exactly, which is why Phase 8 deferred it correctly and for a reason that has
+      since expired.
+- [ ] `num_links` — leave at 1 **if** the fold lands, raise to 2 otherwise. P4: 2 links
+      is 1.48× at the 5 760 KiB payload and neutral-to-negative at ≤640 KiB, so the fold
+      and the second link are alternatives, not additive. `ROOFLINE.md` §4's "the default
+      should follow production's 2" is now conditional on the layout.
+- [ ] Hoist the collective's global semaphores out of the per-call path — still
+      unmeasured, but P1 narrows the target: a plain launch is 105 µs on one device and
+      152 µs on eight, while Phase 8 measured an `all_reduce` enqueue at 481 µs. That
+      ~3× excess is where per-call semaphore creation would live. The analog hoists it
+      with `create_global_semaphores` (`tt_ccl.py`).
+- [ ] Close the composed form's **1.43× gap to its own DRAM floor** (2 766 µs measured
+      on `(8,1)` against §3's 1 935 µs) before treating Phase 10 as the only lever. The
+      profiler says 76% of device time is 7 big-tensor ops; `mul(v,v)` + `sum` at 1 041 µs
+      is the first candidate.
 - [ ] Phase 10 — fused C++ op, only on measured evidence. `ROOFLINE.md` §7 puts the
       ceiling at 10.8× DRAM (215.5 ms → 20 ms per forward) with `v` resident in L1 at
-      every shape that matters.
+      every shape that matters. Phase 9 sharpens it: the composed form measures at 70%
+      of its own floor, so the *realizable* win over what runs today is **~7.6×**, and
+      the fused kernel is measured against 380 ms traced, not 622 ms untraced.
 - [ ] Phase 11 — `PIPELINE.md` + socket round-trip.
 - [ ] Fold `rms_inv` at seal time (needs the batched form first).
 - [ ] Decode path (`T=1`).
@@ -915,3 +1117,40 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
   nothing here times what ships. Galaxy `(8,4)` and `[LINE, RING]` — untested, and the ring
   axis is exactly where a scalar topology deadlocks. `num_links` still defaults to 1 against
   production's 2. The PP boundary, real module outputs, real K3 weights, decode.
+
+- **2026-07-30** — Phase 8 committed locally as `871bbdf968b`, 7 module files, nothing
+  pushed. `DISTRIBUTION.md` reconciled with `ROOFLINE.md` (§4's 0.65% → the exact 0.595%,
+  §4's 50 µs collective guess → the modelled 9.85 ms per forward, §5's two open questions
+  closed). Black's pre-commit hook reformatted an assert in
+  `tests/test_tt_attn_res_distributed.py`, so the committed tree differs from the measured
+  one — re-ran the whole suite on it: **92 passed** in 117.70 s. **PASS**.
+
+- **2026-07-30** — Phase 9 **PASS**: `tests/perf/test_attn_res_perf.py`, five numbered
+  iterations on hardware plus a tracy attribution, all at `T = 5120` on `(1,1)` / `(8,1)` /
+  `(2,4)`. No timing assertions in the file; the verdicts live in §Phase 9 perf loop.
+
+  **VALIDATED:** Device time, at last. Traced, one read costs **201 + 342·(S+1) µs** on
+  `(2,4)` and 213 + 284·(S+1) on `(8,1)` — 2 766 µs at `S = 8` against `ROOFLINE.md` §3's
+  1 935 µs floor, so the composed form runs at **70% of DRAM peak**, 59% with TP. Sequence
+  sharding scales 8.3× on the slope; TP costs 516 µs per read, 19%. Over the real 186-read
+  schedule: **380 ms traced against 622 ms untraced**, so tracing is worth 1.64×. The split
+  form holds at **1.47×** on a TP mesh (P5) while issuing 49 collectives per block against
+  24 — Phase 8's last open question, answered in the split form's favour. The collective is
+  payload-bound at ~18 KiB/µs above a ~29 µs floor and charges tile padding at full price,
+  which makes the deferred statistics fold worth **7.4×** on the collective (348 → 47 µs).
+  A launch is 105 µs on one device and 152 µs on eight, so 8-device fan-out is ~46 µs of it.
+
+  **REFUTED, four claims, three of them mine:** §6's "launch-bound even at production
+  shape" — dispatch is pipelined, the criterion is `max(host, device)` not the sum, and at
+  production shape the two terms are within 2%. §4's fabric model — 88.5 µs predicted at
+  `num_links = 2`, **235.9 measured**, off 2.7× because the collective reaches 18–25% of
+  fabric peak and AllGather runs on **2 worker cores**. §4's deferral of the 32× padding
+  fix — correct untraced, wrong traced, and the decision inverts between the regimes.
+  D10's "~12 ops per read" — it is **28.3**.
+
+  **NOT VALIDATED (Phase 9):** Nothing above is an assertion — the harness logs, so none of
+  it is regression-guarded. The `N`-batched matmul against 24 broadcast passes is still
+  unmeasured, so the split form's remaining headroom is unknown. The fold, `num_links = 2`
+  and the semaphore hoist are all priced and none are implemented. `(4,2)` skipped
+  deliberately; `(8,4)`, `[LINE, RING]`, decode, PP and real weights untouched. The
+  profiler ran untraced on `(2,4)` only, and its own overhead is ~35% of what it reports.
