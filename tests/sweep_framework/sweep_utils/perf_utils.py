@@ -33,6 +33,15 @@ DEVICE_PERF_KEYS = [
 # not counted as a failure.
 DEVICE_PERF_SKIPPED = "__device_perf_skipped__"
 
+# Distinct from DEVICE_PERF_SKIPPED: the profiler was NOT skipped, its readback THREW
+# (e.g. "Invalid packet type" out of DeviceProfiler::readRiscProfilerResults). The runner
+# needs to tell the two apart because it treats a readback failure as evidence about the
+# DEVICE, combined with the vector's own verdict:
+#   readback failed + vector PASSED -> PASS with device-perf N/A, carry on
+#   readback failed + vector FAILED -> presume the device is wedged: mark the vector
+#                                      NOT_RUN (not a test failure) and end the run
+DEVICE_PERF_READBACK_FAILED = "__device_perf_readback_failed__"
+
 
 def clear_disk_kernel_cache() -> None:
     """Clear disk kernel cache for current git hash."""
@@ -129,11 +138,11 @@ def gather_single_test_perf(device, test_passed):
         # normally makes the follow-up allclose fail -- so it was probably a real PCC failure
         # being masked by the profiler traceback, not a passing vector being failed.
         #
-        # Return the SKIPPED sentinel (not None) so a passing vector gets device-perf N/A
-        # rather than FAIL_UNSUPPORTED_DEVICE_PERF, matching _SKIP_DEVICE_PERF /
-        # _should_skip_device_profiler.
+        # Return the READBACK_FAILED sentinel so the runner can combine it with the
+        # vector's own verdict (see the sentinel's definition): perf N/A on a passing
+        # vector, wedged-device abort on a failing one.
         logger.warning(f"Device profiler readback failed ({e}); reporting device-perf N/A for this vector.")
-        return DEVICE_PERF_SKIPPED
+        return DEVICE_PERF_READBACK_FAILED
     logger.info("Reading profiler data from device done")
 
     if not test_passed:
@@ -289,13 +298,12 @@ def run_with_cache_comparison(
     if measure_dp:
         device_perf_cached = gather_single_test_perf(_resolve_perf_device(device, test_module), status_cached)
 
-    # A profiler readback failure on EITHER run means no comparable perf pair, so treat the
-    # whole vector as perf-skipped rather than letting the sentinel string reach
-    # simplify_device_perf() / get_updated_message().
-    if DEVICE_PERF_SKIPPED in (device_perf_uncached, device_perf_cached):
-        dp_skipped = True
-        measure_dp = False
-        device_perf_uncached = device_perf_cached = None
+    # A profiler readback failure on EITHER run means no comparable perf pair. Return the
+    # READBACK_FAILED sentinel straight away (rather than letting the sentinel string reach
+    # simplify_device_perf() / get_updated_message()) so the runner sees the readback
+    # failure and can pair it with the uncached run's verdict.
+    if DEVICE_PERF_READBACK_FAILED in (device_perf_uncached, device_perf_cached):
+        return status_uncached, message_uncached, e2e_uncached_ms, DEVICE_PERF_READBACK_FAILED, peak_memory
 
     # Determine combined status and message
     if not status_uncached:
@@ -362,10 +370,10 @@ def run_single(
         return status, message, e2e_ms, DEVICE_PERF_SKIPPED, peak_memory
     if dp_requested:
         perf_result = gather_single_test_perf(_resolve_perf_device(device, test_module), status)
-        if perf_result == DEVICE_PERF_SKIPPED:
-            # Profiler readback failed -- pass the sentinel through untouched so the
-            # runner marks PASS/perf-N/A. simplify_device_perf() expects a dict.
-            return status, message, e2e_ms, DEVICE_PERF_SKIPPED, peak_memory
+        if perf_result == DEVICE_PERF_READBACK_FAILED:
+            # Pass the sentinel through untouched (simplify_device_perf() expects a dict)
+            # WITH the original status, which is what the runner keys its decision on.
+            return status, message, e2e_ms, DEVICE_PERF_READBACK_FAILED, peak_memory
         message = get_updated_message(message, perf_result)
         simplified_perf = simplify_device_perf(perf_result)
         return status, message, e2e_ms, simplified_perf, peak_memory

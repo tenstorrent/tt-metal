@@ -34,7 +34,12 @@ from framework.constants import parse_mesh_suffix
 from framework.statuses import TestStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
-from sweep_utils.perf_utils import run_single, run_with_cache_comparison, DEVICE_PERF_SKIPPED
+from sweep_utils.perf_utils import (
+    run_single,
+    run_with_cache_comparison,
+    DEVICE_PERF_SKIPPED,
+    DEVICE_PERF_READBACK_FAILED,
+)
 
 
 @dataclass
@@ -532,7 +537,17 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
 
     if status:
         if config.measure_device_perf:
-            if device_perf == DEVICE_PERF_SKIPPED:
+            if device_perf == DEVICE_PERF_READBACK_FAILED:
+                # The profiler readback threw, but this vector's own PCC PASSED. A wrong
+                # profiler buffer says nothing about a correct op result, so keep the PASS
+                # and carry on to the next vector with device-perf N/A.
+                logger.warning(
+                    "Device profiler readback failed but the vector PASSED; recording PASS with "
+                    "device-perf N/A and continuing."
+                )
+                result["status"] = TestStatus.PASS
+                result["device_perf"] = None
+            elif device_perf == DEVICE_PERF_SKIPPED:
                 # Module opted this vector out of profiling (unsupported config, e.g.
                 # conv2d heavy FABRIC_1D -> profiler ARC read hangs). PCC passed, so
                 # PASS with device-perf N/A -- not a failure.
@@ -557,27 +572,60 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
             result["status"] = TestStatus.PASS
     else:
         result["exception"] = message
-        if "DEVICE EXCEPTION" in str(message):
+        if config.measure_device_perf and device_perf == DEVICE_PERF_READBACK_FAILED:
+            # The vector FAILED and the profiler readback ALSO threw. Two independent
+            # readers of the device disagreeing with expectations at once is treated as
+            # evidence the device itself is bad, not that this vector is a bad test: the
+            # host decoded a corrupt profiler marker (only 0-5 are valid packet types) on
+            # the same vector whose result did not match. So do NOT count it as a test
+            # failure -- mark it NOT_RUN and end the run, rather than feeding more vectors
+            # to a device we no longer trust.
+            #
+            # This check deliberately comes FIRST, ahead of the OOM/Watcher/infra
+            # classification below, so the rule is unambiguous: readback failure + failed
+            # vector always means "stop", whatever the vector's own message said.
+            #
+            # Tradeoff, measured on run 30509849370 job 90770018256: the device does not
+            # always stay bad. There, copy 75a4... was the FIRST vector and hit exactly
+            # this combination, yet the following 6 vectors (cos x4, div x2) passed with
+            # PCC ~1.0 on the same device before div 46d243e2 genuinely hung. Ending the
+            # run at the first occurrence forfeits those 6 passes. That is the intended
+            # behaviour here -- prefer stopping early on a suspect device over continuing.
             logger.error(
-                f"DEVICE EXCEPTION: Device could not be initialized. " f"The following assertion was thrown: {message}"
+                f"Device profiler readback failed AND the vector failed for input_hash='{input_hash}'. "
+                "Treating the device as wedged: marking this vector NOT_RUN (not a test failure) "
+                "and ending the run."
             )
-            logger.info("Device error detected. The suite will be aborted after this test.")
-        if "Out of Memory: Not enough space to allocate" in str(message):
-            result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
-        elif "Watcher" in str(message):
-            result["status"] = TestStatus.FAIL_WATCHER
-        elif _is_infra_failure_message(message):
-            # Infrastructure-class failure: either a fabric / control-plane
-            # bring-up failure (mesh never initialized, so this vector's op kernel
-            # never ran) or a device-fatal wedge (a bad core run state surfaced as
-            # "Read unexpected run_mailbox value"). Both are environment faults,
-            # not test-vector faults -- mark NOT_RUN rather than
-            # FAIL_ASSERT_EXCEPTION. _execute_vector_with_retry detects the same
-            # signatures and exits the run early so the remaining vectors are not
-            # each re-reported as false failures on a device that won't recover.
             result["status"] = TestStatus.NOT_RUN
+            result["device_perf"] = None
+            result["_infra_abort"] = True
+            result["_abort_suite"] = True
         else:
-            result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
+            # NOTE: keep this classification inside the else -- the OOM/Watcher chain below
+            # is a separate statement from the DEVICE EXCEPTION log, so leaving it
+            # unguarded would overwrite the NOT_RUN set above with FAIL_ASSERT_EXCEPTION.
+            if "DEVICE EXCEPTION" in str(message):
+                logger.error(
+                    f"DEVICE EXCEPTION: Device could not be initialized. "
+                    f"The following assertion was thrown: {message}"
+                )
+                logger.info("Device error detected. The suite will be aborted after this test.")
+            if "Out of Memory: Not enough space to allocate" in str(message):
+                result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
+            elif "Watcher" in str(message):
+                result["status"] = TestStatus.FAIL_WATCHER
+            elif _is_infra_failure_message(message):
+                # Infrastructure-class failure: either a fabric / control-plane
+                # bring-up failure (mesh never initialized, so this vector's op kernel
+                # never ran) or a device-fatal wedge (a bad core run state surfaced as
+                # "Read unexpected run_mailbox value"). Both are environment faults,
+                # not test-vector faults -- mark NOT_RUN rather than
+                # FAIL_ASSERT_EXCEPTION. _execute_vector_with_retry detects the same
+                # signatures and exits the run early so the remaining vectors are not
+                # each re-reported as false failures on a device that won't recover.
+                result["status"] = TestStatus.NOT_RUN
+            else:
+                result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
 
     if suite_name.lower().startswith("xfail"):
         if result["status"] == TestStatus.PASS:
