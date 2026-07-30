@@ -103,9 +103,10 @@ exceed physical capacity with those required weights. The advertised
 `../context_contract.json`.
 
 The canonical exact optimized 500000-token batch-1 prefill watcher test
-completed its pytest call in 331.01 s (332.92 s elapsed). It binds directly to
-the final source and test hashes. The public contract is unchanged, including
-nonaligned logical lengths.
+completed its pytest call in 331.01 s (332.92 s elapsed). The context contract
+records both its evidence hashes and the final source/test hashes, together
+with their audited import/export-only equivalence. The public contract is
+unchanged, including nonaligned logical lengths.
 
 ## Operation-topology audit
 
