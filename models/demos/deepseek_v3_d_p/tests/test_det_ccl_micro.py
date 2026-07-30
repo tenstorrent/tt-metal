@@ -388,7 +388,8 @@ def test_report_device_mapping(mesh_device, device_params):
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("op", ["readback", "eltwise", "matmul1", "matmul2"])
-def test_local_op_determinism(mesh_device, device_params, op):
+@pytest.mark.parametrize("seq", [3200, 640], ids=["seq3200", "seq640"])
+def test_local_op_determinism(mesh_device, device_params, op, seq):
     """Which subsystem of a chip is wrong: DRAM, the SFPU/pack path, or the matmul array.
 
     Four rungs over one chip's data path, cheapest first:
@@ -402,7 +403,9 @@ def test_local_op_determinism(mesh_device, device_params, op):
     """
     ITERS = 8
     HIDDEN = 4608
-    SEQ = 3200
+    # seq is the per-chip sequence: ISL / SP 8. 3200 is ISL 25600, 640 is a 5120 chunk. A smaller
+    # seq gives each core proportionally less work per iteration, and this fault is intermittent,
+    # so a pass at 640 bounds the exposure at that size rather than clearing the core.
     torch.manual_seed(0)
 
     def repl(t):
@@ -415,7 +418,7 @@ def test_local_op_determinism(mesh_device, device_params, op):
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    x = repl(torch.randn(1, 1, SEQ, EMB_DIM) * 0.02)
+    x = repl(torch.randn(1, 1, seq, EMB_DIM) * 0.02)
     w_up = repl(torch.randn(EMB_DIM, HIDDEN) * 0.02) if op.startswith("matmul") else None
     w_down = repl(torch.randn(HIDDEN, EMB_DIM) * 0.02) if op == "matmul2" else None
 
@@ -443,7 +446,7 @@ def test_local_op_determinism(mesh_device, device_params, op):
             f"maxabs={float((a.float() - b.float()).abs().max()):.3e}"
         )
 
-    logger.info(f"local {op}: {ITERS} iterations, no collectives")
+    logger.info(f"local {op}: seq={seq} ({seq // 32}x{HIDDEN // 32} output tiles), {ITERS} iterations, no collectives")
     baseline = None
     r2r, xchip = {}, {}
     for i in range(ITERS):
@@ -473,8 +476,8 @@ def test_local_op_determinism(mesh_device, device_params, op):
         for c in bad:
             r2r[c] = r2r.get(c, 0) + int((baseline[c] != cur[c]).sum())
 
-    assert not r2r and not xchip, f"local {op} not deterministic: run_to_run={r2r} chip_vs_chip0={xchip}"
-    logger.success(f"local {op} bit-exact across {ITERS} iterations and all 32 chips")
+    assert not r2r and not xchip, f"local {op} seq={seq} not deterministic: run_to_run={r2r} chip_vs_chip0={xchip}"
+    logger.success(f"local {op} seq={seq} bit-exact across {ITERS} iterations and all 32 chips")
 
 
 @pytest.mark.parametrize(

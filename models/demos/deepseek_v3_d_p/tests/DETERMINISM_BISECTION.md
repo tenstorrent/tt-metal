@@ -15,8 +15,8 @@ fast path, so the threshold of 1.0 is not a tolerance. When that fails, all you 
 mpirun --bind-to none --pernode --tag-output bash -c 'source $TT_METAL_HOME/python_env/bin/activate; export PYTHONPATH=$TT_METAL_HOME; python3 -u -m pytest models/demos/deepseek_v3_d_p/tests/test_det_ccl_micro.py -p no:randomly -s -q'
 ```
 
-Run from the repo root with `TT_METAL_HOME` set. 28 tests, all of which pass on a healthy box.
-Local tests only (the fast hardware check, 10 tests):
+Run from the repo root with `TT_METAL_HOME` set. 32 tests, all of which pass on a healthy box.
+Local tests only (the fast hardware check, 14 tests):
 
 ```
 mpirun --bind-to none --pernode --tag-output bash -c 'source $TT_METAL_HOME/python_env/bin/activate; export PYTHONPATH=$TT_METAL_HOME; python3 -u -m pytest models/demos/deepseek_v3_d_p/tests/test_det_ccl_micro.py -k "test_local_ or test_report_device_mapping or test_matmul_core_sweep" -p no:randomly -s -q'
@@ -29,7 +29,7 @@ mpirun --bind-to none --pernode --tag-output bash -c 'source $TT_METAL_HOME/pyth
 | `test_ccl_determinism` | 12 | One TP collective, alone, on a fixed input. Failure implicates the op or fabric. |
 | `test_ccl_chain_determinism` | 6 | 7 chained collectives, past the depth-2 semaphore pools, incl. free-immediately and sync-between variants. Failure implicates inter-op sync or handle reuse. |
 | `test_local_compute_determinism` | 1 | Local matmul chain, **no collective**. Identical input+weights replicated to all 32 chips, so a failure is a chip. |
-| `test_local_op_determinism` | 4 | Which subsystem: `readback` (DRAM), `eltwise` (unpack/SFPU/pack), `matmul1`, `matmul2`. First rung to fail names it. |
+| `test_local_op_determinism` | 8 | Which subsystem: `readback` (DRAM), `eltwise` (unpack/SFPU/pack), `matmul1`, `matmul2`, each at seq 3200 (ISL 25600) and 640 (a 5120 chunk). First rung to fail names it. |
 | `test_local_matmul_core_locality` | 3 | Whether a bad matmul footprint tracks the core grid or an output address. Three shapes; if the *block index* is invariant while the tile offsets scale, it is one core. |
 | `test_matmul_core_sweep` | 1 | Which core, by coordinate. `allowed_worker_cores` confines the matmul to one core at a time and the sweep walks the grid, so a failure names the core instead of implying it. |
 | `test_report_device_mapping` | 1 | shard index -> physical device id. Never assume identity. |

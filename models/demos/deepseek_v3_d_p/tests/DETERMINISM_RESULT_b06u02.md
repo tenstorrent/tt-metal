@@ -20,8 +20,10 @@ Second independent confirmation run: **6 failed, 21 passed, 14:12.** Log:
 | `ccl_chain_determinism` ×6 | pass | pass | bit-exact past the depth-2 semaphore pools |
 | `local_op[readback]` | pass | pass | DRAM path clean, 8 iters × 32 chips |
 | `local_op[eltwise]` | pass | pass | SFPU/pack path clean |
-| `local_op[matmul1]` | **FAIL** | pass | `run_to_run={21: 1415} chip_vs_chip0={21: 1530}` |
-| `local_op[matmul2]` | **FAIL** | pass | `run_to_run={21: 306621} chip_vs_chip0={21: 246411}` |
+| `local_op[seq3200-matmul1]` | **FAIL** | pass | `run_to_run={21: 1415} chip_vs_chip0={21: 1530}` |
+| `local_op[seq3200-matmul2]` | **FAIL** | pass | `run_to_run={21: 306621} chip_vs_chip0={21: 246411}` |
+| `local_op[seq640-matmul1]` | **FAIL** | — | `run_to_run={21: 146} chip_vs_chip0={21: 137}` |
+| `local_op[seq640-matmul2]` | **FAIL** | — | `run_to_run={21: 22888} chip_vs_chip0={21: 19699}` |
 | `local_compute[seq3200]` | **FAIL** | pass | `run_to_run={21: 418500} chip_vs_chip0={21: 442497}` (1.8%) |
 | `core_locality[base]` | **FAIL** | pass | rows 80-89, cols 72-83, blk (M 8/10, N 6/12) |
 | `core_locality[halfN]` | **FAIL** | pass | rows 80-89, cols 36-41, blk (M 8/10, N 6/12) |
@@ -43,9 +45,22 @@ the matmul moves the rectangle and leaves the block index fixed:
 | 3200 × 4608 | 100 × 144 | 80-89 (10 tall) | 72-83 (12 wide) | **M 8 of 10, N 6 of 12** |
 | 3200 × 2304 | 100 × 72 | 80-89 (10 tall) | 36-41 (6 wide) | **M 8 of 10, N 6 of 12** |
 | 1600 × 4608 | 50 × 144 | 40-44 (5 tall) | 72-83 (12 wide) | **M 8 of 10, N 6 of 12** |
+| 640 × 4608 | 20 × 144 | 16-17 (2 tall) | 72-83 (12 wide) | **M 8 of 10, N 6 of 12** |
 
 An address-bound fault (bad DRAM page, bad L1 range) would have stayed at rows 80-89 /
 cols 72-83 while the block index drifted.
+
+## Chunked prefill hits the same core, and hides it better
+
+The 640-row shape is the per-chip sequence of a 5120-token chunk (ISL 5120 / SP 8), so it is the
+size chunked prefill actually runs, not a synthetic control. It still fails, and still on core
+(6,8): `per_core_M` drops to 2 at Mt 20, so row tiles 16-17 give M block `16 // 2` = 8 and col
+tiles 72-83 give N block `72 // 12` = 6 — the same block on the same grid, on all 8 iterations.
+
+What changes is the size of the signal. 5x less work per core gives ~17x fewer differing
+elements (about 21 per iteration against about 350 at seq 3200) and `maxabs` 1.5e-3 against
+8e-3. A PCC gate is further from noticing this at 5120 than at 25600, so a chunked run that
+passes accuracy CI is not evidence the core is fine — only that the fault got smaller.
 
 ## The core, named
 
