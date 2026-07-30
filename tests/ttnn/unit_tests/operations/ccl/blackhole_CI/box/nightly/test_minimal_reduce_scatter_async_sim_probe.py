@@ -15,6 +15,14 @@ This probe reuses the Blackhole test's own `run_reduce_scatter_impl` with num_de
 writer — migrated onto the CCL dataflow helper's MuxConn policy and armed scatter/unicast/inc/
 multicast-inc channels — is actually executed and PCC-verified rather than only compiled.
 
+MULTI-BATCH COVERAGE: the shapes below deliberately include one with a leading dim > 1, so
+`input_tensor_B > 1` and the schedule's per-batch restart of the ring slice walk is executed. That
+path matters: the ring slice cursor is re-seeded to the same first slice at the top of every batch,
+and a version that instead let batch N+1 continue where batch N stopped reads and writes the wrong
+slice on every step after the first batch — silently, with no hang and no CB mismatch. A B=1 shape
+cannot distinguish the two. (The bug was caught by the host equivalence sweep over
+ccl_helpers_schedule.hpp rather than here, which is the argument for having both.)
+
 Verification vehicle, not a CI test: gated on the simulator so it skips on hardware.
 """
 
@@ -36,8 +44,16 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("num_links", [1])
-# dim=3 over a [1,1,32,8*256] input scatters 256 columns to each of the 8 ring members.
-@pytest.mark.parametrize("rs_input_shape, dim", [([1, 1, 32, 2048], 3)])
+@pytest.mark.parametrize(
+    "rs_input_shape, dim",
+    [
+        # dim=3 over a [1,1,32,8*256] input scatters 256 columns to each of the 8 ring members.
+        ([1, 1, 32, 2048], 3),
+        # Same scatter, but input_tensor_B = 2 so the schedule's per-batch ring restart is exercised.
+        ([2, 1, 32, 2048], 3),
+    ],
+    ids=["b1", "b2"],
+)
 @pytest.mark.parametrize("rs_input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("mem_config_input", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)])
