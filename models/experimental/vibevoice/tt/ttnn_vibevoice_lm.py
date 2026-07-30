@@ -109,19 +109,25 @@ _WKV_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 )
 _WKV_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
-# Decode-only FFN program configs (S==1), byte-identical to the auto config: in0_block_w=2 is the
-# K-reduction block auto uses for these shapes (maxabsdiff==0), so the reduction order — hence the
-# bf16 rounding — is preserved.
+# Decode-only FFN program configs (S==1).
 #
 # These extend the CFG batch-2 weight-read-once pattern to the FFN.  The batch-2 LM fusion batched
 # the wq/wo matmuls (per_core_M=2) but left the FFN on auto, which reads each FFN weight matrix
 # once per CFG row.  per_core_M=2 folds both rows into M so each weight is read once: ~1.9x on the
 # down-proj and ~1.85x each on gate/up at B=2.
 #
+# down-proj in0_block_w=4 (K=8960=280 tiles): isolated trace-replay sweep (M=32) measured the
+# down-proj at 124us @ ib2 -> 73.7us @ ib4 (1.68x); integrated layer profile 118us -> 68us.
+# ib4 is BYTE-IDENTICAL to ib2: measured maxabsdiff(ib2,ib4)==0 over all output elements for both
+# B1 (per_core_M=1) and B2 (per_core_M=2), L1 and DRAM output.  in0_block_w only sets the K-tile
+# streaming granularity; the fp32-dest accumulation order is unchanged, so the bf16 output is
+# identical (data-independent) — same maxabsdiff==0 / long-form-safe guarantee ib2 had vs auto.
+# Layer PCC gate: test_decoder_layer_pcc.py PASS (min=0.99819, mean=0.99858).
+#
 # per_core_M makes these valid only for S==1 decode; prefill (S>1) keeps auto.
 _FFN_DOWN_DECODE_PROGCFG_B1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
-    in0_block_w=2,
+    in0_block_w=4,
     out_subblock_h=1,
     out_subblock_w=2,
     per_core_M=1,
@@ -132,7 +138,7 @@ _FFN_DOWN_DECODE_PROGCFG_B1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 )
 _FFN_DOWN_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
-    in0_block_w=2,
+    in0_block_w=4,
     out_subblock_h=1,
     out_subblock_w=2,
     per_core_M=2,
