@@ -117,7 +117,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     for (size_t i = 0; i < num_events; i++) {
         auto event = cq.enqueue_record_event_to_host();
         EXPECT_EQ(event.id(), cmds_issued_per_cq + 1);  // Event ids start at 1
-        EXPECT_EQ(event.mesh_cq_id(), cq.id());
+        EXPECT_EQ(&event.mesh_cq(), &cq);
         cmds_issued_per_cq++;
     }
     distributed::Finish(cq);
@@ -259,7 +259,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
     for (size_t i = 0; i < num_buffers; i++) {
         log_debug(tt::LogTest, "i: {} - Going to record event, write, wait, synchronize.", i);
         auto event = std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host());
-        EXPECT_EQ(event->mesh_cq_id(), cq.id());
+        EXPECT_EQ(&event->mesh_cq(), &cq);
         EXPECT_EQ(event->id(), events_issued_per_cq + 1);  // Event ids start at 1
 
         distributed::DeviceLocalBufferConfig local_config{.page_size = page_size, .buffer_type = BufferType::DRAM};
