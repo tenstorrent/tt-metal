@@ -301,7 +301,12 @@ ttnn::Tensor repeat(
         // Sharded *output* has no resharding path in this port (codegen only ever produces an
         // interleaved output tensor); gate it here rather than in supported_by_codegen(), which
         // is about the input side per the manifest's hand-authored sharded case.
-        const bool codegen_output_ok = !output_mem_config.is_sharded();
+        // Placement must match too: the RM factories derive CB slot sizes and per-page
+        // transfer sizes from one side's aligned page size, and DRAM/L1 page alignments
+        // differ, so a cross-placement call can overrun destination pages or CB slots.
+        // Native derives both sides' pitches independently and handles the conversion.
+        const bool placement_matches = output_mem_config.buffer_type() == working_tensor.memory_config().buffer_type();
+        const bool codegen_output_ok = !output_mem_config.is_sharded() && placement_matches;
         if (sel != repeat_codegen::ImplementationSelector::Native) {
             const bool supported =
                 codegen_output_ok && repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector);
@@ -309,7 +314,7 @@ ttnn::Tensor repeat(
                 TT_FATAL(
                     supported,
                     "repeat: implementation=\"codegen\" requires a supported input and an interleaved output "
-                    "memory configuration");
+                    "memory configuration in the same buffer type as the input");
                 return operations::data_movement::detail::repeat_via_codegen(
                     working_tensor, working_repetition_vector, output_mem_config);
             }

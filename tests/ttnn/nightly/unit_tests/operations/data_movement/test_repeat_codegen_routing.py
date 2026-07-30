@@ -331,3 +331,42 @@ def test_repeat_codegen_routing(device, shape, kwargs, dtype, layout):
     assert_equal(golden, ttnn.to_torch(out))
     msg = "auto routed an out-of-scope case to codegen (program cache grew); expected native fallback"
     assert device.num_program_cache_entries() == entries_before, msg
+
+
+# --- Off-grid regressions (hand-added; edit here, not the emitter) ---
+
+# Mixed placement (interleaved DRAM input, interleaved L1 output requested via
+# memory_config) must route to native: the RM factories derive CB slot sizes and
+# per-page transfer sizes from one side's aligned page size, and DRAM/L1 page
+# alignments differ, so a cross-placement call would overrun destination pages or
+# CB slots. All three cases are otherwise in codegen scope, so the placement gate
+# is the only thing demoting them.
+_MIXED_PLACEMENT = [
+    # higher-dim RM: a writer paced by the wider DRAM pitch would overrun narrower L1 pages
+    ([1, 2, 10, 20], {"repeat_dims": ttnn.Shape([1, 3, 1, 1])}, ttnn.ROW_MAJOR_LAYOUT),
+    # last-dim RM: a reader paced by the wider DRAM pitch would overrun out-pitched CB slots
+    ([1, 2, 10, 20], {"repeat_dims": ttnn.Shape([1, 1, 1, 3])}, ttnn.ROW_MAJOR_LAYOUT),
+    # TILE: page size is placement-agnostic today; kept so relaxing the gate is a conscious act
+    ([1, 2, 10, 20], {"repeat_dims": ttnn.Shape([1, 3, 1, 1])}, ttnn.TILE_LAYOUT),
+]
+
+_MIXED_PLACEMENT_IDS = [
+    "[1, 2, 10, 20]|repeat_dims=[1, 3, 1, 1]|row_major|dram_to_l1",
+    "[1, 2, 10, 20]|repeat_dims=[1, 1, 1, 3]|row_major|dram_to_l1",
+    "[1, 2, 10, 20]|repeat_dims=[1, 3, 1, 1]|tile|dram_to_l1",
+]
+
+
+@pytest.mark.parametrize("shape,kwargs,layout", _MIXED_PLACEMENT, ids=_MIXED_PLACEMENT_IDS)
+def test_repeat_codegen_routing_mixed_placement(device, shape, kwargs, layout):
+    l1_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    x = _make_input(shape, ttnn.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=device)
+    golden = ttnn.to_torch(ttnn.repeat(xt, **kwargs, memory_config=l1_mc, implementation=_NATIVE))
+    # Same cache-growth route assertion as the generated matrix above.
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.repeat(xt, **kwargs, memory_config=l1_mc, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1
+    msg = "auto routed a mixed-placement case to codegen (program cache grew); expected native fallback"
+    assert device.num_program_cache_entries() == entries_before, msg

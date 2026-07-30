@@ -121,10 +121,10 @@ def test_pc_repeat(device, layout, shape, repeat_shape):
 
 # --- Codegen-path coverage (implementation="codegen") ---
 #
-# ttnn.repeat now defaults to the native (device-1.0) path; the codegen prim is
-# only reached via implementation="codegen"/"auto". These duplicate the
+# ttnn.repeat defaults to implementation="auto", which routes gate-supported
+# cases to codegen and the rest to native. These duplicate the
 # correctness / program-cache checks above but force the codegen path so the
-# nightly data_movement suite exercises it despite the native default.
+# nightly data_movement suite exercises it regardless of the gate's verdict.
 #
 # The codegen prim supports only a subset of cases (see
 # repeat_codegen_supported.cpp): interleaved input/output (no sharding), rank
