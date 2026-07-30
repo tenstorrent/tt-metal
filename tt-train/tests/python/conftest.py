@@ -6,6 +6,14 @@
 
 import pytest
 
+from ttml.testing import TP_AXIS_SIZE, device_mesh
+
+
+@pytest.fixture(scope="module")
+def tp_mesh():
+    with device_mesh((1, TP_AXIS_SIZE), ("dp", "tp"), f"needs {TP_AXIS_SIZE} devices on the 'tp' axis") as mesh:
+        yield mesh
+
 
 def pytest_configure(config):
     """Register custom markers."""
