@@ -42,14 +42,22 @@ namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
 // validated FLUX/LTX picker (tools/mm_sweep/picker_table.py oracle + cost-model fallback): a lookup
 // table for the production shapes, else enumerate feasible candidates and pick the min-cost one
 // (Sm=1 anchor + narrow-N M-split hysteresis). Used when the caller passes config=None.
-RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt);
+// `fusion` describes which fused-epilogue operands will be present. It matters because those operands are
+// extra L1 (c_4..c_6, plus c_10 under reduce-scatter), so a config that is feasible unfused can overflow L1
+// when fused. Defaults to unfused.
+RegimeAMatmulConfig auto_select_config(
+    uint32_t Mt, uint32_t Kt, uint32_t Nt, const plan::FusionInputs& fusion = {});
 
 // Device adapter: read (Mt, Kt, Nt) from the tensors, fetch the compute grid + bank-adjacent worker
 // assignments off the device, translate RegimeAMatmulConfig -> plan::RegimeAConfig, and run the pure
 // planner. When cfg is nullopt, auto_select_config picks the config. Returns the plan result verbatim;
 // the caller must TT_FATAL on !ok() with plan.error.
 plan::PlanResult make_and_build_plan(
-    tt::tt_metal::IDevice* device, const Tensor& in0, const Tensor& in1, const std::optional<RegimeAMatmulConfig>& cfg);
+    tt::tt_metal::IDevice* device,
+    const Tensor& in0,
+    const Tensor& in1,
+    const std::optional<RegimeAMatmulConfig>& cfg,
+    const plan::FusionInputs& fusion = {});
 
 // Build the canonical DRAM width-sharded MemoryConfig for the Regime-A in1 (weight) tensor.
 //

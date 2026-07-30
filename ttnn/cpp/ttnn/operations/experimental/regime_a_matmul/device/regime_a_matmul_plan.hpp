@@ -70,6 +70,32 @@ struct RegimeAConfig {
     uint32_t n_subblock_tiles{0};  // nsb: N-subblock width (tiles). 0 => full N_own.
 };
 
+// Which fused-epilogue operands are present. These change CB ALLOCATION (c_4..c_6, and c_10 under
+// reduce-scatter), so L1 feasibility depends on them: a config that fits unfused can overflow fused.
+// Defaults = the unfused path, so callers that do not fuse need not set anything.
+struct FusionInputs {
+    bool has_bias{false};         // c_4: bias [1, N]
+    bool has_ternary{false};      // c_5 (+ c_6): addcmul residual [M, N] and gate
+    bool has_activation{false};   // no operand CB of its own, but forces the c_10 rscatter scratch
+    bool broadcast_gate{false};   // gate is [1, N] (N_sub tiles) rather than a full [M, N] block
+    bool gate_is_fp32{false};     // c_6 tile format
+};
+
+// Reduce-scatter selection gate. SINGLE SOURCE OF TRUTH -- the program factory calls this to choose the
+// reduction strategy, and compute_cb_sizes() below calls it to decide whether to charge L1 for the chain's
+// c_7 or for the ring's c_8/c_9/c_10. If the two ever disagreed, a config could pass feasibility and then
+// be built with a different, larger set of buffers.
+// Rationale for the terms (measured, see the campaign log): reduce-scatter trades reduction data movement
+// for per-round compute setup, so it only pays when each slice carries >= 2 tiles and, on deep K, when the
+// chain depth is small enough that the setup is amortised.
+inline bool rscatter_selected(uint32_t Pk, uint32_t Kt, uint32_t M_block_capacity, uint32_t N_sub) {
+    const uint32_t rs_T = M_block_capacity * N_sub;  // tiles per output sub-block
+    const bool feasible = (Pk > 1u) && (rs_T >= Pk);
+    const uint32_t max_chunk = (rs_T + Pk - 1u) / Pk;
+    const bool deep_ok = (Pk <= 6u) && (max_chunk >= 2u);
+    return feasible && (Pk >= 4u) && (N_sub >= 2u) && ((Kt <= 64u) || deep_ok);
+}
+
 struct PlanInputs {
     // Logical (unpadded) tile counts.
     uint32_t Mt{};
@@ -89,6 +115,9 @@ struct PlanInputs {
 
     // Logical cores that are unavailable (grid holes / reserved). find_near skips these.
     std::set<PlanXY> holes;
+
+    // Fused-epilogue operands present (drives c_4..c_6 / c_10 allocation, hence L1 feasibility).
+    FusionInputs fusion{};
 
     // L1 budget per core (bytes). BH usable ~1440 KB.
     uint32_t l1_budget_bytes{kL1BudgetBytes};
@@ -135,15 +164,80 @@ struct Geometry {
     double waste_k{}, waste_n{};
 };
 
-// Circular-buffer sizing (spec §5).
+// Circular-buffer sizing (spec §5). AUTHORITATIVE: every CB the program factory allocates must be
+// represented here, because l1_bytes is what feasibility is judged on. A buffer that is allocated but not
+// counted is silent L1 overcommit; the op then either fails to create the CBs or corrupts a neighbouring
+// buffer. When adding a CB (e.g. all-gather staging), add a field AND include it in l1_bytes below.
 struct CbSizes {
     uint32_t cb0_tiles{};  // in0 k-slice resident (bf16)
     uint32_t cb1_tiles{};  // in1 (bf16), depth 4
     uint32_t cb2_tiles{};  // out (bf16), depth 2
     uint32_t cb3_tiles{};  // fp32 intermediate accumulator
-    uint32_t cb7_tiles{};  // reduce running sum (bf16), depth 2 — 0 when Pk==1
-    uint32_t l1_bytes{};   // total
+    uint32_t cb7_tiles{};  // chain reduce running sum (bf16), depth 2 — 0 when Pk==1 or reduce-scatter
+    // Fused-epilogue operands (0 when the matching fusion is absent).
+    uint32_t cb4_tiles{};  // bias [1, N_sub] (bf16)
+    uint32_t cb5_tiles{};  // addcmul residual [M, N] block (bf16)
+    uint32_t cb6_tiles{};  // addcmul gate, bf16 or fp32 (see cb6_is_fp32)
+    bool cb6_is_fp32{};    // c_6 tile format follows the gate tensor dtype
+    // Reduce-scatter ring (0 unless reduce-scatter is selected).
+    uint32_t cb8_tiles{};   // ring send, 2 slots of the largest slice (bf16)
+    uint32_t cb9_tiles{};   // ring recv, 2 slots of the largest slice (bf16)
+    uint32_t cb10_tiles{};  // fused-epilogue scratch for the reduced slice (bf16)
+    bool rscatter{};        // which reduction strategy this sizing assumed
+    uint32_t l1_bytes{};    // total, INCLUDING every field above
 };
+
+// Size every CB for one config. SINGLE SOURCE OF TRUTH for L1 accounting: build_plan() uses it for the
+// authoritative feasibility check, the picker's fast feasibility predicate uses it so it can never pick a
+// config the planner will reject, and the program factory allocates FROM the returned struct so the numbers
+// it charges and the numbers it spends cannot drift apart.
+inline CbSizes compute_cb_sizes(
+    uint32_t Pk,
+    uint32_t Kt,
+    uint32_t M_block_capacity,
+    uint32_t K_slice_capacity,
+    uint32_t N_sub,
+    uint32_t kb,
+    const FusionInputs& fu,
+    uint32_t tb = kTileBytesBf16,
+    uint32_t tf = kTileBytesFp32) {
+    CbSizes cb;
+    const uint32_t out_blk_tiles = M_block_capacity * N_sub;
+    cb.rscatter = rscatter_selected(Pk, Kt, M_block_capacity, N_sub);
+
+    cb.cb0_tiles = M_block_capacity * K_slice_capacity;  // == K_num_blocks_eff * M_block * kb
+    cb.cb1_tiles = kCb1Depth * kb * N_sub;
+    cb.cb2_tiles = 2u * out_blk_tiles;
+    cb.cb3_tiles = out_blk_tiles;
+    // The chain's running-sum buffer is not allocated under reduce-scatter (partials travel via c_8/c_9).
+    cb.cb7_tiles = (Pk > 1u && !cb.rscatter) ? (kCb7Depth * out_blk_tiles) : 0u;
+
+    // Under reduce-scatter the writer feeds an owner its OWN SLICE instead of a sub-block row, so each
+    // fused operand CB must also be at least one slice deep.
+    const uint32_t rs_slice = cb.rscatter ? ((out_blk_tiles + Pk - 1u) / Pk) : 0u;
+    if (fu.has_bias) {
+        cb.cb4_tiles = std::max(N_sub, rs_slice);
+    }
+    if (fu.has_ternary) {
+        cb.cb5_tiles = std::max(out_blk_tiles, rs_slice);
+        cb.cb6_tiles = std::max(fu.broadcast_gate ? N_sub : out_blk_tiles, rs_slice);
+        cb.cb6_is_fp32 = fu.gate_is_fp32;
+    }
+    if (cb.rscatter) {
+        cb.cb8_tiles = 2u * rs_slice;
+        cb.cb9_tiles = 2u * rs_slice;
+        if (fu.has_bias || fu.has_ternary || fu.has_activation) {
+            cb.cb10_tiles = rs_slice;
+        }
+    }
+
+    const uint32_t bf16_tiles = cb.cb0_tiles + cb.cb1_tiles + cb.cb2_tiles + cb.cb7_tiles + cb.cb4_tiles +
+                                cb.cb5_tiles + cb.cb8_tiles + cb.cb9_tiles + cb.cb10_tiles +
+                                (cb.cb6_is_fp32 ? 0u : cb.cb6_tiles);
+    const uint32_t fp32_tiles = cb.cb3_tiles + (cb.cb6_is_fp32 ? cb.cb6_tiles : 0u);
+    cb.l1_bytes = bf16_tiles * tb + fp32_tiles * tf;
+    return cb;
+}
 
 // Per-core plan. Ownership is LOGICAL + BALANCED: (start, valid) ranges over the logical tiles, with
 // no schedule padding folded into the address offsets. The kernel processes the fixed schedule
@@ -313,14 +407,11 @@ inline PlanResult build_plan(const PlanInputs& in) {
         return res;
     }
 
-    // --- CB sizing + L1 check (spec §5; cb7 only when Pk>1) ---
-    CbSizes cb;
-    cb.cb0_tiles = g.M_block_capacity * g.K_slice_capacity;  // == K_num_blocks_eff * M_block * kb
-    cb.cb1_tiles = kCb1Depth * kb * g.N_sub;
-    cb.cb2_tiles = 2u * g.M_block_capacity * g.N_sub;
-    cb.cb3_tiles = g.M_block_capacity * g.N_sub;
-    cb.cb7_tiles = (Pk > 1u) ? (kCb7Depth * g.M_block_capacity * g.N_sub) : 0u;
-    cb.l1_bytes = (cb.cb0_tiles + cb.cb1_tiles + cb.cb2_tiles + cb.cb7_tiles) * in.tb + cb.cb3_tiles * in.tf;
+    // --- CB sizing + L1 check (spec §5) ---
+    // Sized by the shared authoritative sizer so this check covers EVERY buffer the factory allocates,
+    // including the fused-epilogue operands (c_4..c_6) and the reduce-scatter ring (c_8..c_10).
+    const CbSizes cb = compute_cb_sizes(
+        Pk, in.Kt, g.M_block_capacity, g.K_slice_capacity, g.N_sub, kb, in.fusion, in.tb, in.tf);
     if (cb.l1_bytes > in.l1_budget_bytes) {
         res.error = "L1 over budget: needs " + std::to_string(cb.l1_bytes) + " B > " +
                     std::to_string(in.l1_budget_bytes) + " B";

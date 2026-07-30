@@ -335,7 +335,15 @@ void kernel_main() {
             noc_async_writes_flushed();  // pipelined: pages departed L1 -> out_cb slot safe to reuse
             cb_pop_front(out_cb, out_blk);
         }
-        noc_async_write_barrier();  // pipelined: single deferred completion barrier before return (no atomics)
+        // Pipelined: single deferred completion before return. BOTH barriers are required even on this
+        // Pk == 1 path: the in0 ring forward above issues non-posted semaphore atomics (noc_semaphore_inc),
+        // and noc_async_write_barrier() drains writes ONLY -- it does not wait for atomic acks. Without the
+        // atomic barrier the kernel can retire with acks still in flight, which the watcher reports as
+        // "kernel completing with pending NOC transactions (missing NOC non-posted atomics flushed
+        // barrier)". Costs nothing in practice here (phase 2 gives the acks ample time to land), but the
+        // guarantee must not depend on that timing.
+        noc_async_write_barrier();
+        noc_async_atomic_barrier();
         return;
     }
 

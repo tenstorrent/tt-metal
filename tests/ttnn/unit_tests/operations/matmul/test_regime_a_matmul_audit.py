@@ -245,3 +245,59 @@ def test_audit_cache_fused_unfused_chunked_interleaved(device):
         outs = ttnn.experimental.regime_a_matmul_split(a0, a1, 2, -1)
         cat = torch.cat([ttnn.to_torch(ttnn.from_device(o))[0, 0] for o in outs], dim=-1)
         assert_with_pcc(base, cat.float(), PCC)
+
+
+# ---------------------------------------------------------------------------------------------------
+# 7. L1 FEASIBILITY ACCOUNTING. The planner's L1 check must charge for EVERY circular buffer the program
+#    factory allocates, not just the always-present ones. It previously omitted the fused-epilogue operands
+#    (c_4 bias / c_5 residual / c_6 gate) and the reduce-scatter ring (c_8/c_9 and the c_10 epilogue
+#    scratch), so a config could pass feasibility and then be built with buffers nobody had budgeted for.
+# ---------------------------------------------------------------------------------------------------
+@pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
+def test_audit_l1_accounting_counts_fusion_cbs(device):
+    """A config that fits UNFUSED but not FUSED must be rejected by the planner, not silently built.
+
+    256x2048x1024 at (Pk1,Ns1,Sm1,kb1,nsb4) needs 1,343,488 B of the 1,474,560 B budget unfused. Adding
+    bias (c_4, 4 tiles) + an addcmul residual (c_5, 32 tiles) + a FULL [M,N] gate (c_6, 32 tiles) adds
+    139,264 B -> 1,482,752 B, i.e. 8,192 B over. A broadcast [1,N] gate would still fit, so the full-gate
+    form is the point of the case. If the accounting regresses to ignoring c_4..c_6 this call succeeds and
+    the test fails.
+    """
+    M, K, N = 256, 2048, 1024
+    cfg = ttnn.RegimeAMatmulConfig(k_slices=1, n_slices=1, m_slices=1, k_block_tiles=1, n_subblock_tiles=4)
+    torch.manual_seed(0)
+    t0, t1 = torch.randn(1, 1, M, K), torch.randn(1, 1, K, N)
+    a0 = ttnn.from_torch(t0, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    wcfg = ttnn.create_regime_a_weight_memory_config(list(t1.shape), ttnn.bfloat16, device)
+    a1 = ttnn.from_torch(t1, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=wcfg)
+    dev_t = lambda t: ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+
+    # Control: the same config unfused must still be accepted, so the case is proving that FUSION is what
+    # pushed it over -- not that the config was infeasible all along.
+    ttnn.experimental.regime_a_matmul(a0, a1, config=cfg)
+
+    with pytest.raises(RuntimeError, match="L1 over budget"):
+        ttnn.experimental.regime_a_matmul(
+            a0,
+            a1,
+            config=cfg,
+            bias_tensor=dev_t(torch.randn(1, 1, 1, N)),
+            fused_ternary_scalar=1.0,
+            fused_ternary_input_a=dev_t(torch.randn(1, 1, M, N)),
+            fused_ternary_input_b=dev_t(torch.randn(1, 1, M, N)),
+        )
+
+
+# ---------------------------------------------------------------------------------------------------
+# 8. PICKER: large-Mt deep-K rescue. The cost-model fallback searches Sm=1 for its anchor, but on large-Mt
+#    deep-K shapes the in0 k-slice-resident CB (M_block * K_slice tiles) exceeds L1 for EVERY Sm=1 candidate,
+#    so auto-select used to raise "found no feasible config" even though M-split configs fit. The Sm>1 search
+#    must therefore be reachable when no Sm=1 anchor exists -- independently of the narrow-N preference gate,
+#    which only decides whether M-split is PREFERABLE, not whether anything fits.
+# ---------------------------------------------------------------------------------------------------
+@pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
+@pytest.mark.parametrize("M,K,N", [(512, 15360, 768), (512, 15360, 1536)], ids=["512x15360x768", "512x15360x1536"])
+def test_audit_picker_large_mt_deep_k_rescue(device, M, K, N):
+    """config=None must resolve these to a feasible M-split config instead of raising."""
+    got, ref = _mm(device, M, K, N)
+    assert_with_pcc(ref, got, PCC)
