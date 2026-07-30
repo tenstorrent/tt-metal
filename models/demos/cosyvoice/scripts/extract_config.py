@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Phase 0.6 — Parse `cosyvoice2.yaml` and assert against `tt/model_config.py`.
 

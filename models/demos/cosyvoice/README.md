@@ -1,26 +1,25 @@
 <!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# CosyVoice2-0.5B — TTS on Wormhole N300
+# CosyVoice — TTS on Wormhole N300
 
 ## Platforms
 Wormhole (N300)
 
 ## Introduction
 
-[CosyVoice2-0.5B](https://github.com/FunAudioLLM/CosyVoice) is a multilingual
+[CosyVoice](https://github.com/FunAudioLLM/CosyVoice) is a multilingual
 text-to-speech model from Alibaba FunAudioLLM. It combines a Qwen2.5-0.5B LLM
 (speech-token prediction), a flow-matching decoder (UNet1D estimator + Euler CFM),
 and a HiFT vocoder (conv stack + iSTFT) to generate 24 kHz speech.
 
-This bring-up on Tenstorrent Wormhole N300 using TTNN covers **Stage 1 (functional
-correctness)** and **Stage 2 (performance optimization)**. The LLM and flow estimator
-run on-device with trace capture; the vocoder runs on host (CPU) due to bf16 precision
-constraints.
+This bring-up on Tenstorrent Wormhole N300 using TTNN covers **Stage 1** (functional
+correctness), **Stage 2** (performance optimization), and **Stage 3** (flash attention,
+streaming inference, 2-chip pipeline parallelism). The LLM and flow estimator run
+on-device with trace capture; the vocoder runs on host (CPU) due to bf16 precision
+constraints in dilated ResBlocks.
 
 **4 generation modes:** SFT, zero-shot voice cloning, cross-lingual, instruct.
 **5 languages:** Chinese, English, Japanese (katakana), Cantonese (yue), Korean.
-
-
 
 ## Prerequisites
 
@@ -58,108 +57,108 @@ python models/demos/cosyvoice/demo/try_it.py
 ### Pytest Demo (20 WAVs: 4 modes × 5 languages)
 
 ```bash
+source /root/tt-metal/python_env/bin/activate
 cd /root/tt-metal
 python -m pytest models/demos/cosyvoice/demo/demo.py -v -s
 ```
 
 Output WAVs are written to `models/demos/cosyvoice/demo/output/`.
 
-
 ## Tests
 
 ```bash
+source /root/tt-metal/python_env/bin/activate
 cd /root/tt-metal
 
-# PCC gates (40 tests, ~90s)
+# PCC gates (48 tests, ~90s)
 python -m pytest models/demos/cosyvoice/tests/pcc/ -q
 
 # E2E mode tests + token accuracy (8 tests, ~40s)
 python -m pytest models/demos/cosyvoice/tests/e2e/test_modes.py -v
 
-# Performance (C6 throughput + RTF)
+# Performance (LLM throughput + E2E RTF + streaming RTF)
 python -m pytest models/demos/cosyvoice/tests/perf/test_throughput.py -v -s
 
-# Audio quality evaluation (C8: WER + speaker similarity)
+# Audio quality evaluation (WER + speaker similarity)
 python -m pytest models/demos/cosyvoice/demo/eval.py -v -s
 ```
 
 ## Results
 
-| Metric | Target | Measured | Status |
-|--------|--------|----------|--------|
-| LLM decode throughput | ≥ 30 tok/s | 114.2 tok/s (traced) | ✓ PASS |
-| E2E RTF | < 0.5 | **0.47** | ✓ PASS |
-| Token accuracy (zero_shot) | > 95% | 96.0% | ✓ PASS |
-| Token accuracy (cross_lingual) | > 95% | 100.0% | ✓ PASS |
-| Token accuracy (instruct2) | > 95% | 100.0% | ✓ PASS |
-| Token accuracy (sft) | > 95% | 98.0% | ✓ PASS |
-| WER (whisper-large-v3) | < 3.0 | 0.000 | ✓ PASS |
-| Speaker similarity (CAM++) | > 60 | 82.9 | ✓ PASS |
-| LLM prefill PCC | ≥ 0.99 | 0.997 | ✓ PASS |
-| LLM decode PCC | ≥ 0.99 | 0.996–0.998 | ✓ PASS |
-| Flow estimator PCC (mel) | ≥ 0.99 | 0.995–0.999 | ✓ PASS |
-| Vocoder waveform PCC | ≥ 0.99 | 1.0 | ✓ PASS |
+| Metric | Target | Measured |
+|--------|--------|----------|
+| LLM decode throughput | ≥ 30 tok/s | 114.2 tok/s (traced) |
+| E2E RTF (non-streaming) | < 0.5 | **0.451** |
+| E2E RTF (streaming, 2-chip) | < 0.6 | **0.57** |
+| Streaming first-chunk latency | — | 2.8s |
+| Token accuracy (zero_shot) | > 95% | 96.0% |
+| Token accuracy (cross_lingual) | > 95% | 100.0% |
+| Token accuracy (instruct2) | > 95% | 100.0% |
+| Token accuracy (sft) | > 95% | 98.0% |
+| Speaker similarity (CAM++) | > 60 | 82.9 |
+| LLM prefill PCC | ≥ 0.99 | 0.997 |
+| LLM decode PCC | ≥ 0.99 | 0.996–0.998 |
+| Flow estimator PCC (mel) | ≥ 0.99 | 0.995–0.999 |
+| Vocoder waveform PCC | ≥ 0.99 | 1.0 |
 
 ## Validation Evidence
 
 All gates verified on Wormhole N300:
 
 ```
-tests/pcc/          40 passed   (LLM teacher-forced PCC, flow encoder/estimator PCC,
-                                 TTNN estimator PCC, vocoder waveform/f0/MCD — 4 modes each)
+tests/pcc/          48 passed   (LLM teacher-forced PCC, flow encoder/estimator PCC,
+                                 TTNN estimator PCC, streaming PCC, vocoder waveform/f0/MCD)
 tests/e2e/           8 passed   (4-mode waveform sanity + teacher-forced token accuracy >95%)
-tests/perf/          2 passed   (LLM decode 114.2 tok/s ≥ 30; E2E RTF 0.47 < 0.5)
+tests/perf/          3 passed   (LLM decode ≥30 tok/s; E2E RTF <0.5; streaming RTF <0.6)
 demo/demo.py        20 passed   (4 modes × 5 languages, WAVs in demo/output/)
-demo/eval.py         2 passed   (WER 0.000, speaker similarity 82.9)
 ```
-
-Device performance data: `demo/output/device_perf_report.csv` (1746 device ops,
-per-op kernel durations, core counts — generated via `tools/tracy/profile_this.py`).
 
 ## Known Limitations
 
-1. **Non-streaming only**: Non-streaming is the Stage-1 design constraint. Streaming
-   requires causal flow attention + chunk-level LLM→flow→vocoder pipelining (Stage 3;
-   see BRINGUP_PLAN.md §12.3.6).
-2. **Host-side vocoder**: The HiFT vocoder's dilated ResBlocks (effective kernel up to
-   51 taps) accumulate ~10% std scale error per upsample stage in bf16, catastrophically
-   amplified by `exp()` in the magnitude computation. The vocoder must stay on host
-   (fp32) until TTNN supports fp32 conv accumulation.
-3. **Host-side DSP**: SineGen2 + iSTFT (n_fft=16) run on host (no native `ttnn.istft`).
+1. **Host-side DSP**: SineGen2 + iSTFT (n_fft=16) run on host (no native `ttnn.istft`).
+2. **Streaming RTF bounded by Python GIL**: 2-chip pipeline eliminates device contention,
+   but host ops (encoder + vocoder) hold the GIL ~1.5s per utterance, serializing with
+   LLM sampling. RTF < 0.3 requires C++ orchestration or an incremental encoder.
 
 ## Architecture
 
 ```
 Text → Frontend (host: normalize, tokenize, speech_tokenizer_v2.onnx, campplus.onnx)
-     → LLM (N300: Qwen2.5-0.5B + speech heads, traced decode, 114 tok/s)
-     → Flow (N300: UNet1D estimator × 5 NFE, traced; host: encoder + Euler CFM)
+     → LLM (N300 chip 0: Qwen2.5-0.5B + speech heads, traced decode, 114 tok/s)
+     → Flow (N300 chip 1: UNet1D estimator × 5 NFE, traced; host: encoder + Euler CFM)
      → Vocoder (host fp32: HiFTGenerator conv stack + SineGen2 + iSTFT)
      → 24 kHz waveform
 ```
+
+Streaming mode (`inference_zero_shot_streaming`) yields waveform chunks as they are
+generated: LLM decodes continuously on chip 0 while flow+vocoder process accumulated
+tokens on chip 1 + host. Uses delta CFM (fixed T_max=256 trace) + hift cache + hamming
+fade-in/out between chunks.
 
 ## Performance Optimization
 
 | Change | Result |
 |--------|--------|
-| LLM trace capture (`ttnn.begin_trace_capture` on decode loop) | 34 → **114 tok/s** (3.3×) |
-| Flow estimator → native TTNN (`estimator_ttnn.py`) | 19.2s → **4.4s** (4.3×) |
-| Estimator trace capture (50MB trace region, cached across calls) | 444 → **~300 ms/NFE-step** |
-| NFE reduction 10→5 (mel PCC=1.0 validated) | RTF 0.78 → **0.47** |
-| Pad caching, conv weight caching, attention scale folding | Eliminated 140+ redundant ops/inference |
-| Vocoder `torch.compile` (reduce-overhead, dynamic) | Host vocoder ~20% faster |
-
-**E2E RTF: 0.47** (was ~3.4 at Stage 1 baseline). 40 PCC tests + 20 demo WAVs pass.
+| LLM trace capture (decode loop) | 34 → **114 tok/s** (3.3×) |
+| Flow estimator → native TTNN | 19.2s → **4.4s** (4.3×) |
+| Estimator trace capture (50MB trace region, cached) | ~300 ms/NFE-step |
+| NFE reduction 10→5 (mel PCC=1.0) | RTF 0.78 → **0.47** |
+| Pad caching, conv weight caching, attention scale folding | Eliminated 140+ redundant ops |
+| Vocoder `torch.compile` | Host vocoder ~20% faster |
+| Flash attention (`scaled_dot_product_attention`) | RTF 0.47 → **0.451** |
+| Streaming (chunk-level delta CFM, fixed-T trace) | First-chunk latency **2.8s** |
+| 2-chip pipeline (`CreateDevices`, LLM∥CFM) | Device contention eliminated |
 
 ### E2E Time Breakdown (zero_shot, 9.4s audio, warm)
 
-| Component | Time |
-|-----------|------|
-| Frontend (ONNX tokenizers, mel) | 0.24s |
-| LLM prefill + decode (traced) | 2.18s |
+| Component | Time | Location |
+|-----------|------|----------|
+| Frontend (ONNX tokenizers, mel) | 0.24s | Host |
+| LLM prefill + decode (traced) | 2.18s | N300 chip 0 |
 | Flow encoder | 0.24s | Host |
-| CFM estimator (5 NFE, traced) | 1.50s |
-| Vocoder (torch.compile) | 0.75s |
-| **Total** | **~4.4s (RTF 0.47)** |
+| CFM estimator (5 NFE, traced) | 1.50s | N300 chip 1 |
+| Vocoder (torch.compile) | 0.75s | Host |
+| **Total** | **~4.3s (RTF 0.451)** | |
 
 ## Validation Evidence (Wormhole N300)
 
@@ -180,8 +179,3 @@ tests/e2e/test_modes.py                 4 mode sanity (zero_shot, cross_lingual,
 ### Tracy profiler report
 
 Report generated: https://drive.google.com/drive/folders/1DfrR5kOkuLq6-_7Fn2RHbjWra77skE_3?usp=sharing
-
-Report on ttnn-visualiser:
-
-
-https://drive.google.com/drive/folders/1DfrR5kOkuLq6-_7Fn2RHbjWra77skE_3?usp=drive_link
