@@ -319,5 +319,13 @@ phase-specific fields. Its verdict remains `more-work-needed` solely because
 the batch-32 routed-output capability requires a shared-TTNN change outside
 this stage's authorized files; it identifies no further model-local fix.
 
+A fresh resumed-stage AutoFix audit is recorded in
+`AUTODEBUG_B32_FRESH.md`. It identifies upstream commit `50c56281566`
+(`Feature: Add single-device fused moe_compute support (#49886)`) as the
+concrete unblock. That commit adds the exact fabric-free `FullLocal` fused
+combine required here, but it is present only on `origin/main`, not in this
+checkout, and backporting its 18 shared-TTNN files is outside the explicit
+model-local stage scope.
+
 Stage-owned commits: `327a8ffac63` and `8ce223940de` (local only, never
 pushed).

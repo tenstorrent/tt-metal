@@ -780,3 +780,13 @@ include zero and its exact-field audit confirms the two interleaved labels
 execute the same prefill policy. The verdict remains `more-work-needed`
 solely for the batch-32 routed-output dependency. The reviewer found no
 further required model-local remediation.
+
+Resumed-stage AutoFix ran a fresh xhigh source audit recorded in
+`AUTODEBUG_B32_FRESH.md`. It independently refuted hidden local-mode,
+post-hoc rolling-buffer consumption, compact sparse-output, and competitive
+static expert-group hypotheses. The exact missing shared capability is now
+available upstream in `50c56281566`, which adds fabric-free
+`MoEComputePath::FullLocal`; that commit is on `origin/main` but is not an
+ancestor of this checkout. Applying it would modify shared TTNN sources
+outside the original model-local write scope. No TT hardware was used for
+this source-only re-audit.
