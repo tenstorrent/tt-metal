@@ -127,10 +127,11 @@ void SortDeviceOperation::validate_on_program_cache_miss(
                     tensor_args.output_tensors.at(1)->dtype() == DataType::UINT32,
                 "Output indices tensor dtype must be UINT16 or UINT32. Got output indices tensor dtype: {}",
                 tensor_args.output_tensors.at(1)->dtype());
-            if (tensor_args.input_tensor.dtype() == DataType::FLOAT32) {
+            if (tensor_args.input_tensor.dtype() == DataType::FLOAT32 ||
+                tensor_args.input_tensor.dtype() == DataType::UINT16) {
                 TT_FATAL(
                     tensor_args.output_tensors.at(1)->dtype() == DataType::UINT32,
-                    "Output indices tensor dtype must be UINT32 when input dtype is FLOAT32 "
+                    "Output indices tensor dtype must be UINT32 when input dtype is FLOAT32 or UINT16 "
                     "(fp32_dest_acc_en forces 32-bit index tiles). Got: {}",
                     tensor_args.output_tensors.at(1)->dtype());
             }
@@ -152,15 +153,17 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     // (uint16) or INT32 (uint32) mode in the SFPU to track indices, so the CB
     // format must match.
     //
-    // When the input dtype forces fp32_dest_acc_en (currently FLOAT32) the
-    // DEST registers are in 32-bit mode and topk reads indices via the INT32
-    // path; UINT16 index tiles (2KB) would not match the writer-generated
-    // 32-bit tiles (4KB) sized to that mode and the writer would overrun the
-    // index CB.  Force UINT32 indices in that case so CB sizing, writer tile
-    // generation, and LLK SFPU mode all agree.
+    // When fp32_dest_acc_en is enabled the DEST registers are 32-bit and topk
+    // reads/writes indices via the INT32 path; UINT16 index tiles (2 KB) would
+    // not match the 4 KB tiles that mode produces, overrunning the index CB.
+    // Force UINT32 indices whenever the sort runs in 32-bit DEST mode, which
+    // currently happens for:
+    //   • FLOAT32 input (direct fp32 comparison)
+    //   • UINT16 input  (uint16 int → fp32 via hardware unpack, exact 0..65535)
     const bool input_is_fp32 = (tensor_args.input_tensor.dtype() == DataType::FLOAT32);
+    const bool input_is_uint16 = (tensor_args.input_tensor.dtype() == DataType::UINT16);
     DataType index_dtype = DataType::UINT16;
-    if (output_shape[-1] >= std::numeric_limits<uint16_t>::max() || input_is_fp32) {
+    if (output_shape[-1] >= std::numeric_limits<uint16_t>::max() || input_is_fp32 || input_is_uint16) {
         index_dtype = DataType::UINT32;
     }
 

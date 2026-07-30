@@ -37,8 +37,14 @@ void kernel_main() {
     constexpr uint32_t W_tile_bytes = get_compile_time_arg_val(rm_base + 3);
     constexpr uint32_t W_index_bytes = get_compile_time_arg_val(rm_base + 4);
 
+    // UINT16 input mode: sorted values in c_4 are Float32 (to avoid bf16 pack corruption).
+    // The writer must convert Float32 → UInt16 element-by-element before DMA'ing to DRAM.
+    constexpr bool is_uint16_fp32_mode = get_compile_time_arg_val(rm_base + 5) == 1;
+    constexpr uint32_t uint16_conv_cb_index = get_compile_time_arg_val(rm_base + 6);
+
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t TILE_H = 32;
+    constexpr uint32_t ELEMENTS_PER_TILE = 1024;  // 32×32
 
     const auto input_tensor_addr_gen = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
     const auto index_tensor_addr_gen = TensorAccessor(index_tensor_args, index_tensor_buffer_addr);
@@ -50,6 +56,7 @@ void kernel_main() {
     DataflowBuffer rm_output_index_dfb(rm_output_index_dfb_index);
     constexpr uint32_t input_tensor_tile_size = get_tile_size(input_tensor_output_cb_index);
     constexpr uint32_t index_tensor_tile_size = get_tile_size(index_tensor_output_cb_index);
+    constexpr uint32_t uint16_tile_size = get_tile_size(uint16_conv_cb_index);
 
     // Semaphore setup
     Semaphore<> cores_to_coordinator_done_sem(cores_to_coordinator_done_semaphore_arg);
@@ -128,25 +135,60 @@ void kernel_main() {
                                 noc.async_write_barrier();
                                 index_output_dfb.pop_front(one_tile);
 
-                                input_output_dfb.wait_front(one_tile);
-                                noc.async_write(
-                                    input_output_dfb,
-                                    input_tensor_addr_gen,
-                                    input_tensor_tile_size,
-                                    {.offset_bytes = 0},
-                                    {.page_id = h * Wt + left_tile_id, .offset_bytes = 0});
-                                noc.async_write_barrier();
-                                input_output_dfb.pop_front(one_tile);
+                                if constexpr (is_uint16_fp32_mode) {
+                                    // Convert Float32 → UInt16 for each value tile before DMA
+                                    DataflowBuffer conv_dfb(uint16_conv_cb_index);
+                                    for (const uint32_t tile_id : {left_tile_id, right_tile_id}) {
+                                        input_output_dfb.wait_front(one_tile);
+                                        conv_dfb.reserve_back(one_tile);
 
-                                input_output_dfb.wait_front(one_tile);
-                                noc.async_write(
-                                    input_output_dfb,
-                                    input_tensor_addr_gen,
-                                    input_tensor_tile_size,
-                                    {.offset_bytes = 0},
-                                    {.page_id = h * Wt + right_tile_id, .offset_bytes = 0});
-                                noc.async_write_barrier();
-                                input_output_dfb.pop_front(one_tile);
+                                        volatile tt_l1_ptr uint32_t* fp32_ptr =
+                                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                                input_output_dfb.get_read_ptr());
+                                        volatile tt_l1_ptr uint16_t* u16_ptr =
+                                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(conv_dfb.get_write_ptr());
+
+                                        for (uint32_t i = 0; i < ELEMENTS_PER_TILE; i++) {
+                                            const uint32_t fp32_bits = fp32_ptr[i];
+                                            float fval;
+                                            __builtin_memcpy(&fval, &fp32_bits, sizeof(fval));
+                                            u16_ptr[i] = static_cast<uint16_t>(static_cast<uint32_t>(fval));
+                                        }
+
+                                        input_output_dfb.pop_front(one_tile);
+                                        conv_dfb.push_back(one_tile);
+
+                                        conv_dfb.wait_front(one_tile);
+                                        noc.async_write(
+                                            conv_dfb,
+                                            input_tensor_addr_gen,
+                                            uint16_tile_size,
+                                            {.offset_bytes = 0},
+                                            {.page_id = h * Wt + tile_id, .offset_bytes = 0});
+                                        noc.async_write_barrier();
+                                        conv_dfb.pop_front(one_tile);
+                                    }
+                                } else {
+                                    input_output_dfb.wait_front(one_tile);
+                                    noc.async_write(
+                                        input_output_dfb,
+                                        input_tensor_addr_gen,
+                                        input_tensor_tile_size,
+                                        {.offset_bytes = 0},
+                                        {.page_id = h * Wt + left_tile_id, .offset_bytes = 0});
+                                    noc.async_write_barrier();
+                                    input_output_dfb.pop_front(one_tile);
+
+                                    input_output_dfb.wait_front(one_tile);
+                                    noc.async_write(
+                                        input_output_dfb,
+                                        input_tensor_addr_gen,
+                                        input_tensor_tile_size,
+                                        {.offset_bytes = 0},
+                                        {.page_id = h * Wt + right_tile_id, .offset_bytes = 0});
+                                    noc.async_write_barrier();
+                                    input_output_dfb.pop_front(one_tile);
+                                }
                             }
 
                             // Signalize readiness to the coordinator
