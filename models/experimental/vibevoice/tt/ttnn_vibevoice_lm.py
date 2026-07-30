@@ -344,13 +344,7 @@ def preprocess_lm_weights(
 # is bit-exact for a given table; it shifts only by the device table's 1.2e-07 deviation from numpy
 # (measured: prefill hidden PCC 0.999946).  The decode paths take the kernel's bf16 RoPE, which
 # leaves greedy tokens unchanged over a synthetic 8-step check but is not bit-exact.
-#
-# NOTE: default flipped ON (VV_FUSED_ROPE=0 to force the fp32 chain).  The bf16 decode kernel is
-# the only perturbation source and a 100-min acceptance run showed the speaking rate accelerating
-# (median 208 wpm vs the fp32 baseline's 153; natural 150-190) even though every energy/spectral
-# check passed — pacing is not covered by those gates.  Re-run the long-form acceptance before
-# relying on this default.
-_FUSED_ROPE = os.environ.get("VV_FUSED_ROPE", "1") == "1"
+_FUSED_ROPE = os.environ.get("VV_FUSED_ROPE", "0") == "1"
 
 
 def _interleave_perm(head_dim: int) -> np.ndarray:
