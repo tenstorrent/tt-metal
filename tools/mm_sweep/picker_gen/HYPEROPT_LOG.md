@@ -1273,3 +1273,74 @@ proxy's kb bias rather than the core count. **A candidate generator whose cost m
 production picker's will systematically slander the production pick.**
 
 All 31 runs correct (PCC 0.99997-1.00011) and stable (block spread <=0.5%). No code change; nothing to ship.
+
+## FINALIZATION (2026-07-30): golden perf suite, cleanup, coverage audit
+
+### 1. Golden performance regression suite
+
+`tests/ttnn/unit_tests/operations/matmul/test_regime_a_matmul_perf.py` -- 10 shapes, 85 s, 10/10 pass.
+Chosen so every production path is covered: Mt 1/2/4/8/16, chain AND reduce-scatter, bank-local AND in1-near
+AND mesh, 7-228 us, 24-96 cores. Thresholds are the measured medians plus a margin matched to the measured
+noise floor (8% under 30 us where iteration spread reaches 12%, 5% above). Every regression this campaign
+caught was 9-33%, so the margins neither flake nor hide anything. Each case also asserts PCC on the same
+program it times, so a perf pass cannot mask a numerical break.
+
+Measurement note worth keeping: **the profiler CSV is only written when the device CLOSES.** Verified directly
+-- it is absent after `ttnn.synchronize_device`, still absent after `ttnn.ReadDeviceProfiler`, and appears only
+after `close_device`. So per-test device timing inside one pytest process is not possible; each shape is
+measured in its own subprocess through the existing `prod_sweep_worker.py` (which also isolates shapes and
+keeps the run-host-id demux in one place). Those tests must therefore NOT take the `device` fixture.
+
+### 2. Removed all diagnostic / experimental infrastructure (-1427 lines)
+
+The program factory alone went 1930 -> 950 lines. Deleted: the `TT_REGIME_A_DIAG_MASK` and
+`TT_REGIME_A_CB1_DEPTH` env vars and their two operation attributes (so the program-cache key now contains
+only real inputs); all 26 diagnostic bits; the ~819 lines of dead host helpers behind them (`RingLinkModel`,
+`regroup_in0_rings`, `balance_in0_ring_order`, `balance_in0_ring_order_bg`, `place_in1_optimal`); the
+`PlanInputs` cb1/cb7-depth and `reduce_meet` knobs (now fixed constants `kCb1Depth=4`, `kCb7Depth=2`); the
+meet-in-the-middle `CorePlan` fields; and the TRID-only cb1-depth compile arg.
+
+Kept, all production and all measured: chain, ring reduce-scatter with its S8/S9 gate, the 2D mesh gate,
+IN1_NEAR M-split placement, PARETO in0 ring ordering, subblock enlargement, coalesced in1 reads, balanced
+tails, fusion, chunked output. One env var survives -- `TT_REGIME_A_LOG_CFG`, observability only, logging the
+factory's own pick/reduction/placement once per cache miss. It is how the sweep tables report ground truth
+(the host-side picker mirror is NOT validated against `auto_select_config`), so it was deliberately retained.
+
+**The cleanup was validated, not asserted: 111/111 correctness AND 10/10 perf thresholds after removal.**
+
+### 3. Coverage audit -- and it found a real gap
+
+Ran the main 111-test suite with the config log to see which production paths it actually reaches:
+
+| programs | reduction | placement |
+|---|---|---|
+| 99 | chain | bank-local |
+| 10 | chain | in1-near |
+| 1 | chain | mesh |
+| **0** | **reduce-scatter** | **--** |
+
+**The correctness suite never exercised ring reduce-scatter at all**, despite it shipping on 14 of the 66
+corpus shapes. Mesh placement had a single program and Ns>1 a single config. So "111/111 pass" was silent
+about the reduction path on a fifth of the corpus. (It was not unverified overall -- 4 of the 10 golden perf
+shapes are reduce-scatter and assert PCC -- but the suite carrying the tails, fusion and cache cases was.)
+
+Added `test_regime_a_matmul_audit.py`, 29 tests, 12 s, closing that and the other gaps:
+- **reduce-scatter**: shallow-K, Sm>1, deep-K-via-Pk<=6, and both UNEVEN chunk partitions (rs_T%Pk != 0:
+  9-over-4 and 6-over-4), each at both an explicit config and config=None; plus the gate yielding to fusion
+  (a reduce-scatter-shaped problem WITH bias must fall back to the chain and still be correct).
+- **mesh**: 4 shapes including mesh+reduce-scatter together and mesh with non-divisible Kt and Nt.
+- **Pk/Ns/Sm grid** unfused on one shape, including Ns=4 and Mt=8 with Sm=3 (M-split tail).
+- **program-cache DISCRIMINATION**, which the main suite structurally could not test -- it only ever replays
+  the SAME program twice, proving address refresh but not that distinct entries never cross-serve. That is
+  exactly the failure class that invalidated four experiments in this campaign. Now interleaved in one
+  process: two configs on one shape; three shapes; a reduce-scatter shape against a chain shape; unfused vs
+  bias-fused vs chunked. Plus explicit-config-equals-auto-pick asserted BIT-EXACT against config=None, and
+  config=None asserted deterministic across cache hits.
+
+After the audit the two suites together cover **all six** reduction x placement combinations:
+19 reduce-scatter programs (11 in1-near, 5 bank-local, 3 mesh) and 17 chain.
+
+No bug was found -- every added test passed first time. The finding is that a shipped path was correct but
+unverified by the suite that gates changes to it.
+
+**Final state: 111 correctness + 29 audit + 10 golden perf = 150 tests, all passing.**
