@@ -51,7 +51,7 @@ bindings unless the evidence workload matches.
 |---|---:|---:|---:|
 | prefill, batch 1, sequence 128 | 14.848 ms | 13.228 ms | 10.91% faster |
 | prefill, batch 32, sequence 128 | 147.841 ms | 135.064 ms | 8.64% faster |
-| traced decode, batch 1 | 9.574 ms | 0.604 ms | 93.69% faster |
+| traced decode, batch 1 | 9.570 ms | 0.604 ms | 93.69% faster |
 | traced decode, batch 32 | 11.155 ms | 3.846 ms | 65.52% faster |
 
 The primary batch-1 result beats the best correct batch-1 baseline and does
@@ -147,7 +147,7 @@ current topology. The selected BFP4/LoFi gate/up plus BFP8/LoFi down policy
 scores 0.995275 prefill and 0.998849/0.998981 decode b1/b32. The
 BFP8/HiFi2 control raises PCC to 0.999475/0.999343/0.999490, but the selected
 policy still meets the functional 0.995 floor and is faster at all four
-workloads: 0.581/12.258 ms prefill and 0.197/0.766 ms decode, versus
+workloads: 0.582/12.278 ms prefill and 0.197/0.767 ms decode, versus
 0.581/12.311 and 0.207/0.843 ms for the control. Functional timing is
 0.629/13.691 and 0.356/6.648 ms. The material prefill PCC delta is accepted
 because it remains above the stated bar while delivering the required

@@ -17,17 +17,15 @@
   "cache_dtype": "bfloat16",
   "optimized_cache_dtype": "bfloat8_b",
   "capability_reduction": null,
-  "completion_status": "optimized_decoder_pending_stage_review",
-  "pending_gates": [
-    "optimized decoder independent stage review"
-  ],
+  "completion_status": "optimized_decoder_complete",
+  "pending_gates": [],
   "independent_stage_reviews": {
     "functional_decoder": {
       "verdict": "clean-pass",
       "required_work": []
     },
     "optimized_decoder": {
-      "verdict": "pending",
+      "verdict": "clean-pass",
       "required_work": []
     }
   },
@@ -42,7 +40,8 @@
       "evidence_source_sha256": "599f386339c13cd3ff67e13bce35830f0c8ce1814e7425e031e46c52bdb9ac30",
       "final_source_sha256": "21d222646cffcb8c09c0fba1b60b0c1f30f117e6dc6a53b49b3f1af340602ecd",
       "source_equivalence": "Final source differs only by import cleanup and an explicit MODEL_ID module export; no runtime method, layout, dtype, program, or kernel path changed.",
-      "test_source_sha256": "3ae6a93e9e08017d6902510c2746c82a46a98e586e5294545d4201dcfc36fddb",
+      "evidence_test_source_sha256": "3ae6a93e9e08017d6902510c2746c82a46a98e586e5294545d4201dcfc36fddb",
+      "final_test_source_sha256": "a0463bf326c1121e16bb773fe8830fc4d44ad8ad9bb77f962212d753ab52989b",
       "artifacts": [
         "optimized_decoder/artifacts/final_context500000_watcher.txt"
       ]

@@ -319,8 +319,8 @@ The equivalent prefill command uses batch 32, sequence 128, and
   not regress.
 - [x] Repeated/stress coverage is deterministic; the aggregate suite and
   fresh-process and ordered long-history runs are watcher-clean.
-- [ ] Independent `$stage-review` clean-pass.
-- [ ] Stage-owned local commits created and SHAs recorded.
+- [x] Independent `$stage-review` clean-pass.
+- [x] Stage-owned local commits created and SHAs recorded.
 
 ## Stage review and commits
 
@@ -334,7 +334,12 @@ The equivalent prefill command uses batch 32, sequence 128, and
   cache/expert/attention precision controls; independent batch-1/batch-32
   expert geometry sweeps; exact official-weight batch-32 prefill gate;
   regenerated final latency and Tracy evidence.
-- Final review verdict: pending.
-- Implementation commit: pending.
-- Evidence-log commit: pending.
+- Fourth/final review verdict: **CLEAN-PASS**. Required work: none. Hard-check
+  gaps: none affecting the stage gate.
+- Implementation/evidence commit:
+  `b495df82d00623fac85d585123cd7a1568fc03ed`.
+- Provenance-clarification commit:
+  `446a47cf5bf1a9b9cd9956a13b366d0ad124cb98`.
+- Post-review evidence-log commit: recorded by the following finalization
+  commit because a commit cannot contain its own SHA.
 - Push: never performed.
