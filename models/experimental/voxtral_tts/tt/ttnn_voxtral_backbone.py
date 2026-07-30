@@ -26,30 +26,41 @@ Requires an HF-format export first -- tt_transformers raises unless HF_MODEL is 
     python models/experimental/voxtral_tts/scripts/export_backbone_hf.py --out <dir>
     HF_MODEL=<dir> python models/experimental/voxtral_tts/tt/ttnn_voxtral_backbone.py
 
-=== PRECISION: THE DEFAULTS ARE WRONG FOR THIS MODEL ===
+=== PRECISION: MEASURE IT ON REAL PROMPTS, NOT ON RANDOM INPUTS ===
 `base_model_name` is whatever the export directory is called, so it matches none of
-tt_transformers' known prefixes (Llama-3*, Mistral-7B*, Phi-3-mini*, ...). Its "accuracy" preset
-therefore falls through to a path that keeps BFP8 MLP weights -- 8-bit block float on ff1/ff2/ff3,
-which is ~73% of every layer's parameters. Measured against our fp32 CPU reference at T=128:
+tt_transformers' known prefixes (Llama-3*, Mistral-7B*, Phi-3-mini*, ...) and its "accuracy" preset
+falls through to a path that keeps BFP8 MLP weights. How much that costs depends entirely on what
+you feed it. Against the fp32 CPU reference, comparing the LAST prefill position (the only one that
+conditions Block 2):
 
-    config                                  1 layer      8 layers    26 layers
-    tt_transformers default (BFP8 MLPs)      0.99971      0.98363      0.89244
-    + BF16 weights everywhere                0.99974      0.99337      0.95321
-    + HIFI4_FP32 math fidelity               0.99988      0.99766      0.96938   <- DEFAULT HERE
-    + fp32 activations                       0.99989      0.98564      0.64432   <- DO NOT
+    weights                        random N(0,0.02)     real prompt      real prompt
+                                       T=128, 26L       P=200 (->256)    P=312 (->512)
+    all-BFP8 MLP (tt_tf default)          0.89244          0.999379        0.999070
+    FF1_FF3 BFP8, FF2 BF16                     --          0.999564        0.999579   <- USED
+    BF16 everywhere                       0.96938          0.999698        L1 OOM
 
-So `precision_override()` below is load-bearing, not a tweak: it is worth 0.892 -> 0.969 on the
-full stack. For scale, tt_transformers' own gate for this comparison is 0.94 for a multi-layer
-model, and their Llama-3.1-8B scores 0.965 on N150.
+The random-input column is a MEASUREMENT ARTEFACT, and an expensive one -- it drove a precision
+hunt that the real-prompt numbers made moot. Random embeddings are off-manifold, so activations do
+not sit in the range the weights were trained for; block-float shares one exponent per block, so
+an inflated dynamic range costs far more there than on real text. Every variant clears 0.999 on
+real prompts. Never quote a bf16-vs-fp32 PCC from synthetic activations.
+
+WHY FF1_FF3 IS BFP8 AND FF2 IS NOT -- an L1 capacity limit, not a numerics choice. At padded
+prefill length 512 with BF16 FF1_FF3, the MLP's circular buffers overrun L1 by ~52 KB:
+"Statically allocated circular buffers ... clash with L1 buffers ... allocated at 1428352 and
+static circular buffer region ends at 1481920" (program.cpp:1764, reached via mlp.py:145).
+FF1_FF3 holds BOTH 3072x9216 matrices, so it is the dominant buffer; halving it fits, and costs
+0.000134 PCC. Probed and ruled out: l1_small_size 64K->16K (no effect -- separate region),
+HIFI4 without fp32_dest_acc (no effect -- weight dtype is the driver), FF2-only BFP8 (still OOM).
+tt_transformers' own chunked prefill cannot help: MAX_PREFILL_CHUNK_SIZE is in units of 1024, so
+it never engages below 512.
 
 fp32 ACTIVATIONS are a trap: 0.99989 at one layer and 0.644 at 26. Something in the residual or
 KV path mismatches once layers chain, and it looks perfect if you only test shallow. Left as bf16.
 
-0.969 is the ceiling reachable this way: `PrecisionSetting` offers only BFP4/BFP8/BF16, so bf16 is
-the weight floor, and 26 layers of it compounds to ~0.969. Reaching 0.999 would need fp32 weights
-(no such setting; and 3.43B x 4B = 13.7 GB exceeds an N150 anyway) or a hand-written backbone.
-Whether 0.969 is ENOUGH is not a PCC question -- Block 2 emits 37 INTEGER codes, so the honest test
-is whether the device hidden state yields the same codes as the reference. See tests/.
+PCC is not the acceptance test anyway -- Block 2 emits 37 INTEGER codes, so what matters is whether
+the device hidden state yields the same codes, and ultimately the WER of the decoded audio. See
+tests/ and STATUS.md.
 """
 
 import os
@@ -61,14 +72,22 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT
 
 BACKBONE_DIM = 3072
 N_LAYERS = 26
-# tt_transformers' prefill asserts seqlen % 128 == 0 (attention.py:889).
-PREFILL_MULTIPLE = 128
+# tt_transformers' prefill asserts seqlen % 128 == 0 (attention.py:889), but that is NOT
+# sufficient: prefill also shards the sequence across the core grid, and each shard must be
+# tile-aligned. With 8 cores, a padded length of 384 gives 48 rows per shard and fails with
+# "Physical shard shape (48, 128) must be tile {32, 32} sized!". 256 is the smallest multiple that
+# always divides into 32-row shards (256/8=32, 512/8=64, 768/8=96, ...), so pad to that.
+PREFILL_MULTIPLE = 256
 # Decode pads the batch dimension to 32 (model.py:prepare_decode_inputs_host).
 DECODE_BATCH_PAD = 32
 
 
 def precision_override(args):
-    """BF16 weights everywhere + HIFI4_FP32 math. See the module docstring for why this matters."""
+    """BF16 weights except FF1_FF3, plus HIFI4_FP32 math.
+
+    FF1_FF3 stays BFP8 to fit L1 at padded prefill length 512; see the module docstring's
+    precision table for the measured cost (0.000134 PCC) and the alternatives that were ruled out.
+    """
     from models.tt_transformers.tt.model_config import (
         DecodersPrecision,
         MathFidelitySetting,
@@ -78,18 +97,14 @@ def precision_override(args):
         TensorGroup,
     )
 
+    precision = {
+        g: PrecisionSetting.BF16
+        for g in (TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO, TensorGroup.KV_CACHE)
+    }
+    precision[TensorGroup.FF1_FF3] = PrecisionSetting.BFP8
     conf = ModelOptimizations(
         {
-            "TensorPrecision": {
-                g: PrecisionSetting.BF16
-                for g in (
-                    TensorGroup.FF1_FF3,
-                    TensorGroup.FF2,
-                    TensorGroup.WQKV,
-                    TensorGroup.WO,
-                    TensorGroup.KV_CACHE,
-                )
-            },
+            "TensorPrecision": precision,
             "OpFidelity": {g: MathFidelitySetting.HIFI4_FP32 for g in OpGroup},
         }
     )
