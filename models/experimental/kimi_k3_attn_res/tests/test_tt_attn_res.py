@@ -259,12 +259,15 @@ def test_values_are_not_normalized(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_sharded_stream_is_rejected(mesh_device, expect_error):
-    """Reductions run over `d`, so a stream sharded on it needs the statistics
-    all-reduce Phase 8 adds. Fail loudly rather than reduce a shard locally."""
+def test_unexpected_shard_width_is_rejected(mesh_device, expect_error):
+    """Reductions run over `d` and the op cannot infer how `d` was split, so a
+    stream whose last dim disagrees with `hidden_size / tp_factor` is a
+    misconfiguration. Fail loudly rather than reduce the wrong width and divide by
+    the wrong `d` — the sharded path's one silent-wrong-answer hazard."""
     op = TtAttnRes(mesh_device, hidden_size=7168)
+    assert op.tp_factor == 1 and op.shard_width == 7168
     shard = ttnn.from_torch(
         torch.zeros(1, 1, 64, 1792), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
     )
-    with expect_error(AssertionError, "sharded on the reduction axis"):
+    with expect_error(AssertionError, "expected 7168"):
         op.forward(shard, None, op.to_query(torch.zeros(7168)))
