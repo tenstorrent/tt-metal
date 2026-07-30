@@ -1,0 +1,34 @@
+{
+  "argv": [
+    "/home/mvasiljevic/tt-metal/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tests/traced_synthetic_pcc.py",
+    "--kind",
+    "full",
+    "--batch",
+    "1",
+    "--optimized",
+    "--candidate",
+    "default",
+    "--steps",
+    "10"
+  ],
+  "batch": 1,
+  "candidate": "default",
+  "exit_status": 0,
+  "kind": "full",
+  "result": "pass",
+  "retained_output": [
+    "OPTIMIZED_POLICY candidate=default layer_kind=full_attention attention_dtype=DataType.BFLOAT16 cache_dtype=DataType.BFLOAT8_B sdpa_fidelity=MathFidelity.HiFi4 qkv_fidelity=MathFidelity.HiFi2 o_fidelity=MathFidelity.HiFi2 qkv_w=2 o_w=3 gate_w=5 up_w=5 down_w=17 linear_packed=False linear_outer=False linear_recurrent=auto linear_recurrent_fidelity=MathFidelity.HiFi2 linear_recurrent_state_dtype=DataType.FLOAT32 linear_input_dtype=DataType.BFLOAT16 linear_input_fidelity=MathFidelity.HiFi2 linear_input_w=2 linear_output_dtype=DataType.BFLOAT16 linear_output_fidelity=MathFidelity.HiFi2 linear_output_w=3 storage_cores=8",
+    "FULL_TRACED_SYNTHETIC_PCC batch=1 step=1 0.9990086830950573",
+    "FULL_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9995811889597688",
+    "FULL_TRACED_SYNTHETIC_PCC batch=1 step=3 0.9998999153941912",
+    "FULL_TRACED_SYNTHETIC_PCC batch=1 step=4 0.9999353871680621",
+    "FULL_TRACED_SYNTHETIC_PCC batch=1 step=5 0.9999550794195851",
+    "FULL_TRACED_SYNTHETIC_PCC batch=1 step=6 0.999964345131075",
+    "FULL_TRACED_SYNTHETIC_PCC batch=1 step=7 0.999969792691051",
+    "FULL_TRACED_SYNTHETIC_PCC batch=1 step=8 0.9999741215844035",
+    "FULL_TRACED_SYNTHETIC_PCC batch=1 step=9 0.9999771193783431",
+    "FULL_TRACED_SYNTHETIC_LATENCY path=optimized candidate=default batch=1 median_ms=1.265089 min_ms=1.263404"
+  ],
+  "steps": 10
+}

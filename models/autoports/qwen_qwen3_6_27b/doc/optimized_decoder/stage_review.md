@@ -2,6 +2,19 @@
 
 Verdict: clean-pass
 
+## Final checkout rereview (2026-07-30)
+
+Verdict: clean-pass.
+
+The fresh reviewer first identified that the restored candidate index schema
+did not match inherited prose. After correction and rereview, the reviewer
+confirmed that README/work_log accurately describe the live 165-row,
+ten-column matrix and correctly link separate program-contract and profiler
+operation evidence. All twelve current B1/B32 profiler reproductions have
+successful profile/report exits and nonempty compact CSVs. All four
+functional/optimized B32 prefill comparisons retain exact successful argv,
+timing contracts, PCC, and latency. No concrete finding remains.
+
 ## Required Work
 
 - None.

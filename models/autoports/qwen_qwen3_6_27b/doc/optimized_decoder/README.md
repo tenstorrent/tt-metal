@@ -126,12 +126,17 @@ therefore gives up part of the earlier FP32-state prefill gain.
 
 ### Candidate evidence
 
-The machine-readable `artifacts/candidate_matrix.csv` records both batches,
-resolved dtype/fidelity, grid/shard geometry, block/subblock choice, profiler
-row time, whole traced-layer time, correctness, and keep/reject reason.
-Every candidate console result is retained under `artifacts/candidates/`.
-`artifacts/program_contracts.json` records the exact TTNN API/validator
-boundaries for the non-expressible alternatives.
+The machine-readable `artifacts/candidate_matrix.csv` is a 165-row index of
+the retained candidate artifacts. Its ten columns record artifact, layer kind,
+batch, candidate, result/exit, whole traced-layer median, PCC, resolved policy
+text, and exact argv where applicable. Every indexed console result is under
+`artifacts/candidates/`. The resolved policy text contains dtype, fidelity,
+and selected block widths; exact grid/shard and non-expressible API/validator
+contracts are in `artifacts/program_contracts.json`. Profiler-row runtime
+evidence is not duplicated in the index: it is retained in
+`artifacts/tracy/*/{profile_run.json,perf.csv,summary.csv}` and the final
+reproduction in
+`current_repro/tracy/*/{profile_run.json,perf.csv,summary.csv}`.
 
 | Candidate | B1/B32 decode or prefill result | Decision |
 |---|---|---|
@@ -191,6 +196,14 @@ exact Tracy and `tt-perf-report` argv, exit status, resolved policy, source
 raw-report path, and filtered outputs. Raw Tracy reports were removed after
 compact evidence was generated; the retained wrapper provenance makes them
 reproducible.
+
+A final checkout-local reproduction is retained under `current_repro/`.
+It includes exact JSON argv and timing contracts for like-for-like functional
+and optimized B32 prefill, plus compact Tracy `perf.csv`, `summary.csv`,
+`summary.png`, and provenance for the final linear default and representative
+BF16/HiFi2, BFP8/LoFi, BFP4/LoFi, input-width-4, and output-width-8 controls
+at both B1 and B32. The raw Tracy databases and reports are intentionally not
+retained.
 
 | Window | Device time / iteration | Wall time | DRAM roofline |
 |---|---:|---:|---:|

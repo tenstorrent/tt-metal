@@ -1,0 +1,32 @@
+{
+  "argv": [
+    "/home/mvasiljevic/tt-metal/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tests/full_attention_synthetic_pcc.py",
+    "--mode",
+    "prefill",
+    "--sequence",
+    "33",
+    "--batch",
+    "32",
+    "--iterations",
+    "5",
+    "--optimized",
+    "--candidate",
+    "default"
+  ],
+  "batch": 32,
+  "candidate": "default",
+  "exit_status": 0,
+  "implementation": "optimized",
+  "iterations": 5,
+  "kind": "full",
+  "result": "pass",
+  "retained_output": [
+    "FALLBACK_AUDIT throw_exception_on_fallback=True",
+    "OPTIMIZED_POLICY candidate=default layer_kind=full_attention attention_dtype=DataType.BFLOAT16 cache_dtype=DataType.BFLOAT8_B sdpa_fidelity=MathFidelity.HiFi4 qkv_fidelity=MathFidelity.HiFi2 o_fidelity=MathFidelity.HiFi2 qkv_w=2 o_w=3 gate_w=5 up_w=5 down_w=17 linear_packed=False linear_outer=False linear_recurrent=auto linear_recurrent_fidelity=MathFidelity.HiFi2 linear_recurrent_state_dtype=DataType.FLOAT32 linear_input_dtype=DataType.BFLOAT16 linear_input_fidelity=MathFidelity.HiFi2 linear_input_w=2 linear_output_dtype=DataType.BFLOAT16 linear_output_fidelity=MathFidelity.HiFi2 linear_output_w=3 storage_cores=8",
+    "FULL_ATTENTION_SYNTHETIC_PCC mode=prefill sequence=33 path=optimized candidate=default 0.9999939887734234",
+    "FULL_ATTENTION_SYNTHETIC_LATENCY mode=prefill batch=32 sequence=33 median_ms=16.455179 min_ms=16.444398"
+  ],
+  "sequence": 33,
+  "timing_contract": "one untimed warmup, then wall-clock each iteration with ttnn.synchronize_device; reported latency is the median"
+}

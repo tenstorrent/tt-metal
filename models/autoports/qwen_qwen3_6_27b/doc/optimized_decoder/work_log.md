@@ -2,6 +2,29 @@
 
 Date: 2026-07-30 UTC
 
+## Current-checkout final reproduction
+
+- The complete AutoFix remediation was transplanted as commit `a79aae3bd90`
+  after the first independent review found the linear-attention, stress, and
+  batch-32 prefill evidence gaps.
+- `pytest -q tests/test_optimized_decoder.py` passed 165/165 and `py_compile`
+  passed.
+- Ten-step final-default traced decode reproduced on the current checkout:
+
+  | Kind | Batch | PCC range | Median ms |
+  |---|---:|---:|---:|
+  | full attention | 1 | 0.999009–0.999977 | 1.265089 |
+  | full attention | 32 | 0.999560–0.999979 | 1.455612 |
+  | linear attention | 1 | 0.999987–0.999997 | 1.658268 |
+  | linear attention | 32 | 0.999968–0.999998 | 15.864582 |
+
+- The current linear policy log proves BFP4/LoFi packed input and output
+  projections, BFP8 recurrent-state storage, input/output block widths 5/12,
+  and the explicit `grid4_w4` HiFi2 recurrent program reached the measured
+  runtime.
+- Fresh-state batch-32 determinism reruns are bit-exact for prefill and decode
+  for both layer kinds. Current JSON evidence is under `current_repro/`.
+
 ## Scope and starting state
 
 - Model: `Qwen/Qwen3.6-27B`, revision
@@ -380,7 +403,53 @@ device/wall is 1.521271/1.687251 ms at B1 and 15.893577/15.975878 ms at B32.
 Refreshed prefill device/wall is 10.517650/11.086341 ms and
 275.038348/275.375946 ms.
 Final static gates passed: Black check, `py_compile`, 165/165 optimized-path
-pytest cases, 114 candidate-matrix rows with exactly 12 columns, parseable
-program-contract and final6 JSON, 26 successful compact contender profiles,
-no retained raw `.logs`/`reports`, scoped `git diff --check`, and parser
-`--help` validation for every documented runner flag.
+pytest cases, parseable candidate JSON, program-contract and final6 JSON,
+26 successful compact contender profiles, no retained raw `.logs`/`reports`,
+scoped `git diff --check`, and parser `--help` validation for every documented
+runner flag.
+
+## Final checkout reproduction and evidence closure (2026-07-30)
+
+The transplanted optimized stage was rerun from the final default in this
+checkout. Ten-step traced medians/PCC ranges were:
+
+- full B1: 1.265089 ms, PCC 0.999009--0.999977;
+- full B32: 1.455612 ms, PCC 0.999560--0.999979;
+- linear B1: 1.658268 ms, PCC 0.999987--0.999997;
+- linear B32: 15.864582 ms, PCC 0.999968--0.999998.
+
+Fresh decode and prefill determinism runs for both layer kinds at B32 were
+bit-exact. Like-for-like B32 prefill was then retained with exact argv, one
+untimed warmup, per-iteration device synchronization, iteration count, exit
+status, PCC, and median/minimum latency:
+
+| Layer kind | Functional | Optimized | PCC (functional / optimized) |
+|---|---:|---:|---:|
+| Full, S=33 | 72.385658 ms | 16.455179 ms | 0.999725 / 0.999994 |
+| Linear, S=5 | 316.264252 ms | 275.113586 ms | 0.999998 / 0.999996 |
+
+The exact command wrapper is `tests/run_prefill_comparison.py`; its four
+results are under `current_repro/prefill_*.json`.
+
+To close the retained-profiler gap, Tracy plus `tt-perf-report` was rerun
+serially for the final linear default and five material controls at both
+batches: BF16/HiFi2 projections, input BFP8/LoFi, both projections BFP4/LoFi,
+final input width 4, and final input width 5/output width 8. All twelve runs
+exited zero. Their traced wall medians were:
+
+| Candidate | B1 | B32 |
+|---|---:|---:|
+| final default (BFP4/LoFi, input w5/output w12) | 1.676193 ms | 15.911695 ms |
+| BF16/HiFi2 projections | 1.929437 ms | 16.154989 ms |
+| input BFP8/LoFi | 1.772588 ms | 16.021936 ms |
+| both projections BFP4/LoFi, baseline geometry | 1.715009 ms | 15.941575 ms |
+| final input width 4 | 1.691254 ms | 15.905949 ms |
+| final input width 5/output width 8 | 1.675353 ms | 15.901531 ms |
+
+Each `current_repro/tracy/*` directory retains `profile_run.json`,
+`perf.csv`, `summary.csv`, and `summary.png`. Raw `.logs` and `reports` were
+removed after compact report generation. `artifacts/candidate_matrix.csv` was
+also restored as a 165-row, ten-column machine-readable index over all
+retained candidate JSON. It intentionally indexes whole-layer latency/PCC and
+policy/argv; profiler operation rows remain in the linked `perf.csv` and
+`summary.csv` files rather than being duplicated into the index.
