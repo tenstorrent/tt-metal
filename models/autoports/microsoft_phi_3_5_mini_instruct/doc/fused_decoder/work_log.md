@@ -33,4 +33,4 @@ Date: 2026-07-30 UTC
   rejected log/profiler attempts, and records profiler teardown/category
   limitations.
 - Fresh independent rereview verdict: `clean-pass`; see `stage_review.md`.
-- Stage-owned commit SHA is appended after the checkpoint is created.
+- Stage implementation/evidence checkpoint: `042cb2dade7`.
