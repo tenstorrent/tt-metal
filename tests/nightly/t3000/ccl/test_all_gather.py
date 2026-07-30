@@ -45,6 +45,8 @@ def is_unsupported_case(
     def tensor_size_bytes(shape):
         padded = list(shape)
         if layout == ttnn.TILE_LAYOUT:
+            # TensorLayout promotes a tiled rank-<2 shape to rank 2 before padding it
+            padded = [1] * (2 - len(padded)) + padded
             padded[-2] = math.ceil(padded[-2] / tile[0]) * tile[0]
             padded[-1] = math.ceil(padded[-1] / tile[1]) * tile[1]
         return math.prod(padded) * elem_size
@@ -395,10 +397,15 @@ def run_all_gather_impl(
         ([1, 1, 1024, 1024], -2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf
         ([1, 1, 48, 1024], -1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, padded
         ([256], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, rank 1
+        # rank 1 row-major, no persistent buffer: padded rank stays 1, and the output is allocated from the spec
+        ([256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, False, 1, False),  # check, rank 1
         # composite (RM last-dim unaligned pages)
         ([1, 1, 32, 136], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf, composite
         # composite (tile padding on gather dim)
         ([1, 1, 48, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, composite
+        ([1600], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, composite, rank 1
+        # per-device 16 elements is a whole bfloat8_b block, so the concat re-quantizes exactly
+        ([128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, False, 1, True),  # check, composite, rank 1
     ],
     ids=[
         "dit_shape-perf",
@@ -413,8 +420,11 @@ def run_all_gather_impl(
         "gather_dim_negative_2-perf",
         "gather_dim_negative_1_padded_dim_2-check",
         "rank1_persistent_buffer-check",
+        "rank1_row_major-check",
         "composite_ag_test_one-perf",
         "composite_ag_test_two-check",
+        "composite_rank1-check",
+        "composite_rank1_bfloat8_b-check",
     ],
 )
 @pytest.mark.parametrize(
@@ -1058,6 +1068,8 @@ def _dram_nd_sharded(
         #
         # matched (m=1,s=1,k=1): RM last-dim, equal in/out shard widths.
         ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), _l1_width_sharded(32, 64, 8)),
+        # matched at rank 1 (m=1,s=1,k=1): a sub-rank-2 padded shape is promoted to [1, N] for the shard grid.
+        ([256], 0, _l1_width_sharded(1, 32, 1), _l1_width_sharded(1, 32, 8)),
         # concat full (m=8,s=1,k=1): sharded -> interleaved; one chunk/device packed per output row.
         ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), ttnn.L1_MEMORY_CONFIG),
         # concat partial (m=2,s=1,k=1): 2 device contributions per output page (multiple pages/row).
@@ -1092,6 +1104,7 @@ def _dram_nd_sharded(
     ],
     ids=[
         "matched",
+        "matched_rank1",
         "concat_full_to_interleaved",
         "concat_partial",
         "split",
@@ -1138,6 +1151,104 @@ def test_all_gather_page_indexing(
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, expects_composite",
+    [
+        # Per-device [32]: the gather dim is tile-aligned, so the native path takes it.
+        ([256], -1, False),
+        # Per-device [200]: the gather dim pads up to a tile, so it falls back to composite.
+        ([1600], 0, True),
+    ],
+    ids=["rank1_native", "rank1_composite"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
+)
+def test_all_gather_low_rank_route(mesh_device, ag_output_shape, dim, expects_composite):
+    # Both routes produce correct data, so only the output buffer identifies the route: native writes into
+    # the persistent output buffer, composite ignores it and allocates its own.
+    tt_input = ttnn.from_torch(
+        torch.rand(ag_output_shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
+        device=mesh_device,
+    )
+    persistent_output_buffer = ttnn.from_torch(
+        torch.zeros(ag_output_shape),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+
+    tt_output = ttnn.all_gather(tt_input, dim=dim, output_tensor=persistent_output_buffer)
+
+    used_composite = tt_output.buffer_address() != persistent_output_buffer.buffer_address()
+    assert used_composite == expects_composite, f"expected composite={expects_composite}, got {used_composite}"
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
+)
+def test_all_gather_invalid_dim(mesh_device, expect_error):
+    # -2 is the trap: for a rank-1 shape ShapeBase[-2] returns a phantom 1 rather than throwing, so an
+    # unguarded dim would gather garbage instead of erroring.
+    tt_input = ttnn.from_torch(
+        torch.rand([256], dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+
+    with expect_error(RuntimeError, "Invalid gather dim"):
+        ttnn.all_gather(tt_input, dim=-2)
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "mapper_dim, gather_dim, expect_replicated",
+    [
+        # The mapper keeps the dim as the caller spelled it while the gather dim is normalized, so the two
+        # have to be compared as axes: -1 and 3 are the same axis of a rank-4 tensor.
+        (-1, -1, True),
+        # Different axes, so the Shard placement must survive.
+        (-2, 3, False),
+    ],
+    ids=["same_axis", "different_axis"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
+)
+def test_all_gather_output_topology(mesh_device, mapper_dim, gather_dim, expect_replicated):
+    # Gathering the sharded axis replicates it, and the output topology has to say so.
+    devices = mesh_device.get_num_devices()
+    tt_input = ttnn.from_torch(
+        torch.rand([1, 1, 32 * devices, 32 * devices], dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=mapper_dim),
+        device=mesh_device,
+    )
+
+    tt_output = ttnn.all_gather(tt_input, dim=gather_dim)
+
+    placements = list(tt_output.tensor_topology().placements())
+    has_shard = any(isinstance(p, ttnn.PlacementShard) for p in placements)
+    if expect_replicated:
+        assert not has_shard, f"gathered axis is still marked sharded: {placements}"
+    else:
+        assert has_shard, f"a non-gathered sharded axis lost its Shard placement: {placements}"
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("ag_input_dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, mem_config_input, mem_config_ag",
@@ -1159,6 +1270,11 @@ def test_all_gather_page_indexing(
         ([1, 24, 64, 64], 1, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 2, 32, 64]), _l1_nd_sharded([1, 2, 32, 64])),
         # --- shard rank < tensor rank (squeezed down to the shard's rank) ---
         ([2, 8, 64, 128], 1, ttnn.TILE_LAYOUT, _l1_nd_sharded([32, 64]), _l1_nd_sharded([32, 64])),
+        # --- rank-1 tensors. Row-major keeps a padded rank of 1, so the shard shape must be rank 1 too.
+        #     Tiled is padded to rank 2, so it takes a legacy 2D spec (an ND one trips the mesh mapper's
+        #     own rank check, upstream of this op). ---
+        ([256], 0, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([32]), _l1_nd_sharded([32])),
+        ([256], 0, ttnn.TILE_LAYOUT, _l1_width_sharded(32, 32, 1), ttnn.L1_MEMORY_CONFIG),
         # --- shard -> core mapping: round-robin wrap (several shards per core), CONTIGUOUS_1D
         #     (adjacent shards packed onto one core), non-rectangular grid, COL_MAJOR core order ---
         (
@@ -1234,6 +1350,8 @@ def test_all_gather_page_indexing(
         "partial_shard_hw",
         "partial_shard_gather_dim",
         "shard_rank_lt_tensor_rank",
+        "rank1_rm",
+        "rank1_tile_sharded_to_interleaved",
         "many_shards_per_core",
         "contiguous_1d",
         "non_rectangular_grid",

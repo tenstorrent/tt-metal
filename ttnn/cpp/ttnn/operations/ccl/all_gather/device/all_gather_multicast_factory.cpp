@@ -232,13 +232,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     ////////////////////////////////////////////////////////////////
 
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-
-    auto input_shape = input_tensor.padded_shape();
-    uint32_t rank = input_shape.rank();
-    int32_t gather_dim = operation_attributes.dim;
-    if (gather_dim < 0) {
-        gather_dim += rank;
-    }
+    const auto& input_shape = input_tensor.padded_shape();
 
     // --- Copy mode ---
     // The kernel always reads whole *aligned* input pages into L1 (required by the input's NoC
@@ -297,21 +291,21 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     }
 
     // --- Stripe geometry ---
-    // input_pages_per_stripe = num input pages along [gather_dim .. rank-1] this
-    // device contributes per stripe. For RM gather_dim=-1 this is the *page* count,
+    // input_pages_per_stripe = num input pages along [gather_dim .. last dim] this
+    // device contributes per stripe. For a last-dim RM gather this is the *page* count,
     // which handles sharded RM input (> 1 input page per row).
     auto tile_spec = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     uint32_t input_pages_per_stripe = 1;
-    for (int32_t i = gather_dim; i < rank; i++) {
+    for (int32_t i = operation_attributes.dim_from_end(); i < 0; i++) {
         uint32_t extent;
-        if (i == rank - 1) {
+        if (i == -1) {
             if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
                 extent = input_shape[i] / tile_spec.get_width();
             } else {
                 // This is a page count, so divide by the unaligned page size, not aligned
                 extent = (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
             }
-        } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == rank - 2) {
+        } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == -2) {
             extent = input_shape[i] / tile_spec.get_height();
         } else {
             extent = input_shape[i];
