@@ -193,7 +193,7 @@ def write_captured_routing() -> str | None:
     :func:`load_captured_routing` reads it: ``view(dispatch_group_size, seq_len_per_chip, top_k)``
     with ``seq_len_per_chip`` = tokens per chip in one chunk (640 for an 8x4 mesh at CHUNK=5120).
 
-    ``scripts/build_captured_routing.py`` consumes this directly: it ranks every
+    ``scripts/make_captured_routing.py`` consumes this directly: it ranks every
     (layer, chunk, col) and emits a loader-compatible ``expert_ids_layer_{N}`` file for a chosen
     chunk (``--chunk C``) or for the chunks concatenated (``--chunk all``).
     """
