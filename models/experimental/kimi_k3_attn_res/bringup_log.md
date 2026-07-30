@@ -194,6 +194,26 @@ Numbered, dated, never renumbered. Each names what it rejected.
   for a regime the model never enters), or loosen `PCC_GATE` globally (blinds the eight
   order-1 configs where the gate does real work). The finiteness assert is what actually
   pins the max-subtraction, and it is absolute.
+- **D17 — 2026-07-30 — the op owns the distributed layout, including `sp_axis`.**
+  `TtAttnRes` exposes `stream_mapper`, `vector_mapper` and `stream_composer`, and
+  `forward` checks its input's last dim against `hidden_size // tp_factor`. It never
+  communicates on `sp_axis` — that axis is placement only — but it still names it, so the
+  layout has exactly one definition. Rejected alternative — leave placement to callers and
+  take only `tp_axis` — which means the op's `hidden_size` (global) and the caller's shard
+  width are agreed by convention rather than by assertion, and that agreement is the one
+  place a sharded AttnRes returns quietly wrong numbers instead of failing: divide by the
+  local width and every score is off by `tp_factor`, with no shape error anywhere.
+- **D18 — 2026-07-30 — the statistics reduction is one `ttnn.all_reduce` of a dim-1 stack,
+  in fp32.** `all_reduce` over `all_gather` + post-op because its output shape equals its
+  input shape — no strided "sum every `C`-th column" in composed ops — and because
+  `all_gather` silently takes a slow composite path when the gather dim has padded tiles
+  (`all_gather_nanobind.cpp:39`), which a 1- or 2-wide stats dim always does. Stacked on
+  **dim 1** rather than the last dim so the halves come back apart on a tile-plane
+  boundary instead of a sub-tile read; that doubles a payload which is 0.65 % of the op's
+  traffic. fp32 because `all_reduce` otherwise reduces in bf16 (`all_reduce_nanobind.cpp:48`)
+  and fp32 measures 0.9999500 against bf16's 0.9999401 over 186 chained reads, for 1.5 MB
+  per read on a 900 MB budget. Rejected alternative — the analog's `all_gather` + `strided
+  sum`, which is both slower here and needs an op we do not have.
 
 ---
 
@@ -222,6 +242,19 @@ Naive form (2 passes over `v`, bf16 storage): `2 × 1002 × 7168 × 2 B` =
 **28.7 MB/token**. Vanilla residual-stream traffic for comparison: `4d × 93` =
 **5.33 MB/token** → AttnRes adds **~5.4× the entire residual-stream traffic of a
 vanilla model**.
+
+> **Amended 2026-07-30 (Phase 8, `ROOFLINE.md`).** The heading is half right, and which
+> half depends on tracing. Two corrections. First, "2 passes over `v`" understates the
+> composed form by 6×: counting DRAM touches op by op gives **12V**, not 2V — the concat,
+> and a full-`V` intermediate for each of the three `mul`s. So 172 MB/token, and a
+> 215.5 ms DRAM floor per forward at `T = 5120` on `(2,4)`. Second, arithmetic intensity
+> is **0.25 flop/byte**, not 1.8 — the 1.8 assumed the naive pass count and counted the
+> `S`-fold reuse of `q` as work. Bandwidth-bound is therefore *more* true than Phase 0
+> thought. But the launch term was never priced: measured, one ttnn call costs ~130 µs
+> untraced against an 88 µs-per-launch break-even, so **untraced the composed op is
+> launch-bound even at production shape**, and traced it is DRAM-bound by 69×. KDA's
+> "kernel count is the only lever" transfers exactly in the regime we develop in and not
+> at all in the regime we ship in. `ROOFLINE.md` §2, §3, §6.
 
 ### The inter/intra-block split is exact and worth ~2.5×
 
@@ -265,8 +298,14 @@ live stream's statistics are the only per-read reduction.
 Both reductions are over `d`. With `d` TP-sharded, AttnRes needs an all-reduce of
 `2(S+1)` **scalars** per token per read — the `tt_distributed_rms_norm.py:236-290`
 pattern (communicate statistics, never the stream). Combine the sum-of-squares and the
-dot into one payload. With the block batching above, that is one small all-reduce per
-block for 24 reads plus one 2-scalar reduce per live-stream read.
+dot into one payload.
+
+> **Amended by Phase 8.** The sentence that used to follow — "with the block batching
+> above, that is one small all-reduce per block for 24 reads plus one 2-scalar reduce per
+> live-stream read" — is wrong, and wrong in the unflattering direction. Each read site
+> still needs its own dot against the sealed set, so `inter_block` amortizes the sealed
+> **RMS** and nothing else: 49 collectives for 24 read sites against the direct form's 24.
+> See `DISTRIBUTION.md` §4 and the Phase 8 learnings.
 
 `block_residual` residency at `S=8`, bf16: **112 KB/token**.
 
@@ -333,7 +372,7 @@ tests use `assert_with_pcc(expected, actual, pcc=0.9999)`
 | `test_hand_rolled_softmax_beats_fused` | `C = 9`, fp32 | rel err no worse than `ttnn.softmax(dim=1)` (D12) |
 | `test_saturated_scores_do_not_overflow` | `max\|score\| = 120`, `d ∈ {256, 7168}` | output finite (absolute); PCC ≥ torch-bf16 − 1e-3 (D16) |
 | `test_values_are_not_normalized` | `S = 4`, `d = 7168` | output moves when a candidate is rescaled |
-| `test_sharded_stream_is_rejected` | last dim ≠ `hidden_size` | raises, via the repo's `expect_error` fixture |
+| `test_unexpected_shard_width_is_rejected` | last dim ≠ `hidden_size / tp_factor` | raises, via the repo's `expect_error` fixture |
 | `test_depth_fidelity` | 93 layers, random module outputs | **relative** gate, below, **plus** norm ratio within 2e-2 |
 | `test_device_lifecycle_matches_torch` | 93-layer device walk, `Bk=12` | 186 reads; seals at `{0,12,…,84}`; `S` ramps 0→8 monotonically |
 | `test_production_forward_matches_torch` | `T = 5120`, `S ∈ {0,8}` | PCC ≥ 0.9999 **and** rel err ≤ 2e-2 |
@@ -341,7 +380,11 @@ tests use `assert_with_pcc(expected, actual, pcc=0.9999)`
 | `test_ragged_token_count_matches_torch` | `T ∈ {1000, 5119}`, `S = 8` | PCC ≥ 0.9999 **and** rel err ≤ 2e-2 across a tile-padded `T` |
 | `test_token_axis_is_pure_batch` | `T ∈ {64, 1000, 5120}`, `S = 8` | `max\|Δ\| == 0` on the shared token slice |
 | `test_production_depth_walk` | 93 layers at `T = 5120` | `max\|Δ\| == 0` vs the `T = 64` walk; seal schedule; finite |
-| `test_attn_res_dist_tp` | `(2,4)`, `S ∈ {4,8}` | PCC ≥ 0.9999 |
+| `test_tp_forward_matches_torch` | `(2,4)`, `S ∈ {0,1,8}`, `d ∈ {256,7168}` | PCC ≥ 0.9999 **and** rel err ≤ 2e-2 |
+| `test_tp_split_matches_forward` | `(2,4)`, `d = 7168`, 24 read sites | PCC ≥ 0.9999 against the direct form |
+| `test_sequence_axis_communicates_nothing` | `(2,4)`, sharded vs replicated sequence | `max\|Δ\| == 0` on the shared tokens, **and** the two SP rows agree to 0 |
+| `test_statistics_reduction_is_load_bearing` | `(2,4)`, `_reduce_stats` stubbed out | PCC **< 0.9999** — the mutation must fail the gate |
+| `test_tp_depth_walk` | `(2,4)`, 93 layers, 186 collectives | **relative** to torch-bf16 (−1e-3) **plus** norm ratio within 2e-2 |
 | `test_attn_res_perf` | `T ∈ {640, 5120}`, `(8,1)` and `(2,4)` | no assertion; numbers transcribed here |
 | `test_pp_roundtrip` | 2 submeshes, `S=4` | bit-exact through the socket |
 
@@ -576,6 +619,99 @@ An exact invariant gives a gate with no threshold to calibrate and no reference 
 compute — and it is the only kind of gate that gets sharper, not blunter, as the shape
 grows.*
 
+### Phase 8 — the sharded path's bugs are invisible on one device
+
+`DISTRIBUTION.md` holds the mapping argument and the arithmetic. What the implementation
+taught, beyond it:
+
+**Every distribution bug in this op is a no-op at `tp_factor == 1`.** Divide `mean(v²)` by
+the local shard width instead of the global `d`; point the collective at the sequence axis;
+skip the collective entirely — on a single device all three are indistinguishable from
+correct, because the reduction *is* the identity there. That is not a reason to be careful;
+it is a reason to build gates that only exist on the mesh. Two of them earn their keep:
+
+| gate | as shipped | mutated |
+|---|---|---|
+| sequence-sharded vs sequence-replicated, same tokens | `max\|Δ\| = 0` | any axis mistake moves it off zero |
+| `_reduce_stats` stubbed to the identity | PCC 0.9999778 | PCC **0.5757407** |
+
+The first is exact, and exactness is what makes it able to tell "reduced on the TP axis"
+from "reduced on *an* axis". Shard 64 tokens over the two SP rows and separately replicate
+32 tokens on both rows: the SP axis carries no traffic under this mapping, so the shared
+tokens must agree bit for bit. A collective aimed at the SP axis mixes different tokens in
+the first placement and doubles the statistics in the second; one spanning both axes does
+the same. Neither shows up in a PCC test, because a PCC test only asks whether one
+placement is self-consistent.
+
+The second is a mutation test that had to be shipped rather than run once, for the same
+reason: there is no single-device configuration in which it fails.
+
+**fp32 statistics are free and slightly better than free.** `ttnn.all_reduce` reduces in
+bf16 unless handed fp32 (`all_reduce_nanobind.cpp:48`). Over 186 chained reads at
+`d = 7168`: fp32 stats 0.9999500, bf16 stats 0.9999401, single-device baseline 0.9999408.
+The bf16-sharded number landing on the single-device number is the informative part — the
+extra cross-shard summation costs nothing measurable, and fp32 is buying back rounding the
+single-device path *also* takes. Which suggests fp32 statistics are worth a look on the
+single-device path too, at 1.5 MB against 900 MB.
+
+**The split form doubles the collectives.** 49 for 24 read sites against the direct form's
+24: `inter_block` amortizes the sealed RMS across read sites, but each site still needs its
+own dot against the sealed set, and `merge` still pays a full paired reduction on the live
+stream. Phase 7 measured the split form 1.50× faster on one device; that number now has a
+second term nobody has measured. The Phase-0 estimate in "TP is nearly free" said one
+all-reduce per block plus one 2-scalar reduce per read, and has been amended in place.
+
+**A collective needs `device_params={"fabric_config": FABRIC_1D}`.** Without it the first
+`all_reduce` dies on `control_plane.cpp:2186` — an uninitialized fabric context, not a
+numeric failure. Cheap to hit and cheap to fix, but it means every distributed test file
+carries the fixture parametrization, not just `mesh_device`.
+
+*Lesson: when a code path is a no-op in the configuration you develop in, the tests that
+cover it have to run in the configuration where it isn't. Neither of this phase's real
+gates can be written on one device, and both of them would have passed a `(1,1)` suite
+while the op computed garbage on a mesh.*
+
+### Phase 8 — `ttnn.all_reduce` is two algorithms, and the shape picks one
+
+`ROOFLINE.md` set out to be a table of Blackhole constants. Two of its numbers had to be
+measured instead, and both changed a conclusion.
+
+**The collective's algorithm depends on the shape, silently.**
+`all_reduce_async.cpp:359` takes a **composite all-gather + `local_sum` + two reshapes**
+whenever `finding_scatter_dim` (`:33-62`) finds no dim divisible by the participant count,
+and reduce-scatter + all-gather otherwise. That scan runs in **tile units** — the last two
+dims divided by 32 — from the last dim backwards. For `[1, 2(S+1), T/R, 1]` at `R = 4`:
+
+| `T/R` | tile units | divisible | path |
+|---|---|---|---|
+| 32 (`T = 64`, the suite) | `[1, 2(S+1), 1, 1]` | only when `S` is odd | composite for even `S` |
+| 2560 (`T = 5120`, production) | `[1, 2(S+1), 80, 1]` | dim 2, always | always RS+AG |
+
+Measured back to back on `(2,4)`: 769 µs for an **8 KiB** reduction against 481 µs for a
+**5760 KiB** one — the small one 1.9× slower while moving 1/720th the bytes, because it is
+on the composite path. So the distributed suite proves both algorithms correct (better
+coverage than intended) and says nothing about production timing (worse than intended). It
+also means an `S` sweep at small `T` produces a parity sawtooth that is an artifact of
+`finding_scatter_dim`, not of AttnRes.
+
+**A launch costs ~130 µs, flat.** The control that makes the number above meaningful: a
+plain `ttnn.mul` in the same loop costs 174/137/137/130 µs across a 720× size range. Flat
+means host — Python, ttnn op infrastructure, 8-device fan-out — not device. Against the
+88 µs-per-launch break-even implied by the production DRAM floor, the composed op is
+launch-bound untraced and DRAM-bound traced, 100× apart. Every perf number this module
+ever reports has to name its regime.
+
+The rest of the memo is arithmetic, and one line of it is the Phase-10 argument: `v` is
+resident in aggregate L1 at every shape that matters (47.7% on LoudBox, 11.9% on Galaxy),
+so a fused kernel's floor is `V(1 + 1/(S+1))` against the composed `12V` — **10.8×**, or
+215.5 ms → 20 ms per forward.
+
+*Lesson: a roofline is not a table of peak bandwidths. Two of the three terms here — which
+algorithm a library op picks, and what a launch costs — are properties of this shape on
+this box, and both were off by enough to invert the verdict. The measurement that mattered
+most was the control, not the subject: 481 µs for a reduction means nothing until a local
+`mul` on the same tensor has been timed in the same loop.*
+
 ---
 
 ## Backlog
@@ -591,9 +727,25 @@ grows.*
 - [x] Phase 7 — remove host fallbacks; `T=5120`.
 - [ ] Verify D10's launch count (~12 ops/read, not ~90) with the Phase-9 profiler —
       `ttnn.graph` cannot see op names, only buffer lifecycle.
-- [ ] Phase 8 — `DISTRIBUTION.md`, TP on `(2,4)`, `ROOFLINE.md`.
-- [ ] Phase 9 — perf harness + numbered perf loop.
-- [ ] Phase 10 — fused C++ op, only on measured evidence.
+- [x] Phase 8 — `DISTRIBUTION.md`, TP on `(2,4)`, `ROOFLINE.md`.
+- [ ] Re-measure the split form's 1.50× on a mesh, where it costs 49 collectives per
+      24 read sites against the direct form's 24; if it needs saving, batch
+      `inter_block`'s 24 dot tensors into one reduction (49 → 26). `ROOFLINE.md` §6
+      prices the 23 saved collectives at ~9 ms per forward untraced.
+- [ ] Try fp32 statistics on the **single-device** path — the sharded measurement says
+      they buy ~1e-5 of depth PCC for 1.5 MB per read.
+- [ ] Default `num_links` to 2, not 1 — production and the analog both use 2
+      (`test_sparse_mla_ccl_perf.py:38`), and at 1 the op pays double the fabric time
+      in `ROOFLINE.md` §4. Needs a mesh perf harness first, so Phase 9.
+- [ ] Hoist the collective's global semaphores out of the per-call path if Phase 9
+      confirms they are part of the ~130 µs — the analog does it with
+      `create_global_semaphores` (`tt_ccl.py`).
+- [ ] Phase 9 — perf harness + numbered perf loop. Measure the **launch term first**:
+      `ROOFLINE.md` §6 says it decides whether DRAM or dispatch binds, and the two
+      regimes are 100× apart.
+- [ ] Phase 10 — fused C++ op, only on measured evidence. `ROOFLINE.md` §7 puts the
+      ceiling at 10.8× DRAM (215.5 ms → 20 ms per forward) with `v` resident in L1 at
+      every shape that matters.
 - [ ] Phase 11 — `PIPELINE.md` + socket round-trip.
 - [ ] Fold `rms_inv` at seal time (needs the batched form first).
 - [ ] Decode path (`T=1`).
@@ -722,3 +874,44 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
   shape, constant live stream; Phase 9 owns it. D10's op-launch count, which `ttnn.graph`
   cannot see. `T` beyond 5120. Multi-device anything — every run above is `(1, 1)`. Real
   module outputs, real K3 weights, decode.
+- **2026-07-30** — Phase 8 **PASS**: `DISTRIBUTION.md` + `ROOFLINE.md` +
+  `tests/test_tt_attn_res_distributed.py` on a real `(2, 4)` mesh. **92/92** across the
+  module, ~113 s.
+  **Command:** `PYTHONPATH=$TT_METAL_HOME python_env/bin/python -m pytest
+  models/experimental/kimi_k3_attn_res/tests/ -q`
+
+  **VALIDATED:** The mapping the analog forces — sequence on mesh axis 0 (free), hidden on
+  mesh axis 1 with one `ttnn.all_reduce` of `[1, 2(S+1), T/R, 1]` fp32 statistics per read —
+  runs correctly on 8 Blackhole chips. `forward` holds PCC 0.9999778 / rel err 1.28e-2 at
+  `d = 7168`, `S = 8` (single device: 0.9999804) and 0.9999986 on the `S = 0` identity path,
+  across `d ∈ {256, 7168}` and `S ∈ {0, 1, 8}`. The split form reproduces the direct form at
+  all 24 read sites. The 93-layer walk survives 186 chained collectives at device PCC
+  0.9999500 vs torch-bf16 0.9999741, norm ratio 1.000183 — better than the single-device
+  0.9999408, because the statistics reduce in fp32. Two gates that can only exist on a mesh:
+  sequence-sharded and sequence-replicated runs of the same 32 tokens agree at
+  **max|Δ| = 0** (and the two SP rows agree to 0), and stubbing `_reduce_stats` to the
+  identity drops PCC to **0.5757407**. `hidden_size` is now the global `d` with an explicit
+  `tp_factor`; `mean(v²)` divides by the global `d`; the op owns `stream_mapper` /
+  `vector_mapper` / `stream_composer` and `topology` is one entry per mesh axis. Both
+  reduction helpers are exact identities at `tp_factor == 1`, so the 82 single-device tests
+  and every measurement above them are unchanged.
+
+  `ROOFLINE.md` prices the mapping: every Blackhole constant cited `file:line`, the
+  Gbps-vs-GB/s conversion written out once, 12 DRAM touches per read derived op by op
+  (215.5 ms floor per forward at `T = 5120` on `(2,4)`), the collective at 4.6% of it, and
+  two things that had to be measured rather than derived — `ttnn.all_reduce` picks a
+  composite all-gather or reduce-scatter+all-gather depending on whether the shape's tile
+  units divide by the participant count (`all_reduce_async.cpp:359`; an 8 KiB reduction
+  measured 1.9× slower than a 5760 KiB one), and one ttnn call costs ~130 µs flat across a
+  720× size range against an 88 µs break-even, so the composed op is launch-bound untraced
+  and DRAM-bound traced. Phase 10's ceiling is 10.8× with `v` resident in L1.
+
+  **NOT VALIDATED (Phase 8):** Any device-time performance claim — no profiler has run.
+  Every µs in `ROOFLINE.md` §3 and §4 is a floor from a cited peak bandwidth, and its two
+  measured numbers are host wall clock including Python. The split form's 1.50× was measured
+  on one device and now carries 2× the collectives. Production `T` on the mesh — the
+  distributed suite is `T = 64`; `T/R` at `(2,4)` is 32, one tile row, which
+  `ROOFLINE.md` §5 shows is a *different collective algorithm* than production runs, so
+  nothing here times what ships. Galaxy `(8,4)` and `[LINE, RING]` — untested, and the ring
+  axis is exactly where a scalar topology deadlocks. `num_links` still defaults to 1 against
+  production's 2. The PP boundary, real module outputs, real K3 weights, decode.
