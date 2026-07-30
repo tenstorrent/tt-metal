@@ -26,10 +26,10 @@ void kernel_main() {
         tile_regs_wait();
 
         for (uint32_t i = 0; i < num_single_transfer; ++i) {
-            copy_block_matmul_partials(dfb::in, i, i, 1);
+            copy_block(dfb::in, i, i, 1);
         }
 
-        pack_tile_block(0, dfb::out, num_single_transfer);
+        pack_block(0, dfb::out, num_single_transfer);
 
         tile_regs_commit();
         tile_regs_release();

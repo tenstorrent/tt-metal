@@ -304,6 +304,94 @@ class APPROX_MODE(TemplateParameter):
 
 
 @dataclass
+class REDUCE_BLOCK_CT_DIM(TemplateParameter):
+    """Compile-time block width (in tiles) for the block-based reduce_block_max_row LLKs.
+
+    A standalone one-line constant, deliberately *not* routed through the matmul-centric
+    ``INPUT_DIMENSIONS`` bundle: this pure block-reduce test has no use for that bundle's
+    other fields (``FULL_RT_DIM`` / ``FULL_CT_DIM`` / ``BLOCK_RT_DIM``) or its
+    ``generate_input_dim`` tile-shape validation, and it needs only a plain compile-time
+    block width. The distinct name (``REDUCE_BLOCK_CT_DIM``, not ``BLOCK_CT_DIM``) also
+    preempts a redefinition clash if ``INPUT_DIMENSIONS`` — the sole emitter of
+    ``BLOCK_CT_DIM`` — is ever added to this test: the header generator concatenates every
+    param's ``convert_to_cpp()`` with no de-dup, so two same-named ``constexpr`` lines would
+    fail to compile. (This test does not currently emit ``BLOCK_CT_DIM``.)
+    """
+
+    reduce_block_ct_dim: int
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint32_t REDUCE_BLOCK_CT_DIM = {self.reduce_block_ct_dim};"
+        )
+
+
+@dataclass
+class USE_RUNTIME(TemplateParameter):
+    """Selects the runtime (dynamic block_ct_dim) reduce_block_max_row LLK family."""
+
+    use_runtime: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool USE_RUNTIME = {str(self.use_runtime).lower()};"
+
+
+@dataclass
+class REINIT_MODE(TemplateParameter):
+    """Selects the reduce_block_max_row re-arm path: 0=none, 1=short (MOP + addrmods),
+    2=minimal (ADDR_MOD_1/2/6), 3=addrmod-only reinit (ADDR_MOD_1/2/3/6)."""
+
+    reinit_mode: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int REINIT_MODE = {self.reinit_mode};"
+
+
+@dataclass
+class CLOBBER_OP(TemplateParameter):
+    """Op run between reduce init and reinit to overwrite the reduce MOP/addrmods
+    (reconfig-escape guard for the reinit paths):
+    0=none, 1=eltwise binary (all addrmods + MOP), 2=minimal_safe (ADDR_MOD_1/2/6 only),
+    3=addrmod_all (ADDR_MOD_1/2/3/6).
+    """
+
+    clobber_op: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int CLOBBER_OP = {self.clobber_op};"
+
+
+@dataclass
+class RESPECT_TRIGGER(TemplateParameter):
+    """Enable the reduce_block_max_row producer/consumer trigger handshake.
+
+    When true, the unpack splits the block reduce into two half-width MOP runs
+    separated by a HW semaphore wait (FPU_SFPU), so the reduce can start on the
+    first half of the block before the second half is signalled. The test's PACK
+    thread plays the producer (posts the tokens). Requires an even block_ct_dim
+    (the unpack MOP outerloop is block_ct_dim / 2)."""
+
+    respect_trigger: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool RESPECT_TRIGGER = {str(self.respect_trigger).lower()};"
+
+
+@dataclass
+class OVERLAP_FIRST_HALF(TemplateParameter):
+    """Overlap the first-half reduce with the second-half pack (runtime family only).
+
+    When true (and RESPECT_TRIGGER + USE_RUNTIME), the unpack's first half gates on
+    the early UNPACK_MATH_DONE token instead of FPU_SFPU, so run()#1 overlaps the
+    second-half pack. Ignored by the compile-time unpack family (no overlap path)."""
+
+    overlap_first_half: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool OVERLAP_FIRST_HALF = {str(self.overlap_first_half).lower()};"
+
+
+@dataclass
 class ITERATIONS(TemplateParameter):
     iterations: int = 8
 
@@ -594,6 +682,33 @@ class SFPU_TILE_INDICES(RuntimeParameter):
             "int DST_TILE_IDX;",
         ]
         return "\n".join(lines), "iii"
+
+
+@dataclass
+class ZERO_POINT(RuntimeParameter):
+    """fp32 bit-pattern of the quant-family zero-point, passed to the binary SFPU
+    init at runtime. DEQUANT expects the bits of -zero_point (the init negates the
+    contract by loading these bits directly). Ignored by non-quant binary ops."""
+
+    zero_point_bits: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t ZERO_POINT = {self.zero_point_bits}u;"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t ZERO_POINT;", "I"
+
+
+@dataclass
+class SIGN_MAGNITUDE_FORMAT(TemplateParameter):
+    """Quant-family SMAG32 datapath toggle; read only by the quant binary ops."""
+
+    sign_magnitude: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool SFPU_SIGN_MAGNITUDE = {str(self.sign_magnitude).lower()};"
+        )
 
 
 @dataclass

@@ -178,17 +178,6 @@ struct ComputeGen2Config {
     // It should most likely become a per-DFB setting, similar to unpack_modes.
     bool enable_2x_src_register = false;
 
-    // Explicitly route this kernel's unpacked operands into dest
-    // running the unpack→math→pack semaphore handshake, independent of operand data format.
-    //
-    // NOTE: This is a strictly TEMPORARY HACK!
-    //       Removal / fix is tracked in issue #49445.
-    // ISSUES: Its presence alters the semantics of unpack_modes.
-    //         This creates a surprising misalignment between Gen1 and Gen2 behavior.
-    //         It also creates a reachable, unvalidated misconfiguration if unpack_to_dest_en and
-    //         unpack_modes are set inconsistently.
-    bool unpack_to_dest_en = false;
-
     ///////////////////////////////////////////////////////////////////////////////////////////////
 };
 

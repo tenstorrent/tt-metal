@@ -142,12 +142,8 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4 and layer3 and gate_device and no_ref and isl_6k4'",
-            50_907_612,  # Re-centered 2026-07-27 for two stacked speedups now in the tree -- BOTH
-            # the in-place direct-write change (measured 64.30 ms alone) AND #47536
-            # (update_padded_kv_cache RM/fp8; measured 64.80 ms alone). The combined 2x4-2link number
-            # can't be measured on the galaxy, so the target is the midpoint of the plausible combined
-            # band [62.10, 64.30] ms; margin 0.03 -> [61.30, 65.10] ms brackets both speedups stacking
-            # and either alone. Was 67_000_000.
+            48_977_160,  # Recalibrated 2026-07-29 from 3 measured 2x4-2link runs (48.99, 48.94,
+            # 49.00 ms; mean 48.977 ms, spread ~0.13%), matching the CI-observed 48.967 ms.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
             1,
