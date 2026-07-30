@@ -1731,7 +1731,7 @@ jobs:
                     SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
                     echo "✅ Found Slack user: $USER_NAME -> $SLACK_USER_ID"
                   else
-                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME"
+                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME (@$clean_item)"
                     echo "⚠️  Slack user not found for: $USER_NAME (@$clean_item), using full name fallback"
                   fi
                 fi
@@ -2728,7 +2728,7 @@ jobs:
                     SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
                     echo "✅ Found Slack user: $USER_NAME -> $SLACK_USER_ID"
                   else
-                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME"
+                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME (@$owner)"
                     echo "⚠️  Slack user not found for: $USER_NAME (@$owner), using full name fallback"
                   fi
                 fi
