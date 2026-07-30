@@ -622,7 +622,6 @@ class TestConfig:
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
-        skip_bit_exact_check: bool = False,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -655,7 +654,6 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
-        self.skip_bit_exact_check = skip_bit_exact_check
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -1709,11 +1707,6 @@ class TestConfig:
             # accumulates onto the previous one. Re-runs are legitimately
             # expected to differ and comparing them would be meaningless.
             return "L1 accumulation makes every run add onto the previous result"
-        if self.skip_bit_exact_check:
-            # The test intentionally exercises a broken or non-deterministic kernel
-            # (e.g. a negative control that expects corrupted output); re-running it
-            # would only confirm the non-determinism, not prove a defect.
-            return "bit-exact check explicitly skipped for this variant"
         return None
 
     def _bit_exact_check_applies(self) -> bool:
