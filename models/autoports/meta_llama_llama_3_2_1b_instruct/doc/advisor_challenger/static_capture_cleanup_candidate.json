@@ -1,0 +1,15 @@
+{
+  "batch": 32,
+  "repeats_ms": [
+    0.4177866503596306,
+    0.4110736772418022,
+    0.4134373739361763,
+    0.41626300662755966,
+    0.41342806071043015
+  ],
+  "best_ms": 0.4110736772418022,
+  "spread_ms": 0.006712973117828369,
+  "oracle": "synthetic batch-32 eager-vs-traced-replay PCC >= 0.995",
+  "oracle_passed": true,
+  "oracle_detail": 1.0
+}

@@ -1,0 +1,43 @@
+{
+  "cell_tag": "meta_llama_llama_3_2_1b_instruct-optimized-decoder-noadvise",
+  "commit": "cc8e0193c32954bde3548d3ee7e628948038acf0",
+  "harness": "doc/advisor_challenger/perf_harness.py",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "repeats_ms": [
+    0.4162425175309181,
+    0.4126960411667824,
+    0.41267555207014084,
+    0.4133470356464386,
+    0.4118839278817177
+  ],
+  "incumbent_ms": 0.4118839278817177,
+  "noise_floor_ms": 0.0043585896492004395,
+  "measured_at": "2026-07-30T19:59:56Z",
+  "perf_report": "tracy/incumbent/incumbent_ops.csv",
+  "shipped_policy_source": "doc/optimized_decoder/precision_experiments.json#results.mlp_all_bfp4",
+  "shipped_policy": {
+    "precision_policy": {
+      "attention_weight_dtype": "bfloat8_b",
+      "mlp_ff1_ff3_weight_dtype": "bfloat4_b",
+      "mlp_ff2_weight_dtype": "bfloat4_b",
+      "kv_cache_dtype": "bfloat8_b",
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "norm_weight_dtype": "bfloat16",
+      "lm_head_weight_dtype": "bfloat8_b",
+      "mul_dtype": "bfloat16",
+      "use_qk_fused_decode": false
+    }
+  },
+  "shipped_weight_dtypes": {
+    "attention_qkv": "BFLOAT8_B",
+    "attention_wo": "BFLOAT8_B",
+    "mlp_gate_up_ff1_ff3": "BFLOAT4_B",
+    "mlp_down_ff2": "BFLOAT4_B",
+    "rmsnorm": "BFLOAT16"
+  },
+  "oracle": "synthetic batch-32 eager-vs-traced-replay PCC >= 0.995",
+  "oracle_passed": true,
+  "oracle_pcc": 1.0
+}

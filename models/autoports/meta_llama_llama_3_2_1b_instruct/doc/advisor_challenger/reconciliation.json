@@ -1,0 +1,54 @@
+{
+  "layer_kind": "dense",
+  "layers_of_kind": 16,
+  "total_layers": 16,
+  "measured_window_us": 391.999,
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, NOT per-op",
+  "source_command": "python .agents/skills/advisor-challenger/scripts/reconcile.py --report shard_advise/dense/report.json --ir shard_advise/dense/final_ir.mlir --perf tracy/incumbent/incumbent_ops.csv --layer-kind dense --layers-of-kind 16 --total-layers 16 --threshold-pct 1.0 --out reconciliation.json",
+  "source_command_result": "The stock parser emitted an empty draft because current tt-perf-report v2.1 uses Device Time in microseconds and current MLIR references layouts by symbol. The reconciliation below is the corrected chain-level reading of those same inputs.",
+  "dram_sharded_considered": 5,
+  "dram_sharded_advised": 5,
+  "chains": [
+    {
+      "chain": "advisor_recall_set_minus_shipped",
+      "ops": [
+        "rms_norm",
+        "attention_qkv",
+        "attention_wo",
+        "mlp_gate",
+        "mlp_up",
+        "mlp_down"
+      ],
+      "op_count": 6,
+      "summed_window_share_pct": 0.0,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "reason": "Empty set difference: both RMSNorms already execute L1 width-sharded on 32 cores and all five linears already execute with DRAM-sharded weights. Advisor-only geometry is recall, not measured evidence."
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "advisor_recall_set_minus_shipped",
+      "layer_kind": "dense",
+      "chain": "advisor_recall_set_minus_shipped",
+      "advised": "L1-sharded norms/activations and DRAM-sharded weights for five linears",
+      "shipped": "same strategy families already present in incumbent tt-perf-report",
+      "device_us": 0.0,
+      "window_share_pct": 0.0,
+      "verdict": "below_threshold",
+      "reason": "No advised strategy-family disagreement remains; alternate core geometry was not treated as advice."
+    }
+  ],
+  "screened_non_advisor_capture_cleanup": {
+    "description": "Replace two runtime memory_config queries with statically declared phase configs so the advisor tracer can capture the graph.",
+    "measured_ms": 0.4110736772418022,
+    "incumbent_ms": 0.4118839278817177,
+    "nominal_delta_ms": -0.0008102506399154663,
+    "noise_floor_ms": 0.0043585896492004395,
+    "verdict": "rejected_tie_to_incumbent",
+    "oracle": "synthetic batch-32 eager-vs-traced-replay PCC >= 0.995",
+    "oracle_passed": true,
+    "candidate_artifact": "static_capture_cleanup_candidate.json"
+  }
+}

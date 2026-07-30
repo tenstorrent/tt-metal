@@ -1,0 +1,56 @@
+{
+  "outcome": "no_change",
+  "changed": false,
+  "shipped_change": false,
+  "decode_batch": 32,
+  "incumbent_ms": 0.4118839278817177,
+  "final_ms": 0.4118839278817177,
+  "delta_ms": 0.0,
+  "delta_pct": 0.0,
+  "noise_floor_ms": 0.0043585896492004395,
+  "winning_config": "frozen incumbent; BFP8 attention, BFP4 MLP, BF16 norms/activations, existing DRAM-sharded decode linears",
+  "best_single_ms": 0.4110736772418022,
+  "oracle": "synthetic batch-32 eager-vs-traced-replay PCC >= 0.995",
+  "oracle_passed": true,
+  "combination": {
+    "best_set": [
+      "incumbent"
+    ],
+    "selection_rule": "incumbent wins every tie inside noise_floor_ms",
+    "measured_sets": [
+      {
+        "chains": [
+          "incumbent"
+        ],
+        "measured_ms": 0.4118839278817177,
+        "oracle_passed": true
+      },
+      {
+        "chains": [
+          "static_capture_cleanup"
+        ],
+        "measured_ms": 0.4110736772418022,
+        "oracle_passed": true,
+        "verdict": "tie_to_incumbent; nominal 0.000810 ms gain is below 0.004359 ms floor"
+      }
+    ],
+    "cumulative_screened_winners": [],
+    "pairwise_combinations": [],
+    "pairwise_reason": "No advisor chain survived screening, so there were no top-chain pairs to combine."
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "initial post-incumbent shipped-precision dense-layer capture",
+      "capture": "shard_advise/dense/report.json",
+      "ranked_from": "tracy/incumbent/incumbent_ops.csv",
+      "result": "no material strategy-family disagreement; capture staticization tied and was reverted"
+    }
+  ],
+  "captures_per_layer_kind": {
+    "dense": 1
+  },
+  "compute_config_handling": "Ignored traced math fidelity as advice; incumbent HiFi2 compute policy retained.",
+  "uncapturable_layer_kinds": [],
+  "uncapturable_layer_share_pct": 0.0
+}
