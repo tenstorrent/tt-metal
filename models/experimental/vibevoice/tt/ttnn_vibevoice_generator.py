@@ -281,6 +281,15 @@ class TTVibeVoiceGenerator:
         # capture from a device index that self-advances — so a replayed frame does no host work for
         # noise at all.  =0 restores the per-frame host write (A/B + rollback).
         self._sf_dev_noise = os.environ.get("VV_DEV_NOISE", "1") == "1"
+        # VV_TTNN_RANDN=1 draws that table with ttnn.randn ON DEVICE instead of torch.randn on host.
+        # EXPERIMENTAL, default off: ttnn.randn is a different generator (device Box-Muller over
+        # per-core PRNGs), so it does NOT reproduce torch's values for a seed — the diffusion init
+        # noise changes and every rendered sample differs from the torch reference.  Measured vs
+        # torch.randn: tails match (P(|z|>3) 0.00265 vs 0.00270 at n=1M), but small draws are
+        # under-dispersed and slightly negative-biased (a [400,64] table came out std 0.938-1.002
+        # across seeds, mean -0.004..-0.040, vs torch's steady std~1.000).  Judge by listening.
+        self._sf_ttnn_randn = os.environ.get("VV_TTNN_RANDN", "0") == "1"
+        self._ttnn_randn_draws = 0  # draw counter, so successive device draws use distinct seeds
         self._sf_noise_table: Optional[ttnn.Tensor] = None
         self._sf_noise_idx: Optional[ttnn.Tensor] = None
         self._sf_t_tensors: Optional[list] = None
@@ -600,7 +609,23 @@ class TTVibeVoiceGenerator:
             lat = torch.cat(frames, dim=0)
 
         if self.acoustic_fix_std:
-            lat = lat + self.acoustic_fix_std * torch.randn_like(lat)
+            if self._sf_ttnn_randn:
+                # VV_TTNN_RANDN=1: draw the fix-std jitter on device.  ``lat`` is already a host
+                # tensor here (the encode output is D2H'd per chunk), so this adds one D2H per
+                # voice row — the point is to move the RANDOMNESS off torch, not to save time.
+                jitter = ttnn.to_torch(
+                    ttnn.randn(
+                        list(lat.shape),
+                        device=self.device,
+                        dtype=ttnn.float32,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        seed=self._ttnn_randn_seed(),
+                    )
+                ).to(lat.dtype)
+            else:
+                jitter = torch.randn_like(lat)
+            lat = lat + self.acoustic_fix_std * jitter
         return lat
 
     def _compute_scale_bias(self, latents_list: List[torch.Tensor], speech_masks: torch.Tensor):
@@ -870,6 +895,35 @@ class TTVibeVoiceGenerator:
         row = ttnn.embedding(idx, self._sf_noise_table, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.plus_one(self._sf_noise_idx)
         return ttnn.reshape(row, [1, 1, 1, row.shape[-1]])
+
+    def _ttnn_randn_seed(self) -> int:
+        """Deterministic seed for the next VV_TTNN_RANDN device draw.
+
+        Derived by READING the run's torch seed (``--seed``, set via torch.manual_seed) rather than
+        drawing from it, so no host RNG is consumed and the torch stream is left untouched; the
+        counter makes successive draws differ (each voice row's jitter, then the noise table)."""
+        self._ttnn_randn_draws += 1
+        return (int(torch.initial_seed()) + self._ttnn_randn_draws) & 0x7FFFFFFF
+
+    def _sf_randn_noise_table(self, max_steps: int, seed: int) -> bool:
+        """VV_TTNN_RANDN=1: draw the run's diffusion init noise ON DEVICE as the [max_steps, 64]
+        bf16 gather table, replacing the host torch.randn + H2D upload.
+
+        Generated directly at the table's final shape and ROW_MAJOR layout (what ttnn.embedding
+        consumes) — no reshape, so there is no tiled-reshape hazard.  Returns False when the gather
+        table is not the active noise path (eager / --no-trace / VV_DEV_NOISE=0), leaving the caller
+        on the host draw."""
+        if not (self._sf_dev_noise and self._trace_segment and self._sf_cfg_b2):
+            return False
+        self._sf_noise_table = ttnn.randn(
+            [max_steps, 64],
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            seed=seed,
+        )
+        return True
 
     def _sf_upload_noise_table(self, diffusion_noise: torch.Tensor) -> None:
         """Upload the run's pre-drawn diffusion noise as a [max_steps, 64] bf16 gather table.
@@ -1662,9 +1716,18 @@ class TTVibeVoiceGenerator:
         # only the first #diffusion-frames rows are consumed.
         diffusion_noise: Optional[torch.Tensor] = None
         if self.ref_inference is None:
-            diffusion_noise = torch.randn(max_steps, 2, 1, 1, 64, dtype=torch.float32, generator=rng).to(torch.bfloat16)
-            # Upload it once as a gather table so the traced frame picks its row on device.
-            self._sf_upload_noise_table(diffusion_noise)
+            # VV_TTNN_RANDN=1 draws the table on device instead (different values for the same seed
+            # — see _sf_randn_noise_table).  _ttnn_randn_seed() READS the run seed rather than
+            # drawing from it, so the torch stream is untouched on this path.
+            _dev_seed = self._ttnn_randn_seed() if self._sf_ttnn_randn else 0
+            if self._sf_ttnn_randn and self._sf_randn_noise_table(max_steps, _dev_seed):
+                _vv_debug(f"diffusion noise: ttnn.randn on device, seed={_dev_seed} (NOT torch-reference values)")
+            else:
+                diffusion_noise = torch.randn(max_steps, 2, 1, 1, 64, dtype=torch.float32, generator=rng).to(
+                    torch.bfloat16
+                )
+                # Upload it once as a gather table so the traced frame picks its row on device.
+                self._sf_upload_noise_table(diffusion_noise)
 
         diffusion_frames = 0
         # Steady-state decode timing (cf. tt_transformers/llama demos): time ONLY the fused-frame
