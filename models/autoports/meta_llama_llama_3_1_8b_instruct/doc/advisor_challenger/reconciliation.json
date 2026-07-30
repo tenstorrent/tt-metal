@@ -1,0 +1,90 @@
+{
+  "layer_kind": "dense",
+  "layers_of_kind": 32,
+  "total_layers": 32,
+  "measured_window_us": 603.414,
+  "threshold_pct": 1.0,
+  "threshold_applied_to": "chain summed window share, NOT per-op",
+  "source_command": "python .agents/skills/advisor-challenger/scripts/reconcile.py --report doc/advisor_challenger/shard_advise/dense/report.json --ir doc/advisor_challenger/shard_advise/dense/final_ir.mlir --perf doc/advisor_challenger/tracy/incumbent.csv --layers-of-kind 32 --total-layers 32 --threshold-pct 1.0",
+  "source_tool_result": "The stock parser reported no placements because its final_ir.mlir layout regex does not match the current #ttnn_layout declarations. The chain below is the manual reconciliation of that IR against the same incumbent CSV.",
+  "dram_sharded_considered": 5,
+  "dram_sharded_advised": 5,
+  "already_shipped": {
+    "attention_and_mlp_matmuls": {
+      "count": 5,
+      "incumbent_program_family": "matmul_multi_core_reuse_multi_cast_dram_sharded",
+      "advisor_program_family": "matmul_multi_core_reuse_multi_cast_dram_sharded",
+      "disposition": "no set difference; advisor geometry is traced state/recall only"
+    }
+  },
+  "chains": [
+    {
+      "chain": "norm_residual",
+      "ops": [
+        "ttnn.rms_norm x2",
+        "adjacent reshard boundaries",
+        "residual add boundaries"
+      ],
+      "op_count": 3,
+      "summed_window_share_pct": 3.183,
+      "verdict": "rejected",
+      "measured_ms": 0.6283288821578026,
+      "reason": "Best challenger was 64-core width sharding and remained 0.007024 ms slower than the frozen incumbent, outside its 0.006282 ms noise floor.",
+      "screened_variants": [
+        {
+          "variable": "decode_norm_core_count",
+          "value": 16,
+          "measured_ms": 0.6305631250143051,
+          "oracle": "synthetic full-shape HF LlamaDecoderLayer PCC >= 0.995",
+          "oracle_passed": true,
+          "pcc": 0.9996037699102784,
+          "artifact": "norm16_run.json"
+        },
+        {
+          "variable": "decode_norm_core_count",
+          "value": 64,
+          "measured_ms": 0.6283288821578026,
+          "oracle": "synthetic full-shape HF LlamaDecoderLayer PCC >= 0.995",
+          "oracle_passed": true,
+          "pcc": 0.9996037699102784,
+          "artifact": "norm64_run.json"
+        }
+      ]
+    }
+  ],
+  "disagreements": [
+    {
+      "op": "ttnn.rms_norm x2",
+      "chain": "norm_residual",
+      "advised_layout": "first norm block-sharded on 11 cores; second norm width-sharded on 22 cores",
+      "shipped_layout": "width-sharded L1 on 32 cores",
+      "device_us": 13.326,
+      "window_share_pct": 2.208,
+      "verdict": "rejected",
+      "measured_ms": 0.6283288821578026,
+      "reason": "Measured as the complete norm/residual chain, not as an isolated norm."
+    },
+    {
+      "op": "adjacent norm reshard boundaries",
+      "chain": "norm_residual",
+      "advised_layout": "advisor-specific conversions around norm inputs/outputs",
+      "shipped_layout": "32-core width-sharded residual stream",
+      "device_us": 2.864,
+      "window_share_pct": 0.475,
+      "verdict": "rejected",
+      "measured_ms": 0.6283288821578026,
+      "reason": "Below threshold alone but retained because the summed chain is material."
+    },
+    {
+      "op": "residual add boundaries",
+      "chain": "norm_residual",
+      "advised_layout": "follow advised norm-chain layout",
+      "shipped_layout": "32-core width-sharded residual stream",
+      "device_us": 3.019,
+      "window_share_pct": 0.5,
+      "verdict": "rejected",
+      "measured_ms": 0.6283288821578026,
+      "reason": "Below threshold alone but retained because the summed chain is material."
+    }
+  ]
+}

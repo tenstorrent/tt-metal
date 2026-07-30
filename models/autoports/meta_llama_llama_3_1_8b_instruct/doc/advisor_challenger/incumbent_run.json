@@ -1,0 +1,28 @@
+{
+  "decode_batch": 32,
+  "context": 0,
+  "weights": "synthetic",
+  "repeats_ms": [
+    0.627586618065834,
+    0.6229979917407036,
+    0.6220266222953796,
+    0.6213448941707611,
+    0.6213048473000526
+  ],
+  "best_ms": 0.6213048473000526,
+  "spread_ms": 0.006281770765781403,
+  "oracle": "HF LlamaDecoderLayer PCC >= 0.995",
+  "oracle_passed": true,
+  "reference_pcc": 0.9996039781810145,
+  "eager_trace_pcc": 1.0,
+  "effective_policy": {
+    "name": "llama31_8b_single_chip_bfp8_attn_bfp4_mlp_decode_v1",
+    "activation_dtype": "BFLOAT16",
+    "attention_weight_dtype": "BFLOAT8_B",
+    "mlp_gate_up_dtype": "BFLOAT4_B",
+    "mlp_down_dtype": "BFLOAT4_B",
+    "kv_cache_dtype": "BFLOAT8_B",
+    "mlp_mul_dtype": "BFLOAT8_B",
+    "mlp_math_fidelity": "LoFi"
+  }
+}

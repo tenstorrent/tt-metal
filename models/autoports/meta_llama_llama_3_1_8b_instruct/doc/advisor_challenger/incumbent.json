@@ -1,0 +1,40 @@
+{
+  "cell_tag": "skillexp-cell/challenger/llama31-8b",
+  "commit": "6ddbdc9ffcc41054025de2e0a023d117ba034c18",
+  "harness": "doc/advisor_challenger/perf_harness.py",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "measured_at": "2026-07-30T21:09:17Z",
+  "repeats_ms": [
+    0.627586618065834,
+    0.6229979917407036,
+    0.6220266222953796,
+    0.6213448941707611,
+    0.6213048473000526
+  ],
+  "incumbent_ms": 0.6213048473000526,
+  "noise_floor_ms": 0.006281770765781403,
+  "oracle": "synthetic full-shape HF LlamaDecoderLayer PCC >= 0.995",
+  "oracle_passed": true,
+  "oracle_pcc": 0.9996039781810145,
+  "oracle_limitations": "Real layer-0 weights are not cached on this host and outbound Hugging Face access is disabled.",
+  "shipped_policy_source": "doc/advisor_challenger/incumbent_run.json effective_policy (executed batch-32 runtime)",
+  "shipped_policy": {
+    "policy": {
+      "name": "llama31_8b_single_chip_bfp8_attn_bfp4_mlp_decode_v1",
+      "activation_dtype": "BFLOAT16",
+      "attention_weight_dtype": "BFLOAT8_B",
+      "mlp_gate_up_dtype": "BFLOAT4_B",
+      "mlp_down_dtype": "BFLOAT4_B",
+      "kv_cache_dtype": "BFLOAT8_B",
+      "mlp_mul_dtype": "BFLOAT8_B",
+      "mlp_math_fidelity": "LoFi"
+    }
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B",
+    "norm": "BFLOAT16"
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "outcome": "no_change",
+  "changed": false,
+  "shipped_change": false,
+  "decode_batch": 32,
+  "incumbent_ms": 0.6213048473000526,
+  "final_ms": 0.6213048473000526,
+  "noise_floor_ms": 0.006281770765781403,
+  "delta_ms": 0.0,
+  "delta_pct": 0.0,
+  "best_single_ms": 0.6283288821578026,
+  "winning_config": {
+    "name": "incumbent",
+    "decode_norm_core_count": 32,
+    "policy": "llama31_8b_single_chip_bfp8_attn_bfp4_mlp_decode_v1"
+  },
+  "oracle": "synthetic full-shape HF LlamaDecoderLayer PCC >= 0.995",
+  "oracle_passed": true,
+  "oracle_pcc": 0.9996039781810145,
+  "oracle_limitations": "Real layer-0 weights are not cached on this host and outbound Hugging Face access is disabled.",
+  "combination": {
+    "best_set": [
+      "incumbent"
+    ],
+    "best_set_ms": 0.6213048473000526,
+    "cumulative_screened_winners": [],
+    "pairwise_applicable": false,
+    "pairwise_reason": "Only one material chain was found and it lost screening; there are no screened winners to combine.",
+    "measured_sets": [
+      {
+        "chains": [
+          "incumbent"
+        ],
+        "measured_ms": 0.6213048473000526,
+        "oracle_passed": true,
+        "artifact": "incumbent_run.json"
+      },
+      {
+        "chains": [
+          "norm_residual:decode_norm_core_count=16"
+        ],
+        "measured_ms": 0.6305631250143051,
+        "oracle_passed": true,
+        "artifact": "norm16_run.json"
+      },
+      {
+        "chains": [
+          "norm_residual:decode_norm_core_count=64"
+        ],
+        "measured_ms": 0.6283288821578026,
+        "oracle_passed": true,
+        "artifact": "norm64_run.json"
+      }
+    ]
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "trigger": "Initial dense-layer capture after freezing the batch-32 incumbent.",
+      "captures_by_layer_kind": {
+        "dense": 1
+      },
+      "profile_ranked_from": "tracy/incumbent.csv",
+      "result": "No screened winner; stop without re-profile/re-capture."
+    }
+  ],
+  "ship_decision": "Both measured norm-chain geometries were slower than the frozen incumbent. Ties and losses ship the incumbent unchanged."
+}
