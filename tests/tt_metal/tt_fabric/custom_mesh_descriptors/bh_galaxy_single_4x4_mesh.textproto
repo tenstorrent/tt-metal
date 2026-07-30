@@ -12,10 +12,4 @@ mesh_descriptors {
   }
 }
 
-graph_descriptors {
-  name: "G0"
-  type: "FABRIC"
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-}
-
-top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

@@ -204,8 +204,14 @@ public:
     bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
 
     // Check if the graph topology policy (for inter-mesh connections) is relaxed
-    // Returns false (STRICT) if MeshGraphDescriptor is not available or if graph topology policy is STRICT
+    // Returns false (STRICT) if MeshGraphDescriptor is not available or if graph topology policy is STRICT, or
+    // if the descriptor does not specify inter-mesh policy (in that case use is_inter_mesh_policy_specified()).
     bool is_inter_mesh_policy_relaxed() const;
+
+    // True if inter-mesh policy was read from FABRIC connection(s) or from graph-level graph_topology.channels
+    // in the top-level graph (same sources as is_inter_mesh_policy_relaxed()). If false, the MGD has no
+    // explicit inter-mesh policy; multi-MGD rank binding should not treat it as STRICT when merging.
+    bool is_inter_mesh_policy_specified() const;
 
     // Get the MeshGraphDescriptor instance (if available)
     // Returns nullptr if MeshGraph was created via generate_mesh_graph_of_shape()
@@ -258,6 +264,8 @@ private:
     std::unordered_map<MeshId, std::vector<MeshId>> switch_to_connected_meshes_;
     std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
     bool inter_mesh_relaxed_policy_ = false;  // Default to STRICT (false = not relaxed)
+    // Set true in initialize_from_mgd when policy is read from the descriptor (vs implicit default)
+    bool inter_mesh_policy_specified_ = false;
 
     // Store the MeshGraphDescriptor instance if created from a descriptor file
     std::optional<MeshGraphDescriptor> mesh_graph_descriptor_;
