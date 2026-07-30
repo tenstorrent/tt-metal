@@ -29,6 +29,10 @@ struct StridedReduceScatterProgramArtifacts {
     uint32_t num_cores_per_link;
     // Index into the reader RT args where addcmul_a_address lives (0 = not used).
     uint32_t reader_addcmul_rt_arg_offset = 0;
+    // Per-core MM signaling: backing L1 buffer for the per-MM-core progress counter array (one
+    // shard/row per RS worker core). Held here so it stays allocated for the cached program's life
+    // (its L1 address is baked into the reader + MM runtime args).
+    std::shared_ptr<tt::tt_metal::Buffer> mm_progress_counters_buffer;
 };
 
 struct operation_attributes_t {

@@ -293,6 +293,10 @@ struct StridedReduceScatterFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
     std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     uint32_t fused_op_receiver_signal_semaphore = 0;
+    // Per-core signaling: L1 base address (identical on every RS worker core) of the per-MM-core
+    // progress counter array. Each MM core increments its own slot; the RS reader waits per-tile on
+    // the producing core's slot. Set by the RS program factory to the backing buffer's address.
+    uint32_t mm_progress_counters_addr = 0;
 
     bool initialized = false;
 
