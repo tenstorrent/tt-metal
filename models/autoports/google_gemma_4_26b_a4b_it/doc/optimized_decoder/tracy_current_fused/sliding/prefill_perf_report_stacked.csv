@@ -1,0 +1,23 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+78.26,SparseMatmulDeviceOperation (in0:dram_interleaved),221005.74,288,Compute,0.63,2.35,1.55,0.62,1.63
+7.25,UnaryDeviceOperation (in0:dram_interleaved),20477.13,483,Compute,,,,,
+6.36,BinaryNgDeviceOperation (in0:dram_interleaved),17969.15,213,Compute,,,,,
+2.68,PermuteDeviceOperation (in0:dram_interleaved),7575.26,288,TM,,,,,
+2.13,FastReduceNCDeviceOperation (in0:dram_interleaved),6026.29,96,Other,,,,,
+1.06,MatmulDeviceOperation (in0:dram_interleaved),2995.59,15,Compute,20.93,80.99,52.23,22.42,67.53
+0.80,SDPAOperation (in0:dram_interleaved),2255.24,3,Compute,,,,,
+0.52,LayerNormDeviceOperation (in0:dram_interleaved),1478.74,33,Compute,,,,,
+0.21,RotaryEmbeddingHfDeviceOperation (in0:dram_interleaved),595.47,6,Other,,,,,
+0.15,SliceDeviceOperation (in0:dram_interleaved),424.49,204,TM,,,,,
+0.12,NlpCreateHeadsDeviceOperation (in0:dram_interleaved),347.86,3,TM,,,,,
+0.10,UntilizeWithUnpaddingDeviceOperation (in0:dram_interleaved),288.41,102,TM,,,,,
+0.07,ReduceDeviceOperation (in0:dram_interleaved),202.36,96,Compute,,,,,
+0.06,NLPConcatHeadsDeviceOperation (in0:dram_interleaved),178.33,3,TM,,,,,
+0.06,TypecastDeviceOperation (in0:dram_interleaved),158.49,9,TM,,,,,
+0.05,PagedFillCacheDeviceOperation (in0:dram_interleaved),129.86,6,Other,,,,,
+0.03,ConcatDeviceOperation (in0:dram_interleaved),95.92,3,TM,,,,,
+0.03,ScatterDeviceOperation (in0:dram_interleaved),82.79,3,Other,,,,,
+0.03,TopKDeviceOperation (in0:dram_interleaved),77.66,3,Other,,,,,
+0.01,SoftmaxDeviceOperation (in0:dram_interleaved),19.24,3,Compute,,,,,
+0.01,UntilizeDeviceOperation (in0:dram_interleaved),14.63,3,TM,,,,,
+0.00,TilizeDeviceOperation (in0:dram_interleaved),10.38,3,TM,,,,,

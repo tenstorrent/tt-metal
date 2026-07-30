@@ -1,0 +1,34 @@
+{
+  "capture_script_sha256": "6e8649c49bb5853d5d9451ed0f2b040cd0a40cd2e941ea7689f2630ab4a8eef1",
+  "captures": [
+    {
+      "batch": 1,
+      "layer_idx": 0,
+      "layer_kind": "sliding_attention",
+      "output": "report.json"
+    },
+    {
+      "batch": 32,
+      "layer_idx": 0,
+      "layer_kind": "sliding_attention",
+      "output": "batch32/report.json"
+    },
+    {
+      "batch": 1,
+      "layer_idx": 5,
+      "layer_kind": "full_attention",
+      "output": "full_attention/batch1/report.json"
+    },
+    {
+      "batch": 32,
+      "layer_idx": 5,
+      "layer_kind": "full_attention",
+      "output": "full_attention/batch32/report.json"
+    }
+  ],
+  "command_template": "export TTMLIR_ADVISOR_HOME=/home/mvasiljevic/tt-mlir; export TT_METAL_ROOT=/home/mvasiljevic/tt-metal; source $TTMLIR_ADVISOR_HOME/tools/ttnn-jit/integrations/agentic-research/shard-advise/scripts/bootstrap.sh; GEMMA4_ADVISE_BATCH=<1|32> GEMMA4_ADVISE_LAYER=<0|5> ttnn-advise capture /home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/shard_advise/advise_gemma4.py:decode --out /tmp/gemma4-optimized-shard-advice-<case>",
+  "fused_decoder_sha256": "134ca812394d2548687bccdfc2524fc75c7c69bb52c0609f4b8ac67ab022972f",
+  "optimized_decoder_sha256": "27520800126cb28009802411b4fe87194ed15845988673905e48d83344a6633a",
+  "optimized_test_sha256": "a8a6273444a5ecb51ce69fba318801bbe80951047390f78242c9964bae414aff",
+  "tt_mlir_commit": "618cd4e75dae69d334bb9d8cdeff314816ccf214"
+}

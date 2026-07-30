@@ -1,0 +1,120 @@
+{
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "results": [
+    {
+      "logical_sequence_length": 1,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9999011787302707,
+      "physical_sequence_length": 32,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 31,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9976763372519135,
+      "physical_sequence_length": 32,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 32,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9984728854138379,
+      "physical_sequence_length": 32,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 33,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9988605520343277,
+      "physical_sequence_length": 64,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 127,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.998628150040704,
+      "physical_sequence_length": 128,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 128,
+      "page_table": [
+        0
+      ],
+      "pcc": 0.9985125200537103,
+      "physical_sequence_length": 128,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 129,
+      "page_table": [
+        1,
+        0
+      ],
+      "pcc": 0.9984380704910137,
+      "physical_sequence_length": 160,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 1023,
+      "page_table": [
+        7,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "pcc": 0.998293725395884,
+      "physical_sequence_length": 1024,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 1024,
+      "page_table": [
+        7,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "pcc": 0.9984602890389397,
+      "physical_sequence_length": 1024,
+      "threshold": 0.995
+    },
+    {
+      "logical_sequence_length": 1025,
+      "page_table": [
+        8,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "pcc": 0.9984151952127088,
+      "physical_sequence_length": 1056,
+      "threshold": 0.995
+    }
+  ]
+}

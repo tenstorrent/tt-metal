@@ -1,0 +1,34 @@
+{
+  "cache_position_modulo": 1024,
+  "decoder_impl": "fused",
+  "logical_lengths": [
+    1024,
+    1025
+  ],
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "preserved_logical_range": [
+    1,
+    1024
+  ],
+  "preserved_pccs": [
+    1.0,
+    1.0
+  ],
+  "provenance": {
+    "checkout_git_sha": "028fd96b1f1349395d8760d55e2441594d4cf776",
+    "decoder_impl": "fused",
+    "decoder_sha256": "134ca812394d2548687bccdfc2524fc75c7c69bb52c0609f4b8ac67ab022972f",
+    "exact_command": "GEMMA4_DECODER_IMPL=fused GEMMA4_RANGE_DOWNLOAD=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_functional_decoder.py::test_bounded_modulo_prefill_tail_cache_integrity",
+    "hardware": {
+      "arch": "Arch.BLACKHOLE",
+      "device_ids": [
+        3
+      ],
+      "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39"
+    },
+    "test_sha256": "86a456b8e03dc8088822bd6aad07461f6a69d90f446e8319193e4d557a4572ec",
+    "ttnn_extension_path": "/home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so",
+    "ttnn_extension_sha256": "ed2bf1a78109396ab2411c7f7bd0a0fa341c3eb3c8b4f82a40985fadb3dc26a2"
+  },
+  "threshold": 0.9999
+}
