@@ -939,15 +939,10 @@ class TTVibeVoiceGenerator:
     def _sf_replay_ready(self) -> bool:
         """True when the next ``_run_segment_frame_traced`` call will only replay (no warmup/capture).
 
-        Default production path is CFG batch-2 (``_sf_lm2trace_tid``); cap-split uses the three
-        per-frame tids; legacy fused uses ``_sf_tid``.  Checking only ``_sf_tid`` left
-        ``steady_decode_frames`` stuck at 0 on the default path
+        The decode path is unconditionally CFG batch-2, whose capture is gated on
+        ``_sf_lm2trace_tid``.  Checking only ``_sf_tid`` left ``steady_decode_frames`` stuck at 0.
         """
-        if self._sf_cfg_b2:
-            return self._sf_lm2trace_tid is not None
-        if self._sf_cap_split:
-            return self._sf_postrace_tid is not None
-        return self._sf_tid is not None
+        return self._sf_lm2trace_tid is not None
 
     def _reset_segment_frame_trace(self) -> None:
         """Release the whole-segment fused trace at a segment boundary.  The boundary's eager LM
