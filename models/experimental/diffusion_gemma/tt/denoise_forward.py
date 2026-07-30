@@ -467,22 +467,22 @@ def _deallocate_prompt_source(prompt_source) -> None:
 # slow plain-interleaved path (rms_norm.py:145-176). That costs 7 extra slices + 1 DRAM concat +
 # 7 extra sharded-norm launches + 8 I2S/S2I round-trips PER norm call (~6-8 norm calls/layer x 30).
 #
-# RMSNorm normalizes each ROW independently over the hidden width, so block_h=8 (256 rows in one op)
-# is per-row EQUIVALENT to 8x block_h=1 (the cross-core width reduction is per-row regardless of
-# block_h). It is NOT, however, bit-identical: the bf16 reduction/accumulation ORDER differs between
-# block_h=8 and 8x block_h=1, ~2e-6/norm (PCC 0.999998), which compounds over 30L x 48 steps under
-# #48291 (no argmax cushion) and flips some committed tokens. So this runs one 256-row width-sharded
-# rms_norm (reusing ``norm.tt_weight`` — reading the weight is data-use, NOT a gemma4 edit) and hands
-# the L1 output straight back, dropping the slice/concat glue. MEASURED +15.8% @48 / +23.3% @12 traced
-# (doc/optimize_perf/l1_residency.md). Gated DG_NORM_FULLCANVAS, default OFF (default path unchanged /
-# bit-identical) until a decision-fidelity check vs HF clears the non-bit-identity for a default flip.
+# RMSNorm normalizes each ROW independently over the hidden width, so one 256-row op is per-row
+# equivalent to 8x 32-row ops -- the cross-core width reduction is per-row regardless of block_h.
+# It runs one 256-row width-sharded rms_norm (reusing ``norm.tt_weight`` — reading the weight is
+# data-use, NOT a gemma4 edit) and hands the L1 output straight back, dropping the slice/concat glue.
+#
+# This was DG_NORM_FULLCANVAS, default OFF. The flag was DELETED 2026-07-30. The blocker was that
+# the two shapes were not bit-identical, which the tree attributed to "~2e-6/norm (PCC 0.999998)"
+# reduction ORDER -- a figure with no measurement behind it (the bench that produced it reports
+# PCC > 1.0 elsewhere, so its floor is ~5e-5). Measured properly the delta was 5.73 bf16 ULP, and its
+# cause was ttnn's rmsnorm default of bf16 partial accumulation. With fp32 accumulation
+# (_norm_compute_kernel_config) the two shapes are bit-identical -- 0 of 69,206,016 elements over 96
+# device slices -- so there is no decision to gate. Measured -20.4%/block on the full 198-question
+# GPQA run, which also scored 71.21% vs 66.67% for the previous full run on the same questions.
 # ---------------------------------------------------------------------------------------------
 
 _NORM_FULLCANVAS_CFG_CACHE = {}
-
-
-def _norm_fullcanvas_enabled():
-    return os.environ.get("DG_NORM_FULLCANVAS", "0") == "1"
 
 
 def _build_fullcanvas_norm_cfg(mesh, seq_len, hidden_size):
@@ -533,47 +533,130 @@ def _build_fullcanvas_norm_cfg(mesh, seq_len, hidden_size):
     return cfg
 
 
-def _fullcanvas_norm(norm, hidden_states):
-    """One 256-row width-sharded rms_norm (HIGH-4). Returns normed [1,1,S,H] DRAM, or None if the
-    width-sharded config is unavailable (caller falls back to the chunked path)."""
-    cfg = _build_fullcanvas_norm_cfg(hidden_states.device(), hidden_states.shape[-2], hidden_states.shape[-1])
+_NORM_ACC_CFG_CACHE = {}
+
+
+def _norm_compute_kernel_config(device):
+    """fp32 destination accumulation for the DG-owned RMSNorms. Measured free, and 2.8x more accurate.
+
+    ttnn's rmsnorm default is HiFi4 with **fp32_acc = false** (ttnn/cpp/.../rmsnorm/rmsnorm.cpp), so
+    each of the 88 per-core partial sums of squares is rounded to bf16 before the cross-core combine.
+    Nothing in DiffusionGemma or gemma4 ever passed a compute_kernel_config to a norm, so every
+    denoise norm ran that way. Measured on QB2 at the shipped shape ([1,1,256,2816] bf16), against an
+    fp64 reference over the SAME bf16 inputs (tests/test_device_norm_fullcanvas.py):
+
+        bf16 accumulate   rel p50 3.99e-3   p99 1.31e-2   max 2.15e-2   rmse 5.43e-3
+        fp32 accumulate   rel p50 1.42e-3   p99 4.38e-3   max 5.76e-3   rmse 1.94e-3   (2.8x better)
+
+    It also removes the dependence on the combine TREE: with bf16 partials, one 256-row norm and 8x
+    32-row norms disagree by up to 5.73 bf16 ULP; with fp32 partials they are BIT-IDENTICAL. That is
+    what lets the full-canvas shape be a pure perf choice rather than a decision change.
+
+    Cost: **-2.3%**, i.e. none. It is free *here* because these configs land on block_w=1 /
+    subblock_w=1, so halving DST capacity has nothing to take away. Do not generalise "fp32 is slow"
+    to this shape without measuring it -- that intuition is right for wide output blocks and wrong
+    here.
+    """
+    key = id(device)
+    cfg = _NORM_ACC_CFG_CACHE.get(key)
+    if cfg is None:
+        cfg = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,  # ttnn's own rmsnorm default
+            math_approx_mode=True,  # unchanged; only the accumulator moves
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        _NORM_ACC_CFG_CACHE[key] = cfg
+    return cfg
+
+
+def _sharded_rms_norm_rows(norm, hidden_states, rows):
+    """One width-sharded rms_norm over ``rows`` at a time, DG-owned, with fp32 accumulation.
+
+    Both the full-canvas (rows = canvas) and the chunked (rows = 32) shapes go through here, so the
+    only difference between them is ``block_h`` -- and with fp32 accumulation that difference is
+    bit-identical (measured). The 32-row config this builds is the same one gemma4's
+    ``RMSNorm._build_sharded_cfg`` picks (same grid search, same block_w, block_h=1), so routing the
+    chunks here instead of through ``norm.forward`` changes the accumulator and nothing else.
+
+    Returns ``None`` when no width-sharded config fits, so the caller can fall back.
+    """
+    cfg = _build_fullcanvas_norm_cfg(hidden_states.device(), rows, hidden_states.shape[-1])
     if cfg is None:
         return None
     input_memcfg, program_config = cfg
     weight = getattr(norm, "tt_weight", None)
-    x_sh = ttnn.to_memory_config(hidden_states, input_memcfg)
-    out_sh = ttnn.rms_norm(
-        x_sh,
-        weight=weight,
-        epsilon=norm.eps,
-        program_config=program_config,
-        memory_config=input_memcfg,
-    )
-    x_sh.deallocate(True)
-    out = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
-    out_sh.deallocate(True)
+    ckcfg = _norm_compute_kernel_config(hidden_states.device())
+    seq_len = hidden_states.shape[-2]
+
+    outs = []
+    for start in range(0, seq_len, rows):
+        piece = hidden_states
+        if rows != seq_len:
+            piece = ttnn.slice(
+                hidden_states,
+                [0, 0, start, 0],
+                [hidden_states.shape[0], hidden_states.shape[1], start + rows, hidden_states.shape[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        x_sh = ttnn.to_memory_config(piece, input_memcfg)
+        out_sh = ttnn.rms_norm(
+            x_sh,
+            weight=weight,
+            epsilon=norm.eps,
+            program_config=program_config,
+            memory_config=input_memcfg,
+            compute_kernel_config=ckcfg,
+        )
+        outs.append(ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG))
+        x_sh.deallocate(True)
+        out_sh.deallocate(True)
+        if piece is not hidden_states:
+            piece.deallocate(True)
+
+    if len(outs) == 1:
+        return outs[0]
+    out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for part in outs:
+        part.deallocate(True)
     return out
 
 
 def _chunked_norm_forward(norm, hidden_states, *, chunk_size: int = 32):
     # A SCALELESS norm keeps its own path, and this test has to come FIRST. It used to sit below the
-    # full-canvas attempt, so with DG_NORM_FULLCANVAS on the MoE router's weightless norm was captured
-    # by _fullcanvas_norm and never reached _rms_norm_dram -- silently swapping its reduction topology
+    # full-canvas attempt, so the MoE router's weightless norm was captured
+    # by the full-canvas path and never reached _rms_norm_dram -- silently swapping its reduction topology
     # from 8 cores / block_w=11 / single-stage (_width_sharded_rms_norm) to 88 cores / block_w=1 /
     # two-stage. That is a structurally different summation tree, not the block_h difference the flag
-    # is documented as making, and nothing asked for it: _fullcanvas_norm was written for the WEIGHTED
-    # norms and swallowed this one by ordering alone. Whether or not it explains the flag's output
-    # delta, a flag named "full canvas" must not also re-shard an unrelated norm.
+    # was documented as making, and nothing asked for it: the full-canvas path was written for the
+    # WEIGHTED norms and swallowed this one by ordering alone.
     if getattr(norm, "with_scale", True) is False and getattr(norm, "tt_weight", None) is None:
-        return _rms_norm_dram(hidden_states, epsilon=norm.eps, chunk_size=chunk_size)
-    if _norm_fullcanvas_enabled() and hidden_states.shape[-2] > chunk_size:
-        out = _fullcanvas_norm(norm, hidden_states)
-        if out is not None:
-            return out
+        return _rms_norm_dram(
+            hidden_states,
+            epsilon=norm.eps,
+            chunk_size=chunk_size,
+            compute_kernel_config=_norm_compute_kernel_config(hidden_states.device()),
+        )
     seq_len = hidden_states.shape[-2]
     if seq_len <= chunk_size:
         return norm.forward(hidden_states)
 
+    # ONE width-sharded norm over the whole canvas, not 8x 32 rows. This was DG_NORM_FULLCANVAS,
+    # default OFF; the flag was deleted on 2026-07-30 because there was nothing left to select.
+    #
+    # It is 9.85x per norm and -20.4% per block end-to-end, and the two reasons it stayed opt-in are
+    # both gone. (1) "Not bit-identical": that was true only because ttnn's rmsnorm default accumulates
+    # partials in bf16. With the fp32 accumulator this path now uses, the 256-row and 8x32-row shapes
+    # are bit-identical -- 0 of 69,206,016 elements over 96 device slices, against 13.0% at bf16.
+    # (2) "Answers get 27% shorter": a 10-question artifact. It shrank to -10% at 71 questions and to
+    # nothing at 198 (mean 11,069 chars, longer than any prior full run), while the score went
+    # 66.67% -> 71.21% on the same 198.
+    out = _sharded_rms_norm_rows(norm, hidden_states, seq_len)
+    if out is not None:
+        return out
+
+    # No width-sharded config fits this width: fall back to gemma4's per-chunk norm (bf16 accumulate).
     chunks = []
     for start in range(0, seq_len, chunk_size):
         end = min(start + chunk_size, seq_len)

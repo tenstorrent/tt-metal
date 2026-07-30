@@ -153,7 +153,6 @@ def run(args) -> dict:
                 "DG_PREFILL_MOE_TUNED",
                 "DG_SELFCOND_PRECHUNK_EMBED",
                 "DG_SELFCOND_LOGITS_L1",
-                "DG_NORM_FULLCANVAS",
                 "TT_METAL_WATCHER",
                 "TT_METAL_DEVICE_PROFILER",
             )

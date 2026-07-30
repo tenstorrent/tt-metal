@@ -40,7 +40,7 @@ on 07-27. If a flag below is not in the tree any more, that document says why.
 |---|---|---|
 | `DG_SDPA_GRID=device` | **−8.8%, bit-exact** | **default flipped** |
 | `DG_MOE_CONCAT=1` | **−29.9%**, fold verified at PCC 0.9999218 | **shipped 2026-07-29, then the flag and its alternative were deleted** |
-| `DG_NORM_FULLCANVAS=1` | **−17.9%**, also cuts commit 2.04 s → 0.37 s | default OFF — needs the gate |
+| `DG_NORM_FULLCANVAS=1` | **−20.4%/block on the full 198**, also cuts commit 2.04 s → 0.37 s | **shipped 2026-07-30; flag deleted** |
 
 The concat MoE never went through the quality gate, because it turned out not to be a trade: the
 token-gather MoE it competed with does not let the denoise trajectory converge (halted 0/9 vs 19/19,
@@ -49,10 +49,15 @@ as a correctness fix and both `DG_MOE_CONCAT` and the token-gather/dense-128 den
 were deleted; `tt/concat_moe.py` is now the only denoise MoE, and `tt/sparse_moe.py` is prefill-only.
 Its −29.9% is in the baseline. **Any absolute quality number measured before that flip is void.**
 
-That leaves one pending flip, −17.9%. It changes committed tokens, so it does not flip on a
-TT-vs-TT bit-identity comparison — the gate is the absolute GPQA arm against the CUDA reference
-(`doc/decision_fidelity/gate/gpu_reference.jsonl`, bar **70.71% / 70.20%** flexible-extract over two
-reps, resolution ~0.5–1 pp).
+That leaves **no pending flip**. The full-canvas norm shipped on 2026-07-30 and its flag was deleted
+with it: both of the reasons it stayed opt-in turned out to be measurement errors. It was called "not
+bit-identical" on the strength of a ~2e-6 figure that had no measurement behind it — the real cause was
+ttnn's rmsnorm defaulting to bf16 partial accumulation, and with fp32 accumulation the two shapes agree
+on 0 of 69,206,016 elements. It was called "27% shorter answers", which was a 10-question artifact that
+shrank to −10% at 71 questions and vanished at 198. The 198-question run scored **71.21%** against
+**66.67%** for the previous full run on the same questions, with 0 empty replies and 0 responses over
+the 2% non-Latin threshold. Both former gate scripts (`perf_flip_arm.sh`, `gpqa_span_arm.sh`) are gone
+with their arms.
 
 *Where the time is now.* At 238 ms/step: MoE 75.5, attention 29.6, shared MLP 9.1,
 self-conditioning 2.3 — and **~120 ms outside the layer stack**. Layer matmul is no longer the

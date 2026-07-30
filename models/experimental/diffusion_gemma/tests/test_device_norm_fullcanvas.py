@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""What DG_NORM_FULLCANVAS actually changes, measured — the number the tree never had.
+"""What the full-canvas RMSNorm actually changes, measured — the number the tree never had.
+
+SHIPPED 2026-07-30 as the only path; `DG_NORM_FULLCANVAS` was deleted. These probes compare the
+two ROW COUNTS directly (32 rows vs 256 rows) rather than through the flag, so they still run.
 
 `l1_residency.md` and `norm_fullcanvas_flip_gate.md` both attribute the flag's non-bit-identity to
 "a ~2e-6 bf16 reduction/accumulation-ORDER difference between block_h=8 and 8x block_h=1", citing

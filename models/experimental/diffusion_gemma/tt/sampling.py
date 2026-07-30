@@ -428,7 +428,8 @@ def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk
 #   * global max     — exact (bf16 max of bf16 values does no rounding, order-independent).
 #   * entropy        — distributed logsumexp with the exact shared max; fp32 per-shard partials +
 #     fp32 all-reduce(SUM). NOT bf16-bit-identical (the 262144-length sum is re-associated as
-#     ``TP`` partials), same #48291 class as ``DG_NORM_FULLCANVAS``; decision-gated.
+#     ``TP`` partials), the same #48291 re-association class the full-canvas norm was held back for
+#     until fp32 partials made it bit-identical (see _norm_compute_kernel_config); decision-gated.
 #
 # Trace-safe: no ``ttnn.full`` / ``zeros_like`` (host writes rejected in trace capture) is used in
 # the combine — the tie fold is a masked-min in fp32; the offset constant is preallocated OUTSIDE

@@ -1,7 +1,7 @@
 # DiffusionGemma — L1-residency pass on the denoise hot path (dg-08, #47465)
 
 > **Historical candidate study, not a selected-current result.**
-> `DG_NORM_FULLCANVAS` changed diffusion decisions and failed its flip gate, so
+> `DG_NORM_FULLCANVAS` was believed to change diffusion decisions and failed its flip gate, so
 > its 20.68 t/s number is ineligible for the precision-preserving default.
 > `DG_MOE_L1` was a wash. Current selected-default evidence is
 > `selfcond_logits_l1_e2e.json`.
@@ -63,7 +63,10 @@ same traced RUN-first argmax path (run-to-run block latency varies ~1.5%; the no
 
 > **CORRECTION 2026-07-30 — the "PCC 0.999998 / ~2e-6 reduction-order" figure in this section is
 > wrong by about four orders of magnitude, and it never had a measurement behind it.**
-> `bench_norm_fullcanvas.py` computes PCC as an fp32 dot product and reports values ABOVE 1.0
+> `bench_norm_fullcanvas.py` (DELETED 2026-07-30 -- it drove its A/B by setting the flag, so with the
+> flag gone both arms are identical and it would silently report PCC 1.0 and zero speedup; its
+> replacement is `tests/test_device_norm_fullcanvas.py`) computed PCC as an fp32 dot product over
+> ~720K elements and reported values ABOVE 1.0
 > elsewhere in its own table (1.000015, 1.000050) — impossible for a Pearson correlation, so its
 > resolution floor is ~5e-5, 25x coarser than the number it was cited for. Measured directly on QB2
 > at the shipped shape ([1,1,256,2816] bf16) by
@@ -160,7 +163,7 @@ non-bit-identical bf16 kernels meet 0.997 at 30L") — a per-row-equivalent, pre
 (same dtype/fidelity) numerical path, not a precision reduction.
 
 **Landing decision.** The objective's correctness gate D requires **bit-identical** argmax/accept
-before/after; HIGH-4 does not meet it, so it lands **opt-in, `DG_NORM_FULLCANVAS` default OFF** — the
+before/after; HIGH-4 did not meet it AT THE TIME, so it landed **opt-in, `DG_NORM_FULLCANVAS` default OFF** — the
 default path is byte-unchanged. It is the largest in-repo denoise lever found since the true-sparse
 MoE, and directly refutes the campaign's "norm de-chunking is not fresh headroom" note (that was
 framed against the 137 ms/layer dense state; at tuned MoE the chunked-norm slice/concat glue is a real
@@ -251,7 +254,7 @@ why it is a real +15.8% while the MoE-activation levers are a wash.
   optimize-playbook ceiling #4 / plan.md R0.4/R-new). Both are cross-stage and out of dg-08 scope; the
   meaningful commit-scoped invariant (dg-08 adds nothing to gemma4) holds. Fast-forwarding local `main`
   would make the automated `git diff main` gate checkable again.
-- **Default-flip gate for `DG_NORM_FULLCANVAS` — RUN, FAILED → stays opt-in** (full detail:
+- **Default-flip gate for `DG_NORM_FULLCANVAS` — RUN, FAILED, then OVERTURNED 2026-07-30 → SHIPPED, flag deleted** (full detail:
   `norm_fullcanvas_flip_gate.md`). The dg-05 `decision_agreement.py` harness (chunked default vs
   full-canvas, 30L / 16-step, injected noise, clean argmax, everything pinned except the flag) measured
   **committed clean-argmax match = 0.145** (bar ≥0.95) — ~85% of committed tokens differ from the
@@ -314,5 +317,5 @@ equally #48291-degraded bf16 paths, **not evidence that full-canvas regresses fi
 
 For the +15.8% @48 lever this means full-canvas is a fair, decision-neutral performance win *relative
 to HF fidelity*. This is a single-prompt/seed characterization, not a population equivalence proof,
-and it does not override the landed output-identity gate: `DG_NORM_FULLCANVAS` remains opt-in and
+and it did not override the landed output-identity gate at the time: `DG_NORM_FULLCANVAS` remained opt-in and
 default-OFF because enabling it changes the default output.

@@ -1,4 +1,26 @@
-# DG_NORM_FULLCANVAS default-flip gate — decision fidelity (dg-05 method, #48291) → KEEP OPT-IN
+# DG_NORM_FULLCANVAS default-flip gate — SUPERSEDED 2026-07-30, the flag SHIPPED and was DELETED
+
+> **This gate's verdict was overturned, and the gate itself is now history.** The full-canvas norm is
+> the only path since 2026-07-30; `DG_NORM_FULLCANVAS` no longer exists. Three things closed it:
+>
+> 1. **The premise was void.** This gate ran with `DG_SPARSE_MOE=1`, i.e. on the token-gather denoise
+>    MoE deleted in `7417bd7d69d` because it does not let the trajectory converge at all — which is
+>    exactly why it describes BOTH its arms as "coherent-then-degenerate". `committed_match = 0.145`
+>    was measured between two arms sitting on a broken baseline.
+> 2. **The magnitude was never measured.** "~2e-6/norm, PCC 0.999998" came from a bench that reports
+>    PCC > 1.0 elsewhere in its own table. The real delta was 5.73 bf16 ULP — four orders of magnitude
+>    larger — and its cause was ttnn's rmsnorm defaulting to bf16 partial accumulation, not the
+>    `block_h` difference this document blames. With fp32 accumulation the two shapes are
+>    **bit-identical**: 0 of 69,206,016 elements over 96 device slices.
+> 3. **The full-scale evidence is the opposite of the small-scale evidence.** The "27% shorter answers"
+>    was a 10-question artifact (−10% at 71, gone at 198). The 198-question run with the norm on scored
+>    **71.21%** against **66.67%** for the previous full run on the same questions, with 0 empty
+>    replies and 0 responses over the 2% non-Latin threshold.
+>
+> Everything below is the original 2026-07-27 gate, kept as the record of how it was decided the first
+> time. Do not cite its numbers as current.
+
+## Original gate (2026-07-27) — verdict at the time: KEEP OPT-IN
 
 The dg-08 L1-residency pass landed `DG_NORM_FULLCANVAS` (full-canvas RMSNorm, +15.8% @48 traced)
 **opt-in, default OFF**, because its output is not bit-identical to the chunked-norm default
@@ -89,7 +111,7 @@ a change that large must not be a silent default. **Landing stays opt-in.**
    approach 1.0, and the flip would be safe — at which point early-halt also fires and the whole
    step-count/perf picture changes anyway.
 
-Until then: `DG_NORM_FULLCANVAS` remains opt-in (default OFF); the +15.8% @48 / +23.3% @12 traced win is
+(SUPERSEDED -- see the header: it shipped on 2026-07-30 and the flag is gone.) Until then: `DG_NORM_FULLCANVAS` remains opt-in (default OFF); the +15.8% @48 / +23.3% @12 traced win is
 available to anyone who opts in and accepts the non-bit-identical (but coherent) output.
 
 ## Artifacts

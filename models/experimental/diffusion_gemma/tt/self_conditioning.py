@@ -163,13 +163,15 @@ def _norm_subblock_w(block_w: int) -> int:
     return 1
 
 
-def _width_sharded_rms_norm(chunk, *, weight=None, epsilon: float):
+def _width_sharded_rms_norm(chunk, *, weight=None, epsilon: float, compute_kernel_config=None):
     hidden_size = chunk.shape[-1]
     tile_size = getattr(ttnn, "TILE_SIZE", 32)
     if hidden_size % tile_size != 0 or chunk.shape[-2] != tile_size:
         kwargs = {"epsilon": epsilon, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
         if weight is not None:
             kwargs["weight"] = weight
+        if compute_kernel_config is not None:
+            kwargs["compute_kernel_config"] = compute_kernel_config
         return ttnn.rms_norm(chunk, **kwargs)
     tile_cols = hidden_size // tile_size
     cores = _norm_shard_core_count(hidden_size)
@@ -177,6 +179,8 @@ def _width_sharded_rms_norm(chunk, *, weight=None, epsilon: float):
         kwargs = {"epsilon": epsilon, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
         if weight is not None:
             kwargs["weight"] = weight
+        if compute_kernel_config is not None:
+            kwargs["compute_kernel_config"] = compute_kernel_config
         return ttnn.rms_norm(chunk, **kwargs)
 
     grid = ttnn.CoreGrid(x=cores, y=1)
@@ -204,6 +208,7 @@ def _width_sharded_rms_norm(chunk, *, weight=None, epsilon: float):
         epsilon=epsilon,
         program_config=program_config,
         memory_config=sharded_mem,
+        compute_kernel_config=compute_kernel_config,
     )
     out = ttnn.sharded_to_interleaved(out_sharded, ttnn.DRAM_MEMORY_CONFIG)
     out_sharded.deallocate(True)
@@ -213,11 +218,13 @@ def _width_sharded_rms_norm(chunk, *, weight=None, epsilon: float):
     return out
 
 
-def _rms_norm_dram(tensor, *, weight=None, epsilon: float, chunk_size: int = 32):
+def _rms_norm_dram(tensor, *, weight=None, epsilon: float, chunk_size: int = 32, compute_kernel_config=None):
     norm_input = _dram_for_rms_norm(tensor)
     seq_len = norm_input.shape[-2]
     if seq_len <= chunk_size:
-        out = _width_sharded_rms_norm(norm_input, weight=weight, epsilon=epsilon)
+        out = _width_sharded_rms_norm(
+            norm_input, weight=weight, epsilon=epsilon, compute_kernel_config=compute_kernel_config
+        )
         if norm_input is not tensor:
             norm_input.deallocate(True)
         return out
@@ -231,7 +238,11 @@ def _rms_norm_dram(tensor, *, weight=None, epsilon: float, chunk_size: int = 32)
             [norm_input.shape[0], norm_input.shape[1], end, norm_input.shape[3]],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        chunks.append(_width_sharded_rms_norm(chunk, weight=weight, epsilon=epsilon))
+        chunks.append(
+            _width_sharded_rms_norm(
+                chunk, weight=weight, epsilon=epsilon, compute_kernel_config=compute_kernel_config
+            )
+        )
         chunk.deallocate(True)
     out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     for chunk in chunks:

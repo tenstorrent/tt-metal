@@ -31,6 +31,12 @@ class _FakeTensor:
     def deallocate(self, force):
         self.deallocated = force
 
+    def device(self):
+        # Real tensors have one, and the norm path asks for it to pick a compute kernel config. A
+        # double that omits it only passes while nothing reaches that code -- the same way
+        # _FakeModel without .layers passed until the bounded read stopped being opt-in.
+        return "fake-device"
+
 
 class _FakeAttention:
     """Stand-in for a Gemma4Attention instance (identity marker)."""
@@ -251,7 +257,31 @@ def test_denoise_attn_mask_builder_rejects_missing_sliding_window(expect_error):
         )
 
 
-def test_chunked_norm_forward_slices_canvas_rows(monkeypatch):
+def test_chunked_norm_forward_norms_the_whole_canvas_in_one_op(monkeypatch):
+    """Weighted norms go through the DG-owned sharded norm, the WHOLE canvas in one op.
+
+    They used to call gemma4's `norm.forward` per 32-row slice. They no longer do, for two reasons:
+    that entry point takes no compute_kernel_config and so could only accumulate the 88 per-core
+    partials in bf16, and 8 ops where 1 will do costs -20.4% per block. See
+    _norm_compute_kernel_config for why one op and eight are now bit-identical.
+    """
+    seen = []
+
+    def fake_sharded(norm, hidden, rows):
+        seen.append(rows)
+        return _FakeTensor(hidden.shape)
+
+    monkeypatch.setattr(DF, "_sharded_rms_norm_rows", fake_sharded)
+    norm = SimpleNamespace(with_scale=True, tt_weight=object(), eps=1e-6)
+
+    out = _chunked_norm_forward(norm, _FakeTensor([1, 1, 96, 2816]))
+
+    assert out.shape == [1, 1, 96, 2816]
+    assert seen == [96], "the whole canvas in one op -- DG_NORM_FULLCANVAS was deleted, not defaulted"
+
+
+def test_chunked_norm_forward_falls_back_to_gemma4_when_no_sharded_config_fits(monkeypatch):
+    """A width with no usable core grid must still norm, via the old per-chunk gemma4 path."""
     calls = []
 
     class _FakeTtnn:
@@ -268,42 +298,43 @@ def test_chunked_norm_forward_slices_canvas_rows(monkeypatch):
             return _FakeTensor([1, 1, sum(tensor.shape[2] for tensor in tensors), tensors[0].shape[3]])
 
     class _FakeNorm:
+        with_scale = True
+        tt_weight = object()
+        eps = 1e-6
+
         def forward(self, tensor):
             calls.append(("norm", tensor.shape))
             return _FakeTensor(tensor.shape)
 
     monkeypatch.setattr(DF, "ttnn", _FakeTtnn)
+    monkeypatch.setattr(DF, "_sharded_rms_norm_rows", lambda norm, hidden, rows: None)
 
     out = _chunked_norm_forward(_FakeNorm(), _FakeTensor([1, 1, 96, 2816]))
 
     assert out.shape == [1, 1, 96, 2816]
     assert [call[0] for call in calls] == ["slice", "norm", "slice", "norm", "slice", "norm", "concat"]
-    assert calls[-1] == (
-        "concat",
-        [[1, 1, 32, 2816], [1, 1, 32, 2816], [1, 1, 32, 2816]],
-        2,
-        "dram",
-    )
 
 
 def test_chunked_norm_forward_uses_sharded_scaleless_norm(monkeypatch):
     calls = []
 
-    def fake_rms_norm_dram(tensor, *, epsilon, chunk_size):
-        calls.append((tensor.shape, epsilon, chunk_size))
+    def fake_rms_norm_dram(tensor, *, epsilon, chunk_size, compute_kernel_config=None):
+        calls.append((tensor.shape, epsilon, chunk_size, compute_kernel_config))
         return _FakeTensor(tensor.shape)
 
     monkeypatch.setattr(DF, "_rms_norm_dram", fake_rms_norm_dram)
+    monkeypatch.setattr(DF, "_norm_compute_kernel_config", lambda device: "fp32-acc")
     norm = SimpleNamespace(with_scale=False, tt_weight=None, eps=1e-6)
 
     out = _chunked_norm_forward(norm, _FakeTensor([1, 1, 96, 2816]))
 
     assert out.shape == [1, 1, 96, 2816]
-    assert calls == [([1, 1, 96, 2816], 1e-6, 32)]
+    # The scaleless path must ALSO get fp32 accumulation -- it is a denoise norm like any other.
+    assert calls == [([1, 1, 96, 2816], 1e-6, 32, "fp32-acc")]
 
 
 def test_fullcanvas_must_not_capture_the_scaleless_router_norm(monkeypatch):
-    """DG_NORM_FULLCANVAS must leave the weightless MoE-router norm on its own path.
+    """The full-canvas path must leave the weightless MoE-router norm on its own path.
 
     The scaleless test used to sit BELOW the full-canvas attempt, so with the flag on the router norm
     was routed into _fullcanvas_norm and never reached _rms_norm_dram -- silently swapping its
@@ -311,18 +342,18 @@ def test_fullcanvas_must_not_capture_the_scaleless_router_norm(monkeypatch):
     A flag named "full canvas" re-sharding an unrelated norm by ordering alone is the bug; this pins
     the ordering. The previous test does not catch it because it never sets the flag.
     """
-    monkeypatch.setenv("DG_NORM_FULLCANVAS", "1")
     calls = []
 
-    def fake_rms_norm_dram(tensor, *, epsilon, chunk_size):
+    def fake_rms_norm_dram(tensor, *, epsilon, chunk_size, compute_kernel_config=None):
         calls.append((tensor.shape, epsilon, chunk_size))
         return _FakeTensor(tensor.shape)
 
-    def fail_fullcanvas(norm, hidden_states):
-        raise AssertionError("a scaleless norm must not reach _fullcanvas_norm")
+    def fail_sharded(norm, hidden_states, rows):
+        raise AssertionError("a scaleless norm must not reach the weighted sharded path")
 
     monkeypatch.setattr(DF, "_rms_norm_dram", fake_rms_norm_dram)
-    monkeypatch.setattr(DF, "_fullcanvas_norm", fail_fullcanvas)
+    monkeypatch.setattr(DF, "_sharded_rms_norm_rows", fail_sharded)
+    monkeypatch.setattr(DF, "_norm_compute_kernel_config", lambda device: "fp32-acc")
     norm = SimpleNamespace(with_scale=False, tt_weight=None, eps=1e-6)
 
     out = _chunked_norm_forward(norm, _FakeTensor([1, 1, 256, 2816]))
@@ -331,22 +362,31 @@ def test_fullcanvas_must_not_capture_the_scaleless_router_norm(monkeypatch):
     assert calls == [([1, 1, 256, 2816], 1e-6, 32)]
 
 
-def test_fullcanvas_still_takes_weighted_norms(monkeypatch):
-    """The other half of the ordering: a WEIGHTED norm must still reach the full-canvas path."""
-    monkeypatch.setenv("DG_NORM_FULLCANVAS", "1")
+def test_the_deleted_fullcanvas_flag_stays_deleted(monkeypatch):
+    """DG_NORM_FULLCANVAS is gone; setting it either way must not change anything.
+
+    It was default OFF for two reasons, both refuted by measurement. (1) The two shapes were not
+    bit-identical -- true only because ttnn's rmsnorm accumulates partials in bf16 by default; under
+    fp32 accumulation they agree on 0 of 69,206,016 elements. (2) It made answers 27% shorter -- a
+    10-question artifact that shrank to -10% at 71 and vanished at 198, where the run was in fact
+    LONGER (11,069 chars) and scored 71.21% vs 66.67% for the previous full run on the same
+    questions. Reintroducing the selector is a deliberate act that should have to delete this test.
+    """
+    assert not hasattr(DF, "_norm_fullcanvas_enabled"), "the DG_NORM_FULLCANVAS gate is back"
     seen = []
 
-    def fake_fullcanvas(norm, hidden_states):
-        seen.append(hidden_states.shape)
-        return _FakeTensor(hidden_states.shape)
+    def fake_sharded(norm, hidden, rows):
+        seen.append(rows)
+        return _FakeTensor(hidden.shape)
 
-    monkeypatch.setattr(DF, "_fullcanvas_norm", fake_fullcanvas)
+    monkeypatch.setattr(DF, "_sharded_rms_norm_rows", fake_sharded)
     norm = SimpleNamespace(with_scale=True, tt_weight=object(), eps=1e-6)
 
-    out = _chunked_norm_forward(norm, _FakeTensor([1, 1, 256, 2816]))
+    for value in ("0", "1"):
+        monkeypatch.setenv("DG_NORM_FULLCANVAS", value)
+        _chunked_norm_forward(norm, _FakeTensor([1, 1, 256, 2816]))
 
-    assert out.shape == [1, 1, 256, 2816]
-    assert seen == [[1, 1, 256, 2816]]
+    assert seen == [256, 256], "the stale flag must be inert in both directions"
 
 
 def test_denoise_hidden_forward_reads_and_deallocates_lazy_prompt_sources(monkeypatch):

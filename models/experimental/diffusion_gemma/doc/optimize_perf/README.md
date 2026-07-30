@@ -58,6 +58,19 @@ Current guardrails:
   path. The OPT-004 geometry numbers ("3.47x / ~13x") were C=32 measurements of a path that no longer
   exists — they are provenance, not guidance. See `winter_borrow_20260727.md` and
   `flag_triage_20260728.md` for the history.
+- **The denoise RMSNorm runs the whole 256-row canvas in ONE width-sharded op**, and
+  `DG_NORM_FULLCANVAS` was DELETED with the choice on 2026-07-30 — setting it does nothing. It was
+  held opt-in by two claims, both of which were measurement errors. "Not bit-identical, ~2e-6/norm
+  (PCC 0.999998)": that figure came from a bench that reports PCC > 1.0 elsewhere, so its floor is
+  ~5e-5; measured properly the delta was 5.73 bf16 ULP, and its cause was ttnn's rmsnorm defaulting to
+  **bf16 partial accumulation** (`fp32_acc=false`) — no DG or gemma4 norm had ever passed a
+  `compute_kernel_config`. With fp32 accumulation the 256-row and 8x32-row shapes are bit-identical
+  (0 of 69,206,016 elements over 96 device slices, vs 13.0% at bf16) and the norm is 2.8x more
+  accurate against an fp64 reference, at −2.3% cost. "Answers get 27% shorter": a 10-question
+  artifact — −10% at 71 questions, gone at 198, where the run was LONGER (11,069 chars) and scored
+  **71.21% vs 66.67%** for the previous full run on the same 198. See
+  `tests/test_device_norm_fullcanvas.py` for the measurements and `norm_fullcanvas_flip_gate.md` for
+  why the original gate was void.
 - The current pure full-depth 64K-build artifact is
   `context_window_prefill_only_chunkedlong_20260713_msl65536.{json,md}`:
   1K 0.78 s, 4K 1.37 s, 8K 4.15 s, 16K 5.55 s, 32K 10.84 s, 64K 35.58 s.
@@ -128,8 +141,9 @@ not a traced-serving mode.
 > commit, traced denoise, and the L1-residency pass. Do not quote them as the
 > model current at that revision. The 2026-07-10 final unset-default reproduction is
 > **18.844 t/s @48**; the
-> `DG_NORM_FULLCANVAS=1` measured 20.68 t/s historically but failed its
-> decision-fidelity flip gate and is ineligible as the selected default. Start with
+> the full-canvas norm measured 20.68 t/s historically and was long held back by a flip gate it
+> "failed"; that gate rested on a magnitude with no measurement behind it, and the norm **shipped as
+> the only path on 2026-07-30** (`DG_NORM_FULLCANVAS` deleted). Start with
 > `perf_campaign_worklog.md`, `selfcond_logits_l1.md`, `selfcond_prechunk.md`,
 > `l1_residency.md`, and `early_halt.md`.
 
