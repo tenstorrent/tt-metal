@@ -560,11 +560,11 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
     return desc;
 }
 
-void RollDeviceOperation::override_runtime_arguments(
+void RollShardedProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    const RollParams& operation_attributes,
+    const RollInputs& tensor_args,
+    Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Buffer addresses and bank ids move per dispatch, so re-run the planner -- create_descriptor's own
     // source of truth -- and write its args into the cached program instead of rebuilding it.
