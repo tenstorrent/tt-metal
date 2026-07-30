@@ -757,6 +757,21 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                             Mt,
                             per_core_M,
                             num_blocks_y);
+                    } else {
+                        // mcast_in1's sender-writer at start_core does not clamp its H-loop to Mt;
+                        // it always emits per_core_M tile-rows. When per_core_M > Mt the tail rows
+                        // land past the end of the output DRAM buffer and silently corrupt
+                        // neighboring allocations. mcast_in0 is safe here because its factory
+                        // explicitly derives in0_last_per_core_M = min(M, per_core_M) and pushes
+                        // the clamped H count into the sender-writer runtime args.
+                        TT_FATAL(
+                            per_core_M <= Mt,
+                            "{}: mcast_in1 requires per_core_M ({}) <= Mt ({}); the mcast_in1 "
+                            "sender-writer path does not clamp H at start_core and would write "
+                            "out of bounds.",
+                            config_name,
+                            per_core_M,
+                            Mt);
                     }
                     check_output_shard_grid_within_extent(output_mem_config, grid, config_name);
                 }
@@ -792,6 +807,18 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                     config_name,
                     num_blocks_y,
                     grid.y);
+                // The 2D reuse-mcast sender-writer path (used by every core in the M-column when
+                // num_blocks_y == 1) does not clamp its H-loop to Mt; it always emits per_core_M
+                // tile-rows. When per_core_M > Mt the tail (per_core_M - Mt) rows land past the
+                // end of the output DRAM buffer and silently corrupt whatever is allocated after
+                // it. Reject the config here rather than let it OOB at runtime.
+                TT_FATAL(
+                    program_config.per_core_M <= Mt,
+                    "{}: per_core_M ({}) must be <= Mt ({}); the 2D reuse-mcast sender-writer "
+                    "path does not clamp H for last-row cores and would write out of bounds.",
+                    config_name,
+                    program_config.per_core_M,
+                    Mt);
                 check_output_shard_grid_within_extent(output_mem_config, grid, config_name);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
