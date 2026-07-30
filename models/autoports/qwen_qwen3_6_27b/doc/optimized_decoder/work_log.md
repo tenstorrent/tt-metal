@@ -105,3 +105,11 @@ Limitations: decode contains one necessary sharded-to-interleaved crossing at
 narrow packed-output slicing boundaries. Linear gated-delta tilize/untilize
 traffic remains necessary until TTNN has a dedicated composite. Host timings
 are not taken from watcher or profiler runs.
+
+## Local checkpoints
+
+- Fused-decoder starting point: `ea7b667c09d`
+- Optimized decoder implementation and reviewed docs: `a864ec4e7c3`
+
+The following bookkeeping commit adds the ignored evidence logs and records
+these checkpoint identifiers. Nothing was pushed.
