@@ -37,3 +37,6 @@ Date: 2026-07-30 UTC
 - Final shipped-default result is 0.667609 ms B1 and 0.830255 ms B32. Faster
   numbers in projection screening logs are rejected experimental composites,
   not the shipped default.
+- Independent final stage review: `clean-pass`; see `stage_review.md`.
+- Local stage checkpoint on branch `skillexp-cell/fuse-noadvise/phi`:
+  `04d269d3601`. No push was performed.
