@@ -631,11 +631,6 @@ single transfer.
 | `reset_*_cache` | H2D | reset conv streaming caches for a fresh generation |
 | `torch.randn(max_steps,…)` | hostCPU | pre-draw all diffusion init noise, then upload once as a gather table (RNG-aligned; `ttnn.randn` on device under `VV_TTNN_RANDN=1`) |
 | first `_greedy_argmax` | D2H | first token after prefill |
-| `cat(audio_chunks)` / build `sequences` / output | hostCPU | assemble final waveform + token sequence. Peaks at ~2× the audio (~1.15 GB for a 100-min render) |
-
-The prefill embed scatter is **not** a host op: splicing the voice embeds into the text embeds' speech
-slots runs entirely on device as slice/concat over the mask's contiguous runs
-(`_scatter_speech_embeds`), replacing a ~141 MB D2H + boolean-mask assign + ~141 MB H2D.
 
 ## Known limitations
 
@@ -717,17 +712,7 @@ model: `vibevoice-1.5b`** (optionally system-type `bh_p150b_civ2`).
 
 ## Upstream references
 
-Model-level facts in this README (context length, frame rate, compression, speaker limit, diffusion
-settings, language support, SIM methodology) are taken from these sources:
-
-| Source | Used for |
-|--------|----------|
-| [VibeVoice Technical Report (arXiv:2508.19205)](https://arxiv.org/abs/2508.19205) | 64K context ("up to 90 minutes in a 64K context window", curriculum 4,096 → 65,536 tokens), 3200× / 7.5 Hz tokenizer, sigma-VAE design, ~340M params per tokenizer encoder/decoder, 4-layer diffusion head, **guidance scale 1.3 and 10 denoising steps**, DPM-Solver++ sampler, SIM-O via WavLM-large, Section 4 limitations |
-| [microsoft/VibeVoice-1.5B model card](https://huggingface.co/microsoft/VibeVoice-1.5B) | "Context Length: 64K", "~90 min", "up to 4 distinct speakers", Qwen2.5-1.5B backbone, 24 kHz / 3200× downsampling, diffusion head "4 layers, ~123M parameters", risks |
-| `weights/VibeVoice-1.5B/config.json` (checkpoint, commit `c00898d2`) | Authoritative per-field values: `max_position_embeddings: 65536`, decoder dims, `v_prediction`, cosine beta schedule, `vae_dim` / `fix_std` per tokenizer |
-| [github.com/microsoft/VibeVoice](https://github.com/microsoft/VibeVoice) | Project scope and model variants (the ASR-7B and Realtime-0.5B variants are **not** covered by this port) |
-| [microsoft.github.io/VibeVoice](https://microsoft.github.io/VibeVoice/) | Project page framing; also records that Microsoft temporarily disabled the original repo after out-of-scope use — which is why demo assets are fetched from the `vibevoice-community/VibeVoice` fork |
-
-> Third-party aggregator sites (e.g. `vibevoice.online`) carry claims that **contradict** the paper and
-> model card — multi-language support beyond English/Chinese, "50+ voices", 48 kHz output, sub-200 ms
-> latency. Do not use them as a specification source for this model.
+- [VibeVoice Technical Report (arXiv:2508.19205)](https://arxiv.org/abs/2508.19205)
+- [microsoft/VibeVoice-1.5B model card](https://huggingface.co/microsoft/VibeVoice-1.5B)
+- [github.com/microsoft/VibeVoice](https://github.com/microsoft/VibeVoice)
+- [microsoft.github.io/VibeVoice](https://microsoft.github.io/VibeVoice/)
