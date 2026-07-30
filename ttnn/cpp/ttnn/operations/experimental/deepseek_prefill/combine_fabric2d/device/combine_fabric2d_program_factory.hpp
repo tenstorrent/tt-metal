@@ -53,6 +53,11 @@ struct CombineFabric2dWorkerTelemetry {
     uint64_t t_last_send = 0;   // ... the last token
     uint64_t t_drained = 0;     // ... when the EDM drain proved every payload packet reached the far chip.
                                 // An upper bound on the transfer where t_last_send is the lower one.
+    // Whole-kernel span: producer entry (before the fabric connection is opened) to exit (after it is
+    // closed). t_last_send - t_first_send is the send loop alone; this pair brackets everything, so it is
+    // what total-time optimisation is measured against.
+    uint64_t t_kernel_start = 0;
+    uint64_t t_kernel_end = 0;
 
     // How many header-only fillers the drain needed (= edm_slots - 1), and where this producer wrote.
     uint32_t drain_packets = 0;
