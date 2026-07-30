@@ -23,9 +23,12 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
-    // --delay is the KNEE knob: uniform per-zone spin count (wall-clock ticks). 0 = graduated ~1..100 us
-    // durations, the representative-capture default. Smaller --delay = higher marker rate per lane.
+    // --delay is the KNEE knob: uniform nop-iterations per zone, the SAME unit as test_x280_realprof
+    // --proddelay, so 0 means MAX RATE (no spin) exactly as it does there. Smaller = higher marker rate.
+    // Omitting --delay entirely selects the graduated ~1..100 us wall-clock durations, which is the right
+    // default for a representative capture -- graduated is a separate MODE, not a magic --delay value.
     uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;  // small grid + modest iters keep the run quick
+    bool knee_mode = false;                               // set by --delay, including --delay 0
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i];
         uint32_t v = (uint32_t)std::strtoul(argv[i + 1], nullptr, 10);
@@ -37,6 +40,7 @@ int main(int argc, char** argv) {
             n_iters = v;
         } else if (a == "--delay") {
             zone_cyc = v;
+            knee_mode = true;  // NOT `zone_cyc != 0`: --delay 0 is a real knee point (max rate)
         }
     }
 
@@ -58,7 +62,9 @@ int main(int argc, char** argv) {
     }
     CoreRange cores(CoreCoord{0, 0}, CoreCoord{gx - 1, gy - 1});
     std::map<std::string, std::string> defs{
-        {"N_ITERS", std::to_string(n_iters) + "u"}, {"ZONE_CYC", std::to_string(zone_cyc) + "u"}};
+        {"N_ITERS", std::to_string(n_iters) + "u"},
+        {"ZONE_MODE", knee_mode ? "1" : "0"},
+        {"ZONE_CYC", std::to_string(zone_cyc) + "u"}};
     const std::string kdir = "tt_metal/programming_examples/profiler/test_perf_debug_zones/kernels/";
 
     // BRISC (RISCV_0) + NCRISC (RISCV_1): the data-movement zone kernel (tags BR_/NC_).
@@ -89,15 +95,15 @@ int main(int argc, char** argv) {
         lanes,
         (unsigned long long)markers,
         zone_cyc,
-        zone_cyc ? "uniform nop-spin: knee mode" : "graduated ~1..100us wall-clock");
-    if (zone_cyc) {
+        knee_mode ? "uniform nop-spin: knee mode" : "graduated ~1..100us wall-clock");
+    if (knee_mode) {
         // No tick-derived rate here on purpose: --delay is nop LOOP ITERATIONS over a volatile counter
         // (same unit as test_x280_realprof --proddelay), and one iteration is several cycles, so markers/s
         // cannot be derived from it without measuring cycles-per-iteration. Printing a tick-derived rate is
         // what previously made this knee look ~30x worse than the harness's.
         printf(
             "[perf-debug zones]   --delay=%u nop-iterations/zone (same unit as test_x280_realprof "
-            "--proddelay)\n",
+            "--proddelay; 0 = max rate)\n",
             zone_cyc);
     }
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);

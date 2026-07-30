@@ -17,6 +17,12 @@
 // a single number (2 markers per zone, so ~2 * aiclk / ZONE_CYC markers/s), and every lane runs at that
 // same rate. Graduated durations would smear the knee, because the instantaneous aggregate rate would
 // swing through the sweep of durations instead of holding at the peak.
+// ZONE_MODE selects the zone body; ZONE_CYC is the nop-iteration count used when ZONE_MODE == 1.
+// These are SEPARATE on purpose: ZONE_CYC == 0 is a legitimate knee point (max rate, no spin at all), the
+// same as test_x280_realprof --proddelay 0, so it must not double as "use the graduated table".
+#ifndef ZONE_MODE
+#define ZONE_MODE 0  // 0 = graduated wall-clock durations, 1 = uniform nop spin (knee sweeps)
+#endif
 #ifndef ZONE_CYC
 #define ZONE_CYC 0u
 #endif
@@ -44,7 +50,7 @@
         }                                                                                          \
     }
 
-// KNEE body (ZONE_CYC != 0): byte-identical to test_x280_realprof's producer loop (realprof_dm.cpp,
+// KNEE body (ZONE_MODE == 1): byte-identical to test_x280_realprof's producer loop (realprof_dm.cpp,
 // WORK_SIZE), so ZONE_CYC and that test's --proddelay are the SAME UNIT and the two knees are directly
 // comparable. The counter MUST stay `volatile`: that is what forces a load/increment/store/compare per
 // iteration, so one iteration costs several cycles rather than a single nop. Do NOT turn this into a
@@ -58,9 +64,9 @@
         }                                                                 \
     }
 
-// GRADUATED keeps the wall-clock spin (ZONE_WALL above): its point is durations calibrated in microseconds
-// for a representative capture, which a nop-iteration count cannot express.
-#if ZONE_CYC
+// GRADUATED (ZONE_MODE == 0) keeps the wall-clock spin (ZONE_WALL above): its point is durations calibrated in
+// microseconds for a representative capture, which a nop-iteration count cannot express.
+#if ZONE_MODE
 #define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)
 #else
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
