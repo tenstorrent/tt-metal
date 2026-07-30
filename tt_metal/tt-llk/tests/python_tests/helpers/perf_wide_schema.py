@@ -18,10 +18,13 @@ Every OUTPUT column is nullable: a test fills the columns it uses and leaves the
 rest NULL. New columns (Quasar, counters/metrics, new params) are added later as
 nullable — a non-breaking change — so this v1 need not be complete.
 
-Import-free on purpose (no device libraries) so it loads/validates without hardware.
+No device libraries (only the pure ``perf_schema`` helpers) so it loads/validates
+without hardware.
 """
 
 from dataclasses import dataclass
+
+from .perf_schema import MEAN, STD, stat_column
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,28 @@ class Column:
     dtype: str  # int64 | float64 | bool | string
     nullable: bool
     category: str
+
+
+# Timing columns are FORMULA-DRIVEN, not sampled: the profiler emits
+# ``mean(<base>)`` for every run type and ``std(<base>)`` whenever that run type
+# runs >= 2 iterations. Different tests/configs run different iteration counts,
+# so across the corpus std can appear for ANY base. We therefore enumerate the
+# COMPLETE {mean, std} x base grid rather than whatever one nightly happened to
+# produce — otherwise the schema is an accidental subset (e.g. it once lacked
+# ``std(MATH_ISOLATE)``, which a real multi-run report legitimately emits).
+_TIMING_BASES = (
+    "L1_TO_L1",
+    "UNPACK_ISOLATE",
+    "MATH_ISOLATE",
+    "PACK_ISOLATE",
+    "L1_CONGESTION[UNPACK]",
+    "L1_CONGESTION[PACK]",
+)
+_TIMING_COLUMNS = [
+    Column(stat_column(base, kind), "float64", True, "timing")
+    for base in _TIMING_BASES
+    for kind in (MEAN, STD)
+]
 
 
 # ── Output schema: columns a perf test produces (validate reports against this) ──
@@ -97,15 +122,8 @@ OUTPUT_SCHEMA = [
     Column("unpack_transpose_faces", "string", True, "configuration"),
     Column("unpack_transpose_within_face", "string", True, "configuration"),
     Column("value_bits", "int64", True, "configuration"),
-    # timing
-    Column("mean(L1_CONGESTION[PACK])", "float64", True, "timing"),
-    Column("mean(L1_CONGESTION[UNPACK])", "float64", True, "timing"),
-    Column("mean(L1_TO_L1)", "float64", True, "timing"),
-    Column("mean(MATH_ISOLATE)", "float64", True, "timing"),
-    Column("mean(PACK_ISOLATE)", "float64", True, "timing"),
-    Column("mean(UNPACK_ISOLATE)", "float64", True, "timing"),
-    Column("std(L1_TO_L1)", "float64", True, "timing"),
-    Column("std(PACK_ISOLATE)", "float64", True, "timing"),
+    # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
+    *_TIMING_COLUMNS,
     # code_size
     Column("TEXT_SIZE(L1_TO_L1)", "int64", True, "code_size"),
     Column("TEXT_SIZE(MATH_ISOLATE)", "int64", True, "code_size"),
