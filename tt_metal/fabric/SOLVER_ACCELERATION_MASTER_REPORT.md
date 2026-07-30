@@ -63,13 +63,16 @@ enumeration (MIN_MODE=3 + GIMSATUL, `-n 20`, 40-min cap):
 | 2x4 stages | time to 1st solution | solutions in 40 min | production baseline |
 |---:|--:|--:|--:|
 | 96  | **6s** | 4 | **0** |
-| 112 | (fast) | 3 | **0** |
+| 112 | 390s | 3 | **0** |
 | 128 | **101s** | 1 | **0** |
-| 144 | (running) | -- | **0** |
+| 144 | **63s** | 1 (done in 64s, rc=0) | **0** |
 
 - gimsatul **breaks through the "can't find solution 1" wall** that gives production 0 -> 1-4 > 0. Real win.
 - But the **super-linear tail** means it stalls after a few: 128 got #1 in 101s then no #2 in the remaining ~38 min.
   So it does NOT reach 20 on the hard cases -- it converts "0 solutions" into "a few solutions".
+- **144 is special:** full fill uses ALL 36 hosts in every solution, so under distinct-host-set dedup there is
+  effectively ONE distinct solution -> enumeration finished cleanly in 64s (rc=0), first solution at 63s. The 144
+  "0 in production" was purely the can't-find-#1 wall; gimsatul-prime fully solves it (1 distinct solution, 64s).
 
 ## 6. Partitioned-parallel (pin stage-0) -- NEGATIVE for single hard solve
 Split by pinning stage-0 placement (vars 1..144, the first exactly-one group), solve buckets in parallel with plain
