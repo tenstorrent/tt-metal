@@ -122,5 +122,7 @@
   candidate's correctness, performance, and canonical-cache decode controls.
 - `tt-smi` was unavailable. Hardware commands were timeout-bounded and all
   device-close logs completed.
-- Local commit SHA(s) are appended after clean independent review. No push is
-  performed.
+- Stage implementation/evidence commit:
+  `13eebb362f1c02b5ba9b8a5a45769c04ba4d4d3a`. The follow-up checkpoint adds
+  this SHA log plus the two required large reproducibility artifacts. No push
+  is performed.
