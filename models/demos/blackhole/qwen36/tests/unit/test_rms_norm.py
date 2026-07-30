@@ -21,11 +21,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import compute_pcc
 from models.demos.blackhole.qwen36.tt.rms_norm import rms_norm_ttnn
 
-pytestmark = run_for_blackhole()
+pytestmark = run_for_wormhole_b0_or_blackhole()
 EPS = 1e-6
 PCC_THRESHOLD = 0.999  # measured ~0.99999 across all shapes on Blackhole
 
