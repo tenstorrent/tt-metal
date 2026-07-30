@@ -52,6 +52,7 @@ enum class EnvVarID {
 
     TT_METAL_CACHE,                           // Cache directory for compiled kernels
     TT_METAL_CACHE_MAX_SIZE,                  // Size cap on the kernel cache directory
+    TT_METAL_CACHE_RECLAIM_UNCLAIMED,         // Allow evicting cache trees with no in-use marker
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
@@ -443,13 +444,28 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 0, meaning no cap and therefore no automatic eviction.
         // Usage: export TT_METAL_CACHE_MAX_SIZE=50G
         //
-        // Both cache variables delegate to disk_cache_apply_env so that one parser and
-        // one error policy (warn and keep the default -- never abort a process over a cache
-        // tuning knob) govern both the runtime and the tt-metal-cache CLI.
+        // Both cache variables delegate to disk_cache_apply_env, so one parser and one error
+        // policy -- warn and keep the default, never abort a process over a cache tuning knob --
+        // govern them.
         case EnvVarID::TT_METAL_CACHE_MAX_SIZE: {
             tt::tt_metal::DiskCacheConfig parsed;
-            tt::tt_metal::disk_cache_apply_env(parsed, value);
+            tt::tt_metal::disk_cache_apply_env(parsed, value, nullptr);
             this->cache_max_size_bytes_ = parsed.max_size_bytes;
+            break;
+        }
+
+        // TT_METAL_CACHE_RECLAIM_UNCLAIMED
+        // Allow the kernel cache to evict directories that carry no in-use marker, i.e. trees
+        // written by tt-metal builds that predate it. Such a tree cannot be told apart from one
+        // an older build is reading right now, so this must be asserted by someone who knows
+        // none is running. Without it a cache that predates this mechanism cannot be brought
+        // under TT_METAL_CACHE_MAX_SIZE at all.
+        // Default: false
+        // Usage: export TT_METAL_CACHE_RECLAIM_UNCLAIMED=1
+        case EnvVarID::TT_METAL_CACHE_RECLAIM_UNCLAIMED: {
+            tt::tt_metal::DiskCacheConfig parsed;
+            tt::tt_metal::disk_cache_apply_env(parsed, nullptr, value);
+            this->cache_reclaim_unclaimed_ = parsed.reclaim_unclaimable;
             break;
         }
 

@@ -92,6 +92,7 @@ DiskCacheConfig make_disk_cache_config(const tt::llrt::RunTimeOptions& rtoptions
     DiskCacheConfig config;
     config.root = cache_root;
     config.max_size_bytes = rtoptions.get_cache_max_size_bytes();
+    config.reclaim_unclaimable = rtoptions.get_cache_reclaim_unclaimed();
     return config;
 }
 
@@ -350,7 +351,8 @@ void JitBuildEnv::init(
 
     build_key_ = hasher.digest();
 
-    const std::string entry_root = fmt::format("{}{}", this->out_root_, build_key_);
+    this->cache_entry_root_ = fmt::format("{}{}", this->out_root_, build_key_);
+    const std::string& entry_root = this->cache_entry_root_;
     this->out_firmware_root_ = entry_root + "/firmware/";
     this->out_kernel_root_ = entry_root + "/kernels/";
     this->firmware_binary_root_ = this->out_firmware_root_;
@@ -362,6 +364,12 @@ void JitBuildEnv::init(
     disk_cache_hold_entry_for_process(entry_root);
     disk_cache_touch(entry_root);
     disk_cache_trim_in_background(make_disk_cache_config(rtoptions, this->out_root_));
+}
+
+void JitBuildEnv::mark_cache_entry_used() const {
+    if (!cache_entry_root_.empty()) {
+        disk_cache_touch(cache_entry_root_);
+    }
 }
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, const Hal& hal) :

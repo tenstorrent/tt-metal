@@ -13,12 +13,11 @@ namespace tt::tt_metal::experimental {
  * compiled in this process.
  *
  * Note: This only clears the in-memory HashLookup cache. To also clear disk-cached kernel
- * binaries, run `tt-metal-cache clear`, which evicts every entry in the cache root that no
- * live process is using. The cache root is <tt-metal-cache>/<build_key>/kernels/, but treat
- * that layout as an implementation detail and go through the CLI.
+ * binaries, delete the per-build-key directories under the cache root, which is
+ * $TT_METAL_CACHE/tt-metal-cache/ when that is set and ~/.cache/tt-metal-cache/ otherwise.
  *
- * The disk cache also bounds itself: entries are evicted least recently used first once it
- * exceeds TT_METAL_CACHE_MAX_SIZE.
+ * The disk cache can also bound itself: setting TT_METAL_CACHE_MAX_SIZE evicts whole build-key
+ * directories, least recently used first, once the root exceeds it.
  *
  * Return value: void
  */

@@ -27,12 +27,17 @@
 //   <root>/.last_trim           when this root was last swept
 //   <root>/.trash/<unique>      entries staged for deletion
 //
-// Only entries carrying .inuse are eviction candidates. That file is created by
-// DiskCacheEntryLock the first time a lock-aware build claims the tree, so its presence means
-// "a build that participates in the locking protocol has used this". Trees left by binaries
-// that predate this component have none and are therefore never touched; they are adopted as
-// current builds reuse them. That is also the guard against a mistyped root: an arbitrary
-// directory's children carry no .inuse, so nothing is a candidate.
+// Every child directory is measured, but only those carrying .inuse are eviction candidates.
+// That file is created by DiskCacheEntryLock the first time a lock-aware build claims the tree,
+// so its presence means "a build that participates in the locking protocol has used this".
+// Trees left by binaries that predate this component have none and cannot be told apart from a
+// tree such a build is reading, so they are not evicted unless reclaim_unclaimable says so.
+// They are still counted, because a bound that ignored whatever the cache already held would
+// not bound anything on a machine that has one. When they alone exceed the bound, a trim
+// reports that and evicts nothing rather than churning trees it can reclaim to no effect.
+//
+// Requiring .inuse is also the guard against a mistyped root: an arbitrary directory's children
+// carry none, so nothing is a candidate there.
 //
 // Recency comes from the .last_used stamp, not atime, which is unusable on machines mounted
 // relatime or noatime and unreliable on NFS.
@@ -48,6 +53,12 @@
 //   - Eviction renames the entry into .trash, releases the entry lock, and only then removes
 //     the staged tree. A partly deleted tree is therefore never visible as a cache hit, and a
 //     waiting process blocks on a rename rather than on a recursive delete.
+//
+// Known limitation: the safety of eviction rests on flock being coherent between the holder and
+// the trimmer, which it is not across hosts on an NFS mount using local_lock. A trimmer on one
+// host can then evict a tree another host is compiling into. This is a documented reason not to
+// bound a shared network root rather than something detected here -- and a reason the default is
+// no bound, since the default root, $HOME/.cache, is an NFS home on many clusters.
 //
 // Nothing here throws on filesystem failure: a cache that cannot be trimmed is a disk-space
 // problem, not a correctness problem, and must never fail a compile.
@@ -73,6 +84,13 @@ struct DiskCacheConfig {
     uint64_t max_size_bytes = 0;
 
     std::chrono::seconds min_eviction_age = kDiskCacheMinEvictionAge;
+
+    // Allow evicting directories that carry no .inuse marker. They were written by builds that
+    // predate the locking protocol, so one cannot be distinguished from a tree such a build is
+    // reading right now -- which is why this is off by default and must be asserted explicitly,
+    // via TT_METAL_CACHE_RECLAIM_UNCLAIMED, by someone who knows no older build is running.
+    // Without it a cache that predates this component cannot be brought under its bound at all.
+    bool reclaim_unclaimable = false;
 };
 
 struct DiskCacheEntry {
@@ -88,10 +106,23 @@ struct DiskCacheEntry {
 
     // True when another live process holds the shared .inuse lock.
     bool in_use = false;
+
+    // True when the directory carries .inuse, i.e. a build that participates in the locking
+    // protocol has used it. A directory without it may be in use by a binary predating that
+    // protocol, and cannot be told apart from an abandoned one, so it is measured but not
+    // evicted unless reclaim_unclaimable says otherwise.
+    bool claimable = false;
 };
 
 struct DiskCacheStats {
+    // Every entry, claimable or not, so this can be compared against du.
     uint64_t total_size_bytes = 0;
+
+    // The portion of the above that no build has claimed. Ordinarily not evictable, so a bound
+    // smaller than this cannot be reached; reported so that is visible rather than silent.
+    uint64_t unclaimable_size_bytes = 0;
+    size_t unclaimable_entries = 0;
+
     // Least recently used first, which is eviction order.
     std::vector<DiskCacheEntry> entries;
 };
@@ -104,6 +135,7 @@ struct DiskCacheTrimResult {
     size_t entries_removed = 0;
     size_t entries_skipped_in_use = 0;
     size_t entries_skipped_too_young = 0;
+    size_t entries_skipped_unclaimable = 0;
     // Set when the pass stopped rather than empty the cache; the bound is then still exceeded.
     size_t entries_kept_as_working_set = 0;
 
@@ -115,6 +147,9 @@ enum class DiskCacheEviction : uint8_t {
     Evict,
     KeepInUse,
     KeepTooYoung,
+    // No .inuse marker and reclaim_unclaimable is off, so it cannot be told apart from a tree an
+    // older build is reading.
+    KeepUnclaimable,
     // Evicting this would empty the cache. An entry larger than the bound can never satisfy
     // it, so evicting would only have the next run regenerate it and the next trim remove it
     // again. Keeping the last one costs one entry's overshoot and buys termination.
@@ -139,9 +174,10 @@ DiskCacheEviction disk_cache_decide_eviction(
 // /tmp/tt-metal-cache-<uid>/. Always ends in a separator.
 std::filesystem::path default_kernel_cache_root();
 
-// Apply TT_METAL_CACHE_MAX_SIZE. Deliberately forgiving: an empty or unparseable value warns
-// and leaves the default, because a cache tuning knob must never stop a process running.
-void disk_cache_apply_env(DiskCacheConfig& config, const char* max_size);
+// Apply TT_METAL_CACHE_MAX_SIZE and TT_METAL_CACHE_RECLAIM_UNCLAIMED. Deliberately forgiving:
+// an empty or unparseable value warns and leaves the default, because a cache tuning knob
+// must never stop a process running.
+void disk_cache_apply_env(DiskCacheConfig& config, const char* max_size, const char* reclaim);
 
 // Parse "50G", "512M", "1024K", "2T" or a bare byte count. Suffixes are binary and case
 // insensitive, and one redundant trailing 'B' is allowed. nullopt if not a valid size.

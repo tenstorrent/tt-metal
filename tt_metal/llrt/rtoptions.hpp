@@ -175,6 +175,7 @@ class RunTimeOptions {
     // Bounds on the kernel cache root. 0 means no size cap, which is the default:
     // automatic eviction stays off until an operator asks for it.
     uint64_t cache_max_size_bytes_ = 0;
+    bool cache_reclaim_unclaimed_ = false;
 
     std::string logs_dir_ = (std::filesystem::current_path() / "").string();
 
@@ -419,6 +420,8 @@ public:
     // Size cap on the kernel cache root, from TT_METAL_CACHE_MAX_SIZE. 0 means no cap, so
     // no automatic eviction.
     uint64_t get_cache_max_size_bytes() const { return this->cache_max_size_bytes_; }
+    // From TT_METAL_CACHE_RECLAIM_UNCLAIMED: allow evicting cache trees with no in-use marker.
+    bool get_cache_reclaim_unclaimed() const { return this->cache_reclaim_unclaimed_; }
 
     // Returns the logs directory for generated output (dprint, watcher, profiler, etc.)
     // Uses TT_METAL_LOGS_PATH if set, otherwise defaults to current working directory

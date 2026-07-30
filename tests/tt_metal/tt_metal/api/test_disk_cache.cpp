@@ -154,6 +154,7 @@ TEST_F(DiskCacheTest, DecideEvictionAppliesPolicyInPriorityOrder) {
     cfg.min_eviction_age = std::chrono::hours{1};
 
     DiskCacheEntry entry;
+    entry.claimable = true;  // the unclaimable case is covered separately
     entry.size_bytes = 500;
     entry.last_used = now - std::chrono::hours{50};
 
@@ -530,6 +531,102 @@ TEST_F(DiskCacheTest, EntryLockIsSharedBetweenConcurrentUsers) {
     EXPECT_TRUE(second.held());
 }
 
+// The bound must account for what the cache already held. Excluding unclaimed trees from the
+// total was the bug that made TT_METAL_CACHE_MAX_SIZE a no-op on any pre-existing cache.
+TEST_F(DiskCacheTest, UnclaimedTreesAreMeasuredEvenThoughTheyAreNotEvicted) {
+    make_entry("claimed");
+    make_unmanaged_entry("old_a");
+    make_unmanaged_entry("old_b");
+
+    const DiskCacheStats stats = disk_cache_stat(config(0));
+    ASSERT_EQ(stats.entries.size(), 3u);
+    EXPECT_GE(stats.total_size_bytes, 3 * kEntryFileBytes) << "all three must count toward the total";
+    EXPECT_GE(stats.unclaimable_size_bytes, 2 * kEntryFileBytes);
+    EXPECT_EQ(stats.unclaimable_entries, 2u);
+}
+
+// Evicting what we may reclaim cannot reach the bound, so the pass must report that instead of
+// deleting trees the next build would immediately regenerate.
+TEST_F(DiskCacheTest, TrimRefusesWhenUnclaimedSpaceAloneExceedsTheBound) {
+    make_entry("claimed_a");
+    make_entry("claimed_b");
+    make_unmanaged_entry("old_a");
+    make_unmanaged_entry("old_b");
+    set_idle_for("claimed_a", std::chrono::hours{50});
+    set_idle_for("claimed_b", std::chrono::hours{40});
+
+    // Bound below the unclaimed portion alone.
+    const DiskCacheTrimResult result = disk_cache_trim(config(kEntryFileBytes));
+
+    EXPECT_TRUE(result.skipped);
+    EXPECT_NE(result.skip_reason.find("TT_METAL_CACHE_RECLAIM_UNCLAIMED"), std::string::npos);
+    EXPECT_EQ(result.entries_removed, 0u);
+    EXPECT_TRUE(entry_exists("claimed_a")) << "must not churn trees it can reclaim to no effect";
+    EXPECT_TRUE(entry_exists("old_a"));
+}
+
+TEST_F(DiskCacheTest, ReclaimUnclaimedMakesOlderTreesEvictable) {
+    make_unmanaged_entry("old_a");
+    make_unmanaged_entry("old_b");
+    set_idle_for("old_a", std::chrono::hours{100});
+    set_idle_for("old_b", std::chrono::hours{50});
+
+    DiskCacheConfig cfg = config(1);
+    // Off by default: the unclaimed portion alone exceeds the bound, so the pass reports rather
+    // than churning.
+    EXPECT_TRUE(disk_cache_trim(cfg).skipped);
+    EXPECT_TRUE(entry_exists("old_a"));
+
+    cfg.reclaim_unclaimable = true;
+    const DiskCacheTrimResult result = disk_cache_trim(cfg);
+    EXPECT_EQ(result.entries_removed, 1u);
+    EXPECT_EQ(result.entries_kept_as_working_set, 1u) << "still never empties the cache";
+    EXPECT_FALSE(entry_exists("old_a")) << "LRU-oldest goes first once reclaim is asserted";
+    EXPECT_TRUE(entry_exists("old_b"));
+}
+
+// .trash is debris this component staged; removing the bound must not orphan it, and it is
+// invisible to disk_cache_stat because dot-names are not entries.
+TEST_F(DiskCacheTest, TrashIsDrainedEvenWithNoBoundConfigured) {
+    const fs::path staged = root_ / ".trash" / "1234-interrupted";
+    fs::create_directories(staged);
+    {
+        const std::ofstream blob(staged / "blob");
+    }
+    ASSERT_TRUE(fs::exists(staged));
+
+    const DiskCacheTrimResult result = disk_cache_trim(config(0));
+
+    EXPECT_TRUE(result.skipped) << "no bound, so no eviction";
+    EXPECT_FALSE(fs::exists(staged)) << "but the staged debris must still be reclaimed";
+}
+
+// The scan takes an *exclusive* probe on .inuse. Holding it across the tree walk would block a
+// starting process past DiskCacheEntryLock's retry budget and leave it building unprotected.
+TEST_F(DiskCacheTest, ScanDoesNotHoldTheInUseLockAcrossTheTreeWalk) {
+    const fs::path entry = make_entry("scanned");
+    disk_cache_stat(config(0));  // completes a full scan, then must have released everything
+
+    const int fd = ::open((entry / ".inuse").c_str(), O_RDWR);
+    ASSERT_GE(fd, 0);
+    EXPECT_EQ(::flock(fd, LOCK_SH | LOCK_NB), 0) << "scan left a lock behind";
+    ::flock(fd, LOCK_UN);
+    ::close(fd);
+}
+
+TEST_F(DiskCacheTest, ParseSizeAcceptsTheSpellingsItPrints) {
+    // A value copied out of a log line must round trip.
+    for (uint64_t bytes : {1024ull, 50ull << 20, 3ull << 30, 2ull << 40}) {
+        const std::string printed = format_disk_cache_size(bytes);
+        const std::string unit = printed.substr(printed.find(' ') + 1);
+        const auto parsed = parse_disk_cache_size("50" + unit);
+        EXPECT_TRUE(parsed.has_value()) << "cannot parse the unit we print: " << unit;
+    }
+    EXPECT_EQ(parse_disk_cache_size("20GiB"), 20ull << 30);
+    EXPECT_EQ(parse_disk_cache_size("512MiB"), 512ull << 20);
+    EXPECT_EQ(parse_disk_cache_size("1KiB"), 1024u);
+}
+
 // The .inuse-presence rule is what makes automatic eviction deployable: a binary predating
 // the locking protocol never creates that file, so a trimmer cannot mistake its live tree for
 // garbage -- and never considers it at all.
@@ -541,10 +638,11 @@ TEST_F(DiskCacheTest, TreesWithoutAnInUseFileAreNeverTouched) {
     set_idle_for("managed_b", std::chrono::hours{10});
     set_idle_for("old_build_key", std::chrono::hours{100});
 
-    // A limit of 1 byte makes everything a candidate, and clear ignores limits entirely.
-    disk_cache_trim(config(1));
-    EXPECT_FALSE(entry_exists("managed_a"));
-    EXPECT_TRUE(entry_exists("old_build_key"));
+    // The bound has to exceed the unclaimed portion, or the refuse-rather-than-churn rule fires
+    // before anything is evicted -- covered by TrimRefusesWhenUnclaimedSpaceAloneExceedsTheBound.
+    disk_cache_trim(config(2 * kEntryFileBytes));
+    EXPECT_FALSE(entry_exists("managed_a")) << "LRU-oldest claimable tree goes";
+    EXPECT_TRUE(entry_exists("old_build_key")) << "unclaimed tree is never touched";
 
     disk_cache_clear(config(0));
     EXPECT_TRUE(entry_exists("old_build_key"));
@@ -587,21 +685,21 @@ TEST_F(DiskCacheTest, ScanningNeverCreatesAnInUseFile) {
 TEST_F(DiskCacheTest, ApplyEnvIsForgivingAndConsistent) {
     {  // Unset and exported-empty are the same thing, and neither disturbs the defaults.
         DiskCacheConfig cfg;
-        disk_cache_apply_env(cfg, nullptr);
+        disk_cache_apply_env(cfg, nullptr, nullptr);
         EXPECT_EQ(cfg.max_size_bytes, 0u);
 
-        disk_cache_apply_env(cfg, "");
+        disk_cache_apply_env(cfg, "", nullptr);
         EXPECT_EQ(cfg.max_size_bytes, 0u);
     }
     {  // Garbage keeps the default rather than aborting the process.
         DiskCacheConfig cfg;
         cfg.max_size_bytes = 123;
-        disk_cache_apply_env(cfg, "not-a-size");
+        disk_cache_apply_env(cfg, "not-a-size", nullptr);
         EXPECT_EQ(cfg.max_size_bytes, 123u);
     }
     {  // Real values still land.
         DiskCacheConfig cfg;
-        disk_cache_apply_env(cfg, "2G");
+        disk_cache_apply_env(cfg, "2G", nullptr);
         EXPECT_EQ(cfg.max_size_bytes, 2ull * 1024 * 1024 * 1024);
     }
 }

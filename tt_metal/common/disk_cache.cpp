@@ -258,7 +258,14 @@ uint64_t drain_trash(const fs::path& trash_dir) {
     return reclaimed;
 }
 
-// Collect eviction candidates: direct child directories carrying .inuse.
+// Every direct child directory of the root, measured. `claimable` distinguishes the two kinds:
+// a directory carrying .inuse has been used by a build that participates in the locking
+// protocol and is therefore safe to evict, while one without it may be in use by a binary
+// predating that protocol and cannot be told apart from an abandoned one.
+//
+// Both kinds are measured. Excluding the unclaimable ones from the total would make the bound
+// ignore whatever the cache already held, which is exactly the case an operator sets a bound to
+// fix.
 DiskCacheStats scan_entries(const fs::path& root) {
     DiskCacheStats stats;
     if (!tt::filesystem::safe_is_directory(root).value_or(false)) {
@@ -276,22 +283,32 @@ DiskCacheStats scan_entries(const fs::path& root) {
             continue;
         }
 
-        // create=false is load bearing: it must not conjure an .inuse file, which would promote
-        // a tree written by an older binary into an eviction candidate. opened() is also
-        // exactly the "is this a candidate at all" test.
-        const ScopedFlock probe(child.path() / kInUseName, /*shared=*/false, /*create=*/false);
-        if (!probe.opened()) {
-            continue;
-        }
-
         DiskCacheEntry entry;
         entry.name = name;
         entry.path = child.path();
+
+        {
+            // Scoped deliberately tight. This is an *exclusive* probe, so holding it across the
+            // recursive walk below would block a starting process for the whole walk -- long
+            // enough to exhaust DiskCacheEntryLock's retry budget and leave that process
+            // building into an unprotected tree. create=false so probing can never conjure an
+            // .inuse file and thereby promote an unclaimable tree into a candidate.
+            const ScopedFlock probe(child.path() / kInUseName, /*shared=*/false, /*create=*/false);
+            entry.claimable = probe.opened();
+            entry.in_use = entry.claimable && !probe.held();
+        }
+        // Our own claim counts as in use: flock would grant our own probe the exclusive lock, so
+        // the file alone cannot tell us.
+        entry.in_use = entry.in_use || claimed_by_this_process(child.path());
+
         entry.size_bytes = measure_tree_bytes(child.path());
         entry.last_used = entry_last_used(child.path());
-        entry.in_use = !probe.held() || claimed_by_this_process(child.path());
 
         stats.total_size_bytes += entry.size_bytes;
+        if (!entry.claimable) {
+            stats.unclaimable_size_bytes += entry.size_bytes;
+            stats.unclaimable_entries++;
+        }
         stats.entries.push_back(std::move(entry));
     }
 
@@ -330,6 +347,17 @@ DiskCacheTrimResult run_trim(const DiskCacheConfig& config, bool honor_limits) {
 
     const DiskCacheStats stats = scan_entries(config.root);
     result.bytes_before = stats.total_size_bytes;
+
+    // Evicting what we may reclaim cannot get under the bound, so doing it would free space the
+    // next build immediately regenerates and still leave the root over. Report instead.
+    if (honor_limits && !config.reclaim_unclaimable && stats.unclaimable_size_bytes > config.max_size_bytes) {
+        return skipped_result(fmt::format(
+            "{} in {} directories predates in-use marking and cannot be evicted safely, which alone exceeds the {} "
+            "limit; set TT_METAL_CACHE_RECLAIM_UNCLAIMED=1 once no older tt-metal build is running",
+            format_disk_cache_size(stats.unclaimable_size_bytes),
+            stats.unclaimable_entries,
+            format_disk_cache_size(config.max_size_bytes)));
+    }
     uint64_t live_bytes = stats.total_size_bytes;
     size_t entries_remaining = stats.entries.size();
 
@@ -350,6 +378,10 @@ DiskCacheTrimResult run_trim(const DiskCacheConfig& config, bool honor_limits) {
             result.entries_skipped_in_use++;
             continue;
         }
+        if (decision == DiskCacheEviction::KeepUnclaimable) {
+            result.entries_skipped_unclaimable++;
+            continue;
+        }
         if (decision == DiskCacheEviction::KeepTooYoung) {
             result.entries_skipped_too_young++;
             continue;
@@ -362,7 +394,10 @@ DiskCacheTrimResult run_trim(const DiskCacheConfig& config, bool honor_limits) {
             // protected; holding it across the delete instead would block that process for the
             // whole delete. create=false so an unclaimed tree stays unclaimed.
             ScopedFlock entry_lock(entry.path / kInUseName, /*shared=*/false, /*create=*/false);
-            if (!entry_lock.held()) {
+            // An unclaimable entry has no .inuse to lock, so there is nothing to acquire and
+            // nothing that could be holding it -- requiring the lock here would make
+            // reclaim_unclaimable unable to evict anything at all.
+            if (entry.claimable && !entry_lock.held()) {
                 result.entries_skipped_in_use++;
                 continue;
             }
@@ -413,6 +448,21 @@ std::string_view trim_spaces(std::string_view text) {
     return text;
 }
 
+std::optional<bool> parse_truthy(std::string_view text) {
+    std::string lowered;
+    lowered.reserve(text.size());
+    for (const char c : trim_spaces(text)) {
+        lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    if (lowered == "1" || lowered == "true" || lowered == "yes" || lowered == "on") {
+        return true;
+    }
+    if (lowered == "0" || lowered == "false" || lowered == "no" || lowered == "off") {
+        return false;
+    }
+    return std::nullopt;
+}
+
 std::optional<ScaledValue> split_scaled_value(std::string_view text) {
     text = trim_spaces(text);
     ScaledValue scaled;
@@ -425,7 +475,12 @@ std::optional<ScaledValue> split_scaled_value(std::string_view text) {
     }
 
     std::string_view unit(parsed.ptr, static_cast<size_t>(end - parsed.ptr));
+    // Accept the spellings format_disk_cache_size emits, so a value copied out of a log round
+    // trips: "50GiB" -> "50Gi" -> "50G". The trailing 'b' and 'i' are both optional.
     if (unit.size() > 1 && std::tolower(static_cast<unsigned char>(unit.back())) == 'b') {
+        unit.remove_suffix(1);
+    }
+    if (unit.size() > 1 && std::tolower(static_cast<unsigned char>(unit.back())) == 'i') {
         unit.remove_suffix(1);
     }
     if (unit.empty()) {
@@ -460,6 +515,9 @@ DiskCacheEviction disk_cache_decide_eviction(
     if (entry.in_use) {
         return DiskCacheEviction::KeepInUse;
     }
+    if (!entry.claimable && !config.reclaim_unclaimable) {
+        return DiskCacheEviction::KeepUnclaimable;
+    }
     if (honor_limits && idle_for(now, entry.last_used) < config.min_eviction_age) {
         return DiskCacheEviction::KeepTooYoung;
     }
@@ -480,21 +538,38 @@ fs::path default_kernel_cache_root() {
     return fs::path("/tmp") / fmt::format("tt-metal-cache-{}", static_cast<unsigned>(::getuid())) / "";
 }
 
-void disk_cache_apply_env(DiskCacheConfig& config, const char* max_size) {
-    if (max_size == nullptr) {
-        return;
+void disk_cache_apply_env(DiskCacheConfig& config, const char* max_size, const char* reclaim) {
+    const auto given = [](const char* value) -> std::optional<std::string_view> {
+        if (value == nullptr) {
+            return std::nullopt;
+        }
+        const std::string_view text = trim_spaces(value);
+        return text.empty() ? std::nullopt : std::optional(text);  // exported empty means unset
+    };
+
+    if (auto text = given(max_size)) {
+        if (auto parsed = parse_disk_cache_size(*text)) {
+            config.max_size_bytes = *parsed;
+        } else {
+            // Never throw over a tuning knob, but do not let the operator believe a bound is in
+            // force when the value did not parse and the default is "no bound".
+            log_warning(
+                tt::LogMetal,
+                "Disk cache: TT_METAL_CACHE_MAX_SIZE='{}' is not a byte count (try 50G, 512M, 20GiB); the kernel "
+                "cache is NOT bounded for this run",
+                std::string(*text));
+        }
     }
-    const std::string_view text = trim_spaces(max_size);
-    if (text.empty()) {
-        return;  // exported empty is the same as unset
-    }
-    if (auto parsed = parse_disk_cache_size(text)) {
-        config.max_size_bytes = *parsed;
-    } else {
-        log_warning(
-            tt::LogMetal,
-            "Disk cache: ignoring TT_METAL_CACHE_MAX_SIZE='{}' (expected a byte count, optionally suffixed K/M/G/T)",
-            std::string(text));
+    if (auto text = given(reclaim)) {
+        if (auto parsed = parse_truthy(*text)) {
+            config.reclaim_unclaimable = *parsed;
+        } else {
+            log_warning(
+                tt::LogMetal,
+                "Disk cache: ignoring TT_METAL_CACHE_RECLAIM_UNCLAIMED='{}' (expected 0/1, true/false, yes/no or "
+                "on/off)",
+                std::string(*text));
+        }
     }
 }
 
@@ -537,7 +612,12 @@ DiskCacheStats disk_cache_stat(const DiskCacheConfig& config) { return scan_entr
 
 DiskCacheTrimResult disk_cache_trim(const DiskCacheConfig& config) {
     if (config.max_size_bytes == 0) {
-        return skipped_result("no size limit configured (set TT_METAL_CACHE_MAX_SIZE to enable)");
+        // Still drain .trash. It is debris this component staged, and a trim interrupted while
+        // a bound was set would otherwise leak it forever once the bound is removed -- invisible
+        // to disk_cache_stat, since dot-names are not entries.
+        DiskCacheTrimResult result = skipped_result("no size limit configured (set TT_METAL_CACHE_MAX_SIZE to enable)");
+        result.bytes_reclaimed = drain_trash(config.root / kTrashName);
+        return result;
     }
     return run_trim(config, /*honor_limits=*/true);
 }
@@ -549,21 +629,23 @@ void disk_cache_trim_in_background(const DiskCacheConfig& config) {
         return;
     }
 
-    // Cheapest gate first: after the first device, later ones cost a mutex and a string compare
-    // instead of a stat.
+    // One stat standing in for a walk of the whole cache. Racing processes may both get past
+    // here; only one wins the trim lock. Checked *before* claiming the root below: claiming
+    // first would mean a process that starts inside the throttle window marks the root done and
+    // then never trims for the rest of its life, however long that is.
+    if (auto stamp = lstat_or_none(config.root / kLastTrimName)) {
+        if (idle_for(std::chrono::system_clock::now(), mtime_of(*stamp)) < kDiskCacheTrimInterval) {
+            return;
+        }
+    }
+
+    // One attempt per root per process, so a multi-device bring-up spawns one thread, not one
+    // per device.
     {
         static std::mutex mutex;
         static std::set<std::string> trimmed_roots;
         const std::lock_guard lock(mutex);
         if (!trimmed_roots.insert(config.root.string()).second) {
-            return;
-        }
-    }
-
-    // One stat standing in for a walk of the whole cache. Racing processes may both get past
-    // here; only one wins the trim lock.
-    if (auto stamp = lstat_or_none(config.root / kLastTrimName)) {
-        if (idle_for(std::chrono::system_clock::now(), mtime_of(*stamp)) < kDiskCacheTrimInterval) {
             return;
         }
     }
@@ -622,7 +704,13 @@ DiskCacheEntryLock::DiskCacheEntryLock(const fs::path& entry_path) {
 
         const int fd = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
         if (fd < 0) {
-            log_debug(tt::LogMetal, "Disk cache: cannot open {}: {}", lock_path.string(), ::strerror(errno));
+            const int err = errno;
+            log_debug(tt::LogMetal, "Disk cache: cannot open {}: {}", lock_path.string(), ::strerror(err));
+            // Retrying a permanent condition -- someone else owns the root, or it is read-only --
+            // just burns the whole sleep budget per device inside the caller's build mutex.
+            if (err != ENOENT && err != EINTR) {
+                return;
+            }
             continue;
         }
         if (::flock(fd, LOCK_SH | LOCK_NB) != 0) {
