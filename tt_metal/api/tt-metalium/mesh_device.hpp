@@ -168,7 +168,6 @@ public:
     void begin_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id);
     void end_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id);
     void replay_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id, bool blocking);
-    // If cq_id is not provided, the current command queue is returned from the current thread
     [[deprecated("Use begin_mesh_trace(MeshCommandQueue&) instead. Pass the command queue object, not a raw id.")]]
     MeshTraceId begin_mesh_trace(uint8_t cq_id);
     [[deprecated(
