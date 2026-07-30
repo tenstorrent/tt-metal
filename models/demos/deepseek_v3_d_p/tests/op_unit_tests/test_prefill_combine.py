@@ -771,6 +771,8 @@ def _cmbf2d_check_accuracy(mesh_device, host_input, dev_output, movements, token
     # `host_out` are both the reassembled whole, so a device's block starts at coord * shard_extent.
     dev_rows, elems = tuple(dev_output.shape)
 
+    extent = rows
+    failures = []
     for m in movements:
         sr, sc = m.src
         dr, dc = m.dst
@@ -779,11 +781,93 @@ def _cmbf2d_check_accuracy(mesh_device, host_input, dev_output, movements, token
         src = host_input[src_row0 : src_row0 + tokens, sc * elems : (sc + 1) * elems]
         got = host_out[dst_row0 : dst_row0 + tokens, dc * elems : (dc + 1) * elems]
         if not torch.equal(src, got):
-            return False
-    return True
+            bad_rows = (src != got).any(dim=1)
+            failures.append(
+                {
+                    "offset": (dr - sr) % extent,
+                    "src": tuple(m.src),
+                    "dst": tuple(m.dst),
+                    "in_base": m.in_base_token,
+                    "bad_tokens": int(bad_rows.sum()),
+                    "first_bad": int(bad_rows.nonzero()[0][0]),
+                    "all_zero": bool((got[bad_rows] == 0).all()),
+                }
+            )
+
+    if not failures:
+        return True
+
+    # Group by ring offset: the single most diagnostic cut, because it separates "routing is wrong" from
+    # "far destinations lose a race" from "one specific hop distance is broken".
+    by_offset = {}
+    for f in failures:
+        e = by_offset.setdefault(f["offset"], {"movements": 0, "bad_tokens": 0, "all_zero": 0})
+        e["movements"] += 1
+        e["bad_tokens"] += f["bad_tokens"]
+        e["all_zero"] += 1 if f["all_zero"] else 0
+    logger.error(f"accuracy FAILED: {len(failures)} of {len(movements)} movements wrong")
+    logger.error(f"{'ring offset':>12} {'bad movements':>14} {'bad tokens':>11} {'wholly unwritten':>17}")
+    for off in sorted(by_offset):
+        e = by_offset[off]
+        logger.error(f"{off:>12} {e['movements']:>14} {e['bad_tokens']:>11} {e['all_zero']:>17}")
+    for f in failures[:5]:
+        logger.error(
+            f"  e.g. off{f['offset']} src{f['src']} -> dst{f['dst']} in_base {f['in_base']}: "
+            f"{f['bad_tokens']}/{tokens} tokens wrong, first at {f['first_bad']}, "
+            f"{'all zero (never written)' if f['all_zero'] else 'wrong content'}"
+        )
+    return False
 
 
-def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, expected_workers, path=CMBF2D_BWINFO_PATH):
+def _cmbf2d_producer_token_budget(mesh_device, axis, num_links, tokens):
+    """`(allowed_per_producer, mesh_total)` token counts, derived from the op's split.
+
+    Producers are deliberately NOT all equal. The fabric routes the diametrically-opposite chip (ring
+    offset R/2, equally far either way) one specific direction of its own choosing, and a producer can only
+    inject on its own cable — so per plane one producer serves H destinations and the other H-1, where
+    H = R/2. See assign_movements_to_producers.
+
+    The test therefore pins the numbers it CAN derive: every producer's count must be one of the two legal
+    values, and the sum over all producers must equal the mesh's total traffic. Both come from the test's
+    own plan, never from telemetry. Once a producer's reported count has been checked against this, using it
+    as that producer's bandwidth denominator is a validated value rather than a trusted one.
+    """
+    extent = tuple(mesh_device.shape)[axis]
+    half = extent // 2
+    allowed = {(half - 1) * tokens, half * tokens}
+    mesh_total = mesh_device.get_num_devices() * (extent - 1) * num_links * tokens
+    return allowed, mesh_total
+
+
+def _cmbf2d_link_tokens(mesh_device, axis, num_links, movements, tokens):
+    """Mean tokens crossing each DIRECTED eth link, derived from the movement list alone.
+
+    A producer's `tokens_sent` counts only its OWN tokens. Once destinations go past the immediate
+    neighbour, every cable also carries traffic being forwarded on behalf of other chips — bytes that are
+    real eth utilisation but appear in nobody's telemetry. So the own-payload rate systematically understates
+    link utilisation, by 2.3x on the 8-ring all-destinations pattern.
+
+    Total token-hops = sum over movements of (ring hop distance x tokens); spread over
+    num_devices * num_links * 2 directed links. Computed from the plan, not from telemetry.
+    """
+    extent = tuple(mesh_device.shape)[axis]
+    token_hops = 0
+    for m in movements:
+        off = (m.dst[axis] - m.src[axis]) % extent
+        token_hops += min(off, extent - off) * tokens
+    return token_hops / (mesh_device.get_num_devices() * num_links * 2)
+
+
+def _dump_combine_fabric2d_bwinfo(
+    mesh_device,
+    num_links,
+    axis,
+    expected_workers,
+    allowed_tokens,
+    mesh_total_tokens,
+    link_tokens,
+    path=CMBF2D_BWINFO_PATH,
+):
     """Read each producer's L1 telemetry record, write the bandwidth report, then assert it is sound.
 
     Telemetry is trusted for CYCLE COUNTS ONLY. Everything else a rate depends on — the clock, the
@@ -817,8 +901,11 @@ def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, expected_workers
     workers = telem["workers"]
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    # What the test asked to be moved; the payload for every rate below.
-    expected_payload = CMBF2D_TOKENS * CMBF2D_TOKEN_BYTES
+    # Per-producer payload comes from each producer's own token count, but only AFTER that count has been
+    # checked against the test's plan (allowed_tokens / mesh_total_tokens) in the assertions below.
+    def payload_of(w):
+        return w["tokens_sent"] * CMBF2D_TOKEN_BYTES
+
     # Cycles -> us needs a clock. Guarded only so a zero clock cannot produce inf and crash the report
     # before the assertion below gets to explain what went wrong.
     usable_clock = clock_mhz if clock_mhz > 0 else 1.0
@@ -828,7 +915,7 @@ def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, expected_workers
         if not w["valid"]:
             bad.append(w)
             continue
-        if w["tokens_sent"] != CMBF2D_TOKENS or w["token_size_bytes"] != CMBF2D_TOKEN_BYTES:
+        if w["tokens_sent"] not in allowed_tokens or w["token_size_bytes"] != CMBF2D_TOKEN_BYTES:
             mismatched.append(w)
         us = (w["t_drained"] - w["t_start"]) / usable_clock
         send_cycles = w["t_last_send"] - w["t_first_send"]
@@ -840,9 +927,9 @@ def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, expected_workers
             {
                 "w": w,
                 "us": us,
-                "gbps": (expected_payload / (us * 1e-6)) / 1e9 if us > 0 else 0.0,
+                "gbps": (payload_of(w) / (us * 1e-6)) / 1e9 if us > 0 else 0.0,
                 "send_us": send_us,
-                "send_gbps": (expected_payload / (send_us * 1e-6)) / 1e9 if send_us > 0 else 0.0,
+                "send_gbps": (payload_of(w) / (send_us * 1e-6)) / 1e9 if send_us > 0 else 0.0,
                 "kernel_us": (w["t_kernel_end"] - w["t_kernel_start"]) / usable_clock,
                 "rdy_us": (w["t_first_send"] - w["t_start"]) / usable_clock,
                 "shares": {k: 100.0 * w[f"{k}_cycles"] / denom for k in ("wait_slot", "issue", "ring_wait")},
@@ -861,7 +948,9 @@ def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, expected_workers
             f"tokens={CMBF2D_TOKENS} per movement token={CMBF2D_TOKEN_BYTES}B clock={clock_mhz}MHz "
             f"edm_sender_slots={first.get('edm_slots', 0)} l1_slots={first.get('num_l1_slots', 0)} "
             f"batch={first.get('batch', 0)} stall_telemetry={CMBF2D_STALL}\n"
-            f"# payload per producer = {expected_payload} B, taken from the TEST's tokens x token_size, not\n"
+            f"# payload per producer = tokens_sent x {CMBF2D_TOKEN_BYTES}B, where tokens_sent is asserted to be\n"
+            f"#   one of {sorted(allowed_tokens)} and to sum to {mesh_total_tokens} across the mesh. Producers are\n"
+            f"#   deliberately unequal: the fabric picks one direction for the opposite chip. Not taken\n"
             f"#   from telemetry. Telemetry supplies cycle counts only; its tokens_sent / token_size_bytes\n"
             f"#   are asserted to match, and the clock is asserted within "
             f"{CMBF2D_CLOCK_TOLERANCE:.0%} of {CMBF2D_EXPECTED_CLOCK_MHZ} MHz.\n"
@@ -871,7 +960,10 @@ def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, expected_workers
             f"#          drain: dpk header-only fillers plus one more free slot force every payload credit\n"
             f"#          back from the far chip.\n"
             f"# sus    = first send -> last send, the SEND LOOP alone.\n"
-            f"# GB/s   = payload / us   |   sGB/s = payload / sus  [fabric push rate, UPPER bound]\n"
+            f"# GB/s   = own payload / us   |   sGB/s = own payload / sus  [push rate of OWN tokens]\n"
+            f"# Own payload is NOT link utilisation once destinations pass the immediate neighbour: each cable\n"
+            f"#   also carries traffic forwarded on other chips' behalf, which is real eth traffic but appears in\n"
+            f"#   no producer's tokens_sent. The derived link figure is in the summary at the bottom.\n"
             f"# rdy    = first DRAM read -> first send, i.e. how long the ring took to prime.\n"
             f"# wait%/iss%/ring% = share of the send window spent waiting for an EDM slot (eth side is the\n"
             f"#   limiter) / issuing payload packets / waiting on the reader (DRAM side is the limiter).\n"
@@ -902,8 +994,8 @@ def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, expected_workers
         for w in mismatched:
             f.write(
                 f"# PAYLOAD MISMATCH: dev {w['device_id']} coord {tuple(w['mesh_coord'])} reported "
-                f"{w['tokens_sent']} tokens x {w['token_size_bytes']}B, test asked for "
-                f"{CMBF2D_TOKENS} x {CMBF2D_TOKEN_BYTES}B\n"
+                f"{w['tokens_sent']} tokens x {w['token_size_bytes']}B, test allows "
+                f"{sorted(allowed_tokens)} x {CMBF2D_TOKEN_BYTES}B\n"
             )
         if rows:
             g_min, g_p50, g_max, g_mean = _stats([r["gbps"] for r in rows])
@@ -912,8 +1004,22 @@ def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, expected_workers
             k_min, k_p50, k_max, k_mean = _stats([r["kernel_us"] for r in rows])
             xfer_mean = sum(r["us"] for r in rows) / len(rows)
             mean_sh = {k: sum(r["shares"][k] for r in rows) / len(rows) for k in ("wait_slot", "issue", "ring_wait")}
+            # Derived LINK utilisation. Reported only as a mesh aggregate, deliberately: the per-link load
+            # is NOT uniform. The fabric routes the diametrically-opposite chip one single direction, so those
+            # links carry ~(H*H/2 + H/2) tokens and the others ~(H*H/2 - H/2) (mean link_tokens). Turning that
+            # into a per-producer number needs the direction the fabric chose, which the test does not know —
+            # so a per-row column would be wrong by up to +/-25% and is not printed.
+            link_bytes = link_tokens * CMBF2D_TOKEN_BYTES
             f.write(
-                f"#\n# per-producer GB/s: min {g_min:.2f} p50 {g_p50:.2f} max {g_max:.2f} mean {g_mean:.2f}\n"
+                f"#\n# DERIVED LINK UTILISATION (headline): {link_tokens:g} tokens x {CMBF2D_TOKEN_BYTES}B = "
+                f"{link_bytes / 1e6:.2f} MB per directed link\n"
+                f"#   over the SLOWEST send window ({l_max:.2f} us): {(link_bytes / (l_max * 1e-6)) / 1e9:.2f} GB/s"
+                f"   [the transfer is not done until the last producer is]\n"
+                f"#   over the p50 send window ({l_p50:.2f} us): {(link_bytes / (l_p50 * 1e-6)) / 1e9:.2f} GB/s\n"
+                f"#   per-link load is non-uniform (see the note in the code); only the aggregate is meaningful.\n"
+            )
+            f.write(
+                f"# per-producer GB/s: min {g_min:.2f} p50 {g_p50:.2f} max {g_max:.2f} mean {g_mean:.2f}\n"
                 f"# per-producer sGB/s: min {s_min:.2f} p50 {s_p50:.2f} max {s_max:.2f} mean {s_mean:.2f}\n"
                 f"# mean send-window shares: wait_slot {mean_sh['wait_slot']:.1f}% issue {mean_sh['issue']:.1f}% "
                 f"ring_wait {mean_sh['ring_wait']:.1f}%\n"
@@ -921,7 +1027,7 @@ def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, expected_workers
                 f"# producer-kernel us: min {k_min:.2f} p50 {k_p50:.2f} max {k_max:.2f} mean {k_mean:.2f}\n"
                 f"# kernel time outside the transfer window: mean {k_mean - xfer_mean:.2f} us "
                 f"({100.0 * (k_mean - xfer_mean) / k_mean if k_mean > 0 else 0.0:.1f}% of kernel)\n"
-                f"# aggregate payload across the mesh: {expected_payload * len(rows) / 1e6:.1f} MB over "
+                f"# aggregate payload across the mesh: {sum(payload_of(r['w']) for r in rows) / 1e6:.1f} MB over "
                 f"{len(rows)} producers\n"
             )
             # The two windows bracket the transfer, so their ratio says how much of the reported time is
@@ -935,8 +1041,13 @@ def _dump_combine_fabric2d_bwinfo(mesh_device, num_links, axis, expected_workers
     assert (
         len(rows) == expected_workers
     ), f"expected {expected_workers} producer records (one per movement), got {len(rows)}; see {path}"
+    total_sent = sum(r["w"]["tokens_sent"] for r in rows)
+    assert total_sent == mesh_total_tokens, (
+        f"producers sent {total_sent} tokens in total but the test's plan moves {mesh_total_tokens}; "
+        f"the op is not covering the movement list. See {path}"
+    )
     assert not mismatched, (
-        f"{len(mismatched)} producer(s) reported a payload other than {CMBF2D_TOKENS} x "
+        f"{len(mismatched)} producer(s) reported a payload outside the allowed {sorted(allowed_tokens)} x "
         f"{CMBF2D_TOKEN_BYTES}B; see 'PAYLOAD MISMATCH' in {path}"
     )
     assert abs(clock_mhz - CMBF2D_EXPECTED_CLOCK_MHZ) <= CMBF2D_CLOCK_TOLERANCE * CMBF2D_EXPECTED_CLOCK_MHZ, (
@@ -1015,12 +1126,16 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
     # One telemetry record per PRODUCER CORE, not per movement: a device has 2 * num_links producers (one
     # per link per direction) and each now serves several movements, so these two counts diverged the
     # moment destinations went beyond the immediate neighbours.
+    _cmbf2d_allowed, _cmbf2d_total = _cmbf2d_producer_token_budget(mesh_device, CMBF2D_AXIS, num_links, tokens)
     bwinfo_path = _cmbf2d_bwinfo_path()
     _dump_combine_fabric2d_bwinfo(
         mesh_device,
         num_links,
         axis=CMBF2D_AXIS,
         expected_workers=num_devices * 2 * num_links,
+        link_tokens=_cmbf2d_link_tokens(mesh_device, CMBF2D_AXIS, num_links, movements, tokens),
+        allowed_tokens=_cmbf2d_allowed,
+        mesh_total_tokens=_cmbf2d_total,
         path=bwinfo_path,
     )
     logger.info(f"combine_fabric2d telemetry -> {bwinfo_path}")

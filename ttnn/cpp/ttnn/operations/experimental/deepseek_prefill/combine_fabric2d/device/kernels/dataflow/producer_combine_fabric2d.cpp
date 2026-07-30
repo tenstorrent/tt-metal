@@ -4,12 +4,15 @@
 
 // Producer kernel (writer RISC, NOC_1). Owns the ONE fabric sender connection its eth channel allows (the
 // L1 connection table is indexed by eth channel and the EDM stores a single worker_xy per channel, so a
-// second core on the same channel would just hang) and executes exactly ONE movement descriptor: copy this
-// chip's input tokens [in_base_page, +num_tokens) to the PEER chip's output tokens [out_base_page,
-// +num_tokens), one fabric packet per token, 1:1 and in order.
+// second core on the same channel would just hang) and executes a LIST of assignments: its routing
+// plane's share of this chip's movements to every other chip on the axis, one fabric packet per token,
+// 1:1 and in order within each assignment.
 //
-// The tokens do NOT come from DRAM here any more: the reader kernel on this same core streams them into a
-// num_l1_slots-deep L1 ring, and this loop drains it. num_tokens is the caller's, unbounded by L1.
+// Destinations are no longer restricted to the chip across this producer's own cable — an assignment may
+// name a chip several hops away, and the fabric forwards it. Phase 9 takes that forwarding over.
+//
+// The tokens do NOT come from DRAM here: the reader kernel on this same core streams them into a
+// num_l1_slots-deep L1 ring, and this loop drains it. Token counts are the caller's, unbounded by L1.
 //
 // Slots are claimed and released in batches of `batch`, which is what amortises the two counter bumps and
 // the source flush over several packets. The flush matters now that the ring is REUSED: a payload send
@@ -81,10 +84,12 @@ void kernel_main() {
     // inside the kernel-total window.
     const uint64_t t_kernel_start = wall_clock();
 
-    // The movement this producer was assigned, plus the ring geometry it shares with the reader.
-    constexpr uint32_t num_tokens = get_compile_time_arg_val(0);
-    constexpr uint32_t num_l1_slots = get_compile_time_arg_val(1);
-    constexpr uint32_t token_size_bytes = get_compile_time_arg_val(2);
+    // The ring geometry this producer shares with the reader, plus its assignment table.
+    constexpr uint32_t num_l1_slots = get_compile_time_arg_val(0);
+    constexpr uint32_t token_size_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t slot_tail_bytes = get_compile_time_arg_val(2);
+    // The IMMEDIATE ring neighbour across this producer's own cable. Only the end-of-run drain targets it;
+    // payload destinations come from the assignment table and can be several hops away.
     constexpr uint32_t peer_chip_id = get_compile_time_arg_val(3);
     constexpr uint32_t peer_mesh_id = get_compile_time_arg_val(4);
     constexpr uint32_t peer_noc_x = get_compile_time_arg_val(5);
@@ -99,17 +104,24 @@ void kernel_main() {
     // Fine-grained stall buckets cost ~2 wall-clock register reads per token (a few percent of the
     // token's own cycles), so they are compile-time optional: on to explain a number, off to quote one.
     constexpr bool stall_telemetry = get_compile_time_arg_val(12) != 0;
-    // Where this movement writes, and the output buffer's base address (uniform across the mesh, so an
-    // accessor built from this chip's base produces addresses valid on the peer chip too).
-    constexpr uint32_t out_base_page = get_compile_time_arg_val(13);
-    constexpr uint32_t dram_out_base_addr = get_compile_time_arg_val(14);
+    // The output buffer's base address, uniform across the mesh, so an accessor built from this chip's
+    // base produces addresses valid on any destination chip.
+    constexpr uint32_t dram_out_base_addr = get_compile_time_arg_val(13);
     // Ring handshake: the reader bumps `filled`, we bump `freed`. Both monotonic, single-writer.
-    constexpr uint32_t batch = get_compile_time_arg_val(15);
-    constexpr uint32_t filled_addr = get_compile_time_arg_val(16);
-    constexpr uint32_t freed_addr = get_compile_time_arg_val(17);
-    constexpr uint32_t my_noc_x = get_compile_time_arg_val(18);
-    constexpr uint32_t my_noc_y = get_compile_time_arg_val(19);
-    constexpr auto dram_out_args = TensorAccessorArgs<20>();
+    constexpr uint32_t batch = get_compile_time_arg_val(14);
+    constexpr uint32_t filled_addr = get_compile_time_arg_val(15);
+    constexpr uint32_t freed_addr = get_compile_time_arg_val(16);
+    constexpr uint32_t my_noc_x = get_compile_time_arg_val(17);
+    constexpr uint32_t my_noc_y = get_compile_time_arg_val(18);
+    constexpr uint32_t num_assignments = get_compile_time_arg_val(19);
+    // Per-assignment table: [out_base_token, num_tokens, dst_chip_id, dst_mesh_id]. Read through
+    // kernel_compile_time_args (a constexpr std::array) because get_compile_time_arg_val needs a literal
+    // index and this table is walked by a loop variable.
+    constexpr uint32_t ASSIGN_BASE = 20;
+    constexpr uint32_t ASSIGN_WORDS = 4;
+    constexpr auto dram_out_args = TensorAccessorArgs<ASSIGN_BASE + ASSIGN_WORDS * num_assignments>();
+    // A ring slot is the token plus a metadata tail; only the token part is sent over the fabric.
+    constexpr uint32_t slot_stride = token_size_bytes + slot_tail_bytes;
 
     volatile tt_l1_ptr uint32_t* telem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(telemetry_addr);
     // Invalidate first so a stale record from an earlier run can never be mistaken for this one's.
@@ -122,15 +134,17 @@ void kernel_main() {
         rt_args_idx, num_connections);
     auto& sender = fabric_connections.get(0).sender;
 
-    // One prebuilt header per ring slot. Only the destination page varies per token, so a slot's header
-    // is not touched again until the ring wraps — which is what lets the payload send skip its flush.
+    // One header per ring slot. A slot's header is not touched again until the ring wraps, and the
+    // per-batch noc_async_writes_flushed() below is what makes that wrap safe — so stamping the route here
+    // is exactly as safe as stamping the destination page was.
+    //
+    // The route can no longer be prebuilt once for the whole run: destinations now change per assignment.
+    // It is restamped per token rather than per assignment because slots from the previous assignment may
+    // still be in flight when the next one starts (the ring is continuous across assignments), so
+    // rewriting all slot headers at a boundary could clobber a header still being read.
     auto slot_hdr = [](uint32_t slot) -> volatile PACKET_HEADER_TYPE* {
         return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_ring_addr + slot * sizeof(PACKET_HEADER_TYPE));
     };
-    for (uint32_t slot = 0; slot < num_l1_slots; slot++) {
-        fabric_set_unicast_route(
-            (volatile tt::tt_fabric::HybridMeshPacketHeader*)slot_hdr(slot), peer_chip_id, peer_mesh_id);
-    }
 
     // Written only by the reader on this core; we just read it.
     volatile tt_l1_ptr uint32_t* filled = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_addr);
@@ -157,58 +171,71 @@ void kernel_main() {
         // One zone per batch. The profiler L1 buffer holds 250 optional markers per RISC, so a per-token
         // zone would overflow and silently drop data at the token counts this op now runs.
         DeviceZoneScopedN("PRODUCER_LOOP");
-        while (sent < num_tokens) {
-            const uint32_t n = (num_tokens - sent) < batch ? (num_tokens - sent) : batch;
-            // Wait for n filled slots.
-            const uint64_t r0 = stall_telemetry ? wall_clock() : 0;
-            while (true) {
-                invalidate_l1_cache();
-                if (*filled - sent >= n) {
-                    break;
+        // Outer loop over this producer's assignments. `sent` never restarts: the ring stream is
+        // continuous, so the assignment boundary only changes WHERE tokens go, not the flow control.
+        for (uint32_t a = 0; a < num_assignments; a++) {
+            const uint32_t out_base_page = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 0];
+            const uint32_t assignment_tokens = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 1];
+            const uint32_t dst_chip_id = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 2];
+            const uint32_t dst_mesh_id = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 3];
+            uint32_t done = 0;
+            while (done < assignment_tokens) {
+                const uint32_t n = (assignment_tokens - done) < batch ? (assignment_tokens - done) : batch;
+                // Wait for n filled slots.
+                const uint64_t r0 = stall_telemetry ? wall_clock() : 0;
+                while (true) {
+                    invalidate_l1_cache();
+                    if (*filled - sent >= n) {
+                        break;
+                    }
                 }
-            }
-            if constexpr (stall_telemetry) {
-                ring_wait_cy += wall_clock() - r0;
-            }
-            for (uint32_t i = 0; i < n; i++) {
-                const uint32_t slot = (sent + i) % num_l1_slots;
-                volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
-                // Header first, THEN wait for the slot — building it while the EDM may still be busy is
-                // free overlap, and reversing the two costs ~8% of the bandwidth. Plain unicast write, NOT
-                // the fused write+atomic-inc, which is documented to hang Blackhole on a DRAM destination
-                // (moe_utils.hpp:486).
-                tt::tt_fabric::linear::to_noc_unicast_write(token_size_bytes, hdr, out_base_page + sent + i, dram_out);
-                const uint64_t w0 = wall_clock();
-                if (sent + i == 0) {
-                    t_first_send = w0;
-                }
-                sender.wait_for_empty_write_slot();
-                uint64_t w1 = 0;
                 if constexpr (stall_telemetry) {
-                    w1 = wall_clock();
-                    wait_slot_cy += w1 - w0;
+                    ring_wait_cy += wall_clock() - r0;
                 }
-                sender.send_payload_without_header_non_blocking_from_address(
-                    ring_addr + slot * token_size_bytes, token_size_bytes);
-                // No flush per token: a slot's header is not touched again until the ring wraps, and the
-                // payload is flushed once per batch below. Letting the NoC queue hold the writes is what
-                // allows token N+1 to be issued while N is still draining.
-                //
-                // CAVEAT: the production idiom (moe_utils.hpp) flush-blocks here, which also orders our
-                // payload write ahead of the EDM slot-credit write that post_send_payload_increment_pointers
-                // issues on the sync cmd buf. Dropping the flush leans on the NoC keeping those in order to
-                // the same destination. The op's content check is what makes that safe to rely on: a torn
-                // packet would show up as a wrong output token.
-                sender.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
-                t_last_send = wall_clock();
-                if constexpr (stall_telemetry) {
-                    issue_cy += t_last_send - w1;
+                for (uint32_t i = 0; i < n; i++) {
+                    const uint32_t slot = (sent + i) % num_l1_slots;
+                    volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
+                    // Header first, THEN wait for the slot — building it while the EDM may still be busy is
+                    // free overlap, and reversing the two costs ~8% of the bandwidth. Plain unicast write,
+                    // NOT the fused write+atomic-inc, which is documented to hang Blackhole on a DRAM
+                    // destination (moe_utils.hpp:486).
+                    fabric_set_unicast_route(
+                        (volatile tt::tt_fabric::HybridMeshPacketHeader*)hdr, dst_chip_id, dst_mesh_id);
+                    tt::tt_fabric::linear::to_noc_unicast_write(
+                        token_size_bytes, hdr, out_base_page + done + i, dram_out);
+                    const uint64_t w0 = wall_clock();
+                    if (sent + i == 0) {
+                        t_first_send = w0;
+                    }
+                    sender.wait_for_empty_write_slot();
+                    uint64_t w1 = 0;
+                    if constexpr (stall_telemetry) {
+                        w1 = wall_clock();
+                        wait_slot_cy += w1 - w0;
+                    }
+                    sender.send_payload_without_header_non_blocking_from_address(
+                        ring_addr + slot * slot_stride, token_size_bytes);
+                    // No flush per token: a slot's header is not touched again until the ring wraps, and the
+                    // payload is flushed once per batch below. Letting the NoC queue hold the writes is what
+                    // allows token N+1 to be issued while N is still draining.
+                    //
+                    // CAVEAT: the production idiom (moe_utils.hpp) flush-blocks here, which also orders our
+                    // payload write ahead of the EDM slot-credit write that post_send_payload_increment_pointers
+                    // issues on the sync cmd buf. Dropping the flush leans on the NoC keeping those in order to
+                    // the same destination. The op's content check is what makes that safe to rely on: a torn
+                    // packet would show up as a wrong output token.
+                    sender.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
+                    t_last_send = wall_clock();
+                    if constexpr (stall_telemetry) {
+                        issue_cy += t_last_send - w1;
+                    }
                 }
+                // The batch's payload reads have drained out of L1, so these slots are safe to refill.
+                noc_async_writes_flushed();
+                sent += n;
+                done += n;
+                noc_semaphore_inc(my_freed_noc, n);
             }
-            // The batch's payload reads have drained out of L1, so these slots are safe to refill.
-            noc_async_writes_flushed();
-            sent += n;
-            noc_semaphore_inc(my_freed_noc, n);
         }
     }
 
@@ -219,8 +246,8 @@ void kernel_main() {
     // The worker's free-slot count is `D = num_buffers_per_channel` deep and satisfies
     // free = D - (packets_written - credits_returned) (edm_fabric_worker_adapters.hpp:283). A credit is
     // only produced by the FAR END (the router forwards to the worker what the remote receiver channel
-    // acked — fabric_erisc_router.cpp:1690). So after num_tokens payload packets, writing D-1 more and
-    // then obtaining one further free slot forces credits_returned >= num_tokens, i.e. every payload
+    // acked — fabric_erisc_router.cpp:1690). So after `sent` payload packets, writing D-1 more and
+    // then obtaining one further free slot forces credits_returned >= sent, i.e. every payload
     // packet has provably reached the destination chip. That moment is what turns the report's GB/s into
     // an upper-bound end-to-end rate while sGB/s stays the push rate. It does NOT prove the destination
     // DRAM write has retired — the far eRISC may ack on write issue.
@@ -260,7 +287,9 @@ void kernel_main() {
     telem[TELEM_T_DRAINED_HI] = (uint32_t)(t_drained >> 32);
     telem[TELEM_EDM_SLOTS] = sender.num_buffers_per_channel;
     telem[TELEM_DRAIN_PACKETS] = drain_packets;
-    telem[TELEM_OUT_BASE_PAGE] = out_base_page;
+    // First assignment's destination page. Only a breadcrumb now that a producer serves several
+    // assignments; the full table lives in the factory's log line.
+    telem[TELEM_OUT_BASE_PAGE] = kernel_compile_time_args[ASSIGN_BASE + 0];
     telem[TELEM_WAIT_SLOT_CY_LO] = (uint32_t)(wait_slot_cy & 0xFFFFFFFFu);
     telem[TELEM_WAIT_SLOT_CY_HI] = (uint32_t)(wait_slot_cy >> 32);
     telem[TELEM_ISSUE_CY_LO] = (uint32_t)(issue_cy & 0xFFFFFFFFu);
