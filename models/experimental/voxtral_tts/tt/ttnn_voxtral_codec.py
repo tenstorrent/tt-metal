@@ -73,6 +73,15 @@ LayerScale (~0.01) and there are only 8 attention ops, so it does not transfer.
 ~3-5% of the end-to-end budget. It is NOT where the end-to-end answer gets decided -- Block 1 is
 (87% of the parameters, 12.5 sequential steps per second of audio).
 
+Per-block profile after the head fusions (L=4096, one of 8 blocks), which is what says the block is
+now arithmetic-bound rather than movement-bound:
+
+    norms  qkv   qkn   split  attn   merge  wo    mlp   resid | TOTAL
+    0.46   1.71  0.45  0.95   9.68   0.21   0.58  7.87  1.07  | 22.97 ms
+
+attn (42%) + mlp (34%) = 76% is real matmul work. split and merge were 11.67 and 4.93 ms before
+optimization #7; they are now 0.95 and 0.21. Nothing movement-shaped is left to remove.
+
 === OPTIMIZATIONS APPLIED, AND WHAT EACH WAS WORTH ===
   1. bf16 attention (above): best accuracy of the four configs AND faster.
   2. Chunked windowed attention (_attention), slab 512: O(S^2) -> O(S*slab). At S=12000, warm
@@ -107,6 +116,17 @@ LayerScale (~0.01) and there are only 8 attention ops, so it does not transfer.
   * Unchunked attention with a full [S,S] mask: identical accuracy (so chunking really is exact),
     but 3x slower at S=4096 and the mask grows quadratically to 268 MB. Only S<=1024 prefers it,
     which is a `chunk_min` question, not a chunking one -- see CHUNK_MIN.
+  * Fused SwiGLU MLP (one [1024, 2*4096] matmul + ttnn.swiglu, weight ordered w3|w1): 0.77-0.86x,
+    i.e. SLOWER, and maxabs 3.4e-02 vs the current path at short L so it is not even equivalent.
+    Note swiglu needs 4D input. The MLP is ~116 GMAC at L=4096 -- arithmetic-bound, nothing to fuse.
+  * Fused QKV projection (one [1024, 3072] matmul + 3 slices instead of three [1024, 1024]
+    matmuls): 0.74-0.82x. Same FLOPs, and it BUYS data movement -- the exact mirror of why
+    optimization #7 won. maxabs also drifts to 2.4e-03 at long L, so not a free swap either.
+  * Fused residual+norm (`rms_norm(x, residual_input_tensor=r)` instead of add-then-norm): this one
+    is genuinely FASTER, 1.54-1.73x, but the base is small -- 0.17 ms per site, 2 sites x 8 blocks
+    = ~2.7 ms of 97 ms (2.8%) -- and maxabs is 4.4e-03 on the RESIDUAL path, which every later layer
+    inherits. Not taken: a 2.8% gain does not justify perturbing the residual stream. Revisit only
+    with the real-speech worst-sample fixture as the gate.
 
 === TRAPS ===
   * PCC HIDES OUTLIERS. It is a correlation: it can sit at 0.9998 while individual samples are
