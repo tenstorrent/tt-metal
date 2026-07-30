@@ -109,3 +109,29 @@ Scripts: `oneshot_external_sat_scripts/{full_sweep,hybrid_sweep,enum_sweep,parti
 build_cadical,dump_cnf}.sh`. Raw results: `RESULTS_*.txt` in the same dir. Env knobs: `TT_TOPO_SAT_MIN_MODE`
 (0 warm+descent / 1 warm+lock / 3 hardcap), `TT_TOPO_SAT_GIMSATUL[_BIN|_THREADS]`, `TT_TOPO_SAT_GIM_FIRST`,
 `TT_TOPO_SAT_FASTSAT`, `TT_TOPO_SAT_SEED`, `TT_TOPO_SAT_DUMP_DIMACS`.
+
+---
+
+# Story 3 result — incremental vs from-scratch enumeration (seed-controlled)
+
+Question: how much does incremental state reuse (learned clauses + phases + VSIDS) actually help when enumerating
+distinct (unique-shape / distinct-host-set) solutions? Setup: CaDiCaL-only, MIN_MODE=3 hardcap (no warm descent),
+`-n 5`, 15-min cap. **A** = incremental (one solver, blocking clauses); **B** = from-scratch (fresh solver +
+re-encode + replay all prior blocks each solution). Both paths verified via an always-on marker; 3 seeds each
+(1/7/42) to rule out seed variance. Env: `TT_TOPO_SAT_ENUM_FROMSCRATCH=1`, `TT_TOPO_SAT_SEED=N`.
+
+| stages | incremental (5 sols) | from-scratch | winner (all 3 seeds) |
+|---:|--:|--:|:--|
+| 64 | 216 / 310 / 218 s → 5 | **135 / 252 / 147 s → 5** | from-scratch (~1.5×) |
+| 80 | 902 s → **1** (all seeds) | 902 s → **3-4** (all seeds) | from-scratch (3-4× more under budget) |
+| 96 | **310 / 347 / 314 s → 5** | 902 s → **1** (all seeds) | incremental (big) |
+
+**Finding: the winner is STRUCTURAL (per stage-count), not seed-dependent.** Seed spread is tight (96-incr:
+310/314/347s) — far smaller than the mode gap. There is **no universal winner**:
+- 64, 80 → from-scratch wins; 96 → incremental wins, every seed.
+- Consistent with the warm-state theory: incremental reuse is a big win when consecutive distinct solutions are
+  *structurally close* (96: nails 5 in ~320s), and a liability when they're *far apart* (80: warm phases mislead ->
+  stalls at 1, while from-scratch's fresh fast hardcap solves keep producing 3-4).
+
+Implication: a robust production enumerator should **run both modes and take whichever is winning** (or detect the
+regime) rather than committing to one. Raw data: oneshot_external_sat_scripts/RESULTS_story3_*.txt.
