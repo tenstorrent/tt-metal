@@ -35,6 +35,7 @@ from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
+    create_fabric_router_config,
     extract_mesh_config,
     get_ep_mesh_composer,
     get_ep_mesh_mapper,
@@ -651,6 +652,29 @@ CMBF2D_AXIS = 0
 # during development. (Candidate for demotion to a warning before check-in.)
 CMBF2D_EXPECTED_CLOCK_MHZ = 1350
 CMBF2D_CLOCK_TOLERANCE = 0.05
+# Bytes the op asks the fabric to carry per packet: the token PLUS the 64-byte routing tail phase 9 needs
+# to forward alongside it. 14336 + 64 = 14400 = 64 * 225, so a forwarding-buffer page stays DRAM-aligned,
+# and it is comfortably under Blackhole's 15232 B ceiling ((16384 NoC max - 96 header) floored to Bfp8_b
+# tiles, erisc_datamover_builder.hpp:465-476) and 16-byte aligned as the fabric validator requires.
+CMBF2D_PACKET_BYTES = CMBF2D_TOKEN_BYTES + 64
+# Raising the fabric payload is a DEVICE-WIDE setting, so CombineFabric2D carries its own mesh config
+# rather than taking one from ALL_MESH_CONFIGS. The op only ever runs on this single config, and this way
+# a bigger packet cannot perturb any other test that shares that list. The id is unchanged, so
+# `-k fabric2d-torus-xy-8x4-2link` still selects it.
+CMBF2D_MESH_CONFIGS = [
+    pytest.param(
+        (8, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=CMBF2D_PACKET_BYTES),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        ttnn.Topology.Ring,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="fabric2d-torus-xy-8x4-2link",
+    ),
+]
 
 
 def _cmbf2d_bwinfo_path():
@@ -855,7 +879,15 @@ def _cmbf2d_link_tokens(mesh_device, axis, num_links, movements, tokens):
     for m in movements:
         off = (m.dst[axis] - m.src[axis]) % extent
         token_hops += min(off, extent - off) * tokens
-    return token_hops / (mesh_device.get_num_devices() * num_links * 2)
+    mean_link = token_hops / (mesh_device.get_num_devices() * num_links * 2)
+    # The two directions are NOT equally loaded. The fabric routes the diametrically-opposite chip
+    # (distance H) one single way, so that direction carries distances 1..H and the other only 1..H-1:
+    #   busiest = sum_{k=0..H-1} (H-k)     = H(H+1)/2  tokens
+    #   lightest = sum_{k=0..H-2} (H-1-k)  = H(H-1)/2  tokens
+    # (H(H+1)/2 + H(H-1)/2 = H^2 = 2 * mean, as it must.) The busiest link is what actually bounds the
+    # transfer, so it is the honest denominator for "are we at line rate".
+    half = extent // 2
+    return mean_link, half * (half + 1) // 2 * tokens, half * (half - 1) // 2 * tokens
 
 
 def _dump_combine_fabric2d_bwinfo(
@@ -1009,14 +1041,17 @@ def _dump_combine_fabric2d_bwinfo(
             # links carry ~(H*H/2 + H/2) tokens and the others ~(H*H/2 - H/2) (mean link_tokens). Turning that
             # into a per-producer number needs the direction the fabric chose, which the test does not know —
             # so a per-row column would be wrong by up to +/-25% and is not printed.
-            link_bytes = link_tokens * CMBF2D_TOKEN_BYTES
+            mean_tok, busy_tok, light_tok = link_tokens
+            busy_bytes = busy_tok * CMBF2D_TOKEN_BYTES
             f.write(
-                f"#\n# DERIVED LINK UTILISATION (headline): {link_tokens:g} tokens x {CMBF2D_TOKEN_BYTES}B = "
-                f"{link_bytes / 1e6:.2f} MB per directed link\n"
-                f"#   over the SLOWEST send window ({l_max:.2f} us): {(link_bytes / (l_max * 1e-6)) / 1e9:.2f} GB/s"
-                f"   [the transfer is not done until the last producer is]\n"
-                f"#   over the p50 send window ({l_p50:.2f} us): {(link_bytes / (l_p50 * 1e-6)) / 1e9:.2f} GB/s\n"
-                f"#   per-link load is non-uniform (see the note in the code); only the aggregate is meaningful.\n"
+                f"#\n# DERIVED LINK UTILISATION (headline)\n"
+                f"#   load per directed link is non-uniform: busiest {busy_tok:g} tokens "
+                f"({busy_bytes / 1e6:.2f} MB), lightest {light_tok:g}, mean {mean_tok:g}. The fabric routes the\n"
+                f"#   diametrically-opposite chip one single way, so that direction carries one more distance.\n"
+                f"#   BUSIEST link over the SLOWEST send window ({l_max:.2f} us): "
+                f"{(busy_bytes / (l_max * 1e-6)) / 1e9:.2f} GB/s of 25   <-- the real bottleneck\n"
+                f"#   mean link over the p50 send window ({l_p50:.2f} us): "
+                f"{(mean_tok * CMBF2D_TOKEN_BYTES / (l_p50 * 1e-6)) / 1e9:.2f} GB/s\n"
             )
             f.write(
                 f"# per-producer GB/s: min {g_min:.2f} p50 {g_p50:.2f} max {g_max:.2f} mean {g_mean:.2f}\n"
@@ -1060,7 +1095,7 @@ def _dump_combine_fabric2d_bwinfo(
 
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    ALL_MESH_CONFIGS,
+    CMBF2D_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
@@ -1070,6 +1105,15 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
         f"num_links={num_links} topology={topology}"
     )
     ttnn.visualize_mesh_device(mesh_device)
+
+    # The op relies on the fabric carrying token + 64B routing tail in ONE packet. Assert the device came
+    # up that way rather than trusting the config went through.
+    fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+    assert fabric_payload >= CMBF2D_PACKET_BYTES, (
+        f"fabric max payload is {fabric_payload} B but the op needs {CMBF2D_PACKET_BYTES} "
+        f"({CMBF2D_TOKEN_BYTES} token + 64 routing tail)"
+    )
+    logger.info(f"combine_fabric2d fabric max payload {fabric_payload} B (needs {CMBF2D_PACKET_BYTES})")
 
     tokens = CMBF2D_TOKENS
     token_size_bytes = CMBF2D_TOKEN_BYTES
@@ -1133,7 +1177,7 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
         num_links,
         axis=CMBF2D_AXIS,
         expected_workers=num_devices * 2 * num_links,
-        link_tokens=_cmbf2d_link_tokens(mesh_device, CMBF2D_AXIS, num_links, movements, tokens),
+        link_tokens=_cmbf2d_link_tokens(mesh_device, CMBF2D_AXIS, num_links, movements, tokens),  # tuple
         allowed_tokens=_cmbf2d_allowed,
         mesh_total_tokens=_cmbf2d_total,
         path=bwinfo_path,

@@ -26,6 +26,9 @@
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+// create_device_tensor: allocates device memory from a TensorSpec with no host data, which is what the
+// op-internal forwarding buffer wants (never initialised, never read back).
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt_stl/assert.hpp>
 #include "ttnn/distributed/types.hpp"
 
@@ -63,6 +66,34 @@ constexpr uint32_t CMBF2D_SLOT_TAIL_BYTES = 64;
 static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
 static_assert(DRAIN_SINK_OFF < TELEMETRY_OFF, "telemetry region overlaps the drain sink");
 static_assert(TELEMETRY_OFF + TELEMETRY_SIZE <= PROD_BUF_OFF, "telemetry region overlaps the token ring");
+
+// ---------------------------------------------------------------------------------------------
+// Forwarding buffer (phase 9): DRAM staging for tokens passing THROUGH this chip.
+//
+// Phase 9 stops the fabric forwarding multi-hop packets and does it in the op instead. A producer's
+// packets then only ever travel one hop, so anything bound further lands in the NEXT chip's forwarding
+// buffer and is re-sent from there.
+//
+// Geometry. The buffer is quartered by (routing plane, send direction) — the pair that uniquely identifies
+// the upstream producer from the downstream chip's point of view — and each quarter holds
+// `fwd_chunks_per_quarter` chunks of (tokens_per_movement + 1) pages. The +1 page is the sentinel that
+// marks a chunk's end.
+//
+// Chunk count per quarter: a chunk arriving at C in one direction is one (source, destination) pair whose
+// path passes through C and continues. Summing over upstream distance k >= 1 of the movements from that
+// source whose distance exceeds k gives sum_{k=1..H-1} (H-k) = H(H-1)/2, where H = extent/2. That is 6 for
+// an 8-ring, matching the plan. It is the worst case of the two directions: the direction that does NOT
+// carry the diametrically-opposite chip needs only (H-1)(H-2)/2, but both quarters are sized alike.
+// ---------------------------------------------------------------------------------------------
+uint32_t fwd_chunks_per_quarter(uint32_t extent) {
+    const uint32_t half = extent / 2;
+    return half * (half - 1) / 2;
+}
+
+// Quarters = (routing plane, direction) pairs = num_links * 2.
+uint32_t fwd_total_chunks(uint32_t extent, uint32_t num_links) {
+    return fwd_chunks_per_quarter(extent) * num_links * 2;
+}
 
 // Telemetry record word layout, shared with the producer kernel. Kept explicit (rather than a struct)
 // because the kernel writes it by index and the host reads it by index.
@@ -575,13 +606,17 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     uint32_t ring_filled_addr,
     uint32_t ring_freed_addr,
     tt::tt_metal::Buffer* dram_out_buf,
-    tt::tt_metal::Buffer* dram_in_buf) {
+    tt::tt_metal::Buffer* dram_in_buf,
+    tt::tt_metal::Buffer* dram_fwd_buf) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* mesh = args.device;
     auto* dev = mesh->get_device(coord);
     const auto self_node = mesh->get_fabric_node_id(coord);
     const uint32_t dram_out_addr = static_cast<uint32_t>(dram_out_buf->address());
     const uint32_t dram_in_addr = static_cast<uint32_t>(dram_in_buf->address());
+    // Op-internal forwarding staging. Passed to both kernels from P9.1 so the plumbing is in place and
+    // verified; P9.2 is what starts writing to it.
+    const uint32_t dram_fwd_addr = static_cast<uint32_t>(dram_fwd_buf->address());
     const uint32_t axis = args.axis;
     const uint32_t extent = mesh->shape()[static_cast<int32_t>(axis)];
 
@@ -691,6 +726,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             static_cast<uint32_t>(wp.worker_virtual.x),
             static_cast<uint32_t>(wp.worker_virtual.y),
             static_cast<uint32_t>(my_assignments.size()),
+            // Forwarding buffer (P9.1 plumbing; P9.2 starts using it).
+            dram_fwd_addr,
+            fwd_chunks_per_quarter(extent),
+            args.tokens_per_movement + 1,  // pages per chunk, incl. the sentinel
         };
         // Per-assignment block: [out_base_token, num_tokens, dst_chip_id, dst_mesh_id] x num_assignments.
         for (const auto& a : my_assignments) {
@@ -730,6 +769,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             l1.telemetry,
             dram_in_addr,
             static_cast<uint32_t>(my_assignments.size()),
+            // Forwarding buffer (P9.1 plumbing; P9.2 starts using it).
+            dram_fwd_addr,
+            fwd_chunks_per_quarter(extent),
+            args.tokens_per_movement + 1,  // pages per chunk, incl. the sentinel
         };
         // Per-assignment block: [in_base_token, num_tokens] x num_assignments.
         for (const auto& a : my_assignments) {
@@ -893,11 +936,23 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
         axis,
         mesh_shape[axis]);
 
-    const uint32_t fabric_max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t extent = mesh_shape[static_cast<int32_t>(axis)];
     TT_FATAL(
-        operation_attributes.token_size_bytes <= fabric_max_payload,
-        "combine_fabric2d: token_size_bytes {} exceeds the fabric max payload {} (one packet per token)",
+        extent % 2 == 0,
+        "combine_fabric2d: axis {} extent {} must be even — the all-destinations pattern relies on a "
+        "diametrically-opposite chip at ring offset extent/2",
+        axis,
+        extent);
+
+    const uint32_t fabric_max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    // From phase 9 a forwarded packet carries the token PLUS its routing tail, so the payload the fabric
+    // must accept is token + tail, not just token.
+    TT_FATAL(
+        operation_attributes.token_size_bytes + CMBF2D_SLOT_TAIL_BYTES <= fabric_max_payload,
+        "combine_fabric2d: token_size_bytes {} + {} B routing tail exceeds the fabric max payload {}. Raise "
+        "max_packet_payload_size_bytes in the device's fabric_router_config.",
         operation_attributes.token_size_bytes,
+        CMBF2D_SLOT_TAIL_BYTES,
         fabric_max_payload);
 
     const auto grid = mesh_device->compute_with_storage_grid_size();
@@ -982,6 +1037,57 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(ring_filled_sem);
     workload_descriptor.semaphores.push_back(ring_freed_sem);
+
+    // ---- Op-internal forwarding buffer. Never initialised and never read back: it is pure staging for
+    // tokens passing through a chip on their way somewhere else (phase 9). One page per token, and the page
+    // is token + tail so a single fabric write lands both. Fused into ONE page rather than split across a
+    // payload and a metadata region precisely because nothing outside the op reads it — so the "one page =
+    // one token" property that the caller's regions must keep does not apply here, and we save a DRAM
+    // read and a DRAM write per forwarded token.
+    //
+    // Allocated with create_device_tensor (no host data, no upload) and parked on
+    // WorkloadDescriptor::buffers wrapped in a shared_ptr<Tensor>: holding only a shared_ptr<MeshBuffer>
+    // would let DeviceStorage::deallocate free the memory when the local Tensor dies at the end of this
+    // function (workload_descriptor.hpp:19-36). Being a mesh tensor, its device-local address is uniform
+    // across the mesh by construction, which is what lets a producer address the NEXT chip's buffer.
+    const uint32_t fwd_page_bytes = operation_attributes.token_size_bytes + CMBF2D_SLOT_TAIL_BYTES;
+    TT_FATAL(
+        fwd_page_bytes % sizeof(uint32_t) == 0,
+        "combine_fabric2d: forwarding page {} B must be a multiple of 4",
+        fwd_page_bytes);
+    const uint32_t fwd_chunks = fwd_total_chunks(extent, operation_attributes.num_links);
+    const uint32_t fwd_pages_per_chunk = operation_attributes.tokens_per_movement + 1;  // +1 = sentinel
+    const uint32_t fwd_pages = fwd_chunks * fwd_pages_per_chunk;
+    const ttnn::TensorSpec fwd_spec(
+        ttnn::Shape({fwd_pages, fwd_page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
+    // Throws if it does not fit DRAM, which IS the "verify it fits" check this stage asks for.
+    auto fwd_owner = std::make_shared<ttnn::Tensor>(tt::tt_metal::create_device_tensor(fwd_spec, mesh_device));
+    auto* dram_fwd_buf = fwd_owner->buffer();
+    TT_FATAL(dram_fwd_buf != nullptr, "combine_fabric2d: forwarding buffer has no device buffer");
+    TT_FATAL(
+        dram_fwd_buf->aligned_page_size() == fwd_page_bytes,
+        "combine_fabric2d: forwarding page size is {} B after alignment but the op addresses it as {} B. "
+        "token_size_bytes + {} must be a multiple of the DRAM alignment.",
+        dram_fwd_buf->aligned_page_size(),
+        fwd_page_bytes,
+        CMBF2D_SLOT_TAIL_BYTES);
+    workload_descriptor.buffers.push_back({fwd_owner, dram_fwd_buf});
+    log_info(
+        tt::LogOp,
+        "combine_fabric2d forwarding buffer: {} chunks ({} per quarter x {} planes x 2 directions) x {} pages "
+        "x {} B = {:.1f} MB per device at 0x{:x}",
+        fwd_chunks,
+        fwd_chunks_per_quarter(extent),
+        operation_attributes.num_links,
+        fwd_pages_per_chunk,
+        fwd_page_bytes,
+        static_cast<double>(fwd_pages) * fwd_page_bytes / 1e6,
+        dram_fwd_buf->address());
+
     for (const auto& coord : tensor_coords.coords()) {
         auto desc = build_program_for_coord(
             operation_attributes,
@@ -993,7 +1099,8 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
             ring_filled_addr,
             ring_freed_addr,
             dram_out_buf,
-            dram_in_buf);
+            dram_in_buf,
+            dram_fwd_buf);
         workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return workload_descriptor;

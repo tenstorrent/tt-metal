@@ -117,7 +117,11 @@ void kernel_main() {
     // Per-assignment table: [out_base_token, num_tokens, dst_chip_id, dst_mesh_id]. Read through
     // kernel_compile_time_args (a constexpr std::array) because get_compile_time_arg_val needs a literal
     // index and this table is walked by a loop variable.
-    constexpr uint32_t ASSIGN_BASE = 20;
+    // Forwarding buffer, plumbed from P9.1 and used from P9.2.
+    constexpr uint32_t dram_fwd_base_addr = get_compile_time_arg_val(20);
+    constexpr uint32_t fwd_chunks_per_quarter = get_compile_time_arg_val(21);
+    constexpr uint32_t fwd_pages_per_chunk = get_compile_time_arg_val(22);
+    constexpr uint32_t ASSIGN_BASE = 23;
     constexpr uint32_t ASSIGN_WORDS = 4;
     constexpr auto dram_out_args = TensorAccessorArgs<ASSIGN_BASE + ASSIGN_WORDS * num_assignments>();
     // A ring slot is the token plus a metadata tail; only the token part is sent over the fabric.
