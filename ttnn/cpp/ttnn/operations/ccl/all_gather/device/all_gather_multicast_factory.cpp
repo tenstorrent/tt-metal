@@ -291,12 +291,12 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     }
 
     // --- Stripe geometry ---
-    // input_pages_per_stripe = num input pages along [gather_dim .. last dim] this
+    // input_pages_per_stripe = num input pages along [gather dim .. last dim] this
     // device contributes per stripe. For a last-dim RM gather this is the *page* count,
     // which handles sharded RM input (> 1 input page per row).
     auto tile_spec = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     uint32_t input_pages_per_stripe = 1;
-    for (int32_t i = operation_attributes.dim_from_end(); i < 0; i++) {
+    for (int32_t i = operation_attributes.dim_from_end; i < 0; i++) {
         uint32_t extent;
         if (i == -1) {
             if (input_tensor.layout() == ttnn::TILE_LAYOUT) {

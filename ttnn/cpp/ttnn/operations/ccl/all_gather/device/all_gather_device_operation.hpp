@@ -37,7 +37,7 @@ struct AllGatherDeviceOperation {
 
 tt::tt_metal::TensorSpec compute_output_specs_helper(
     const Tensor& input_tensor,
-    int32_t gather_dim,
+    int32_t gather_dim_from_end,
     uint32_t num_devices,
     const std::optional<MemoryConfig>& memory_config);
 

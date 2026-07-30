@@ -21,7 +21,11 @@ namespace ttnn::operations::ccl {
 // struct field must be added to both lists. Miss one and two different configs will share a cached program.
 // NOTE: auto-reflection can't be used since it value-initializes the struct, and TensorSpec has no default ctor.
 struct AllGatherParams {
-    int32_t dim = 0;  // gather dim, normalized against the input's logical rank (not output padded rank)
+    // Gather dim: counted from the end of the shape, so always negative. A padded shape can outrank the
+    // logical one (a tiled rank-<2 tensor is promoted to rank 2, extra dims prepended), so this is the only
+    // format valid against both. Use Shape::get_normalized_index() where a non-negative axis is needed.
+    int32_t dim_from_end = -1;
+
     tt::tt_metal::TensorSpec output_spec;
     std::optional<uint32_t> cluster_axis;
 
@@ -39,7 +43,7 @@ struct AllGatherParams {
     std::optional<CoreRangeSet> sub_core_grid;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "dim",
+        "dim_from_end",
         "output_spec",
         "cluster_axis",
         "fabric_config",
@@ -52,7 +56,7 @@ struct AllGatherParams {
         "sub_core_grid");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            dim,
+            dim_from_end,
             output_spec,
             cluster_axis,
             fabric_config,
@@ -64,11 +68,6 @@ struct AllGatherParams {
             subdevice_id,
             sub_core_grid);
     }
-
-    // Index for padded_shape(): a padded shape can outrank the logical one (a tiled rank-<2 tensor is
-    // promoted to rank 2, extra dims prepended), so only a from-the-end index is valid against both.
-    // output_spec's logical shape is the input's with the gather dim scaled, so its rank equals the input's.
-    int32_t dim_from_end() const { return dim - static_cast<int32_t>(output_spec.logical_shape().rank()); }
 
     // "true 2D" = a 2D fabric config with both axes active
     bool is_true_2d() const {

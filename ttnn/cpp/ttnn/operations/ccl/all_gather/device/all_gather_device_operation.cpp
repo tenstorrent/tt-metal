@@ -33,7 +33,10 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
     // Constraints on other inputs
     const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
     TT_FATAL(
-        args.dim >= 0 && args.dim < rank, "Invalid (normalized) gather dim {} for {}D input tensor", args.dim, rank);
+        args.dim_from_end >= -rank && args.dim_from_end < 0,
+        "Invalid (normalized) gather dim {} for {}D input tensor",
+        rank + args.dim_from_end,
+        rank);
     TT_FATAL(
         args.num_devices > 1, "all_gather collective will only work for num_devices > 1, got {}", args.num_devices);
 
@@ -69,7 +72,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         auto output_shape = output_tensor.padded_shape();
         auto input_shape = input_tensor.padded_shape();
         auto expected_output_shape = input_shape;
-        expected_output_shape[args.dim_from_end()] *= args.num_devices;
+        expected_output_shape[args.dim_from_end] *= args.num_devices;
         TT_FATAL(
             output_shape.size() == input_shape.size(),
             "Output tensor shape should have same number of dimensions as input tensor but has {}",
@@ -100,10 +103,11 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
 
     // For each distribution dimension, if sharded on the gather dim, make it replicated
     const auto& logical_shape = input_tensor.logical_shape();
+    const uint32_t gather_dim = logical_shape.get_normalized_index(args.dim_from_end);
     for (auto& output_placement : output_placements) {
         if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placement)) {
             // Shard::dim is always unnormalized by construction, so normalize here
-            if (logical_shape.get_normalized_index(shard->dim) == static_cast<uint32_t>(args.dim)) {
+            if (logical_shape.get_normalized_index(shard->dim) == gather_dim) {
                 output_placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
             }
         }
@@ -272,7 +276,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
 
 tt::tt_metal::TensorSpec compute_output_specs_helper(
     const Tensor& input_tensor,
-    int32_t gather_dim,
+    int32_t gather_dim_from_end,
     uint32_t num_devices,
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
@@ -282,7 +286,7 @@ tt::tt_metal::TensorSpec compute_output_specs_helper(
         output_mem_config = MemoryConfig(output_mem_config.buffer_type(), output_mem_config.nd_shard_spec());
     }
     auto shape = input_tensor.logical_shape();
-    shape[gather_dim] *= num_devices;
+    shape[gather_dim_from_end] *= num_devices;
     return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config));
@@ -330,13 +334,15 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
         axis_num_links,
         packet_size);
 
-    // Resolve negative gather dim
-    const int32_t gather_dim = static_cast<int32_t>(input_tensor.logical_shape().get_normalized_index(dim));
+    // Resolve the user's gather dim to a from-the-end index (see AllGatherParams::dim_from_end)
+    const auto& logical_shape = input_tensor.logical_shape();
+    const int32_t gather_dim_from_end =
+        static_cast<int32_t>(logical_shape.get_normalized_index(dim)) - static_cast<int32_t>(logical_shape.rank());
 
     return {
         AllGatherParams{
-            gather_dim,
-            compute_output_specs_helper(input_tensor, gather_dim, num_devices, memory_config),
+            gather_dim_from_end,
+            compute_output_specs_helper(input_tensor, gather_dim_from_end, num_devices, memory_config),
             cluster_axis,
             fabric_config,
             axis_topology,

@@ -25,10 +25,10 @@ std::pair<bool, std::string> use_composite_all_gather(
     int32_t dim,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<uint32_t> cluster_axis) {
-    const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
-    const int32_t gather_dim = static_cast<int32_t>(input_tensor.logical_shape().get_normalized_index(dim));
-    // Index for padded_shape(), identical to AllGatherParams::dim_from_end().
-    const int32_t gather_dim_from_end = gather_dim - rank;
+    const auto& logical_shape = input_tensor.logical_shape();
+    const int32_t gather_dim = static_cast<int32_t>(logical_shape.get_normalized_index(dim));
+    // Indexes both logical_shape and padded_shape, identical to AllGatherParams::dim_from_end.
+    const int32_t gather_dim_from_end = gather_dim - static_cast<int32_t>(logical_shape.rank());
 
     // Below is equivalent to: axis_num_devices[0] * axis_num_devices[1]
     const auto& mesh_shape = input_tensor.device()->shape();
@@ -37,20 +37,20 @@ std::pair<bool, std::string> use_composite_all_gather(
     // Gather-dim padding would need the output's gather-dim extent to be num_devices * the input's
     // padded extent, but it is num_devices * the logical one.
     auto gathered_padded_shape = input_tensor.padded_shape();
-    if (input_tensor.logical_shape()[gather_dim] != gathered_padded_shape[gather_dim_from_end]) {
+    if (logical_shape[gather_dim_from_end] != gathered_padded_shape[gather_dim_from_end]) {
         return {
             true,
             fmt::format(
                 "gather dim {} is padded from {} to {}; size must be a multiple of the tile/shard extent",
                 gather_dim,
-                input_tensor.logical_shape()[gather_dim],
+                logical_shape[gather_dim_from_end],
                 gathered_padded_shape[gather_dim_from_end])};
     }
 
     // Keep the padding check above this: building the spec can TT_FATAL on a legacy output config that
     // can't hold the gathered shape, and a gather-dim-padded input should route to composite instead.
     const auto output_spec =
-        operations::ccl::compute_output_specs_helper(input_tensor, gather_dim, num_devices, memory_config);
+        operations::ccl::compute_output_specs_helper(input_tensor, gather_dim_from_end, num_devices, memory_config);
 
     // The kernel walks the output page grid as the input's with only the gather dim scaled, so any
     // other difference breaks it -- e.g. an output shard width that doesn't divide the row, which
