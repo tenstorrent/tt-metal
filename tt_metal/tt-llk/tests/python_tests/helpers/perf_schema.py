@@ -5,9 +5,12 @@
 
 class PerfSchemaError(AssertionError):
     """
-    Raised when a perf report accumulates more than one column schema in a
-    single CSV (ragged, NaN-filled rows that break strict-JSON dashboards and
-    the compare feature). Fail-loud so the contaminated CSV never ships.
+    Raised when a perf report's columns are not a valid, unique schema.
+
+    Two failure modes share this error: a single CSV that accumulates more than
+    one column schema (ragged, NaN-filled rows), and a report with two columns
+    that carry the same header name (a duplicate that would be silently mangled
+    into a ``<name>.1`` phantom). Both are fail-loud so the bad CSV never ships.
     """
 
 
@@ -21,6 +24,9 @@ FORMAT_HEADERS = (
     "formats.output",
 )
 FLAG_HEADERS = ("unpack_to_dest", "dest_acc")
+
+# All fixed (non-parameter) sweep columns the pipeline always emits.
+FIXED_SWEEP_HEADERS = FORMAT_HEADERS + FLAG_HEADERS
 
 LOOP_FACTOR_COLUMN = "loop_factor"
 TILE_CNT_COLUMN = "tile_cnt"
@@ -59,6 +65,26 @@ def counter_base(bank: str, counter: str) -> str:
 def cycles_of(base: str) -> str:
     """Cycles variant of a counter base, e.g. cycles_of("FPU.FPU_COUNTER") -> "FPU.FPU_COUNTER.cycles"."""
     return f"{base}.cycles"
+
+
+def find_duplicate_columns(columns) -> list:
+    seen, dupes = set(), []
+    for c in columns:
+        if c in seen and c not in dupes:
+            dupes.append(c)
+        seen.add(c)
+    return dupes
+
+
+def assert_unique_columns(columns, context: str = "") -> None:
+    dupes = find_duplicate_columns(columns)
+    if dupes:
+        raise PerfSchemaError(
+            f"Perf report has duplicate column header(s) {dupes} in "
+            f"{context or 'report'}. Two parameters resolve to the same column "
+            f"name (they share a dataclass field name), or the same parameter "
+            f"was passed twice. Rename one field so every header is unique."
+        )
 
 
 # Golden CSV-header catalog

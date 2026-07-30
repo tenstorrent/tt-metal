@@ -29,6 +29,7 @@ from .perf_schema import (
     TEXT_SIZE_PREFIX,
     TILE_CNT_COLUMN,
     PerfSchemaError,
+    assert_unique_columns,
     stat_prefix,
     text_size_column,
 )
@@ -136,6 +137,10 @@ class PerfReport:
         self._schema_registry: dict[frozenset, dict] = {}
 
     def append(self, frame: pd.DataFrame, label: str | None = None):
+        # Gate: a report must never carry two columns with the same header. We
+        # check here, at the single funnel every report row passes through
+        # A duplicate raises PerfSchemaError, so the contaminated CSV never ships.
+        assert_unique_columns(frame.columns, context=label or "report")
         self._frames.append(frame)
         self._masks.append(pd.Series(True, index=frame.index))
         self._register_schema(frame, label)
