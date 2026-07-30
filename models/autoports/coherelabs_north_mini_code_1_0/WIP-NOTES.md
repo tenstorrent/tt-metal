@@ -47,3 +47,28 @@ not redirected by a changed objective — a real limitation of scoping-by-resume
 **Superseded by a FRESH run** (fresh branch + fresh log dir) with `MOE=1` from the first turn, so no
 b32 context ever accumulates. This park exists so that rerun can be compared against it, and so the
 b1 numbers and the `50c56281566` diagnosis survive regardless of how the rerun goes.
+
+## Parked artifacts — what is where (all work preserved)
+
+| where | what |
+|---|---|
+| this branch, `doc/optimized_decoder/` | the full committed analysis: README, work_log, AUTODEBUG*/AUTOFIX*/AUTOTRIAGE, STAGE_REVIEW_1..4 + FINAL + FINAL_REREVIEW, candidates/, and 198 perf/report files incl. `*_perf_report.txt` |
+| this branch, `doc/optimized_decoder/parked-ignored-artifacts.tgz` | 604 KB / 206 entries — the **gitignored** artifacts `git add -A` silently skipped (probe logs, candidate yaml/txt, junit, small csv). B25. |
+| `skillexp-logs/parked-evidence/northmini-nofuse-noadvise-ignored/` (host) | the same set uncompressed, plus the excluded tracy CSVs |
+
+**Deliberately excluded from git: 97 MB of tracy CSVs** (17 files, incl. two ~45 MB
+`profile_log_device.csv` raw device dumps). Policy is tt-perf-report text only — no CSV, no
+`.tracy`. The report text itself **is** committed. Excluded dumps, by sha256 prefix:
+
+- `c17c96d7e74fb95d` — `tracy/review5_selected/layer4_prefill_b32/reports/2026_07_29_05_44_54/profile_log_device.csv` (44.9 MB)
+- `43a87a297b67594c` — `tracy/review5_selected/layer1_prefill_b32/reports/2026_07_29_05_44_17/profile_log_device.csv` (46.1 MB)
+
+They remain on the host at the path above if ever needed.
+
+## The rerun starts fresh — this park is the only copy of this attempt
+
+The batch-1 rerun uses `mkwork.sh`, which builds the work branch from the
+`skillexp/fd-ready/coherelabs_north_mini_code_1_0` **tag** and **refuses** if any
+`doc/optimized_decoder`, `doc/fused_decoder` or `tt/optimized_decoder.py` exists for this model in
+the source commit or the worktree. So the rerun tree carries the functional decoder and nothing else,
+and it cannot see or inherit anything from this attempt.
