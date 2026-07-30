@@ -114,6 +114,9 @@ from its description, and a few commands also name it explicitly.
   `tt-enable-tracing`, `vllm-integration`, `tti-release`, `stage-review`.
 - **Not applicable**: `forge-functional-decoder` — the backbone is the hand-written gemma4 code,
   not a tt-forge emit; this pipeline does not use it.
+- **Written here** (no generic counterpart): `eval-run-audit` — audit a finished GPQA eval run:
+  false-green check, LLM-judge every response for whether it actually answered, paired Record-ID
+  comparison against a baseline, and output speed from block telemetry.
 
 ## Context-length contract
 
