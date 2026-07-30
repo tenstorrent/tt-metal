@@ -275,8 +275,8 @@ class TttGenerationWorker:
         for model in self.models:
             for layer in model.layers:
                 k_cache, v_cache = layer.attention.layer_past
-                ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                ttnn.mul(v_cache, 0, output_tensor=v_cache)
+                ttnn.fill(k_cache, 0, output_tensor=k_cache)
+                ttnn.fill(v_cache, 0, output_tensor=v_cache)
         self.generator.prev_page_table = None
 
     def _prepare_prompt_batch(
