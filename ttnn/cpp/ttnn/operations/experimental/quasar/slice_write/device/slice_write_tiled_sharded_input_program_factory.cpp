@@ -223,7 +223,7 @@ ttnn::device_operation::ProgramArtifacts SliceWriteTiledShardedInputProgramFacto
     const auto& output_tensor_end = operation_attributes.slice_end;
 
     const auto& input_padded_shape = input.padded_shape();
-    const auto output_shape = output.logical_shape();
+    const auto& output_shape = output.logical_shape();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
