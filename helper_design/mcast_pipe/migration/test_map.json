@@ -11,6 +11,150 @@
     "Record skips and xfails separately; do not count them as passes.",
     "Revalidate discovery-only routes after test or factory routing changes."
   ],
+  "host_bindings": [
+    {
+      "id": "weights-mcast:conv2d-sharded:single-sender-rect",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "height-sharded/default 1D writer pair with weights multicast enabled",
+      "migration_unit": "conv2d-weights-single-sender-rect",
+      "inventory": [
+        "CONV-HEIGHT",
+        "test_conv_dram"
+      ],
+      "coverage": "complete with exact sender and receiver JIT evidence"
+    },
+    {
+      "id": "weights-mcast:conv2d-sharded:fixed-line",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "block-sharded non-depthwise row/column fixed-line weights multicast",
+      "migration_unit": "conv2d-weights-fixed-line",
+      "inventory": [
+        "CONV-BLOCK",
+        "test_conv_dram"
+      ],
+      "coverage": "complete with exact sender and receiver JIT evidence; explicitly recheck both row and column routes"
+    },
+    {
+      "id": "weights-mcast:conv2d-sharded:skip",
+      "classification": "not_applicable",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "skip_weights_mcast=true",
+      "result": "SKIP_MCAST removes the device protocol; no receiver or weights semaphore binding exists"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-2d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy 2D create path, both transpose_mcast values",
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "inventory": [
+        "MM-IN1-ALL",
+        "MM-IN1-RECEIVER-2D"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-2d:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor 2D create path, both transpose_mcast values",
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "inventory": [
+        "MM-IN1-ALL",
+        "MM-IN1-RECEIVER-2D"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in1:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy path with gather_in0=false and mcast_in0=false",
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "inventory": [
+        "MM-IN1-ALL"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in1:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor path with gather_in0=false and mcast_in0=false",
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "inventory": [
+        "MM-IN1-ALL"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in0:legacy",
+      "classification": "not_applicable",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy path with gather_in0=false and mcast_in0=true",
+      "result": "sender source is compiled with SKIP_MCAST and no in1 receiver exists"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in0:descriptor",
+      "classification": "not_applicable",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor path with gather_in0=false and mcast_in0=true",
+      "result": "sender source is compiled with SKIP_MCAST and no in1 receiver exists"
+    },
+    {
+      "id": "matmul-in1-mcast:sparse-1d:mcast-in0:legacy",
+      "classification": "not_applicable",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp",
+      "dispatch": "sparse MCAST_IN0 path",
+      "result": "sender source is compiled with SKIP_MCAST and no in1 receiver exists"
+    },
+    {
+      "id": "groupnorm-v2:sharded:legacy:mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=false and use_mcast=true",
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "inventory": [
+        "GN-SHARDED-PARAMETERIZED legacy"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "groupnorm-v2:sharded:legacy:degenerate",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=false and use_mcast=false",
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "inventory": [
+        "GN-SHARDED-PARAMETERIZED legacy fixed/default routing"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "groupnorm-v2:sharded:welford:mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=true and use_mcast=true",
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "inventory": [
+        "GN-SHARDED-PARAMETERIZED Welford"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "groupnorm-v2:sharded:welford:degenerate",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=true and use_mcast=false",
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "inventory": [
+        "GN-SHARDED-PARAMETERIZED Welford fixed/default routing"
+      ],
+      "coverage": "complete"
+    }
+  ],
   "inventory_definitions": {
     "MM-IN0-INTERLEAVED": {
       "path": "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",

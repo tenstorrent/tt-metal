@@ -9,6 +9,24 @@ the `origin/llk_helper_library` baseline at `54d8dfb7bef`.
 Remediation also added the previously raw Conv 1D sender and both GroupNorm v2
 senders, producing the current 22-row production candidate set.
 
+## Host-helper re-entry state
+
+The paired `mcast_host` helper and `McastArgs` decoder are materialized and
+their intake tests are green, but this older ledger had no `host_bindings`
+state. Phase 1 found ten required bindings, all initialized as `pending`:
+
+| Unit | Required bindings | Kernel rows | Validation |
+|---|---:|---:|---|
+| `conv2d-weights-single-sender-rect` | 1 | 2 | `CONV-HEIGHT`, shared DRAM slice |
+| `conv2d-weights-fixed-line` | 1 | 2 | `CONV-BLOCK`, shared DRAM slice |
+| `matmul-in1-mcast-padding-host` | 4 | 2 | `MM-IN1-ALL`, `MM-IN1-RECEIVER-2D` |
+| `groupnorm-sharded-v2-mcast-host` | 4 | 4 | legacy + Welford `GN-SHARDED-PARAMETERIZED` |
+
+The exact binding/dispatch map is in `test_map.json`; the easier-first atomic
+order and risk gates are in `tiers.md`. Until a unit's required bindings are
+migrated at API v9, its kernel rows are kernel-current but not fully
+end-to-end current.
+
 ## Current migrations under API v9 (10)
 
 | Area | Role | Kernel | Validation |
@@ -44,6 +62,8 @@ migrations.
 The copied July census still contains 92 entries:
 
 - 10 current production migrations at API v9;
+- 10 required host bindings pending across 4 atomic units;
+- 0 fully end-to-end current kernels until those bindings are migrated;
 - 12 production candidates deferred with `v9-port-blocked` and a concrete
   design-gap flag;
 - 70 pre-existing deferred candidates from the July census;
