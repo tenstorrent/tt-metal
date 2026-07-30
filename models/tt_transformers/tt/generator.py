@@ -1689,7 +1689,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     for chunk in model_chunks:
                         s = format_sampling_params(chunk, seed_bs).seed
                         seed_values += s if isinstance(s, list) else [s] * seed_bs
-                sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
+                # reset_batch = first decode after prefill or a layout change: seed unconditionally,
+                # even for seed=None. ``decode_only`` mode never seeded the device, so the if_needed
+                # path matches the manager's initial None, early-returns, and replays one draw.
+                if reset_batch:
+                    sampling_module.seed_manager.reset_seed_from_slots(seed_values, active_seed_slots)
+                else:
+                    sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
                 sampling_module.seed_manager.align_seed_counters_to_positions(
                     seed_values, active_seed_slots, start_values
                 )
