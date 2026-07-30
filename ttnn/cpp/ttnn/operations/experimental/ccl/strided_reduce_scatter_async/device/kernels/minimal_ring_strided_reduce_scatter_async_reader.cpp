@@ -184,6 +184,11 @@ void kernel_main() {
                 const uint32_t effective_chunk_width_in_tiles =
                     get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_full_block_wt);
                 const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
+                // Hoist the (run-invariant) divisions out of the per-tile advance.
+                const auto steps_worker = decompose_tile_advance(
+                    effective_worker_id, effective_subchunk_size, effective_chunk_width_in_tiles);
+                const auto steps_advance = decompose_tile_advance(
+                    effective_advance_by_tiles, effective_subchunk_size, effective_chunk_width_in_tiles);
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
 #ifdef FUSE_MM_OP_SIGNALER
@@ -229,8 +234,7 @@ void kernel_main() {
                             tile_row_in_mm_M_unit_block,
                             chunk_col_in_tiles,
                             mm_core_idx,
-                            effective_worker_id,
-                            effective_subchunk_size,
+                            steps_worker,
                             effective_chunk_width_in_tiles,
                             current_mm_block_ht);
                         uint32_t tiles_to_read = how_many_tiles_to_read_formula(
@@ -329,8 +333,7 @@ void kernel_main() {
                                     tile_row_in_mm_M_unit_block,
                                     chunk_col_in_tiles,
                                     mm_core_idx,
-                                    effective_advance_by_tiles,
-                                    effective_subchunk_size,
+                                    steps_advance,
                                     effective_chunk_width_in_tiles,
                                     current_mm_block_ht);
                             }
