@@ -43,7 +43,7 @@ void WriteShard(
     const MeshCoordinate& coord,
     bool blocking = false) {
     std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(src.data())};
-    mesh_cq.enqueue_write_shards(mesh_buffer, shard_data_transfers, blocking);
+    mesh_cq.enqueue_write_shards(*mesh_buffer, shard_data_transfers, blocking);
 }
 
 template <typename DType>
@@ -64,7 +64,7 @@ void ReadShard(
     auto* shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
     std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(dst.data())};
-    mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
+    mesh_cq.enqueue_read_shards(shard_data_transfers, *mesh_buffer, blocking);
 }
 
 template <typename DType>
@@ -79,7 +79,7 @@ void EnqueueWriteMeshBuffer(
         src.size(),
         sizeof(DType));
 
-    mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
+    mesh_cq.enqueue_write_mesh_buffer(*mesh_buffer, src.data(), blocking);
 }
 
 template <typename DType>
@@ -95,7 +95,7 @@ void EnqueueReadMeshBuffer(
     } else {
         dst.resize(mesh_buffer->size() / sizeof(DType));
     }
-    mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
+    mesh_cq.enqueue_read_mesh_buffer(dst.data(), *mesh_buffer, blocking);
 }
 
 // Make the current thread block until the event is recorded by the associated MeshCommandQueue.

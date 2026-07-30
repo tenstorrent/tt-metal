@@ -309,7 +309,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
         write_events.push_back(write_cq.enqueue_record_event_to_host());
         // Wait for write to complete before reading
         read_cq.enqueue_wait_for_event(write_events.back());
-        read_cq.enqueue_read_shards(read_shards[i], buffer, false);
+        read_cq.enqueue_read_shards(read_shards[i], *buffer, false);
         read_events.push_back(read_cq.enqueue_record_event_to_host());
     }
 

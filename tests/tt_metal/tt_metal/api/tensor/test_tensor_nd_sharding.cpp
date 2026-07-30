@@ -1271,8 +1271,8 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
             distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}
                 .host_data(reinterpret_cast<std::byte*>(partial_readback_data.data()) + region_offset)
                 .region(buffer_region);
-        mesh_device_->mesh_command_queue().enqueue_write_shards(shared_mesh_buffer, {write_shard_data_transfer}, true);
-        mesh_device_->mesh_command_queue().enqueue_read_shards({read_shard_data_transfer}, shared_mesh_buffer, true);
+        mesh_device_->mesh_command_queue().enqueue_write_shards(*shared_mesh_buffer, {write_shard_data_transfer}, true);
+        mesh_device_->mesh_command_queue().enqueue_read_shards({read_shard_data_transfer}, *shared_mesh_buffer, true);
     }
     EXPECT_EQ(tensor_data, partial_readback_data);
 

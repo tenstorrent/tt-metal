@@ -271,7 +271,7 @@ void EnqueueWriteMeshSubBuffer(
                                    .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
                                    .region(region);
 
-    cq.enqueue_write_shards(buffer, {shard_data_transfer}, blocking);
+    cq.enqueue_write_shards(*buffer, {shard_data_transfer}, blocking);
 }
 
 void EnqueueReadMeshSubBuffer(
@@ -283,7 +283,7 @@ void EnqueueReadMeshSubBuffer(
     auto shard_data_transfer =
         distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst.data()).region(region);
 
-    cq.enqueue_read_shards({shard_data_transfer}, buffer, blocking);
+    cq.enqueue_read_shards({shard_data_transfer}, *buffer, blocking);
 }
 
 template <bool cq_dispatch_only = false>
