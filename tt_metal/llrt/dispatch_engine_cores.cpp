@@ -44,7 +44,7 @@ std::vector<tt::tt_metal::CoreCoord> get_quasar_tensix_fallback_dispatch_cores_f
 // (one tile per CQ). dispatch_core_manager assigns prefetch/dispatch via separate pool pops;
 // dispatch_s is forced onto the dispatcher tile. Rebuild the soc DE list as
 // [DE0, DE0, DE1, DE1, ...] so each CQ's prefetch+dispatch share a tile. Extra DEs beyond
-// num_hw_cqs are unused; if fewer DEs than CQs, later CQs reuse the last available DE.
+// num_hw_cqs are unused; if fewer DEs than CQs, later CQs cycle through the DEs again.
 // Free DMs are auto-assigned at CreateDispatchEngineKernel time.
 void expand_quasar_dispatch_engine_pool_for_fd_assignment(
     std::vector<tt::tt_metal::CoreCoord>& logical_cores, uint8_t num_hw_cqs) {
@@ -55,8 +55,7 @@ void expand_quasar_dispatch_engine_pool_for_fd_assignment(
     logical_cores.clear();
     logical_cores.reserve(static_cast<size_t>(num_hw_cqs) * 2);
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
-        const size_t de_index =
-            (static_cast<size_t>(cq_id) < available_des.size()) ? cq_id : available_des.size() - 1;
+        const size_t de_index = static_cast<size_t>(cq_id) % available_des.size();
         const auto& de = available_des[de_index];
         logical_cores.push_back(de);
         logical_cores.push_back(de);
