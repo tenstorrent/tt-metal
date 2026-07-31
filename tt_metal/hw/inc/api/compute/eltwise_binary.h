@@ -62,94 +62,146 @@ ALWI void binary_dest_reuse_init(uint32_t icb0, uint32_t call_line) {
         icb0, icb0, false /* acc_to_dest */)));
 }
 
-// Internal implementation shared by the per-op short inits (add_init / sub_init / mul_init).
-// It is intentionally not the public surface: there is deliberately no generic public `binary_init`;
-// the per-op `*_init` functions are the API the kernels call (mirrors the matmul.h precedent).
-//
-// binary_reuse_dest == NONE: reconfigures the unpacker + math pipeline for the two-operand op
-//   (SrcA <- icb0, SrcB <- icb1) via binary_tiles_init<true, TYPE>.
-// binary_reuse_dest != NONE: dest-reuse path via binary_dest_reuse_init; icb1 and acc_to_dest are
-//   unused on that path (the second source operand is taken from DST).
-template <EltwiseBinaryType eltwise_binary_type, EltwiseBinaryReuseDestType binary_reuse_dest>
-ALWI void binary_init_impl(uint32_t icb0, uint32_t icb1, bool acc_to_dest, uint32_t call_line) {
-    if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE) {
-        binary_tiles_init<true /* full_init */, eltwise_binary_type>(icb0, icb1, acc_to_dest, call_line);
-    } else {
-        binary_dest_reuse_init<eltwise_binary_type, binary_reuse_dest>(icb0, call_line);
-    }
-}
+// The per-op short inits below come in two forms; there is deliberately no generic public `binary_init`
+// (mirrors the matmul.h precedent). The two-operand form is the standard op (both operands unpacked);
+// the single-operand template form is the dest-reuse op (one operand is taken from DST, so only one CB
+// is unpacked). Overload resolution picks between them by whether a template argument is supplied:
+//   add_init(a, b)                                    -> two-operand (SrcA <- a, SrcB <- b)
+//   add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(a) -> dest-reuse (DST -> SrcA, a -> SrcB)
+// The two-operand form is not templated, so a bare call cannot select the dest-reuse path; the
+// dest-reuse form requires an explicit (non-NONE) template argument, so it cannot be called by mistake.
 
 // clang-format off
 /**
- * Paired init function for add_tiles / binary_dest_reuse_tiles<ELWADD>. Configures the unpacker and
- * math pipeline for element-wise addition. Call before add_tiles (or the dest-reuse op). The one-time
- * hardware configuration must already have been performed via compute_kernel_hw_startup(icb0, icb1, ocb)
- * at the start of MAIN. For general information on init functions refer to any_init.
+ * Paired init for two-operand element-wise addition (add_tiles). Configures the unpacker and math
+ * pipeline so that SrcA <- icb0 and SrcB <- icb1. Call before add_tiles. The one-time hardware
+ * configuration must already have been performed via compute_kernel_hw_startup(icb0, icb1, ocb) at the
+ * start of MAIN. For general information on init functions refer to any_init. For the dest-reuse variant
+ * (one operand from DST) use the single-operand add_init<binary_reuse_dest> overload below.
  *
- * When binary_reuse_dest != NONE the dest-reuse variant is configured: only icb0 is unpacked and the
- * second source operand is taken from DST (see binary_dest_reuse_tiles); icb1 is unused in that mode.
- *
- * | Param Type | Name            | Description                                                     | Type                       | Valid Range | Required |
- * |------------|-----------------|-----------------------------------------------------------------|----------------------------|-------------|----------|
- * | Template   | binary_reuse_dest | Selects the two-operand (NONE) or dest-reuse init path        | EltwiseBinaryReuseDestType | N/A         | False    |
- * | Function   | icb0            | The identifier of the circular buffer (CB) containing A         | uint32_t                   | 0 to 31     | True     |
- * | Function   | icb1            | The identifier of the circular buffer (CB) containing B         | uint32_t                   | 0 to 31     | True     |
- * | Function   | acc_to_dest     | If true, operation = A + B + dst_tile_idx of add_tiles          | bool                       | 0,1         | False    |
+ * | Argument    | Description                                              | Type     | Valid Range | Required |
+ * |-------------|----------------------------------------------------------|----------|-------------|----------|
+ * | icb0        | CB whose tile is unpacked into SrcA (operand A)          | uint32_t | 0 to 31     | True     |
+ * | icb1        | CB whose tile is unpacked into SrcB (operand B)          | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest | If true, operation = A + B + dst_tile_idx of add_tiles   | bool     | 0,1         | False    |
  */
 // clang-format on
-template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void add_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
-    binary_init_impl<EltwiseBinaryType::ELWADD, binary_reuse_dest>(icb0, icb1, acc_to_dest, call_line);
+    binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWADD>(icb0, icb1, acc_to_dest, call_line);
 }
 
 // clang-format off
 /**
- * Paired init function for sub_tiles / binary_dest_reuse_tiles<ELWSUB>. Configures the unpacker and
- * math pipeline for element-wise subtraction. Call before sub_tiles (or the dest-reuse op). The one-time
- * hardware configuration must already have been performed via compute_kernel_hw_startup(icb0, icb1, ocb)
- * at the start of MAIN. For general information on init functions refer to any_init.
+ * Paired init for dest-reuse element-wise addition (binary_dest_reuse_tiles<ELWADD, binary_reuse_dest>).
+ * One addend is taken from the DST register, so only a single CB is unpacked; which source register the
+ * DST tile is loaded into is selected by binary_reuse_dest:
+ *   - DEST_TO_SRCA: DST -> SrcA, icb -> SrcB   (result = DST + icb)
+ *   - DEST_TO_SRCB: DST -> SrcB, icb -> SrcA   (result = icb + DST)
+ * Call before binary_dest_reuse_tiles. compute_kernel_hw_startup must already have run at the start of
+ * MAIN. For general information on init functions refer to any_init.
  *
- * When binary_reuse_dest != NONE the dest-reuse variant is configured: only icb0 is unpacked and the
- * second source operand is taken from DST (see binary_dest_reuse_tiles); icb1 is unused in that mode.
- *
- * | Param Type | Name            | Description                                                     | Type                       | Valid Range | Required |
- * |------------|-----------------|-----------------------------------------------------------------|----------------------------|-------------|----------|
- * | Template   | binary_reuse_dest | Selects the two-operand (NONE) or dest-reuse init path        | EltwiseBinaryReuseDestType | N/A         | False    |
- * | Function   | icb0            | The identifier of the circular buffer (CB) containing A         | uint32_t                   | 0 to 31     | True     |
- * | Function   | icb1            | The identifier of the circular buffer (CB) containing B         | uint32_t                   | 0 to 31     | True     |
- * | Function   | acc_to_dest     | If true, operation = A - B + dst_tile_idx of sub_tiles          | bool                       | 0,1         | False    |
+ * | Param Type | Name              | Description                                                        | Type                       | Valid Range | Required |
+ * |------------|-------------------|--------------------------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | binary_reuse_dest | Which source register the DST operand is loaded into (must be non-NONE) | EltwiseBinaryReuseDestType | N/A   | True     |
+ * | Function   | icb               | CB whose tile is unpacked into the source register not fed by DST  | uint32_t                   | 0 to 31     | True     |
  */
 // clang-format on
-template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-ALWI void sub_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
-    binary_init_impl<EltwiseBinaryType::ELWSUB, binary_reuse_dest>(icb0, icb1, acc_to_dest, call_line);
+template <EltwiseBinaryReuseDestType binary_reuse_dest>
+ALWI void add_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    static_assert(
+        binary_reuse_dest != EltwiseBinaryReuseDestType::NONE,
+        "Single-operand add_init is the dest-reuse init; call add_init(icb0, icb1) for the two-operand op.");
+    binary_dest_reuse_init<EltwiseBinaryType::ELWADD, binary_reuse_dest>(icb, call_line);
 }
 
 // clang-format off
 /**
- * Paired init function for mul_tiles / binary_dest_reuse_tiles<ELWMUL>. Configures the unpacker and
- * math pipeline for element-wise multiplication. Call before mul_tiles (or the dest-reuse op). The
- * one-time hardware configuration must already have been performed via compute_kernel_hw_startup(icb0,
- * icb1, ocb) at the start of MAIN. For general information on init functions refer to any_init.
+ * Paired init for two-operand element-wise subtraction (sub_tiles). Configures the unpacker and math
+ * pipeline so that SrcA <- icb0 and SrcB <- icb1. Call before sub_tiles. The one-time hardware
+ * configuration must already have been performed via compute_kernel_hw_startup(icb0, icb1, ocb) at the
+ * start of MAIN. For general information on init functions refer to any_init. For the dest-reuse variant
+ * (one operand from DST) use the single-operand sub_init<binary_reuse_dest> overload below.
+ *
+ * | Argument    | Description                                              | Type     | Valid Range | Required |
+ * |-------------|----------------------------------------------------------|----------|-------------|----------|
+ * | icb0        | CB whose tile is unpacked into SrcA (operand A)          | uint32_t | 0 to 31     | True     |
+ * | icb1        | CB whose tile is unpacked into SrcB (operand B)          | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest | If true, operation = A - B + dst_tile_idx of sub_tiles   | bool     | 0,1         | False    |
+ */
+// clang-format on
+ALWI void sub_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
+    binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWSUB>(icb0, icb1, acc_to_dest, call_line);
+}
+
+// clang-format off
+/**
+ * Paired init for dest-reuse element-wise subtraction (binary_dest_reuse_tiles<ELWSUB, binary_reuse_dest>).
+ * One operand is taken from the DST register, so only a single CB is unpacked; which source register the
+ * DST tile is loaded into is selected by binary_reuse_dest:
+ *   - DEST_TO_SRCA: DST -> SrcA, icb -> SrcB   (result = DST - icb)
+ *   - DEST_TO_SRCB: DST -> SrcB, icb -> SrcA   (result = icb - DST)
+ * Call before binary_dest_reuse_tiles. compute_kernel_hw_startup must already have run at the start of
+ * MAIN. For general information on init functions refer to any_init.
+ *
+ * | Param Type | Name              | Description                                                        | Type                       | Valid Range | Required |
+ * |------------|-------------------|--------------------------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | binary_reuse_dest | Which source register the DST operand is loaded into (must be non-NONE) | EltwiseBinaryReuseDestType | N/A   | True     |
+ * | Function   | icb               | CB whose tile is unpacked into the source register not fed by DST  | uint32_t                   | 0 to 31     | True     |
+ */
+// clang-format on
+template <EltwiseBinaryReuseDestType binary_reuse_dest>
+ALWI void sub_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    static_assert(
+        binary_reuse_dest != EltwiseBinaryReuseDestType::NONE,
+        "Single-operand sub_init is the dest-reuse init; call sub_init(icb0, icb1) for the two-operand op.");
+    binary_dest_reuse_init<EltwiseBinaryType::ELWSUB, binary_reuse_dest>(icb, call_line);
+}
+
+// clang-format off
+/**
+ * Paired init for two-operand element-wise multiplication (mul_tiles). Configures the unpacker and math
+ * pipeline so that SrcA <- icb0 and SrcB <- icb1. Call before mul_tiles. The one-time hardware
+ * configuration must already have been performed via compute_kernel_hw_startup(icb0, icb1, ocb) at the
+ * start of MAIN. For general information on init functions refer to any_init. For the dest-reuse variant
+ * (one operand from DST) use the single-operand mul_init<binary_reuse_dest> overload below.
  *
  * acc_to_dest defaults to true here for backwards compatibility with Quasar (where it selects
  * accumulate-into-DST); it is unused on WH/BH, where accumulation is the default behaviour. Pass the
  * three-argument form for explicit control.
  *
- * When binary_reuse_dest != NONE the dest-reuse variant is configured: only icb0 is unpacked and the
- * second source operand is taken from DST (see binary_dest_reuse_tiles); icb1 is unused in that mode.
- *
- * | Param Type | Name            | Description                                                     | Type                       | Valid Range | Required |
- * |------------|-----------------|-----------------------------------------------------------------|----------------------------|-------------|----------|
- * | Template   | binary_reuse_dest | Selects the two-operand (NONE) or dest-reuse init path        | EltwiseBinaryReuseDestType | N/A         | False    |
- * | Function   | icb0            | The identifier of the circular buffer (CB) containing A         | uint32_t                   | 0 to 31     | True     |
- * | Function   | icb1            | The identifier of the circular buffer (CB) containing B         | uint32_t                   | 0 to 31     | True     |
- * | Function   | acc_to_dest     | If true, operation = A * B + dst_tile_idx of mul_tiles          | bool                       | 0,1         | False    |
+ * | Argument    | Description                                              | Type     | Valid Range | Required |
+ * |-------------|----------------------------------------------------------|----------|-------------|----------|
+ * | icb0        | CB whose tile is unpacked into SrcA (operand A)          | uint32_t | 0 to 31     | True     |
+ * | icb1        | CB whose tile is unpacked into SrcB (operand B)          | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest | If true, operation = A * B + dst_tile_idx of mul_tiles   | bool     | 0,1         | False    |
  */
 // clang-format on
-template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void mul_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = true, uint32_t call_line = __builtin_LINE()) {
-    binary_init_impl<EltwiseBinaryType::ELWMUL, binary_reuse_dest>(icb0, icb1, acc_to_dest, call_line);
+    binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWMUL>(icb0, icb1, acc_to_dest, call_line);
+}
+
+// clang-format off
+/**
+ * Paired init for dest-reuse element-wise multiplication (binary_dest_reuse_tiles<ELWMUL, binary_reuse_dest>).
+ * One operand is taken from the DST register, so only a single CB is unpacked; which source register the
+ * DST tile is loaded into is selected by binary_reuse_dest:
+ *   - DEST_TO_SRCA: DST -> SrcA, icb -> SrcB   (result = DST * icb)
+ *   - DEST_TO_SRCB: DST -> SrcB, icb -> SrcA   (result = icb * DST)
+ * Call before binary_dest_reuse_tiles. compute_kernel_hw_startup must already have run at the start of
+ * MAIN. For general information on init functions refer to any_init.
+ *
+ * | Param Type | Name              | Description                                                        | Type                       | Valid Range | Required |
+ * |------------|-------------------|--------------------------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | binary_reuse_dest | Which source register the DST operand is loaded into (must be non-NONE) | EltwiseBinaryReuseDestType | N/A   | True     |
+ * | Function   | icb               | CB whose tile is unpacked into the source register not fed by DST  | uint32_t                   | 0 to 31     | True     |
+ */
+// clang-format on
+template <EltwiseBinaryReuseDestType binary_reuse_dest>
+ALWI void mul_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    static_assert(
+        binary_reuse_dest != EltwiseBinaryReuseDestType::NONE,
+        "Single-operand mul_init is the dest-reuse init; call mul_init(icb0, icb1) for the two-operand op.");
+    binary_dest_reuse_init<EltwiseBinaryType::ELWMUL, binary_reuse_dest>(icb, call_line);
 }
 
 // clang-format off

@@ -32,7 +32,10 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_inp0.get_id(), dfb_inp1.get_id(), dfb_out0.get_id());
 
 #if not PRE_SCALE
-    binary_tiles_init<false, ELTWISE_OP_TYPE>(dfb_inp0.get_id(), dfb_inp1.get_id());
+    // full_init=true: compute_kernel_hw_startup configures the hardware but does not run
+    // llk_unpack_AB_init, so the binary op init must supply the unpacker init here. (The PRE_SCALE
+    // path does its own full binary_tiles_init<true> inside the loop.)
+    binary_tiles_init<true, ELTWISE_OP_TYPE>(dfb_inp0.get_id(), dfb_inp1.get_id());
 #endif
 
 #ifdef PACK_RELU

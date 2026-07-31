@@ -78,7 +78,7 @@ ALWI void batchnorm_bcast_tiles(
         sub_tiles(cb_other, cb_bcast, 0, 0, 0);
 
         // (input - batch_mean)/(sqrt(batch_var + eps)) = result
-        mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_den, cb_den);
+        mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_den);
         binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_den, 0, 0);
         tile_regs_commit();
 

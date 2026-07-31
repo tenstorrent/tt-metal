@@ -541,7 +541,7 @@ void kernel_main() {
             if constexpr (fuse_pre_add) {
                 // Fuse in = in + b
                 reconfig_data_format_srca(cb_in, cb_inb);
-                add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, cb_inb);
+                add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
                 cb_inb_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
                     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
@@ -604,7 +604,7 @@ void kernel_main() {
                 tile_regs_commit();
             } else {
                 reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
-                mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, cb_ex2pe);
+                mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
                 for (auto i : block.local()) {
                     binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                         cb_ex2pe, 0, i);

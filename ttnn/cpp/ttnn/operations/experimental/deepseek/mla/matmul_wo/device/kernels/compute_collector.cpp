@@ -40,7 +40,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_s2c_in2_id, cb_s2c_in2_id, cb_s2c_out_id);
 
-    add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2_id, cb_s2c_in2_id);
+    add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2_id);
 
     cb_s2c_out.reserve_back(num_iters);
 

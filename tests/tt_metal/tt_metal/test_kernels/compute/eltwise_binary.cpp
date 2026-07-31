@@ -23,11 +23,9 @@ void kernel_main() {
     constexpr auto cb_in2 = tt::CBIndex::c_2;
     compute_kernel_hw_startup(cb_inp0, cb_inp1, cb_out0);
 #if not defined ELTWISE_DEST_REUSE_TYPE
-#ifdef FULL_INIT
+    // full_init=true: compute_kernel_hw_startup does not run llk_unpack_AB_init, so a math-only
+    // (binary_tiles_init<false>) init is no longer sufficient on its own; always do the full init.
     binary_tiles_init<true, ELTWISE_OP_TYPE>(cb_in0, cb_in1);
-#else
-    binary_tiles_init<false, ELTWISE_OP_TYPE>(cb_in0, cb_in1);
-#endif
 #endif
 
 #ifdef PACK_RELU
@@ -62,11 +60,11 @@ void kernel_main() {
         // Dest-reuse init is folded into the per-op inits via the binary_reuse_dest template param;
         // dispatch on the compile-time op type since there is no generic binary_init.
         if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWADD) {
-            add_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0, cb_inp0);
+            add_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
         } else if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWSUB) {
-            sub_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0, cb_inp0);
+            sub_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
         } else {
-            mul_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0, cb_inp0);
+            mul_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
         }
 #endif
 

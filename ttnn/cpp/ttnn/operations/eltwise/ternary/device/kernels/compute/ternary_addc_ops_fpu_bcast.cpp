@@ -74,7 +74,7 @@ ALWI void process_tile(
 #endif
 
         // Step 3: Load A and add with result DST[0] + dfb_in0 -> DST[0]
-        add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_in0.get_id(), dfb_in0.get_id());
+        add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_in0.get_id());
         binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             dfb_in0.get_id(), 0, 0);
 

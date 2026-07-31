@@ -35,7 +35,7 @@ void kernel_main() {
         copy_tile(cb_in0, 0, dst0);
         cb_in0_obj.pop_front(onetile);
 
-        mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_in0, cb_in0);
+        mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_in0);
         for (uint32_t j = 1; j < num_input_tiles; ++j) {
             cb_in0_obj.wait_front(onetile);
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(

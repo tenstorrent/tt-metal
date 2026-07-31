@@ -47,7 +47,7 @@ inline void mul_and_accumulate_block(
             // dest-reuse add: dst[0] += out_cb. srcA gets out_cb (cfg52 must match out_cb fmt);
             // srcB is filled from dst[0] by the dest-reuse path.
             reconfig_data_format_srca(out_cb_id);
-            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(out_cb_id, out_cb_id);
+            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(out_cb_id);
             out_cb.wait_front(1);
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 out_cb_id, 0, 0);

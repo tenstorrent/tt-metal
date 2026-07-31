@@ -75,7 +75,6 @@ struct SingleCoreBinaryConfig {
     CoreCoord core;
     std::string binary_op;
     bool acc_to_dest = false;
-    bool full_init = true;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     tt::tt_metal::Tile tile = tt::tt_metal::Tile({32, 32});
 };
@@ -234,9 +233,6 @@ static std::map<std::string, std::string> build_binary_defines(const SingleCoreB
         defines["ELTWISE_DEST_REUSE_TYPE"] = "EltwiseBinaryReuseDestType::DEST_TO_SRCA";
     } else {
         defines["ELTWISE_OP"] = binary_op_name_to_op_kernel.at(test_config.binary_op);
-        if (test_config.full_init) {
-            defines["FULL_INIT"] = "1";
-        }
         if (test_config.acc_to_dest) {
             defines["LOAD_BUF2_DATA"] = "1";
             defines["ACC_TO_DEST"] = "1";
@@ -533,7 +529,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .l1_output_data_format = tt::DataFormat::Float16_b,
             .core = CoreCoord(0, 0),
             .binary_op = "add",
-            .full_init = true,
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
@@ -554,7 +549,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .l1_output_data_format = tt::DataFormat::Float16_b,
             .core = CoreCoord(0, 0),
             .binary_op = "sub",
-            .full_init = true,
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
@@ -575,7 +569,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
             .l1_output_data_format = tt::DataFormat::Float16_b,
             .core = CoreCoord(0, 0),
             .binary_op = "mul",
-            .full_init = true,
             .math_fidelity = MathFidelity(i)};
         test_config.num_tiles = 1;
         log_info(tt::LogTest, "Math Fidelity = {}", i);
