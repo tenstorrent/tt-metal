@@ -27,6 +27,7 @@ Run:
 from __future__ import annotations
 
 import os
+import statistics
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,8 @@ _PROD_ENV_KEYS = (
     "PI0_MLP_BS",
     "PI0_MLP_FUSED_RS",
     "PI0_KV_SOCKET",
+    "PI05_PASS_EXPERT_MASK",
+    "PI05_FUSED_KV_MASK",
     "PI05_NUM_DENOISE_STEPS",
 )
 
@@ -162,6 +165,21 @@ def _mean(xs):
     return sum(xs) / len(xs) if xs else 0.0
 
 
+def _timing_summary(xs):
+    ordered = sorted(xs)
+    p10 = ordered[max(0, round(0.1 * (len(ordered) - 1)))]
+    p90 = ordered[min(len(ordered) - 1, round(0.9 * (len(ordered) - 1)))]
+    return {
+        "mean": _mean(xs),
+        "median": statistics.median(xs),
+        "min": ordered[0],
+        "p10": p10,
+        "p90": p90,
+        "max": ordered[-1],
+        "stdev": statistics.pstdev(xs),
+    }
+
+
 def test_perf_16_socket_traced_2cq():
     """2CQ socket-KV e2e replay: next-chunk H2D on CQ1 overlapped with CQ0 compute.
 
@@ -180,6 +198,11 @@ def test_perf_16_socket_traced_2cq():
     ) as mesh_handles:
         pipe, cfg = _make_pipeline(mesh_handles)
         images, lang_tokens = _build_test_inputs(cfg.siglip_config)
+        if os.environ.get("PI05_BENCH_PAD_LAST_CAMERA", "0") == "1":
+            assert N_CAMS >= 2, "padded-camera benchmark requires at least two image slots"
+            img_masks = [torch.tensor(True) for _ in range(N_CAMS)]
+            img_masks[-1] = torch.tensor(False)
+            pipe.prepare_runtime_masks(img_masks, torch.ones((1, LANG_LEN), dtype=torch.bool))
 
         pipe.set_num_denoising_steps(cfg.num_denoising_steps)
 
@@ -199,11 +222,20 @@ def test_perf_16_socket_traced_2cq():
         assert torch.isfinite(last_actions).all(), "non-finite values in actions output"
         assert torch.isfinite(last_1cq).all(), "non-finite values in 1CQ actions output"
 
-        mean_1cq = _mean(times_1cq)
-        mean = _mean(times)
+        stats_1cq = _timing_summary(times_1cq)
+        stats = _timing_summary(times)
         print("\n" + "=" * 72)
         print(f"16-chip pi0.5 socket-KV e2e replay  (N_CAMS={N_CAMS}, steps={cfg.num_denoising_steps})")
         print("=" * 72)
         print(f"  actions shape           : {tuple(last_actions.shape)}  (ah={ah}, ad={ad})")
-        print(f"  2CQ mean ({len(times)} iters)  : {mean:.2f} ms  (e2e: max(H2D on CQ1, compute) + D2H)")
+        print(
+            f"  1CQ ({len(times_1cq)} iters)   : median={stats_1cq['median']:.2f} mean={stats_1cq['mean']:.2f} "
+            f"p10/p90={stats_1cq['p10']:.2f}/{stats_1cq['p90']:.2f} ms"
+        )
+        print(
+            f"  2CQ ({len(times)} iters)   : median={stats['median']:.2f} mean={stats['mean']:.2f} "
+            f"min/p10/p90/max={stats['min']:.2f}/{stats['p10']:.2f}/{stats['p90']:.2f}/{stats['max']:.2f} "
+            f"stdev={stats['stdev']:.3f} ms"
+        )
+        print(f"  2CQ samples             : {[round(x, 3) for x in times]}")
         print("=" * 72)

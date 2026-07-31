@@ -13,17 +13,10 @@ from __future__ import annotations
 
 import os
 
-# When set, the denoise block forwards the real expert mask to SDPA (via the general-SDPA fallback),
-# so masking real prefix columns is no longer silently dropped and this guard need not fire.
-# Must match PI05_PASS_EXPERT_MASK in denoise_block.py.
+# Must match the mask routing in denoise_block.py / _ttnn_compat.py.
 _PASS_EXPERT_MASK_16 = int(os.environ.get("PI05_PASS_EXPERT_MASK", "0")) == 1
-# Tolerate a PARTIALLY masked prefix K-tile (keep it, attending its invalid columns) instead of raising.
-# Exactly one such tile arises in the LIBERO config: the language segment's prompt ends mid-tile, so
-# tile 24 mixes real prompt tokens with language padding. Skipping it would drop real tokens; keeping it
-# attends up to 31 pad columns out of ~544 attended (~5.7% spurious mass). Whether that matters is an
-# EMPIRICAL question -- validate with a LIBERO rollout, exactly as the phantom-suffix tail was
-# (0.011% measured error). Opt-in, because silently attending invalid columns is what the guard exists
-# to prevent. The exact fix is a 1-tile additive mask in kv_sdpa's boundary chunk.
+# Legacy escape hatch for callers that deliberately keep a partially masked prefix tile without
+# forwarding the additive mask. Production forwards the mask and does not need this tolerance.
 _TOLERATE_PARTIAL_TILE = int(os.environ.get("PI05_TOLERATE_PARTIAL_PREFIX_TILE", "0")) == 1
 from typing import Dict, List, Optional, Tuple
 
@@ -298,21 +291,16 @@ class Pi0_5GLX16DecodePipeline:
         if suffix_padded > action_horizon:
             expert_mask[:, prefix_padded + action_horizon : kv_total] = _MASK_VAL
             expert_mask[action_horizon:suffix_padded, :] = _MASK_VAL
-        # The tiny-tile denoise block passes attn_mask=None to kv_sdpa (the fused two-source path has
-        # no mask support), so ANY masking built here is silently discarded. Measured impact of losing
-        # just the phantom-suffix tail: 0.011% mean relative error (the phantom rows derive from the
-        # small adaRMS shift, so their K/V and hence their softmax contribution are tiny) -- see
-        # test_l1_single_layer_pcc_phantom_mask. That is acceptable.
-        # Masking REAL prefix columns is NOT: those K/V are full magnitude. That only arises when a
-        # caller supplies img_masks with an absent camera or a padded lang_masks, so fail loudly here
-        # rather than let it be dropped without a trace.
+        # With PI05_PASS_EXPERT_MASK=1 the denoise block forwards this mask, and
+        # PI05_FUSED_KV_MASK=1 keeps it on kv_sdpa's native two-source path at either query tile height.
+        # Without the pass-through flag, fail loudly below if dropping it would expose real prefix
+        # columns. Fully invalid prefix tiles are independently removed by tile skipping.
         # ---- PREFIX TILE SKIPPING ----------------------------------------------------------------
         # Every fully-masked prefix K-tile is dropped from kv_sdpa's read list rather than masked. The
         # masking here is tile-aligned for the case that matters: pad_mask is built from _NUM_PATCHES
         # (256) element per-camera segments and 256 % 32 == 0, so an absent camera is exactly 8 whole
-        # K-tiles. Skipping them needs no mask tensor (side-stepping the bf8 + dense-mask + 16-row-tile
-        # sign inversion, which is what made tile-16 unusable for LIBERO) and does LESS work than the
-        # unmasked path -- for LIBERO's padded slot 3 that is 24 of 32 prefix tiles.
+        # K-tiles. Skipping them reduces prefix work -- for LIBERO's padded slot 3 that is 24 of 32
+        # prefix tiles. The fused additive mask still handles partial prefix tiles and suffix padding.
         _TW = 32
         prefix_tile_valid = []
         prefix_tile_partial = []
@@ -352,16 +340,15 @@ class Pi0_5GLX16DecodePipeline:
             raise NotImplementedError(
                 f"prefix K-tiles {prefix_tile_partial} are PARTIALLY masked, so neither skipping them "
                 "(drops real columns) nor keeping them (attends invalid ones) is correct, and the "
-                "tiny-tile kv_sdpa has no mask path. Only arises with a partial lang_masks or a "
+                "mask must be forwarded to attention. Only arises with partial lang_masks or a "
                 "non-32-aligned prefix_len; the production config hits neither. Set "
-                "PI05_PASS_EXPERT_MASK=1 to route through the general SDPA instead (TILE_HEIGHT=32 only)."
+                "PI05_PASS_EXPERT_MASK=1 (and PI05_FUSED_KV_MASK=1 for native kv_sdpa)."
             )
         if bool((_dropped != 0).any()) and not _PASS_EXPERT_MASK_16:
             raise NotImplementedError(
                 "pipeline_16_decode built an expert attention mask that blocks REAL prefix columns "
-                "(absent camera or padded language), but the tiny-tile denoise block drops the mask "
-                "entirely -- kv_sdpa's fused two-source path has no mask support. Restore a "
-                "valid-length/padded-column mask in kv_sdpa before using partial img_masks/lang_masks."
+                "(absent camera or padded language), but PI05_PASS_EXPERT_MASK is disabled. Enable "
+                "PI05_PASS_EXPERT_MASK=1 and PI05_FUSED_KV_MASK=1 to use native masked kv_sdpa."
             )
         expert_mask_4d = expert_mask.unsqueeze(0).unsqueeze(0)
 
