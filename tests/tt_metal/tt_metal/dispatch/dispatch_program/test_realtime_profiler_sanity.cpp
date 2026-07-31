@@ -81,7 +81,7 @@ constexpr uint32_t kNumPrograms = 5;
 // mis-decoded timestamp.
 constexpr double kMaxDurationNs = 1'000'000'000.0;
 
-// clock_sync.sync_error_ns is half the sync-handshake RTT: the minimax bound on where the anchor landed, and what each
+// clock_sync.sync_error is half the sync-handshake RTT: the minimax bound on where the anchor landed, and what each
 // record self-reports as its accuracy. Asserted as a distribution rather than a per-record ceiling because the two
 // failure modes look different -- a degraded handshake lifts the median, while a re-anchor policy that stops rejecting
 // bad round trips only fattens the tail.
@@ -352,7 +352,7 @@ TEST(RealtimeProfilerClockModel, AnchorSitsAtTheRoundTripMidpoint) {
         model.frequency());
     EXPECT_EQ(mapped_host_ns, (now + kRtt / 2).time_since_epoch().count())
         << "the device timestamp must map back to the midpoint of the round trip that carried it";
-    EXPECT_EQ(mapping.sync_error_ns, static_cast<uint64_t>((kRtt / 2).count()));
+    EXPECT_EQ(mapping.sync_error, kRtt / 2);
 }
 
 TEST(RealtimeProfilerClockModel, FirstHandshakeIsAcceptedHoweverSlow) {
@@ -401,7 +401,7 @@ experimental::ProgramRealtimeRecord make_service_record(uint32_t runtime_id, uin
         .start_timestamp = runtime_id * 10,
         .end_timestamp = runtime_id * 10 + 5,
         .frequency = 1.0,
-        .clock_sync = {.device_cycle_offset = 0, .sync_error_ns = 0},
+        .clock_sync = {.device_cycle_offset = 0, .sync_error = {}},
         .kernel_sources = {},
     };
 }
@@ -723,11 +723,11 @@ TEST_F(RealtimeProfilerDeviceSanity, FiveProgramsBackToBack) {
         EXPECT_GT(rec.frequency, 0.0) << "RT record frequency must be positive (runtime_id=" << rec.runtime_id
                                       << ", chip=" << rec.chip_id << ")";
 
-        EXPECT_GT(rec.clock_sync.sync_error_ns, 0u)
-            << "RT record sync_error_ns should be set by the init sync handshake (runtime_id=" << rec.runtime_id << ")";
+        EXPECT_GT(rec.clock_sync.sync_error, std::chrono::nanoseconds::zero())
+            << "RT record sync_error should be set by the init sync handshake (runtime_id=" << rec.runtime_id << ")";
 
         if (rec.frequency > 0.0 && rec.end_timestamp > rec.start_timestamp) {
-            const double duration_ns = rec.duration_ns();
+            const double duration_ns = rec.duration().count();
             EXPECT_LT(duration_ns, kMaxDurationNs)
                 << "RT record duration is implausibly large (runtime_id=" << rec.runtime_id << ", chip=" << rec.chip_id
                 << ", duration_ns=" << duration_ns << ")";
@@ -756,7 +756,7 @@ TEST_F(RealtimeProfilerDeviceSanity, FiveProgramsBackToBack) {
         << "Not every program's source was correctly correlated by runtime ID";
 }
 
-// Sync accuracy is what each record self-reports as clock_sync.sync_error_ns. Spread programs across many servo
+// Sync accuracy is what each record self-reports as clock_sync.sync_error. Spread programs across many servo
 // re-anchor intervals so the records sample that value over the session, then assert its distribution stays tight.
 // A degraded handshake (slow/contended PCIe) lifts the median; a servo that stops rejecting bad re-anchors fattens the
 // tail — p50/p90/p99 catch each, unlike a single per-record ceiling.
@@ -777,44 +777,45 @@ TEST_F(RealtimeProfilerDeviceSanity, SyncAccuracy) {
     // One sample per anchor, not per record: a burst of dispatch inside one re-anchor epoch would otherwise move the
     // percentiles without the handshake having changed at all. Single device here, so a single previous offset
     // identifies the anchor.
-    std::vector<uint64_t> errors_ns;
+    std::vector<std::chrono::nanoseconds> errors;
     std::optional<int64_t> last_offset;
     const auto& records = collector.records();
     for (const auto& record : records) {
         if (last_offset != record.clock_sync.device_cycle_offset) {
             last_offset = record.clock_sync.device_cycle_offset;
-            errors_ns.push_back(record.clock_sync.sync_error_ns);
+            errors.push_back(record.clock_sync.sync_error);
         }
     }
-    ASSERT_GE(errors_ns.size(), kIterations / 4)
-        << "only " << errors_ns.size() << " distinct anchors across " << records.size()
+    ASSERT_GE(errors.size(), kIterations / 4)
+        << "only " << errors.size() << " distinct anchors across " << records.size()
         << " records; too few independent samples to characterize the sync-error distribution";
-    std::sort(errors_ns.begin(), errors_ns.end());
+    std::sort(errors.begin(), errors.end());
 
     // Interpolated between adjacent ranks; nearest-rank would snap each percentile onto one sample and report the
     // neighbouring order statistic instead.
-    const auto pct = [&errors_ns](double p) {
-        const double rank = p * static_cast<double>(errors_ns.size() - 1);
+    const auto pct = [&errors](double p) {
+        const double rank = p * static_cast<double>(errors.size() - 1);
         const auto lo = static_cast<size_t>(rank);
-        const size_t hi = std::min(lo + 1, errors_ns.size() - 1);
-        return static_cast<double>(errors_ns[lo]) +
-               (rank - static_cast<double>(lo)) * static_cast<double>(errors_ns[hi] - errors_ns[lo]);
+        const size_t hi = std::min(lo + 1, errors.size() - 1);
+        return static_cast<double>(errors[lo].count()) +
+               (rank - static_cast<double>(lo)) * static_cast<double>((errors[hi] - errors[lo]).count());
     };
     std::cout << fmt::format(
-                     "[ SYNC ] sync_error_ns over {} anchors ({} records): min={} p50={:.1f} p75={:.1f} p90={:.1f} "
+                     "[ SYNC ] sync_error (ns) over {} anchors ({} records): min={} p50={:.1f} p75={:.1f} p90={:.1f} "
                      "p95={:.1f} p99={:.1f} max={}",
-                     errors_ns.size(),
+                     errors.size(),
                      records.size(),
-                     errors_ns.front(),
+                     errors.front().count(),
                      pct(0.50),
                      pct(0.75),
                      pct(0.90),
                      pct(0.95),
                      pct(0.99),
-                     errors_ns.back())
+                     errors.back().count())
               << std::endl;
 
-    EXPECT_GT(errors_ns.front(), 0u) << "sync_error_ns should be populated by the sync handshake";
+    EXPECT_GT(errors.front(), std::chrono::nanoseconds::zero())
+        << "sync_error should be populated by the sync handshake";
     EXPECT_LT(pct(0.50), static_cast<double>(kSyncErrorP50Ns))
         << "median sync error too high; the handshake is systematically degraded";
     EXPECT_LT(pct(0.90), static_cast<double>(kSyncErrorP90Ns)) << "p90 sync error too high";
@@ -965,20 +966,16 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
     enqueue_blocking(/*runtime_id=*/1);
 
     struct HostWindow {
-        int64_t before_ticks;
-        int64_t after_ticks;
+        std::chrono::steady_clock::time_point before;
+        std::chrono::steady_clock::time_point after;
     };
     std::map<uint32_t, HostWindow> windows;
-    const auto host_ns = [] {
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count();
-    };
     constexpr uint32_t kFirstMeasured = 2;
     constexpr uint32_t kNumMeasured = 8;
     for (uint32_t runtime_id = kFirstMeasured; runtime_id < kFirstMeasured + kNumMeasured; ++runtime_id) {
-        const int64_t before = host_ns();
+        const auto before = std::chrono::steady_clock::now();
         enqueue_blocking(runtime_id);  // blocks until the program completes on device
-        const int64_t after = host_ns();
+        const auto after = std::chrono::steady_clock::now();
         windows[runtime_id] = {before, after};
     }
 
@@ -987,10 +984,10 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
 
     // Generous bound: it covers host-clock read jitter and the gap between the bracketing reads and the actual
     // dispatch/completion. The check catches a fundamentally wrong mapping (off by ms and up), not µs-level skew.
-    constexpr double kSlackNs = 2'000'000.0;
+    constexpr auto kSlack = std::chrono::milliseconds(2);
 
     int checked = 0;
-    double worst_outside_ns = 0.0;
+    std::chrono::nanoseconds worst_outside{};
     double min_freq = 0.0;
     double max_freq = 0.0;
     for (const auto& rec : collector.records()) {
@@ -1001,26 +998,25 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
         const double frequency = rec.frequency;
         min_freq = (checked == 0) ? frequency : std::min(min_freq, frequency);
         max_freq = (checked == 0) ? frequency : std::max(max_freq, frequency);
-        const double host_start_ns = static_cast<double>(rec.host_start_ns());
-        const double host_end_ns = static_cast<double>(rec.host_end_ns());
-        const double before_ns = static_cast<double>(it->second.before_ticks);
-        const double after_ns = static_cast<double>(it->second.after_ticks);
+        const auto host_start = rec.host_start();
+        const auto host_end = rec.host_end();
+        const HostWindow& window = it->second;
 
-        EXPECT_GE(host_start_ns, before_ns - kSlackNs)
-            << "runtime_id=" << rec.runtime_id << ": record host start " << host_start_ns
-            << "ns precedes the dispatch window start " << before_ns << "ns";
-        EXPECT_LE(host_end_ns, after_ns + kSlackNs)
-            << "runtime_id=" << rec.runtime_id << ": record host end " << host_end_ns
-            << "ns follows the dispatch window end " << after_ns << "ns";
+        EXPECT_GE(host_start, window.before - kSlack)
+            << "runtime_id=" << rec.runtime_id << ": record host start precedes the dispatch window start by "
+            << (window.before - host_start).count() << "ns";
+        EXPECT_LE(host_end, window.after + kSlack)
+            << "runtime_id=" << rec.runtime_id << ": record host end follows the dispatch window end by "
+            << (host_end - window.after).count() << "ns";
 
-        worst_outside_ns = std::max({worst_outside_ns, before_ns - host_start_ns, host_end_ns - after_ns});
+        worst_outside = std::max({worst_outside, window.before - host_start, host_end - window.after});
         ++checked;
     }
 
     EXPECT_GT(checked, 0) << "No RT records matched a measured dispatch window";
     // <= 0 means every record mapped strictly inside its window; a small positive value is measurement jitter.
     std::cout << "[ SYNC ] checked " << checked
-              << " record(s); worst excursion outside dispatch window = " << worst_outside_ns
+              << " record(s); worst excursion outside dispatch window = " << worst_outside.count()
               << "ns (<= 0 means fully inside); record frequency = [" << min_freq << ", " << max_freq << "] GHz"
               << std::endl;
 }
@@ -1046,7 +1042,7 @@ constexpr uint32_t kClockCheckRounds = 3;
 constexpr uint32_t kClockReadsPerRound = 500;
 constexpr uint32_t kFirstClockCheckRuntimeId = 9101;
 // What this has to establish: that the published mapping is right to within a few microseconds. Deliberately fixed
-// rather than derived from the record's own sync_error_ns -- a bound computed from the claim cannot test the claim.
+// rather than derived from the record's own sync_error -- a bound computed from the claim cannot test the claim.
 // The measured disagreement is ~210ns, so these leave an order of magnitude of headroom, and they are wide enough to
 // absorb the clock drift between a record's mapping snapshot and the reads it is checked against.
 constexpr double kMaxMeanMappingErrorNs = 2'000.0;
@@ -1194,7 +1190,7 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
     std::vector<double> residuals_ns;
     residuals_ns.reserve(brackets.size());
     std::vector<double> bracket_widths_ns;
-    uint64_t claimed_error_ns = 0;
+    std::chrono::nanoseconds claimed_error{};
     uint32_t rounds_checked = 0;
     for (uint32_t round = 0; round < kClockCheckRounds; ++round) {
         const auto it = record_by_runtime_id.find(kFirstClockCheckRuntimeId + round);
@@ -1212,7 +1208,7 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
                                           record.frequency;
             residuals_ns.push_back(mapped_host_ns - bracket.host_mid_ns());
             bracket_widths_ns.push_back(bracket.half_width_ns());
-            claimed_error_ns = std::max(claimed_error_ns, record.clock_sync.sync_error_ns);
+            claimed_error = std::max(claimed_error, record.clock_sync.sync_error);
         }
     }
     ASSERT_GE(rounds_checked, kClockCheckRounds / 2) << "too few rounds produced a record to check against";
@@ -1238,7 +1234,8 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
               << "): " << residuals_ns.size() << " reads over " << rounds_checked << " rounds, host bracket +/-"
               << typical_bracket_ns << "ns; published mapping off by " << mean_residual_ns
               << "ns on average, |residual| p50=" << quantile(0.50) << "ns p90=" << quantile(0.90)
-              << "ns max=" << magnitudes.back() << "ns; RT profiler claims " << claimed_error_ns << "ns" << std::endl;
+              << "ns max=" << magnitudes.back() << "ns; RT profiler claims " << claimed_error.count() << "ns"
+              << std::endl;
 
     // Averaging drives the bracket's noise down by the square root of the sample count, so the mean resolves the
     // disagreement to tens of nanoseconds; a regression in it shows up in the line printed above long before it

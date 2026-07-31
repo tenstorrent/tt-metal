@@ -138,7 +138,7 @@ private:
     // sequence's acquire/release is what orders it. Too wide for a lock-free atomic, and far too hot for a mutex.
     std::atomic<uint32_t> mapping_seq_{0};
     std::atomic<int64_t> mapping_device_cycle_offset_{0};
-    std::atomic<uint64_t> mapping_sync_error_ns_{0};
+    std::atomic<std::chrono::nanoseconds> mapping_sync_error_{};
     std::atomic<double> mapping_frequency_{0.0};
 };
 

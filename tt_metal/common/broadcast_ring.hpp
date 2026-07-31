@@ -105,10 +105,11 @@ public:
         /**
          * @brief Wakes readers blocked in Reader::wait().
          *
-         * publish()/publish_batch() do not wake on their own; this must be called explicitly.
+         * publish()/publish_batch() do not wake on their own; this must be called explicitly, from the thread
+         * driving the writer.
          */
         void wake_readers() noexcept {
-            shared_state_->wake_token.fetch_add(1, std::memory_order_release);
+            shared_state_->wake_token.store(++wake_token_cache_, std::memory_order_release);
             shared_state_->wake_token.notify_all();
         }
 
@@ -120,7 +121,10 @@ public:
     private:
         friend class BroadcastRing;
         Writer(SharedState* shared_state, SlotsView view) noexcept :
-            shared_state_(shared_state), view_(view), head_cache_(shared_state->head.load(std::memory_order_relaxed)) {}
+            shared_state_(shared_state),
+            view_(view),
+            head_cache_(shared_state->head.load(std::memory_order_relaxed)),
+            wake_token_cache_(shared_state->wake_token.load(std::memory_order_relaxed)) {}
 
         template <typename U>
         void publish_impl(std::span<U> items) {
@@ -148,6 +152,7 @@ public:
         SharedState* shared_state_;
         SlotsView view_;
         uint64_t head_cache_;
+        typename WakeTokenAtomic::value_type wake_token_cache_;
     };
 
     [[nodiscard]] Writer& writer() noexcept { return writer_; }

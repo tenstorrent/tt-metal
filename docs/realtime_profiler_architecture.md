@@ -117,11 +117,11 @@ Each handshake is one-shot and rides a host-pinned ACK word; the device never wr
     |  re-anchor offset at the midpoint    |
 ```
 
-The device writes `D` before the token, so once the host observes the token `D` has already landed. The offset is re-anchored at the round-trip midpoint (minimax placement, error <= RTT/2 without assuming a symmetric latency); the reported `sync_error_ns` is that half-RTT.
+The device writes `D` before the token, so once the host observes the token `D` has already landed. The offset is re-anchored at the round-trip midpoint (minimax placement, error <= RTT/2 without assuming a symmetric latency); the reported `sync_error` is that half-RTT.
 
 **Init** repeats the handshake ~100 times (reading `D` from the ACK buffer each time) and fits `frequency` by linear regression. **Steady state:** each device is resynced every 50 ms and `device_cycle_offset` re-anchored to track clock drift. A device whose host ACK word could not be set up is simply left unsynced — there is no record-FIFO fallback.
 
-A resync fires a burst of 10 handshakes and anchors on the tightest, so one slow round trip cannot set the published `sync_error_ns`. Syncing runs on its own thread, not the receiver's: it is a slow control loop where draining is a data path, and on a 32-chip system the probes cost ~5% of a core, which is nothing on a dedicated thread and page backlog in the drain loop. The receiver reads each device's mapping through a seqlock the sync thread publishes into.
+A resync fires a burst of 10 handshakes and anchors on the tightest, so one slow round trip cannot set the published `sync_error`. Syncing runs on its own thread, not the receiver's: it is a slow control loop where draining is a data path, and on a 32-chip system the probes cost ~5% of a core, which is nothing on a dedicated thread and page backlog in the drain loop. The receiver reads each device's mapping through a seqlock the sync thread publishes into.
 
 ---
 

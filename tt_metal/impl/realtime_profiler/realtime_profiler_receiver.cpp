@@ -850,13 +850,12 @@ uint64_t RealtimeProfilerReceiver::run_loop(
                 "RT profiler D2H FIFO high-water mark (pages)",
                 static_cast<int64_t>(fifo_pages_window_max_));
             fifo_pages_window_max_ = 0;
-            int64_t worst_sync_error_ns = 0;
+            std::chrono::nanoseconds worst_sync_error{};
             for (const auto& dev_state : devices_) {
-                worst_sync_error_ns = std::max(
-                    worst_sync_error_ns,
-                    static_cast<int64_t>(dev_state.clock_sync->calibration().mapping.sync_error_ns));
+                worst_sync_error = std::max(worst_sync_error, dev_state.clock_sync->calibration().mapping.sync_error);
             }
-            TracyPlot("RT profiler sync error (us)", static_cast<double>(worst_sync_error_ns) / 1000.0);
+            TracyPlot(
+                "RT profiler sync error (us)", (std::chrono::duration<double, std::micro>{worst_sync_error}.count()));
             last_fifo_plot = now;
         }
 

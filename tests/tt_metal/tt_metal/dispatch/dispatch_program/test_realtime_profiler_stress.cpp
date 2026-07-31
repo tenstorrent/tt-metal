@@ -88,7 +88,7 @@ constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
 // How often the long-running tests emit an in-progress stats line.
 constexpr auto kStressReportInterval = std::chrono::seconds(10);
 
-// One sync-error sample per re-anchor per chip, counted by value. sync_error_ns only changes when the servo
+// One sync-error sample per re-anchor per chip, counted by value. sync_error only changes when the servo
 // re-anchors, so these tests see ~20 samples/s/device -- keeping each one would grow without bound across a soak,
 // while the values themselves span only a handful of nanosecond steps. Counting per value is therefore exact (no
 // bucket edges) at a memory cost set by the spread rather than the runtime. Sampling per anchor also weights each
@@ -108,11 +108,11 @@ public:
             it->second = offset;
         }
         const std::lock_guard lock(mutex_);
-        ++counts_[record.clock_sync.sync_error_ns];
+        ++counts_[record.clock_sync.sync_error];
     }
 
     // Safe to call while the callback is still running, for in-progress reports.
-    std::map<uint64_t, uint64_t> counts() const {
+    std::map<std::chrono::nanoseconds, uint64_t> counts() const {
         const std::lock_guard lock(mutex_);
         return counts_;
     }
@@ -120,7 +120,7 @@ public:
 private:
     std::unordered_map<uint32_t, int64_t> last_offset_;  // consumer thread only
     mutable std::mutex mutex_;
-    std::map<uint64_t, uint64_t> counts_;
+    std::map<std::chrono::nanoseconds, uint64_t> counts_;
 };
 
 struct StressSyncErrorPercentilesUs {
@@ -133,7 +133,7 @@ struct StressSyncErrorPercentilesUs {
 // From one snapshot, so an in-progress report cannot mix percentiles taken at different instants. Percentiles
 // interpolate between adjacent ranks; nearest-rank would snap each onto one sample.
 StressSyncErrorPercentilesUs stress_sync_percentiles_us(const StressSyncErrorTally& tally) {
-    const std::map<uint64_t, uint64_t> counts = tally.counts();
+    const std::map<std::chrono::nanoseconds, uint64_t> counts = tally.counts();
     if (counts.empty()) {
         return {};
     }
@@ -142,7 +142,7 @@ StressSyncErrorPercentilesUs stress_sync_percentiles_us(const StressSyncErrorTal
         total += count;
     }
     // The value the sample at flattened position `rank` would have, had every sample been kept in a sorted list.
-    const auto value_at_rank = [&counts](uint64_t rank) {
+    const auto value_at_rank = [&counts](uint64_t rank) -> std::chrono::nanoseconds {
         uint64_t cumulative = 0;
         for (const auto& [value, count] : counts) {
             cumulative += count;
@@ -155,17 +155,17 @@ StressSyncErrorPercentilesUs stress_sync_percentiles_us(const StressSyncErrorTal
     const auto pct_us = [&](double p) {
         const double rank = p * static_cast<double>(total - 1);
         const auto lo = static_cast<uint64_t>(rank);
-        const uint64_t lo_value = value_at_rank(lo);
-        const uint64_t hi_value = value_at_rank(std::min(lo + 1, total - 1));
-        return (static_cast<double>(lo_value) +
-                (rank - static_cast<double>(lo)) * static_cast<double>(hi_value - lo_value)) /
-               1000.0;
+        const std::chrono::nanoseconds lo_value = value_at_rank(lo);
+        const std::chrono::nanoseconds hi_value = value_at_rank(std::min(lo + 1, total - 1));
+        const auto interpolated = std::chrono::duration<double, std::nano>{lo_value} +
+                                  (rank - static_cast<double>(lo)) * (hi_value - lo_value);
+        return std::chrono::duration<double, std::micro>{interpolated}.count();
     };
     return {
         .p50 = pct_us(0.50),
         .p90 = pct_us(0.90),
         .p99 = pct_us(0.99),
-        .max = static_cast<double>(counts.rbegin()->first) / 1000.0,
+        .max = std::chrono::duration<double, std::micro>{counts.rbegin()->first}.count(),
     };
 }
 
@@ -219,7 +219,7 @@ std::shared_ptr<distributed::MeshDevice> open_full_mesh() {
 // That rate is what ClockModel's re-anchor gate budgets: it treats the standing anchor as having degraded by
 // budget * elapsed, and keeps a slow handshake out only while the standing anchor is still the better placement. A
 // device drifting faster than the budget would have the gate hold a stale anchor while the real error outran the
-// model -- sync_error_ns would keep reporting a small number that is no longer true. Measured under trace replay so
+// model -- sync_error would keep reporting a small number that is no longer true. Measured under trace replay so
 // the chip is hot, which is when the rate is largest and the fit made at cold bring-up is furthest off.
 TEST(RealtimeProfilerStress, ClockDriftStaysWithinModelBudget) {
     // Must track kClockDriftPpm in realtime_profiler_clock_model.cpp.
@@ -334,7 +334,7 @@ TEST(RealtimeProfilerStress, ClockDriftStaysWithinModelBudget) {
         << "chip " << worst_chip << " drifts at " << worst_ppm << " ppm, beyond the " << kModelledDriftPpm
         << " ppm kClockDriftPpm budgets in realtime_profiler_clock_model.cpp. The re-anchor gate credits the standing "
            "anchor with only that much degradation per interval, so past this it holds anchors whose real error has "
-           "outrun the model while sync_error_ns keeps reporting the old, smaller bound.";
+           "outrun the model while sync_error keeps reporting the old, smaller bound.";
 
     mesh_device->release_mesh_trace(trace_id);
     EXPECT_TRUE(mesh_device->close());
@@ -378,7 +378,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                     << "receiver published a record with end < start (runtime_id=" << rec.runtime_id << ")";
                 if (!(rec.frequency > 0.0)) {
                     ++bad_frequency;
-                } else if (rec.duration_ns() >= kMaxStressDurationNs) {
+                } else if (rec.duration().count() >= kMaxStressDurationNs) {
                     ++implausible_duration;
                 }
             }
@@ -520,12 +520,11 @@ TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
 
-    std::vector<std::atomic<std::chrono::steady_clock::rep>> paced_delivered(total_paced);
-    // Each record's device-start mapped to host (steady_clock ns) via its clock_sync. A record flushes only when the
-    // NEXT program dispatches (device double-buffers the timestamps), so record k's delivery latency is measured
-    // against host_start[k+1] — the flush trigger — which isolates the host pipeline from pacing and from device-side
-    // execution queueing when the host out-runs the device.
-    std::vector<std::atomic<int64_t>> paced_host_start_ns(total_paced);
+    std::vector<std::atomic<std::chrono::steady_clock::time_point>> paced_delivered(total_paced);
+    // A record flushes only when the NEXT program dispatches (device double-buffers the timestamps), so record k's
+    // delivery latency is measured against host_start[k+1] — the flush trigger — which isolates the host pipeline
+    // from pacing and from device-side execution queueing when the host out-runs the device.
+    std::vector<std::atomic<std::chrono::steady_clock::time_point>> paced_host_start(total_paced);
     std::atomic<uint64_t> paced_idx{0};
     std::atomic<uint64_t> dropped_total{0};
     std::atomic<uint64_t> total_records{0};
@@ -535,7 +534,7 @@ TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
         RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
             dropped_total.fetch_add(batch.dropped, std::memory_order_relaxed);
             total_records.fetch_add(batch.records.size(), std::memory_order_relaxed);
-            const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+            const auto now = std::chrono::steady_clock::now();
             for (const auto& rec : batch.records) {
                 if (rec.runtime_id != kPacedId) {
                     foreign_records.fetch_add(1, std::memory_order_relaxed);
@@ -544,11 +543,8 @@ TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
                 if (rec.frequency > 0.0) {
                     const uint64_t idx = paced_idx.fetch_add(1, std::memory_order_relaxed);
                     if (idx < total_paced) {
-                        const double host_start_ns = (static_cast<double>(rec.start_timestamp) -
-                                                      static_cast<double>(rec.clock_sync.device_cycle_offset)) /
-                                                     rec.frequency;
                         paced_delivered[idx].store(now, std::memory_order_relaxed);
-                        paced_host_start_ns[idx].store(static_cast<int64_t>(host_start_ns), std::memory_order_relaxed);
+                        paced_host_start[idx].store(rec.host_start(), std::memory_order_relaxed);
                     }
                 }
             }
@@ -614,13 +610,14 @@ TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
         for (uint32_t i = 0; i + 1 < kOpsPerGap; ++i) {
             const uint32_t idx = gap_idx * kOpsPerGap + i;
             const auto d = paced_delivered[idx].load(std::memory_order_relaxed);
-            const auto next_start = paced_host_start_ns[idx + 1].load(std::memory_order_relaxed);
-            if (d == 0 || next_start == 0) {
+            const auto next_start = paced_host_start[idx + 1].load(std::memory_order_relaxed);
+            constexpr std::chrono::steady_clock::time_point kUnset{};
+            if (d == kUnset || next_start == kUnset) {
                 continue;
             }
-            // Both are steady_clock ns (clock_sync maps device cycles into steady_clock); the difference is the host
-            // pipeline latency from the record becoming available (next program's device-start) to callback receipt.
-            latency_us.push_back(std::max(0.0, static_cast<double>(d - next_start) / 1000.0));
+            // Host pipeline latency, from the record becoming available (next program's device-start) to callback
+            // receipt.
+            latency_us.push_back(std::max(0.0, std::chrono::duration<double, std::micro>{d - next_start}.count()));
         }
         const double lat_p50 = percentile(latency_us, 0.50);
         const double lat_p99 = percentile(latency_us, 0.99);

@@ -89,10 +89,10 @@ void RealtimeProfilerTracyConsumer::CalibrateFromRecord(const experimental::Prog
     s.last_seen_offset = record.clock_sync.device_cycle_offset;
 
     // Re-steer the Tracy context on every offset change (a resync re-anchor, ~20/s) so its view tracks the mapping
-    // instead of lagging a throttle window behind it. clock_sync maps device cycles to CLOCK_MONOTONIC ns; recover the
+    // instead of lagging a throttle window behind it. clock_sync maps device cycles to steady_clock; recover the
     // host anchor, then convert it into Tracy's rdtsc CPU-tick domain (only here, off the per-record path — see
-    // HostMonoNsToTracyCpuTicks).
-    const int64_t host_anchor = HostMonoNsToTracyCpuTicks(record.host_start_ns());
+    // HostTimeToTracyCpuTicks).
+    const int64_t host_anchor = HostTimeToTracyCpuTicks(record.host_start());
     const double frequency = record.frequency;
 
     if (first) {
@@ -126,7 +126,7 @@ TracyTTCtx RealtimeProfilerTracyConsumer::GetContext(uint32_t chip_id) {
 }
 
 bool RealtimeProfilerTracyConsumer::ValidateHostClockDomain() {
-    // clock_sync is CLOCK_MONOTONIC; HostMonoNsToTracyCpuTicks bridges it into Tracy's rdtsc domain, which needs a
+    // clock_sync is CLOCK_MONOTONIC; HostTimeToTracyCpuTicks bridges it into Tracy's rdtsc domain, which needs a
     // usable Tracy CPU timer. Bail out of calibration if Tracy can't report one.
     if (!(TracyGetTimerMul() > 0.0)) {
         log_error(
@@ -137,11 +137,13 @@ bool RealtimeProfilerTracyConsumer::ValidateHostClockDomain() {
     return true;
 }
 
-int64_t RealtimeProfilerTracyConsumer::HostMonoNsToTracyCpuTicks(int64_t host_mono_ns) {
+int64_t RealtimeProfilerTracyConsumer::HostTimeToTracyCpuTicks(std::chrono::steady_clock::time_point host_time) {
     const double ns_per_tick = TracyGetTimerMul();
     if (!(ns_per_tick > 0.0)) {
         return TracyGetCpuTime();
     }
+    const int64_t host_mono_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(host_time.time_since_epoch()).count();
     // A side-by-side read pins the CLOCK_MONOTONIC<->rdtsc offset (both are the same TSC oscillator). A hardware
     // interrupt landing between the two mono reads stretches the bracket and skews the midpoint, so keep the tightest
     // of several attempts (the NTP/PTP correlation trick) — this drops the rare ~µs excursion to a ~ns floor. The

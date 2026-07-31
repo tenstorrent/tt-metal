@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <span>
@@ -14,7 +15,7 @@ namespace tt::tt_metal::experimental {
 struct ProgramRealtimeClockSync {
     int64_t device_cycle_offset;  // Clock offset; a device timestamp maps to std::chrono::steady_clock host time as
                                   // host_ns = (timestamp - device_cycle_offset) / frequency
-    uint64_t sync_error_ns;       // Estimated sync mapping error; assumes device clock frequency is stable.
+    std::chrono::nanoseconds sync_error;  // Estimated sync mapping error; assumes device clock frequency is stable.
 };
 
 struct ProgramRealtimeRecord {
@@ -28,27 +29,37 @@ struct ProgramRealtimeRecord {
     std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid for the
                                                        // lifetime of the process.
 
-    [[nodiscard]] constexpr double duration_ns() const {
-        return static_cast<double>(end_timestamp - start_timestamp) / frequency;
+    /** @brief How long the program executed; excludes dispatch and queueing. */
+    [[nodiscard]] constexpr std::chrono::duration<double, std::nano> duration() const {
+        return std::chrono::duration<double, std::nano>{
+            static_cast<double>(end_timestamp - start_timestamp) / frequency};
     }
 
-    // Program start on the host's std::chrono::steady_clock, in ns.
-    [[nodiscard]] constexpr int64_t host_start_ns() const {
-        return static_cast<int64_t>(
-            (static_cast<double>(start_timestamp) - static_cast<double>(clock_sync.device_cycle_offset)) / frequency);
+    /** @brief When the program began executing on the std::chrono::steady_clock timeline; carries
+     * clock_sync.sync_error. */
+    [[nodiscard]] constexpr std::chrono::steady_clock::time_point host_start() const {
+        const std::chrono::duration<double, std::nano> host_ns{
+            (static_cast<double>(start_timestamp) - static_cast<double>(clock_sync.device_cycle_offset)) / frequency};
+        return std::chrono::steady_clock::time_point{std::chrono::round<std::chrono::steady_clock::duration>(host_ns)};
     }
 
-    // Program end on the host's std::chrono::steady_clock, in ns.
-    [[nodiscard]] constexpr int64_t host_end_ns() const {
-        return static_cast<int64_t>(
-            (static_cast<double>(end_timestamp) - static_cast<double>(clock_sync.device_cycle_offset)) / frequency);
+    /** @brief When the program finished executing on the std::chrono::steady_clock timeline; carries
+     * clock_sync.sync_error. */
+    [[nodiscard]] constexpr std::chrono::steady_clock::time_point host_end() const {
+        const std::chrono::duration<double, std::nano> host_ns{
+            (static_cast<double>(end_timestamp) - static_cast<double>(clock_sync.device_cycle_offset)) / frequency};
+        return std::chrono::steady_clock::time_point{std::chrono::round<std::chrono::steady_clock::duration>(host_ns)};
     }
 
-    // The device timestamp (raw ticks) a host std::chrono::steady_clock time maps to. Accurate only near this record;
-    // a host time far from this record's window carries more error than clock_sync.sync_error_ns reports.
-    [[nodiscard]] constexpr uint64_t device_timestamp_at(int64_t host_ns) const {
-        return static_cast<uint64_t>(
-            static_cast<double>(host_ns) * frequency + static_cast<double>(clock_sync.device_cycle_offset));
+    /**
+     * @brief The device timestamp (raw ticks) a host time maps to.
+     *
+     * Accurate only near this record; a host time far from this record's window carries more error than
+     * clock_sync.sync_error reports.
+     */
+    [[nodiscard]] constexpr uint64_t device_timestamp_at(std::chrono::steady_clock::time_point host_time) const {
+        const double host_ns = std::chrono::duration<double, std::nano>{host_time.time_since_epoch()}.count();
+        return static_cast<uint64_t>(host_ns * frequency + static_cast<double>(clock_sync.device_cycle_offset));
     }
 };
 

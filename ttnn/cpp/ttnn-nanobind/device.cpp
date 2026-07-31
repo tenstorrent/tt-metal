@@ -6,6 +6,7 @@
 
 #include <tt-metalium/device_types.hpp>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -164,9 +165,9 @@ void py_device_module_types(nb::module_& m_device) {
             &tt::tt_metal::experimental::ProgramRealtimeClockSync::device_cycle_offset,
             "Clock offset: a device timestamp maps to time.monotonic_ns() host time as "
             "host_ns = (timestamp - device_cycle_offset) / frequency")
-        .def_ro(
+        .def_prop_ro(
             "sync_error_ns",
-            &tt::tt_metal::experimental::ProgramRealtimeClockSync::sync_error_ns,
+            [](const tt::tt_metal::experimental::ProgramRealtimeClockSync& self) { return self.sync_error.count(); },
             "Estimated sync mapping error: half the round trip of the handshake the mapping was last anchored on");
 
     nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
@@ -190,18 +191,29 @@ void py_device_module_types(nb::module_& m_device) {
             "Device-to-host clock mapping for this record")
         .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::chip_id, "Device chip ID")
         .def_prop_ro(
-            "duration_ns", &tt::tt_metal::experimental::ProgramRealtimeRecord::duration_ns, "On-device duration, in ns")
+            "duration_ns",
+            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) { return record.duration().count(); },
+            "On-device duration, in ns")
         .def_prop_ro(
             "host_start_ns",
-            &tt::tt_metal::experimental::ProgramRealtimeRecord::host_start_ns,
+            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                return std::chrono::duration_cast<std::chrono::nanoseconds>(record.host_start().time_since_epoch())
+                    .count();
+            },
             "Program start on the host's time.monotonic_ns() clock, in ns")
         .def_prop_ro(
             "host_end_ns",
-            &tt::tt_metal::experimental::ProgramRealtimeRecord::host_end_ns,
+            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                return std::chrono::duration_cast<std::chrono::nanoseconds>(record.host_end().time_since_epoch())
+                    .count();
+            },
             "Program end on the host's time.monotonic_ns() clock, in ns")
         .def(
             "device_timestamp_at",
-            &tt::tt_metal::experimental::ProgramRealtimeRecord::device_timestamp_at,
+            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record, int64_t host_ns) {
+                return record.device_timestamp_at(std::chrono::steady_clock::time_point{
+                    std::chrono::round<std::chrono::steady_clock::duration>(std::chrono::nanoseconds{host_ns})});
+            },
             nb::arg("host_ns"),
             "The device timestamp (raw ticks) a time.monotonic_ns() host time maps to; accurate only for host times "
             "near this record")

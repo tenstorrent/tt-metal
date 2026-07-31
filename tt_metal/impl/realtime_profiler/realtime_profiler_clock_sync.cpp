@@ -138,7 +138,7 @@ void RealtimeProfilerClockSync::publish_mapping() {
     mapping_seq_.store(seq + 1, std::memory_order_relaxed);  // odd: an update is in progress
     std::atomic_thread_fence(std::memory_order_release);
     mapping_device_cycle_offset_.store(mapping.device_cycle_offset, std::memory_order_relaxed);
-    mapping_sync_error_ns_.store(mapping.sync_error_ns, std::memory_order_relaxed);
+    mapping_sync_error_.store(mapping.sync_error, std::memory_order_relaxed);
     mapping_frequency_.store(model_.frequency(), std::memory_order_relaxed);
     std::atomic_thread_fence(std::memory_order_release);
     mapping_seq_.store(seq + 2, std::memory_order_release);
@@ -152,7 +152,7 @@ RealtimeProfilerClockSync::Calibration RealtimeProfilerClockSync::calibration() 
         }
         Calibration out;
         out.mapping.device_cycle_offset = mapping_device_cycle_offset_.load(std::memory_order_relaxed);
-        out.mapping.sync_error_ns = mapping_sync_error_ns_.load(std::memory_order_relaxed);
+        out.mapping.sync_error = mapping_sync_error_.load(std::memory_order_relaxed);
         out.frequency = mapping_frequency_.load(std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_acquire);
         if (mapping_seq_.load(std::memory_order_relaxed) == before) {

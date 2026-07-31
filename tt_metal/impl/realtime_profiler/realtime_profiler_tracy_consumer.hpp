@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <vector>
 #include <tracy/TracyTTDevice.hpp>
@@ -37,9 +38,9 @@ private:
     void CalibrateDevice(uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency);
     TracyTTCtx GetContext(uint32_t chip_id);
     bool ValidateHostClockDomain();
-    // Convert a CLOCK_MONOTONIC host timestamp (the domain of clock_sync) into Tracy's rdtsc CPU-tick domain, which the
+    // Convert a steady_clock host time (the domain of clock_sync) into Tracy's rdtsc CPU-tick domain, which the
     // Tracy context/calibration APIs require. Reads both host clocks side by side to pin the offset.
-    int64_t HostMonoNsToTracyCpuTicks(int64_t host_mono_ns);
+    int64_t HostTimeToTracyCpuTicks(std::chrono::steady_clock::time_point host_time);
     void PublishDeviceProfilerSyncAnchor(
         uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency);
 

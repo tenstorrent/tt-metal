@@ -42,7 +42,7 @@ static void WriteRealtimeRecordsToCsv(const tt::tt_metal::experimental::ProgramR
     for (const auto& record : batch.records) {
         uint64_t duration_cycles =
             (record.end_timestamp >= record.start_timestamp) ? (record.end_timestamp - record.start_timestamp) : 0;
-        double duration_ns = record.duration_ns();
+        double duration_ns = record.duration().count();
 
         fmt::format_to(
             out,

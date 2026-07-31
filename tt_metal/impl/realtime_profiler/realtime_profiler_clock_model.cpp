@@ -168,7 +168,7 @@ experimental::ProgramRealtimeClockSync ClockModel::mapping() const {
         .device_cycle_offset = device_cycle_offset_,
         // Where the anchor could have landed inside its round trip. Drift between re-anchors measures ~6 ppm, which
         // over one resync interval stays far inside this bound, so it carries no term of its own.
-        .sync_error_ns = static_cast<uint64_t>(placement_error(rtt_).count()),
+        .sync_error = placement_error(rtt_),
     };
 }
 
