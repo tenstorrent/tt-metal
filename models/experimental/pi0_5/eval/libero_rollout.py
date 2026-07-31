@@ -49,6 +49,43 @@ if LIBERO_REPO not in sys.path:
     sys.path.insert(0, LIBERO_REPO)
 os.environ.setdefault("MUJOCO_GL", "osmesa")
 
+
+def _apply_production_env_defaults():
+    """Source _bench_runs/pi05_production.env as DEFAULTS, exactly like the perf tests do.
+
+    Until now LIBERO did NOT pick these up: the perf harness self-applies them at module load, but this
+    script only set four pipeline-specific vars, so any rollout launched without a manual
+    `source _bench_runs/pi05_production.env` ran WITHOUT the 22 validated production flags -- including
+    the tuning that the published numbers were measured with, and (since 9a65cecda27)
+    PI05_COMPACT_MASKED_PREFIX / PI05_D2H_DRAIN_ONLY, worth ~3.3 ms and a 10x reduction in run-to-run
+    jitter. That silent divergence between "what we benchmark" and "what we evaluate" is exactly the gap
+    that let a whole capability regression sit unnoticed earlier in this branch.
+
+    setdefault semantics: an explicit shell export still wins, so existing launcher scripts that already
+    source the file are unaffected. Must run BEFORE any ttnn / pi0_5 import so every flag is in place
+    when modules read it at import time. PI05_NO_PROD_ENV=1 opts out.
+    """
+    if os.environ.get("PI05_NO_PROD_ENV", "").lower() in ("1", "true", "yes", "on"):
+        return
+    import re as _re
+
+    envf = os.path.join(os.environ.get("TT_METAL_HOME") or REPO_ROOT, "_bench_runs", "pi05_production.env")
+    if not os.path.exists(envf):
+        print(f"[libero] WARN: {envf} not found; production flags NOT applied", flush=True)
+        return
+    applied = 0
+    with open(envf) as f:
+        for line in f:
+            m = _re.match(r"\s*export\s+([A-Z0-9_]+)=(\S+)", line)
+            # never override the checkpoint path -- the rollout resolves its own
+            if m and m.group(1) != "PI05_CHECKPOINT_DIR" and m.group(1) not in os.environ:
+                os.environ[m.group(1)] = m.group(2)
+                applied += 1
+    print(f"[libero] production env: {applied} flag(s) applied from {envf}", flush=True)
+
+
+_apply_production_env_defaults()
+
 import sentencepiece
 from safetensors.torch import load_file
 
