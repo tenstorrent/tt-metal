@@ -3,6 +3,7 @@
 
 #include <nlohmann/json.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <array>
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -34,11 +35,18 @@ TensorSpec make_nd_sharded_tensor_spec(const ttnn::Shape& shape, const ttnn::Sha
         tt::tt_metal::BufferType::L1,
         tt::tt_metal::NdShardSpec{shard_shape, cores, tt::tt_metal::ShardOrientation::ROW_MAJOR});
     return TensorSpec(
-        shape,
-        TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            PageConfig(tt::tt_metal::Layout::TILE),
-            memory_config));
+        shape, TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), memory_config));
+}
+
+TensorSpec make_legacy_height_sharded_tensor_spec(const ttnn::Shape& shape) {
+    const auto cores = tt::tt_metal::CoreRangeSet(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}));
+    const auto memory_config = tt::tt_metal::MemoryConfig(
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::BufferType::L1,
+        tt::tt_metal::ShardSpec(cores, std::array<uint32_t, 2>{32, 64}, tt::tt_metal::ShardOrientation::ROW_MAJOR));
+    return TensorSpec(
+        shape, TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), memory_config));
 }
 
 const auto has_nd_provenance = [](const std::string& args) {
@@ -114,6 +122,23 @@ TEST_F(TestGraphCaptureArgumentsTranspose, PermuteImplicitOutputConfigPreservesN
     EXPECT_EQ(create_tensor_it->arguments[2], "Layout::TILE");
     ASSERT_EQ(create_tensor_it->arguments.size(), 5);
     EXPECT_TRUE(has_nd_provenance(create_tensor_it->arguments[4])) << create_tensor_it->arguments[4];
+}
+
+TEST_F(TestGraphCaptureArgumentsTranspose, PermuteImplicitOutputConfigRecomputesLegacyShardSpecForShardedFallback) {
+    auto tt_input = create_device_tensor(make_legacy_height_sharded_tensor_spec(ttnn::Shape({1, 1, 32, 64})), device_);
+
+    ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    ttnn::permute(tt_input, ttnn::SmallVector<int64_t>({3, 2, 1, 0}));
+    auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
+    auto operations = ttnn::graph::extract_arguments(trace);
+
+    auto create_tensor_it = find_create_device_tensor(operations);
+    ASSERT_NE(create_tensor_it, operations.end()) << "create_device_tensor operation not found";
+    EXPECT_EQ(create_tensor_it->arguments[0], "Shape([64, 32, 1, 1])");
+    EXPECT_EQ(create_tensor_it->arguments[2], "Layout::TILE");
+    ASSERT_EQ(create_tensor_it->arguments.size(), 5);
+    EXPECT_TRUE(create_tensor_it->arguments[4].find("TensorMemoryLayout::HEIGHT_SHARDED") != std::string::npos)
+        << create_tensor_it->arguments[4];
 }
 
 TEST_F(TestGraphCaptureArgumentsTranspose, PermuteImplicitOutputConfigPreservesNdProvenanceForRank5ShardedFallback) {
