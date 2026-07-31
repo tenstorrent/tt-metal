@@ -670,20 +670,100 @@ def _append_attempt(rec: dict) -> list:
     return attempts
 
 
-def _autorecord_wedge(reason: str) -> None:
+FAULT_KIND_WEDGED = "wedged"
+FAULT_KIND_CRASHED = "crashed"
+FAULT_KIND_TIMEOUT = "timeout"
+
+# An op REFUSING A CONFIG, raised by validation before any device work. classify_failure lists
+# tt_fatal/tt_throw/tt_assert as device-fault markers -- correct for a runtime abort, wrong for
+# these, and that is why an illegal dtype or shard spec reset healthy silicon. The distinguishing
+# feature is the SHAPE of the claim: validation states a requirement about the inputs.
+_OP_VALIDATION_MARKERS = (
+    "must have dtype",
+    "must be tile",
+    "must be equal",
+    "only support",
+    "only supports",
+    "is not supported",
+    "unsupported",
+    "must be divisible",
+    "must match",
+    "invalid shape",
+    "shape mismatch",
+    "programconfig",
+    "must be a multiple",
+    "does not fit",
+    "out of memory",
+    "l1 allocation",
+)
+
+
+def _is_op_validation_reject(reason) -> bool:
+    """Did an op reject the CONFIG (device untouched), rather than the device faulting?
+
+    Requires BOTH an assert-family marker and a validation-shaped claim, so a bare TT_FATAL with no
+    stated requirement still falls through to the conservative device-fault path.
+    """
+    s = str(reason or "").lower()
+    if not any(m in s for m in ("tt_fatal", "tt_throw", "tt_assert")):
+        return False
+    return any(m in s for m in _OP_VALIDATION_MARKERS)
+
+
+def fault_kind_for(reason, killed_by_watchdog: bool = False) -> str:
+    """WHICH of the three things went wrong -- they were all called "wedged" (BUG 1).
+
+        timeout  WE killed it (watchdog). The workload never finished, so the lever was never
+                 measured and nothing was learned about it. Known at the CALL SITE, no parsing.
+        crashed  the op rejected the config -- "TT_FATAL: All input tensors must have dtype =
+                 bfloat16". A clean assert from validation; the board is untouched and the answer
+                 is real: this lever does not apply to this op.
+        wedged   the runtime says the HARDWARE is gone ("Read 0xffffffff over PCIe ID N"), which is
+                 what device_recovery.is_dead_board already recognises.
+
+    UNKNOWN stays `wedged` deliberately: absent a signature, under-reacting to a genuinely dead
+    board costs more than one unnecessary reset. This only refines what we CALL the failure --
+    classify_failure still does the judging.
+    """
+    if killed_by_watchdog:
+        return FAULT_KIND_TIMEOUT
+    if _is_op_validation_reject(reason):
+        # An op refusing an illegal CONFIG, before it touches the device.
+        return FAULT_KIND_CRASHED
+    if classify_failure(reason) == FAULT_MEASUREMENT:
+        # Positive evidence the host could not take a reading while the device stayed healthy
+        # (profiler / CSV / launcher). The board is fine.
+        return FAULT_KIND_CRASHED
+    # FAULT_DEVICE and FAULT_UNKNOWN both stay `wedged`. Without positive evidence that the device
+    # survived, assuming it did is the expensive direction to be wrong in.
+    return FAULT_KIND_WEDGED
+
+
+def _autorecord_wedge(reason: str, killed_by_watchdog: bool = False) -> None:
     t = _load_target()
+    kind = fault_kind_for(reason, killed_by_watchdog=killed_by_watchdog)
     rec = {
         "op_signature": t.get("op") or "candidate config",
         "kernel_kind": _normalise_rung(t.get("rung")),
         # An unmeasured attempt is not evidence about the lever. Without this the *_tries
         # counters treated a host-side measurement failure as "tried and lost on merit".
-        "measurement_failed": _is_confirmed_measurement_failure(reason),
+        # A watchdog timeout is unmeasured BY CONSTRUCTION -- we killed it before it could finish.
+        "measurement_failed": kind == FAULT_KIND_TIMEOUT or _is_confirmed_measurement_failure(reason),
         "measured_ms": None,
         "beat_baseline": False,
         "note": reason,
         "stages": [],
         "kernel_detected_in_source": False,
+        # KEPT TRUTHY for every non-clean outcome: _rung_state, the report renderer and
+        # termination_check all read this field, and silently changing what it means would be a
+        # worse bug than the one being fixed. fault_kind carries the detail.
         "wedged": True,
+        "fault_kind": kind,
+        # A lever we killed ourselves deserves another go; an illegal config would fail identically.
+        "retryable": kind == FAULT_KIND_TIMEOUT,
+        # ONLY a real device fault should reset the board. Resetting on an op-validation assert or
+        # on our own watchdog is what produced the "killed holders none" resets on healthy silicon.
+        "needs_device_recovery": kind == FAULT_KIND_WEDGED,
         "evidence": {},
         "diff": "",
     }
