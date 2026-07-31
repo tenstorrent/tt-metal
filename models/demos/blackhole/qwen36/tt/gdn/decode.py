@@ -8,9 +8,11 @@ Operates on the gdn instance: reads weights from `gdn.weights`, config dims from
 memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 """
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tt.gdn.state import init_recurrent_state, split_fused_conv_state
+from models.demos.blackhole.qwen36.tt.wh_compat import apply as _apply_wh_compat
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
+
+_apply_wh_compat()  # Wormhole GDN L1 adjustments (see tt/wh_compat.py)
 
 
 def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None):
@@ -31,17 +33,15 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
 
     T = x.shape[1]
 
-    # Chunk prefill on Wormhole: force the DRAM working set. gated_deltanet_forward_ttnn picks its
-    # memory config as `None if valid_len is not None else _seq_memory_config(T)`, and
-    # _seq_memory_config returns L1 for T <= 512. Those L1 tensors then collide with the chunk-seq
-    # kernel's statically-allocated circular buffers ("clash with L1 buffers", ~34KB/core short on
-    # WH) — the kernel's CBs are L1-only and its chunk_size is hard-asserted to 128 in C++, so the
-    # only thing that can move is the surrounding activations. The upstream code already uses this
-    # exact escape hatch for the masked-bucket path (see its "valid_len path forces DRAM" comment).
-    # valid_len == T is a semantic no-op: the seq adapter only masks when valid_len < T, and the conv
-    # tail select at valid_len == T resolves to the same last K-1 real tokens as the unmasked path.
-    if mode == "chunk" and T > 1 and valid_len is None and not is_blackhole():
-        valid_len = T
+    # NOTE (Wormhole): do NOT force valid_len here to buy the DRAM working set. Passing valid_len
+    # makes gated_deltanet_forward_ttnn build the conv-tail one-hot selector on the host
+    # (`ttnn.from_torch(sel, ..., device=device)`), which is a host->device write. Inside
+    # begin_trace_capture that is illegal — "TT_FATAL: Writes are not supported during trace
+    # capture" — and it wedges the device, since the fatal fires before end_trace_capture runs.
+    # Every trace-capturing prefill test hits it. The L1 pressure this was working around is
+    # instead fixed at its source, from inside this model's folder (see tt/wh_compat.py): the
+    # chunk-seq activations go to DRAM on WH, and the kernel's [BH, L, V] output relayout is bf16
+    # rather than fp32 (33.5MB -> 16.8MB at L=2048, see tt/chunk_seq_wh.py).
 
     # After prefill, fuse separate conv states into one for efficient decode
     if T == 1 and gdn.fused_conv_state is None and gdn.conv_state_q is not None:
