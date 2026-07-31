@@ -8,6 +8,7 @@
 #include <map>
 #include <vector>
 
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
@@ -50,6 +51,12 @@ constexpr const char* kComputeTilize =
 
 uint32_t align_up(uint32_t value, uint32_t alignment) { return ((value + alignment - 1) / alignment) * alignment; }
 
+// The page pitches below (input stick, output tile) are rounded with the DRAM alignment for both
+// placements, as ops/tilize/spec.py does. That is exact for an interleaved-L1 buffer too, not just
+// a lucky over-estimate: supported_by_codegen admits only W % TILE_W == 0 with a >= 2-byte dtype, so
+// a stick is a multiple of 64 bytes and a tile a multiple of 32 — already aligned under the L1
+// alignment (the smaller of the two) as well, leaving the rounding a no-op either way.
+
 // ops/tilize/builder.py _largest_divisor_le
 uint32_t largest_divisor_le(uint32_t n, uint32_t limit) {
     if (n <= limit) {
@@ -88,8 +95,9 @@ uint32_t required_cb_out(uint32_t write_batch, uint32_t compute_chunk) {
 
 // UnpackToDestMode vector forcing a FLOAT32 input CB to unpack straight into DEST (avoids the
 // SRCA Float16_b truncation for RM fp32 tilize input) — mirrors builder_utils.unpack_to_dest_fp32_modes.
-std::vector<UnpackToDestMode> unpack_to_dest_fp32_modes(uint32_t cb_index, uint32_t num_cbs = 64) {
-    std::vector<UnpackToDestMode> modes(num_cbs, UnpackToDestMode::Default);
+// Length is the host-side CB-count constant the native tilize factory uses for the same vector.
+std::vector<UnpackToDestMode> unpack_to_dest_fp32_modes(uint32_t cb_index) {
+    std::vector<UnpackToDestMode> modes(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     modes[cb_index] = UnpackToDestMode::UnpackToDestFp32;
     return modes;
 }
@@ -280,10 +288,11 @@ ProgramDescriptor build_row(
         cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
     }
 
-    // Batched writes measure slower than single writes once a core owns several tile-rows
-    // (native/ported 0.97 -> 0.92 on [4, 12, 96, 96]), so batching stays restricted to the
-    // one-row-per-core case. A one-tile/core assignment has nothing to overlap either, so batch-4
-    // priming and double-buffering are pure per-core setup cost there.
+    // MEMORY: writer_tilize_interleaved.cpp's batched branch walks CB pages linearly from the
+    // read pointer, which only matches the output tile ids when a core owns ONE tile-row; with
+    // several rows per core it interleaves them wrong. Force the single-write branch there.
+    // A one-tile-per-core assignment has nothing to overlap either, so batch priming and
+    // double-buffering would be pure per-core setup cost — spec.py's `minimal_work` clamp.
     const bool minimal_work = (num_col_chunks == 1 && chunk_wt == 1 && g.total_ht <= num_cores);
     if (minimal_work) {
         cb_depth = 1;
