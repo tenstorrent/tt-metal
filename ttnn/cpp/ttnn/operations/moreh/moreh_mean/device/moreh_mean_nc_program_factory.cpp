@@ -174,7 +174,9 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanNCFactory:
         return KernelSpec{
             .unique_id = unique_id,
             .source = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_nc.cpp",
-            .compiler_options = {.defines = compute_defines},
+            // O3 is legacy ComputeConfig's default; Metal 2.0's CompilerOptions defaults to O2, so
+            // the level has to be stated explicitly to keep the compute kernel where it was.
+            .compiler_options = {.defines = compute_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {
                     DFBBinding{
