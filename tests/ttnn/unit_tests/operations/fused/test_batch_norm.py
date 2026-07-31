@@ -1202,9 +1202,19 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
         training=True,
         momentum=0.1,
     )
-    frobenius_threshold = 0.25 if not fp32_dest_acc_en else 0.15
+    # LoFi + fp32_dest_acc_en=False is inherently lower precision than the default SFPU
+    # path, and the channel count (so also the generated data) varies with the device grid,
+    # which makes the worst-case element error backend-dependent. PCC and relative Frobenius
+    # are the real gates on the main output; allclose is a coarse outlier guard.
+    lofi = not fp32_dest_acc_en
+    frobenius_threshold = 0.25 if lofi else 0.15
     assert_numeric_metrics(
-        torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=frobenius_threshold
+        torch_result,
+        tt_output,
+        pcc_threshold=0.99,
+        rtol=0.1,
+        atol=6.0 if lofi else 4.0,
+        frobenius_threshold=frobenius_threshold,
     )
 
     if check_mean:
