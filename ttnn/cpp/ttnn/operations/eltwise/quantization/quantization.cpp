@@ -555,6 +555,10 @@ Tensor dequantize(
                     post_activation,
                     std::nullopt);
             },
+            // The shifted input and the scale are both carried at f32 and the multiply packs
+            // c_dtype directly, so a bf16 output is rounded once, in the packer. Narrowing either
+            // operand to bf16 before the multiply instead would round three times: the shifted
+            // input, the scale, and the bf16 product.
             [&](const float scale, const Tensor& zero_point) {
                 if (!is_per_channel) {
                     check_per_tensor_zero_point(zero_point);
@@ -562,7 +566,7 @@ Tensor dequantize(
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
                         input_for_shift, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
-                    c_dtype);
+                    DataType::FLOAT32);
                 return ttnn::multiply(
                     input_shifted, scale, c_dtype, memory_config, optional_output_tensor, none, none, none);
             },
@@ -574,10 +578,10 @@ Tensor dequantize(
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
                         input_for_shift, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
-                    c_dtype);
+                    DataType::FLOAT32);
                 return ttnn::multiply(
                     input_shifted,
-                    scale.dtype() == c_dtype ? scale : ttnn::typecast(scale, c_dtype),
+                    scale.dtype() == DataType::FLOAT32 ? scale : ttnn::typecast(scale, DataType::FLOAT32),
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
