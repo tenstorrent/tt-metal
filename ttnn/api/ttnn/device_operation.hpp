@@ -208,17 +208,6 @@ void enqueue_mesh_workload(
         return;
     }
 
-    // Set allocation context so that any program-cache buffer allocations inside EnqueueMeshWorkload
-    // are tagged with the op name + compile args for the trace allocation tracker.
-    std::optional<tt::tt_metal::AllocationContextGuard> ctx_guard;
-    if (tt::tt_metal::trace_allocation_tracking_enabled()) {
-        auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
-        std::string alloc_ctx = "program_cache: " + std::string(op_name);
-        for (const auto& [name, value] : ttsl::reflection::get_attributes(operation_attributes)) {
-            alloc_ctx += " " + std::string(name) + "=" + value.to_string();
-        }
-        ctx_guard.emplace(alloc_ctx);
-    }
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(
@@ -311,6 +300,19 @@ void create_and_cache_mesh_workload(
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     const ProgramCacheKey& program_key) {
     mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+
+    // Program-cache buffers are only created on the cache-miss path. Keep the
+    // allocation context here so cached dispatches have no tracker branch or
+    // function call when tracking is disabled.
+    std::optional<tt::tt_metal::AllocationContextGuard> ctx_guard;
+    if (tt::tt_metal::trace_allocation_tracking_enabled()) {
+        auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+        std::string alloc_ctx = "program_cache: " + std::string(op_name);
+        for (const auto& [name, value] : ttsl::reflection::get_attributes(operation_attributes)) {
+            alloc_ctx += " " + std::string(name) + "=" + value.to_string();
+        }
+        ctx_guard.emplace(alloc_ctx);
+    }
 
     auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
     auto program_factory_index = program_factory.index();
