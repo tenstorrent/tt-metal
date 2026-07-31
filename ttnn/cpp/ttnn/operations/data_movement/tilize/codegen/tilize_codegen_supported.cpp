@@ -30,10 +30,14 @@ bool is_supported_dtype(DataType dtype) {
 
 // Exact-match ledger entries that demotion analysis could NOT reduce to a mechanism. Each is a
 // single measured configuration, not a condition — see is_demoted() for the generalized row-path
-// predicates that cover the rest of the ledger. Fields are the sweep's shape, the memory config's
-// buffer type (input and output share it: the sweep's vector_map feeds one `memory_config` and the
-// input is created with it), and the dtype (same in and out — this port never routes a dtype-cast
+// predicates that cover the rest of the ledger. Fields are the sweep's shape, the buffer type of
+// the OUTPUT memory config, and the dtype (same in and out — this port never routes a dtype-cast
 // call to codegen, see supported_by_codegen).
+//
+// The ledger keys its `memory_config` field on the sweep's `output_memory_config` parameter
+// (manifest vector_map), which the sweep varies independently of `input_a_memory_config`; a ledger
+// entry marked L1 therefore constrains the output placement only, and matching on the input's
+// buffer type does not identify these cases.
 struct DemotedCase {
     std::vector<uint32_t> shape;
     BufferType buffer_type;
@@ -42,7 +46,7 @@ struct DemotedCase {
 
 const std::vector<DemotedCase>& ungeneralized_demoted_cases() {
     static const std::vector<DemotedCase> cases = {
-        // UNGENERALIZED: row path at Wt == 3, DRAM source. Its L1 twin is covered by the
+        // UNGENERALIZED: row path at Wt == 3, DRAM placement. The L1 twin of each is covered by the
         // wt3_l1_source predicate; no mechanism was found for the DRAM leg of these two shapes.
         {{3, 7, 64, 96}, BufferType::DRAM, DataType::BFLOAT16},
         {{5, 160, 96}, BufferType::DRAM, DataType::BFLOAT16},
@@ -51,7 +55,7 @@ const std::vector<DemotedCase>& ungeneralized_demoted_cases() {
         // DRAM twins of both shapes measured above parity). No mechanism found.
         {{5, 8, 64, 64}, BufferType::L1, DataType::BFLOAT16},
         {{6, 4, 96, 64}, BufferType::L1, DataType::BFLOAT16},
-        // UNGENERALIZED: row path at Wt == 5, DRAM source. Phase 7 reported this as a port "FIX"
+        // UNGENERALIZED: row path at Wt == 5, DRAM placement. Phase 7 reported this as a port "FIX"
         // at generic/ported = 0.998 — the port reproduces the codegen prototype to within 0.2%,
         // so the 1.3% native deficit is the prototype's, not a translation defect. No mechanism.
         {{6, 224, 160}, BufferType::DRAM, DataType::BFLOAT16},
@@ -135,7 +139,10 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     // Same grid query the factory's path dispatch uses (64 cores on wormhole_b0).
     const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
     const uint32_t grid_cores = grid.x * grid.y;
-    const auto input_buffer_type = operation_attributes.input_mem_config.buffer_type();
+    // The ledger's placement axis is the output memory config (manifest vector_map maps
+    // `memory_config` -> the sweep's `output_memory_config`), so every placement-conditioned
+    // demotion below keys on this side.
+    const auto output_buffer_type = operation_attributes.output_mem_config.buffer_type();
 
     // tilize_rm_row_path_wt1: Wt == 1 forces uses_2d_column_path() -> ncol == 1 (Wt <= 2), so
     // build_row is selected for any NC*Ht. There the minimal_work clamp sets cb_depth = 1 and
@@ -155,13 +162,13 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
         return true;
     }
 
-    // tilize_rm_row_path_wt3_l1_source: interleaved-L1 sourcing makes the reader's 32 stick reads
-    // per tile-row core-to-core L1 transfers rather than DRAM reads, which speeds up the shared
-    // part of both legs while codegen's fixed per-core setup is unchanged - enough to cross below
-    // parity on the Wt == 3 row path. Restricted to Wt == 3 falling to the row path, i.e. no
-    // divisor d >= 2 of Wt fits (for Wt == 3: NC*Ht > grid_cores/3), and to an L1 source: the same
-    // shapes sourced from DRAM cleared the gate, and Wt == 3 with a 2D-column split wins outright.
-    if (wt == 3 && input_buffer_type == BufferType::L1 && choose_2d_ncol(total_ht, wt, grid_cores) == 1) {
+    // tilize_rm_row_path_wt3_l1_source: interleaved-L1 transport makes the row path's per-stick
+    // traffic core-to-core L1 rather than DRAM, which speeds up the part of the kernel both legs
+    // share while codegen's fixed per-core setup is unchanged - enough to cross below parity on the
+    // Wt == 3 row path. Restricted to Wt == 3 falling to the row path, i.e. no divisor d >= 2 of Wt
+    // fits (for Wt == 3: NC*Ht > grid_cores/3), and to interleaved L1: the same shapes with a DRAM
+    // placement cleared the gate, and Wt == 3 with a 2D-column split wins outright.
+    if (wt == 3 && output_buffer_type == BufferType::L1 && choose_2d_ncol(total_ht, wt, grid_cores) == 1) {
         return true;
     }
 
@@ -171,10 +178,9 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     for (uint32_t i = 0; i < shape.rank(); ++i) {
         shape_vec.push_back(shape[i]);
     }
-    const auto output_buffer_type = operation_attributes.output_mem_config.buffer_type();
     for (const auto& demoted : ungeneralized_demoted_cases()) {
-        if (demoted.buffer_type == input_buffer_type && demoted.buffer_type == output_buffer_type &&
-            demoted.dtype == operation_attributes.input_dtype && demoted.shape == shape_vec) {
+        if (demoted.buffer_type == output_buffer_type && demoted.dtype == operation_attributes.input_dtype &&
+            demoted.shape == shape_vec) {
             return true;
         }
     }
