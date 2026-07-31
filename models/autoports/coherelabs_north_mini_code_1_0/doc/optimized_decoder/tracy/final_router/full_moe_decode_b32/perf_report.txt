@@ -1,0 +1,21 @@
+Script started on 2026-07-30 23:55:52+00:00 [COMMAND="python_env/bin/tt-perf-report models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/final_router/full_moe_decode_b32/ops.csv --start-signpost PERF_DECODE --end-signpost PERF_DECODE_END --no-host-ops --no-color --csv models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/final_router/full_moe_decode_b32/perf_report.csv --summary-file models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/final_router/full_moe_decode_b32/perf_summary.csv" <not executed on terminal>]
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE'.
+Using operations until 'PERF_DECODE_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/final_router/full_moe_decode_b32/perf_report.csv
+Overall DRAM roofline (modeled ops): 29.3% (150 GB/s)
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SdpaDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RepeatDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'FastReduceNCDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/final_router/full_moe_decode_b32/perf_summary.csv.csv
+Plotting PNG stacked report to models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/final_router/full_moe_decode_b32/perf_summary.csv.png
+
+Script done on 2026-07-30 23:55:53+00:00 [COMMAND_EXIT_CODE="0"]
