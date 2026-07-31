@@ -10,9 +10,8 @@ Output: per row, slot0's value tiles, then slot0's index tiles, as uint32.
 - padding lane: high 16 bits of value are 0xFF80 (bf16 -inf)
 """
 
-# For the sake of exactness, SrcA stimuli are built by hand with numpy
-# and compared against torch.topk.
-import numpy as np
+# For the sake of exactness, SrcA stimuli are built by hand.
+# helpers.stimuli_generator is very awkward for these tests.
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -55,36 +54,42 @@ def _decode_row_major(raw: int, K: int) -> int:
     return d
 
 
-def _distinct_bf16_from_hi16(hi16: np.ndarray) -> np.ndarray:
+def _bitcast_float32(words: torch.Tensor) -> torch.Tensor:
+    """Reinterpret integer bit patterns as float32."""
+    return words.to(torch.int32).view(torch.float32)
+
+
+def _distinct_bf16_from_hi16(hi16: torch.Tensor) -> torch.Tensor:
     """Turn uint16 into exactly-representable bf16 values as float32."""
-    return (hi16.astype(np.uint32) << np.uint32(16)).view(np.float32).copy()
+    return _bitcast_float32(hi16.to(torch.int64) << 16)
 
 
-def _make_row(search_len: int, seed: int, mode: str) -> np.ndarray:
-    """One row of `search_len` values as float32.
+def _make_row(search_len: int, seed: int, mode: str) -> torch.Tensor:
+    """
+    One row of `search_len` values as float32.
+    Seeded by row index so that rows within a variant differ.
 
     mode="positive": distinct, exactly-representable, all >= 1.0 (unambiguous top-k).
     mode="signed":   distinct, exactly-representable, spanning negatives and
                      positives (bf16 sign handling in the sort).
     mode="random":   random bf16 (ties likely; not distinct).
     """
-    rng = np.random.default_rng(seed)
+    gen = torch.Generator().manual_seed(seed)
     if mode == "positive":
         # hi16 from 0x3F80 up: consecutive exactly-representable bf16 >= 1.0.
-        hi16 = 0x3F80 + rng.permutation(search_len)
+        hi16 = 0x3F80 + torch.randperm(search_len, generator=gen)
         return _distinct_bf16_from_hi16(hi16)
     if mode == "signed":
         n_neg = search_len // 2
-        pos = 0x3F80 + np.arange(search_len - n_neg)  # >= +1.0
-        neg = 0xBF80 + np.arange(n_neg)  # <= -1.0 (sign bit set)
-        hi16 = rng.permutation(np.concatenate([pos, neg]))
+        pos = 0x3F80 + torch.arange(search_len - n_neg)  # >= +1.0
+        neg = 0xBF80 + torch.arange(n_neg)  # <= -1.0 (sign bit set)
+        hi16 = torch.cat([pos, neg])[torch.randperm(search_len, generator=gen)]
         return _distinct_bf16_from_hi16(hi16)
     if mode == "random":
-        gen = torch.Generator().manual_seed(seed)
-        return torch.randn(search_len, generator=gen).to(torch.bfloat16).float().numpy()
+        return torch.randn(search_len, generator=gen).to(torch.bfloat16).float()
     if mode == "all_equal":
         # Degenerate input: all identical.
-        return np.full(search_len, 3.0, dtype=np.float32)
+        return torch.full((search_len,), 3.0, dtype=torch.float32)
     if mode == "zeros_win":
         # Everything else is negative, so the +0 lanes are the largest values in the
         # row and win the top-K. That is the only arrangement in which a zero's
@@ -96,8 +101,10 @@ def _make_row(search_len: int, seed: int, mode: str) -> np.ndarray:
         # indistinguishable from a flushed one.
         assert search_len % 2 == 0, "zeros_win expects num_chunks=2 with a full tail"
         chunk_len = search_len // 2
-        vals = _distinct_bf16_from_hi16(0xBF80 + rng.permutation(search_len))
-        zero_pos = 1 + rng.choice(chunk_len - 1, chunk_len // 2, replace=False)
+        vals = _distinct_bf16_from_hi16(
+            0xBF80 + torch.randperm(search_len, generator=gen)
+        )
+        zero_pos = 1 + torch.randperm(chunk_len - 1, generator=gen)[: chunk_len // 2]
         vals[zero_pos] = 0.0
         return vals
     raise ValueError(f"unknown mode {mode}")
@@ -115,8 +122,8 @@ def _build_input(K, num_chunks, tail_elements, num_rows, mode, as_float32=False)
     search_len = (num_chunks - 1) * K + tail_elements
     total_input_tiles = num_rows * num_chunks * tiles_per_seq
 
-    src = np.zeros(total_input_tiles * ELEMENTS_PER_TILE, dtype=np.float32)
-    rows = np.empty((num_rows, search_len), dtype=np.float32)
+    src = torch.zeros(total_input_tiles * ELEMENTS_PER_TILE, dtype=torch.float32)
+    rows = torch.empty((num_rows, search_len), dtype=torch.float32)
 
     for r in range(num_rows):
         rows[r] = _make_row(search_len, r, mode)
@@ -127,8 +134,7 @@ def _build_input(K, num_chunks, tail_elements, num_rows, mode, as_float32=False)
             # Remaining slots stay 0; the copy path clears inactive lanes to -inf
             # regardless, so their L1 contents are never read.
 
-    src_t = torch.from_numpy(src)
-    return (src_t if as_float32 else src_t.to(torch.bfloat16)), torch.from_numpy(rows)
+    return (src if as_float32 else src.to(torch.bfloat16)), rows
 
 
 def _config(
@@ -196,32 +202,39 @@ def _config(
     )
 
 
-def _as_uint32(result):
-    """Read the flat L1 uint32 result into a numpy uint32 array."""
-    return np.asarray(
-        torch.tensor(result, dtype=format_dict[FORMATS.output_format]), dtype=np.uint32
-    )
+def _result_words(result):
+    """
+    Read the flat L1 uint32 result. format_dict maps uint32 to torch.int64,
+    so shifts and masks below don't need any special handling of the sign bit.
+    """
+    return torch.tensor(result, dtype=format_dict[FORMATS.output_format])
+
+
+def _finite_lanes(value_words):
+    """Lane mask that drops the bf16 -inf padding the copy path writes."""
+    return ((value_words >> 16) & 0xFFFF) != BF16_NEG_INF_HI16
 
 
 def _extract_hw_topk(result, K, num_rows):
-    """Per row, pair value[j] with index[j] and drop bf16 -inf padding lanes.
-    Returns a list of (indices_uint32, values_float32): the surviving top-K."""
+    """
+    Per row, pair value[j] with index[j] and drop bf16 -inf padding lanes.
+    Returns a list of (index_words, values_float32): the surviving top-K.
+    """
     tiles_per_seq = _tiles_per_sequence(K)
-    res = _as_uint32(result)
+    res = _result_words(result)
     per_row = 2 * tiles_per_seq * ELEMENTS_PER_TILE
     region = tiles_per_seq * ELEMENTS_PER_TILE
     assert (
-        res.size == num_rows * per_row
-    ), f"result size {res.size} != expected {num_rows * per_row}"
+        res.numel() == num_rows * per_row
+    ), f"result size {res.numel()} != expected {num_rows * per_row}"
 
     out = []
     for r in range(num_rows):
         block = res[r * per_row : (r + 1) * per_row]
         value_words = block[:region]
         index_words = block[region:]
-        hi16 = (value_words >> np.uint32(16)) & np.uint32(0xFFFF)
-        finite = hi16 != BF16_NEG_INF_HI16
-        out.append((index_words[finite], value_words[finite].view(np.float32)))
+        finite = _finite_lanes(value_words)
+        out.append((index_words[finite], _bitcast_float32(value_words[finite])))
     return out
 
 
@@ -249,8 +262,8 @@ def _check(
 
     for r, (hw_idx, hw_val) in enumerate(_extract_hw_topk(result, K, num_rows)):
         assert (
-            hw_idx.size == K
-        ), f"row {r}: expected {K} finite top-K lanes, got {hw_idx.size}"
+            hw_idx.numel() == K
+        ), f"row {r}: expected {K} finite top-K lanes, got {hw_idx.numel()}"
 
         hw_idx_list = [int(x) - index_offset for x in hw_idx.tolist()]
         assert len(set(hw_idx_list)) == K, f"row {r}: returned indices are not distinct"
@@ -269,7 +282,7 @@ def _check(
             )
 
         # Sort both: Dest tile order is internal. Correct even under ties.
-        hw_vals_sorted = torch.sort(torch.from_numpy(hw_val.astype(np.float32))).values
+        hw_vals_sorted = torch.sort(hw_val).values
         gold_vals_sorted = torch.sort(gold_values[r]).values
         assert passed_test(
             gold_vals_sorted, hw_vals_sorted, value_format
@@ -358,7 +371,7 @@ def test_topk_xl_all_equal(K):
 
     idx = sorted(int(i) for i in hw_idx.tolist())
     assert idx == list(range(K)), "all-equal row did not return 0..K-1"
-    assert np.all(hw_val == rows[0][0].item()), "all-equal row returned a changed value"
+    assert (hw_val == rows[0][0].item()).all(), "all-equal row returned a changed value"
 
 
 def _check_separate(
@@ -370,26 +383,24 @@ def _check_separate(
     core_id fields, that the coordinate identifies each element's position, and
     the values.
     """
-    res = _as_uint32(result)
+    res = _result_words(result)
     region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
     per_row = 2 * region
-    assert res.size == num_rows * per_row
+    assert res.numel() == num_rows * per_row
 
     for r in range(num_rows):
         block = res[r * per_row : (r + 1) * per_row]
         value_words = block[:region]
         index_words = block[region:]
-        finite = (
-            (value_words >> np.uint32(16)) & np.uint32(0xFFFF)
-        ) != BF16_NEG_INF_HI16
+        finite = _finite_lanes(value_words)
 
-        hw_val = value_words[finite].view(np.float32)
+        hw_val = _bitcast_float32(value_words[finite])
         hw_iw = index_words[finite]
-        assert hw_iw.size == K, f"row {r}: expected {K} lanes, got {hw_iw.size}"
+        assert hw_iw.numel() == K, f"row {r}: expected {K} lanes, got {hw_iw.numel()}"
 
-        group = hw_iw >> np.uint32(group_shift)
-        raw = hw_iw & np.uint32((1 << group_shift) - 1)
-        assert np.all(group == group_id), (
+        group = hw_iw >> group_shift
+        raw = hw_iw & ((1 << group_shift) - 1)
+        assert (group == group_id).all(), (
             f"row {r}: group_id bits wrong at shift {group_shift}; got "
             f"{sorted(set(int(g) for g in group.tolist()))[:4]}, want {group_id}"
         )
@@ -397,8 +408,8 @@ def _check_separate(
         # core_id sits in bits [15:11]. A group_shift of 11 or less puts the group
         # id over that field, leaving no separable core bits to read back.
         if group_shift > 11:
-            hw_core = (raw >> np.uint32(11)) & np.uint32(0x1F)
-            assert np.all(hw_core == core_id), (
+            hw_core = (raw >> 11) & 0x1F
+            assert (hw_core == core_id).all(), (
                 f"row {r}: core_id bits [15:11] wrong; got "
                 f"{sorted(set(int(c) for c in hw_core.tolist()))[:4]}, want {core_id}"
             )
@@ -417,7 +428,7 @@ def _check_separate(
         # value multiset matches the input (single chunk => all values).
         assert passed_test(
             torch.sort(rows[r]).values,
-            torch.sort(torch.from_numpy(hw_val.astype(np.float32))).values,
+            torch.sort(hw_val).values,
             FORMATS.input_format,
         )
 
@@ -427,21 +438,20 @@ def _check_remove_msb(result, K, num_rows):
     remove_msb_values: fused region -> [0 | raw]. Check the value half is
     zeroed and the decoded positions form the full 0..K-1 set.
     """
-    res = _as_uint32(result)
+    res = _result_words(result)
     region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
-    assert res.size == num_rows * region
+    assert res.numel() == num_rows * region
 
     for r in range(num_rows):
         block = res[r * region : (r + 1) * region]
-        hi16 = (block >> np.uint32(16)) & np.uint32(0xFFFF)
-        finite = hi16 != BF16_NEG_INF_HI16  # padding lanes are still -inf
+        finite = _finite_lanes(block)  # padding lanes are still -inf
         real = block[finite]
-        assert real.size == K, f"row {r}: expected {K} lanes, got {real.size}"
+        assert real.numel() == K, f"row {r}: expected {K} lanes, got {real.numel()}"
 
-        untouched = int(np.count_nonzero(real >> np.uint32(16)))
+        untouched = int(torch.count_nonzero(real >> 16))
         assert untouched == 0, f"row {r}: value half not zeroed in {untouched} lanes"
 
-        raw = real & np.uint32(0xFFFF)
+        raw = real & 0xFFFF
         pos = [_decode_row_major(int(x), K) for x in raw.tolist()]
         assert set(pos) == set(
             range(K)
@@ -481,9 +491,9 @@ def _positional_rank(values, descending):
     rank[lane] = position of that lane's value in the sorted order.
     Requires distinct values.
     """
-    order = np.argsort(-values if descending else values, kind="stable")
-    rank = np.empty(order.size, dtype=np.int64)
-    rank[order] = np.arange(order.size)
+    order = torch.argsort(-values if descending else values, stable=True)
+    rank = torch.empty(order.numel(), dtype=torch.int64)
+    rank[order] = torch.arange(order.numel())
     return rank
 
 
@@ -519,19 +529,21 @@ def test_topk_xl_core_id(K, core_id):
 @skip_for_wormhole
 @skip_for_quasar
 def test_topk_xl_group_shift(K, group_shift):
-    src_A, rows = _build_input(K, 1, K, 1, "positive")
+    num_rows = 1
+
+    src_A, rows = _build_input(K, 1, K, num_rows, "positive")
     configuration = _config(
         K,
         1,
         K,
-        1,
+        num_rows,
         src_A,
         index_op=INDEX_OP_CODE["separate"],
         group_id=GROUP_ID,
         group_shift=group_shift,
     )
     result = configuration.run().result
-    _check_separate(result, K, 1, rows, group_shift=group_shift)
+    _check_separate(result, K, num_rows, rows, group_shift=group_shift)
 
 
 # chunk_base is saved by one of three inits, based on a template argument:
@@ -609,11 +621,12 @@ def test_topk_xl_rebuild_ascending(K):
     ):
         rank_desc = _positional_rank(desc_val, descending=True)
         rank_asc = _positional_rank(asc_val, descending=False)
-        mismatch = int(np.count_nonzero(rank_desc != rank_asc))
+        differs = rank_desc != rank_asc
+        mismatch = int(torch.count_nonzero(differs))
         assert mismatch == 0, (
             f"row {r}: ascending rebuild is not the mirror of the descending one: "
             f"{mismatch}/{K} lanes hold a different rank; first at lane "
-            f"{int(np.argmax(rank_desc != rank_asc))}"
+            f"{int(differs.nonzero()[0])}"
         )
 
 
@@ -622,27 +635,25 @@ def _check_fused_reduce(result, K, num_rows, num_chunks, rows):
     Checks the group_id bits, the top-K values, and each returned coordinate
     against the value paired with it.
     """
-    res = _as_uint32(result)
+    res = _result_words(result)
     region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
     per_row = 2 * region
-    assert res.size == num_rows * per_row
+    assert res.numel() == num_rows * per_row
 
     for r in range(num_rows):
         block = res[r * per_row : (r + 1) * per_row]
         value_words = block[:region]
         index_words = block[region:]
-        finite = (
-            (value_words >> np.uint32(16)) & np.uint32(0xFFFF)
-        ) != BF16_NEG_INF_HI16
+        finite = _finite_lanes(value_words)
 
-        hw_val = value_words[finite].view(np.float32)
+        hw_val = _bitcast_float32(value_words[finite])
         hw_iw = index_words[finite]
-        assert hw_iw.size == K, f"row {r}: expected {K} lanes, got {hw_iw.size}"
-        assert np.all(
-            hw_iw >> np.uint32(GROUP_SHIFT) == GROUP_ID
-        ), f"row {r}: group_id bits wrong"
+        assert hw_iw.numel() == K, f"row {r}: expected {K} lanes, got {hw_iw.numel()}"
+        assert (
+            (hw_iw >> GROUP_SHIFT) == GROUP_ID
+        ).all(), f"row {r}: group_id bits wrong"
 
-        raw = hw_iw & np.uint32((1 << GROUP_SHIFT) - 1)
+        raw = hw_iw & ((1 << GROUP_SHIFT) - 1)
         pos = [_decode_row_major(int(x), K) for x in raw.tolist()]
         assert all(0 <= p < K for p in pos), f"row {r}: coordinate outside 0..K-1"
 
@@ -659,7 +670,7 @@ def _check_fused_reduce(result, K, num_rows, num_chunks, rows):
         gold = torch.topk(rows[r], K).values
         assert passed_test(
             torch.sort(gold).values,
-            torch.sort(torch.from_numpy(hw_val.astype(np.float32))).values,
+            torch.sort(hw_val).values,
             FORMATS.input_format,
         ), f"row {r}: fused-reduce top-K value mismatch"
 
@@ -669,28 +680,29 @@ def _check_denormal_fused_word(result, K, rows):
 
     A +0 value zeroes bits 30:23 of the fused word, so the 32-bit word is an fp32
     denormal. An FP32-mode move would flush it and take the index with it."""
-    res = _as_uint32(result)
+    res = _result_words(result)
     region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
     block = res[: 2 * region]
     value_words = block[:region]
     index_words = block[region:]
-    finite = ((value_words >> np.uint32(16)) & np.uint32(0xFFFF)) != BF16_NEG_INF_HI16
+    finite = _finite_lanes(value_words)
 
-    hw_val = value_words[finite].view(np.float32)
+    hw_val = _bitcast_float32(value_words[finite])
     hw_iw = index_words[finite]
-    assert hw_iw.size == K, f"expected {K} lanes, got {hw_iw.size}"
+    assert hw_iw.numel() == K, f"expected {K} lanes, got {hw_iw.numel()}"
 
-    row = rows[0].numpy()
-    expected = {p for p in range(K) if row[p] == 0.0}  # zeros live in chunk 0
+    row = rows[0]
+    expected = {p for p in range(K) if float(row[p]) == 0.0}  # zeros live in chunk 0
     assert expected, "stimulus produced no zeros"
 
     zero_lane = hw_val == 0.0
-    assert int(np.count_nonzero(zero_lane)) == len(expected), (
+    n_zero = int(torch.count_nonzero(zero_lane))
+    assert n_zero == len(expected), (
         f"expected {len(expected)} zero-valued lanes in the top-K, got "
-        f"{int(np.count_nonzero(zero_lane))}; zeros should outrank every negative"
+        f"{n_zero}; zeros should outrank every negative"
     )
 
-    raw = hw_iw[zero_lane] & np.uint32((1 << GROUP_SHIFT) - 1)
+    raw = hw_iw[zero_lane] & ((1 << GROUP_SHIFT) - 1)
     got = {_decode_row_major(int(x), K) for x in raw.tolist()}
     assert got == expected, (
         "index bits of the denormal-shaped fused words did not survive: "
@@ -711,13 +723,14 @@ def test_topk_xl_denormal_fused_word(K):
     the unfused path they sit in separate regions, so a value word is plain
     0x00000000 and flushing it is a no-op."""
     (K,) = K
+    num_rows, num_chunks = 1, 2
 
-    src_A, rows = _build_input(K, 2, K, 1, "zeros_win")
+    src_A, rows = _build_input(K, num_chunks, K, num_rows, "zeros_win")
     configuration = _config(
         K,
-        2,
+        num_chunks,
         K,
-        1,
+        num_rows,
         src_A,
         fused_reduce=True,
         group_id=GROUP_ID,
@@ -736,20 +749,21 @@ def test_topk_xl_fused_reduce(K, num_chunks):
     region between the slots), 16 instead of 18 instructions in the MOP, and
     half the iteration count.
     """
+    num_rows = 1
 
-    src_A, rows = _build_input(K, num_chunks, K, 1, "positive")
+    src_A, rows = _build_input(K, num_chunks, K, num_rows, "positive")
     configuration = _config(
         K,
         num_chunks,
         K,
-        1,
+        num_rows,
         src_A,
         fused_reduce=True,
         group_id=GROUP_ID,
         group_shift=GROUP_SHIFT,
     )
     result = configuration.run().result
-    _check_fused_reduce(result, K, 1, num_chunks, rows)
+    _check_fused_reduce(result, K, num_rows, num_chunks, rows)
 
 
 @parametrize(K=[512, 1024, 2048], partial_tail=[False, True])
@@ -763,17 +777,22 @@ def test_topk_xl_input_float32(K, partial_tail):
       - K=1024: the copy clears SrcA with -inf instead of doing ZEROACC
       - K=2048: the tail's second tile is empty, so both threads return early
     """
+    num_rows, num_chunks = 1, 2
     tail_elements = (K // 2) if partial_tail else K
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt32)
 
-    src_A, rows = _build_input(K, 2, tail_elements, 1, "positive", as_float32=True)
+    src_A, rows = _build_input(
+        K, num_chunks, tail_elements, num_rows, "positive", as_float32=True
+    )
     gold_indices = get_golden_generator(TopKXLGolden)(rows, K)
-    configuration = _config(K, 2, tail_elements, 1, src_A, formats=formats)
+    configuration = _config(
+        K, num_chunks, tail_elements, num_rows, src_A, formats=formats
+    )
     result = configuration.run().result
     _check(
         result,
         K,
-        1,
+        num_rows,
         rows,
         gold_indices,
         compare_index_set=True,
@@ -789,9 +808,10 @@ def test_topk_xl_input_float32(K, partial_tail):
 @skip_for_quasar
 def test_topk_xl_dest_sync_half(K):
     (K,) = K
+    num_rows, num_chunks = 2, 2
 
-    src_A, rows = _build_input(K, 2, K, 2, "positive")
+    src_A, rows = _build_input(K, num_chunks, K, num_rows, "positive")
     gold_indices = get_golden_generator(TopKXLGolden)(rows, K)
-    configuration = _config(K, 2, K, 2, src_A, dest_sync=DestSync.Half)
+    configuration = _config(K, num_chunks, K, num_rows, src_A, dest_sync=DestSync.Half)
     result = configuration.run().result
-    _check(result, K, 2, rows, gold_indices, compare_index_set=True)
+    _check(result, K, num_rows, rows, gold_indices, compare_index_set=True)
