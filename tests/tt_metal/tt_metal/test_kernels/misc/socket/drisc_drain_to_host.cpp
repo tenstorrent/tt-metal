@@ -9,19 +9,20 @@
 //
 // Per sweep:
 //   POLL   one 256 B control-vector read per core, all outstanding, one barrier
-//   FRAME  for each lane with a run, append a 2-word header to the page and NoC-read the run's words
-//          STRAIGHT INTO the page buffer behind it
+//   STAGE  for each core with work, ONE aligned 10,240 B read of its five rings
+//   FRAME  per lane, a 2-word header into the page followed by a local copy of just the live words
 //   PUSH   when the next frame would not fit, pad and push the page over the socket
 //   HEAD   publish the five advanced heads in one 20 B write -- what unblocks the producer
 //
-// Reading per lane directly into the page is the point. The alternative -- one whole-core 10 KB read
-// into a staging buffer, then a local copy of the live words into the page -- costs a device-side
-// memcpy and ships dead ring space. Here each read lands exactly where it belongs and only real words
-// cross PCIe. It costs more read ISSUES (up to 5 per core rather than 1), which the measurements say is
-// the dominant term, so this is deliberately trading issue cost for bytes; see FINDINGS.
+// The staging read exists for ALIGNMENT, not convenience. Reading each run straight into the page at
+// its natural offset is leaner, but a run starts at an arbitrary word in the ring, so both src and dst
+// would be arbitrary 4-byte offsets -- violating L1_ALIGNMENT (16 B on Blackhole) and not agreeing with
+// each other. The NoC mis-delivers rather than rejects that: it showed up as a single substituted word
+// at a frame boundary, desynchronising the host's marker walk on 440 of 600 lanes while the total word
+// count still reconciled perfectly. The X280 can copy word-granular because its L2CPU uses CPU loads;
+// a DRISC moves data with NoC DMA and is bound by the alignment rules.
 //
-// Ring wrap is resolved here, not on the host: a run that crosses the ring end is split into two reads
-// that land contiguously in the page, so the payload the host sees is already linear.
+// Ring wrap is resolved here, not on the host, so the payload the host sees is already linear.
 //
 // The NIU must already be in stream mode -- a DRISC in the default NOC2AXI mode cannot initiate NoC,
 // and the socket config write has to be able to land in L1.
@@ -56,10 +57,13 @@ void kernel_main() {
     constexpr uint32_t kSocketConfigAddr = get_compile_time_arg_val(8);
     constexpr uint32_t kQuietStop = get_compile_time_arg_val(9);
     constexpr uint32_t kMaxSweeps = get_compile_time_arg_val(10);
+    constexpr uint32_t kStage = get_compile_time_arg_val(11);      // whole-core staging buffer
+    constexpr uint32_t kDataBytes = get_compile_time_arg_val(12);  // 10240 = five 2 KB rings
 
     constexpr uint32_t kNumRisc = 5;
     constexpr uint32_t kMaxCores = 128;
-    constexpr uint32_t kHeadSlots = 16;
+    constexpr uint32_t kHeadSlots =
+        128;  // one per core: a posted head write must not have its scratch reused underneath it
     constexpr uint32_t kPageWords = kPageBytes / 4;
 
     constexpr uint32_t kHeadWordOffset = kernel_profiler::SPSC_RING_HEAD_0;
@@ -71,6 +75,7 @@ void kernel_main() {
     // A run can be a whole ring, so a page must hold at least one maximal frame or it could never make
     // progress -- the fit check would fail forever on a freshly flushed page.
     static_assert(kPageWords >= drisc_drain::FRAME_HEADER_WORDS + kRingWords, "page too small for a max frame");
+    static_assert(kDataBytes <= NOC_MAX_BURST_SIZE, "whole-core read must fit one NoC packet");
 
     const uint32_t num_cores = get_arg_val<uint32_t>(0);
     const uint32_t cv_src = get_arg_val<uint32_t>(1);     // start of profiler_msg_t on the worker
@@ -134,20 +139,53 @@ void kernel_main() {
 
             const uint32_t xy = coords[c];
             const uint32_t core_xy = cv[kCoreXyOffset];  // identity, free in the poll
-            bool touched = false;
 
+            uint32_t runs[kNumRisc];
+            uint32_t total = 0;
             for (uint32_t r = 0; r < kNumRisc; r++) {
-                uint32_t run = cv[kTailWordOffset + r] - mine[r];
-                if (run == 0) {
-                    continue;
-                }
-                if (run > max_run) {
-                    max_run = run;
+                runs[r] = cv[kTailWordOffset + r] - mine[r];
+                if (runs[r] > max_run) {
+                    max_run = runs[r];
                 }
                 // A lossless producer blocks at capacity, so a run can never exceed the ring.
-                if (run > kRingWords) {
+                if (runs[r] > kRingWords) {
                     overflows++;
-                    run = kRingWords;
+                    runs[r] = kRingWords;
+                }
+                total += runs[r];
+            }
+            if (total == 0) {
+                continue;
+            }
+
+            // -------- STAGE: one ALIGNED whole-core read --------
+            //
+            // Reading each run straight into the page at its natural offset would be leaner -- no copy,
+            // no dead ring space -- but it is NOT LEGAL. A run starts at an arbitrary word inside the
+            // ring, so src would be `ring_base + si*4` and dst `page + doff*4`: arbitrary 4-byte offsets
+            // that do not respect L1_ALIGNMENT (16 B on Blackhole) and do not agree with each other.
+            // The NoC does not reject that, it mis-delivers it -- observed as a single substituted word
+            // at a frame boundary, which desynchronised the host walk on 440 of 600 lanes while the
+            // total word count still reconciled perfectly.
+            //
+            // The X280 gets away with word-granular copies because its L2CPU moves the data with CPU
+            // loads and stores; a DRISC moves it with NoC DMA, which is bound by the alignment rules.
+            //
+            // So: one 10,240 B read from the ring base (aligned by construction), then a local copy of
+            // just the live words into the page. Costs reading dead ring space and a device-side copy;
+            // buys correctness. The aligned-direct variant is possible -- align the read down to a 16 B
+            // boundary, pad the page to match, and carry the skew in the frame header -- and is the
+            // obvious optimisation once the path is trusted.
+            CoreLocalMem<uint32_t> sdst(kStage);
+            noc.async_read<NocOptions::DEFAULT, kDataBytes>(
+                src, sdst, kDataBytes, {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = ring0_src}, {});
+            noc.async_read_barrier();  // staged data must be present before it is copied out
+            volatile tt_l1_ptr uint32_t* stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStage);
+
+            for (uint32_t r = 0; r < kNumRisc; r++) {
+                const uint32_t run = runs[r];
+                if (run == 0) {
+                    continue;
                 }
 
                 // -------- PUSH if this frame would not fit --------
@@ -155,7 +193,6 @@ void kernel_main() {
                     if (page_words < kPageWords) {
                         page[page_words] = drisc_drain::frame_w0(drisc_drain::KIND_PAD, 0, 0);
                     }
-                    noc.async_read_barrier();  // every frame's payload must have landed
                     socket_reserve_pages(sender, 1);
                     noc_write_page_chunked(pcie_xy_enc, kPageBuf, pcie_base + sender.write_ptr, kPageBytes);
                     socket_push_pages(sender, 1);
@@ -165,40 +202,35 @@ void kernel_main() {
                     page_words = 0;
                 }
 
-                // -------- FRAME: header, then the run read straight in behind it --------
+                // -------- FRAME: header, then the live words, wrap resolved here --------
                 page[page_words] = drisc_drain::frame_w0(drisc_drain::KIND_DATA, r, run);
                 page[page_words + 1] = core_xy;
-                uint32_t doff = page_words + drisc_drain::FRAME_HEADER_WORDS;
-
-                uint32_t si = mine[r] % kRingWords;
-                uint32_t left = run;
-                const uint32_t ring_base = ring0_src + r * kRingWords * 4u;
-                while (left > 0) {
-                    uint32_t chunk = kRingWords - si;  // to the ring end
-                    if (chunk > left) {
-                        chunk = left;
-                    }
-                    CoreLocalMem<uint32_t> dst(kPageBuf + doff * 4u);
-                    noc.async_read<NocOptions::DEFAULT, 0>(
-                        src,
-                        dst,
-                        chunk * 4u,
-                        {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = ring_base + si * 4u},
-                        {});
-                    doff += chunk;
-                    left -= chunk;
-                    si = 0;  // only the first chunk can start mid-ring
+                const uint32_t doff = page_words + drisc_drain::FRAME_HEADER_WORDS;
+                const uint32_t lane_base = r * kRingWords;
+                const uint32_t si = mine[r] % kRingWords;
+                uint32_t first = kRingWords - si;  // words before the ring wraps
+                if (first > run) {
+                    first = run;
+                }
+                for (uint32_t k = 0; k < first; k++) {
+                    page[doff + k] = stage[lane_base + si + k];
+                }
+                for (uint32_t k = first; k < run; k++) {
+                    page[doff + k] = stage[lane_base + (k - first)];
                 }
 
                 page_words += drisc_drain::FRAME_HEADER_WORDS + run;
                 mine[r] += run;
                 sweep_words += run;
                 frames++;
-                touched = true;
             }
 
             // -------- HEAD write-back: what actually unblocks the producer --------
-            if (touched) {
+            //
+            // Safe here without a further barrier: the staged read already completed above and the copy
+            // into the page is a local store, so nothing is still reading the worker's ring when the
+            // producer is told those slots are free.
+            {
                 const uint32_t sc = kHeadScratch + hb_slot * 32u;
                 volatile tt_l1_ptr uint32_t* scp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc);
                 for (uint32_t r = 0; r < kNumRisc; r++) {
@@ -223,7 +255,6 @@ void kernel_main() {
         if (page_words < kPageWords) {
             page[page_words] = drisc_drain::frame_w0(drisc_drain::KIND_PAD, 0, 0);
         }
-        noc.async_read_barrier();
         socket_reserve_pages(sender, 1);
         noc_write_page_chunked(pcie_xy_enc, kPageBuf, pcie_base + sender.write_ptr, kPageBytes);
         socket_push_pages(sender, 1);

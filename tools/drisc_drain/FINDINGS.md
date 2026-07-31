@@ -664,6 +664,60 @@ or raise the page size. Not tuned here -- correctness first.
 Throughput is again **not** meaningful from this run: the device figure is dominated by the quiet
 sweeps used to detect completion, and the host wall (0.076 s) includes them.
 
+## Zone decode: the stream is real
+
+The framed egress carried words; this parses them back into zones host-side, against `prof_packet.h`
+(the same definitions the device's `ppfmt` uses -- not a host copy).
+
+Decoder walk per lane: `STICKY_TIMER` (1 word, sets the wall-clock HIGH half for everything after it),
+`ZONE_START/END/TOTAL` (2 words: `type | 16-bit srcloc`, then the LOW half), `STICKY_PROG` (1 word),
+`DATA/EVENT` (2 + size). START pushes, END pops.
+
+Full grid: **604,940 markers -> 302,410 zones across 600 lanes**, and the srcloc histogram reconciles
+exactly against what each kernel ran:
+
+| srcloc | zones | expected |
+|---|---|---|
+| `0xaee8` (compute kernel) | 180,000 | 360 TRISC lanes x 500 = **180,000** |
+| `0x6401` (data movement) | 120,000 | 240 DM lanes x 500 = **120,000** |
+| `0x7fff` (`PROFILER_STALL_ZONE`) | 1,810 | producers blocking on full rings |
+
+4x4 likewise exact: 96,000 = 48 x 2000 and 64,000 = 32 x 2000. Zero unknown types, unmatched ends,
+srcloc mismatches or backwards timestamps.
+
+### Two bugs it caught that word-counting could not
+
+Both were invisible to the egress test, which passed while the payload was quietly wrong -- a warning
+about what "the totals reconcile" does and does not prove.
+
+**1. The head was published before the reads completed.** Advancing `head = tail` while payload reads
+are in flight frees the producer to overwrite the very slots being read: a use-after-free on the ring.
+It does not fail cleanly. The stream stays plausible, then a word that is really the middle of a later
+marker is parsed as a header and the walk desynchronises. **596 of 600 lanes died.** Fixed by
+completing the read before publishing.
+
+**2. NoC alignment.** Reading each run straight into the page put src at `ring_base + si*4` and dst at
+`page + doff*4` -- arbitrary 4-byte offsets, violating `L1_ALIGNMENT` (16 B on Blackhole) and not
+congruent with each other. **The NoC mis-delivers rather than rejects.** The symptom was a *single
+substituted word* at a frame boundary -- total word count still reconciled perfectly, so only the
+marker walk could see it. 440 of 600 lanes desynced.
+
+The X280 copies word-granular safely because its L2CPU uses CPU loads and stores; a DRISC moves data
+with NoC DMA and is bound by the alignment rules. **Do not port X280 copy idioms to a DRISC unchanged.**
+
+Fixed with one aligned whole-core read into staging plus a local copy of the live words into the page
+-- the shape rejected earlier on efficiency grounds. Cost: 77 -> 88 ms on the full grid. The
+aligned-direct variant is still available as an optimisation: round the read down to a 16 B boundary,
+pad the page to match, and carry the skew in the frame header.
+
+### Markers before the first sticky are normal
+
+121,084 of 604,940 full-grid markers arrived before their lane's first `STICKY_TIMER`, and that is
+**not** an error: the producer emits a sticky only when the clock's HIGH half CHANGES, so a capture
+starting mid-stream inherits a high half it never saw. Those timestamps are unanchored and must be
+excluded from ordering checks; a real consumer either drops them or back-fills from the first sticky.
+Asserting they were zero was a decoder bug, not a device one.
+
 ## Verdict: the DRAM round-trip does not pay
 
 | approach | GB/s | DRISCs | DRAM traffic |
