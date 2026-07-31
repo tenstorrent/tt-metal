@@ -72,20 +72,23 @@ constexpr uint32_t BFP8_TILE = get_compile_time_arg_val(20);
 constexpr uint32_t MAX_CHILDREN = get_compile_time_arg_val(21);
 constexpr uint32_t REMAP = get_compile_time_arg_val(22);  // 1 = bank-run remap of the N axis
 constexpr uint32_t MAILBOX_MAGIC = get_compile_time_arg_val(23);
+// W_down prefetch depth in phase-2 K-blocks: how many blocks are kept in flight ahead
+// of the round that consumes them. 1 == the per-round read (DRAM-latency bound).
+constexpr uint32_t WD_AHEAD = get_compile_time_arg_val(24);
 
-constexpr uint32_t cb_x_in = get_compile_time_arg_val(24);
-constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(25);
-constexpr uint32_t cb_x_stage = get_compile_time_arg_val(26);
-constexpr uint32_t cb_w_gate = get_compile_time_arg_val(27);
-constexpr uint32_t cb_w_down = get_compile_time_arg_val(28);
-constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(29);
-constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(30);
-constexpr uint32_t cb_h = get_compile_time_arg_val(31);
-constexpr uint32_t cb_h_local = get_compile_time_arg_val(32);
-constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(33);
-constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(34);
+constexpr uint32_t cb_x_in = get_compile_time_arg_val(25);
+constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(26);
+constexpr uint32_t cb_x_stage = get_compile_time_arg_val(27);
+constexpr uint32_t cb_w_gate = get_compile_time_arg_val(28);
+constexpr uint32_t cb_w_down = get_compile_time_arg_val(29);
+constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(30);
+constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(31);
+constexpr uint32_t cb_h = get_compile_time_arg_val(32);
+constexpr uint32_t cb_h_local = get_compile_time_arg_val(33);
+constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(34);
+constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(35);
 
-constexpr uint32_t CT_XMCAST = 35;
+constexpr uint32_t CT_XMCAST = 36;
 constexpr uint32_t CT_HMCAST = CT_XMCAST + 5;
 
 constexpr uint32_t TILE_H = 32;
@@ -229,6 +232,27 @@ void kernel_main() {
         // cb_x_tiles is ONE slot of M_BLOCK*KR_PAD tiles, so its write pointer is the same L1
         // address on every core in the row (mcast_pipe requires an identical landing address).
         // -------------------------------------------------------------------
+        // W_gate is ISSUED HERE, ahead of the x rounds, and only BARRIERED/pushed after them:
+        // the x multicast is a chain of M_BLOCK semaphore handshakes with almost no NoC payload,
+        // so the whole gate weight block's DRAM latency hides underneath it. With
+        // num_k_blocks == 1 the block has to be fully fronted before the gate matmul starts, so
+        // this is the only place its latency can be overlapped.
+        cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
+        const uint32_t wg_wp = get_write_ptr(cb_w_gate);
+        for (uint32_t k = 0; k < kr; ++k) {
+            const uint32_t kt = kstart + k;
+            uint32_t j = hstart;
+            uint32_t noff = 0;
+            while (j < hstart + hn) {
+                const uint32_t len = run_len(j, hstart + hn, SLOTS_H);
+                const uint32_t first = remap_n(j, SLOTS_H);
+                noc_async_read(
+                    wg_acc.get_noc_addr(kt * HID_T + first), wg_wp + (k * HN_PAD + noff) * BFP4_TILE, len * BFP4_TILE);
+                j += len;
+                noff += len;
+            }
+        }
+
         cb_reserve_back(cb_x_tiles, X_SLOT_TILES);
         const uint32_t x_base = get_write_ptr(cb_x_tiles);
 
@@ -282,28 +306,47 @@ void kernel_main() {
         cb_push_back(cb_x_tiles, X_SLOT_TILES);
 
         // -------------------------------------------------------------------
-        // Phase 1b — W_gate: one K-block == the whole per-row K extent, coalesced bank runs.
+        // Phase 1b — W_gate landed under the x rounds; publish it.
         // (W_up is the writer's twin on NoC1 — the dual-NoC split of op_design.md §1.5.)
         // -------------------------------------------------------------------
-        cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
+        noc_async_read_barrier();
+        cb_push_back(cb_w_gate, WG_BLOCK_TILES);
+
+        // -------------------------------------------------------------------
+        // Phase 1b' — W_down for ALL WD_AHEAD phase-2 K-blocks, ISSUED as one batch.
+        //
+        // Read per round (the obvious shape) leaves only HN_PAD transactions of ~1 KB in flight,
+        // which is DRAM-LATENCY bound, not bandwidth bound. Issuing WD_AHEAD blocks at once puts
+        // WD_AHEAD*HN_PAD transactions in flight and hides the latency behind the reduce-tree
+        // handshakes below. WD_AHEAD is a knob: 1 restores the per-round read.
+        // -------------------------------------------------------------------
+        constexpr uint32_t WD_BLOCK_TILES = HN_PAD * EC_MAX;
+        cb_reserve_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
         {
-            const uint32_t wp = get_write_ptr(cb_w_gate);
-            for (uint32_t k = 0; k < kr; ++k) {
-                const uint32_t kt = kstart + k;
-                uint32_t j = hstart;
-                uint32_t noff = 0;
-                while (j < hstart + hn) {
-                    const uint32_t len = run_len(j, hstart + hn, SLOTS_H);
-                    const uint32_t first = remap_n(j, SLOTS_H);
-                    noc_async_read(
-                        wg_acc.get_noc_addr(kt * HID_T + first), wp + (k * HN_PAD + noff) * BFP4_TILE, len * BFP4_TILE);
-                    j += len;
-                    noff += len;
+            const uint32_t wp = get_write_ptr(cb_w_down);
+            for (uint32_t r = 0; r < WD_AHEAD; ++r) {
+                const uint32_t hbase = r * HN_PAD;
+                uint32_t hn_r = HN_PAD;
+                if (hbase + hn_r > HID_T) {
+                    hn_r = HID_T - hbase;
+                }
+                for (uint32_t k = 0; k < hn_r; ++k) {
+                    const uint32_t ht = remap_n(hbase + k, SLOTS_H);
+                    uint32_t j = jstart;
+                    uint32_t eoff = 0;
+                    while (j < jstart + ec) {
+                        const uint32_t len = run_len(j, jstart + ec, SLOTS_E);
+                        const uint32_t first = remap_n(j, SLOTS_E);
+                        noc_async_read(
+                            wd_acc.get_noc_addr(ht * EMB_T + first),
+                            wp + (r * WD_BLOCK_TILES + k * EC_MAX + eoff) * BFP4_TILE,
+                            len * BFP4_TILE);
+                        j += len;
+                        eoff += len;
+                    }
                 }
             }
-            noc_async_read_barrier();
         }
-        cb_push_back(cb_w_gate, WG_BLOCK_TILES);
 
         // -------------------------------------------------------------------
         // Phase 1c — reduce tree, PARENT side. One slot per incoming partial, so the child's
@@ -322,21 +365,23 @@ void kernel_main() {
         }
 
         // -------------------------------------------------------------------
-        // Phase 2 — W_down K-block r fused with round r of the h all-gather. The gather rides
+        // Phase 2 — round r of the h all-gather, with W_down already in flight. The gather rides
         // the phase-2 K stream, so it overlaps `down` compute and flow-controls itself on cb_h.
+        // The batch issued above landed under the reduce handshakes; publish it, then stream the
+        // remaining K-blocks one round ahead of the round that consumes them.
         // -------------------------------------------------------------------
-        // EC_MAX-wide K-block so the CB increment is uniform across cores; a core with
-        // ec < EC_MAX leaves the tail columns unwritten and the matmul never reads them.
-        constexpr uint32_t wd_block_tiles = HN_PAD * EC_MAX;
+        noc_async_read_barrier();
+        cb_push_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
         for (uint32_t r = 0; r < HGROUPS; ++r) {
-            const uint32_t hbase = r * HN_PAD;
-            uint32_t hn_r = HN_PAD;
-            if (hbase + hn_r > HID_T) {
-                hn_r = HID_T - hbase;
-            }
-
-            cb_reserve_back(cb_w_down, wd_block_tiles);
-            {
+            // Stay WD_AHEAD K-blocks ahead of the round being consumed.
+            const uint32_t pre = r + WD_AHEAD;
+            if (pre < HGROUPS) {
+                const uint32_t hbase = pre * HN_PAD;
+                uint32_t hn_r = HN_PAD;
+                if (hbase + hn_r > HID_T) {
+                    hn_r = HID_T - hbase;
+                }
+                cb_reserve_back(cb_w_down, WD_BLOCK_TILES);
                 const uint32_t wp = get_write_ptr(cb_w_down);
                 for (uint32_t k = 0; k < hn_r; ++k) {
                     const uint32_t ht = remap_n(hbase + k, SLOTS_H);
@@ -354,8 +399,8 @@ void kernel_main() {
                     }
                 }
                 noc_async_read_barrier();
+                cb_push_back(cb_w_down, WD_BLOCK_TILES);
             }
-            cb_push_back(cb_w_down, wd_block_tiles);
 
             cb_reserve_back(cb_h, H_BLOCK_TILES);
             const uint32_t hdst = get_write_ptr(cb_h);

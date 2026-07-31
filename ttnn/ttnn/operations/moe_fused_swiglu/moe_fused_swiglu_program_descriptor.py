@@ -20,6 +20,7 @@ parameters — none is a whole-op dimension (``EMB_T``, ``HID_T``, ``capacity``)
 magic literal.
 """
 
+import os
 from pathlib import Path
 
 import ttnn
@@ -58,7 +59,23 @@ XSTICK_ROWS = 1  # tile-rows of row-major x sticks held in flight
 
 #: Read-coalescing knob: max BANK-CONTIGUOUS weight/output tiles fetched per NoC transaction.
 #: 1 reproduces the naive one-transaction-per-tile read (the ablation baseline).
-WRUN = 8
+#: Overridable for `/perf-measure` A/B via MOE_SWIGLU_WRUN.
+WRUN = int(os.environ.get("MOE_SWIGLU_WRUN", 8))
+
+#: `/perf-measure` ablation hook (payload stubbed, ALL synchronisation scaffolding intact).
+#: MOE_SWIGLU_ABLATE=skip_compute defines SKIP_COMPUTE in the compute TU, which drops the inner
+#: matmul LLK call while keeping every CB wait/push, reload and L1_ACC toggle — the documented
+#: way to separate the dataflow ceiling from the compute ceiling. NOT a correctness mode.
+ABLATE = os.environ.get("MOE_SWIGLU_ABLATE", "")
+
+#: W_down prefetch depth, in phase-2 K-blocks kept in flight ahead of the round that consumes
+#: them. Clamped to [1, HGROUPS].
+#:
+#: MEASURED (emb 7168, count 256, bf16_rm): 1 -> 227.8 us, 4 -> 228.7 us, 11 -> 240.1 us. Deeper
+#: prefetch does NOT help, which is itself the finding: the phase-2 weight stream is not
+#: DRAM-latency bound. Parked at 1 (byte-identical to the naive per-round read) and kept as a
+#: live knob — it becomes worth turning only once the h all-gather stops being the critical path.
+WD_AHEAD = int(os.environ.get("MOE_SWIGLU_WD_AHEAD", 1))
 
 #: Reduce-tree fan-in cap (>= ceil(log2(KGROUPS)) for the binary tree below).
 MAX_CHILDREN = 5
@@ -216,6 +233,7 @@ def create_program_descriptor(
     if min(hn_sizes) == 0:
         raise RuntimeError(f"moe_fused_swiglu: hidden {hidden} cannot fill {HGROUPS} column groups")
 
+    wd_ahead = max(1, min(WD_AHEAD, HGROUPS))
     ec_sizes, ec_starts = _split(EMB_T, num_cores)
     # EC_MAX is the phase-2 N *stride*: every phase-2 CB reserves/pushes in EC_MAX-wide units so
     # its page count is a multiple of the increment (a CB whose total is not a multiple of its
@@ -259,18 +277,40 @@ def create_program_descriptor(
 
     # ---- collectives: emit the mcast wire (Mcast1D / Mcast2D own the coord + rect math) ----
     # Reader runs on NOC_0 (ReaderDataMovementConfig -> preferred_noc_for_dram_read).
+    # DataReadySignal: Flag, NOT the Counter op_design.md §4.2/§4.4 asks for. Counter was tried
+    # and HANGS on both families: mcast_pipe.inl:153 hands `inc_multicast` the LOOPBACK
+    # (INCLUDE-source) fan-out while the atomic multicast is EXCLUDE-source, so its atomic
+    # barrier waits forever for an ack from a destination that was never addressed. Both mcasts
+    # here loopback (src cb != dst cb), so both trip it. Flag is correct but forces the sender of
+    # round r+1 to wait for every receiver to reset round r's flag — see the perf notes.
+    # `handshake` is the receiver->sender "my cb slot is free" ack, i.e. the CB flow control, and
+    # stays on (MOE_SWIGLU_ABLATE=no_handshake drops it for MEASUREMENT only — not correct).
+    handshake = ABLATE != "no_handshake"
+    counter = ttnn._ttnn.mcast_host.McastDataReady.Flag
     x_mcast = ttnn.Mcast1D(
         device,
         all_cores,
         ttnn.Mcast1DShape.PerRow,
         0,
-        ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True, rotating_sender=True, base_sem_id=SEM_X_BASE),
+        ttnn.McastConfig(
+            noc=ttnn.NOC.NOC_0,
+            handshake=handshake,
+            data_ready=counter,
+            rotating_sender=True,
+            base_sem_id=SEM_X_BASE,
+        ),
     )
     h_mcast = ttnn.Mcast2D(
         device,
         all_cores,
         ttnn.CoreCoord(0, 0),
-        ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True, rotating_sender=True, base_sem_id=SEM_H_BASE),
+        ttnn.McastConfig(
+            noc=ttnn.NOC.NOC_0,
+            handshake=handshake,
+            data_ready=counter,
+            rotating_sender=True,
+            base_sem_id=SEM_H_BASE,
+        ),
     )
     assert x_mcast.num_senders() == HGROUPS, x_mcast.num_senders()
     assert h_mcast.num_senders() == num_cores, h_mcast.num_senders()
@@ -287,7 +327,9 @@ def create_program_descriptor(
     n_x_tiles = M_BLOCK * KR_PAD  # ONE slot -> identical mcast landing address on every core
     n_gu_block = M_BLOCK * HN_PAD
     n_w_gu = KR_PAD * HN_PAD  # one gate/up K-block (num_k_blocks == 1)
-    n_w_down = HN_PAD * EC_MAX
+    # cb_w_down spans ALL HGROUPS phase-2 K-blocks: the per-M-block pushes then sum to exactly
+    # the CB size (the cb_api wrap rule) whatever wd_ahead is, so wd_ahead stays a free knob.
+    n_w_down = HGROUPS * HN_PAD * EC_MAX
     n_out_block = M_BLOCK * EC_MAX
 
     cbs = [
@@ -302,7 +344,7 @@ def create_program_descriptor(
         _cb(CB_X_STAGE, all_cores, DEPTH_XSTAGE * KR_PAD, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_W_GATE, all_cores, DEPTH_W * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
         _cb(CB_W_UP, all_cores, DEPTH_W * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
-        _cb(CB_W_DOWN, all_cores, DEPTH_W * n_w_down, bfp4_tile, ttnn.bfloat4_b),
+        _cb(CB_W_DOWN, all_cores, n_w_down, bfp4_tile, ttnn.bfloat4_b),
         _cb(CB_REDUCE_GATE_IN, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_REDUCE_UP_IN, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_H, all_cores, DEPTH_H * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
@@ -346,6 +388,7 @@ def create_program_descriptor(
         MAX_CHILDREN,
         remap,
         MAILBOX_MAGIC,
+        wd_ahead,
         CB_X_IN,
         CB_X_TILES,
         CB_X_STAGE,
@@ -509,6 +552,7 @@ def create_program_descriptor(
             compile_time_args=compute_ct,
             runtime_args=compute_rt,
             config=compute_kernel_config,
+            defines=[("SKIP_COMPUTE", "1")] if ABLATE == "skip_compute" else [],
         ),
     ]
 
