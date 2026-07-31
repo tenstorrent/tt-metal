@@ -262,11 +262,19 @@ runtime:
     wh_galaxy: 15
     bh_galaxy: 15
   perf:
-    # +10 min/SKU over the prior 55/40 to cover the new runtime_perf_jit_build job
+    # +10 min/SKU over the prior 55/40 to cover the runtime_perf_jit_build job
     # (JIT-build compile-throughput microbenchmark: 300 kernels x 3 reps, ~2-3 min
-    # measured, budgeted at 10 min in runtime_perf_tests.yaml).
-    wh_n300_civ2: 65
-    bh_p150_perf: 50
+    # measured, budgeted at 10 min in runtime_perf_tests.yaml), and a further +10 min/SKU
+    # for the runtime_perf_host_init_teardown job (device open/close host-timing
+    # microbenchmark, budgeted at 10 min in runtime_perf_tests.yaml).
+    wh_n300_civ2: 75
+    bh_p150_perf: 60
+    # wh_llmbox_perf (T3K, 8 chips) runs only the runtime_perf_host_init_teardown job
+    # (single_chip -> mesh_8 sweep; 15 min timeout for the 8-device open/close reps).
+    wh_llmbox_perf: 15
+    # wh_galaxy_perf (6U galaxy, 32 chips) runs only the runtime_perf_host_init_teardown job
+    # (single_chip -> mesh_32 sweep; 30 min timeout for the 32-device open/close reps).
+    wh_galaxy_perf: 30
 
 triage:
   merge_gate:

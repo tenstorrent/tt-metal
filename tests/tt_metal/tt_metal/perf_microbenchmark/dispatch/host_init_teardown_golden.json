@@ -1,0 +1,89 @@
+{
+  "_comment": "Host init/teardown CI golden (Wormhole: wh_n300_civ2 2-chip + wh_llmbox_perf 8-chip T3K + wh_galaxy_perf 32-chip 6U galaxy). All values are REAL CI captures (min aggregate, ns): single_chip + mesh_2 from wh_n300_civ2; mesh_4 + mesh_8 from wh_llmbox_perf (T3K); mesh_16 + mesh_32 from wh_galaxy_perf (galaxy). NOTE (why still --ignore-times): teardown grows gently and is ~SKU-independent (n300/T3K/galaxy agree per topology, 112-146 ms), but INIT single_chip/mesh_2 diverge ~3-4x by box size because host discovery scales with total chips in the box even to open a unit mesh (single_chip init: n300 ~61 ms, T3K ~184 ms, galaxy ~249 ms; mesh_4+ converge across T3K/galaxy within ~5%). A single shared Wormhole golden therefore cannot tightly gate init single_chip/mesh_2 across all three SKUs; they show up as advisories on the larger boxes. Arming the gate for those rows needs per-SKU goldens. The runtime_perf_host_init_teardown CI job runs compare_host_init_teardown_ci.py with --ignore-times, which validates structure only (no errored benchmarks) and treats topology-set mismatches as advisories, since the topology axis is enumerated from the attached cluster. Metric = host-side real_time (ns) of the min aggregate: BM_host_init = MeshDevice open, BM_host_teardown = MeshDevice close. wh_n300_civ2 sweep = single_chip + mesh_2; wh_llmbox_perf (T3K) adds mesh_4 + mesh_8; wh_galaxy_perf (6U) adds mesh_16 + mesh_32 (full system mesh).",
+  "benchmarks": [
+    {
+      "name": "BM_host_init/single_chip/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 60817297.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_init/mesh_2/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 81803333.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_init/mesh_4/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 265649684.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_init/mesh_8/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 279013111.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_init/mesh_16/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 319571275.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_init/mesh_32/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 392877655.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/single_chip/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 115588687.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/mesh_2/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 115753893.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/mesh_4/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 118015971.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/mesh_8/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 119134377.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/mesh_16/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 128201075.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_host_teardown/mesh_32/iterations:3/repeats:3/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 145503016.0,
+      "time_unit": "ns"
+    }
+  ]
+}
