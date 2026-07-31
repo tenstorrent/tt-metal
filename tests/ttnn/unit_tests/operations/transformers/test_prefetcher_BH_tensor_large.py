@@ -46,6 +46,7 @@ Three scopes:
 """
 
 import math
+import time
 import zlib
 import pytest
 import torch
@@ -640,141 +641,212 @@ def test_tensor_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
 # ---------------------------------------------------------------------------
 # `queue_tensor_prefetcher_request` does not go through the command queue: it
 # serializes a request into socket pages and a host worker thread fans them out to
-# the DRAM sender cores over NOC. When it names a command queue that is mid
-# trace-capture, the request must be *captured* (not sent) and re-sent on every
-# `execute_trace` of that trace, so a captured matmul that consumes the GCB is
-# refilled on each replay.
+# the DRAM sender cores over NOC. Whether a request is *captured* into a trace — held
+# back, then re-sent on every `execute_trace` of that trace — or sent immediately is a
+# host-side routing decision with two inputs: the request's `capture_into_trace` flag,
+# and whether the calling thread's current command queue is mid trace-capture.
+
+
+class _TraceCase:
+    """One gcb-fed matmul, shared by the tests in this section: a persistent activation,
+    one DRAM weight, the gcb the prefetcher fills, and `num_weight_values` sets of weight
+    values the test can write into that weight with `write_weight`, each with its own
+    torch reference.
+
+    Rewriting the weight is how the tests tell a captured request from one that was sent
+    immediately. A request reads DRAM when the DRISC processes it, so a request held for
+    replay reads the weight as it stands at replay time, while one sent during capture
+    read it as it stood then. Overwrite the weight after recording the trace, and the
+    matmul output says which happened — no reliance on a hang.
+    """
+
+    def __init__(self, device, num_weight_values=1, seed_tag=b"trace_replay", write_cq=0):
+        self.device = device
+
+        # ---- Topology (qkv_small shape; adapts to harvested DRAM bank counts) ----
+        num_dram_banks = device.dram_grid_size().x
+        num_receivers_per_bank = 1
+        ring_size = num_dram_banks * num_receivers_per_bank
+        ring_cols = num_dram_banks
+        ring_rows = num_receivers_per_bank
+        dtype = ttnn.bfloat16
+        self.ring_size = ring_size
+        self.dtype = dtype
+
+        receiver_core_range_set = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+        )
+
+        M = 32
+        k_tiles_per_shard = 8
+        n_tiles_per_receiver = 1
+        K = k_tiles_per_shard * ring_size * ttnn.TILE_SIZE
+        N = ring_size * n_tiles_per_receiver * ttnn.TILE_SIZE
+
+        torch.manual_seed(zlib.crc32(seed_tag))
+        pt_weights = [torch.randn(1, 1, K, N) for _ in range(num_weight_values)]
+        pt_act = torch.randn(1, 1, M, K)
+
+        # ---- Weight (B): width-sharded in DRAM across the banks ----
+        dram_core_range_set = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+        )
+        weight_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(dram_core_range_set, [K, N // num_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+        # ---- Activation (A): width-sharded on receiver cores; persistent across replays ----
+        K_per_shard = _round_up(math.ceil(K / ring_size), ttnn.TILE_SIZE)
+        act_mem_config = ttnn.create_sharded_memory_config(
+            shape=(M, K_per_shard),
+            core_grid=receiver_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # Host copies of each value set, kept so write_weight can push them into the one
+        # device weight later.
+        self.host_weights = [ttnn.from_torch(w, dtype=dtype, layout=ttnn.TILE_LAYOUT) for w in pt_weights]
+
+        # `write_cq` is the queue these host-to-device writes go out on — what
+        # wait_for_cq_on_tensor_prefetcher is asked to fence against.
+        self.write_cq = write_cq
+        with ttnn.command_queue(write_cq):
+            self.weight = ttnn.as_tensor(
+                pt_weights[0], device=device, dtype=dtype, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
+            )
+            self.act = ttnn.from_torch(
+                pt_act, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
+            )
+
+        # ---- Matmul program config (1D-mcast gather_in0) ----
+        out_block_h = M // ttnn.TILE_SIZE
+        out_block_w = N // ring_size // ttnn.TILE_SIZE
+        out_subblock_w = min(out_block_w, 8)
+        while out_subblock_w > 1 and out_block_w % out_subblock_w != 0:
+            out_subblock_w -= 1
+        self.program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(ring_cols, ring_rows),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            per_core_M=out_block_h,
+            per_core_N=out_block_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+            hop_cores=ttnn.CoreRangeSet([]),
+            num_global_cb_receivers=num_receivers_per_bank,
+            untilize_out=False,
+        )
+
+        # ---- DRAM-sender GlobalCircularBuffer: one layer deep ----
+        tile_bytes = _bytes_per_tile(dtype)
+        in1_block_size_bytes = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
+        gcb_size = ring_size * in1_block_size_bytes
+        bank_to_receivers = [
+            (b, _bank_receivers_row_major(b, num_receivers_per_bank, ring_cols)) for b in range(num_dram_banks)
+        ]
+        self.gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+            device, [self.program_config], [self.weight], bank_to_receivers=bank_to_receivers, size=gcb_size
+        )
+
+        self.out_mem_config = ttnn.create_sharded_memory_config(
+            shape=(M, N // ring_size),
+            core_grid=receiver_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            dst_full_sync_en=True,
+        )
+
+        self.expected = [pt_act.float() @ w.float() for w in pt_weights]
+
+    def write_weight(self, value_index):
+        """Overwrite the DRAM weight in place with value set `value_index`, and wait for
+        the write to land. In place matters: a captured request holds the addresses it was
+        queued with, so this is what changes what a replay of it reads."""
+        # A request that already went out may still be reading this weight: the DRISC DMAs
+        # from DRAM when it processes the request, and nothing host-side reports that as
+        # finished. Sleep first so the overwrite cannot land under an in-flight read — 50 ms
+        # against a per-layer DMA measured in microseconds.
+        time.sleep(0.05)
+        ttnn.copy_host_to_device_tensor(self.host_weights[value_index], self.weight, cq_id=self.write_cq)
+        ttnn.synchronize_device(self.device)
+
+    def queue(self, **kwargs):
+        """Queue one gcb layer of the weight. Passes no `capture_into_trace` of its own
+        unless a test names one, so the binding default applies."""
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            self.device, [(self.weight, self.ring_size)], global_cb=self.gcb, **kwargs
+        )
+
+    def linear(self, **kwargs):
+        """Run the matmul over one gcb layer. in1 comes from the gcb, so the output
+        reflects whatever the prefetcher put there, not the weight tensor passed here."""
+        return ttnn.linear(
+            self.act,
+            self.weight,
+            program_config=self.program_config,
+            global_cb=self.gcb,
+            memory_config=self.out_mem_config,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=self.dtype,
+            **kwargs,
+        )
+
+    def prefetch_and_linear(self, **kwargs):
+        """Queue a layer and run the matmul over it, through the paired call production
+        uses. Unlike `queue`, this one asks to be captured (`capture_into_trace=True`)."""
+        return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+            self.act,
+            self.weight,
+            global_cb=self.gcb,
+            program_config=self.program_config,
+            memory_config=self.out_mem_config,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=self.dtype,
+            **kwargs,
+        )
+
+    def check(self, torch_out, value_index):
+        """(passing, message) for a readback against act @ weight-value-set value_index."""
+        return comp_pcc(self.expected[value_index], torch_out, 0.999)
+
+
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872}], indirect=True)
 @pytest.mark.parametrize("replay_count", [1, 3])
 def test_tensor_prefetcher_trace_replay(device, replay_count):
     """Capture a (prefetcher-request + linear) pair into a trace and replay it
     `replay_count` times; each replay must refill the GCB and produce the right
     matmul output."""
-    # ---- Topology (qkv_small shape; adapts to harvested DRAM bank counts) ----
-    num_dram_banks = device.dram_grid_size().x
-    num_receivers_per_bank = 1
-    ring_size = num_dram_banks * num_receivers_per_bank
-    ring_cols = num_dram_banks
-    ring_rows = num_receivers_per_bank
-    dtype = ttnn.bfloat16
-
-    receiver_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
-    )
-
-    M = 32
-    k_tiles_per_shard = 8
-    n_tiles_per_receiver = 1
-    K = k_tiles_per_shard * ring_size * ttnn.TILE_SIZE
-    N = ring_size * n_tiles_per_receiver * ttnn.TILE_SIZE
-
-    # ---- Weight (B): width-sharded in DRAM across the banks ----
-    torch.manual_seed(zlib.crc32(b"trace_replay"))
-    pt_weight = torch.randn(1, 1, K, N)
-    dram_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
-    )
-    weight_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(dram_core_range_set, [K, N // num_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    tt_weight = ttnn.as_tensor(
-        pt_weight, device=device, dtype=dtype, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
-    )
-
-    # ---- Activation (A): width-sharded on receiver cores; persistent across replays ----
-    pt_act = torch.randn(1, 1, M, K)
-    K_per_shard = _round_up(math.ceil(K / ring_size), ttnn.TILE_SIZE)
-    act_mem_config = ttnn.create_sharded_memory_config(
-        shape=(M, K_per_shard),
-        core_grid=receiver_core_range_set,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    tt_act = ttnn.from_torch(pt_act, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config)
-
-    # ---- Matmul program config (1D-mcast gather_in0) ----
-    out_block_h = M // ttnn.TILE_SIZE
-    out_block_w = N // ring_size // ttnn.TILE_SIZE
-    out_subblock_w = min(out_block_w, 8)
-    while out_subblock_w > 1 and out_block_w % out_subblock_w != 0:
-        out_subblock_w -= 1
-    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(ring_cols, ring_rows),
-        in0_block_w=1,
-        out_subblock_h=1,
-        out_subblock_w=out_subblock_w,
-        per_core_M=out_block_h,
-        per_core_N=out_block_w,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=False,
-        gather_in0=True,
-        hop_cores=ttnn.CoreRangeSet([]),
-        num_global_cb_receivers=num_receivers_per_bank,
-        untilize_out=False,
-    )
-
-    # ---- DRAM-sender GlobalCircularBuffer ----
-    tile_bytes = _bytes_per_tile(dtype)
-    in1_block_size_bytes = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
-    gcb_size = ring_size * in1_block_size_bytes
-    bank_to_receivers = [
-        (b, _bank_receivers_row_major(b, num_receivers_per_bank, ring_cols)) for b in range(num_dram_banks)
-    ]
-    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
-        device, [program_config], [tt_weight], bank_to_receivers=bank_to_receivers, size=gcb_size
-    )
-
-    output_mem_config = ttnn.create_sharded_memory_config(
-        shape=(M, N // ring_size),
-        core_grid=receiver_core_range_set,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-        dst_full_sync_en=True,
-    )
-
-    expected = pt_act.float() @ pt_weight.float()
-
-    def fill_and_matmul():
-        # prefetch_and_linear queues the prefetch request and runs the consuming
-        # matmul against the same gcb/program_config in one call; block_count is
-        # derived from the gcb's receiver count (no need to pass ring_size).
-        return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
-            tt_act,
-            tt_weight,
-            global_cb=gcb,
-            program_config=program_config,
-            memory_config=output_mem_config,
-            compute_kernel_config=compute_kernel_config,
-            dtype=dtype,
-        )
+    case = _TraceCase(device)
 
     with tensor_prefetcher_session(device):
         # ---- Warmup: compile kernels + balance the GCB before trace capture. The
         # queue here is sent immediately (cq 0 not capturing) and consumed by the matmul. ----
         logger.info("Warmup (compile) run")
-        tt_out = fill_and_matmul()
+        tt_out = case.prefetch_and_linear()
         ttnn.synchronize_device(device)
-        warmup_torch = ttnn.to_torch(tt_out)
-        passing, msg = comp_pcc(expected, warmup_torch, 0.999)
+        passing, msg = case.check(ttnn.to_torch(tt_out), 0)
         assert passing, f"warmup PCC failed: {msg}"
 
         # ---- Capture: the queue request is captured into the trace (cq 0 mid-capture),
         # NOT sent now. The linear is captured too. ----
         logger.info("Capturing trace")
         trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        tt_out = fill_and_matmul()
+        tt_out = case.prefetch_and_linear()
         ttnn.end_trace_capture(device, trace_id, cq_id=0)
 
         # ---- Replay: each execute_trace must replay the captured prefetcher request
@@ -782,11 +854,141 @@ def test_tensor_prefetcher_trace_replay(device, replay_count):
         for i in range(replay_count):
             logger.info(f"Replay {i + 1}/{replay_count}")
             ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-            out_torch = ttnn.to_torch(tt_out)
-            passing, msg = comp_pcc(expected, out_torch, 0.999)
+            passing, msg = case.check(ttnn.to_torch(tt_out), 0)
             assert passing, f"replay {i + 1} PCC failed: {msg}"
 
         ttnn.release_trace(device, trace_id)
+
+
+# The next two tests both work by overwriting the DRAM weight after recording the trace,
+# then replaying once. A request reads DRAM when the DRISC processes it, so the matmul
+# output names the moment the request went out: the post-overwrite values mean it was held
+# and replayed, the pre-overwrite values mean it went out during capture. They are each
+# other's failure signature, and neither can regress into a hang — one layer is queued and
+# one matmul runs it either way.
+#
+# The overwrite assumes a request queued during capture has already read DRAM by the time
+# the new values land; `write_weight` sleeps to guarantee it, since there is no host-visible
+# request-completion signal to wait on instead.
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("cq_id", [0, 1])
+def test_tensor_prefetcher_trace_capture_on_queue(device, cq_id):
+    """A request asking to be captured must land in the trace being recorded on the queue
+    the caller named — including a queue that is not the default 0.
+
+    Which queue is consulted follows ttnn's usual convention: the `queue_id` keyword is
+    consumed by the operation wrapper and applied by making that queue the thread's current
+    one, so the C++ layer never sees it. A keyword dropped anywhere along that chain leaves
+    the prefetch resolving against some other queue, which is not recording, and the request
+    goes out during capture instead of being held."""
+    case = _TraceCase(device, num_weight_values=2, seed_tag=b"trace_capture_on_queue")
+
+    with tensor_prefetcher_session(device):
+        # Warmup on the same queue: trace capture needs the matmul program already cached,
+        # and this leaves the gcb empty.
+        tt_out = case.prefetch_and_linear(queue_id=cq_id)
+        ttnn.synchronize_device(device)
+        passing, msg = case.check(ttnn.to_torch(tt_out), 0)
+        assert passing, f"warmup PCC failed: {msg}"
+
+        trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
+        tt_out = case.prefetch_and_linear(queue_id=cq_id)
+        ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
+
+        case.write_weight(1)
+
+        ttnn.execute_trace(device, trace_id, cq_id=cq_id, blocking=True)
+        replayed = ttnn.to_torch(tt_out)
+        ttnn.release_trace(device, trace_id)
+
+    passing, msg = case.check(replayed, 1)
+    assert passing, (
+        f"replay on cq {cq_id} did not match the weight written after recording: {msg}. "
+        f"Matching the pre-recording weight instead means the request went out during "
+        f"capture, i.e. queue_id={cq_id} never reached the prefetch half."
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872}], indirect=True)
+def test_tensor_prefetcher_request_not_captured_by_default(device):
+    """Without `capture_into_trace`, a request goes out immediately even when the current
+    queue is mid trace-capture.
+
+    This is the tri-state the flag exists for: `capture_into_trace=False` means "never
+    captured", which is not the same as "no queue is recording". A caller on a thread that
+    happens to be inside a capture region can still ask for an immediate send, and that
+    request must not be re-sent on every `execute_trace`."""
+    case = _TraceCase(device, num_weight_values=2, seed_tag=b"not_captured_by_default")
+
+    with tensor_prefetcher_session(device):
+        tt_out = case.prefetch_and_linear()
+        ttnn.synchronize_device(device)
+        passing, msg = case.check(ttnn.to_torch(tt_out), 0)
+        assert passing, f"warmup PCC failed: {msg}"
+
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        # Mid-capture, at the binding default: goes out now, reading the weight as it
+        # currently stands. The linear below is captured, as any op in this region is.
+        case.queue()
+        tt_out = case.linear()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+        case.write_weight(1)
+
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        replayed = ttnn.to_torch(tt_out)
+        ttnn.release_trace(device, trace_id)
+
+    passing, msg = case.check(replayed, 0)
+    assert passing, (
+        f"replay did not match the weight as it stood during recording: {msg}. Matching the "
+        f"weight written afterwards means the request was captured and re-read DRAM on "
+        f"replay, which capture_into_trace=False must not do."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fencing against a command queue
+# ---------------------------------------------------------------------------
+# `wait_for_cq_on_tensor_prefetcher`'s queue argument reaches the C++ layer only in its
+# positional form: a `cq_id=` keyword is consumed by the operation wrapper and applied
+# by making that queue the thread's current one. That is why the binding defaults to
+# None (resolve whatever queue is current) rather than to 0 — a `uint8_t = 0` default
+# would silently fence queue 0 for the keyword and context forms.
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("cq_id", [0, 1])
+@pytest.mark.parametrize("form", ["positional", "keyword", "context"])
+def test_tensor_prefetcher_wait_for_cq_queue_forms(device, cq_id, form):
+    """All three spellings must fence the queue the weight was written on, on a
+    non-default queue as much as on queue 0."""
+    case = _TraceCase(device, seed_tag=b"wait_for_cq_forms", write_cq=cq_id)
+
+    with tensor_prefetcher_session(device):
+        if form == "positional":
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id)
+        elif form == "keyword":
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=cq_id)
+        else:
+            with ttnn.command_queue(cq_id):
+                ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device)
+
+        tt_out = case.prefetch_and_linear(queue_id=cq_id)
+        ttnn.synchronize_device(device)
+        out_torch = ttnn.to_torch(tt_out)
+
+    passing, msg = case.check(out_torch, 0)
+    assert passing, f"PCC failed after fencing cq {cq_id} in its {form} form: {msg}"
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
+def test_tensor_prefetcher_wait_for_cq_rejects_unknown_queue(device, expect_error):
+    """A queue id the device does not have must raise, not fall back to queue 0."""
+    _TraceCase(device, seed_tag=b"wait_for_cq_unknown")
+
+    with tensor_prefetcher_session(device):
+        # device_params above opens 2 command queues, so 2 is one past the last.
+        with expect_error(RuntimeError, "is out of range"):
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, 2)
 
 
 # ---------------------------------------------------------------------------

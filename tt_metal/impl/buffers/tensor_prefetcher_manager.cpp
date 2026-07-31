@@ -1066,10 +1066,18 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     }
 
     // (a) Dispatcher write: bump every target DRAM core's signal slot for this CQ. Runs
-    // under the api lock we already hold (the method does not re-lock). Re-resolving by id
-    // (safe: we checked cq.device() above) gets the queue as a MeshCommandQueueBase, which
-    // is what exposes enqueue_write_dram_core_counter.
+    // under the api lock we already hold (the method does not re-lock). Re-resolving by id is
+    // what gets the queue as a MeshCommandQueueBase, which is what exposes
+    // enqueue_write_dram_core_counter; the identity check is what makes the round trip safe.
+    // It holds for every queue a mesh device owns, so a lookup that lands anywhere else fails
+    // here instead of fencing a queue the caller never named.
     auto& cq_base = mesh_device_->impl().mesh_command_queue_base(static_cast<uint8_t>(cq_id));
+    TT_FATAL(
+        &cq_base == &cq,
+        "WaitForCqOnTensorPrefetcher was given a command queue reporting id {}, but that is not mesh device {}'s "
+        "command queue for that id. Fence against a command queue obtained from the prefetcher's own mesh device.",
+        cq_id,
+        mesh_device_->id());
     cq_base.enqueue_write_dram_core_counter(
         ttsl::Span<const DeviceMemoryAddress>(targets), signal_value, /*blocking=*/false);
 
