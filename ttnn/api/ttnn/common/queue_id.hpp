@@ -4,13 +4,16 @@
 
 #pragma once
 
-#include <tt-metalium/queue_id.hpp>
+#include <optional>
+#include <tt_stl/strong_type.hpp>
+#include <cstdint>
 
 namespace ttnn {
-/*
-    Moved to metal as a part of tensor lowering. ttnn::QueueId remains to avoid breaking existing code and users, but
-    all new development should use tt::tt_metal::QueueId instead.
-*/
-using QueueId = tt::tt_metal::QueueId;
+
+using QueueId = ttsl::StrongType<uint8_t, struct QueueIdTag>;
+
+inline std::optional<uint8_t> raw_optional(const std::optional<QueueId>& cq_id) {
+    return cq_id.has_value() ? std::make_optional(cq_id.value().get()) : std::nullopt;
+}
 
 }  // namespace ttnn

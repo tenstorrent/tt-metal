@@ -58,6 +58,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_run_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
@@ -149,6 +150,10 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/distributed_tensor_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/byte_based_data_transfer_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_pad_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_to_tensor_spec_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_live_ranges.cpp
 )

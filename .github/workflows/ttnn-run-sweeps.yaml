@@ -803,7 +803,7 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: ${{ fromJSON(needs.resolve-inputs.outputs.tracy) }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ needs.resolve-inputs.outputs.platform }}
       enable-lto: ${{ fromJSON(needs.resolve-inputs.outputs.enable-lto) }}
 

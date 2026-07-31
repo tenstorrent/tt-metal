@@ -121,6 +121,7 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     bool load_bias = true;
 #endif
+
     [[maybe_unused]] uint32_t l1_write_addr_act = 0;
     for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
         // MCAST RECEIVE WEIGHTS

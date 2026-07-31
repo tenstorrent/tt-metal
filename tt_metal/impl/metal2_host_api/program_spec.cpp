@@ -2244,7 +2244,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // tensors the CTA payload never carried tensor_shape in the first place (and
     // the device-side accessor doesn't read it), so the flag is a pure host-side
     // validation loosening and has no effect on the CTA/CRTA layout.
-    const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape && is_sharded;
+    const bool dyn_shape = tensor_parameter.relaxations.dynamic_tensor_shape && is_sharded;
     // dynamic_tensor_shape lets the bound tensor's logical shape vary. For an interleaved ROW-MAJOR
     // tensor the page size (= last_dim_width * elem_size) is part of that varying shape, so it must
     // ride a runtime CRTA word too -- otherwise it goes stale on a program-cache hit and the
@@ -2255,7 +2255,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // spec-fixed, so neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages
     // words instead (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
     const bool dyn_page =
-        tensor_parameter.advanced_options.dynamic_tensor_shape && !is_sharded && spec.layout() == Layout::ROW_MAJOR;
+        tensor_parameter.relaxations.dynamic_tensor_shape && !is_sharded && spec.layout() == Layout::ROW_MAJOR;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2462,10 +2462,10 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     return out;
 }
 
-// Create map of local accessor name -> logical DFB id
-tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccessorHandles(
+// Create map of accessor name -> logical DFB id
+tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
-    tt::tt_metal::DataflowBufferLocalAccessorHandleMap out;
+    tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
         const uint32_t id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
@@ -2480,10 +2480,10 @@ tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccess
     return out;
 }
 
-// Create map of local accessor name -> logical Semaphore id
-tt::tt_metal::SemaphoreLocalAccessorHandleMap MakeSemaphoreLocalAccessorHandles(
+// Create map of accessor name -> logical Semaphore id
+tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     const KernelSpec& kernel_spec, const SemaphoreNameToIdMap& semaphore_name_to_id) {
-    tt::tt_metal::SemaphoreLocalAccessorHandleMap out;
+    tt::tt_metal::SemaphoreBindingHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
         const uint32_t id = semaphore_name_to_id.at(semaphore_binding.semaphore_spec_name);
@@ -2765,7 +2765,6 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         .unpack_to_dest_mode = unpack_dst_modes,
         .math_approx_mode = (gen2.sfpu_precision_mode == Precision::Approximate),
         .enable_2x_src_format = gen2.enable_2x_src_register,
-        .unpack_to_dest_en = gen2.unpack_to_dest_en,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -2925,10 +2924,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
     // Register TensorParameters with the program for ValidateProgramRunArgs to consult at enqueue.
     for (const auto& tensor_parameter : spec.tensor_parameters) {
-        const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape;
-        const bool match_padded_only = tensor_parameter.advanced_options.match_padded_shape_only;
         program_impl->register_tensor_parameter(
-            tensor_parameter.unique_id.get(), tensor_parameter.spec, dyn_shape, match_padded_only);
+            tensor_parameter.unique_id.get(), tensor_parameter.spec, tensor_parameter.relaxations);
     }
 
     // Create DataflowBuffers and build name -> ID map.
@@ -3001,11 +2998,11 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         KernelSource kernel_src = MakeKernelSource(kernel_spec);
         const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
-        // Make the local accessor name -> DFB ID map for this kernel
-        const tt::tt_metal::DataflowBufferLocalAccessorHandleMap dfb_handles =
-            MakeDataflowBufferLocalAccessorHandles(kernel_spec, dfb_name_to_id);
-        const tt::tt_metal::SemaphoreLocalAccessorHandleMap semaphore_handles =
-            MakeSemaphoreLocalAccessorHandles(kernel_spec, semaphore_name_to_id);
+        // Make the accessor name -> DFB ID map for this kernel
+        const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
+            MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_id);
+        const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
+            MakeSemaphoreBindingHandles(kernel_spec, semaphore_name_to_id);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
