@@ -1,0 +1,17 @@
+# Single-rank single-galaxy mesh for the LTX-2.3 multihost CI (bh_sc1) legs.
+# Mirrors models/tt_dit/tests/models/flux1/scaleout_configs/single_galaxy, but LTX's
+# 4x8sp1tp0nl2_ring config needs the FULL 32-device galaxy mapped as ONE 4x8 mesh (not Flux's
+# 8-device 4x2 block): sequence-parallel (sp=dim1, width 8) runs as a RING, dim0 (height 4) is LINE,
+# num_links=2 -> channels count 2. One rank owns the whole galaxy.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
