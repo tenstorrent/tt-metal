@@ -64,6 +64,7 @@ MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
             auto& global_semaphore = multi_device_global_semaphore.global_semaphores[i];
             size_t attempt = 0;
             std::vector<GlobalSemaphore> garbage;
+            garbage.reserve(attempts);
             log_debug(tt::LogTTNN, "global_semaphore->address(): {}", get_global_semaphore_address(global_semaphore));
             while (get_global_semaphore_address(global_semaphore) != target_addr) {
                 auto sem = create_global_semaphore(device, cores, initial_value, buffer_type);
