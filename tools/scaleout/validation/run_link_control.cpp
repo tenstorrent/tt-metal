@@ -78,7 +78,10 @@ void print_usage() {
               << "                                 # Like down_unsafe, but downs only ONE end of each link so\n"
               << "                                 # the partner stays up for recovery's retrain handshake\n"
               << "  run_link_control dump_peers    # Dump all ethernet peer connections as JSON (stdout)\n"
-              << "                                 # Runs without taking the CHIP_IN_USE lock\n";
+              << "                                 # Runs without taking the CHIP_IN_USE lock\n"
+              << "  run_link_control dump_dbg_slot # Dump the ERISC debug slot from every eth core (stdout)\n"
+              << "                                 # Read-only, no CHIP_IN_USE lock -- safe to run while a\n"
+              << "                                 # test holds the chip, including while it is hung\n";
 }
 
 }  // namespace tt::scaleout_tools
@@ -96,7 +99,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (command != "down" && command != "up" && command != "down_unsafe" && command != "down_single_unsafe" &&
-        command != "dump_peers") {
+        command != "dump_peers" && command != "dump_dbg_slot") {
         std::cerr << "Unknown command: " << command << "\n";
         print_usage();
         return 1;
@@ -121,6 +124,10 @@ int main(int argc, char* argv[]) {
     }
     if (command == "dump_peers") {
         dump_eth_peers_json();
+        return 0;
+    }
+    if (command == "dump_dbg_slot") {
+        dump_erisc_debug_slots();
         return 0;
     }
 

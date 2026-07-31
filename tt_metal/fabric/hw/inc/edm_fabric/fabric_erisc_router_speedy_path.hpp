@@ -283,6 +283,26 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     auto pkts_received = get_ptr_val<to_receiver_pkts_sent_id>();
     bool unwritten_packets = pkts_received != 0;
+#if defined(ARCH_BLACKHOLE)
+    // [RX PIPELINE PROBE] Mirror the whole receiver pipeline to the L1 debug slot every step, on ERISC1.
+    // pkts_received IS the buffer occupancy (peer increments it on send, we decrement it on consume), so
+    // this measures "is the RX buffer full?" directly instead of inferring it from a cross-core delta.
+    // Unconditional (not gated on unwritten_packets) so an idle/empty receiver is distinguishable from a
+    // dead one -- see the heartbeat word.
+    fabric_dbg_set_recv_pipeline(
+        pkts_received,
+        wr_sent_counter.counter,
+        receiver_channel_pointers.wr_flush_counter.counter,
+        receiver_channel_pointers.ack_counter.counter,
+        (receiver_state.unacked_sends & 0xFFFF) | (receiver_state.has_pending_flush ? (1u << 16) : 0u) |
+            (static_cast<uint32_t>(receiver_state.pending_flush_trid) << 17));
+    // [CREDIT RESYNC] A retrain can drop the fire-and-forget credit DMA, stranding the sender's final
+    // window of completions with nothing left to re-trigger the push. Re-issue it once per retrain; the
+    // values are absolute so this repairs an arbitrary number of lost updates and is otherwise a no-op.
+    if (fabric_retrain_edge_for_receiver()) {
+        receiver_channel_response_credit_sender.resync_credits();
+    }
+#endif
 
     if (unwritten_packets) {
         static_assert(!ENABLE_RISC_CPU_DATA_CACHE, "ENABLE_RISC_CPU_DATA_CACHE must be disabled for speedy path");

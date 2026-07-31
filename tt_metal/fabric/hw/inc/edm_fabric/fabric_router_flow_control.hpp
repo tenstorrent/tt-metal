@@ -43,6 +43,22 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
     std::array<uint32_t, NUM_SENDER_CHANNELS> completion_counters;
     std::array<uint32_t, NUM_SENDER_CHANNELS> ack_counters;
 
+    // [CREDIT RESYNC] Re-issue the credit DMA without recording a new completion.
+    //
+    // update_sender_side_credits() is fire-and-forget and ships the WHOLE credit block, whose entries are
+    // absolute running totals -- so a single re-push repairs any number of updates lost while the link was
+    // down, with no retransmit bookkeeping, and is a no-op if nothing was lost. It normally only fires when
+    // a new completion occurs, which is why a drop in the retrain window is never repaired: at the tail
+    // there are no further completions to trigger it. The receiver's total is the exact upper bound on what
+    // the sender should hold, so an absolute overwrite cannot over-credit.
+    //
+    // Spins for TXQ availability first: the existing call sites are documented as assuming !eth_txq_is_busy.
+    FORCE_INLINE void resync_credits() const {
+        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+        }
+        update_sender_side_credits();
+    }
+
 private:
     FORCE_INLINE void update_sender_side_credits() const {
         internal_::eth_send_packet_bytes_unsafe(
@@ -69,6 +85,11 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
         remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_ack_stream_ids[src_id], 1);
     }
+
+    // [CREDIT RESYNC] No-op for the stream-register variant: its credits are remote INCREMENTS to a
+    // stream register with no absolute state to re-push, so there is nothing to resynchronise. Present
+    // only so callers compile under either credit-sender configuration.
+    FORCE_INLINE void resync_credits() const {}
 
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_completed_stream_ids;
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_ack_stream_ids;
