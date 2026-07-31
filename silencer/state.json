@@ -1,18 +1,20 @@
 {
-  "last_scan_date": "2026-07-30",
+  "last_scan_date": "2026-07-31",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
     "30515701001",
     "30582544934",
     "30586242428",
-    "30587963164"
+    "30587963164",
+    "30618649345"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
     "pr-gate.yaml",
     "runtime-unit-tests.yaml",
-    "sanity-tests.yaml"
+    "sanity-tests.yaml",
+    "galaxy-unit-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -26,7 +28,7 @@
     }
   ],
   "backlog_cursor": {
-    "next_category": 5,
-    "note": "Fixed Unknown motherboard log spam (physical_system_discovery.cpp) via per-name log-once latch. Next: continue scanning host runtime/test logs (t3000, galaxy, models) for category 1/3/5 patterns; histogram from this scan showed UMD/Metal info-level lines (Cluster lifecycle, Profiler started) as lower-frequency repeats worth revisiting if they recur more broadly."
+    "next_category": 6,
+    "note": "Fixed 'Using pre-compiled firmware from' info->debug demotion (build_env_manager.cpp) on branch silencer/demote-precompiled-firmware-log, from galaxy-unit-tests run 30618649345. Histogram also showed high-volume UMD hugepage/numa warnings (hwloc_set_area_membind / init_hugepage, 256x each, tracked upstream tt-umd Issue #893 - out of scope, lives in submodule) and Fabric 'routing planes' warning (160x) worth investigating next. Test-info spam (5477x) dominates the histogram but is mostly per-test setup lines, needs closer look at subsystem breakdown before targeting."
   }
 }
