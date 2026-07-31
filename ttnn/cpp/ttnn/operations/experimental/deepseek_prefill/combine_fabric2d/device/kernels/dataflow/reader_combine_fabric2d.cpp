@@ -93,10 +93,16 @@ void kernel_main() {
     // it straight into its output region.
     constexpr uint32_t nbr_chip_id = get_compile_time_arg_val(18);
     constexpr uint32_t num_assignments = get_compile_time_arg_val(19);
+    constexpr uint32_t schedule_len = get_compile_time_arg_val(20);
+    // Work schedule: one entry per unit of work, high bit set = "relay forwarding chunk k", clear = "own
+    // assignment k". Which order to do them in is the factory's call (assignment_order); this kernel just
+    // walks the list. Interleaving own work with relaying is what keeps downstream cores fed.
+    constexpr uint32_t SCHED_BASE = 21;
+    constexpr uint32_t SCHED_FWD = 0x80000000u;
     // Per-assignment table: [in_base_token, num_tokens, out_base_token, dst_chip_id]. Read through
     // kernel_compile_time_args (a constexpr std::array) because get_compile_time_arg_val needs a literal
-    // index and this table is walked by a loop variable.
-    constexpr uint32_t ASSIGN_BASE = 20;
+    // index and these tables are walked by a loop variable.
+    constexpr uint32_t ASSIGN_BASE = SCHED_BASE + schedule_len;
     constexpr uint32_t ASSIGN_WORDS = 4;
     constexpr uint32_t ACCESSOR_BASE = ASSIGN_BASE + ASSIGN_WORDS * num_assignments;
     constexpr auto dram_in_args = TensorAccessorArgs<ACCESSOR_BASE>();
@@ -164,8 +170,8 @@ void kernel_main() {
         return published % num_l1_slots;
     };
 
-    // ---- Phase A: this producer's own assignments.
-    for (uint32_t a = 0; a < num_assignments; a++) {
+    // ---- One own assignment: stream its tokens from local DRAM, tagging each with where it must end up.
+    auto do_own_assignment = [&](uint32_t a) {
         const uint32_t in_base_page = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 0];
         const uint32_t assignment_tokens = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 1];
         const uint32_t out_base_page = kernel_compile_time_args[ASSIGN_BASE + a * ASSIGN_WORDS + 2];
@@ -214,12 +220,11 @@ void kernel_main() {
             flush_publish();  // a chunk boundary: do not let it sit unpublished
             out_chunk++;
         }
-    }
-    flush_publish();
+    };
 
-    // ---- Phase B: chunks that arrived in our own quarter, each pushed one more hop.
+    // ---- One arrived chunk, pushed exactly one more hop.
     uint32_t consumed = 0;  // forwarded tokens (sentinels included) taken out of our quarter
-    for (uint32_t chunk = 0; chunk < num_incoming_chunks; chunk++) {
+    auto do_forward_chunk = [&](uint32_t chunk) {
         // Every token of a chunk shares one final destination (a chunk IS one movement's tokens), so the
         // first token decides for the whole chunk whether this hop is the last one.
         bool reforward = false;
@@ -279,6 +284,17 @@ void kernel_main() {
         }
         if (reforward) {
             out_chunk++;
+        }
+    };
+
+    // ---- Walk the schedule. Forwarding chunks always appear in increasing order, so `consumed` stays a
+    // valid watermark into our quarter however the own assignments are interleaved around them.
+    for (uint32_t si = 0; si < schedule_len; si++) {
+        const uint32_t entry = kernel_compile_time_args[SCHED_BASE + si];
+        if (entry & SCHED_FWD) {
+            do_forward_chunk(entry & ~SCHED_FWD);
+        } else {
+            do_own_assignment(entry);
         }
     }
     flush_publish();
