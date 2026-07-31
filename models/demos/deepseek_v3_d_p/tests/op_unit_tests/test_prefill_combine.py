@@ -647,7 +647,10 @@ CMBF2D_STALL = int(os.environ.get("CMBF2D_STALL", "0"))
 # Forwarded tokens between semaphore bumps to the downstream reader. Purely a tuning knob — a bump always
 # follows a chunk's sentinel, so accuracy holds for any value >= 1; this only sets how finely the downstream
 # reader can pipeline WITHIN a chunk. Swept in P9.3.
-CMBF2D_FWD_BUMP = int(os.environ.get("CMBF2D_FWD_BUMP", "8"))
+CMBF2D_FWD_BUMP = int(os.environ.get("CMBF2D_FWD_BUMP", "32"))
+# 0 = nearest destination first then all forwarding; 1 = furthest first with forwarding interleaved, so
+# downstream cores are handed work earlier. Scheduling only — accuracy is identical either way.
+CMBF2D_ORDER = int(os.environ.get("CMBF2D_ORDER", "1"))
 # Mesh axis whose neighbours the op talks to. Matches the op's `axis` argument.
 CMBF2D_AXIS = 0
 # Blackhole AICLK the bandwidth numbers assume. Telemetry gives cycle counts; turning those into GB/s
@@ -955,7 +958,7 @@ def _dump_combine_fabric2d_bwinfo(
             f"# mesh={tuple(mesh_device.shape)} num_links={num_links} axis={axis} "
             f"tokens={CMBF2D_TOKENS} per movement token={CMBF2D_TOKEN_BYTES}B clock={clock_mhz}MHz "
             f"edm_sender_slots={first.get('edm_slots', 0)} l1_slots={first.get('num_l1_slots', 0)} "
-            f"batch={first.get('batch', 0)} fwd_bump_every={CMBF2D_FWD_BUMP} stall_telemetry={CMBF2D_STALL}\n"
+            f"batch={first.get('batch', 0)} fwd_bump_every={CMBF2D_FWD_BUMP} order={CMBF2D_ORDER} stall_telemetry={CMBF2D_STALL}\n"
             f"# payload per producer = tokens_sent x {CMBF2D_TOKEN_BYTES}B, where tokens_sent is asserted to be\n"
             f"#   one of {sorted(allowed_tokens)} and to sum to {mesh_total_tokens} across the mesh. Producers are\n"
             f"#   deliberately unequal: the fabric picks one direction for the opposite chip. Not taken\n"
@@ -1117,6 +1120,7 @@ def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
         token_size_bytes=token_size_bytes,
         axis=CMBF2D_AXIS,
         fwd_bump_every=CMBF2D_FWD_BUMP,
+        assignment_order=CMBF2D_ORDER,
         stall_telemetry=CMBF2D_STALL,
     )
     ttnn.synchronize_device(mesh_device)
