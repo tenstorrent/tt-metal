@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "api/tensor/tensor_accessor.h"
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint_pages.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
@@ -47,7 +46,6 @@ void kernel_main() {
         uint32_t bank_id = get_vararg(args_idx++);
         uint32_t src_offset = get_vararg(args_idx++);
         uint32_t addr = src_addr + src_offset;
-        DPRINT("addr: {}\n", addr);
         uint32_t units_to_transfer = get_vararg(args_idx++);
         uint32_t read_size = units_to_transfer * remote_unit_size_padded;
         CoreLocalMem<uint32_t> scratch_dst(l1_scratch_write_addr + src_offset);

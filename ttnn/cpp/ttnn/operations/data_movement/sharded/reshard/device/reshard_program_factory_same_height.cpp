@@ -171,10 +171,21 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
 
     // Local sharded DFB, built on the local buffer's borrowed memory so its backing L1 address is
     // refreshed from the tensor argument on every enqueue.
+    //
+    // The DFB is only an address source (the kernel reaches the shard through get_write_ptr() /
+    // get_read_ptr() + offset and never touches the FIFO), so the entry count does not bound its
+    // accesses. Clamp it to the backing tensor's packed size: a padded shard shape can push the
+    // shard-derived size past what Metal 2.0's spec-time borrowed-DFB check allows (it compares
+    // against the TensorSpec's packed size, having no Buffer at spec time to see the larger real
+    // per-bank allocation the legacy dynamic CB was checked against). Behaviour is unchanged
+    // because nothing reads the size.
+    const uint32_t shard_dfb_bytes = remote_units_per_shard * unit_size;
+    const uint32_t local_packed_bytes =
+        static_cast<uint32_t>(local_tensor.tensor_spec().compute_packed_buffer_size_bytes());
     spec.dataflow_buffers = {DataflowBufferSpec{
         .unique_id = DFBSpecName{kSHShardDfbName},
         .entry_size = unit_size,
-        .num_entries = remote_units_per_shard,
+        .num_entries = std::min(shard_dfb_bytes, local_packed_bytes) / unit_size,
         .data_format_metadata = data_format,
         .borrowed_from = TensorParamName{kSHLocalTensorParam},
     }};

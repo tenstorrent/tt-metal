@@ -19,6 +19,33 @@ of this report.
 No factory was left on the legacy concept, so `AllFactoriesValid` sees a uniform
 `MetalV2FactoryConcept` variant.
 
+## Review round
+
+PR [#51495](https://github.com/tenstorrent/tt-metal/pull/51495) — Copilot raised 4 comments
+(1 🔴, 3 🟡). All 4 accepted and addressed; none required a scope decision to be escalated.
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| 1 | 🔴 | Borrowed output DFB can exceed the tensor's packed size and be rejected at spec time | **Fixed, and widened** — the same defect was latent in the same-width and same-height borrowed DFBs, which the review did not flag; all three are clamped. Root cause recorded as a framework gap under *Handoff points*. |
+| 2 | 🟡 | Live `DPRINT` carried into a production kernel | **Fixed** — removed, with the now-dead debug include. Overrides the port's initial scope-discipline call; see the DPRINT entry under *Open items for downstream*. |
+| 3 | 🟡 | `METAL2_PORT_BRIEF.md` still asserts the stale Quasar co-borrower claim | **Fixed by annotation, not rewrite** — see below. |
+| 4 | 🟡 | `METAL2_PREPORT_AUDIT.md` carries the same stale claim | **Fixed by annotation, not rewrite** — see below. |
+
+On 3 and 4: the brief and the pre-port audit are the **audit's** artifacts and the historical record
+of what the audit concluded, and this port is downstream of them — silently rewriting their findings
+would falsify that record and detach them from the audit's own status tables and provenance line.
+The reviewer's actual concern is that stale *actionable* guidance can wrongly expand a future port's
+scope, which a correction note answers just as well. Each file therefore keeps its original text and
+gains a dated `⚠ CORRECTION (port, 2026-07-31)` block at the stale bullet, stating what is wrong,
+how it was verified, and where the evidence lives. The audit's note also carries a process
+suggestion for the readiness-sheet owner (derive the co-borrower list from a grep at audit time,
+since a sibling op forking its kernels silently invalidates the sheet).
+
+Finding 1 is the one worth dwelling on: it was a **latent launch-time `TT_FATAL` on valid shapes**,
+not a style issue, and it was reachable from the op's own test suite. The port's own reasoning had
+gone wrong in a specific, generalisable way — see the second half of the Quasar-template entry under
+*Confusion*.
+
 ## Provenance
 
 `git log -1 --format='%h %cs %s' -- docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/`
@@ -71,8 +98,67 @@ The success case: zero device-op-class edits.
 
 ## Handoff points
 
-**None.** No capitulation, no boundary-rule assumption violation, no kernel-lib gap, no
-framework gap, no removed pybind surface.
+No capitulation, no boundary-rule assumption violation, no kernel-lib gap, no removed pybind
+surface. **One framework gap**, below.
+
+### Framework gap — the spec-time borrowed-DFB size check is not shard-aware
+
+*Owner: Metal 2.0 host-API team. Reporter: this port. Surfaced by PR review (Copilot, 🔴).*
+
+**The check.** `program_spec.cpp:1541-1580` validates a borrowed-memory DFB with
+
+```cpp
+const size_t dfb_bytes    = dfb.entry_size * dfb.num_entries;
+const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+TT_FATAL(dfb_bytes <= tensor_bytes, ...);
+```
+
+**The problem.** A borrowed DFB is a **per-node** resource, but
+`compute_packed_buffer_size_bytes()` is a **whole-tensor** quantity derived from the physical
+(padded logical) shape — `tensor_layout.cpp:257-274` — with no core-count multiplier, no shard
+padding, and no L1 page alignment. (`compute_consumed_memory_bytes_per_bank` is the shard-aware
+method, and is not the one used.) So the two sides of the comparison are not commensurable, and
+the check is neither an upper nor a lower bound:
+
+- **Normally far too lenient** — a shard of an N-core tensor is ~1/N of the packed size. The
+  framework's own comment concedes this: *"a DFB can pass here against the full-tensor size and
+  still fail per-bank later. By design."*
+- **Sometimes too strict**, which is what bit. When a shard covers most/all of the tensor *and* is
+  padded, its real size legitimately exceeds the packed logical size. A tiled `[32, 96]` output
+  with a `(32, 128)` shard on one core is 4 tiles of shard vs 3 tiles of packed tensor →
+  `TT_FATAL` before launch, on a perfectly valid tensor. The same-width unaligned path reaches the
+  same failure by a second route: the padded per-row stride (`local_unit_size_padded > unit_size`)
+  rather than a padded shard shape.
+
+**Why this is a regression against legacy, not porter error.** Legacy's equivalent check was
+`CircularBufferConfig::set_total_size` against `buffer.aligned_size_per_bank()`
+(`circular_buffer_config.cpp:193-231`) — the *real* allocation, which is large enough. Metal 2.0
+still applies that per-bank check, but only at attach time
+(`program_run_args.cpp:460-468`). The spec-time check is an additional, differently-based gate with
+no legacy counterpart, and it is the one that rejects valid programs.
+
+**What the port did.** Clamped each of the three borrowed DFBs to
+`min(shard-derived bytes, tensor packed bytes)`. Behaviour-neutral: all three are **address-only**
+(every binding kernel uses `get_write_ptr()` / `get_read_ptr()` + offset and issues zero FIFO ops —
+verified across all nine kernels), so nothing reads `entry_size` / `num_entries` and `get_*_ptr()`
+returns the borrowed base regardless of declared capacity. Sites:
+`reshard_program_factory_generic.cpp` (`output_shard`),
+`reshard_program_factory_same_width.cpp` (`shard`),
+`reshard_program_factory_same_height.cpp` (`shard`).
+
+**Requested fix.** Compare against a shard-aware bound at spec time (the `TensorSpec` can already
+produce one via `compute_consumed_memory_bytes_per_bank`), or drop the spec-time size check for
+borrowed DFBs and rely on the precise attach-time per-bank check that already exists. Until then,
+every op with a borrowed DFB on a padded shard must carry this clamp — the sibling
+`experimental/quasar/reshard` independently arrived at the same workaround
+(`experimental/quasar/reshard/device/reshard_program_factory_generic.cpp:817-831`), which is
+evidence the gap is generic rather than reshard-specific.
+
+**Ticket-ready summary.** *Metal 2.0's spec-time borrowed-DFB size check compares a per-node DFB
+size against a whole-tensor, padding-blind packed size, rejecting valid programs whose shard is
+padded beyond the logical tensor. Two independent ops have had to clamp their DFB size to work
+around it. Either make the bound shard-aware or defer entirely to the existing attach-time per-bank
+check.*
 
 Specifically, on the things the recipe warns could force a stop:
 
@@ -183,15 +269,27 @@ Specifically, on the things the recipe warns could force a stop:
   reading framework source. Suggested fix: state the rule (`entry_size = legacy page_size`,
   `num_entries = legacy total_size / page_size`, exact by the legacy CB invariant) in that
   section.
-- **Borrowed-DFB size parity is only findable in framework source.** The recipe says a borrowed
-  DFB's backing address refreshes from the `TensorArgument` and that no `dfb_run_overrides` entry
-  is needed, but says nothing about the *sizing* check. Confirming that the port preserves legacy
-  behavior needed a source diff: Metal 2.0's `dfb_total_bytes <= buffer->aligned_size_per_bank()`
-  (`tt_metal/impl/metal2_host_api/program_run_args.cpp:460-468`) is the exact analog of legacy's
-  `total_size <= max_size_` with `max_size_ = buffer.aligned_size_per_bank()`
-  (`circular_buffer_config.cpp:193-231`). Worth one sentence in the borrowed-memory paragraph:
-  the attach-time check is byte-identical to the legacy dynamic-CB check, so preserving
-  `entry_size * num_entries == legacy total_size` preserves the validation outcome.
+- **Borrowed-DFB sizing is under-documented, and the missing half caused the port's only real bug.**
+  The recipe says a borrowed DFB's backing address refreshes from the `TensorArgument` and that no
+  `dfb_run_overrides` entry is needed, but says nothing about the *sizing* checks — of which there
+  are **two**, on different bases, and only one is a legacy analog:
+  - *Attach time*, `dfb_total_bytes <= buffer->aligned_size_per_bank()`
+    (`program_run_args.cpp:460-468`) — byte-identical to legacy's `total_size <= max_size_` with
+    `max_size_ = buffer.aligned_size_per_bank()` (`circular_buffer_config.cpp:193-231`). Preserving
+    `entry_size * num_entries == legacy total_size` preserves this outcome, which is the conclusion
+    the port drew and stopped at.
+  - *Spec time*, `dfb_bytes <= tensor_spec.compute_packed_buffer_size_bytes()`
+    (`program_spec.cpp:1541-1580`) — **no legacy counterpart**, and it compares a per-node DFB
+    against a whole-tensor padding-blind size, so preserving legacy parity is *not* sufficient to
+    pass it. This is what the port missed, and it is a latent launch-time `TT_FATAL` on valid padded
+    shards; see *Handoff points* for the full analysis and the clamp.
+
+  Suggested fix, in two parts. **Docs:** the borrowed-memory paragraph should name both checks, say
+  which is the legacy analog, and warn that the spec-time one is not shard-aware — so a porter knows
+  legacy parity alone does not clear it. A worked line would do it: *"size your borrowed DFB from the
+  shard, then clamp to the backing tensor's packed size; the spec-time check is whole-tensor and
+  padding-blind."* **Framework:** make the spec-time bound shard-aware or drop it (see *Handoff
+  points*), at which point the doc note and every op's clamp can go away.
 - **Nothing says a borrowed-only `TensorParameter` needs no kernel `TensorBinding`.** Three DFBs
   here borrow from a `TensorParameter` no kernel binds (`local` in same-width / same-height,
   `output` in generic). Whether that trips the "TensorParameter is defined but not bound by any
@@ -236,6 +334,18 @@ Specifically, on the things the recipe warns could force a stop:
   from the current legacy source instead. Worth promoting from a general caution to a named
   failure mode: *a ported sibling can be a stale fork of the very kernel you are porting; diff it
   against the legacy source before trusting any value in it.*
+
+  **But the inverse error is just as real, and this port made it.** Having established that the
+  Quasar copy was a stale fork, I stopped mining it — and it turned out to contain one thing this
+  port genuinely needed: the borrowed-DFB size clamp (its
+  `reshard_program_factory_generic.cpp:817-831`, with a comment describing the padded-shard failure
+  in detail). That is not staleness, it is a framework gap the Quasar porter hit first and solved
+  correctly; skipping it cost a 🔴 review finding and a latent launch-time `TT_FATAL` in three
+  factories (see *Handoff points*). So the guidance needs both halves: a ported sibling's **values**
+  are untrustworthy without a diff against current legacy, but its **workarounds** are evidence of
+  real framework gaps and deserve to be understood before being discarded. A cheap discriminator:
+  a divergence with a comment explaining *why* is a candidate finding; a divergence with no
+  explanation is probably drift.
 - **The shared reference docs were hard to locate.** `metal2_port.md` links its four companions
   as `../shared/*.md`, but the invoker supplies only the absolute path to `metal2_port.md`, which
   in this workspace is a symlink into a *different* checkout
@@ -286,10 +396,17 @@ Specifically, on the things the recipe warns could force a stop:
   - **Unreachable code** in `is_valid_for_legacy_reshard` (`reshard_device_operation.cpp:39-50`):
     the unconditional `return` at line 39 makes the whole row-major shard-width block at 41-50
     dead. In the device-operation class, so off-limits regardless.
-  - **Live `DPRINT`** in a shipping kernel: `reshard_same_width_reader.cpp` still contains
+  - **Live `DPRINT`** in a shipping kernel: `reshard_same_width_reader.cpp` carried
     `DPRINT("addr: {}\n", addr);` in the unaligned reader path, plus two commented-out
-    `print_bf16_pages` calls. Carried across verbatim (whitelist rule 8 — comments and
-    self-documentation are preserved, and removing the DPRINT is an unrelated cleanup).
+    `print_bf16_pages` calls. The port initially carried all of it across verbatim, on the
+    scope-discipline reading that removing a pre-existing debug print is an unrelated cleanup that
+    belongs in the report rather than the diff. **PR review overrode that** (see *Review round*
+    below): the repo's own PR-review rules for `ttnn/**` list "no debug print statements in
+    production code … remove leftover debugging artifacts before merge" as 🟡 IMPORTANT
+    (`.github/instructions/ttnn.instructions.md:18`), and it applies to files this PR touches. The
+    live `DPRINT` and the now-dead `#include "api/debug/dprint_pages.h"` are removed. The two
+    **commented-out** `print_bf16_pages` lines are kept — they are inert, and deleting comments
+    cuts against whitelist rule 8; whether to keep them is the op owner's call.
   - **Dead RTA read** `num_output_pages` in `reshard_reader.cpp` and
     `reshard_reader_diff_width.cpp` — unpacked, never referenced. Faithfully preserved as a named
     RTA (declared in the schema, set per node, read into an unused local), so the port stays a

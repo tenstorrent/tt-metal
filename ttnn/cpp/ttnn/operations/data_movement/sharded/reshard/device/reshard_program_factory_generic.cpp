@@ -808,13 +808,22 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
     };
 
     // Output sharded DFB, built on the output buffer's borrowed memory so its backing L1 address is
-    // refreshed from the tensor argument on every enqueue. entry_size * num_entries reproduces the
-    // legacy CB's total_size exactly (the legacy CB required total_size % page_size == 0).
+    // refreshed from the tensor argument on every enqueue.
+    //
+    // The DFB is only an address source: the kernel writes through get_write_ptr() + offset and never
+    // touches the FIFO, so entry_size / num_entries do not bound its accesses. That matters because a
+    // padded shard shape can make the shard-derived total_size exceed the output tensor's packed size
+    // (a tiled [32, 96] tensor with a (32, 128) shard is 4 tiles of shard against 3 tiles of packed
+    // tensor), and Metal 2.0's spec-time borrowed-DFB check compares against exactly that packed size
+    // (program_spec.cpp:1541-1580) — it has no Buffer at spec time, so it cannot see the larger real
+    // per-bank allocation the legacy dynamic CB was checked against. Clamp so the DFB never claims
+    // more L1 than the TensorSpec reports; behaviour is unchanged because nothing reads the size.
     const uint32_t dfb_entry_size = static_cast<uint32_t>(output_buffer->page_size());
+    const uint32_t output_packed_bytes = static_cast<uint32_t>(output.tensor_spec().compute_packed_buffer_size_bytes());
     spec.dataflow_buffers = {DataflowBufferSpec{
         .unique_id = DFBSpecName{kGenOutputShardDfbName},
         .entry_size = dfb_entry_size,
-        .num_entries = total_size / dfb_entry_size,
+        .num_entries = std::min(total_size, output_packed_bytes) / dfb_entry_size,
         .data_format_metadata = data_format,
         .borrowed_from = TensorParamName{kGenOutputTensorParam},
     }};

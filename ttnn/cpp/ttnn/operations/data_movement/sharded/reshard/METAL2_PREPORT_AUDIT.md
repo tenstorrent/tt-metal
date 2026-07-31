@@ -144,6 +144,23 @@ The op is a freshly-migrated `descriptor` op (ProgramDescriptor migration #43840
 
 - **CB endpoints (shapes to watch):** all two-toucher CBs here are the **dual-instance work-split** shape (same `kernel_source` in a ReaderConfig + WriterConfig pair over one core range, splitting work by disjoint ranges) → assign **1P+1C**, do **not** reach for the multi-binding flag. No hidden-second-writer (semaphore-gated co-fill) shapes — the op uses no semaphores. No multi-reader ≥3-toucher shapes.
 - **Cross-op / shared kernels (port-together set):** the six shared reshard kernels live in `ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/` (one level up from the op — in-family shared pool, file-path instantiated by the Generic/SameWidth/SameHeight factories). The `reshard_same_width_*`, `reshard_same_height_*`, `reshard_reader*` kernels are **also instantiated by `ttnn/cpp/ttnn/operations/experimental/quasar/reshard/`** — a Quasar (Gen2) port, out of scope here, but a co-borrower. Per the readiness sheet, the Quasar reshard's `NdReshardCopyPagesFactory` and `ReshardGenericFactory` are already `MetalV2`; its SameWidth/SameHeight/CopyLocal factories are still `legacy device-op`. Any Metal 2.0 CB→DFB / named-token rewrite of these shared kernels must be coordinated so the Quasar reshard is not broken. Port the shared kernels + both consuming reshard ops as one unit.
+
+  > **⚠ CORRECTION (port, 2026-07-31) — this heads-up did not hold at port time.**
+  > Two facts in it were stale, both traceable to the readiness sheet rather than to the code:
+  > 1. **Quasar is not a co-borrower.** It has private copies of all nine kernels under
+  >    `experimental/quasar/reshard/device/kernels/` and instantiates only those paths. A
+  >    repo-wide grep for consumers of the `data_movement/sharded/device/kernels/dataflow/reshard_*`
+  >    paths returns only this op's three factories, so the shared kernels were modified **in
+  >    place** with no Quasar coordination and no scope expansion.
+  > 2. **All five Quasar reshard factories are already on `create_program_artifacts`**, not just
+  >    `NdReshardCopyPagesFactory` and `ReshardGenericFactory`.
+  >
+  > The original text is preserved above as the audit-time record; only this note is added. The
+  > correction changes no gate and no other conclusion in this audit — the shared-kernel item was
+  > non-gating coordination advice. **Process note for the readiness-sheet owner:** a sibling op
+  > forking its kernels silently invalidates the sheet's co-borrower answer, so a future audit
+  > should derive the consumer list from a grep at audit time rather than from the sheet. See
+  > `METAL2_PORT_PLAN.md` → *Cross-op kernels* and `METAL2_PORT_REPORT.md` → *Confusion*.
 - **RTA varargs (prefer the kernel-side vararg mechanism, do not try to name each):**
   - `reshard_reader.cpp:35` — `for (range_id < num_ranges)` with `arg_index++` reads inside the loop; also data-selected reads `get_arg_val(start_x_index)` / `get_arg_val(core_id_x_index)` (`:41-42,60-61`). Variable-count + data-selected → varargs.
   - `reshard_reader_diff_width.cpp:35` — `for (block_id < num_blocks)` with nested `current_pattern_arg_index++` reads. Variable-count → varargs.

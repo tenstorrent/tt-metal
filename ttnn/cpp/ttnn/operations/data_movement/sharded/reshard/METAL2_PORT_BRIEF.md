@@ -53,6 +53,20 @@ Case-2 rule of thumb: bind the tensor, bridge the base via `get_bank_base_addres
 
 - **CB endpoints (multi-binding):** none. Every two-toucher CB is the dual-instance work-split shape → assign **1P+1C**; do **not** reach for the multi-binding advanced option. There are no hidden-second-writer (semaphore-gated co-fill) shapes — the op uses **no semaphores at all** — and no multi-reader ≥3-toucher shapes.
 - **Cross-op / shared kernels (port-together set):** the six shared kernels in `ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/` (`reshard_reader.cpp`, `reshard_reader_diff_width.cpp`, `reshard_same_width_reader.cpp`, `reshard_same_width_writer.cpp`, `reshard_same_height_reader.cpp`, `reshard_same_height_writer.cpp`) are file-path instantiated by the Generic/SameWidth/SameHeight factories and are **also borrowed by `experimental/quasar/reshard/`** (a Gen2 port, out of scope here). Their Metal 2.0 CB→DFB / named-token rewrite is a single change — coordinate so the Quasar reshard is not broken; port the shared kernels + both consuming ops as one unit.
+
+  > **⚠ CORRECTION (port, 2026-07-31) — this bullet is stale; do not act on it.**
+  > `experimental/quasar/reshard/` is **not** a co-borrower. It carries its own private copies of
+  > all nine kernels under `experimental/quasar/reshard/device/kernels/` and instantiates only
+  > those paths (verified by extracting every `kernels/` string literal from
+  > `experimental/quasar/reshard/device/*.cpp`). A repo-wide search for consumers of the
+  > `data_movement/sharded/device/kernels/dataflow/reshard_*` paths returns **only** this op's
+  > three factories, so this op is the complete consumer set and the shared kernels were modified
+  > **in place** — no fork, no Quasar coordination, no expanded scope. Separately, all five Quasar
+  > reshard factories are *already* on `create_program_artifacts`, not the "still legacy device-op"
+  > state recorded here.
+  > The original text is preserved above as the audit-time record. See
+  > `METAL2_PORT_PLAN.md` → *Cross-op kernels* and `METAL2_PORT_REPORT.md` → *Confusion* for the
+  > evidence and the fork-vs-in-place decision.
 - **RTA varargs (prefer the kernel-side vararg mechanism — do not try to name each):**
   - `reshard_reader.cpp:35` — `for (range_id < num_ranges)` with in-loop `arg_index++` reads; also data-selected reads (`get_arg_val(start_x_index)` / `get_arg_val(core_id_x_index)`, `:41-42,60-61`).
   - `reshard_reader_diff_width.cpp:35` — `for (block_id < num_blocks)` with nested `current_pattern_arg_index++` reads.

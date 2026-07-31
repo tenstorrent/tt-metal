@@ -309,8 +309,11 @@ coordinate and no reason to leave a legacy copy behind. Recorded in the port rep
 
 - **KernelSpecs:** `reader`, `writer` — both of the single selected source.
 - **DataflowBufferSpecs:**
-  - `shard` — `entry_size = local_unit_size_padded`, `num_entries = local_units_per_shard`,
+  - `shard` — `entry_size = local_unit_size_padded`,
+    `num_entries = min(local_units_per_shard * local_unit_size_padded, local packed bytes) / local_unit_size_padded`,
     `data_format_metadata = data_format`, `borrowed_from = "local"`.
+    See [Borrowed-DFB sizing](#borrowed-dfb-sizing) for why the clamp is needed and why it is
+    behaviour-neutral.
   - `scratch` — **only when `unaligned && local_is_output`** —
     `entry_size = remote_unit_size_padded`, `num_entries = remote_units_per_shard`,
     `data_format_metadata = data_format`, not borrowed.
@@ -324,8 +327,9 @@ coordinate and no reason to leave a legacy copy behind. Recorded in the port rep
 
 - **KernelSpecs:** `reader`, `writer` — both of the single selected source.
 - **DataflowBufferSpecs:** `shard` — `entry_size = unit_size`,
-  `num_entries = remote_units_per_shard`, `data_format_metadata = data_format`,
-  `borrowed_from = "local"`.
+  `num_entries = min(remote_units_per_shard * unit_size, local packed bytes) / unit_size`,
+  `data_format_metadata = data_format`, `borrowed_from = "local"`.
+  See [Borrowed-DFB sizing](#borrowed-dfb-sizing).
 - **SemaphoreSpecs:** none.
 - **TensorParameters:** `remote` (both kernels, Case 2), `local` (borrowed-only).
 - **WorkUnitSpecs:** one, `{reader, writer}` over `all_cores`.
@@ -334,13 +338,70 @@ coordinate and no reason to leave a legacy copy behind. Recorded in the port rep
 
 - **KernelSpecs:** `reader`, `writer` — both of the runtime-selected source.
 - **DataflowBufferSpecs:** `output_shard` — `entry_size = output_buffer->page_size()`,
-  `num_entries = total_size / entry_size`, `data_format_metadata = data_format`,
-  `borrowed_from = "output"`.
-  (`entry_size * num_entries == total_size` exactly: the legacy `CircularBufferConfig` already
-  required `total_size % page_size == 0`.)
+  `num_entries = min(total_size, output packed bytes) / entry_size`,
+  `data_format_metadata = data_format`, `borrowed_from = "output"`.
+  (Absent the clamp, `entry_size * num_entries == total_size` exactly: the legacy
+  `CircularBufferConfig` already required `total_size % page_size == 0`.)
+  See [Borrowed-DFB sizing](#borrowed-dfb-sizing).
 - **SemaphoreSpecs:** none.
 - **TensorParameters:** `input` (both kernels, Case 2), `output` (borrowed-only).
 - **WorkUnitSpecs:** one, `{reader, writer}` over `all_cores`.
+
+### Borrowed-DFB sizing
+
+Three DFBs are built on borrowed memory (`shard` in same-width and same-height, `output_shard` in
+generic), and all three are sized from a **shard**, while Metal 2.0's spec-time borrowed-DFB check
+compares against the **whole backing tensor's packed size**:
+
+```cpp
+// program_spec.cpp:1541-1580
+const size_t dfb_bytes    = dfb.entry_size * dfb.num_entries;
+const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+TT_FATAL(dfb_bytes <= tensor_bytes, ...);
+```
+
+`compute_packed_buffer_size_bytes()` is derived from the tensor's *physical (padded logical)*
+shape — `tensor_layout.cpp:257-274` — so it is **neither shard-aware nor padding-aware**: it does
+not multiply by core count, and it does not account for shard padding or L1 page alignment. (The
+shard-aware quantity is a different method, `compute_consumed_memory_bytes_per_bank`.) That makes
+the check neither an upper nor a lower bound on a per-node borrowed DFB:
+
+- **Usually far too lenient.** A shard on an N-core tensor is ~1/N of the packed size, so the
+  check passes trivially — the framework's own comment acknowledges this ("a DFB can pass here
+  against the full-tensor size and still fail per-bank later. By design").
+- **Occasionally too strict**, which is the case that bites. When the shard covers most or all of
+  the tensor *and* is padded, the shard's real size legitimately exceeds the packed logical size.
+  The canonical example: a tiled `[32, 96]` output with a `(32, 128)` shard on one core is 4 tiles
+  of shard against 3 tiles of packed tensor → `TT_FATAL` before launch. The same-width unaligned
+  path reaches it a second way, through the padded per-row stride
+  (`local_unit_size_padded > unit_size`) rather than a padded shard shape.
+
+Legacy had no such failure: `CircularBufferConfig::set_total_size` checked against
+`buffer.aligned_size_per_bank()` (`circular_buffer_config.cpp:193-231`) — the *real* allocation,
+which is large enough. Metal 2.0 applies that same per-bank check, but only later, at attach time
+(`program_run_args.cpp:460-468`); the spec-time check is a coarser, differently-based gate that
+legacy never had.
+
+**Resolution: clamp each borrowed DFB's total to the backing tensor's packed size.** This is
+behaviour-neutral here because **all three borrowed DFBs are address-only** — every kernel that
+binds them reaches the shard through `get_write_ptr()` / `get_read_ptr()` plus an offset and issues
+**zero** FIFO operations (verified: `reserve_back` / `push_back` / `wait_front` / `pop_front` appear
+in no reshard kernel except `nd_reshard_copy_pages_*`, whose DFB is not borrowed). Nothing reads
+`entry_size` or `num_entries`, and `get_*_ptr()` returns the borrowed base address regardless of
+declared capacity, so shrinking the entry count cannot change what any kernel does. It only lowers
+the number the validator inspects. The attach-time per-bank check still passes, since clamping only
+reduces the DFB's claimed size.
+
+No in-API alternative exists: when a padded shard genuinely exceeds the packed logical size, *every*
+value satisfying the spec-time check is smaller than the true shard size, so clamping is the only
+choice that both passes validation and leaves behaviour intact. Recorded as a framework gap in
+`METAL2_PORT_REPORT.md` → *Handoff points*, since the proper fix is for the spec-time check to
+compare against a shard-aware bound.
+
+A degenerate case — packed size smaller than one DFB entry, which would clamp `num_entries` to 0 —
+is caught loudly by the validator's own `num_entries > 0` check (`program_spec.cpp:1204-1215`)
+rather than silently producing a zero-size DFB, so no artificial floor is introduced. It requires a
+tensor smaller than a single padded page and is unreachable for a sharded tensor.
 
 ---
 
