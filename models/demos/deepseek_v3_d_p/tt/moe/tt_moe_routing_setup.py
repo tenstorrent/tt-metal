@@ -11,15 +11,17 @@ indices) and the dispatch module (TtDispatchModule) which physically moves token
 This is a TTNN wrapper around two device operations executed in sequence:
 
   1. masked_bincount — Builds a per-expert histogram counting how many tokens each expert
-     receives from the local chip. Uses a height-sharded parallel algorithm where BRISC and
-     NCRISC cooperatively count on each core, followed by a binary-tree reduction across
-     cores. The expert_dispatch_table acts as a mask: experts with mask[e] < 0 are not
-     present on this device and are skipped.
+     receives from the local chip. It consumes the gate's expert-index output directly (TILE,
+     interleaved) and untiles in-kernel; internally it assigns each of a fixed 8x8 core grid
+     (64 cores) a contiguous range of token rows, where BRISC and NCRISC cooperatively count,
+     followed by a binary-tree reduction across cores. The expert_dispatch_table acts as a
+     mask: experts with mask[e] < 0 are not present on this device and are skipped.
 
      Input:  ttnn_top_k_experts_indices
-               Shape per device: (seq_len_per_chip, num_experts_per_tok), uint16, height-sharded
-               across an 8x8 core grid (64 cores). Padded to min width of 8 if
-               num_experts_per_tok < 8 (L1 alignment = 16 bytes / 2 bytes per uint16).
+               Shape per device: (seq_len_per_chip, num_experts_per_tok), uint16, TILE,
+               interleaved (the gate emits L1-interleaved). seq_len_per_chip must be a multiple
+               of 64. The op reads only columns [0, num_experts_per_tok); the TILE width padding
+               (up to 32) is ignored, so no explicit width padding is needed.
              experts_in_dispatch_group
                Shape per device: (num_routed_experts,), int32, interleaved DRAM
                Mask where values >= 0 indicate experts present on this device, -1 means absent.
@@ -97,7 +99,6 @@ This is a TTNN wrapper around two device operations executed in sequence:
 
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -159,7 +160,6 @@ class TtMoERoutingSetup(LightweightModule):
         self,
         ttnn_top_k_experts_indices: ttnn.Tensor | torch.Tensor,
         num_routed_experts: int,
-        seq_len_per_chip: int,
         num_experts_per_tok: int,
     ):
         """
@@ -168,11 +168,10 @@ class TtMoERoutingSetup(LightweightModule):
         Args:
             ttnn_top_k_experts_indices: Top-k expert indices from the gate.
                 Shape per device: (seq_len_per_chip, num_experts_per_tok), uint16
-                Can be a torch.Tensor (will be converted and sharded automatically) or
-                a pre-sharded ttnn.Tensor.
+                Passed to masked_bincount as-is: a UINT16, TILE, interleaved ttnn.Tensor (the gate's
+                direct output; no untilize/reshard). A torch.Tensor is also accepted and converted to
+                the same TILE, interleaved layout.
             num_routed_experts: Total number of routed experts across all chips (e.g. 64 or 256)
-            seq_len_per_chip: Number of tokens per chip. Must be divisible by 64 (the 8x8 core grid
-                used for height sharding in masked_bincount).
             num_experts_per_tok: Number of experts each token is routed to (e.g. 2 for top-2 routing)
 
         Returns:
@@ -191,84 +190,37 @@ class TtMoERoutingSetup(LightweightModule):
             expert_histograms: Per-device token count per expert (before cross-chip aggregation).
                 Shape per device: (num_routed_experts,), uint32
         """
-        signpost(header="MoERoutingSetup")
 
         if isinstance(ttnn_top_k_experts_indices, torch.Tensor):
+            # Standalone/test path: build the same UINT16, TILE, L1 interleaved tensor the gate emits.
             mesh_mapper = ttnn.ShardTensor2dMesh(
                 self.mesh_device,
                 mesh_shape=self.mesh_device.shape,
-                dims=(0, None),  # shard cols; replicate rows
+                dims=(0, None),
             )
             ttnn_top_k_experts_indices = ttnn.from_torch(
                 ttnn_top_k_experts_indices,
                 device=self.mesh_device,
                 dtype=ttnn.uint16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mesh_mapper,
             )
-        else:
-            ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
 
-        L1_ALIGNMENT_BYTES = 16
-        UINT16_BYTES = 2
-        assert ttnn_top_k_experts_indices.dtype == ttnn.uint16, "Expected uint16 dtype for expert indices"
-
-        min_shard_width = L1_ALIGNMENT_BYTES // UINT16_BYTES  # 8
-
-        shard_width = num_experts_per_tok
-        if num_experts_per_tok < min_shard_width:
-            shard_width = min_shard_width
-            ttnn_top_k_experts_indices = ttnn.pad(
-                ttnn_top_k_experts_indices,
-                padding=((0, 0), (0, shard_width - num_experts_per_tok)),
-                value=(num_routed_experts + 1),
-            )
-
-        bincount_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
-        num_cores = bincount_core_grid.num_cores()
-        assert (
-            seq_len_per_chip % num_cores == 0
-        ), f"seq_len_per_chip ({seq_len_per_chip}) must be divisible by num_cores ({num_cores}) for sharding to work correctly"
-
-        self.expert_index_sharded_mem_config = ttnn.create_sharded_memory_config(
-            shape=(seq_len_per_chip // num_cores, shard_width),
-            core_grid=bincount_core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        ttnn_top_k_experts_indices = ttnn.to_memory_config(
-            ttnn_top_k_experts_indices, self.expert_index_sharded_mem_config
-        )
+        # The device gate (DEVICE / DEVICE_FP32 / HASH_DEVICE) emits TILE indices, so this is a no-op
+        # on the perf-critical path. The host-fallback gates (HOST_ALL / HOST_MATMUL / HOST_GROUPED_GATE
+        # / HASH_HOST) emit ROW_MAJOR indices; The tilize only ever runs on the (non-perf) host path.
+        if ttnn_top_k_experts_indices.layout != ttnn.TILE_LAYOUT:
+            ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.TILE_LAYOUT)
 
         if len(ttnn_top_k_experts_indices.shape) == 3:
             ttnn_top_k_experts_indices = ttnn.squeeze(ttnn_top_k_experts_indices, 0)
         logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
 
-        # Constraint imposed by masked_bincount
-        if len(self.experts_in_dispatch_group.shape) != 1:
-            assert (
-                self.experts_in_dispatch_group.shape[0] == 1
-            ), "Expected first dimension to be 1 after sharding expert dispatch table"
-        logger.debug(f"{self.experts_in_dispatch_group.shape=}")
-
         expert_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(
             ttnn_top_k_experts_indices, self.experts_in_dispatch_group, num_routed_experts, num_experts_per_tok
         )
 
-        # offset_cumsum outputs are tiny UINT32 vectors placed in DRAM
-        # (downstream ops — ttnn::extract / ttnn::insert in the routed-expert
-        # moe composite, plus ttnn::combine — read them device-side, no perf
-        # impact). DRAM placement was originally needed to keep L1 clear of
-        # the unified routed-expert FFN's static CB region on the
-        # 256-expert / 32-per-chip configuration; the FFN no longer reads
-        # region_offsets directly, but DRAM placement is kept defensively.
-        #
-        # Contract: expert_region_offsets entries are TOKEN rows, tile-aligned
-        # (multiples of TILE_HEIGHT=32). ttnn::extract / ttnn::insert rely
-        # on this alignment when slicing dispatched_buffer into per-expert
-        # token tensors.
         (
             global_dispatch_offsets,
             total_counts_per_expert,
@@ -284,6 +236,5 @@ class TtMoERoutingSetup(LightweightModule):
             # device is opened with l1_small_size > 0 (e.g. the Kimi chunked test).
             use_l1_small_for_semaphores=self.use_l1_small_for_semaphores,
         )
-        signpost(header="moe_gate_calculate_global_dispatch_offsets")
 
         return global_dispatch_offsets, total_counts_per_expert, expert_region_offsets, expert_histograms

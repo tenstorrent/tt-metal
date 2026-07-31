@@ -5,10 +5,13 @@
 #pragma once
 
 #include <cstdint>
+#include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel::sfpu {
+
+inline void softshrink_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_softshrink(std::uint32_t param0) {

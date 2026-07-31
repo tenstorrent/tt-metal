@@ -96,6 +96,31 @@ def _make_tp_mapper(shard_type):
     return ttml.mesh().axis_mapper("tp", tdim=dim)
 
 
+def _param_tp_shard_type(param):
+    """Shard type of *param* along the 'tp' mesh axis, read from its live layout.
+
+    Mirrors ``checkpointing._load_params``: instead of hard-coding which module
+    produced the weight, ask the destination parameter how it is sharded.
+      - sharded on dim 2 (rows / output features) -> ``"col_w"``
+      - sharded on dim 3 (cols / hidden features)  -> ``"row_w"``
+      - replicated, or no 'tp' axis                -> ``None``
+    """
+    placements = ttml.Sharding.from_tensor(param).placements
+    if placements is None:  # unit mesh / no topology
+        return None
+    tp_axis = ttml.mesh().axis_index("tp")
+    if tp_axis >= len(placements):
+        return None
+    p = placements[tp_axis]
+    if not isinstance(p, ttnn.PlacementShard):  # replicated on the tp axis
+        return None
+    if p.dim == 2:
+        return "col_w"
+    if p.dim == 3:
+        return "row_w"
+    raise ValueError(f"weight is sharded on dim {p.dim} over the 'tp' axis; expected dim 2 (rows) or dim 3 (hidden).")
+
+
 def load_from_safetensors(
     model: ttml.modules.AbstractModuleBase,
     safetensors_path: str | os.PathLike,
@@ -164,20 +189,45 @@ def load_from_safetensors(
         k = k_staged.pop(layer_idx)
         v = v_staged.pop(layer_idx)
 
-        combined = np.concatenate([k, v], axis=0)
+        # Ensure K/V have shape [kv_out, hidden] (rows = output features) so the shard axis
+        # (rows / dim 2) matches ColumnParallelLinear. full_rows is the fused
+        # kv_linear row count (2*kv_out), so full_rows // 2 == kv_out.
+        if k.shape[0] != full_rows // 2 or k.shape[1] != full_cols:
+            raise RuntimeError(
+                f"Unexpected k_proj shape {tuple(k.shape)} at layer {layer_idx}: expected "
+                f"[kv_out, hidden] = [{full_rows // 2}, {full_cols}]. Check that the "
+                f"LlamaConfig matches the checkpoint."
+            )
+
+        # Fused KV layout under ColumnParallel TP: the kv_linear output rows are
+        # sharded CONTIGUOUSLY across tp devices, and per device grouped_heads_creation
+        # splits the LOCAL kv width at its midpoint into [K_local | V_local]. A naive
+        # [all-K ; all-V] concat puts the K/V boundary at the GLOBAL midpoint, which
+        # does not line up with the per-device local midpoints for tp>1 (device 0 gets
+        # all K, device 1 all V, etc.). So group the rows PER SHARD as
+        # [K_s0, V_s0, K_s1, V_s1, ...]: then contiguous shard s = [K_shard_s | V_shard_s]
+        # lands on device s as exactly [K_local | V_local]. At tp_size=1 this reduces to
+        # the plain [K ; V] concat.
+        kv_out = k.shape[0]
+        if kv_out % tp_size != 0:
+            raise RuntimeError(f"kv_out {kv_out} not divisible by tp_size {tp_size} at layer {layer_idx}")
+        per = kv_out // tp_size
+        hidden = k.shape[1]
+        k_blk = k.reshape(tp_size, per, hidden)
+        v_blk = v.reshape(tp_size, per, hidden)
+        # stack -> [tp, 2, per, hidden]; row-major flatten -> K_s0, V_s0, K_s1, V_s1, ...
+        combined = np.stack([k_blk, v_blk], axis=1).reshape(2 * kv_out, hidden)
+
         cr, cc = combined.shape
         if cr != full_rows or cc != full_cols:
-            if cc == full_rows and cr == full_cols:
-                combined = combined.T
-            else:
-                raise RuntimeError(
-                    f"KV concat shape mismatch at layer {layer_idx}: "
-                    f"combined=({cr}x{cc}), target=({full_rows}x{full_cols})"
-                )
+            raise RuntimeError(
+                f"KV combine shape mismatch at layer {layer_idx}: "
+                f"combined=({cr}x{cc}), target=({full_rows}x{full_cols})"
+            )
 
         mapper = _make_tp_mapper(shard_type)
         _assign_tensor(param, _to_bf16_4d(combined), mapper=mapper)
-        print(f"  Combined k_proj + v_proj -> kv_linear for layer {layer_idx}")
+        print(f"  Combined k_proj + v_proj -> kv_linear (per-shard interleave, tp={tp_size}) for layer {layer_idx}")
 
     weight_tying = config.weight_tying
 
@@ -194,11 +244,16 @@ def load_from_safetensors(
         ):
             from ttml.models import WeightTyingType
 
-            emb_param_name = "Llama/fc/weight" if weight_tying == WeightTyingType.Enabled else "Llama/tok_emb/weight"
+            tied = weight_tying == WeightTyingType.Enabled
+            emb_param_name = "Llama/fc/weight" if tied else "Llama/tok_emb/weight"
             param = get_param(emb_param_name)
             tgt = param.shape()
-            resized = _pad_and_resize(hf_arr, tgt[-2], tgt[-1])
-            _assign_tensor(param, _to_bf16_4d(resized))
+            shard_type = _param_tp_shard_type(param) if use_tp else None
+            full_rows = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
+            full_cols = tgt[-1] * tp_size if shard_type == "row_w" else tgt[-1]
+            resized = _pad_and_resize(hf_arr, full_rows, full_cols)
+            mapper = _make_tp_mapper(shard_type)
+            _assign_tensor(param, _to_bf16_4d(resized), mapper=mapper)
             continue
 
         # ── LM head ──

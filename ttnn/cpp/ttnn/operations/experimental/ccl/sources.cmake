@@ -127,6 +127,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     llama_reduce_scatter_matmul/rs_matmul_nanobind.cpp
     all_reduce_async/all_reduce_async_nanobind.cpp
     rms_allgather/rms_allgather_nanobind.cpp
+    dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm_nanobind.cpp
     llama_reduce_scatter/llama_reduce_scatter_nanobind.cpp
     llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_nanobind.cpp
     all_to_all_async/all_to_all_async_nanobind.cpp

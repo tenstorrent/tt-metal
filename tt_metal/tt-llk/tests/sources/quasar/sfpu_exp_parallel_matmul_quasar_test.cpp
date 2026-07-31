@@ -32,7 +32,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-    set_ttsync_enables<TRACK_ALL>(ckernel::unpack::TRISC_ID);
+    set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
     tdma_descriptor_t tdma_desc_src_a;
     tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_A[0]);
@@ -149,7 +149,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_pack.buf_desc_id     = buf_desc_id_pack;
     td_pack.reg_data_format = static_cast<std::uint8_t>(formats.pack_S_src);
     _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK1>(td_pack);
+    _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack, ckernel::ReluConfig::none());
 
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
 
@@ -211,7 +211,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc_dst.reg_data_format         = static_cast<std::uint8_t>(formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc_dst, ckernel::ReluConfig::none());
     _llk_pack_matmul_init_(buf_desc_id_dst, params.RT_DIM, params.CT_DIM, 1);
 
     _llk_pack_matmul_(0, 0);

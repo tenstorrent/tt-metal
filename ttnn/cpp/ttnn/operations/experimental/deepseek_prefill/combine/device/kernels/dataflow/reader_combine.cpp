@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -127,8 +128,6 @@ void kernel_main() {
     uint32_t num_cores = get_arg_val<uint32_t>(rt_args++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args++);
-    uint32_t output_init_complete_semaphore_address = get_semaphore(output_init_complete_semaphore_id);
-    uint32_t output_init_barrier_address = get_semaphore(output_init_barrier_semaphore_id);
 
     DPRINT_COMBINE(
         "Combine Reader: experts=[{}, {}) linearized_mesh_coord={}\n",
@@ -144,17 +143,15 @@ void kernel_main() {
         uint32_t page_start = get_arg_val<uint32_t>(rt_args++);
         uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
         uint32_t output_init_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
-        uint32_t output_init_done_sem_address = get_semaphore(output_init_done_semaphore_id);
 
         {
             // DeviceZoneScopedN("combine-output-zeroing-SENDER-writing");
             zero_pages(cb_zero_buffer_id, page_start, page_end, aligned_output_page_size, output_addr_gen);
         }
 
-        volatile tt_l1_ptr uint32_t* output_init_done_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_done_sem_address);
-        noc_semaphore_wait(output_init_done_sem_ptr, num_total_untilizer_cores);
-        noc_semaphore_set(output_init_done_sem_ptr, 0);
+        Semaphore<> output_init_done_sem(output_init_done_semaphore_id);
+        output_init_done_sem.wait(num_total_untilizer_cores);
+        output_init_done_sem.set(0);
     }
 #endif
 
@@ -197,17 +194,15 @@ void kernel_main() {
 
 #if INIT_ZEROS
     // Signal writer that output-zeroing is complete
-    volatile tt_l1_ptr uint32_t* output_init_complete_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_complete_semaphore_address);
-    noc_semaphore_set(output_init_complete_sem_ptr, 1);
+    Semaphore<> output_init_complete_sem(output_init_complete_semaphore_id);
+    output_init_complete_sem.set(1);
 
     // Wait for ALL writers (all cores) to complete init exchange.
     // Each writer signals all readers' barrier sems via noc_semaphore_inc,
     // so this reader waits for num_cores signals before proceeding.
-    volatile tt_l1_ptr uint32_t* barrier_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_barrier_address);
-    noc_semaphore_wait(barrier_sem_ptr, num_cores);
-    noc_semaphore_set(barrier_sem_ptr, 0);
+    Semaphore<> barrier_sem(output_init_barrier_semaphore_id);
+    barrier_sem.wait(num_cores);
+    barrier_sem.set(0);
 #endif
 
     // Read expert token counts

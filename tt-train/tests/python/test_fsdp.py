@@ -92,6 +92,15 @@ def _close_device_quietly() -> None:
         pass
 
 
+def _close_device_mesh_quietly() -> None:
+    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
+    swallowing errors so teardown never masks a real failure."""
+    try:
+        ttml.close_device_mesh()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
     """If ``TT_MESH_GRAPH_DESC_PATH`` isn't set, point it at a bundled MGD.
 
@@ -155,13 +164,7 @@ def fsdp_mesh():
     # single-device handle if they need to. The global ``ttml._mesh._mesh``
     # is reset so ``ttml.mesh()`` doesn't return a handle to a closed
     # device for any test that runs after this module.
-    _close_device_quietly()
-    try:
-        import ttml._mesh as _mesh_mod  # type: ignore[import-not-found]
-
-        _mesh_mod._mesh = None
-    except Exception:  # noqa: BLE001
-        pass
+    _close_device_mesh_quietly()
     _restore_mgd_path(previous_mgd)
 
 
@@ -387,17 +390,17 @@ class TestFullyShardLinear:
         weight_after = _read_replicated_to_numpy(linear.weight.tensor, self.mesh)
         np.testing.assert_array_equal(weight_before, weight_after)
 
-    def test_double_wrap_raises(self):
+    def test_double_wrap_raises(self, expect_error):
         """Calling ``fully_shard`` twice on the same module raises."""
         linear = LinearLayer(64, 128, has_bias=False)
         ttml.fsdp.fully_shard(linear)
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "already wrapped with fully_shard"):
             ttml.fsdp.fully_shard(linear)
 
-    def test_invalid_axis_raises(self):
+    def test_invalid_axis_raises(self, expect_error):
         """Sharding on an axis the mesh doesn't have raises before any state change."""
         linear = LinearLayer(64, 128, has_bias=False)
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "Mesh has no axis named"):
             ttml.fsdp.fully_shard(linear, mesh_axis="this_axis_does_not_exist")
 
 

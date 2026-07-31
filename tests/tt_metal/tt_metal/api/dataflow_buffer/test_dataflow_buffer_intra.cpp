@@ -149,8 +149,8 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     m2::DataflowBufferSpec dfb_in{
         .unique_id = DFB_IN,
@@ -222,11 +222,13 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     params.kernel_run_args = {
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
-            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = CONSUMER,
-            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -374,7 +376,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
 
     // DRAM input tensor for the DM producer.
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     // DM producer: implicit-sync path feeds the remapper ring.
     auto producer = make_dm_dfb_producer(PRODUCER, DFB_REMAPPER, IN_TENSOR, num_entries, /*implicit_sync=*/true);
@@ -423,7 +425,8 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
         {.kernel = PRODUCER,
-         .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}}},
+         .runtime_arg_values =
+             m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}};
     m2::SetProgramRunArgs(program, params);

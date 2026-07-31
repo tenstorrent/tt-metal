@@ -30,7 +30,7 @@ void FillPadDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(detail::data_type_to_size.contains(input_tensor.dtype()), "Unsupported datatype {}", input_tensor.dtype());
 }
 
-TensorSpec FillPadDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec FillPadDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     return input_tensor.tensor_spec();

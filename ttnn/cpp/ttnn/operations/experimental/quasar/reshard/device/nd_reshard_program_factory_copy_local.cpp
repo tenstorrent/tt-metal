@@ -174,10 +174,8 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
     // ncrisc copies shards [num_data_cores, num_data_cores*3, num_data_cores*5, ...]
     uint32_t start_shard_id = 0;
     for (const auto& core : cores_vec) {
-        brisc_run_args.runtime_arg_values.push_back(
-            ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"first_shard_id", start_shard_id}}});
-        ncrisc_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"first_shard_id", start_shard_id + shard_id_stride / 2}}});
+        brisc_run_args.runtime_arg_values["first_shard_id"][core] = start_shard_id;
+        ncrisc_run_args.runtime_arg_values["first_shard_id"][core] = start_shard_id + shard_id_stride / 2;
         ++start_shard_id;
     }
 

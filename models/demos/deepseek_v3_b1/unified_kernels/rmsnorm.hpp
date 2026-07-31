@@ -124,7 +124,7 @@ struct RMSNorm {
 #if defined(COMPILE_FOR_TRISC)
         void compute_rmsnorm(const ComputeArgs& args) {
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
-            reconfig_data_format<false, true>(CTArgs::input_cb, CTArgs::input_cb);
+            reconfig_data_format<SrcOrder::Regular, true>(CTArgs::input_cb, CTArgs::input_cb);
             pack_reconfig_data_format<true>(CTArgs::output_cb);
             pack_block_contiguous_init(CTArgs::output_cb);
             {

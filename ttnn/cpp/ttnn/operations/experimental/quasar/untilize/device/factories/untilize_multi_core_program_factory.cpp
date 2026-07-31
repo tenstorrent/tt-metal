@@ -170,7 +170,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     reader.unique_id = READER;
     reader.dfb_bindings = {
         DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}};
-    reader.hw_config = ttnn::create_reader_datamovement_config(device->arch());
+    reader.hw_config =
+        ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
     if (use_block_reader) {
         reader.source = kdir / "reader_unary_sharded_blocks_metal2.cpp";
         reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}};
@@ -208,7 +209,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
                   "num_unpadded_cols_per_input_block",
                   "width_wise_output_block_start_index",
                   "num_cols_already_processed_in_first_output_block"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute KernelSpec(s) (common; full + optional interleaved cliff) ----
@@ -222,10 +224,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), hw);
         if (fp32_dest_acc_en) {
             std::visit(
-                [&](auto& c) {
-                    c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-                },
-                compute_hw);
+                [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
         }
         return compute_hw;
     };
@@ -267,10 +266,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     }
 
     // ---- Per-core runtime args (mirrors legacy work-distribution loop verbatim) ----
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> compute_full_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> compute_cliff_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
+    KernelRunArgs::RuntimeArgValues compute_full_node_args;
+    KernelRunArgs::RuntimeArgValues compute_cliff_node_args;
 
     uint32_t tile_start_index = 0;
     bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;
@@ -283,14 +282,23 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
                                 uint32_t num_input_blocks_to_process,
                                 uint32_t num_tiles_to_read) {
         if (use_block_reader) {
-            reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = core, .args = {{"start_shard_id", core_index}, {"num_blocks", num_input_blocks_to_process}}});
+            AddRuntimeArgsForNode(
+                reader_node_args,
+                core,
+                {
+                    {"start_shard_id", core_index},
+                    {"num_blocks", num_input_blocks_to_process},
+                });
         } else if (use_backed_cb) {
-            reader_node_args.push_back(
-                KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_tiles_per_core", num_tiles_to_read}}});
+            reader_node_args["num_tiles_per_core"][core] = num_tiles_to_read;
         } else {
-            reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = core, .args = {{"num_tiles", num_tiles_to_read}, {"start_page_id", tile_start_index}}});
+            AddRuntimeArgsForNode(
+                reader_node_args,
+                core,
+                {
+                    {"num_tiles", num_tiles_to_read},
+                    {"start_page_id", tile_start_index},
+                });
         }
     };
 
@@ -329,19 +337,19 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
         uint32_t num_cols_already_processed_in_first_output_block =
             input_block_global_col_index % num_cols_per_output_block;
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
                 {"num_input_blocks_to_process", num_input_blocks_to_process},
                 {"height_wise_input_block_start_index", height_wise_input_block_start_index},
                 {"num_unpadded_cols_per_input_block", num_unpadded_cols_per_input_block},
                 {"width_wise_output_block_start_index", width_wise_output_block_start_index},
-                {"num_cols_already_processed_in_first_output_block",
-                 num_cols_already_processed_in_first_output_block}}});
+                {"num_cols_already_processed_in_first_output_block", num_cols_already_processed_in_first_output_block},
+            });
 
         if (has_full) {
-            compute_full_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = core, .args = {{"per_core_block_cnt", num_input_blocks_to_process}}});
+            compute_full_node_args["per_core_block_cnt"][core] = num_input_blocks_to_process;
         }
 
         tile_start_index += num_tiles_per_input_block * num_input_blocks_per_full_core;
@@ -358,24 +366,29 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         // Cliff core (interleaved only) always starts at the first output block, column 0.
         uint32_t width_wise_output_block_start_index = 0;
         uint32_t num_cols_already_processed_in_first_output_block = 0;
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = cliff_core,
-            .args = {
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            cliff_core,
+            {
                 {"num_input_blocks_to_process", num_input_blocks_to_process},
                 {"height_wise_input_block_start_index", height_wise_input_block_start_index},
                 {"num_unpadded_cols_per_input_block", num_unpadded_cols_per_input_block},
                 {"width_wise_output_block_start_index", width_wise_output_block_start_index},
-                {"num_cols_already_processed_in_first_output_block",
-                 num_cols_already_processed_in_first_output_block}}});
+                {"num_cols_already_processed_in_first_output_block", num_cols_already_processed_in_first_output_block},
+            });
 
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
         // Cliff core only exists for interleaved input.
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = cliff_core, .args = {{"num_tiles", num_tiles_to_read}, {"start_page_id", tile_start_index}}});
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            cliff_core,
+            {
+                {"num_tiles", num_tiles_to_read},
+                {"start_page_id", tile_start_index},
+            });
 
         if (has_cliff) {
-            compute_cliff_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = cliff_core, .args = {{"per_core_block_cnt", num_input_blocks_to_process}}});
+            compute_cliff_node_args["per_core_block_cnt"][cliff_core] = num_input_blocks_to_process;
         }
     }
 

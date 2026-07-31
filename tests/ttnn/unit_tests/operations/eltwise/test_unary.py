@@ -255,7 +255,7 @@ def create_banded_range_tensor(input_shape, value_ranges, dtype=torch.uint32):
     return torch.cat(segments).to(dtype).reshape(input_shape)
 
 
-# Shared banded coverage of the full uint32 range, used by the relu-family full-range tests.
+# Shared banded coverage of the full uint32 range, used by the relu-family tests.
 UINT32_BANDED_RANGES = [
     (0, 300),
     (300, 1000),
@@ -267,6 +267,21 @@ UINT32_BANDED_RANGES = [
     (1e8, 1e9),
     (1e9, 2147483647),
     (2147483648, 4294967295),
+]
+
+
+# Shared banded coverage of the full int32 range, used by the relu-family tests.
+INT32_BANDED_RANGES = [
+    (-2147483648, -1e9),
+    (-1e9, -1e7),
+    (-1e7, -1e5),
+    (-1e5, -300),
+    (-300, 0),
+    (0, 300),
+    (300, 1e5),
+    (1e5, 1e7),
+    (1e7, 1e9),
+    (1e9, 2147483647),
 ]
 
 
@@ -671,17 +686,11 @@ def test_pow(device, h, w, scalar, layout):
 @pytest.mark.parametrize("lower_limit", [0, 1.0, 2, -5.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_relu_min(device, h, w, lower_limit, dtype):
     torch.manual_seed(0)
 
-    if dtype == ttnn.bfloat16:
-        torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    elif dtype == ttnn.int32:
-        torch_input_tensor = torch.randint(
-            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32
-        )
-        lower_limit = int(lower_limit)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
 
     golden_function = ttnn.get_golden_function(ttnn.relu_min)
     torch_output_tensor = golden_function(torch_input_tensor, lower_limit=lower_limit)
@@ -696,17 +705,11 @@ def test_relu_min(device, h, w, lower_limit, dtype):
 @pytest.mark.parametrize("upper_limit", [0, 1.0, 2, -5.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_relu_max(device, h, w, upper_limit, dtype):
     torch.manual_seed(0)
 
-    if dtype == ttnn.bfloat16:
-        torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    elif dtype == ttnn.int32:
-        torch_input_tensor = torch.randint(
-            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32
-        )
-        upper_limit = int(upper_limit)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
 
     golden_function = ttnn.get_golden_function(ttnn.relu_max)
     torch_output_tensor = golden_function(torch_input_tensor, upper_limit=upper_limit)
@@ -718,27 +721,96 @@ def test_relu_max(device, h, w, upper_limit, dtype):
     assert torch.equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
-def test_relu6(device, h, w, dtype):
-    torch.manual_seed(0)
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [INT32_BANDED_RANGES])
+@pytest.mark.parametrize("upper_limit", [-(2**31), -(2**30), -7, 0, 7, 1000, 2**24 + 1, 2**30, 2147483647])
+def test_relu_max_int32_full_range(device, input_shapes, value_ranges, upper_limit):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.int32)
 
-    if dtype == ttnn.bfloat16:
-        torch_input_tensor = torch.randn((h, w), dtype=torch.bfloat16) * 10 - 2
-    elif dtype == ttnn.int32:
-        torch_input_tensor = torch.randint(
-            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32
-        )
+    golden_function = ttnn.get_golden_function(ttnn.relu_max)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), upper_limit).to(torch.int32)
 
-    golden_function = ttnn.get_golden_function(ttnn.relu6)
-    torch_output_tensor = golden_function(torch_input_tensor)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu_max(input_tensor, upper_limit), dtype=torch.int32)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.relu6(input_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
+    assert torch.equal(output_tensor, torch_output_tensor)
 
-    assert torch.equal(torch_output_tensor, output_tensor)
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [INT32_BANDED_RANGES])
+@pytest.mark.parametrize("lower_limit", [-(2**31), -(2**30), -7, 0, 7, 1000, 2**24 + 1, 2**30, 2147483647])
+def test_relu_min_int32_full_range(device, input_shapes, value_ranges, lower_limit):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.int32)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu_min)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), lower_limit).to(torch.int32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu_min(input_tensor, lower_limit), dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "op, limit, values",
+    [
+        (ttnn.relu_max, 2**24 + 1, [2**24, 2**24 + 1, 2**24 + 2, 2**26, -5]),
+        (ttnn.relu_max, 2**31 - 1, [2**31 - 3, 2**31 - 2, 2**31 - 1, 0, -5]),
+        (ttnn.relu_min, 2**24 + 1, [2**24, 2**24 + 1, 2**24 + 2, -100, 2**26]),
+        (ttnn.relu_min, 2**31 - 1, [2**31 - 3, 2**31 - 2, 2**31 - 1, -(2**31), 0]),
+    ],
+)
+def test_relu_min_max_int32_edge_cases(device, op, limit, values):
+    n = 32 * 32
+    filled = (values * (n // len(values) + 1))[:n]
+    torch_input_tensor = torch.tensor(filled, dtype=torch.int32).reshape(1, 1, 32, 32)
+
+    golden_function = ttnn.get_golden_function(op)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), limit).to(torch.int32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(op(input_tensor, limit), dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [INT32_BANDED_RANGES])
+def test_relu6_int32_full_range(device, input_shapes, value_ranges):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.int32)
+
+    # torch.nn.functional.relu6 (the ttnn.relu6 golden) has no integer kernel; relu6 clamps to
+    # [0, 6], so compute the golden manually
+    torch_output_tensor = torch.clamp(torch_input_tensor, min=0, max=6)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu6(input_tensor), dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
 
 
 @pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
@@ -974,11 +1046,95 @@ def test_leaky_relu_uint8_full_range(device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-@pytest.mark.parametrize("scalar", [1.5, 2.0])
+# scalar 3 is an integer literal: with unary_remainder now a ScalarVariant, an int scalar on a
+# bfloat16 input flows as the uint32 variant alternative (not float). It must still take the float
+# reciprocal path (non-UINT32 input) and match the golden.
+@pytest.mark.parametrize("scalar", [1.5, 2.0, 3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_remainder(device, h, w, scalar):
     run_unary_test_with_float_remainder(device, h, w, scalar, ttnn.remainder)
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+@pytest.mark.parametrize("scalar", [1, 2, 7, 255, 65536, 2147483647, 2147483648, 4294967295])
+def test_remainder_uint32_full_range(device, input_shapes, value_ranges, scalar):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), scalar, device=device).to(torch.uint32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.remainder(input_tensor, scalar), dtype=torch.uint32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("values", [[0, 1, 35, 41, 600, 2147483647, 2147483648, 4294967295]])
+@pytest.mark.parametrize("scalar", [1, 3, 41, 256, 2147483647, 2147483648, 4294967295])
+def test_remainder_uint32_scalar_edge_cases(device, values, scalar):
+    torch_input_tensor = torch.tensor([values], dtype=torch.int64).to(torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), scalar, device=device).to(torch.uint32)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(input_tensor, scalar), dtype=torch.uint32)
+    assert torch.equal(output_tensor, torch_output_tensor), f"mismatch for divisor {scalar}"
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+@pytest.mark.parametrize("scalar", [7, 255, 65536, 2147483648, 4294967295])
+@pytest.mark.parametrize("relu_max_limit", [50, 1000])
+def test_remainder_uint32_with_activations(device, input_shapes, value_ranges, scalar, relu_max_limit):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_remainder = golden_function(torch_input_tensor.to(torch.int64), scalar, device=device)
+    torch_output_tensor = torch.clamp(torch_remainder, max=relu_max_limit).to(torch.uint32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(
+        ttnn.remainder(
+            input_tensor,
+            scalar,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU_MAX, relu_max_limit)],
+        ),
+        dtype=torch.uint32,
+    )
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_remainder_divisor_guard(device, expect_error):
+    uint32_tensor = ttnn.from_torch(
+        torch.tensor([[5, 7, 10, 100]], dtype=torch.int64).to(torch.uint32),
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # uint32 requires a positive integer divisor: zero and negative divisors are rejected.
+    for bad_divisor in [0, -5]:
+        with expect_error(RuntimeError, "Divisor must be positive"):
+            ttnn.remainder(uint32_tensor, bad_divisor)
+
+    # a float divisor on a uint32 tensor is rejected (it would silently truncate).
+    with expect_error(RuntimeError, "integer scalar divisor"):
+        ttnn.remainder(uint32_tensor, 3.0)
 
 
 @pytest.mark.parametrize("scalar", [1.5, 2.0])

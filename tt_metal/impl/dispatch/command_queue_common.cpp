@@ -147,7 +147,7 @@ uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id) {
     uint32_t dev_dispatch_progress_ptr =
         MetalContext::instance()
             .dispatch_mem_map(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
+            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS, cq_id);
 
     // read_core expects TRANSLATED (virtual) coordinates
     // dispatcher_core_manager stores logical coordinates, so convert LOGICAL -> TRANSLATED (virtual)
@@ -159,6 +159,12 @@ uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id) {
         &progress, sizeof(uint32_t), dispatcher_core_virtual, dev_dispatch_progress_ptr);
 
     return progress;
+}
+
+bool is_cq_shared(CommandQueueDeviceAddrType addr_type) {
+    return addr_type == CommandQueueDeviceAddrType::WORKER_COMPLETION_SEMAPHORES ||
+           addr_type == CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT ||
+           addr_type == CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT;
 }
 
 }  // namespace tt::tt_metal

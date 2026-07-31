@@ -299,9 +299,9 @@ inline auto compute_program_hash(
 // make_tensor_meta — extract TensorMeta from a Tensor (no JSON)
 // ---------------------------------------------------------------------------
 
-static inline TensorMeta make_tensor_meta(const Tensor& tensor) {
+static inline TensorMeta make_tensor_meta(const ttnn::Tensor& tensor) {
     TensorMeta m;
-    if (tensor.storage_type() == StorageType::DEVICE) {
+    if (tensor.storage_type() == ttnn::StorageType::DEVICE) {
         m.is_device = true;
         m.device_id = tensor.device()->id();
         m.buffer_type = std::string(enchantum::to_string(tensor.memory_config().buffer_type()));
@@ -373,11 +373,11 @@ inline std::string op_meta_data_serialized_json(
         }
 
         // Input tensors → TensorMeta (no JSON)
-        ttsl::reflection::visit_object_of_type<Tensor>(
+        ttsl::reflection::visit_object_of_type<ttnn::Tensor>(
             [&data](auto&& tensor) { data.input_tensors.push_back(make_tensor_meta(tensor)); }, tensor_args);
 
         // Output tensors → TensorMeta (no JSON)
-        ttsl::reflection::visit_object_of_type<Tensor>(
+        ttsl::reflection::visit_object_of_type<ttnn::Tensor>(
             [&data](auto&& tensor) { data.output_tensors.push_back(make_tensor_meta(tensor)); }, tensor_return_value);
 
         // Performance model — use if constexpr to avoid depending on OpPerformanceModel type

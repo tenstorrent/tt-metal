@@ -28,7 +28,7 @@ void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor.buffer() != nullptr, "Input tensor must be allocated in device buffers (buffer is null)");
 }
 
-TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
     using namespace tt::constants;
@@ -39,7 +39,8 @@ TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(
     uint32_t num_tiles_w = 1;  // RMSNorm only
     output_shape[-1] = num_tiles_w * TILE_WIDTH;
 
-    return TensorSpec(output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
 }
 
 Tensor FusedRMSNormPreAllGatherDeviceOperation::create_output_tensors(

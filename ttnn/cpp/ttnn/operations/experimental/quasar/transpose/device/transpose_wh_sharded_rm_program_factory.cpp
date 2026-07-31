@@ -163,6 +163,11 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
              {"Wt", wt},
              {"W_size_bytes", stick_size_bytes},
              {"l1_write_offset_bytes", wt * input_tensor.element_size() * TILE_WIDTH}},
+        // QSR: CB_IN (cb_dst) uses normal DFB implicit sync. The reader now fills it with a plain CPU
+        // local copy (no NOC read into the producer DFB), so there is no sim auto-post double-count to
+        // work around, and CB_IN is a real reader->compute handshake (reserve_back/push_back vs the
+        // compute's wait_front/pop_front) that needs the credits. (The earlier disable_implicit_sync_for
+        // was a workaround for the self/loopback NOC-read auto-post bug, removed with that read.)
         .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
     };
 
@@ -174,8 +179,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32.
         std::visit(
             [&](auto& c) {
-                c.unpack_to_dest_mode.emplace(CB_IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-                c.unpack_to_dest_mode.emplace(CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+                c.unpack_modes.emplace(CB_IN, tt::tt_metal::UnpackMode::UnpackToDest);
+                c.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
             },
             compute_hw);
     }

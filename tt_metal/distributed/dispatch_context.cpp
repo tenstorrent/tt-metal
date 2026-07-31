@@ -51,8 +51,18 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     }
 
     ContextId context_id = extract_context_id(mesh_device);
-    fast_dispatch_enabled_ = MetalContext::instance(context_id).rtoptions().get_fast_dispatch();
     const auto& cluster = MetalContext::instance(context_id).get_cluster();
+
+    // Mock/emulated devices skip firmware/dispatch entirely, so there is no real hardware to
+    // toggle between Slow and Fast Dispatch. Treat the transition as a no-op to avoid touching
+    // dispatch cores/command queues that are never created for these targets (init_command_queue_host
+    // leaves command_queues_ empty on mock/emulated), which otherwise segfaults on teardown.
+    // See https://github.com/tenstorrent/tt-metal/issues/50634.
+    if (cluster.is_mock_or_emulated()) {
+        return;
+    }
+
+    fast_dispatch_enabled_ = MetalContext::instance(context_id).rtoptions().get_fast_dispatch();
     TT_FATAL(
         !fast_dispatch_enabled_,
         "Fast Dispatch can only be manually enabled when running the workload with Slow Dispatch mode.");
@@ -118,10 +128,18 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
         return;
     }
 
+    ContextId context_id = extract_context_id(mesh_device);
+    const auto& cluster = MetalContext::instance(context_id).get_cluster();
+
+    // Mirror initialize_fast_dispatch: the FD/SD toggle is a no-op on mock/emulated targets, so
+    // there is nothing to tear down. See https://github.com/tenstorrent/tt-metal/issues/50634.
+    if (cluster.is_mock_or_emulated()) {
+        return;
+    }
+
     TT_FATAL(fast_dispatch_enabled_, "Can only manually terminate fast dispatch after initializing it.");
     TT_FATAL(num_fd_inits_ == 1, "Fast Dispatch termination requires exactly one active manual Fast Dispatch session.");
 
-    ContextId context_id = extract_context_id(mesh_device);
     const auto& device_manager = MetalContext::instance(context_id).device_manager();
     const auto& active_devices = device_manager->get_all_active_devices_impl();
 

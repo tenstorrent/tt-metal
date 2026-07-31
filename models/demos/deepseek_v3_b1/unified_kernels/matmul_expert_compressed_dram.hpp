@@ -640,7 +640,7 @@ struct MatmulExpertCompressedDRAM {
             } else {
                 cb_wait_front(CTArgs::cb_in0, num_tiles_k);
             }
-            reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
+            reconfig_data_format<SrcOrder::Reverse, true>(CTArgs::cb_in0, CTArgs::cb_in1);
             pack_reconfig_data_format<true>(CTArgs::cb_out);
             compressed_custom_mm_block_init_short<false, true, false>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 
@@ -975,7 +975,7 @@ struct MatmulExpertCompressedDRAM {
                         // as silu_tile) so the tile_regs commit/wait flow is clean.
                         constexpr uint32_t silu_iterations = CTArgs::silu_tile_h / 2;
 
-                        reconfig_data_format_srca<false, true>(CTArgs::cb_out_silu);
+                        reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(CTArgs::cb_out_silu);
                         pack_reconfig_data_format<true>(CTArgs::cb_out_silu);
                         copy_tile_to_dst_init_short(CTArgs::cb_out_silu);
                         silu_tile_init();
