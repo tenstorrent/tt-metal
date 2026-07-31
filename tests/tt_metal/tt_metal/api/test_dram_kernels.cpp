@@ -2971,16 +2971,21 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCScatterReadMultiCoreScaling) {
 // synthetic tails the host had written into the control vector; here Tensix RISCs emit zones through
 // the ordinary DeviceZoneScopedN path and a DRISC has to keep them from blocking.
 //
-// The test is self-falsifying: each producer emits far more zones than its 512-word ring can hold, and
+// All five SPSC lanes of every producing core are live: BRISC (lane 0), NCRISC (lane 1) and a compute
+// kernel covering TRISC0-2 (lanes 2-4). That is what exercises the drainer's per-lane indexing and its
+// five-head write-back, rather than just lane 0.
+//
+// The test is self-falsifying: each lane is asked to push far more than its 512-word ring can hold, and
 // kernel_profiler.hpp's producer BLOCKS on a full ring by design ("a profiled run REQUIRES the consumer
 // to be draining"). If the drainer's flow control is wrong -- wrong tail offset, no head write-back,
 // desynced mirror -- the workers never finish and the program hangs rather than failing a comparison.
+//
+// It runs twice on purpose. Tails are monotonic for the whole FW session, so by the second round the
+// heads are far from zero, and a drainer that assumed a zero-based stream would compute a garbage run.
 TEST_F(DramKernelDRISCScatterFixture, DRISCServicesRealProfiledWorkers) {
-    constexpr uint32_t kWorkerDim = 4;  // 4x4 = 16 producing cores
-    constexpr uint32_t kZonesPerCore = 2000;
     constexpr uint32_t kWorkPerZone = 4;
     constexpr uint32_t kQuietStop = 4096;
-    constexpr uint32_t kMaxSweeps = 400000;
+    constexpr uint32_t kMaxSweeps = 2000000;
     constexpr uint32_t kNumRisc = 5;
 
     const auto& hal = MetalContext::instance().hal();
@@ -2989,28 +2994,10 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCServicesRealProfiledWorkers) {
     const uint32_t ring_words = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
     const uint32_t data_bytes = kNumRisc * ring_words * sizeof(uint32_t);
     const uint32_t ring0_src = cv_src + poll_bytes;
-
-    const CoreRange producer_range({0, 0}, {kWorkerDim - 1, kWorkerDim - 1});
-    std::vector<CoreCoord> producer_virtual;
-    std::vector<uint32_t> coords;
-    for (uint32_t y = 0; y < kWorkerDim; y++) {
-        for (uint32_t x = 0; x < kWorkerDim; x++) {
-            const CoreCoord v = device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
-            producer_virtual.push_back(v);
-            coords.push_back((v.x & 0xFFFFu) | ((v.y & 0xFFFFu) << 16));
-        }
-    }
-    const uint32_t num_cores = static_cast<uint32_t>(coords.size());
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
 
     const CoreCoord drisc_logical = free_drisc_cores(1)[0];
     const CoreCoord drisc_virtual = device_->virtual_core_from_logical_core(drisc_logical, CoreType::DRAM);
-
-    // DRISC L1 map
-    const uint32_t poll_ring = drisc_l1_base_;
-    const uint32_t data_buf = poll_ring + num_cores * poll_bytes;
-    const uint32_t head_scratch = data_buf + data_bytes;
-    const uint32_t results_addr = head_scratch + 16 * 32;
-    ASSERT_LT(results_addr + 64 - drisc_l1_base_, drisc_l1_unreserved_size_);
 
     auto set_niu_mode = [&](uint32_t stream) {
         Program p = CreateProgram();
@@ -3023,116 +3010,168 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCServicesRealProfiledWorkers) {
     };
     set_niu_mode(1);
 
-    Program program = CreateProgram();
-    auto producer_id = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/profiler_zone_producer.cpp",
-        producer_range,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    SetRuntimeArgs(program, producer_id, producer_range, {kZonesPerCore, kWorkPerZone});
-
-    auto drain_id = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_service_workers.cpp",
-        drisc_logical,
-        DramConfig{
-            .noc = NOC::NOC_0,
-            .compile_args = {
-                poll_bytes,
-                data_bytes,
-                ring_words,
-                poll_ring,
-                data_buf,
-                head_scratch,
-                results_addr,
-                kQuietStop,
-                kMaxSweeps}});
-    std::vector<uint32_t> drain_args = {num_cores, cv_src, ring0_src};
-    drain_args.insert(drain_args.end(), coords.begin(), coords.end());
-    SetRuntimeArgs(program, drain_id, drisc_logical, drain_args);
-
-    log_info(
-        LogTest,
-        "servicing {} producers x {} zones each; ring {} words, so each lane overflows ~{}x",
-        num_cores,
-        kZonesPerCore,
-        ring_words,
-        (kZonesPerCore * 4) / ring_words);
-
-    const auto t0 = std::chrono::steady_clock::now();
-    run_workload(std::move(program));
-    const double wall_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-
-    std::vector<uint32_t> out(10, 0);
-    MetalContext::instance().get_cluster().read_core(
-        out.data(),
-        out.size() * sizeof(uint32_t),
-        tt_cxy_pair(mesh_device_->build_id(), drisc_virtual),
-        drisc_l1_noc_addr_ + (results_addr - drisc_l1_base_));
-
-    const uint64_t cycles = (static_cast<uint64_t>(out[1]) << 32) | out[0];
-    const uint64_t total_words = (static_cast<uint64_t>(out[3]) << 32) | out[2];
-    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
-
-    log_info(
-        LogTest,
-        "drained {} words ({:.2f} KB) in {} sweeps, {} core-visits with work, max run {} words, "
-        "overflows {}, checksum 0x{:08x}, quiet-at-exit {}",
-        total_words,
-        total_words * 4.0 / 1024.0,
-        out[4],
-        out[5],
-        out[6],
-        out[7],
-        out[8],
-        out[9]);
-    log_info(
-        LogTest,
-        "device {:.3f} ms, host wall {:.3f} s, drained {:.3f} MB/s",
-        cycles * 1000.0 / clk_hz,
-        wall_s,
-        total_words * 4.0 * clk_hz / cycles / 1e6);
-
-    if (total_words == 0) {
-        GTEST_SKIP() << "no markers produced -- run with TT_METAL_DEVICE_PROFILER=1 TT_METAL_NO_RT_PROFILER=1";
-    }
-
-    // The real proof: every lane fully drained, head == tail on every producing core.
-    uint32_t lanes_checked = 0;
-    uint32_t lanes_behind = 0;
-    uint64_t final_tail_sum = 0;
-    for (uint32_t c = 0; c < num_cores; c++) {
-        std::vector<uint32_t> cv(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-        MetalContext::instance().get_cluster().read_core(
-            cv.data(), poll_bytes, tt_cxy_pair(mesh_device_->build_id(), producer_virtual[c]), cv_src);
-        for (uint32_t r = 0; r < kNumRisc; r++) {
-            const uint32_t head = cv[kernel_profiler::SPSC_RING_HEAD_0 + r];
-            const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
-            final_tail_sum += tail;
-            lanes_checked++;
-            if (head != tail) {
-                lanes_behind++;
-                log_warning(
-                    LogTest, "core {} lane {}: head {} != tail {} ({} words left)", c, r, head, tail, tail - head);
+    // One round: `grid` worth of producing cores, `zones` zones per lane, drained by one DRISC.
+    auto run_round = [&](const char* label, CoreCoord grid, uint32_t zones) {
+        const CoreRange producer_range({0, 0}, {grid.x - 1, grid.y - 1});
+        std::vector<CoreCoord> producer_virtual;
+        std::vector<uint32_t> coords;
+        for (uint32_t y = 0; y < grid.y; y++) {
+            for (uint32_t x = 0; x < grid.x; x++) {
+                const CoreCoord v = device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
+                producer_virtual.push_back(v);
+                coords.push_back((v.x & 0xFFFFu) | ((v.y & 0xFFFFu) << 16));
             }
         }
-        EXPECT_EQ(cv[kernel_profiler::SPSC_CORE_XY], (producer_virtual[c].y << 16) | (producer_virtual[c].x & 0xFFFF))
-            << "core " << c << " identity stamp";
-    }
-    log_info(
-        LogTest,
-        "final: {} lanes checked, {} still behind, tail sum {} words",
-        lanes_checked,
-        lanes_behind,
-        final_tail_sum);
+        const uint32_t num_cores = static_cast<uint32_t>(coords.size());
 
-    EXPECT_EQ(out[7], 0u) << "ring overflow: a producer got ahead of the drainer, markers were lost";
-    EXPECT_LE(out[6], ring_words) << "run exceeded ring capacity";
-    EXPECT_NE(out[8], 0u) << "checksum zero: drained words were all zero, so no real markers moved";
-    EXPECT_EQ(lanes_behind, 0u) << "drainer exited with lanes still holding undrained markers";
-    // BRISC alone emits 2000 zones x 4 words; the FW adds its own wrapper zone and stickies.
-    EXPECT_GE(total_words, static_cast<uint64_t>(num_cores) * kZonesPerCore * 4)
-        << "fewer words than the producers must have emitted";
+        // Heads before the round, so the round's own contribution can be isolated from a stream that
+        // is already far along (tails are monotonic for the whole FW session).
+        uint64_t tail_sum_before = 0;
+        for (uint32_t c = 0; c < num_cores; c++) {
+            std::vector<uint32_t> cv(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+            MetalContext::instance().get_cluster().read_core(
+                cv.data(), poll_bytes, tt_cxy_pair(mesh_device_->build_id(), producer_virtual[c]), cv_src);
+            for (uint32_t r = 0; r < kNumRisc; r++) {
+                tail_sum_before += cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+            }
+        }
+
+        const uint32_t poll_ring = drisc_l1_base_;
+        const uint32_t data_buf = poll_ring + num_cores * poll_bytes;
+        const uint32_t head_scratch = data_buf + data_bytes;
+        const uint32_t results_addr = head_scratch + 16 * 32;
+        ASSERT_LT(results_addr + 64 - drisc_l1_base_, drisc_l1_unreserved_size_);
+
+        Program program = CreateProgram();
+        auto brisc_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/profiler_zone_producer.cpp",
+            producer_range,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(program, brisc_id, producer_range, {zones, kWorkPerZone});
+
+        auto ncrisc_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/profiler_zone_producer.cpp",
+            producer_range,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        SetRuntimeArgs(program, ncrisc_id, producer_range, {zones, kWorkPerZone});
+
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/profiler_zone_producer_compute.cpp",
+            producer_range,
+            ComputeConfig{.compile_args = {zones, kWorkPerZone}});
+
+        auto drain_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_service_workers.cpp",
+            drisc_logical,
+            DramConfig{
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    poll_bytes,
+                    data_bytes,
+                    ring_words,
+                    poll_ring,
+                    data_buf,
+                    head_scratch,
+                    results_addr,
+                    kQuietStop,
+                    kMaxSweeps}});
+        std::vector<uint32_t> drain_args = {num_cores, cv_src, ring0_src};
+        drain_args.insert(drain_args.end(), coords.begin(), coords.end());
+        SetRuntimeArgs(program, drain_id, drisc_logical, drain_args);
+
+        const uint64_t expected = static_cast<uint64_t>(num_cores) * kNumRisc * zones * 4;
+        log_info(
+            LogTest,
+            "[{}] {} cores x 5 lanes x {} zones = {} words minimum; each lane overflows its {}-word ring "
+            "~{}x",
+            label,
+            num_cores,
+            zones,
+            expected,
+            ring_words,
+            (zones * 4) / ring_words);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        run_workload(std::move(program));
+        const double wall_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+
+        std::vector<uint32_t> out(10, 0);
+        MetalContext::instance().get_cluster().read_core(
+            out.data(),
+            out.size() * sizeof(uint32_t),
+            tt_cxy_pair(mesh_device_->build_id(), drisc_virtual),
+            drisc_l1_noc_addr_ + (results_addr - drisc_l1_base_));
+
+        const uint64_t cycles = (static_cast<uint64_t>(out[1]) << 32) | out[0];
+        const uint64_t total_words = (static_cast<uint64_t>(out[3]) << 32) | out[2];
+
+        log_info(
+            LogTest,
+            "[{}] drained {} words ({:.2f} KB) in {} sweeps, {} core-visits with work, max run {}, "
+            "overflows {}, checksum 0x{:08x}",
+            label,
+            total_words,
+            total_words * 4.0 / 1024.0,
+            out[4],
+            out[5],
+            out[6],
+            out[7],
+            out[8]);
+        log_info(LogTest, "[{}] device {:.3f} ms, host wall {:.3f} s", label, cycles * 1000.0 / clk_hz, wall_s);
+
+        if (total_words == 0) {
+            GTEST_SKIP() << "no markers produced -- run with TT_METAL_DEVICE_PROFILER=1 TT_METAL_DRISC_PROFILER=1";
+        }
+
+        // The real proof: every lane fully drained, head == tail on every producing core.
+        uint32_t lanes_behind = 0;
+        uint32_t lanes_silent = 0;
+        uint64_t tail_sum_after = 0;
+        for (uint32_t c = 0; c < num_cores; c++) {
+            std::vector<uint32_t> cv(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+            MetalContext::instance().get_cluster().read_core(
+                cv.data(), poll_bytes, tt_cxy_pair(mesh_device_->build_id(), producer_virtual[c]), cv_src);
+            for (uint32_t r = 0; r < kNumRisc; r++) {
+                const uint32_t head = cv[kernel_profiler::SPSC_RING_HEAD_0 + r];
+                const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+                tail_sum_after += tail;
+                if (head != tail) {
+                    lanes_behind++;
+                }
+                if (tail == 0) {
+                    lanes_silent++;
+                }
+            }
+            EXPECT_EQ(
+                cv[kernel_profiler::SPSC_CORE_XY], (producer_virtual[c].y << 16) | (producer_virtual[c].x & 0xFFFF))
+                << label << " core " << c << " identity stamp";
+        }
+        const uint64_t produced_this_round = tail_sum_after - tail_sum_before;
+        log_info(
+            LogTest,
+            "[{}] tails advanced {} words this round; drained {}; {} lanes behind, {} lanes silent",
+            label,
+            produced_this_round,
+            total_words,
+            lanes_behind,
+            lanes_silent);
+
+        EXPECT_EQ(out[7], 0u) << label << ": ring overflow -- a producer got ahead of the drainer";
+        EXPECT_LE(out[6], ring_words) << label << ": run exceeded ring capacity";
+        EXPECT_NE(out[8], 0u) << label << ": checksum zero, drained words were all zero";
+        EXPECT_EQ(lanes_behind, 0u) << label << ": drainer exited with lanes still holding markers";
+        EXPECT_EQ(lanes_silent, 0u) << label << ": some lane never produced -- all 5 should be live";
+        EXPECT_EQ(produced_this_round, total_words) << label << ": drained != produced this round";
+        EXPECT_GE(produced_this_round, expected) << label << ": fewer words than producers must have emitted";
+    };
+
+    const CoreCoord full_grid = device_->compute_with_storage_grid_size();
+    run_round("4x4", {4, 4}, 2000);
+    run_round("full-grid", full_grid, 500);
 
     set_niu_mode(0);
 }
