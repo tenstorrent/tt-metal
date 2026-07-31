@@ -30,24 +30,26 @@ import re
 import sys
 from pathlib import Path
 
-# ttnn op -> device op class. Extend rather than guess: an unmapped op aborts, because a wrong guess
-# misattributes every later op in the alignment.
+# Pairing is automatic by normalised name (see matches()). These two tables hold only what that cannot
+# reach, and both are kept SMALL and GENERAL on purpose -- enumerating the op names of the models you
+# happen to have seen is how this script goes stale.
+#
+# RENAMES: a ttnn op whose device class is a different word.
 TTNN_TO_DEVICE = {
-    "rms_norm": "LayerNorm", "layer_norm": "LayerNorm",
-    "linear": "Matmul", "matmul": "Matmul", "sparse_matmul": "SparseMatmul",
-    "add": "BinaryNg", "multiply": "BinaryNg", "subtract": "BinaryNg", "div": "BinaryNg",
-    "nlp_create_qkv_heads_decode": "NLPCreateQKVHeadsDecode",
-    "nlp_concat_heads_decode": "NLPConcatHeadsDecode",
+    "rms_norm": "LayerNorm",                 # rms_norm is served by the layernorm device op
+    "linear": "Matmul",
     "concatenate_heads": "NLPConcatHeads",
-    "rotary_embedding_llama": "RotaryEmbeddingLlama", "rotary_embedding": "RotaryEmbedding",
     "paged_scaled_dot_product_attention_decode": "SdpaDecode",
     "scaled_dot_product_attention_decode": "SdpaDecode",
-    "paged_update_cache": "PagedUpdateCache", "update_cache": "UpdateCache",
-    "transpose": "Transpose", "embedding": "Embedding", "silu": "Silu", "gelu": "Gelu",
-    "softmax": "Softmax", "typecast": "Typecast",
-    # metadata / conversion only -- no device op of their own
-    "reshape": None, "to_layout": None, "to_memory_config": None, "view": None,
 }
+# NO DEVICE OP: tensor creation and pure metadata. Anything here consumes no device op.
+NO_DEVICE_OP = {"reshape", "to_layout", "to_memory_config", "view",
+                "full", "zeros", "ones", "empty", "arange"}
+# CATCH-ALL DEVICE CLASSES: tt-metal funnels whole families through one device op, so an advised op that
+# pairs with nothing may still be one of these. Pairing permissively is the safer error: a mispair puts an
+# op in the wrong bucket, while a missed pair pushes a real device op into `untraced` and understates what
+# the advisor saw -- and understating the advisor is the bias this stage exists to avoid.
+CATCH_ALL = {"Unary", "BinaryNg", "Reduce", "Copy"}
 CONVERSION = {"Reshard": "l1_regrid", "ShardedToInterleaved": "l1_to_dram",
               "InterleavedToSharded": "dram_to_l1", "Untilize": "retilize", "Tilize": "retilize"}
 
@@ -56,36 +58,93 @@ def device_class(op_code: str) -> str:
     return op_code.split()[0].replace("DeviceOperation", "")
 
 
-def parse_perf(path: Path):
-    """Device ops in program order, plus the window total. Accepts us or ns duration columns."""
+def parse_perf(path: Path, incumbent_ms: float | None = None):
+    """Device ops in program order, plus the window total.
+
+    Column names differ between producers and cases: tt-perf-report writes `OP Code` / `Device Time` (us),
+    a raw Tracy export writes `OP CODE` / `DEVICE KERNEL DURATION [ns]` / `CORE COUNT`. Look them up
+    case-insensitively by substring rather than by exact spelling.
+    """
     rows = list(csv.DictReader(path.open(newline="")))
     if not rows:
         sys.exit(f"FATAL: {path} has no rows")
-    col = next((c for c in rows[0] if c and c.strip().lower() in
-                ("device time", "device kernel duration [ns]", "device kernel duration",
-                 "device_kernel_duration_ns")), None)
-    if col is None:
-        sys.exit(f"FATAL: {path} has no recognised duration column; saw {list(rows[0])}")
-    scale = 1 / 1000.0 if "ns" in col.lower() else 1.0
+    keys = {(k or "").strip().lower(): k for k in rows[0]}
+
+    def find(*needles, exact=True):
+        for n in needles:
+            if exact and n in keys:
+                return keys[n]
+        for n in needles:
+            for k, orig in keys.items():
+                if n in k:
+                    return orig
+        return None
+
+    code_col = find("op code", "op type", "name")
+    dur_col = find("device time", "device kernel duration [ns]", "device kernel duration")
+    core_col = find("cores", "core count")
+    if code_col is None or dur_col is None:
+        sys.exit(f"FATAL: {path}: need an op-code and a duration column; saw {sorted(keys)}")
+    ns = "ns" in dur_col.lower() or "cycle" in dur_col.lower()
+    scale = 1 / 1000.0 if ns else 1.0
+
     ops, total = [], 0.0
     for r in rows:
-        code = (r.get("OP Code") or "").strip()
+        code = (r.get(code_col) or "").strip()
         if not code:
             continue
         try:
-            us = float(str(r[col]).replace(",", "")) * scale
+            us = float(str(r[dur_col]).replace(",", "")) * scale
         except (TypeError, ValueError):
             us = 0.0
-        try:
-            cores = int(float(str(r.get("Cores", "")).replace(",", "")))
-        except (TypeError, ValueError):
-            cores = None
-        ops.append({"id": r.get("ID"), "cls": device_class(code), "code": code,
+        cores = None
+        if core_col:
+            try:
+                cores = int(float(str(r.get(core_col, "")).replace(",", "")))
+            except (TypeError, ValueError):
+                cores = None
+        dsc = find("dram sharded", exact=False)
+        ops.append({"id": r.get(find("id") or "", None), "cls": device_class(code), "code": code,
                     "us": us, "cores": cores,
-                    "dram_sharded": (r.get("DRAM Sharded") or "").strip().lower()
-                                    in ("true", "1", "yes")})
+                    "dram_sharded": (r.get(dsc) or "").strip().lower() in ("true", "1", "yes")
+                                    if dsc else False})
         total += us
+
+    # A report that was not bounded to one iteration by signposts repeats its op sequence. Detect that
+    # structurally rather than by a magic ratio: shares computed over N iterations are N times too small.
+    seq = [o["cls"] for o in ops]
+    for period in range(1, len(seq) // 2 + 1):
+        if len(seq) % period == 0 and seq == seq[:period] * (len(seq) // period):
+            reps = len(seq) // period
+            sys.exit(f"FATAL: {path}: the op sequence repeats {reps}x (period {period} of {len(seq)} "
+                     f"rows), so this report covers {reps} iterations rather than one. Re-run "
+                     f"tt-perf-report with --start-signpost/--end-signpost bounding a single replay; "
+                     f"every share computed here would be {reps}x too small.")
+
+    # And a window far from the harness's own number means the CSV is not the decode window at all.
+    if incumbent_ms is not None and incumbent_ms > 0:
+        ratio = total / (incumbent_ms * 1000.0)
+        if ratio > 5 or ratio < 0.2:
+            sys.exit(f"FATAL: {path}: window {total:.1f} us is {ratio:.1f}x the harness's "
+                     f"{incumbent_ms * 1000:.1f} us. Either the harness does not measure the decode "
+                     f"path, or the report is not signpost-bounded to one iteration. Shares computed "
+                     f"against this window would be wrong.")
     return ops, total
+
+
+def norm(x: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", x.lower())
+
+
+def matches(ttnn_op: str, dev_cls: str) -> bool:
+    """Pair a ttnn op with a device class by normalised name, either direction as a prefix.
+
+    Prefix-either-way covers the common shapes without an entry each: slice_static/Slice, concat/Concat,
+    embedding/Embeddings, topk/TopK, repeat/Repeat, the rotary variants. TTNN_TO_DEVICE holds only genuine
+    renames; CATCH_ALL covers families tt-metal funnels through one device op.
+    """
+    a, b = norm(ttnn_op), norm(dev_cls)
+    return a == b or a.startswith(b) or b.startswith(a)
 
 
 def parse_advised(report: dict):
@@ -97,10 +156,8 @@ def parse_advised(report: dict):
         cores = ((int(m.group(3)) - int(m.group(1)) + 1) * (int(m.group(4)) - int(m.group(2)) + 1)
                  if m else None)
         name = o["op"].replace("ttnn.", "")
-        if name not in TTNN_TO_DEVICE:
-            sys.exit(f"FATAL: ttnn op {name!r} has no device-class mapping. Add it to TTNN_TO_DEVICE; "
-                     f"guessing would misattribute every later op.")
-        out.append({"index": o["index"], "op": name, "cls": TTNN_TO_DEVICE[name], "layout": lay,
+        explicit = None if name in NO_DEVICE_OP else TTNN_TO_DEVICE.get(name, "__auto__")
+        out.append({"index": o["index"], "op": name, "explicit": explicit, "layout": lay,
                     "cores": cores, "program_config": o.get("program_config", "") or "",
                     "space": "dram" if lay.startswith("dram") else
                              ("l1" if lay.startswith("l1") else None)})
@@ -108,20 +165,25 @@ def parse_advised(report: dict):
 
 
 def align(advised, device):
-    """Pair the two program-order sequences on device class, tolerating gaps on both sides.
+    """Pair the two program-order sequences, tolerating gaps on both sides.
 
     Lengths differ: the advised graph omits ops the tracer never saw and includes metadata-only ops with
-    no device counterpart. A positional zip misattributes everything after the first gap.
+    no device counterpart. A positional zip misattributes everything after the first gap. An advised op
+    that pairs with nothing consumes no device op, so one unknown name cannot shift the rest.
     """
     pairs, di = [], 0
     for a in advised:
-        if a["cls"] is None:
+        if a["explicit"] is None:
             continue                                     # metadata only; nothing to account
+        want = a["explicit"]
         j = di
-        while j < len(device) and device[j]["cls"] != a["cls"]:
+        while j < len(device):
+            c = device[j]["cls"]
+            if (c == want) if want != "__auto__" else (matches(a["op"], c) or c in CATCH_ALL):
+                break
             j += 1
         if j >= len(device):
-            pairs.append((a, None))                      # advised op never ran
+            pairs.append((a, None))                      # advised op never ran, or name unknown
             continue
         for k in range(di, j):
             pairs.append((None, device[k]))              # device ops the advisor did not place
@@ -140,22 +202,27 @@ def main() -> int:
     ap.add_argument("--layer-kind", default="unknown")
     ap.add_argument("--layers-of-kind", type=int, default=1)
     ap.add_argument("--total-layers", type=int, default=1)
+    ap.add_argument("--incumbent-ms", type=float, default=None,
+                    help="incumbent_ms from incumbent.json; enables a window sanity check")
     ap.add_argument("--ir", type=Path, help="accepted and ignored; geometry comes from report.json")
     a = ap.parse_args()
 
     report = json.loads(a.report.read_text())
     advised = parse_advised(report)
-    device, window = parse_perf(a.perf)
+    device, window = parse_perf(a.perf, a.incumbent_ms)
     if window <= 0:
         sys.exit(f"FATAL: measured window is 0 us from {a.perf}")
 
     rows, chains, cur = [], [], None
     for adv, dev in align(advised, device):
         if dev is None:
-            rows.append({"op": adv["op"], "bucket": "advised_but_not_present", "us": 0.0,
-                         "share_pct": 0.0, "advised": adv["layout"],
-                         "reason": "advised op absent from the measured window -- a capture/shape "
-                                   "mismatch worth a look, not a free win"})
+            auto = adv["explicit"] == "__auto__"
+            rows.append({"op": adv["op"],
+                         "bucket": "unmapped_advised" if auto else "advised_but_not_present",
+                         "us": 0.0, "share_pct": 0.0, "advised": adv["layout"],
+                         "reason": "no device op paired with this advised op. Either it did not run "
+                                   "(a capture/shape mismatch worth a look), or its name does not pair "
+                                   "with any device class -- add it to TTNN_TO_DEVICE if so."})
             continue
         r = {"op": adv["op"] if adv else None, "device": dev["code"], "cls": dev["cls"],
              "us": round(dev["us"], 3), "share_pct": round(100 * dev["us"] / window, 3),
@@ -207,7 +274,7 @@ def main() -> int:
 
     acct, accounted = {}, 0.0
     for r in rows:
-        if r["bucket"] == "advised_but_not_present":
+        if r["bucket"] in ("advised_but_not_present", "unmapped_advised"):
             continue
         accounted += r["us"]
         b = acct.setdefault(r["bucket"], {"us": 0.0, "ops": 0})

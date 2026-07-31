@@ -79,7 +79,9 @@ this; `$optimize` step 6 / OPT-003 states the same definition, and the optimizer
 Detect boundaries from **conversion ops present in the profile**, never from differing grids: a grid change
 is often absorbed by the consumer, so grid-differencing over-counts.
 
-Measured cost per conversion, from three decoders:
+Indicative cost per conversion, measured on three Blackhole decoders. **Read your own numbers out of
+`reconcile.py`'s `boundary` rows** — these scale with tensor size and differ by architecture; the table is
+for calibration, not for arithmetic:
 
 | move | device op | µs/op |
 |---|---|---|
@@ -87,6 +89,11 @@ Measured cost per conversion, from three decoders:
 | DRAM→L1 | `InterleavedToSharded` | 1.2–2.6, scales with tensor size |
 | L1→DRAM | `ShardedToInterleaved` | 1.5–3.5, scales, dearer direction |
 | retilize | `Untilize` / `Tilize` | **6.7–10.0** — largest class, and absent from the traced graph |
+
+Also: `reconcile.py` refuses a perf report that is not bounded to **one** replay, because it detects the op
+sequence repeating. Three of the nine cells in the reference corpus committed un-bounded reports covering 2,
+2 and 10 iterations, and every window share computed from those is smaller than the truth by that factor.
+Bound the report with `--start-signpost` / `--end-signpost`.
 
 **Chains do not interact appreciably** — two independent chains measured 0.13 and 0.16 µs of interaction.
 So do **not** enumerate pairwise combinations. Grow one chain instead:
