@@ -215,6 +215,21 @@ Galaxy prefill is `[LINE, RING]`. This is not a precaution: the analog already c
 tuple and the comment explaining that a scalar `Ring` "would deadlock dispatch/combine on
 a non-existent row wrap link" (`test_prefill_block.py:666-673`).
 
+> **Amended 2026-07-31 (`GALAXY.md` §2).** Two corrections, and the second one can make a
+> Galaxy measurement silently meaningless.
+>
+> The citation above is a **`(4,4)` sub-torus**, not a full Galaxy — it needs
+> `TT_VISIBLE_DEVICES` plus a `TT_MESH_GRAPH_DESC_PATH` descriptor. The full-Galaxy configs are
+> `torus-x-8x4` / `torus-xy-8x4` in `models/demos/deepseek_v3_d_p/tests/conftest.py:100-135`.
+>
+> And a topology tuple does not create a ring. `ttnn.all_reduce` filters the request through
+> `get_usable_topology` (`all_reduce.cpp:42`), which **silently demotes Ring → Linear** when the
+> `FabricConfig` cannot wrap that axis (`ccl_common.cpp:126-164`). Axis 1 — the only axis this op
+> communicates on — wraps under `FABRIC_2D_TORUS_X`/`_XY` or `FABRIC_1D_RING`, and **not** under
+> `FABRIC_2D_TORUS_Y`, whose ring is on the SP axis where AttnRes moves zero bytes. Assert
+> `ttnn.get_usable_topology(stats, ttnn.Topology.Ring, cluster_axis=1)` before recording any ring
+> number; otherwise §4's "a ring halves the fabric term" is unfalsifiable.
+
 ---
 
 ## 5. Judgment gate — decided, implemented, and green on `(2,4)`
