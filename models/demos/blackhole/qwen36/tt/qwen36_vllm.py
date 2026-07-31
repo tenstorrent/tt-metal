@@ -311,8 +311,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
         # smallest power-of-2 width >= active prefix [0:num_active) before the base forward.
         # No runner edit / output re-pad — plugin reads unpadded_batch_size in slot order.
-        # One decode-trace store (+ token/pos/rope buffers) per width B; on a width switch, stage
-        # from host because the incoming bucket's device buffers are stale under continuity.
+        # Each width keeps its own trace metadata and output, but all traces bind the same
+        # canonical token/position/RoPE/page-table input buffers.
         args = list(args)
 
         def _read(name, pos):
@@ -360,16 +360,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 _sm = getattr(_m, "sampling", None)
                 if _sm is not None and hasattr(_sm, "set_trace_bucket"):
                     _sm.set_trace_bucket(B)
-            self._note_bucket_switch(model, B)
         return super().decode_forward(*args, **kwargs)
-
-    def _note_bucket_switch(self, model, B):
-        """On a decode-width switch, force host tokens for every slot (incoming bucket buffers are stale)."""
-        prev_B = getattr(self, "_last_decode_bucket", None)
-        self._last_decode_bucket = B
-        if prev_B is None or prev_B == B or not getattr(model, "device_decode_continuity", False):
-            return
-        self._force_host_decode_tokens = True
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
         # Capture the chunk-prefill trace + warm the masked-bucket set so requests only replay
@@ -421,6 +412,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 w *= 2
             widths.append(max_b)
             result = None
+            num_blocks = kwargs.get("num_blocks")
+            if num_blocks is not None:
+                for decode_model in self.model:
+                    initialize_inputs = getattr(decode_model, "initialize_decode_trace_inputs", None)
+                    if initialize_inputs is not None:
+                        initialize_inputs(num_blocks)
             compile_key = (
                 tuple(widths),
                 kwargs.get("num_blocks"),
@@ -429,12 +426,18 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             )
             trace_enabled = kwargs.get("enable_trace", False)
             if getattr(self, "_decode_bucket_compile_key", None) != compile_key:
-                for width in widths:
-                    kw = dict(kwargs)
-                    kw["max_batch_size"] = width
-                    kw["enable_trace"] = False
-                    logger.info(f"Qwen decode compile warmup: bucket width={width}")
-                    result = super().warmup_model_decode(*args, **kw)
+                for decode_model in self.model:
+                    decode_model._compile_decode_with_canonical_inputs = True
+                try:
+                    for width in widths:
+                        kw = dict(kwargs)
+                        kw["max_batch_size"] = width
+                        kw["enable_trace"] = False
+                        logger.info(f"Qwen decode compile warmup: bucket width={width}")
+                        result = super().warmup_model_decode(*args, **kw)
+                finally:
+                    for decode_model in self.model:
+                        decode_model._compile_decode_with_canonical_inputs = False
                 self._decode_bucket_compile_key = compile_key
 
             if not trace_enabled:

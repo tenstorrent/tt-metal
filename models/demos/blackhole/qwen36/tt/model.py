@@ -5,6 +5,7 @@
 tok_embeddings -> 32 x Qwen36DecoderLayer -> RMSNorm -> LM Head.
 Hybrid state: KV cache (8 attn layers) + recurrent state (24 DeltaNet layers).
 """
+
 import math
 import os
 
@@ -176,6 +177,12 @@ class Qwen36Model:
         self._bucket_cos_buf = None
         self._bucket_sin_buf = None
         self._gdn_batched_prev = None  # batched GDN bindings saved during bucket-trace capture
+        # Decode bucketing keeps one authoritative token/position/RoPE/page-table buffer set.
+        # Every width-specific trace binds these same addresses and only reads/writes its prefix.
+        self._canonical_decode_inputs = None
+        self._canonical_decode_num_blocks = None
+        self._active_decode_bucket = None
+        self._compile_decode_with_canonical_inputs = False
         # Persistent B=1 GDN prefill scratch (batched serving): allocated once at warmup, its buffer
         # addresses are baked into the chunk-prefill trace and reused by every prefill_paged_slots
         # replay, so it is never freed/reallocated (only zeroed in place). See _bind_gdn_prefill_scratch.
@@ -3194,15 +3201,57 @@ class Qwen36Model:
         n = self.sampling.tt_sampling.max_batch_size if self.sampling is not None else 32
         return max(32, int(n))
 
-    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
+    def initialize_decode_trace_inputs(self, num_blocks):
+        """Allocate canonical max-width decode buffers before any trace capture."""
+        if not self.device_decode_continuity:
+            return
+        num_blocks = int(num_blocks)
+        if self._canonical_decode_inputs is not None:
+            assert self._canonical_decode_num_blocks == num_blocks
+            return
+
+        from models.tt_transformers.tt.common import copy_host_to_device
+
+        Bmax = int(self.args.max_batch_size)
+        host = self.prepare_decode_trace_inputs_host(
+            torch.zeros(Bmax, 1, dtype=torch.int32),
+            torch.zeros(Bmax, dtype=torch.int32),
+            torch.zeros(Bmax, num_blocks, dtype=torch.int32),
+        )
+        self._canonical_decode_inputs = copy_host_to_device(host, mesh_device=self.mesh_device)
+        self._canonical_decode_num_blocks = num_blocks
+        mark_corruptible = getattr(ttnn, "mark_corruptible", None)
+        if mark_corruptible is not None:
+            for tensor in self._canonical_decode_inputs:
+                if tensor is not None:
+                    mark_corruptible(tensor)
+
+    def prepare_decode_trace_inputs(self, host_inputs):
+        """Copy trace inputs into the canonical device buffer set."""
+        from models.tt_transformers.tt.common import copy_host_to_device
+
+        if not self.device_decode_continuity:
+            return copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        if self._canonical_decode_inputs is None:
+            self._canonical_decode_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+            page_table = host_inputs[3]
+            self._canonical_decode_num_blocks = int(page_table.shape[1]) if page_table is not None else None
+        else:
+            copy_host_to_device(host_tensors=host_inputs, device_tensors=self._canonical_decode_inputs)
+        return self._canonical_decode_inputs
+
+    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None, *, canonical=False):
         """Build HOST decode inputs: (tokens_tt, cur_pos_tt, rope, page_table_tt).
 
-        ``rope`` is a uint32 [1,B] POSITION index under device decode continuity (the graph
-        gathers cos/sin from it and then advances it), or host-packed cos/sin otherwise.
+        Canonical traced inputs are max-width. A bucket trace slices only its active prefix.
         """
         from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host
 
         B = tokens.shape[0]
+        canonical = bool(canonical and self.device_decode_continuity)
+        target_B = int(self.args.max_batch_size) if canonical else B
+        if self.device_decode_continuity:
+            self._active_decode_bucket = B
         if self.device_decode_continuity:
             # The on-device sampler writes the sampled id straight back into this buffer, so it must
             # be a legal ttnn.sampling / ttnn.argmax output_tensor: rank 4, uint32, ROW_MAJOR, one
@@ -3223,10 +3272,13 @@ class Qwen36Model:
             assert pos_vec.shape[0] == B, f"current_pos length {pos_vec.shape[0]} != batch {B}"
         else:
             pos_vec = torch.full((B,), int(current_pos), dtype=torch.int32)
+        if canonical and B < target_B:
+            pos_vec = torch.nn.functional.pad(pos_vec, (0, target_B - B), value=-1)
         # RoPE position is the KV position offset by rope_delta (multimodal compresses the position
         # space; post-image text has t==h==w so 1D RoPE at rope_pos is correct). cur_pos_tt below
         # stays the true KV position. rope_delta is 0 for text, so this is a no-op there.
-        rope_pos_vec = pos_vec + self.rope.rope_delta
+        rope_pos_vec = pos_vec.clone()
+        rope_pos_vec[:B] += self.rope.rope_delta
         if self.device_decode_continuity:
             # Hand the decode graph the rope POSITION, not a host-computed cos/sin: the graph
             # gathers cos/sin from the device tables and then advances this index itself, so a
@@ -3249,6 +3301,8 @@ class Qwen36Model:
             cos_host, sin_host = self.rope.get_cos_sin_host(int(rope_pos_vec[0]))  # HOST ttnn [1,1,rope_head_dim]
             rope_packed = pack_rope_host(cos_host, sin_host)  # torch-based (host)
         cur_pos_tt = ttnn.from_torch(pos_vec, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if page_table is not None and canonical and B < target_B:
+            page_table = torch.nn.functional.pad(page_table, (0, 0, 0, target_B - B), value=-1)
         page_table_tt = (
             ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
             if page_table is not None
@@ -3256,10 +3310,16 @@ class Qwen36Model:
         )
         return tokens_tt, cur_pos_tt, rope_packed, page_table_tt
 
+    def prepare_decode_trace_inputs_host(self, tokens, current_pos, page_table=None):
+        return self.prepare_decode_inputs_host(tokens, current_pos, page_table=page_table, canonical=True)
+
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """Host-to-device transfer for decode inputs."""
         from models.tt_transformers.tt.common import copy_host_to_device
 
+        if self._compile_decode_with_canonical_inputs:
+            host = self.prepare_decode_trace_inputs_host(tokens, current_pos, page_table=page_table)
+            return self.prepare_decode_trace_inputs(host)
         host = self.prepare_decode_inputs_host(tokens, current_pos, page_table=page_table)
         return copy_host_to_device(host, mesh_device=self.mesh_device)
 
@@ -3279,27 +3339,43 @@ class Qwen36Model:
         """
         from models.demos.blackhole.qwen36.tt.generator_interface import unpack_rope
 
-        # rot_mat_idxs is either a uint32 [1,B] POSITION tensor (device continuity: gather cos/sin
-        # here, then advance the position on device below) or the host-packed cos/sin pair.
+        # Canonical traced inputs are max-width. Each bucket trace captures fixed prefix slices,
+        # so every width reads and updates the same resident state addresses.
         device_rope = rot_mat_idxs is not None and rot_mat_idxs.dtype == ttnn.uint32
         if device_rope:
-            cos, sin = self.rope.get_rot_mats_from_idxs(rot_mat_idxs)
+            bucket = int(self._active_decode_bucket or current_pos.shape[0])
+            assert 1 <= bucket <= current_pos.shape[0]
+            active_current_pos = current_pos
+            active_rot_mat_idxs = rot_mat_idxs
+            active_page_table = page_table
+            if current_pos.shape[0] != bucket:
+                active_current_pos = ttnn.slice(current_pos, (0,), (bucket,))
+                active_rot_mat_idxs = ttnn.slice(rot_mat_idxs, (0, 0), (1, bucket))
+                if page_table is not None:
+                    active_page_table = ttnn.slice(page_table, (0, 0), (bucket, page_table.shape[1]))
+            cos, sin = self.rope.get_rot_mats_from_idxs(active_rot_mat_idxs)
         else:
+            active_current_pos = current_pos
+            active_rot_mat_idxs = rot_mat_idxs
+            active_page_table = page_table
             cos, sin = unpack_rope(rot_mat_idxs)
 
         if on_device_logits:
             assert self.sampling is not None, "on_device_logits=True but self.sampling is None"
-            logits = self._forward_decode(tokens, cos, sin, current_pos, page_table, sharded_lm_head=True)
+            logits = self._forward_decode(tokens, cos, sin, active_current_pos, active_page_table, sharded_lm_head=True)
             # Sampler runs >=32-wide; pad B up to it (else shape mismatch). Extra slots unused.
             sampler_batch = self.sampling.tt_sampling.max_batch_size
             B = logits.shape[2]
             if B < sampler_batch:
                 logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, sampler_batch - B), (0, 0)], value=0.0)
         else:
-            logits = self._forward_decode(tokens, cos, sin, current_pos, page_table)
+            logits = self._forward_decode(tokens, cos, sin, active_current_pos, active_page_table)
         if device_rope:
-            ttnn.plus_one(current_pos, skip_negative_entries=True)
-            ttnn.plus_one(rot_mat_idxs)
+            ttnn.plus_one(active_current_pos, skip_negative_entries=True)
+            ttnn.plus_one(active_rot_mat_idxs)
+            if active_current_pos is not current_pos:
+                ttnn.experimental.slice_write(active_current_pos, current_pos, [0], [bucket], [1])
+                ttnn.experimental.slice_write(active_rot_mat_idxs, rot_mat_idxs, [0, 0], [1, bucket], [1, 1])
         # On-device sampling consumes a bare tensor; host sampling expects the legacy tuple.
         return logits if on_device_logits else (logits, None)
 

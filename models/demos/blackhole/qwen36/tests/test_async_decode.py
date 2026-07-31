@@ -15,6 +15,7 @@ A mistake in any of the three does NOT crash -- it silently shifts the rotation 
 replays a token, which shows up only as degraded output. So the gate here is exact token equality
 against the known-good host-staged path, over several steps, not a single-step PCC.
 """
+
 import os
 import time
 
@@ -82,6 +83,43 @@ def _build(mesh_device, bmax):
 
 def _sampled_ids(tok_tensor, mesh_device, B):
     return ttnn.to_torch(ttnn.get_device_tensors(tok_tensor)[0]).reshape(-1)[:B].to(torch.int64).tolist()
+
+
+def _mark_trace_buffers_corruptible(value):
+    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
+    if mark_corruptible is None or value is None:
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _mark_trace_buffers_corruptible(item)
+        return
+    mark_corruptible(value)
+
+
+def _gdn_snapshot(model):
+    def first_device(tensor):
+        tensors = ttnn.get_device_tensors(tensor)
+        return ttnn.to_torch(tensors[0] if tensors else tensor)
+
+    saved = []
+    for layer in model.layers:
+        if layer.is_full_attention:
+            continue
+        dn = layer.attention
+        recurrent = getattr(dn, "rec_state", None)
+        if recurrent is None:
+            recurrent = dn.recurrent_state
+        conv_states = getattr(dn, "conv_states", None)
+        if conv_states is None:
+            fused = getattr(dn, "fused_conv_state", None)
+            conv_states = [] if fused is None else [fused]
+        saved.append(
+            {
+                "recurrent": first_device(recurrent),
+                "conv": [first_device(conv) for conv in conv_states],
+            }
+        )
+    return saved
 
 
 @torch.no_grad()
@@ -214,52 +252,190 @@ def test_continuity_matches_host_staged_decode(mesh_device, B, reset_seeds, ensu
 
 @torch.no_grad()
 @_parametrize_traced()
-def test_bucket_switch_needs_restage(mesh_device, reset_seeds, ensure_gc):
-    """Show the width-switch hazard the vLLM wrapper stages around, and that staging fixes it.
-
-    Each decode width owns its own token/position/rope buffers. After running at width 8, width
-    1's buffers still hold whatever width 1 left behind, so replaying width 1 without staging
-    would decode a stale token at a stale position. On a width change ``_note_bucket_switch``
-    makes the generator take HOST tokens/positions for every slot instead of the device ones,
-    which is what makes the generator's own reset-step restage authoritative. This asserts both
-    halves of the claim on the device buffers: the staleness, and that a host restage fixes it.
-    """
+def test_canonical_bucket_inputs_share_state(mesh_device, reset_seeds, ensure_gc):
+    """All bucket widths must bind and update one canonical resident input set."""
     BMAX = 8
     model, page_table = _build(mesh_device, BMAX)
+    model.initialize_decode_trace_inputs(BPU)
+
+    host1 = model.prepare_decode_trace_inputs_host(
+        torch.tensor([[100]], dtype=torch.int32),
+        torch.tensor([START_POS], dtype=torch.int32),
+        page_table[:1],
+    )
+    dev1 = model.prepare_decode_trace_inputs(host1)
+    host8 = model.prepare_decode_trace_inputs_host(
+        torch.tensor([[100 + u] for u in range(BMAX)], dtype=torch.int32),
+        torch.full((BMAX,), START_POS, dtype=torch.int32),
+        page_table,
+    )
+    dev8 = model.prepare_decode_trace_inputs(host8)
+
+    assert dev1 is dev8
+    assert list(dev8[1].shape) == [BMAX]
+    assert list(dev8[2].shape) == [1, BMAX]
+    assert list(dev8[3].shape) == [BMAX, BPU]
+
+    for _ in range(5):
+        model.ttnn_decode_forward(dev8[0], dev8[1], rot_mat_idxs=dev8[2], page_table=dev8[3])
+
+    # Selecting width 1 changes only the captured prefix; no host/device copy occurs.
+    model.prepare_decode_trace_inputs_host(
+        torch.tensor([[999]], dtype=torch.int32),
+        torch.tensor([999], dtype=torch.int32),
+        page_table[:1],
+    )
+    model.ttnn_decode_forward(dev1[0], dev1[1], rot_mat_idxs=dev1[2], page_table=dev1[3])
+    ttnn.synchronize_device(mesh_device)
+
+    positions = ttnn.to_torch(ttnn.get_device_tensors(dev8[1])[0]).reshape(-1)[:BMAX].tolist()
+    rope = ttnn.to_torch(ttnn.get_device_tensors(dev8[2])[0]).reshape(-1)[:BMAX].tolist()
+    expected = [START_POS + 6] + [START_POS + 5] * (BMAX - 1)
+    assert positions == expected
+    assert rope == expected
+    logger.info("PASSED: width 8 -> 1 preserved and advanced one canonical decode state")
+
+
+@torch.no_grad()
+@_parametrize_traced()
+def test_bucket_trace_stores_share_canonical_inputs(mesh_device, reset_seeds, ensure_gc):
+    """The served Generator path must bind every bucket trace to the same input objects."""
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+
+    BMAX = 8
+    model, _ = _build(mesh_device, BMAX)
+    generator = Qwen36ForCausalLM([model], [model.args], mesh_device)
+    warmup = dict(
+        kv_cache=None,
+        max_batch_size=BMAX,
+        num_blocks=BPU,
+        can_sample_on_device=True,
+        greedy_only=True,
+    )
+    generator.warmup_model_decode(enable_trace=False, **warmup)
+    generator.warmup_model_decode(enable_trace=True, **warmup)
+
+    canonical = model._canonical_decode_inputs
+    assert canonical is not None
+    assert set(generator._bucket_trace_store) == {1, 2, 4, BMAX}
+    for B, (_, trace_inputs, _) in generator._bucket_trace_store.items():
+        assert trace_inputs[True][0] is canonical, f"width {B} on-device trace did not bind canonical inputs"
+        assert trace_inputs[False][0] is canonical, f"width {B} host trace did not bind canonical inputs"
+
+    generator.__del__()
+    generator._bucket_trace_store = {}
+    generator.trace_ids_decode = {}
+    generator.model = []
+    logger.info("PASSED: all served decode bucket traces share canonical input buffers")
+
+
+@torch.no_grad()
+@_parametrize_traced()
+@pytest.mark.parametrize(
+    "schedule",
+    [
+        pytest.param((1, 1, 1, 8, 8, 8, 1, 1, 1), id="1-8-1"),
+        pytest.param((8, 8, 8, 2, 2, 2, 8, 8, 8), id="8-2-8"),
+    ],
+)
+def test_bucket_switch_continuity_matches_host_reference(mesh_device, schedule, reset_seeds, ensure_gc):
+    """Bucket switches preserve exact token, position, RoPE, and GDN state."""
     from models.tt_transformers.tt.common import copy_host_to_device
 
-    dev_of = {}
-    for B in (1, BMAX):
-        dev_of[B] = model.prepare_inputs_decode(
-            torch.tensor([[100 + u] for u in range(B)], dtype=torch.int32),
-            torch.full((B,), START_POS, dtype=torch.int32),
-            page_table[:B],
-        )
+    BMAX = 8
+    model, page_table = _build(mesh_device, BMAX)
+    slots = model._decode_token_slots
+    widths = tuple(sorted(set(schedule)))
+    tok0 = torch.tensor([[100 + u] for u in range(BMAX)], dtype=torch.int32)
+    pos0 = torch.full((BMAX,), START_POS, dtype=torch.int32)
+    model.sampling.apply_decode_state([_greedy_params(slots)], reset_batch=True)
 
-    # width 8 advances for a few steps; width 1's buffers are untouched and go stale.
-    for _ in range(5):
-        model.ttnn_decode_forward(
-            dev_of[BMAX][0], dev_of[BMAX][1], rot_mat_idxs=dev_of[BMAX][2], page_table=dev_of[BMAX][3]
+    # Reference: eager decode with host-authoritative inputs every step.
+    model.device_decode_continuity = False
+    model.reset_tp()
+    ref_tokens, ref_positions = [], []
+    tok, pos = tok0.clone(), pos0.clone()
+    for B in schedule:
+        dev = model.prepare_inputs_decode(tok[:B], pos[:B], page_table[:B])
+        logits = model.ttnn_decode_forward(
+            dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=True
         )
+        sampled = model.sampling.sample(logits, enable_trace=False)
+        ids = _sampled_ids(sampled[0] if isinstance(sampled, tuple) else sampled, mesh_device, B)
+        tok[:B] = torch.tensor(ids, dtype=torch.int32).reshape(B, 1)
+        pos[:B] += 1
+        ref_tokens.append(tok.reshape(-1).tolist())
+        ref_positions.append(pos.tolist())
     ttnn.synchronize_device(mesh_device)
-    stale = ttnn.to_torch(ttnn.get_device_tensors(dev_of[1][1])[0]).reshape(-1)[:1].tolist()
-    live = ttnn.to_torch(ttnn.get_device_tensors(dev_of[BMAX][1])[0]).reshape(-1)[:1].tolist()
-    logger.info(f"after 5 width-8 steps: width-8 pos={live}, width-1 pos={stale} (stale by design)")
-    assert live == [START_POS + 5] and stale == [START_POS], "width-8 advance leaked into width-1 buffers"
+    ref_gdn = _gdn_snapshot(model)
 
-    # what the generator's reset-step restage does on the switch back to width 1
-    host = model.prepare_decode_inputs_host(
-        torch.tensor([[777]], dtype=torch.int32), torch.tensor([START_POS + 5], dtype=torch.int32), page_table[:1]
-    )
-    copy_host_to_device(host_tensors=host, device_tensors=dev_of[1])
-    restaged_pos = ttnn.to_torch(ttnn.get_device_tensors(dev_of[1][1])[0]).reshape(-1)[:1].tolist()
-    restaged_tok = ttnn.to_torch(ttnn.get_device_tensors(dev_of[1][0])[0]).reshape(-1)[:1].tolist()
-    restaged_rope = ttnn.to_torch(ttnn.get_device_tensors(dev_of[1][2])[0]).reshape(-1)[:1].tolist()
-    logger.info(f"after restage: pos={restaged_pos} tok={restaged_tok} rope_idx={restaged_rope}")
-    assert restaged_pos == [START_POS + 5]
-    assert restaged_tok == [777]
-    assert restaged_rope == [START_POS + 5]
-    logger.info("PASSED: a width switch leaves stale buffers, and the host restage corrects all three")
+    # Subject: all traces share one canonical input set. Compile every width first.
+    model.device_decode_continuity = True
+    model.initialize_decode_trace_inputs(BPU)
+    canonical = model._canonical_decode_inputs
+    for B in widths:
+        model._reset_gdn_state_for_new_sequence()
+        host = model.prepare_decode_trace_inputs_host(tok0[:B], pos0[:B], page_table[:B])
+        dev = model.prepare_decode_trace_inputs(host)
+        logits = model.ttnn_decode_forward(
+            dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=True
+        )
+        model.sampling.set_trace_bucket(B)
+        model.sampling.sample(logits, tt_out_tok=dev[0], enable_trace=False)
+    ttnn.synchronize_device(mesh_device)
+
+    tids, logits_of = {}, {}
+    for B in widths:
+        model._reset_gdn_state_for_new_sequence()
+        host = model.prepare_decode_trace_inputs_host(tok0[:B], pos0[:B], page_table[:B])
+        dev = model.prepare_decode_trace_inputs(host)
+        assert dev is canonical
+        _mark_trace_buffers_corruptible(dev)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        logits = model.ttnn_decode_forward(
+            dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=True
+        )
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        _mark_trace_buffers_corruptible(logits)
+        model.sampling.set_trace_bucket(B)
+        model.sampling.sample(logits, tt_out_tok=dev[0], enable_trace=True, skip_precompile=True)
+        ttnn.synchronize_device(mesh_device)
+        tids[B], logits_of[B] = tid, logits
+
+    # Rewind once. No host input is staged during the switch sequence.
+    model._reset_gdn_state_for_new_sequence()
+    initial_host = model.prepare_decode_trace_inputs_host(tok0, pos0, page_table)
+    copy_host_to_device(host_tensors=initial_host, device_tensors=canonical)
+    ttnn.synchronize_device(mesh_device)
+
+    for step, B in enumerate(schedule):
+        model.sampling.set_trace_bucket(B)
+        ttnn.execute_trace(mesh_device, tids[B], cq_id=0, blocking=False)
+        model.sampling.sample(logits_of[B], tt_out_tok=canonical[0], enable_trace=True)
+        ttnn.synchronize_device(mesh_device)
+
+        got_tokens = _sampled_ids(canonical[0], mesh_device, BMAX)
+        got_positions = (
+            ttnn.to_torch(ttnn.get_device_tensors(canonical[1])[0]).reshape(-1)[:BMAX].to(torch.int64).tolist()
+        )
+        got_rope = ttnn.to_torch(ttnn.get_device_tensors(canonical[2])[0]).reshape(-1)[:BMAX].to(torch.int64).tolist()
+        assert got_tokens == ref_tokens[step], f"step {step}, width {B}: token state diverged"
+        assert got_positions == ref_positions[step], f"step {step}, width {B}: position state diverged"
+        assert got_rope == ref_positions[step], f"step {step}, width {B}: RoPE state diverged"
+
+    got_gdn = _gdn_snapshot(model)
+    assert len(got_gdn) == len(ref_gdn)
+    for layer, (got_state, ref_state) in enumerate(zip(got_gdn, ref_gdn)):
+        assert torch.equal(got_state["recurrent"], ref_state["recurrent"]), f"GDN recurrent layer {layer} diverged"
+        assert len(got_state["conv"]) == len(ref_state["conv"])
+        for tap, (got_conv, ref_conv) in enumerate(zip(got_state["conv"], ref_state["conv"])):
+            assert torch.equal(got_conv, ref_conv), f"GDN conv layer {layer}, tap {tap} diverged"
+
+    model.sampling.reset_trace()
+    for tid in tids.values():
+        ttnn.release_trace(mesh_device, tid)
+    logger.info(f"PASSED: schedule {schedule} matches the always-host-reloaded reference")
 
 
 @pytest.mark.skip(

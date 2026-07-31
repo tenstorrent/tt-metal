@@ -309,8 +309,34 @@ class SamplingGenerator:
     ):
         if penalties_on:
             logits = self.tt_penalties.apply(logits)
+        preserved_tail = self._preserve_feedback_tail(tt_out_tok)
         tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+        self._restore_feedback_tail(tt_out_tok, preserved_tail)
         return tt_tokens, tt_log_probs
+
+    def _preserve_feedback_tail(self, tt_out_tok):
+        bucket = self._active_trace_bucket
+        if tt_out_tok is None or bucket is None or int(bucket) >= int(tt_out_tok.shape[-1]):
+            return None
+        rank = len(tt_out_tok.shape)
+        starts = [0] * rank
+        starts[-1] = int(bucket)
+        return ttnn.slice(tt_out_tok, starts, list(tt_out_tok.shape))
+
+    @staticmethod
+    def _restore_feedback_tail(tt_out_tok, preserved_tail):
+        if preserved_tail is None:
+            return
+        rank = len(tt_out_tok.shape)
+        starts = [0] * rank
+        starts[-1] = int(tt_out_tok.shape[-1]) - int(preserved_tail.shape[-1])
+        ttnn.experimental.slice_write(
+            preserved_tail,
+            tt_out_tok,
+            starts,
+            list(tt_out_tok.shape),
+            [1] * rank,
+        )
 
     def capture_trace(
         self,
