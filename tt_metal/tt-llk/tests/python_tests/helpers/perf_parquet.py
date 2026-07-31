@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed Parquet output for LLK performance reports (Milestone 2).
+"""Parquet output for LLK performance reports
 
 Publishes a run's per-test reports as one immutable, typed Parquet batch whose
 physical schema is the shared wide schema (perf_wide_schema.DB_SCHEMA).
@@ -104,7 +104,7 @@ def to_table(df, columns=DB_SCHEMA) -> pa.Table:
     arrays = []
     for field in schema:
         col = aligned[field.name]
-        # A "string" column may hold non-strings (a bool unpack_to_dest, an enum
+        # A string column may hold non strings (a bool unpack_to_dest, an enum
         # dest_acc); stringify non-null values so Arrow accepts them, keep nulls.
         if field.type == pa.string():
             col = col.map(lambda v: v if pd.isna(v) else str(v))
@@ -117,7 +117,7 @@ def write_parquet(df, path, columns=DB_SCHEMA, compression="zstd"):
     pq.write_table(to_table(df, columns), path, compression=compression)
 
 
-# ── Run-level publication ─────────────────────────────────────────────────────
+#  Run-level publication
 
 
 def stamp_provenance(
@@ -189,7 +189,7 @@ def write_run_batch(test_frames, path, *, compression="zstd", **provenance):
     )
 
 
-# ── CSV -> Parquet conversion (also the historical-migration path, Milestone 3) ─
+#  CSV -> Parquet conversion
 
 
 def _test_name_from_csv(path) -> str:
@@ -226,12 +226,35 @@ def _coerce_frame_to_schema(df, schema_by_name):
     return out, report
 
 
-def convert_csvs_to_parquet(csv_paths, out_path, *, compression="zstd", **provenance):
+def _lossy_conversion_message(diagnostics) -> str:
+    lines = ["CSV -> Parquet conversion is not lossless (strict mode):"]
+    for test, cols in sorted(diagnostics["unknown_columns"].items()):
+        lines.append(f"  {test}: columns not in schema, would be DROPPED: {cols}")
+    for test, report in sorted(diagnostics["coerced_values"].items()):
+        for col, info in sorted(report.items()):
+            lines.append(
+                f"  {test}: {col} ({info['type']}) has {info['bad']} value(s) that "
+                f"don't fit (e.g. {info['example']!r}), would become NULL"
+            )
+    lines.append(
+        "Fix the schema (add the column / correct the type), or pass strict=False."
+    )
+    return "\n".join(lines)
+
+
+def convert_csvs_to_parquet(
+    csv_paths, out_path, *, compression="zstd", strict=True, **provenance
+):
     """Convert a run's per-test CSVs into one typed Parquet batch.
 
     Reads each CSV, coerces its columns to the schema types, and reuses
-    build_run_batch to align + stamp provenance + compact. Returns diagnostics:
-    per test, columns dropped (not in the schema) and values coerced to NULL.
+    build_run_batch to align + stamp provenance + compact.
+
+    With strict=True (default) the conversion must be lossless: if any column
+    would be dropped (not in the schema) or any value coerced to NULL, it raises
+    BEFORE writing and no file is produced. Pass strict=False for a best-effort
+    conversion that writes anyway. Either way it returns the diagnostics: per
+    test, the dropped columns and the coerced values.
     """
     schema_by_name = {c.name: c for c in DB_SCHEMA}
     frames = {}
@@ -245,11 +268,14 @@ def convert_csvs_to_parquet(csv_paths, out_path, *, compression="zstd", **proven
         coerced, report = _coerce_frame_to_schema(df, schema_by_name)
         if report:
             diagnostics["coerced_values"].setdefault(name, {}).update(report)
-        # Same test can appear across arch dirs / shards: accumulate its rows.
+        # Same test can appear across arch dirs / shards: accumulate its rows..
         if name in frames:
             frames[name] = pd.concat([frames[name], coerced], ignore_index=True)
         else:
             frames[name] = coerced
+
+    if strict and (diagnostics["unknown_columns"] or diagnostics["coerced_values"]):
+        raise ValueError(_lossy_conversion_message(diagnostics))
 
     table = build_run_batch(frames, **provenance)
     pq.write_table(table, out_path, compression=compression)

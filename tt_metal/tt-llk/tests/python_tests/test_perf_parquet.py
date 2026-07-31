@@ -173,27 +173,53 @@ def test_convert_compacts_multiple_csvs(tmp_path):
     assert set(table.to_pandas()["test_name"]) == {"perf_a", "perf_b"}
 
 
-def test_convert_drops_and_reports_unknown_columns(tmp_path):
+def test_convert_lenient_drops_and_reports_unknown_columns(tmp_path):
     df = pd.DataFrame({"marker": ["INIT"], "tile_cnt": [4], "made_up_col": [9]})
     p = _write_csv(tmp_path, "perf_x.csv", df)
 
-    diag = convert_csvs_to_parquet([p], tmp_path / "out.parquet", **_RUN_PROV)
+    diag = convert_csvs_to_parquet(
+        [p], tmp_path / "out.parquet", strict=False, **_RUN_PROV
+    )
 
     assert diag["unknown_columns"]["perf_x"] == ["made_up_col"]
     assert "made_up_col" not in pq.read_table(tmp_path / "out.parquet").schema.names
 
 
-def test_convert_coerces_and_reports_bad_values(tmp_path):
+def test_convert_lenient_coerces_and_reports_bad_values(tmp_path):
     # value_bits is int64 in the schema; "2.0f" can't parse -> NULL, and reported.
     df = pd.DataFrame({"marker": ["INIT"], "value_bits": ["2.0f"], "tile_cnt": [4]})
     p = _write_csv(tmp_path, "perf_x.csv", df)
 
-    diag = convert_csvs_to_parquet([p], tmp_path / "out.parquet", **_RUN_PROV)
+    diag = convert_csvs_to_parquet(
+        [p], tmp_path / "out.parquet", strict=False, **_RUN_PROV
+    )
 
     assert "value_bits" in diag["coerced_values"]["perf_x"]
     table = pq.read_table(tmp_path / "out.parquet")
     idx = table.schema.get_field_index("value_bits")
     assert table.column(idx).null_count == 1
+
+
+def test_convert_strict_raises_on_unknown_column(tmp_path):
+    # Default strict=True: a column not in the schema is data loss -> fail loud.
+    df = pd.DataFrame({"marker": ["INIT"], "tile_cnt": [4], "made_up_col": [9]})
+    p = _write_csv(tmp_path, "perf_x.csv", df)
+    out = tmp_path / "out.parquet"
+
+    with pytest.raises(ValueError, match="made_up_col"):
+        convert_csvs_to_parquet([p], out, **_RUN_PROV)
+    assert not out.exists()  # nothing written on a lossy conversion
+
+
+def test_convert_strict_raises_on_bad_value(tmp_path):
+    # Default strict=True: an unparsable value would become NULL -> fail loud.
+    df = pd.DataFrame({"marker": ["INIT"], "value_bits": ["2.0f"], "tile_cnt": [4]})
+    p = _write_csv(tmp_path, "perf_x.csv", df)
+    out = tmp_path / "out.parquet"
+
+    with pytest.raises(ValueError, match="value_bits"):
+        convert_csvs_to_parquet([p], out, **_RUN_PROV)
+    assert not out.exists()
 
 
 def test_convert_stringifies_bool_valued_string_column(tmp_path):
