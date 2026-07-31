@@ -169,8 +169,16 @@ For models too big for one chip, weights are **fractured** (sharded) across devi
   - `all_gather` — concatenate shards across devices (e.g. after column-fractured proj).
   - `reduce_scatter` — sum partial results and re-shard (e.g. after row-fractured proj).
   - `all_reduce` — sum and replicate.
-- **Fuse CCL with matmul** where possible: `ttnn.experimental.all_gather_matmul` overlaps
-  the all-gather with the matmul — a real latency win on multi-device.
+- **Fuse CCL with matmul** where possible — the collective disappears into the matmul kernel and
+  overlaps with compute, removing a standalone launch (the dominant cost once a collective is
+  dispatch/launch-bound, not byte-bound):
+  - column-fractured proj (recombine with `all_gather`): `ttnn.experimental.all_gather_matmul`.
+  - row-fractured proj (recombine with `reduce_scatter`): `ttnn.experimental.matmul_reduce_scatter_async`
+    (needs global semaphores) — the row-parallel **sibling** of `all_gather_matmul`, and the lever for a
+    dispatch-bound `reduce_scatter`: fuse it INTO the producing matmul.
+  - Do NOT instead collapse `reduce_scatter + all_gather` back into a single `all_reduce` to "cut op
+    count" — that is still a standalone collective per projection (same launch overhead), so it does not
+    pay. Fuse into the matmul; do not just re-merge the collectives.
 
 **CCL cost rules:**
 - CCLs are expensive — minimize them. Use **bf8b** inputs to CCLs instead of bf16 to halve
@@ -238,7 +246,7 @@ Zero runtime overhead, smaller DRAM footprint, faster weight reads each forward.
 | `exp_approx_mode` | True for short seq, False for >16k |
 | Multi-device weights | 1D fracture (n300/T3K), 2D fracture (TG); recombine with CCL |
 | CCL dtype | bf8b not bf16 (halve bytes) |
-| CCL + matmul | fuse via `all_gather_matmul` |
+| CCL + matmul | fuse via `all_gather_matmul` (all_gather/col) or `matmul_reduce_scatter_async` (reduce_scatter/row); don't re-merge into `all_reduce` |
 | Norm weights | TILE_WIDTH sticks, ROW_MAJOR, no padding |
 | On-device | embeddings, sampling, untilize, mask/RoPE generation |
 
