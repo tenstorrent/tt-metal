@@ -411,11 +411,22 @@ that any accumulator stays fp32.
 4. **Prefill length handling.** Our own implementation sets its own L1 budget, so the 512 ceiling and
    the 256-multiple padding are ours to choose rather than inherited.
 
-**Increment order — each step must gate on PCC against `voxtral_backbone_ref` before the next:**
-1. Load the Mistral-native checkpoint to device; assert weight shapes against the reference.
-2. ONE layer, prefill only, vs `_layer()` — this is where a RoPE convention error shows up.
-3. All 26 layers, prefill, vs `reference_forward()`. Expect the bf16 weight floor, ~0.9996 on real
-   prompts; **use real prompts, not random inputs** (trap #12).
+**Increment order — each step must gate on PCC against `voxtral_backbone_ref` before the next.**
+Implementation lives in **`tt/ttnn_voxtral_gpt.py`**, developed alongside the `tt_transformers`
+wrapper so the working pipeline (RTF 1.04–1.07, 0.0% WER) stays intact until this earns the swap.
+1. ~~Load the Mistral-native checkpoint to device; assert weight shapes~~ — **DONE**
+   (`_assert_shapes`, which catches the non-square wq/wo).
+2. ~~ONE layer, prefill, vs `_layer()`~~ — **DONE, PCC 0.99999332.** That one number covers the
+   weight load, RoPE, the causal mask, GQA and SwiGLU together. Re-run it as the regression check:
+   `python models/experimental/voxtral_tts/tt/ttnn_voxtral_gpt.py`.
+   RoPE resolution: `wq`/`wk` are permuted interleaved→half-split ONCE at load
+   (`interleaved_to_halfsplit`) and the easy `rotate_half` form runs on device, avoiding an even/odd
+   lane shuffle inside a tile. A convention error would have read ~0.5, not 0.99999.
+3. **NEXT — all 26 layers, prefill, vs `reference_forward()`.** `TtVoxtralGPT(dev, n_layers=26)`
+   already constructs; what is missing is the harness. **Use real prompts, not random inputs**
+   (trap #12) — expect ~0.9996, the bf16 weight floor. Two things to watch: host RAM (the reference
+   loads fp32, ~12 GB) and our own L1 budget for prefill, which is now ours to set rather than
+   inherited, so the 512 ceiling and 256-multiple padding no longer apply by default.
 4. KV cache + single decode step vs `IncrementalBackbone.step()`.
 5. Swap into the pipeline; gate on WER and long-form frame counts, and diff the WAV bytes against the
    current build to see exactly what changed.
