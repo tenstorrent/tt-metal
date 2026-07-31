@@ -194,8 +194,8 @@ class FusedKernelGenerator:
                 self.config.global_config.dest_acc.value
             )
 
-        operand_include = (
-            ""
+        quasar_include = (
+            '#include "llk_sync.h"\n'
             if self.config.global_config.architecture == ChipArchitecture.QUASAR
             else '#include "operand.h"\n'
         )
@@ -207,7 +207,7 @@ class FusedKernelGenerator:
             f'#include "ckernel_defs.h"\n'
             f'#include "ckernel_sfpu.h"\n'
             f'#include "tensix_types.h"\n'
-            f"{operand_include}"
+            f"{quasar_include}"
             f"{profiler_include}"
             f"\n"
             f"std::uint32_t unp_cfg_context          = 0;\n"

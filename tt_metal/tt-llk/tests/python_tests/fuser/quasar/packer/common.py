@@ -67,7 +67,7 @@ def packer_dest_section_done(
 
 def packer_sync_with_unpacker(has_pack_consumer: bool) -> str:
     if has_pack_consumer:
-        return "t6_semaphore_post<p_stall::PACK>(semaphore::PACK_UNPACK);\n"
+        return "_llk_sync_post_<p_stall::PACK>(semaphore::PACK_UNPACK);\n"
     return ""
 
 

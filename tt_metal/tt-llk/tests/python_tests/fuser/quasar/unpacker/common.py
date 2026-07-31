@@ -77,7 +77,7 @@ def dvalid_init(quasar_use_dvalid: bool = False) -> str:
 def sync_with_packer(needs_pack_sync: bool) -> str:
     if needs_pack_sync:
         return (
-            "TT_SEMWAIT(p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO, 0, semaphore::t6_sem(semaphore::PACK_UNPACK));\n"
-            "t6_semaphore_get<>(semaphore::PACK_UNPACK);\n"
+            "_llk_sync_wait_<p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::PACK_UNPACK);\n"
+            "_llk_sync_get_<>(semaphore::PACK_UNPACK);\n"
         )
     return ""

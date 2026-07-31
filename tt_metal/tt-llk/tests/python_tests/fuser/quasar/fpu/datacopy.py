@@ -22,7 +22,6 @@ class DatacopyFpu(Fpu):
         return [
             "llk_math_common.h",
             "llk_math_eltwise_unary_datacopy.h",
-            "llk_sync.h",
         ]
 
     def golden(
