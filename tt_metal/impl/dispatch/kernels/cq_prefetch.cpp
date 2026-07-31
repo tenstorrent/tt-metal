@@ -1072,40 +1072,179 @@ uint32_t process_relay_paged_cmd_large(
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
-// Issues the reads that fill one scratch buffer with whole pages, advancing page_id past them and returning the
+// Walks interleaved pages in page order, one bank per step.
+//
+// Interleaved layout sends consecutive pages to consecutive banks, so page order visits the bank cycle in order and
+// the in-bank offset only advances when that cycle wraps. TensorAccessor::get_noc_addr instead recovers both from the
+// page id on every page, which costs two magic-multiply divisions by the bank count -- one for the in-bank offset and
+// one for the coordinate, which derives the bank a second time -- plus assembling a 64-bit address that the NoC API
+// immediately takes back apart. Tracking the cycle turns that into an increment and a compare, and lets the
+// coordinate and the local address go to the command buffer separately.
+//
+// A page's local address is row_addr + bank_offset[bank]. Where all banks share one offset it folds into row_addr,
+// and then the local address is the same for a whole row of pages and only the coordinate has to be reprogrammed per
+// read. That holds for L1 always, and for DRAM wherever the SoC descriptor gives every DRAM view the same
+// address_offset (Blackhole). Wormhole DRAM is the exception: its views alternate a 1 GB offset, so consecutive
+// pages there really do sit at different local addresses.
+template <bool is_dram>
+class InterleavedBankWalker {
+public:
+    static constexpr uint32_t num_banks = is_dram ? NUM_DRAM_BANKS : NUM_L1_BANKS;
+
+    // Whether all banks share one base offset, which is the precondition for the fold_offset ctor argument. The
+    // table is fixed once firmware init writes it, so this only depends on the arch and its harvesting.
+    static FORCE_INLINE bool offsets_uniform() {
+        const uint32_t first = interleaved_addr_gen::get_bank_offset<is_dram>(0);
+        for (uint32_t bank = 1; bank < num_banks; bank++) {
+            if (interleaved_addr_gen::get_bank_offset<is_dram>(bank) != first) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // fold_offset must be offsets_uniform(). Callers pass it as a template argument to local_addr() as well, so the
+    // two always agree.
+    FORCE_INLINE InterleavedBankWalker(
+        uint32_t page_id, uint32_t bank_base_address, uint32_t page_size, bool fold_offset) :
+        page_size_(page_size) {
+        const uint32_t row = interleaved_addr_gen::get_bank_offset_index<is_dram>(page_id);
+        bank_ = interleaved_addr_gen::get_bank_index<is_dram>(page_id, row);
+        row_addr_ = bank_base_address + row * page_size;
+        if (fold_offset) {
+            row_addr_ += interleaved_addr_gen::get_bank_offset<is_dram>(0);
+        }
+#if ASSERT_ENABLED
+        page_id_ = page_id;
+#endif
+    }
+
+    FORCE_INLINE uint32_t coord() const { return interleaved_addr_gen::get_noc_xy<is_dram>(bank_, noc_index); }
+
+    template <bool folded>
+    FORCE_INLINE uint32_t local_addr() const {
+        if constexpr (folded) {
+            return row_addr_;
+        } else {
+            return row_addr_ + interleaved_addr_gen::get_bank_offset<is_dram>(bank_);
+        }
+    }
+
+    // Steps to the next page. Returns whether the row advanced, i.e. whether a folded local address changed.
+    FORCE_INLINE bool advance() {
+        ++bank_;
+#if ASSERT_ENABLED
+        page_id_++;
+#endif
+        if (bank_ == num_banks) {
+            bank_ = 0;
+            row_addr_ += page_size_;
+            return true;
+        }
+        return false;
+    }
+
+#if ASSERT_ENABLED
+    // Cross-checks the walk against the accessor it replaces, so a watcher build reports any layout this hand-rolled
+    // address generation gets wrong rather than silently reading the wrong pages.
+    template <bool folded, typename AddrGen>
+    FORCE_INLINE bool matches(const AddrGen& addr_gen) const {
+        return get_noc_addr_helper(coord(), local_addr<folded>()) == addr_gen.get_noc_addr(page_id_);
+    }
+#endif
+
+private:
+    uint32_t bank_ = 0;
+    uint32_t row_addr_ = 0;
+    uint32_t page_size_ = 0;
+#if ASSERT_ENABLED
+    uint32_t page_id_ = 0;
+#endif
+};
+
+// Issues the reads that fill one scratch buffer with whole pages, advancing the walker past them and returning the
 // number of bytes read.
 //
 // noc_async_read reprograms the transaction length on every read, and ahead of that has to test the length against
 // NOC_MAX_BURST_SIZE to decide whether the transfer needs splitting across packets. A page that fits in a single
 // packet needs neither: every page in the command is the same size, so the caller programs the length once and each
-// read then writes only the addresses. That removes one of the five (Wormhole) or six (Blackhole) command buffer
-// register writes each page costs, which is the whole per-page issue cost at the page sizes where this loop, rather
-// than DRAM, is the bottleneck.
+// read then writes only the addresses. single_packet asserts both halves of that.
 //
-// single_packet asserts both halves of that: pages fit in one packet, and the caller has programmed the length.
-template <bool single_packet, typename AddrGen>
+// folded_offset additionally drops the local address from all but the first read of each row, leaving only the
+// coordinate and the destination. It requires the walker to have been built with fold_offset set.
+template <bool single_packet, bool folded_offset, bool is_dram, typename AddrGen>
 FORCE_INLINE uint32_t read_pages_into_scratch(
-    const AddrGen& addr_gen, uint32_t& page_id, uint32_t scratch_read_addr, uint32_t amt_to_read, uint32_t page_size) {
+    [[maybe_unused]] const AddrGen& addr_gen,
+    InterleavedBankWalker<is_dram>& walker,
+    uint32_t scratch_read_addr,
+    uint32_t amt_to_read,
+    uint32_t page_size) {
     uint32_t amt_read = 0;
+    // The first read of a chunk always programs the address: the walker may have started mid-row, and a chunk
+    // boundary is not a row boundary.
+    bool row_changed = true;
     while (amt_to_read >= page_size) {
-        uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
+#if ASSERT_ENABLED
+        // Guarded rather than left to ASSERT, whose disabled form still has to parse the expression -- matches() and
+        // the page id it needs only exist in an assert-enabled build.
+        ASSERT(walker.template matches<folded_offset>(addr_gen));
+#endif
+        const uint32_t coord = walker.coord();
+        const uint32_t local_addr = walker.template local_addr<folded_offset>();
         if constexpr (single_packet) {
             // Keep the reads visible to watcher and to noc tracing, both of which noc_async_read would have done.
             // Both compile out of a release build.
             RECORD_NOC_EVENT_WITH_ADDR(
-                NocEventType::READ, scratch_read_addr, noc_addr, page_size, -1, false, noc_index);
-            DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_index, noc_addr, scratch_read_addr, page_size);
-            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
-                noc_index, noc_addr, scratch_read_addr, 0);
+                NocEventType::READ,
+                scratch_read_addr,
+                get_noc_addr_helper(coord, local_addr),
+                page_size,
+                -1,
+                false,
+                noc_index);
+            DEBUG_SANITIZE_NOC_READ_TRANSACTION(
+                noc_index, get_noc_addr_helper(coord, local_addr), scratch_read_addr, page_size);
+            if constexpr (folded_offset) {
+                if (row_changed) {
+                    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                        noc_index, coord, local_addr, scratch_read_addr, 0);
+                } else {
+                    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                        noc_index, coord, local_addr, scratch_read_addr, 0);
+                }
+            } else {
+                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                    noc_index, coord, local_addr, scratch_read_addr, 0);
+            }
         } else {
-            noc_async_read(noc_addr, scratch_read_addr, page_size);
+            noc_async_read(get_noc_addr_helper(coord, local_addr), scratch_read_addr, page_size);
         }
+        row_changed = walker.advance();
         scratch_read_addr += page_size;
-        page_id++;
         amt_to_read -= page_size;
         amt_read += page_size;
     }
     return amt_read;
+}
+
+// Picks the read loop for this command. The two flags are fixed for the whole command, so the choice is made once
+// per chunk and each loop body is free of it.
+template <bool is_dram, typename AddrGen>
+FORCE_INLINE uint32_t read_pages_into_scratch(
+    bool single_packet,
+    bool folded_offset,
+    const AddrGen& addr_gen,
+    InterleavedBankWalker<is_dram>& walker,
+    uint32_t scratch_read_addr,
+    uint32_t amt_to_read,
+    uint32_t page_size) {
+    if (!single_packet) {
+        return read_pages_into_scratch<false, false>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
+    }
+    if (folded_offset) {
+        return read_pages_into_scratch<true, true>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
+    }
+    return read_pages_into_scratch<true, false>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
 }
 
 // This fn prefetches data from DRAM memory and writes data to the dispatch core.
@@ -1177,9 +1316,14 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
         noc_async_read_one_packet_set_state(addr_gen.get_noc_addr(page_id), page_size);
     }
 
-    uint32_t amt_read =
-        single_packet ? read_pages_into_scratch<true>(addr_gen, page_id, scratch_read_addr, amt_to_read, page_size)
-                      : read_pages_into_scratch<false>(addr_gen, page_id, scratch_read_addr, amt_to_read, page_size);
+    // Folding the shared bank offset into the row address is only worth a separate loop when there is at least one
+    // full row of pages to spread the saved address writes over.
+    const bool folded_offset = single_packet && pages >= InterleavedBankWalker<is_dram>::num_banks &&
+                               InterleavedBankWalker<is_dram>::offsets_uniform();
+    InterleavedBankWalker<is_dram> walker(page_id, base_addr, page_size, folded_offset);
+
+    uint32_t amt_read = read_pages_into_scratch(
+        single_packet, folded_offset, addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
     // The fences are to prevent any compiler reordering of instructions around the division. The latency of the
     // division is hidden by the latency of the noc_async_read_barrier().
     std::atomic_signal_fence(std::memory_order_acq_rel);
@@ -1227,10 +1371,8 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
 
             uint32_t amt_to_write = amt_read;
             amt_to_read = (scratch_db_buf_size > read_length) ? read_length : scratch_db_buf_size;
-            amt_read =
-                single_packet
-                    ? read_pages_into_scratch<true>(addr_gen, page_id, scratch_read_addr, amt_to_read, page_size)
-                    : read_pages_into_scratch<false>(addr_gen, page_id, scratch_read_addr, amt_to_read, page_size);
+            amt_read = read_pages_into_scratch(
+                single_packet, folded_offset, addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
 
             // Third step - write from DB
             uint32_t npages =
