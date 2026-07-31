@@ -422,6 +422,40 @@ single-N150. Memory: 3.03B params in the 26 layers + 402M embedding = 3.43B →
 CFG batched to 2B. Implemented in `tt/ttnn_voxtral_flow.py` at fp32/HiFi4: velocity PCC 0.9999989,
 semantic codes exact. Semantic argmax and FSQ quantise stay on host (see that module's docstring).
 
+**THE BIG ONE — a batched matmul re-reads the whole weight per batch element.** CFG makes the trunk
+a batch-2 forward, and that was doubling every weight read for nothing. Measured on
+`[*,3,3072] @ [3072,9216]`:
+
+| activation | ms | effective |
+|---|---|---|
+| `[1,3,K]` | 0.294 | 192 GB/s |
+| `[2,3,K]` (CFG batch 2) | 0.581 | 97 GB/s |
+| `[4,3,K]` (CFG batch 4) | 1.154 | 49 GB/s |
+| **`[1,6,K]` (batch 2 FOLDED into rows)** | **0.296** | **191 GB/s** |
+| `[1,32,K]` (full tile row) | 0.294 | 193 GB/s |
+
+Cost scales linearly with batch; folding the batch into the ROW dimension is **free**, because 6 rows
+still fit one 32-row tile. A linear applies per row independently, so `_trunk` now runs the whole
+trunk as `[1, B*3, 3072]` and only splits the batch out for attention. **Worth 2.23x on device time
+(136.9 -> 61.3 ms) with BIT-IDENTICAL output** — verified against the previous build's WAVs on three
+prompts including a 458-frame clip. This is what the "13% of DRAM peak" figure actually was: a single
+matmul reaches 66% of peak, and CFG batching was throwing half of it away.
+
+It also makes bfp8 weights unnecessary: bf16 **with** the fold (61.3 ms) beats bfp8 **without** it
+(98.3 ms). `WEIGHT_DTYPE` stays `None`; bfp8 remains measured and available but costs accuracy for
+less than the free fix delivers.
+
+Also applied: **k and v share one weight and one matmul**, split by `nlp_create_qkv_heads` which
+builds the head layout in the same op — 3 linears + 6 reshape/permutes become 2 linears + 1 op.
+Worth 1.6%, numerically identical. The old comment claiming the fused op "needs a batch layout this
+does not have" was simply wrong.
+
+**Still available and untried: DRAM-sharded weights** (`create_dram_sharded_mem_config` +
+`MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`, as `tt_transformers` uses for decode). It
+requires the ACTIVATION to be L1-sharded too — `input_tensor_a.is_sharded()` is a hard TT_FATAL — so
+it is real plumbing, and note model_config.py:716 warns that a per_core_N mismatch gives silently bad
+PCC. Only worth it if 66% of peak is not enough.
+
 **Measured and REJECTED — sdpa in the attention interior.** `ttnn.transformer.scaled_dot_product_
 attention` fuses 7 ops into 1 there (2x `repeat_interleave`, transpose, matmul, scale, softmax,
 matmul) and supports GQA natively, so k/v go in unexpanded and the 4x expansion disappears. It
