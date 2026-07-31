@@ -12,16 +12,13 @@
 //    looped over `effective_chunks` chunks (computed from the device-side
 //    counts/idx scratch CBs). Activated tiles are distributed across the
 //    M-row by the READER via L1 multicast — no DRAM scratch round-trip or
-//    cross-core barrier. Placement has two modes (the `direct_write` CT flag):
-//      * direct_write == 0: writes start at tile row 0. The FFN op writes to
-//        a per-expert output tensor; a separate ttnn::insert handles
-//        placement into any shared destination buffer.
-//      * direct_write == 1: this expert's output is written directly into a
-//        shared destination buffer at the expert's region offset. The kernel
-//        reads start[global_expert_id] from `start` (= expert_region_offsets)
-//        device-side and adds (start / TILE_HEIGHT) tile-rows to every output
-//        row — fusing what ttnn::insert would otherwise do (no temp-buffer
-//        DRAM round-trip).
+//    cross-core barrier. Every expert's output is written directly into the
+//    shared destination buffer at that expert's region offset: the kernel
+//    reads start[global_expert_id] from `start` (= expert_region_offsets)
+//    device-side and adds (start / TILE_HEIGHT) tile-rows to every output
+//    row — fusing what ttnn::insert would otherwise do (no temp-buffer DRAM
+//    round-trip). expert_region_offsets is a mandatory op input, so there is
+//    no per-expert-output-tensor mode.
 //
 // 2. Two-RISC `up`-weight read (UP_SPLIT). The writer (NCRISC) reads `up`
 //    from DRAM on NoC 1 concurrent with the reader's NoC-0 `gate` read. The
@@ -53,58 +50,53 @@ void kernel_main() {
     const uint32_t my_mt = get_arg_val<uint32_t>(1);
     const uint32_t my_nt_d = get_arg_val<uint32_t>(2);
     const uint32_t start_addr = get_arg_val<uint32_t>(3);
-    // UP_SPLIT up-weight read args. Arg 4 holds expert-0's up base (kept for
-    // arg-layout stability); the per-expert `up` addresses live in the array
-    // starting at UP_RT and are used instead.
-    const uint32_t my_nt_gu = get_arg_val<uint32_t>(5);
-    const bool is_up_sender = get_arg_val<uint32_t>(6) != 0;
+    // UP_SPLIT up-weight read args. The per-expert `up` addresses live in the
+    // runtime-arg array starting at UP_RT.
+    const uint32_t my_nt_gu = get_arg_val<uint32_t>(4);
+    const bool is_up_sender = get_arg_val<uint32_t>(5) != 0;
     // UP_SPLIT local handshake sems (see reader): up_go = slot reserved,
     // up_done = up landed.
-    const uint32_t up_go_sem_id = get_arg_val<uint32_t>(7);
-    const uint32_t up_done_sem_id = get_arg_val<uint32_t>(8);
+    const uint32_t up_go_sem_id = get_arg_val<uint32_t>(6);
+    const uint32_t up_done_sem_id = get_arg_val<uint32_t>(7);
 
-    constexpr uint32_t cb_out = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     // per_core_M_max: CB-sized max per-core M. The runtime per_core_M is picked
     // from the device count below; the down matmul packs the full max ring (so
     // cb_out carries per_core_M_max rows) and this writer emits only the first
     // (runtime) per_core_M of them.
-    constexpr uint32_t per_core_M_max = get_compile_time_arg_val(2);
-    constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(3);
-    constexpr uint32_t per_core_N_d = get_compile_time_arg_val(4);
-    constexpr uint32_t d_out_subblock_h = get_compile_time_arg_val(7);
-    constexpr uint32_t d_out_subblock_w = get_compile_time_arg_val(8);
-    constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(9);
-    constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(10);
-    constexpr uint32_t num_chunks_max = get_compile_time_arg_val(11);
-    constexpr uint32_t chunk_M_max = get_compile_time_arg_val(12);
+    constexpr uint32_t per_core_M_max = get_compile_time_arg_val(1);
+    constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(2);
+    constexpr uint32_t per_core_N_d = get_compile_time_arg_val(3);
+    constexpr uint32_t d_out_subblock_h = get_compile_time_arg_val(4);
+    constexpr uint32_t d_out_subblock_w = get_compile_time_arg_val(5);
+    constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(6);
+    constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(7);
+    constexpr uint32_t num_chunks_max = get_compile_time_arg_val(8);
+    constexpr uint32_t chunk_M_max = get_compile_time_arg_val(9);
     // device-side count read.
-    constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(14);
-    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(11);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(12);
     // M_tiles_full: total tile-row count of the FFN *input* (x). When the
     // kernel runs more chunks than strictly needed (because
     // M_tiles_full % chunk_M_tiles != 0), the last chunk has writer
     // destinations past M_tiles_full — we skip those source rows here.
-    constexpr uint32_t M_tiles_full = get_compile_time_arg_val(16);
-    // direct_write CT arg (17) is always 1 now: every expert's output is written
-    // into the shared buffer at start[global_id]/TILE tile-rows. Kept in the
-    // CT-arg layout for stability but no longer branched on.
-    // dst_M_tiles: tile-row count of the *destination* buffer. Equals
-    // M_tiles_full in non-direct mode; the shared buffer's row count in
-    // direct-write mode (used to bound destination writes).
-    constexpr uint32_t dst_M_tiles = get_compile_time_arg_val(18);
-    constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(19);
+    constexpr uint32_t M_tiles_full = get_compile_time_arg_val(13);
+    // dst_M_tiles: tile-row count of the *destination* (shared) buffer, used to
+    // bound destination writes.
+    constexpr uint32_t dst_M_tiles = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(15);
     // UP_SPLIT up-weight read (see header): the writer reads `up` on NoC 1 into
     // the gy=0 sender's cb_in1_up slot; the reader mcasts it on NoC 0.
     // writer_split_up gates it (1 = UP_SPLIT, 0 = LEGACY: reader owns `up`).
-    constexpr uint32_t cb_in1_up = get_compile_time_arg_val(20);
-    constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(21);
-    constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(22);
-    constexpr uint32_t writer_split_up = get_compile_time_arg_val(23);
+    constexpr uint32_t cb_in1_up = get_compile_time_arg_val(16);
+    constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(17);
+    constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(18);
+    constexpr uint32_t writer_split_up = get_compile_time_arg_val(19);
     // When the compute tail-skips the last down block's K padding, the down
     // matmul never reduces the N-OOB hidden columns, so the `up` read can skip
     // zero-filling them. Derived identically to the reader's down_k_tail_skip.
-    constexpr bool down_k_tail_skip = get_compile_time_arg_val(24) != 0;
+    constexpr bool down_k_tail_skip = get_compile_time_arg_val(20) != 0;
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     // Full compile-time M-subblock count of cb_out (the down matmul copies the
@@ -121,10 +113,9 @@ void kernel_main() {
     CircularBuffer cb_start_scratch_buf(cb_start_scratch);
 
     // Accessor compile-arg stream order (host appends in this exact order):
-    // out, then start (direct-write), then up (UP_SPLIT). The accessors are
-    // constructed unconditionally; start_acc is used only when direct_write,
-    // up_acc only when writer_split_up.
-    constexpr uint32_t out_accessor_offset = 25;
+    // out, then start, then up (UP_SPLIT). The accessors are constructed
+    // unconditionally; up_acc is used only when writer_split_up.
+    constexpr uint32_t out_accessor_offset = 21;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -136,7 +127,7 @@ void kernel_main() {
     constexpr auto up_args = TensorAccessorArgs<up_accessor_offset>();
     // Per-expert `up` base addresses live in a runtime-arg array after the fixed
     // writer args; UP_RT is its first index. up_addr(e) = arg[UP_RT + e].
-    constexpr uint32_t UP_RT = 9;
+    constexpr uint32_t UP_RT = 8;
 
     const uint32_t out_tile_bytes = cb_out_buf.get_tile_size();
 
@@ -182,12 +173,16 @@ void kernel_main() {
         const auto up_acc = TensorAccessor(up_args, get_arg_val<uint32_t>(UP_RT + local_expert_id), up_tile_bytes);
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         const uint32_t count_value = counts_ptr[global_expert_id];
-        const uint32_t count_tiles = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
+        // Same capacity clamp the reader and compute apply to the device-produced
+        // count (see adaptive_chunk::clamp_count_tiles): arithmetic, so it bounds
+        // the chunk loop in Release too, where ASSERT is a no-op.
+        const uint32_t count_tiles_raw = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
+        const uint32_t count_tiles = adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max);
+        ASSERT(count_tiles == count_tiles_raw);
         // Runtime chunk layout from THIS expert's count — the same math the reader
         // and compute kernels run, so all three agree on the row mapping (a
         // mismatch would emit this expert's rows at the wrong token offsets).
         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
-        ASSERT(effective_chunks <= num_chunks_max);
         const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
 
         for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {

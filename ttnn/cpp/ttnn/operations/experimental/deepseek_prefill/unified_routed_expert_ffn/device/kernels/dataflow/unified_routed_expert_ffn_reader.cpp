@@ -7,8 +7,7 @@
 // Per-core responsibilities, sequenced over `effective_chunks` chunks
 // (effective_chunks = ceil(this expert's token count / chunk_M_tiles)):
 //   - Read counts/idx_table scratch once at kernel start to discover this
-//     expert's active token count. x tile reads start at row 0 unless
-//     read_x_at_offset is set, in which case x is a shared buffer and this
+//     expert's active token count. x is the shared dispatched buffer and this
 //     expert's rows begin at start[global_id] (fusing what ttnn::extract did);
 //     the reader adds (start / TILE) * K_gate_tiles to every x page index.
 //   - Phase 1 (gate matmul, fused with phase 2): per K-block, sender at
@@ -36,59 +35,56 @@
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
-    // Args 1..3 hold expert-0's gate/up/down base addresses (kept for arg-layout
-    // stability); the per-expert weight-address arrays after `start` are used
-    // instead, so these single slots are intentionally not read here.
-    const uint32_t counts_addr = get_arg_val<uint32_t>(4);
-    const uint32_t idx_table_addr = get_arg_val<uint32_t>(5);
+    const uint32_t counts_addr = get_arg_val<uint32_t>(1);
+    const uint32_t idx_table_addr = get_arg_val<uint32_t>(2);
 
-    const uint32_t my_mt = get_arg_val<uint32_t>(6);
-    const uint32_t my_nt_gu = get_arg_val<uint32_t>(7);
-    const uint32_t my_nt_d = get_arg_val<uint32_t>(8);
+    const uint32_t my_mt = get_arg_val<uint32_t>(3);
+    const uint32_t my_nt_gu = get_arg_val<uint32_t>(4);
+    const uint32_t my_nt_d = get_arg_val<uint32_t>(5);
 
-    // Weight-multicast runtime args (indices 9..18).
-    const uint32_t is_in1_sender_u32 = get_arg_val<uint32_t>(9);
+    // Weight-multicast runtime args (indices 6..15).
+    const uint32_t is_in1_sender_u32 = get_arg_val<uint32_t>(6);
     const bool is_in1_sender = is_in1_sender_u32 != 0;
-    const uint32_t in1_ready_sem_id = get_arg_val<uint32_t>(10);
-    const uint32_t in1_valid_sem_id = get_arg_val<uint32_t>(11);
-    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(12);
-    const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(13);
-    const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(14);
-    const uint32_t in1_mcast_nx_end = get_arg_val<uint32_t>(15);
-    const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(16);
-    const uint32_t in1_sender_nx = get_arg_val<uint32_t>(17);
-    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(18);
+    const uint32_t in1_ready_sem_id = get_arg_val<uint32_t>(7);
+    const uint32_t in1_valid_sem_id = get_arg_val<uint32_t>(8);
+    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(9);
+    const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(10);
+    const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(11);
+    const uint32_t in1_mcast_nx_end = get_arg_val<uint32_t>(12);
+    const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(13);
+    const uint32_t in1_sender_nx = get_arg_val<uint32_t>(14);
+    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(15);
 
-    // x (in0) multicast runtime args (indices 19..28).
-    const uint32_t is_in0_sender_u32 = get_arg_val<uint32_t>(19);
+    // x (in0) multicast runtime args (indices 16..25).
+    const uint32_t is_in0_sender_u32 = get_arg_val<uint32_t>(16);
     const bool is_in0_sender = is_in0_sender_u32 != 0;
-    const uint32_t in0_ready_sem_id = get_arg_val<uint32_t>(20);
-    const uint32_t in0_valid_sem_id = get_arg_val<uint32_t>(21);
-    const uint32_t in0_num_receivers = get_arg_val<uint32_t>(22);
-    const uint32_t in0_mcast_nx_start = get_arg_val<uint32_t>(23);
-    const uint32_t in0_mcast_ny_start = get_arg_val<uint32_t>(24);
-    const uint32_t in0_mcast_nx_end = get_arg_val<uint32_t>(25);
-    const uint32_t in0_mcast_ny_end = get_arg_val<uint32_t>(26);
-    const uint32_t in0_sender_nx = get_arg_val<uint32_t>(27);
-    const uint32_t in0_sender_ny = get_arg_val<uint32_t>(28);
+    const uint32_t in0_ready_sem_id = get_arg_val<uint32_t>(17);
+    const uint32_t in0_valid_sem_id = get_arg_val<uint32_t>(18);
+    const uint32_t in0_num_receivers = get_arg_val<uint32_t>(19);
+    const uint32_t in0_mcast_nx_start = get_arg_val<uint32_t>(20);
+    const uint32_t in0_mcast_ny_start = get_arg_val<uint32_t>(21);
+    const uint32_t in0_mcast_nx_end = get_arg_val<uint32_t>(22);
+    const uint32_t in0_mcast_ny_end = get_arg_val<uint32_t>(23);
+    const uint32_t in0_sender_nx = get_arg_val<uint32_t>(24);
+    const uint32_t in0_sender_ny = get_arg_val<uint32_t>(25);
 
     // Activated L1 mcast sems. Sender (gx == kb at phase-4 K-block kb) waits
     // on its act_ready_sem for GRID_X - 1 incs from the receivers; then
     // mcasts cb_activated -> all M-row cores' cb_in0_down_full L1; then
     // mcasts act_valid_sem to release receivers.
-    const uint32_t act_ready_sem_id = get_arg_val<uint32_t>(29);
-    const uint32_t act_valid_sem_id = get_arg_val<uint32_t>(30);
+    const uint32_t act_ready_sem_id = get_arg_val<uint32_t>(26);
+    const uint32_t act_valid_sem_id = get_arg_val<uint32_t>(27);
 
     // UP_SPLIT local handshake (reader <-> writer): up_go = slot reserved,
     // up_done = up block landed in L1. Monotonic; gy=0 in1-sender cores only.
-    const uint32_t up_go_sem_id = get_arg_val<uint32_t>(31);
-    const uint32_t up_done_sem_id = get_arg_val<uint32_t>(32);
+    const uint32_t up_go_sem_id = get_arg_val<uint32_t>(28);
+    const uint32_t up_done_sem_id = get_arg_val<uint32_t>(29);
     Semaphore<> up_go_sem(up_go_sem_id);
     Semaphore<> up_done_sem(up_done_sem_id);
 
-    // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 33.
+    // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 30.
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
-    constexpr uint32_t M_ROW_NOC_RT_OFFSET = 33;
+    constexpr uint32_t M_ROW_NOC_RT_OFFSET = 30;
 
     // -------------------------- compile-time args -------------------------
     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
@@ -335,16 +331,22 @@ void kernel_main() {
 
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         const uint32_t count_value = counts_ptr[global_expert_id];
-        const uint32_t count_tiles = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
+        // counts[] is device-produced and unvalidated: bound it by the capacity
+        // this program was built for (num_chunks_max * chunk_M_max tile-rows)
+        // BEFORE deriving anything from it. The clamp is arithmetic so it also
+        // holds in Release, where ASSERT is a no-op; the assert below still
+        // hard-fails a mismatch in watcher builds. Compute and writer clamp
+        // identically, so all three keep the same row mapping (see
+        // adaptive_chunk::clamp_count_tiles).
+        const uint32_t count_tiles_raw = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
+        const uint32_t count_tiles = adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max);
+        ASSERT(count_tiles == count_tiles_raw);
         // Runtime chunk layout from THIS expert's actual token count (identical
         // math in the compute and writer kernels, so all three agree on the row
         // mapping). Full chunks span chunk_M_max tile-rows; the tail chunk shrinks
         // per_core_M to the remainder, so per_core_M is per-chunk (see the chunk
         // loop) and adapts to each expert's own load with minimal phantom work.
         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
-        // An out-of-range count means counts[] disagrees with the allocated M —
-        // hard-fail rather than silently clamp and emit rows for the wrong tokens.
-        ASSERT(effective_chunks <= num_chunks_max);
 
         // x-read row offset: this expert's rows begin at start[global_id].
         // Convert the token row to a tile-page offset (row_tile * K_gate_tiles)

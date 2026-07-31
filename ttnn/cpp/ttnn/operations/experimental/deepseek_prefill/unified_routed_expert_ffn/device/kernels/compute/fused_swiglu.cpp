@@ -891,9 +891,15 @@ void kernel_main() {
         // picker on the same count, so they agree on the row mapping; rows past the
         // count in the tail chunk are zero-filled by the reader and dropped by the
         // writer.
-        const uint32_t count_tiles = (count_value + 31) / 32;
+        // The count is device-produced and unvalidated, so clamp it to this
+        // program's capacity before deriving the chunk layout — arithmetic, so the
+        // bound holds in Release where ASSERT is a no-op. Reader and writer apply
+        // the identical clamp, keeping the three row mappings in lockstep (see
+        // adaptive_chunk::clamp_count_tiles).
+        const uint32_t count_tiles_raw = (count_value + 31) / 32;
+        const uint32_t count_tiles = adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max);
+        ASSERT(count_tiles == count_tiles_raw);
         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
-        ASSERT(effective_chunks <= num_chunks_max);
 
         for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
             // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller
