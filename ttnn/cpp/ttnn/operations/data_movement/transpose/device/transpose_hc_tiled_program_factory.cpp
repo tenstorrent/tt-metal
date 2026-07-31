@@ -193,16 +193,17 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
-    // Donor writer forked into the op directory (legacy source lives under eltwise/unary; the
-    // orchestration constraint forbids editing out-of-directory files, so it is forked here).
+    // Borrowed writer: bound from the Metal 2.0 fork that lives beside its legacy original under
+    // eltwise/unary (the legacy source still serves ~45 unmigrated binders). The fork's binding
+    // names are this factory's constraint, not the reverse.
     KernelSpec writer{
         .unique_id = HCT_WRITER,
         .source =
-            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-            "writer_unary_interleaved_start_id_transpose_m2.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+            "writer_unary_interleaved_start_id_metal2.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = HCT_SRC0_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = HCT_OUTPUT, .accessor_name = "dst"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = HCT_OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };

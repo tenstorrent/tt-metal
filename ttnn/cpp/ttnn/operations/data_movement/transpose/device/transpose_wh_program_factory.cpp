@@ -90,12 +90,12 @@ ttnn::device_operation::ProgramArtifacts build_wh_tiled(const TransposeInputs& t
 
     KernelSpec compute{
         .unique_id = WH_COMPUTE,
-        // Forked into the op dir: transpose_wh.cpp is cross-op shared with legacy peers (permute,
+        // Lent kernel: transpose_wh.cpp is cross-op shared with legacy peers (permute,
         // nlp_create_qkv_heads{,_boltz,_vit}, split_query_key_value_and_split_heads), so the legacy
-        // source must stay non-Metal-2.0 for them; this factory binds the Metal 2.0 fork.
+        // source must stay non-Metal-2.0 for them; this factory binds the Metal 2.0 fork beside it.
         .source =
             "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/"
-            "transpose_wh_transpose_m2.cpp",
+            "transpose_wh_metal2.cpp",
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = WH_SRC0_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
@@ -107,12 +107,14 @@ ttnn::device_operation::ProgramArtifacts build_wh_tiled(const TransposeInputs& t
 
     KernelSpec writer{
         .unique_id = WH_WRITER,
+        // Borrowed kernel: bound from the Metal 2.0 fork that lives beside its legacy original
+        // under eltwise/unary. The fork's binding names are this factory's constraint.
         .source =
-            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-            "writer_unary_interleaved_start_id_transpose_m2.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+            "writer_unary_interleaved_start_id_metal2.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = WH_OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = WH_OUTPUT, .accessor_name = "dst"}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = WH_OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
@@ -267,7 +269,7 @@ ttnn::device_operation::ProgramArtifacts build_wh_rm(const TransposeInputs& tens
         // WH-Sharded-RM factory); the SHARDED branch is stripped in the fork.
         .source =
             "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/"
-            "transpose_wh_rm_transpose_m2.cpp",
+            "transpose_wh_rm_metal2.cpp",
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
             {DFBBinding{

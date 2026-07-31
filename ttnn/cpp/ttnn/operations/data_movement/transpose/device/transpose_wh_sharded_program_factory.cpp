@@ -91,13 +91,13 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         compute_cfg.unpack_modes.emplace(WHS_SRC0_DFB, UnpackMode::UnpackToDest);
     }
 
-    // Donor kernels forked into the op directory (legacy sources live under eltwise/unary and
-    // data_movement/sharded; the orchestration constraint forbids editing them in place).
+    // Borrowed donor kernels: each is forked beside its own legacy original (eltwise/unary and
+    // data_movement/sharded respectively), since the legacy sources still serve many other ops.
     KernelSpec reader{
         .unique_id = WHS_READER,
         .source =
-            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-            "reader_unary_sharded_transpose_m2.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+            "reader_unary_sharded_metal2.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = WHS_SRC0_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
@@ -107,8 +107,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     KernelSpec writer{
         .unique_id = WHS_WRITER,
         .source =
-            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-            "writer_unary_sharded_transpose_m2.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+            "writer_unary_sharded_metal2.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = WHS_OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
@@ -117,13 +117,13 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
 
     KernelSpec compute{
         .unique_id = WHS_COMPUTE,
-        // Forked into the op dir: transpose_wh_sharded.cpp is cross-op shared with legacy peers
+        // Lent kernel: transpose_wh_sharded.cpp is cross-op shared with legacy peers
         // (create_qkv_heads, create_qkv_heads_from_separate_tensors,
         // split_query_key_value_and_split_heads_sharded), so the legacy source must stay
-        // non-Metal-2.0 for them; this factory binds the Metal 2.0 fork.
+        // non-Metal-2.0 for them; this factory binds the Metal 2.0 fork beside it.
         .source =
             "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/"
-            "transpose_wh_sharded_transpose_m2.cpp",
+            "transpose_wh_sharded_metal2.cpp",
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = WHS_SRC0_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},

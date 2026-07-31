@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Metal 2.0 fork of data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp,
-// forked into the transpose op directory because the orchestration constraint forbids editing
-// the shared donor in place. Used by the WH-Sharded transpose factory (consumes the borrowed
-// output DFB). Sunset when the shared donor and all its consumers migrate to Metal 2.0.
+// Metal 2.0 fork of writer_unary_sharded.cpp, living beside it. The legacy source stays in place,
+// non-Metal-2.0, for its ~17 unmigrated binders; ops ported to Metal 2.0 bind this fork.
+// Bindings are named for the kernel's role (dfb::out, args::num_units), not for any one consumer.
+// Sunset when the last legacy consumer migrates and this fork takes over the legacy name.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

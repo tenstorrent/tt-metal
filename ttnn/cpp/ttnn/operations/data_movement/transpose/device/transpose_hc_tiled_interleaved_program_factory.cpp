@@ -205,7 +205,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
         // (permute_tiled_program_factory.cpp), so it must stay non-Metal-2.0 for that consumer.
         .source =
             "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-            "reader_unary_transpose_hc_interleaved_tiled_padding_aware_transpose_m2.cpp",
+            "reader_unary_transpose_hc_interleaved_tiled_padding_aware_metal2.cpp",
         .compiler_options = {.defines = pad_defines},
         .dfb_bindings = reader_dfb,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = HCTI_INPUT, .accessor_name = "src"}},
