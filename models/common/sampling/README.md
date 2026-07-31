@@ -123,6 +123,32 @@ versioning. It certifies that a vLLM wrapper supports split async readback and
 device-resident sampled-token feedback; wrappers without it receive explicit
 full-input reload commands instead.
 
+### Requirements for `supports_async_decode=True`
+
+A model wrapper may opt in only if all of the following hold:
+
+- `decode_forward(..., read_from_device=False)` and
+  `read_decode_output(..., async_read=True)` split submission from observational
+  readback.
+- Device sampling writes the selected token into the persistent token input
+  consumed by the next decode.
+- Decode forward advances the persistent position exactly once; sampling and
+  readback never advance it.
+- Page tables can be refreshed without copying or rebinding token, position, or
+  RoPE trace inputs.
+- All four reload commands are honored independently, without model-local
+  heuristics escalating page-table-only refresh into a full reload.
+- Slot remap, sampling-parameter upload, penalty/RNG reset, and seed advancement
+  occur in that order, with one seed advance per sampled token.
+- Persistent buffers remain valid through deferred readback and until an
+  explicit reload replaces them.
+
+If any item is unsupported, leave the capability absent or `False`. vLLM will
+disable async scheduling and issue a full input reload for every decode. The
+authoritative mode definitions, transition matrix, and correctness invariant
+live in the paired vLLM plugin document
+`plugins/vllm-tt-plugin/docs/decode-reload-contract.md`.
+
 ## Pitfalls
 
 **`padded_vocab_size` vs `vocab_size`**: TTSampling device offsets for global token IDs must use the padded vocab size to match how the LM head shards logits across devices. Using unpadded `vocab_size` for offsets shifts token IDs from devices 1+ and produces garbled output.
