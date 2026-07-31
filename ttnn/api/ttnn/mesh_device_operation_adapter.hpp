@@ -975,6 +975,18 @@ public:
         using Base = ProgramSpecMeshWorkloadFactoryAdapter<CustomSpecFactory>;
         using typename Base::cached_mesh_workload_t;
 
+        // create_program_artifacts takes no coordinate, so the miss build stamps one set of run args on every
+        // range: without this, a per-coordinate arg is wrong until the first cache hit.
+        static cached_mesh_workload_t create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            auto cached_workload = Base::create_mesh_workload(attrs, tensor_coords, tensor_args, tensor_return_value);
+            apply_descriptor(cached_workload, attrs, tensor_args, tensor_return_value);
+            return cached_workload;
+        }
+
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& attrs,
