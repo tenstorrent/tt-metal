@@ -64,6 +64,11 @@ handicapped with extra barriers.
 BRISC's kernel is present in **all three** variants (it just returns in the baseline) so kernel count
 and launch shape are identical.
 
+A fourth variant, `one_riscv_brisc`, is a **diagnostic** rather than a candidate: BRISC reads *both*
+operands, so all reads ride NoC 1 with the same single-RISC issue load as the baseline. Because a
+RISC and its port move together, that is the only way to see the port/route contribution on its own.
+It is used in the multi-core tables below.
+
 ## Measured result (BH P150, single core, bf16, 128 tiles/operand)
 
 Full tables and noise figures: [`report.md`](report.md). Max spread across all cells was **0.5%**.
@@ -81,13 +86,14 @@ and the pack cycle.
 
 **Three things to take away:**
 
-1. **The split wins at every block size measured** — never a regression, for zero extra L1.
+1. **On one core the split wins at every block size measured**, for zero extra L1. (Multi-core is a
+   different story — see *Where this wins and where it does NOT* below.)
 2. **The read-side win grows monotonically with `block`, but the full-op win peaks at `block=8` and
    then decays.** The ablation says why: the measured FPU cost rises from ~0 at `block≤2` to ~4.1 µs
    at `block=32`. Once the reads get fast enough the FPU becomes the critical path, so a faster read
    has less and less left to uncover. The trick does not stop working at large blocks — the *op* stops
    being read-bound. Always run the ablation before concluding where the win "stops".
-3. **Two engines buy ~1.6×, not 2×** in this configuration. Don't budget 2×.
+3. **Two engines buy ~1.6×, not 2×** at this transaction size. Don't budget 2×.
 
 **On the semaphore form:** `two_riscv_sem` is a **loss** at `block=1` (0.97× — 128 same-core
 handshakes), breaks even around `block=2`, and converges to within ~1% of `two_riscv` by `block≥16`.
@@ -146,6 +152,42 @@ limit, and the port's injection path contributes a smaller share.**
 Practical consequence: the smaller your transactions, the more this trick is worth. With large
 contiguous reads you are closer to the byte side and should expect less.
 
+## Where this wins and where it does NOT — core count × transaction size
+
+The single-core numbers above are only half the story. Two forces compete, and their balance decides
+the sign. Full tables in [`report.md`](report.md).
+
+**Force 1 — issue-rate relief** (what the split buys). Grows as transactions shrink, because cost per
+command is fixed.
+
+**Force 2 — the NoC-1 read-route penalty** (what the split costs). Reads want NoC 0: its
+dimension-ordered east→south routing *disperses* column-localized DRAM traffic, whereas NoC 1's
+north→west *concentrates* it onto the DRAM columns (writes are the mirror, which is why the
+reader-NoC0 / writer-NoC1 default exists). Splitting moves **half the read traffic onto the worse
+route**. Measured in isolation with a diagnostic variant that keeps a single-RISC issue load but puts
+*all* reads on NoC 1: **0.98×** on one core (routing irrelevant) but **0.31×** at 11 cores.
+
+Net effect, `two_riscv` vs baseline, payload-ablated, `block=8`:
+
+| cores | 2048 B (bf16 tile) | 1024 B | 512 B | 256 B |
+|---|---|---|---|---|
+| 1 | 1.32× | 1.58× | 1.73× | **1.85×** |
+| 11 | **0.63×** ← regression | 0.79× | 1.19× | 1.56× |
+| 88 (11×8) | 1.08× | 1.14× | **1.49×** | **1.74×** |
+
+Also measured: aggregate DRAM read bandwidth plateaus at **~400–440 GB/s from 22 cores up**, while
+per-core bandwidth collapses 37 → 4.6 GB/s. At high core counts the read is DRAM-bound, so there is
+little issue-rate headroom left to reclaim — which is why the 2048 B column flattens to ~1.1×.
+
+**The rule:** this is a **small-transaction** optimization, not a "more cores" one.
+
+- **Use it** when reads are command-limited: many small transactions. Block-float weight pages land
+  exactly here (a bfp4 tile page is 576 B, bfp8 1088 B), and at ~512 B the split wins at **every**
+  core count tested — 1.19× at 11 cores, 1.49× at 88.
+- **Don't** use it for large, tile-sized reads spread over a moderate core count. At bf16 2048 B on 11
+  cores it is a **0.63× regression**: you pay the NoC-1 read-route penalty and get nothing for it.
+- On a **single core** it always wins, and routing is irrelevant.
+
 ## Gist — how to apply it
 
 1. Move the second operand's `noc_async_read` into the **writer** kernel (`WriterConfigDescriptor`
@@ -173,6 +215,9 @@ python -m ttnn.operations.examples.dual_noc_read [options]
 | `--trials` | int | `5` | independent profiler windows; report shows median ± spread |
 | `--iters` | int | `10` | launches averaged inside each window |
 
+Multi-core sweeps run through the test directly (the grids and per-core tile count are env knobs):
+`DNR_GRIDS=1x1,11x1,11x8`, `DNR_TPC=32` (tiles per operand per core), `DNR_TXN_GRIDS`, `DNR_TXNS`.
+
 There is deliberately **no `--kernel-iters`**: the output is L1-resident and nothing drains it, so a
 launch performs exactly one pass over the tiles. Amortize launch overhead with `--shape` instead.
 The transaction-size sweep behind table [3] is set with `DNR_TXNS` (default `2048,1024,512,256`).
@@ -189,18 +234,27 @@ python -m ttnn.operations.examples.dual_noc_read --shape 2048,128 --blocks 8,16,
 scripts/run_safe_pytest.sh --run-all \
     tests/ttnn/unit_tests/operations/examples/test_dual_noc_read.py::test_dual_noc_read_correctness
 
-# the measured sweep (all three tables)
+# the single-core sweep (all three tables)
 scripts/run_safe_pytest.sh --run-all \
     tests/ttnn/unit_tests/operations/examples/test_dual_noc_read.py::test_dual_noc_read_device_perf
+
+# multi-core scaling, and core count x transaction size
+scripts/run_safe_pytest.sh --run-all \
+    tests/ttnn/unit_tests/operations/examples/test_dual_noc_read.py::test_dual_noc_read_multicore_perf \
+    tests/ttnn/unit_tests/operations/examples/test_dual_noc_read.py::test_dual_noc_read_multicore_txn_probe
 ```
 
 ## Caveats
 
-- **Single core.** With many cores competing for DRAM the shared ceiling arrives sooner; expect less.
-- **The win is bounded by how read-bound the op is** (takeaway 2) — run the ablation.
+- **Perf is measured, never asserted.** Correctness (`C == A*B`) is the only pass/fail.
+- **The win is bounded by how read-bound the op is** — see takeaway 2; run the ablation before
+  drawing conclusions about where it "stops".
 - The output being L1-resident is what makes this a clean read-only measurement. A real op writes its
   result, and if the writer must do that *concurrently* with reading the second operand, this is no
   longer free. The trick is free precisely when the writer would otherwise be idle.
-- bf16 tiles (2048 B) only, and that is the *least* favourable transaction size for this trick — see
-  the mechanism section. Smaller pages (block-float formats, partial-tile reads) should do better;
-  re-measure rather than extrapolating.
+- **Grids here are rectangular and anchored at (0,0)**, with work split row-major. Different
+  placements route differently (that is force 2 above), so re-measure rather than extrapolating to a
+  different core layout.
+- Only `bfloat16` operands are wired up; `txn_bytes` is what stands in for smaller pages. A real
+  block-float tensor also changes the page size seen by the accessor, so treat the 512 B column as
+  indicative of a bfp4-sized read, not identical to one.

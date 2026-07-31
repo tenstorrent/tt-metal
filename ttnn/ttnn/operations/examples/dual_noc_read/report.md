@@ -159,6 +159,82 @@ scaled) plus the NoC-model cross-check above. Both point at issue rate.
 
 ---
 
+## Multi-core scaling — and why the split can turn into a LOSS
+
+Per-core work held constant (32 tiles/operand/core, so total bytes grow with the grid), payload
+ablated, `block=8`. Grids are 11 wide, ending at 11×8 = 88 cores.
+
+`one_riscv_brisc` is a **diagnostic**, not part of the ladder: BRISC reads *both* operands, so all
+reads ride NoC 1 with the SAME single-RISC issue load as the baseline. Since a RISC and its port move
+together, this is the only way to see the port/route contribution on its own — any gap vs `one_riscv`
+is the NoC, not issue rate.
+
+| cores | grid | variant | ns/op | GB/s | GB/s/core | vs base |
+|---|---|---|---|---|---|---|
+| 1 | 1×1 | `one_riscv` | 3524 | 37.2 | 37.2 | (base) |
+| 1 | 1×1 | `two_riscv` | 2657 | 49.3 | 49.3 | **1.33×** |
+| 1 | 1×1 | `one_riscv_brisc` | 3609 | 36.3 | 36.3 | 0.98× |
+| 11 | 11×1 | `one_riscv` | 4615 | 312.4 | 28.4 | (base) |
+| 11 | 11×1 | `two_riscv` | 7357 | 196.0 | 17.8 | **0.63×** ← loss |
+| 11 | 11×1 | `one_riscv_brisc` | 14710 | 98.0 | 8.9 | **0.31×** |
+| 22 | 11×2 | `one_riscv` | 7562 | 381.3 | 17.3 | (base) |
+| 22 | 11×2 | `two_riscv` | 10668 | 270.3 | 12.3 | 0.71× |
+| 22 | 11×2 | `one_riscv_brisc` | 20636 | 139.7 | 6.4 | 0.37× |
+| 44 | 11×4 | `one_riscv` | 14503 | 397.7 | 9.0 | (base) |
+| 44 | 11×4 | `two_riscv` | 15965 | 361.2 | 8.2 | 0.91× |
+| 44 | 11×4 | `one_riscv_brisc` | 30866 | 186.8 | 4.3 | 0.47× |
+| 88 | 11×8 | `one_riscv` | 28406 | 406.0 | 4.6 | (base) |
+| 88 | 11×8 | `two_riscv` | 26310 | 438.4 | 5.0 | 1.08× |
+| 88 | 11×8 | `one_riscv_brisc` | 51995 | 221.8 | 2.5 | 0.55× |
+
+**Two things are happening, and they fight each other.**
+
+**(i) DRAM saturates.** Aggregate read bandwidth plateaus at ~400–440 GB/s from 22 cores up, while
+per-core bandwidth collapses 37.2 → 4.6 GB/s. At 88 cores the read is DRAM-bound, not issue-bound, so
+relieving issue rate has almost nothing left to give.
+
+**(ii) NoC 1 is a much worse route for DRAM reads at spread placements.** The diagnostic isolates
+this: same issue load, reads moved to the other port, and it costs **0.31–0.55×** from 11 cores up —
+while being neutral (0.98×) on a single core, where routing is irrelevant. Reads want NoC 0: its
+dimension-ordered east→south routing *disperses* column-localized DRAM traffic, whereas NoC 1's
+north→west *concentrates* it onto the DRAM columns. Writes are the mirror image, which is exactly why
+the reader/writer default pairing is NoC 0 / NoC 1.
+
+Splitting the operands puts **half the read traffic on the worse route**. At a bf16 tile page that
+costs more than the second engine gains — hence the 0.63× at 11 cores. At 88 cores DRAM saturation
+flattens both effects and it comes back to roughly neutral (1.08×).
+
+## Transaction size flips the sign
+
+Same grids, `block=8`, payload ablated, sweeping bytes per NoC command.
+
+| cores | txn B | `two_riscv` vs base | `one_riscv_brisc` (NoC-1 penalty) |
+|---|---|---|---|
+| 1 | 2048 | 1.32× | 0.98× |
+| 1 | 1024 | 1.58× | 1.00× |
+| 1 | 512 | 1.73× | 0.99× |
+| 1 | 256 | **1.85×** | 1.00× |
+| 11 | 2048 | **0.63×** | 0.32× |
+| 11 | 1024 | 0.79× | 0.41× |
+| 11 | 512 | **1.19×** | 0.66× |
+| 11 | 256 | **1.56×** | 0.95× |
+| 88 | 2048 | 1.08× | 0.55× |
+| 88 | 1024 | 1.14× | 0.58× |
+| 88 | 512 | **1.49×** | 0.81× |
+| 88 | 256 | **1.74×** | 1.13× |
+
+As transactions shrink, per-command issue cost grows (favouring the split) **and** the NoC-1 route
+penalty fades (0.32 → 0.95 at 11 cores) — both push the same way. So the loss at 11 cores is specific
+to large, tile-sized reads: by ~512 B the split is already a **1.19×** win there, and **1.49×** at 88
+cores.
+
+**Practical rule.** The split is worth it when reads are *command*-limited, i.e. many small
+transactions — which is the normal case for block-float weight pages (a bfp4 tile page is 576 B, bfp8
+1088 B). It is a regression when reads are large, tile-sized, and spread over a moderate core count,
+because then you are paying the NoC-1 read-route penalty for nothing.
+
+---
+
 ## Summary
 
 1. **Splitting two independent operand streams across the two data-movement RISC-Vs wins at every

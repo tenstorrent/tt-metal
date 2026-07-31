@@ -37,8 +37,10 @@ from loguru import logger
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn.operations.examples.dual_noc_read import (
+from ttnn.operations.examples.dual_noc_read.program_descriptor_with_inline_kernels import (
+    ALL_VARIANTS,
     BASELINE,
+    DIAG_VARIANT,
     LABEL,
     NOCS,
     RISCS,
@@ -273,4 +275,135 @@ def test_dual_noc_read_device_perf(device):
             lines.append(f"    {txn:>6} {cmds:>6}  {variant:<18}  {v:>10.1f} {sp:>5.1f}  {read_bytes / v:>9.1f}{tag}")
 
     lines += ["", "    variants:"] + [f"      {k:<18} {LABEL[k]}" for k in variants]
+    logger.info("\n".join(lines))
+
+
+# =============================================================================
+# Multi-core scaling — does the split survive when many cores contend for DRAM?
+#
+# PER-CORE work is held CONSTANT (TILES_PER_CORE tiles per core, so the tensor grows with the grid).
+# That way the only thing changing across grids is cross-core DRAM/NoC contention, not each core's
+# own workload. Grids are 11 wide to match a realistic N-parallel matmul grid, ending at 11x8.
+# =============================================================================
+TILES_PER_CORE = int(os.environ.get("DNR_TPC", "32"))
+GRID_SWEEP = tuple(
+    tuple(int(v) for v in g.split("x")) for g in os.environ.get("DNR_GRIDS", "1x1,11x1,11x2,11x4,11x8").split(",")
+)
+
+
+def _make_inputs_for_grid(device, num_cores, seed=0):
+    """Tall 1-tile-wide operands with TILES_PER_CORE tiles per core, so height-sharding the output
+    over the grid gives each core exactly TILES_PER_CORE tile-rows."""
+    total_tiles = TILES_PER_CORE * num_cores
+    return _make_inputs(device, shape=(total_tiles * TILE, TILE), seed=seed), total_tiles
+
+
+def test_dual_noc_read_multicore_correctness(device):
+    """A*B stays correct once the work is split across a grid (page range per core must line up
+    with that core's output shard)."""
+    for grid in GRID_SWEEP:
+        (a, b), _ = _make_inputs_for_grid(device, grid[0] * grid[1])
+        expected = ttnn.to_torch(a).to(torch.float32) * ttnn.to_torch(b).to(torch.float32)
+        out = ttnn.to_torch(dual_noc_read(a, b, variant="two_riscv", block=8, grid_x=grid[0], grid_y=grid[1]))
+        assert_with_pcc(expected, out.to(torch.float32), _PCC)
+        logger.info(f"grid {grid[0]}x{grid[1]} ({grid[0] * grid[1]} cores): PCC ok")
+
+
+def test_dual_noc_read_multicore_perf(device):
+    """Measure the split's win as the core count grows to a full N-parallel grid."""
+    # include the NoC-1 diagnostic: same single-RISC issue load, all reads on the OTHER port.
+    mc_variants = _selected_variants() + (DIAG_VARIANT,)
+    blocks = tuple(int(x) for x in os.environ.get("DNR_MC_BLOCKS", "8,32").split(","))
+    page_bytes = None
+    rows = []
+    for grid in GRID_SWEEP:
+        gx, gy = grid
+        cores = gx * gy
+        (a, b), total_tiles = _make_inputs_for_grid(device, cores)
+        page_bytes = a.buffer_aligned_page_size()
+        read_bytes = 2 * total_tiles * page_bytes
+        for block in blocks:
+            if TILES_PER_CORE % block:
+                continue
+            cell = {}
+            for variant in mc_variants:
+                run_fn = lambda v=variant, bl=block, g=grid: dual_noc_read(
+                    a, b, variant=v, block=bl, do_math=False, grid_x=g[0], grid_y=g[1]
+                )
+                value, spread = _measure_ns(device, run_fn)
+                assert value is not None, f"no profiler data for {variant} {gx}x{gy} block={block}"
+                cell[variant] = (value, spread)
+            rows.append((cores, gx, gy, block, read_bytes, cell))
+
+    lines = [
+        "",
+        "=== dual_noc_read MULTI-CORE scaling (payload-ablated: pure read) ===",
+        f"    box={socket.gethostname()}  arch={_arch_label(device)}  dtype=bfloat16  tile_bytes={page_bytes}",
+        f"    PER-CORE work held constant at {TILES_PER_CORE} tiles/operand/core, so total bytes grow with the grid.",
+        f"    N={N_TRIALS} windows x {N_PROFILE_ITERS} launches (median).  speedup is vs {BASELINE} at the same cell.",
+        "",
+        f"    {'cores':>5} {'grid':>6} {'block':>5}  {'MB read':>8}  {'variant':<18}  {'ns/op':>10} {'+-%':>5}"
+        f"  {'GB/s':>7}  {'GB/s/core':>9}  {'vs base':>8}",
+    ]
+    for cores, gx, gy, block, read_bytes, cell in rows:
+        base = cell[BASELINE][0]
+        for variant in mc_variants:
+            v, sp = cell[variant]
+            tag = "  (base)" if variant == BASELINE else f"  {base / v:5.2f}x"
+            lines.append(
+                f"    {cores:>5} {f'{gx}x{gy}':>6} {block:>5}  {read_bytes / 1e6:>8.2f}  {variant:<18}"
+                f"  {v:>10.1f} {sp:>5.1f}  {read_bytes / v:>7.1f}  {read_bytes / v / cores:>9.2f}{tag}"
+            )
+        lines.append("")
+    logger.info("\n".join(lines))
+
+
+def test_dual_noc_read_multicore_txn_probe(device):
+    """At multi-core placements, does a SMALLER transaction flip the split back to a win?
+
+    The single-core mechanism probe showed the win grows as transactions shrink (issue-bound), while
+    the multi-core sweep showed it collapsing (DRAM-bound + the NoC-1 route penalty). Those two pull
+    in opposite directions, so the sign at a given (cores, txn_bytes) is an empirical question. This
+    matters for real weight reads, which often use block-float pages far smaller than a bf16 tile.
+    """
+    grids = tuple(
+        tuple(int(v) for v in g.split("x")) for g in os.environ.get("DNR_TXN_GRIDS", "1x1,11x1,11x8").split(",")
+    )
+    txns = tuple(int(x) for x in os.environ.get("DNR_TXNS", "2048,1024,512,256").split(","))
+    variants = (BASELINE, "two_riscv", DIAG_VARIANT)
+
+    lines = [
+        "",
+        "=== dual_noc_read MULTI-CORE x TRANSACTION SIZE (payload-ablated, block=8) ===",
+        f"    box={socket.gethostname()}  arch={_arch_label(device)}  {TILES_PER_CORE} tiles/operand/core",
+        "    total bytes fixed per grid; smaller txn_bytes = proportionally more NoC commands.",
+        "",
+        f"    {'cores':>5} {'grid':>6} {'txn B':>6}  {'variant':<18}  {'ns/op':>10} {'+-%':>5}  {'GB/s':>7}  {'vs base':>8}",
+    ]
+    for grid in grids:
+        gx, gy = grid
+        cores = gx * gy
+        (a, b), total_tiles = _make_inputs_for_grid(device, cores)
+        page_bytes = a.buffer_aligned_page_size()
+        read_bytes = 2 * total_tiles * page_bytes
+        for txn in txns:
+            if page_bytes % txn:
+                continue
+            cell = {}
+            for variant in variants:
+                run_fn = lambda v=variant, t=txn, g=grid: dual_noc_read(
+                    a, b, variant=v, block=8, do_math=False, txn_bytes=t, grid_x=g[0], grid_y=g[1]
+                )
+                value, spread = _measure_ns(device, run_fn)
+                assert value is not None, f"no profiler data for {variant} {gx}x{gy} txn={txn}"
+                cell[variant] = (value, spread)
+            base = cell[BASELINE][0]
+            for variant in variants:
+                v, sp = cell[variant]
+                tag = "  (base)" if variant == BASELINE else f"  {base / v:5.2f}x"
+                lines.append(
+                    f"    {cores:>5} {f'{gx}x{gy}':>6} {txn:>6}  {variant:<18}  {v:>10.1f} {sp:>5.1f}"
+                    f"  {read_bytes / v:>7.1f}{tag}"
+                )
+            lines.append("")
     logger.info("\n".join(lines))

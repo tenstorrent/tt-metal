@@ -77,6 +77,14 @@ SEM_DONE = 1  # BRISC -> reader: bytes have landed in that slot
 VARIANTS = ("one_riscv", "two_riscv", "two_riscv_sem")
 BASELINE = "one_riscv"
 
+# DIAGNOSTIC (not part of the ladder): the mirror of the baseline — BRISC reads BOTH operands, so
+# ALL reads ride NoC 1 instead of NoC 0, with the SAME single-RISC issue load. Since a RISC and
+# its port move together, this is the only way to see the port/route contribution on its own: any
+# gap vs `one_riscv` is attributable to the NoC, not to issue rate. Matters at multi-core
+# placements, where the two NoCs route DRAM traffic very differently.
+DIAG_VARIANT = "one_riscv_brisc"
+ALL_VARIANTS = VARIANTS + (DIAG_VARIANT,)
+
 # Per-variant kernel wiring, passed to the kernels as explicit compile-time flags (clearer than a
 # mode enum decoded in the kernel):
 #   rd_b   — does NCRISC issue B's reads?
@@ -90,7 +98,12 @@ _WIRING = {
     "one_riscv": (1, 1, 0, 0, 0),
     "two_riscv": (0, 0, 1, 1, 0),
     "two_riscv_sem": (0, 1, 1, 0, 1),
+    # diagnostic: NCRISC idle, BRISC reads A and B (all reads on NoC 1)
+    "one_riscv_brisc": (0, 0, 1, 1, 0),
 }
+
+# Which RISC reads operand A. Only the diagnostic moves it off NCRISC.
+_A_ON_WRITER = {"one_riscv": 0, "two_riscv": 0, "two_riscv_sem": 0, "one_riscv_brisc": 1}
 
 # CB depth in blocks. Double-buffered so a RISC can prefetch block N+1 while compute drains N.
 # two_riscv_sem's slot arithmetic depends on this exact value (see the writer kernel).
@@ -100,13 +113,14 @@ LABEL = {
     "one_riscv": "NCRISC reads A+B, both on NoC0 (BRISC idle)",
     "two_riscv": "NCRISC:A/NoC0 + BRISC:B/NoC1, each owns its CB",
     "two_riscv_sem": "NCRISC:A/NoC0 + BRISC:B/NoC1, reader owns cb_b (2 sems)",
+    "one_riscv_brisc": "DIAG: BRISC reads A+B, both on NoC1 (NCRISC idle)",
 }
 
 # The two factors, for the report: how many RISC-Vs issue reads, how many NoC ports carry them.
 # RISCs and NoCs move together (1:1 firmware binding), so these are always equal — both are reported
 # to keep the reader honest about the fact that the two factors are NOT independently varied.
-RISCS = {"one_riscv": 1, "two_riscv": 2, "two_riscv_sem": 2}
-NOCS = {"one_riscv": 1, "two_riscv": 2, "two_riscv_sem": 2}
+RISCS = {"one_riscv": 1, "two_riscv": 2, "two_riscv_sem": 2, "one_riscv_brisc": 1}
+NOCS = {"one_riscv": 1, "two_riscv": 2, "two_riscv_sem": 2, "one_riscv_brisc": 1}
 
 
 # =============================================================================
@@ -129,15 +143,17 @@ void kernel_main() {
     constexpr uint32_t reads_b     = get_compile_time_arg_val(3);  // does THIS RISC fetch B?
     constexpr uint32_t owns_b      = get_compile_time_arg_val(4);  // does THIS RISC reserve/push cb_b?
     constexpr uint32_t use_sem     = get_compile_time_arg_val(5);
-    constexpr uint32_t go_sem_id   = get_compile_time_arg_val(6);
-    constexpr uint32_t done_sem_id = get_compile_time_arg_val(7);
+    constexpr uint32_t reads_a     = get_compile_time_arg_val(6);  // 0 only in the NoC-1 diagnostic
+    constexpr uint32_t go_sem_id   = get_compile_time_arg_val(7);
+    constexpr uint32_t done_sem_id = get_compile_time_arg_val(8);
     constexpr uint32_t txns_per_page = page_bytes / txn_bytes;
-    constexpr auto a_args = TensorAccessorArgs<8>();
+    constexpr auto a_args = TensorAccessorArgs<9>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
 
-    const uint32_t a_addr    = get_arg_val<uint32_t>(0);
-    const uint32_t b_addr    = get_arg_val<uint32_t>(1);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    const uint32_t a_addr     = get_arg_val<uint32_t>(0);
+    const uint32_t b_addr     = get_arg_val<uint32_t>(1);
+    const uint32_t num_tiles  = get_arg_val<uint32_t>(2);  // THIS core's tile count
+    const uint32_t start_page = get_arg_val<uint32_t>(3);  // THIS core's first page
 
     const auto a_acc = TensorAccessor(a_args, a_addr, page_bytes);
     const auto b_acc = TensorAccessor(b_args, b_addr, page_bytes);
@@ -145,6 +161,10 @@ void kernel_main() {
     Semaphore<> go_sem(go_sem_id);
     Semaphore<> done_sem(done_sem_id);
     uint32_t seq = 0;
+
+    if constexpr (!reads_a && !reads_b && !owns_b) {
+        return;  // NoC-1 diagnostic: BRISC owns everything, NCRISC contributes nothing.
+    }
 
     for (uint32_t p = 0; p < num_tiles; p += block) {
         cb_reserve_back(cb_a, block);
@@ -165,7 +185,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < block; ++i) {
             for (uint32_t t = 0; t < txns_per_page; ++t) {
                 noc_async_read(
-                    a_acc.get_noc_addr(p + i) + t * txn_bytes, a_l1 + i * page_bytes + t * txn_bytes, txn_bytes);
+                    a_acc.get_noc_addr(start_page + p + i) + t * txn_bytes, a_l1 + i * page_bytes + t * txn_bytes, txn_bytes);
             }
         }
         if constexpr (reads_b) {
@@ -176,7 +196,7 @@ void kernel_main() {
             for (uint32_t i = 0; i < block; ++i) {
                 for (uint32_t t = 0; t < txns_per_page; ++t) {
                     noc_async_read(
-                        b_acc.get_noc_addr(p + i) + t * txn_bytes, b_l1 + i * page_bytes + t * txn_bytes, txn_bytes);
+                        b_acc.get_noc_addr(start_page + p + i) + t * txn_bytes, b_l1 + i * page_bytes + t * txn_bytes, txn_bytes);
                 }
             }
         }
@@ -217,19 +237,25 @@ void kernel_main() {
     constexpr uint32_t reads_b     = get_compile_time_arg_val(3);  // does THIS RISC fetch B?
     constexpr uint32_t owns_b      = get_compile_time_arg_val(4);  // does THIS RISC reserve/push cb_b?
     constexpr uint32_t use_sem     = get_compile_time_arg_val(5);
-    constexpr uint32_t depth       = get_compile_time_arg_val(6);  // cb_b depth in blocks
-    constexpr uint32_t go_sem_id   = get_compile_time_arg_val(7);
-    constexpr uint32_t done_sem_id = get_compile_time_arg_val(8);
+    constexpr uint32_t reads_a     = get_compile_time_arg_val(6);  // 1 only in the NoC-1 diagnostic
+    constexpr uint32_t depth       = get_compile_time_arg_val(7);  // cb_b depth in blocks
+    constexpr uint32_t go_sem_id   = get_compile_time_arg_val(8);
+    constexpr uint32_t done_sem_id = get_compile_time_arg_val(9);
     constexpr uint32_t txns_per_page = page_bytes / txn_bytes;
-    constexpr auto b_args = TensorAccessorArgs<9>();
+    constexpr auto b_args = TensorAccessorArgs<10>();
+    constexpr auto a_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
 
     if constexpr (!reads_b) {
         return;  // BASELINE: BRISC's NoC-1 port sits idle. This is the thing being fixed.
     }
 
-    const uint32_t b_addr    = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    constexpr uint32_t cb_a = 0;
+    const uint32_t b_addr     = get_arg_val<uint32_t>(0);
+    const uint32_t num_tiles  = get_arg_val<uint32_t>(1);  // THIS core's tile count
+    const uint32_t start_page = get_arg_val<uint32_t>(2);  // THIS core's first page
+    const uint32_t a_addr     = get_arg_val<uint32_t>(3);  // used only by the NoC-1 diagnostic
     const auto b_acc = TensorAccessor(b_args, b_addr, page_bytes);
+    const auto a_acc = TensorAccessor(a_args, a_addr, page_bytes);
 
     if constexpr (owns_b) {
         // BRISC OWNS cb_b end to end — its own reserve/push. No semaphore: the CB's own
@@ -237,15 +263,32 @@ void kernel_main() {
         // both CBs independently. Cheapest correct form of the split.
         for (uint32_t p = 0; p < num_tiles; p += block) {
             cb_reserve_back(cb_b, block);
+            if constexpr (reads_a) {
+                cb_reserve_back(cb_a, block);
+            }
             const uint32_t l1 = get_write_ptr(cb_b);
             for (uint32_t i = 0; i < block; ++i) {
                 for (uint32_t t = 0; t < txns_per_page; ++t) {
                     noc_async_read(
-                        b_acc.get_noc_addr(p + i) + t * txn_bytes, l1 + i * page_bytes + t * txn_bytes, txn_bytes);
+                        b_acc.get_noc_addr(start_page + p + i) + t * txn_bytes, l1 + i * page_bytes + t * txn_bytes, txn_bytes);
+                }
+            }
+            if constexpr (reads_a) {
+                // Diagnostic only: A's reads go out on THIS RISC's NoC too, so all traffic is on NoC 1
+                // with a single-RISC issue load — the mirror of the baseline.
+                const uint32_t l1a = get_write_ptr(cb_a);
+                for (uint32_t i = 0; i < block; ++i) {
+                    for (uint32_t t = 0; t < txns_per_page; ++t) {
+                        noc_async_read(
+                            a_acc.get_noc_addr(start_page + p + i) + t * txn_bytes, l1a + i * page_bytes + t * txn_bytes, txn_bytes);
+                    }
                 }
             }
             noc_async_read_barrier();
             cb_push_back(cb_b, block);
+            if constexpr (reads_a) {
+                cb_push_back(cb_a, block);
+            }
         }
     } else {
         // two_riscv_sem: the READER owns cb_b (reserve + push); we only deposit bytes. A CB write
@@ -266,7 +309,7 @@ void kernel_main() {
             for (uint32_t i = 0; i < block; ++i) {
                 for (uint32_t t = 0; t < txns_per_page; ++t) {
                     noc_async_read(
-                        b_acc.get_noc_addr(p + i) + t * txn_bytes, l1 + i * page_bytes + t * txn_bytes, txn_bytes);
+                        b_acc.get_noc_addr(start_page + p + i) + t * txn_bytes, l1 + i * page_bytes + t * txn_bytes, txn_bytes);
                 }
             }
             noc_async_read_barrier();
@@ -345,24 +388,29 @@ void kernel_main() {
 _DST_TILES = 8  # bf16 DST capacity (half-sync, no fp32 dest acc) — caps the compute chunk
 
 
-def _single_core():
-    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+def _core_grid(grid_x=1, grid_y=1):
+    """A grid_x by grid_y rectangle anchored at (0,0). One CoreRange with ROW_MAJOR shard
+    orientation, so shard index == y * grid_x + x — the same order the page assignment uses."""
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))])
 
 
-def create_output_memory_config(shape):
-    """The whole output as ONE L1 shard on core (0,0), so compute's pack lands directly in the
-    output tensor and no kernel has to drain it to DRAM."""
+def create_output_memory_config(shape, grid_x=1, grid_y=1):
+    """Height-shard the output across the grid so compute's pack lands directly in the output
+    tensor and no kernel has to drain it to DRAM. Each core owns tiles_per_core tile-rows."""
     h, w = list(shape)
+    num_cores = grid_x * grid_y
+    if h % num_cores:
+        raise ValueError(f"dual_noc_read example: output height {h} must divide over {num_cores} cores")
     return ttnn.create_sharded_memory_config(
-        (h, w),
-        core_grid=_single_core(),
+        (h // num_cores, w),
+        core_grid=_core_grid(grid_x, grid_y),
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
 
 
-def validate(a, b, block, txn_bytes=None):
+def validate(a, b, block, txn_bytes=None, num_cores=1):
     for name, t in (("a", a), ("b", b)):
         shape = list(t.shape)
         if len(shape) != 2:
@@ -382,6 +430,14 @@ def validate(a, b, block, txn_bytes=None):
 
     h, w = list(a.shape)
     total_tiles = (h // TILE) * (w // TILE)
+    if num_cores > 1:
+        if total_tiles % num_cores:
+            raise ValueError(f"dual_noc_read example: total tiles ({total_tiles}) must divide over {num_cores} cores")
+        if (total_tiles // num_cores) % block:
+            raise ValueError(
+                f"dual_noc_read example: tiles per core ({total_tiles // num_cores}) must be "
+                f"divisible by block ({block})"
+            )
     if txn_bytes is not None:
         page_bytes = a.buffer_aligned_page_size()
         if txn_bytes < 32 or txn_bytes > page_bytes or page_bytes % txn_bytes:
@@ -410,12 +466,15 @@ def l1_footprint_bytes(total_tiles, block, page_bytes):
     return (2 * CB_DEPTH_BLOCKS * block + total_tiles) * page_bytes
 
 
-def create_program_descriptor(a, b, output, *, variant, block, do_math=True, txn_bytes=None):
-    if variant not in VARIANTS:
-        raise ValueError(f"dual_noc_read example: variant must be one of {VARIANTS}, got {variant!r}")
-    total_tiles = validate(a, b, block, txn_bytes)
+def create_program_descriptor(a, b, output, *, variant, block, do_math=True, txn_bytes=None, grid_x=1, grid_y=1):
+    if variant not in ALL_VARIANTS:
+        raise ValueError(f"dual_noc_read example: variant must be one of {ALL_VARIANTS}, got {variant!r}")
+    num_cores = grid_x * grid_y
+    total_tiles = validate(a, b, block, txn_bytes, num_cores)
     rd_b, rd_own, wr_b, wr_own, sem = _WIRING[variant]
-    core_ranges = _single_core()
+    a_on_writer = _A_ON_WRITER[variant]
+    core_ranges = _core_grid(grid_x, grid_y)
+    tiles_per_core = total_tiles // num_cores
     page_bytes = a.buffer_aligned_page_size()
     txn_bytes = page_bytes if txn_bytes is None else txn_bytes
 
@@ -436,19 +495,26 @@ def create_program_descriptor(a, b, output, *, variant, block, do_math=True, txn
         ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output),
     ]
 
-    reader_ct = [page_bytes, block, txn_bytes, rd_b, rd_own, sem, SEM_GO, SEM_DONE]
+    reader_ct = [page_bytes, block, txn_bytes, rd_b, rd_own, sem, 1 - a_on_writer, SEM_GO, SEM_DONE]
     reader_ct.extend(ttnn.TensorAccessorArgs(a).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(b).get_compile_time_args())
 
-    writer_ct = [page_bytes, block, txn_bytes, wr_b, wr_own, sem, CB_DEPTH_BLOCKS, SEM_GO, SEM_DONE]
+    writer_ct = [page_bytes, block, txn_bytes, wr_b, wr_own, sem, a_on_writer, CB_DEPTH_BLOCKS, SEM_GO, SEM_DONE]
     writer_ct.extend(ttnn.TensorAccessorArgs(b).get_compile_time_args())
+    writer_ct.extend(ttnn.TensorAccessorArgs(a).get_compile_time_args())
 
+    # Contiguous page range per core, in the SAME row-major order the output height-sharding uses
+    # (shard index == y * grid_x + x), so each core's reads land in its own output shard.
     reader_rt = ttnn.RuntimeArgs()
-    reader_rt[0][0] = [a.buffer_address(), b.buffer_address(), total_tiles]
     writer_rt = ttnn.RuntimeArgs()
-    writer_rt[0][0] = [b.buffer_address(), total_tiles]
     compute_rt = ttnn.RuntimeArgs()
-    compute_rt[0][0] = [total_tiles]
+    a_addr, b_addr = a.buffer_address(), b.buffer_address()
+    for gy in range(grid_y):
+        for gx in range(grid_x):
+            start = (gy * grid_x + gx) * tiles_per_core
+            reader_rt[gx][gy] = [a_addr, b_addr, tiles_per_core, start]
+            writer_rt[gx][gy] = [b_addr, tiles_per_core, start, a_addr]
+            compute_rt[gx][gy] = [tiles_per_core]
 
     reader = ttnn.KernelDescriptor(
         kernel_source=_READER,
@@ -490,6 +556,8 @@ def dual_noc_read(
     block: int = 8,
     do_math: bool = True,
     txn_bytes: int = None,
+    grid_x: int = 1,
+    grid_y: int = 1,
 ) -> ttnn.Tensor:
     """C = A * B for two DRAM-interleaved bf16 tiled tensors, on one core, output L1-sharded.
 
@@ -507,18 +575,31 @@ def dual_noc_read(
         txn_bytes: bytes per NoC transaction. Default (None) = the whole tile page in one read.
             A smaller value must divide the page and moves the SAME bytes in proportionally MORE
             transactions — the knob that separates "cost per command" from "cost per byte".
+        grid_x, grid_y: rectangular core grid anchored at (0,0). Default 1x1 (single core), which
+            isolates one core's data-movement capacity. Larger grids add cross-core DRAM/NoC
+            contention on top of the effect: the total tile count is split evenly across the grid
+            in row-major order, so PER-CORE work shrinks as the grid grows unless the shape is
+            scaled with it.
 
     Output is A*B for every variant (with do_math=True), in L1 (height-sharded on core (0,0)).
     """
-    validate(a, b, block, txn_bytes)
+    validate(a, b, block, txn_bytes, grid_x * grid_y)
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(a.shape)),
         ttnn.bfloat16,
         ttnn.TILE_LAYOUT,
         a.device(),
-        create_output_memory_config(a.shape),
+        create_output_memory_config(a.shape, grid_x, grid_y),
     )
     descriptor = create_program_descriptor(
-        a, b, output, variant=variant, block=block, do_math=do_math, txn_bytes=txn_bytes
+        a,
+        b,
+        output,
+        variant=variant,
+        block=block,
+        do_math=do_math,
+        txn_bytes=txn_bytes,
+        grid_x=grid_x,
+        grid_y=grid_y,
     )
     return ttnn.generic_op([a, b, output], descriptor)

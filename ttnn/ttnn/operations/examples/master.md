@@ -93,9 +93,9 @@ B and C could be fetched at the same time — usually has one reader fetch both 
 operand to each data-movement RISC-V instead. A second-tensor sibling of `split_reader`.
 **Situation:** two operand streams with no dependency between them, in a read-heavy phase where the
 writer has nothing to drain yet.
-**Measured win:** **up to 1.34×** on the full op and **up to 1.59×** on the read alone (BH P150,
-1 core, bf16). See the README for the block-size dependence, the compute-masking effect, and the
-mechanism (it is mostly RISC-V issue rate, not link saturation).
+**Measured win:** **up to 1.85×** on the read (small transactions), **1.34×** on a full bf16 op —
+but a **0.63× REGRESSION** for large tile-sized reads on a mid-size grid (BH P150). It is a
+small-transaction optimization, not a more-cores one; read the README before applying it.
 
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
