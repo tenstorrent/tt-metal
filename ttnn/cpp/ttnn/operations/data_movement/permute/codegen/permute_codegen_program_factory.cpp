@@ -197,11 +197,12 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreBlockedG
     auto [num_cores, all_cores, core_group_1, core_group_2, blocks_per_core_1, blocks_per_core_2] =
         split_work_to_cores(device->compute_with_storage_grid_size(), num_blocks_total);
 
-    // 4-byte (int32/float32-as-int32) datums need 32-bit DEST accumulation through the
+    // 4-byte (int32/float32) datums need 32-bit DEST accumulation through the
     // tilize -> transpose_tile -> pack_untilize compute; bf16 (2-byte) does not.
+    // permute_rm_program_factory.cpp:169 carries the CB in the tensor's own dtype (no int32
+    // reinterpret) through this identical compute chain, so this port matches it directly.
     const bool fp32_dest_acc = (elem_size == 4);
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(
-        input_tensor.dtype() == DataType::FLOAT32 ? DataType::INT32 : input_tensor.dtype());
+    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
     CBFormatDescriptor cb0_fmt{.buffer_index = 0, .data_format = cb_data_format, .page_size = input_cb_page_size};
     CBDescriptor cb0_desc{

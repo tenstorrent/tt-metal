@@ -68,27 +68,21 @@ bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& d
     // (shape, dims, dtype) regression example from permute.yaml's perf-demoted ledger. None of
     // these match the "left-out-for-now" fused-WH scope=out condition (all have NC < 6 or
     // dims[-1] != rank-2), so they are genuine in-scope perf demotions, not mis-scoped cases.
+    // A prior round's larger list has since been narrowed: entries whose device-vs-native deficit
+    // was inside measurement noise, or whose deficit traced to the FLOAT32->INT32 CB-format defect
+    // in the blocked-generic factory (now repaired to match permute_rm_program_factory.cpp:169's
+    // native, unmapped dtype), were reversed off this list rather than kept as an exception.
     struct DemotedCase {
         std::initializer_list<uint32_t> shape;
         std::initializer_list<uint32_t> dims;
         DataType dtype;
     };
     static const DemotedCase kDemoted[] = {
-        {{1, 2, 3, 64, 96}, {1, 2, 0, 3, 4}, DataType::BFLOAT16},
-        {{1, 2, 3, 64, 96}, {1, 2, 0, 3, 4}, DataType::FLOAT32},
-        {{1, 2, 3, 64, 96}, {1, 2, 0, 3, 4}, DataType::INT32},
         {{1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::FLOAT32},
         {{1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::INT32},
         {{1, 4, 96, 128}, {3, 2, 0, 1}, DataType::INT32},
         {{2, 3, 4, 32, 64}, {4, 0, 2, 3, 1}, DataType::INT32},
-        {{2, 3, 64, 96}, {3, 2, 0, 1}, DataType::FLOAT32},
         {{2, 3, 64, 96}, {3, 2, 1, 0}, DataType::FLOAT32},
-        {{2, 96, 128}, {0, 2, 1}, DataType::FLOAT32},
-        {{2, 96, 128}, {2, 0, 1}, DataType::FLOAT32},
-        {{3, 64, 96}, {0, 2, 1}, DataType::FLOAT32},
-        {{3, 64, 96}, {2, 0, 1}, DataType::FLOAT32},
-        {{64, 96}, {1, 0}, DataType::FLOAT32},
-        {{96, 64}, {1, 0}, DataType::FLOAT32},
     };
 
     const auto& shape = input_tensor.logical_shape();
