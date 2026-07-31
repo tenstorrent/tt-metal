@@ -79,6 +79,20 @@ this; `$optimize` step 6 / OPT-003 states the same definition, and the optimizer
 Detect boundaries from **conversion ops present in the profile**, never from differing grids: a grid change
 is often absorbed by the consumer, so grid-differencing over-counts.
 
+**The advisor declares its own boundaries, in `reshards[]` — not in `ops[]`.** These are the
+`to_layout` / `to_memory_config` edges; in tt-mlir they are what the optimizer materializes on a chain edge.
+So each shipped conversion can be compared against the advice on the same producer→consumer edge, and
+`reconcile.py` does this as `advised_here`:
+
+| shipped boundary | advice on that edge | meaning |
+|---|---|---|
+| present | **absent** | the advisor keeps this run in L1 — **the candidate**, and the pattern behind every win in this corpus |
+| present | present | agreement on the boundary; nothing to screen |
+| present | undetermined | no paired advised op either side; treat as unscreened, not as absent |
+
+The match is on op *names*, so a repeated edge collapses to one key: presence is a strong signal, absence a
+weaker one. It orders the worklist; it never substitutes for a measurement.
+
 Indicative cost per conversion, measured on three Blackhole decoders. **Read your own numbers out of
 `reconcile.py`'s `boundary` rows** — these scale with tensor size and differ by architecture; the table is
 for calibration, not for arithmetic:
@@ -140,11 +154,15 @@ It partitions the measured window so that every device op lands in exactly one b
 to 100 %: `chain`, `boundary`, `dram_resident`, `agrees_with_shipped`, `untraced`. It fails loudly rather
 than emitting a gap.
 
-Read three things out of it:
+Read four things out of it:
 
-- **the ranked chain list** — ordered by conversion value, i.e. the µs of boundary ops a change removes,
-  *not* by the advised ops' window share. A chain whose ops total under 1 % of the window can be worth
-  several per cent once its DRAM round trips are gone.
+- **the ranked chain list** — ordered by `advisor_removes_us` (the µs of shipped conversions the advice does
+  *not* place on that edge), then by total conversion value; *never* by the advised ops' window share. A
+  chain whose ops total under 1 % of the window can be worth several per cent once its DRAM round trips are
+  gone — in this corpus a chain at 0.948 % op share won 5–6 %.
+- **`advised_boundaries`** — how many shipped conversions the advisor drops, agrees with, and leaves
+  undetermined, with the µs. `us_advisor_drops` is the stage's upper bound on conversion-removal value;
+  screening cannot beat it, so if it is small, say so early rather than after nine measurements.
 - **`material_ops_on_le_2_cores`** — a material op left on ≤2 cores needs a measured attempt or a quoted
   hard error. Nothing else discharges it.
 - **`agrees_with_shipped`** — where the advisor independently re-derived your config. Since it is blind to
@@ -152,7 +170,9 @@ Read three things out of it:
   marginal contribution here is zero by construction; **report the number as a headline**, and do not read it
   as wasted advice. How much a from-scratch optimization it would have saved is a different experiment.
 
-If the script aborts, fix the input or extend its op map. Do not hand-author its output.
+Advised ops pair with device classes automatically, so an abort means an input problem — an unbounded perf
+report, a wrong file, a window that cannot be the decode path. Fix the input, not the output: hand-authoring
+this file is the one failure the gate cannot detect for you.
 
 ### 4. Screen, in the order the reconciliation gives
 

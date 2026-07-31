@@ -39,19 +39,34 @@ TTNN_TO_DEVICE = {
     "rms_norm": "LayerNorm",                 # rms_norm is served by the layernorm device op
     "linear": "Matmul",
     "concatenate_heads": "NLPConcatHeads",
+    "transpose": "Permute",                  # ttnn.transpose lowers to the permute device op
     "paged_scaled_dot_product_attention_decode": "SdpaDecode",
     "scaled_dot_product_attention_decode": "SdpaDecode",
 }
-# NO DEVICE OP: tensor creation and pure metadata. Anything here consumes no device op.
-NO_DEVICE_OP = {"reshape", "to_layout", "to_memory_config", "view",
-                "full", "zeros", "ones", "empty", "arange"}
-# CATCH-ALL DEVICE CLASSES: tt-metal funnels whole families through one device op, so an advised op that
-# pairs with nothing may still be one of these. Pairing permissively is the safer error: a mispair puts an
-# op in the wrong bucket, while a missed pair pushes a real device op into `untraced` and understates what
-# the advisor saw -- and understating the advisor is the bias this stage exists to avoid.
-CATCH_ALL = {"Unary", "BinaryNg", "Reduce", "Copy"}
-CONVERSION = {"Reshard": "l1_regrid", "ShardedToInterleaved": "l1_to_dram",
-              "InterleavedToSharded": "dram_to_l1", "Untilize": "retilize", "Tilize": "retilize"}
+# NO DEVICE OP: host-side tensor creation, and the two ops the advisor lists in reshards[] rather than
+# ops[]. NOT reshape: a reshape is sometimes a free view and sometimes a real ReshapeView kernel, so let
+# the pairing decide instead of asserting it is free.
+# ADVISED OPS EXCLUDED FROM PAIRING: their device counterpart is either nothing at all, or a movement op
+# that is already classified by role below. `to_layout` / `to_memory_config` are here for the second reason,
+# NOT because they are free -- a to_layout is exactly how a 6.7-10 us retilize enters the graph. Its cost is
+# counted, as a `boundary` op on the device side. Excluding them only stops them stealing a compute op.
+UNPAIRED_ADVISED = {"to_layout", "to_memory_config", "reshape", "view",
+                    "full", "zeros", "ones", "empty", "arange"}
+# MOVEMENT device ops -- their only effect is placement or layout, so they are chain BOUNDARIES whatever
+# the advisor said about them. Matched by PREFIX, because tt-metal spells variants: UntilizeWithUnpadding,
+# TilizeWithValPadding. Ops that also compute (Slice, Permute, Concat, Repeat) are deliberately absent:
+# those pair with an advised op and belong to a chain.
+MOVEMENT_PREFIXES = (("Reshard", "l1_regrid"), ("ShardedToInterleaved", "l1_to_dram"),
+                     ("InterleavedToSharded", "dram_to_l1"), ("Untilize", "retilize"),
+                     ("Tilize", "retilize"), ("ReshapeView", "reshape_view"),
+                     ("FillPad", "fill_pad"), ("Copy", "copy"))
+
+
+def movement_class(dev_cls: str):
+    for pref, name in MOVEMENT_PREFIXES:
+        if dev_cls.startswith(pref):
+            return name
+    return None
 
 
 def device_class(op_code: str) -> str:
@@ -141,7 +156,7 @@ def matches(ttnn_op: str, dev_cls: str) -> bool:
 
     Prefix-either-way covers the common shapes without an entry each: slice_static/Slice, concat/Concat,
     embedding/Embeddings, topk/TopK, repeat/Repeat, the rotary variants. TTNN_TO_DEVICE holds only genuine
-    renames; CATCH_ALL covers families tt-metal funnels through one device op.
+    renames.
     """
     a, b = norm(ttnn_op), norm(dev_cls)
     return a == b or a.startswith(b) or b.startswith(a)
@@ -156,7 +171,7 @@ def parse_advised(report: dict):
         cores = ((int(m.group(3)) - int(m.group(1)) + 1) * (int(m.group(4)) - int(m.group(2)) + 1)
                  if m else None)
         name = o["op"].replace("ttnn.", "")
-        explicit = None if name in NO_DEVICE_OP else TTNN_TO_DEVICE.get(name, "__auto__")
+        explicit = None if name in UNPAIRED_ADVISED else TTNN_TO_DEVICE.get(name, "__auto__")
         out.append({"index": o["index"], "op": name, "explicit": explicit, "layout": lay,
                     "cores": cores, "program_config": o.get("program_config", "") or "",
                     "space": "dram" if lay.startswith("dram") else
@@ -164,34 +179,84 @@ def parse_advised(report: dict):
     return out
 
 
-def align(advised, device):
-    """Pair the two program-order sequences, tolerating gaps on both sides.
+def pair_score(adv, dev_cls, nameless=False):
+    """How well an advised op pairs with a device class. 0 = incompatible.
 
-    Lengths differ: the advised graph omits ops the tracer never saw and includes metadata-only ops with
-    no device counterpart. A positional zip misattributes everything after the first gap. An advised op
-    that pairs with nothing consumes no device op, so one unknown name cannot shift the rest.
+    An exact rename or a normalised-prefix match scores 2. A `nameless` advised op -- one that matches no
+    device class anywhere in this profile -- scores 1 against anything, so it can pair by position alone.
+    tt-metal funnels whole op families through one device class (`neg` and `sigmoid` both run as `Unary`)
+    and that mapping is not enumerable from here, so position is the only remaining evidence. Scoring it
+    below a real match means the alignment falls back to position only when nothing better lines up; an
+    unconditional fallback lets any unmatched op grab a distant device op and drag everything between it
+    into `untraced`.
     """
-    pairs, di = [], 0
-    for a in advised:
-        if a["explicit"] is None:
-            continue                                     # metadata only; nothing to account
-        want = a["explicit"]
-        j = di
-        while j < len(device):
-            c = device[j]["cls"]
-            if (c == want) if want != "__auto__" else (matches(a["op"], c) or c in CATCH_ALL):
-                break
-            j += 1
-        if j >= len(device):
-            pairs.append((a, None))                      # advised op never ran, or name unknown
-            continue
-        for k in range(di, j):
-            pairs.append((None, device[k]))              # device ops the advisor did not place
-        pairs.append((a, device[j]))
-        di = j + 1
-    for k in range(di, len(device)):
-        pairs.append((None, device[k]))
+    want = adv["explicit"]
+    if want != "__auto__":
+        return 2 if dev_cls == want else 0
+    if matches(adv["op"], dev_cls):
+        return 2
+    return 1 if nameless else 0
+
+
+def align(advised, device):
+    """Align the two program-order sequences by dynamic programming.
+
+    Both sides have insertions -- the advised graph omits ops the tracer never saw and contains ops with
+    no device counterpart, while the profile contains ops the advisor never placed. A greedy scan is not
+    adequate: one unpairable advised op consumes an unbounded run of device ops into `untraced`, which
+    understates what the advisor saw. This is an LCS with a weighted match, so a poor local pairing loses
+    to leaving both sides unpaired.
+
+    Returns [(advised|None, device|None)] in program order. Movement ops are excluded by the caller: they
+    are boundaries whatever the advisor said, so they must not participate in pairing.
+    """
+    n, m = len(advised), len(device)
+    # an advised op that matches no device class here may pair by position alone; see pair_score
+    nameless = [not any(pair_score(a, d["cls"]) == 2 for d in device) for a in advised]
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            sc = pair_score(advised[i], device[j]["cls"], nameless[i])
+            best = max(dp[i + 1][j], dp[i][j + 1])
+            if sc:
+                best = max(best, sc + dp[i + 1][j + 1])
+            dp[i][j] = best
+    pairs, i, j = [], 0, 0
+    while i < n and j < m:
+        sc = pair_score(advised[i], device[j]["cls"], nameless[i])
+        if sc and dp[i][j] == sc + dp[i + 1][j + 1]:
+            pairs.append((advised[i], device[j])); i += 1; j += 1
+        elif dp[i][j] == dp[i][j + 1]:
+            pairs.append((None, device[j])); j += 1
+        else:
+            pairs.append((advised[i], None)); i += 1
+    while i < n:
+        pairs.append((advised[i], None)); i += 1
+    while j < m:
+        pairs.append((None, device[j])); j += 1
     return pairs
+
+
+def parse_reshards(report):
+    """Index the advice's own chain boundaries by the (producer, consumer) edge they sit on.
+
+    `reshards[]` is where the advisor declares where it believes L1 residency breaks -- in tt-mlir these are
+    the ToLayout / ToMemoryConfig ops the optimizer materializes on a chain edge, and they do NOT appear in
+    `ops[]`. Comparing them against the shipped movement ops is the point: a shipped boundary with no advised
+    reshard on the same edge means the advisor keeps that chain in L1, which is the highest-value candidate
+    this stage can produce.
+
+    Keyed on op NAMES, so an edge a layer repeats (several `linear` -> `slice_static`) collapses to one key.
+    That makes presence a strong hint and absence a weaker one; it is ranking input, not a measurement.
+    """
+    idx = {}
+    for x in report.get("reshards", []) or []:
+        src, dst = (x.get("from") or "?"), (x.get("to") or "?")
+        space = lambda t: "dram" if t.startswith("dram") else ("l1" if t.startswith("l1") else "?")
+        idx.setdefault((x.get("producer"), x.get("consumer")), []).append(
+            {"kind": x.get("kind"), "from": src, "to": dst,
+             "transition": f"{space(src)}->{space(dst)}", "output_revert": x.get("output_revert")})
+    return idx
 
 
 def main() -> int:
@@ -207,14 +272,25 @@ def main() -> int:
     ap.add_argument("--ir", type=Path, help="accepted and ignored; geometry comes from report.json")
     a = ap.parse_args()
 
+    for f in (a.report, a.perf):
+        if not f.is_file():
+            sys.exit(f"FATAL: no such file: {f}")
     report = json.loads(a.report.read_text())
     advised = parse_advised(report)
+    reshard_idx = parse_reshards(report)
     device, window = parse_perf(a.perf, a.incumbent_ms)
     if window <= 0:
         sys.exit(f"FATAL: measured window is 0 us from {a.perf}")
 
+    # movement ops are boundaries regardless of what the advisor said, so keep them out of the pairing
+    pairable = [d for d in device if not movement_class(d["cls"])]
+    alignment = align([a for a in advised if a["explicit"] is not None], pairable)
+    paired = {id(d): a for a, d in alignment if d is not None}
+    unpaired_adv = [a for a, d in alignment if d is None]
+    seq = [(paired.get(id(d)), d) for d in device] + [(a, None) for a in unpaired_adv]
+
     rows, chains, cur = [], [], None
-    for adv, dev in align(advised, device):
+    for adv, dev in seq:
         if dev is None:
             auto = adv["explicit"] == "__auto__"
             rows.append({"op": adv["op"],
@@ -227,10 +303,12 @@ def main() -> int:
         r = {"op": adv["op"] if adv else None, "device": dev["code"], "cls": dev["cls"],
              "us": round(dev["us"], 3), "share_pct": round(100 * dev["us"] / window, 3),
              "shipped_cores": dev["cores"]}
-        if dev["cls"] in CONVERSION:
-            # conversions live in the advisor's reshards[] list, not ops[], so they arrive unpaired;
-            # classify them first or they fall through to `untraced` and the ranking loses its input
-            r.update(bucket="boundary", conversion_class=CONVERSION[dev["cls"]])
+        mv = movement_class(dev["cls"])
+        if mv:
+            # movement ops mostly arrive unpaired, because the advisor lists them in reshards[] rather
+            # than ops[]; classify them first or they fall through to `untraced` and the ranking loses
+            # its input entirely
+            r.update(bucket="boundary", conversion_class=mv)
             cur = None                                   # a conversion ends the current L1 run
         elif adv is None:
             r.update(bucket="untraced", reason="in the profile, absent from the advisor's graph")
@@ -256,6 +334,27 @@ def main() -> int:
                 r["chain"] = cur["chain"]
         rows.append(r)
 
+    # Does the advice put a conversion on this same edge? Absent => the advisor keeps the chain in L1.
+    dev_rows = [r for r in rows if "device" in r]
+    for i, r in enumerate(dev_rows):
+        if r["bucket"] != "boundary":
+            continue
+        prev = next((dev_rows[j]["op"] for j in range(i - 1, -1, -1) if dev_rows[j].get("op")), None)
+        nxt = next((dev_rows[j]["op"] for j in range(i + 1, len(dev_rows)) if dev_rows[j].get("op")), None)
+        hits = reshard_idx.get((prev, nxt))
+        r["edge"] = f"{prev} -> {nxt}"
+        if prev is None or nxt is None:
+            r["advised_here"] = None
+            r["reason"] = "boundary on an edge with no paired advised op either side -- undetermined"
+        elif hits:
+            r["advised_here"] = True
+            r["advised_reshard"] = hits[0]
+            r["reason"] = "the advisor puts a conversion here too -- agreement, not a candidate"
+        else:
+            r["advised_here"] = False
+            r["reason"] = ("no advised reshard on this edge: the advisor keeps this run in L1. Removing "
+                           "this conversion is the change to measure.")
+
     # conversion value: boundary us adjacent to a chain -- what joining across it would remove
     for i, r in enumerate(rows):
         if r["bucket"] != "boundary":
@@ -264,13 +363,18 @@ def main() -> int:
             if 0 <= j < len(rows) and rows[j].get("chain"):
                 ch = next(c for c in chains if c["chain"] == rows[j]["chain"])
                 ch["boundary_us"] += r["us"] / 2.0
+                if r.get("advised_here") is False:
+                    ch["advisor_removes_us"] = round(ch.get("advisor_removes_us", 0.0) + r["us"] / 2.0, 3)
     for c in chains:
         c["us"] = round(c["us"], 3)
         c["boundary_us"] = round(c["boundary_us"], 3)
         c["conversion_value_us"] = c["boundary_us"]
+        c.setdefault("advisor_removes_us", 0.0)
         c["op_share_pct"] = round(100 * c["us"] / window, 3)
         c["per_model_us"] = round((c["us"] + c["boundary_us"]) * a.layers_of_kind, 3)
-    chains.sort(key=lambda c: -(c["conversion_value_us"] + c["us"]))
+    # advisor-attributable value first: a boundary the advice also wants is not this stage's candidate.
+    # Losing chains are kept in the list, only ordered lower -- suppressing one understates the contribution.
+    chains.sort(key=lambda c: (-c["advisor_removes_us"], -(c["conversion_value_us"] + c["us"])))
 
     acct, accounted = {}, 0.0
     for r in rows:
@@ -294,7 +398,17 @@ def main() -> int:
         "total_layers": a.total_layers, "measured_window_us": round(window, 3),
         "accounting": acct, "accounting_closes_100pct": closes,
         "accounted_us": round(accounted, 3),
-        "ranked_by": "conversion_value_us + chain op us -- NOT advised-op window share",
+        "ranked_by": "advisor_removes_us, then conversion_value_us + chain op us -- NOT advised-op share",
+        "advised_boundaries": {
+            "advised_reshard_edges": len(reshard_idx),
+            "shipped_boundaries_advisor_drops": sum(
+                1 for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is False),
+            "us_advisor_drops": round(sum(
+                r["us"] for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is False), 3),
+            "shipped_boundaries_advisor_agrees": sum(
+                1 for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is True),
+            "undetermined": sum(
+                1 for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is None)},
         "chains": chains, "material_ops_on_le_2_cores": low,
         "note": "Screen chains in the order given, each as one unit, and record repeats_ms. Do NOT copy "
                 "advised core counts: they are selected under a bytes-shaped objective and are often "
@@ -308,9 +422,14 @@ def main() -> int:
     print(f"{a.layer_kind}: window {window:.3f} us, {len(rows)} rows, closes: {closes}")
     for b, v in sorted(acct.items(), key=lambda x: -x[1]["us"]):
         print(f"   {b:22s} {v['us']:9.3f} us {v['share_pct']:6.2f} %  ({v['ops']} ops)")
-    print(f"   {len(chains)} chain(s), ranked by conversion value:")
+    ab = out["advised_boundaries"]
+    print(f"   boundaries: advisor drops {ab['shipped_boundaries_advisor_drops']} "
+          f"({ab['us_advisor_drops']:.3f} us), agrees {ab['shipped_boundaries_advisor_agrees']}, "
+          f"undetermined {ab['undetermined']}")
+    print(f"   {len(chains)} chain(s), ranked by advisor-attributable conversion value:")
     for c in chains:
         print(f"      {c['chain']:16s} ops {c['us']:8.3f} + boundaries {c['boundary_us']:7.3f} us"
+              f" (advisor drops {c['advisor_removes_us']:6.3f})"
               f"   {'/'.join(c['ops'])[:52]}")
     for r in low:
         print(f"   !! {r['device']} on {r['shipped_cores']} core(s), {r['us']:.3f} us "
