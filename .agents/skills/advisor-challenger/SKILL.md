@@ -1,230 +1,167 @@
-# `$advisor-challenger` — turn a finished optimized decoder into a faster one, using `$shard-advise` as a challenger that cannot lose
+# `$advisor-challenger` — measure how much `$shard-advise` adds to a decoder already optimized without it
 
-**Input:** a *finished, tagged* `optimized_decoder.py` produced by an optimize stage that never ran the
-advisor (a `*-noadvise` arm cell).
-**Output:** a **new `optimized_decoder.py`** that is measured to be **the best of the incumbent and
-everything the advisor suggested** — never worse than the incumbent, by construction.
+**Input:** a finished, tagged `optimized_decoder.py` from an arm or snapshot that never ran the advisor.
+**Output:** the best *measured* decoder, plus a complete accounting of what the advisor said and what it was
+worth. A **no-change outcome is a measured contribution of zero** — a result, not a failure.
 
-This skill exists because the advisor was previously used as a **seed** at the *start* of optimization,
-and that ordering is what produced every problem worth naming: it biased the search toward whatever it
-said first, it froze a dtype it had itself made conditional, and it was never obliged to be measured
-against anything. Run *after* a finished decoder instead, it becomes a challenger — and a challenger
-with a frozen incumbent and ties going to the incumbent cannot make the model slower. It can only cost
-time.
+## What this stage is
 
-## The invariant — this is the whole point, do not weaken it
+A contribution measurement. Hold the incumbent fixed, add one stage whose content is nothing but advisor
+usage, and measure the difference. The frozen incumbent is the **control**, so
 
 ```
-final_ms <= incumbent_ms          for every measured configuration
+final_ms <= incumbent_ms
 ```
 
-It holds because of three mechanical facts, not because anyone is careful:
+is not a safety property — **the delta is the measurement**. Freezing before the capture keeps the control
+uncontaminated. Ties go to the incumbent as a conservative attribution rule.
 
-1. the incumbent's latency is **measured and frozen before the advisor runs at all**;
-2. every change is measured against that frozen number;
-3. **the incumbent wins ties** against a noise floor derived from its own repeats.
+Consequence: **anything that suppresses a candidate understates the advisor's contribution.** Prefer
+measuring a doubtful candidate over dropping it.
 
-If you re-order these, you lose the guarantee. In particular: do not run the capture first "to know
-where to look". A capture is cheap to run and expensive to unsee.
+## Division of labour
 
-## What the advisor is actually good at — use it for that and nothing else
+The advisor is a deterministic pass. It enumerates legal placements completely, then selects among them
+without a latency term — the chain-level quantity it optimises is bytes. So:
 
-Measured across four models (see `SHARD-ADVISOR-FINDINGS.md`):
-
-| what it produces | track record |
+| the advisor supplies | you supply |
 |---|---|
-| **the *set* of ops it would shard that you did not** | **right every time** — DS legal on phi's 5 linears; norms should be sharded on qwen (+152 µs/layer, proven) and gemma (363 µs/layer, nobody did it); DS legal on north's gate/up + down |
-| the *specific geometry* for those ops | **lost** on phi (−34 µs), **tied** on qwen gate/up DS, **untested-above** on north; neutral ±5 % on its own surface at matched dtype |
+| the **op set** that is placed differently from the shipped graph | the **geometry** |
+| the **direction** — into L1, out to DRAM, different grid | the chain extent, and every measurement |
 
-**Its precision is poor; its recall is good.** So the query you are running is:
+**Never copy an advised core count.** Its selection is bytes-shaped and routinely lands below the divisors
+of the tensor's tile count: a 4096-wide (128-tile) norm was advised 11 and 22 cores where 32 gives exactly
+4 tiles per core and 64 is also legal. The same choice has produced configs that cannot execute
+(`per_core_K=9 is illegal` on a K=96-tile matmul). Take the op, derive the geometry from tile
+divisibility, and sweep both sides of your own choice.
 
-> *"What did I leave interleaved, or on ≤2 cores, that is legally shardable?"*
+`compute_config` / `math_fidelity` in the advised IR mirror the captured graph. They are not advice;
+override them with your own fidelity decision.
 
-**not** *"what config should I use?"* Take the **set difference** and derive your own geometry. If you do
-sweep the advisor's geometry, sweep **above** its value as well as below — north's sweep that appeared to
-vindicate its block widths only tested points *beneath* them on a monotone-improving axis, so its value
-"won" by being the largest anyone tried. On phi, where a sweep actually bracketed the advisor's value,
-the block width mattered 0.1–0.3 % — inside noise, in both directions.
+## Chains
 
-## Ordered procedure
+**A chain is a run of ops all resident in L1, preferably on one consistent shard spec.** A DRAM crossing is
+the hard boundary; an internal L1 regrid is in-chain cost, not a split. (This is `$optimize` step 6 /
+OPT-003 — read it there rather than reinventing it.)
 
-### Step 1 — Freeze the incumbent (before touching the advisor)
+Detect boundaries from **conversion ops present in the profile**, never from differing grids: a grid change
+is often absorbed by the consumer, so grid-differencing over-counts.
 
-Measure the incumbent decoder as it ships, **3 repeats minimum**, on this machine, with its own perf
-harness. Write `doc/advisor_challenger/incumbent.json`:
+Measured cost per conversion, from three decoders:
 
-```json
-{ "cell_tag": "...", "commit": "...", "harness": "tests/optimized_decoder_perf.py",
-  "decode_batch": 1, "repeats_ms": [1.2721, 1.2734, 1.2719],
-  "incumbent_ms": 1.2721, "noise_floor_ms": 0.0015,
-  "shipped_policy": { ... }, "shipped_policy_source": "..." }
+| move | device op | µs/op |
+|---|---|---|
+| L1→L1 regrid | `Reshard` | 1.4–1.9, roughly flat |
+| DRAM→L1 | `InterleavedToSharded` | 1.2–2.6, scales with tensor size |
+| L1→DRAM | `ShardedToInterleaved` | 1.5–3.5, scales, dearer direction |
+| retilize | `Untilize` / `Tilize` | **6.7–10.0** — largest class, and absent from the traced graph |
+
+**Chains do not interact appreciably** — two independent chains measured 0.13 and 0.16 µs of interaction.
+So do **not** enumerate pairwise combinations. Grow one chain instead:
+
+```
+chain := maximal run of ops all resident in L1
+loop:  pull in the adjacent op across the nearest DRAM crossing   (removes 1.2-3.5 us, or 6.7-10 retilize)
+       then unify the grid inside the chain                        (each removed Reshard is 1.4-1.9 us)
+       stop when neither move wins; cap the depth
 ```
 
-- `incumbent_ms` is the **best** repeat, not the mean — a challenger must beat the incumbent's good day,
-  otherwise you ratchet on noise.
-- `noise_floor_ms` = spread across repeats. Observed same-config spreads in this corpus were
-  **0.2–31 µs**. Any delta inside the floor is a **tie**, and ties go to the incumbent.
+The one combination worth enumerating is **across layer kinds** (step 6).
 
-**`shipped_policy` must come from what EXECUTED**, and `shipped_policy_source` must name that artifact:
-the final `tt-perf-report` CSV columns, or the selected candidate JSON. **Never from
-`resolved_policy.constructor_defaults`** — those are the class's default arguments, not the run's
-effective config, and reading them as policy is a documented error (gemma's defaults print
-`dense_decode_dram_sharded: False` on a cell whose CSV shows `DRAM Sharded = True`).
+## Procedure
 
-### Step 2 — Capture, once per layer kind, at the shipped precision
+### 1. Freeze the incumbent, before running the advisor
 
-Copy `scripts/capture_template.py`, adapt it per model, and **construct the decoder with the shipped
-policy**. This is the single most common defect in existing capture scripts: **3 of 4 call
-`from_state_dict(...)` with no dtype/policy argument** and silently trace the class defaults. north
-traced `bf16` attention and shipped `bfp8`, so two matmuls were excluded for a dtype the model never
-used. `advise_qwen.py` is the only correct existing template — it builds `POLICIES["default"]` and
-passes `policy=policy`.
+Its own perf harness at `DECODE_BATCH`. **10 untimed warm-up replays, then n = 5 timed** — or blocks of 100
+replays, which gave the tightest floor in this corpus (0.03 %). Record `repeats_ms` and take the
+**median**, not the min: min-of-n is biased low by an amount that grows with n, so cells with different n
+are not comparable.
 
-- **One capture per layer kind.** A single capture on one kind lets the whole search follow it there:
-  qwen's advise arm ran candidate variants on `full_attention` only, while the `linear_attention` kind
-  carrying **48 of 64 layers** got nothing but a default measurement.
-- **Pass `--pipeline-options allow-bf16-dram-sharded-matmul=true` whenever a traced weight is bf16.**
-  Otherwise DS is declined *by policy, not by capability* — bf16 DS runs at PCC 1.0000. This is exactly
-  how gemma got `dram_sharded_considered = 0` on 5 of 5.
-- Some ops are **terminal in the tracer** and no sequencing reaches them: `ttnn.sparse_matmul` (all MoE
-  experts) and SSM/gated-delta ops (`softplus`, `prefix_scan`, `hc_sum_reduce`, `assign`). Record which
-  layer kinds are therefore uncapturable and what share of layers they carry.
+`incumbent.json`: `decode_batch`, `requested_decode_batch`, `measured_at`, `repeats_ms`, `incumbent_ms`
+(median), `harness`, `harness_scope` (what the harness measures end to end), `shipped_policy` and
+`shipped_weight_dtypes` sourced from what **executed** — the final `tt-perf-report` CSV or the selected
+candidate JSON, never `resolved_policy.constructor_defaults`.
 
-### Step 3 — Read the advice correctly
+Save the op-level `tt-perf-report` CSV per layer kind. The window it reports must be within ~5× of
+`incumbent_ms`; a wider gap means the harness measures something other than the decode path.
 
-- `final_ir.mlir` is **authoritative** for program configs, required input layouts and the advisor's own
-  reverts. `report.json` gives per-op layout and the program-config *family* but **omits block widths and
-  `per_core_N`**.
-- **`compute_config` / `math_fidelity` in the IR is not advice.** It mirrors whatever the captured graph
-  already had. Taking it literally cost north **30.8 µs (−10.7 %)**. Override it with your own
-  fidelity choice, always.
-- **`dram_sharded_considered == 0` has two causes and you must say which:** (a) a wrong-precision
-  capture, or (b) the bf16-DS-off-by-default eligibility gate. OPT-015 names only (a), which sends you
-  hunting a capture bug that may not exist. The report states its own reason — quote it.
+### 2. Capture once per layer kind, at the shipped precision
 
-### Step 4 — Reconcile: build the disagreement list
+Copy `scripts/capture_template.py`; construct the decoder with the **shipped policy**, not class defaults.
+Pass `--pipeline-options allow-bf16-dram-sharded-matmul=true` if any traced weight is bf16. `captured_at`
+must be after `measured_at`.
 
-Run `scripts/reconcile.py`. It diffs advised layout/program-config per op against the shipped graph and
-emits `reconciliation.json`, one row per disagreement, each carrying that op's share of the measured
-device window so you can rank by what is actually worth measuring.
+Record the **layer share** of any kind you cannot capture. `sparse_matmul` and the SSM / gated-delta ops
+are terminal in the tracer; if such a kind dominates, *"the advisor cannot reach N of M layers"* is the
+correct result and must be stated, not discovered later.
 
-Rank by window share and apply a **materiality threshold** (default 1 % of the decode window). Below it,
-record the row as `below_threshold` with its number — do not silently drop it.
+### 3. Reconcile — `scripts/reconcile.py`, once per layer kind
 
-### Step 5 — Measure every material disagreement, one variable at a time
+It partitions the measured window so that every device op lands in exactly one bucket and the buckets sum
+to 100 %: `chain`, `boundary`, `dram_resident`, `agrees_with_shipped`, `untraced`. It fails loudly rather
+than emitting a gap.
 
-For each row above threshold: build the variant, measure it against the frozen incumbent, record a
-number.
+Read three things out of it:
 
-- **Change one variable per measurement.** phi's arm rejected the advisor's geometry in an A/B that moved
-  core count *and* block width together, and so never learned which one mattered.
-- **A prose rejection is not a result.** Every row ends with a measured number or an explicit
-  `below_threshold`. qwen's arm rejected the advised RMSNorm sharding in one sentence with no
-  measurement; that advice was worth **152 µs per layer**.
-- **Do not mix dtype/fidelity policies.** A geometry measured under a different dtype does not reject the
-  final dtype policy, and vice versa.
-- **Correctness is a gate on every kept change, not a formality.** Re-run the incumbent's own test suite
-  at the incumbent's own PCC bar and record which oracle was used. Prefer a real-weight oracle where the
-  cell has one; note explicitly when only synthetic weights are available, because diagonal synthetic
-  weights provably cannot see some defects (qwen's contiguous-vs-per-head Q/gate split was invisible to
-  them). **A faster decoder that fails its oracle is not a result — it is a regression with a good
-  number.**
+- **the ranked chain list** — ordered by conversion value, i.e. the µs of boundary ops a change removes,
+  *not* by the advised ops' window share. A chain whose ops total under 1 % of the window can be worth
+  several per cent once its DRAM round trips are gone.
+- **`material_ops_on_le_2_cores`** — a material op left on ≤2 cores needs a measured attempt or a quoted
+  hard error. Nothing else discharges it.
+- **`agrees_with_shipped`** — where the advisor independently re-derived your config. It contributes zero
+  *here* by construction; report the number, do not treat it as wasted advice.
 
-Every **kept** candidate also needs its own op-level `tt-perf-report` CSV, referenced as `perf_report` in
-its row. An end-to-end latency delta tells you a change helped; it cannot tell you *where* the time moved,
-and a kept change with no profile is a number with no mechanism behind it. It is also how you notice a
-change that wins overall while making its own target op slower.
+If the script aborts, fix the input or extend its op map. Do not hand-author its output.
 
-### Step 5b — Combine: screening alone does not find the best decoder
+### 4. Screen, in the order the reconciliation gives
 
-Steps 4–5 screen each chain **independently** against the frozen incumbent. That is necessary but not
-sufficient, because **chains interact**: they share L1, they share the conversion boundaries at their
-edges, and two changes that each beat the incumbent alone can lose together — or a cumulative set can lose
-to one of its own members.
+Each chain as one unit, one variable per measurement, against the frozen incumbent. Every chain ends with
+`repeats_ms` and a verdict, or `below_threshold` with its conversion value. Screen `dram_resident` rows
+too — *"leave this in DRAM"* is advice, and de-sharding an op has won here.
 
-So after screening:
+Every kept candidate: its own op-level CSV as `perf_report`, and the incumbent's oracle at the incumbent's
+own PCC bar. Name the oracle and say if it is synthetic. **A faster decoder that fails its oracle is a
+regression with a good number.**
 
-1. measure the **cumulative set** of screened winners;
-2. measure **pairwise combinations** of the top material chains;
-3. record **every** measured set in `final.json.combination.measured_sets` with its `measured_ms` and
-   `oracle_passed`, and record `best_single_ms`;
-4. ship `best_set` — the best **measured** set, never an inferred one.
+Screen DS-matmul advice **last**. It has not won a measurement in this corpus, and where it agrees with a
+shipped DS config there is nothing to screen.
 
-The invariant tightens accordingly: `final_ms <= incumbent_ms` **and** `final_ms <= best_single_ms`, both
-within the noise floor. Shipping a combination that is worse than a single change you already measured is a
-defect the gate refuses, not a judgement call.
+### 5. Decide by non-overlap
 
-Do not enumerate the full power set. Cumulative plus pairwise-on-the-top-chains is enough to catch
-interaction on this corpus, and the cost is bounded by the number of chains that survived screening — which
-is small precisely when the advisor had little to say.
+Ship a change iff **every candidate repeat beats every incumbent repeat**. No noise floor, no min baseline.
+This is only comparable across cells if n is fixed — the false-positive rate is `1/C(2n,n)`, so 5 % at
+n=3 against 0.40 % at n=5. **Confirm the winner in a fresh process** before shipping: cross-process
+variance is otherwise unmeasured, and per-process work happens once per process.
 
-### Step 6 — Iterate, bounded, and re-rank from a FRESH profile
+### 6. Combine across layer kinds
 
-You may iterate: apply what won, then go again. **Re-profile first.** The chain ranking in step 4 was
-computed from the incumbent's op-level CSV; once you have changed the graph, that distribution no longer
-exists, and continuing to rank against it means chasing a profile you have already invalidated. So every
-iteration after the first re-runs the profiler and re-runs `reconcile.py` on the **new** CSV, and records
-that CSV as `reranked_from`. The gate refuses a later iteration without it.
+Where the model has several layer kinds and the reported latency is a weighted composite, the candidate
+space is the **product** of per-kind winners, not the union of one-kind-varied sets. The composite is
+arithmetic over independently measured series, so these cost no extra device time. Record every measured
+set with its `chains`, `measured_ms`, `repeats_ms` and `oracle_passed`; ship the best measured set.
 
-Two further rules keep iteration from becoming the search:
+### 7. Ship
 
-- **Re-capture only after a topology rewrite that changes an op's shape.** A dtype change is not a
-  rewrite, and under this ordering dtype is already final.
-- **Cap it (default ≤3 captures per layer kind per cell)** and record each capture's trigger in
-  `iterations[]`. Extra captures are not free: one advisor seed application hit
-  `TT_FATAL: Sharded inputs require sharded outputs` and **wedged PCIe access**, needing a `tt-smi`
-  reset; and qwen's second capture returned **byte-identical** program configs — pure waste.
+Write the winner into `tt/optimized_decoder.py` and **keep every losing knob, default-off**, so rejected
+candidates stay re-measurable. `final.json`: `outcome`, `changed`, `final_ms`, `incumbent_ms`,
+`repeats_ms`, the winning config, the oracle, and `iterations[]`. If nothing won, ship the incumbent
+unchanged and say so with the numbers.
 
-Stop when an iteration produces no material disagreement, or the cap is reached.
+`README.md`: the accounting from step 3, what was screened with its number, what was not and why, and the
+unreachable share.
 
-### Step 7 — Ship the better decoder
+## Iterating
 
-Write the winning configuration into `models/autoports/<model>/tt/optimized_decoder.py` and record:
+You may apply what won and go again — but **re-profile first** and re-run `reconcile.py` on the new CSV;
+the old ranking describes a graph that no longer exists. Record `reranked_from`. Re-capture only after a
+topology rewrite that changes an op's shape; a dtype change is not one. Cap at 3 captures per layer kind.
 
-- `final.json`: `final_ms`, `incumbent_ms`, `delta_ms`, `delta_pct`, the winning config, the oracle that
-  passed, and the per-iteration history;
-- `README.md`: what was advised, what was kept, what was rejected **with its number**, and what was
-  uncapturable.
+Extension is not free: growing L1 residency hits capacity walls, and a bad placement in this project wedged
+PCIe and needed a `tt-smi` reset. Do not run extension experiments alongside a measured stage.
 
-**A no-change outcome is a valid, publishable result.** If nothing beat the incumbent, ship the
-incumbent unchanged and say so with the numbers. That is the honest answer to "does the advisor earn its
-cost on this model", and it is the outcome the invariant is designed to make safe. Do not manufacture a
-change to look productive.
+## What this stage cannot reach
 
-## Running this as an ordinary pipeline stage
-
-The gate `02b-advisor-challenger.check.sh` is self-contained: it reads only committed-or-working-tree
-artifacts under `doc/advisor_challenger/`, takes either `<model_dir>` or `models/autoports/<model_dir>`,
-and needs **no environment from any orchestrator**. An earlier revision required a `CHALLENGER_DECODE_BATCH`
-env var that only one experiment's driver exported, which made the stage fail for everyone else — a gate
-that cannot pass in the pipeline is a wall, not a gate. The batch now comes from the stage's own
-`requested_decode_batch`, and an orchestrator that *does* export `CHALLENGER_DECODE_BATCH` gets one extra
-cross-check for free.
-
-**What the gate enforces on its own:** the three batches agree; the incumbent was frozen *before* the
-capture (`captured_at` after `measured_at`); traced dtypes equal shipped dtypes; `dram_sharded_considered`
-of 0 is classified; every material chain has a measured number; `final_ms <= incumbent_ms` with ties to the
-incumbent; the oracle passed; iterations are capped and triggered.
-
-**What it cannot enforce, and therefore what an orchestrator must add.** The gate may run *during* the
-stage, when artifacts are still uncommitted, so it cannot use git history. Git-level freshness — that this
-run built its own artifacts instead of recovering a previous attempt's — has to come from whatever launches
-the stage. A previous re-run in this project passed a clean-working-tree preflight and then cherry-picked
-its predecessor's commits out of the object store two minutes later, so this is not hypothetical. The three
-checks worth wiring in, in the orchestrator:
-
-1. every commit touching `doc/advisor_challenger/` authored inside this stage's own window — cherry-pick and
-   rebase preserve author dates, so inherited history is visible;
-2. no `cherry-pick` or `rebase` entry in the work branch's reflog;
-3. no byte-identical artifact shared with a parked copy of the same cell — this is what catches files
-   copied by hand, which have fresh commits but stale content.
-
-`skillexp-logs/run_challenger.sh` implements all three as `challenger_is_fresh()` if you want a reference.
-
-## What this cannot reach — state it, do not discover it
-
-The largest single win in the reference corpus is **not reachable by this skill**: gemma's routed
-expert-down grid at 8 cores against a legal 44, worth **+117.7 µs/layer at identical BFLOAT8_B** across
-all 30 layers, is `ttnn.sparse_matmul` and terminal in the tracer. If a model's time is in its experts,
-this skill will be quiet and correct while the real win sits untouched. Sweeping norm and expert grids
-directly, without the advisor, is a separate and often better-paying activity.
+`ttnn.sparse_matmul` and the SSM / gated-delta ops are terminal in the tracer, so a model whose time is in
+its experts or its linear attention is largely invisible here — state the share rather than implying
+coverage. Sweeping expert and norm grids **directly**, without the advisor, is a separate and often
+better-paying activity.

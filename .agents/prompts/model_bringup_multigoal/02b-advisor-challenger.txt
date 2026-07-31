@@ -1,51 +1,25 @@
-/goal Use $advisor-challenger to make the finished MODEL_DIR optimized decoder faster than it already is, using $shard-advise as a challenger that must win on measurement — or prove with numbers that it cannot be beaten.
+/goal Use $advisor-challenger to measure how much $shard-advise adds to the already-optimized MODEL_DIR decoder: ship the best measured decoder, or record a contribution of zero with numbers.
 
-Read .agents/skills/advisor-challenger/SKILL.md FIRST and follow it — it has the detail and the traps. Use
-$shard-advise for SETUP and capture mechanics only; this stage replaces its "how to incorporate" part.
-Ship a NEW decoder measured to be the best of the incumbent and everything the advisor suggested. A
-NO-CHANGE outcome is a valid result — record it with numbers; never manufacture a change.
+Read .agents/skills/advisor-challenger/SKILL.md FIRST and follow it; use $shard-advise for SETUP and capture mechanics only.
 
-All artifacts go under doc/advisor_challenger/. The gate 02b-advisor-challenger.check.sh enforces each of:
+CONTRIBUTION MEASUREMENT: the incumbent is the control, the delta IS the result, and a no-change outcome is a publishable zero. Suppressing a candidate understates the contribution — measure the doubtful ones.
 
-0. BATCH + ORDER. Everything runs at decode batch DECODE_BATCH. incumbent.json records decode_batch,
-   requested_decode_batch (both = DECODE_BATCH) and measured_at; each report.json records capture_batch and
-   captured_at, which must be AFTER measured_at.
+Everything runs at decode batch DECODE_BATCH. All artifacts under doc/advisor_challenger/.
 
-1. FREEZE THE INCUMBENT, before the advisor runs. Its own perf harness at DECODE_BATCH, >=3 repeats, into
-   incumbent.json: incumbent_ms = BEST repeat, noise_floor_ms = the spread. Record shipped_policy,
-   shipped_weight_dtypes and shipped_policy_source naming the artifact they came from (final tt-perf-report CSV or
-   selected candidate JSON) — NEVER resolved_policy.constructor_defaults (class defaults). Save the
-   incumbent's op-level tt-perf-report CSV; every ranking below is computed from it.
+1. FREEZE THE INCUMBENT before running the advisor. Its own perf harness at DECODE_BATCH, 10 untimed warm-ups then n=5 timed. incumbent.json: repeats_ms, incumbent_ms = MEDIAN (not min), decode_batch and requested_decode_batch (both DECODE_BATCH), measured_at, harness, harness_scope, plus shipped_policy and shipped_weight_dtypes sourced from what EXECUTED (final tt-perf-report CSV or selected candidate JSON) — never resolved_policy.constructor_defaults. Save the op-level CSV per layer kind; its window must be within ~5x of incumbent_ms.
 
-2. CAPTURE ONCE PER LAYER KIND, AT THE SHIPPED PRECISION, building the target with the shipped policy
-   (template scripts/capture_template.py; advise_qwen.py is the only correct example). Pass
-   --pipeline-options allow-bf16-dram-sharded-matmul=true if any traced weight is bf16. Record traced_weight_dtypes and
-   dram_sharded_considered; if 0, a dram_sharded_zero_cause of wrong_precision_capture or
-   bf16_eligibility_default. Note uncapturable kinds (sparse_matmul/SSM are terminal) and their layer share.
+2. CAPTURE ONCE PER LAYER KIND at the shipped precision, decoder built with the shipped policy (template scripts/capture_template.py). Pass --pipeline-options allow-bf16-dram-sharded-matmul=true if any traced weight is bf16. Record capture_batch, captured_at (after measured_at), traced_weight_dtypes, and the LAYER SHARE of any kind you cannot capture — sparse_matmul and SSM ops are terminal in the tracer, so if such a kind dominates then "the advisor cannot reach N of M layers" is the result.
 
-3. RECONCILE IN CHAINS. Run scripts/reconcile.py against the incumbent CSV: it groups advised ops into
-   chains and thresholds on the chain's SUMMED window share (OPT-003).
+3. RECONCILE with scripts/reconcile.py, once per layer kind. It partitions the window so every device op lands in one bucket summing to 100%, and ranks chains by CONVERSION VALUE — the microseconds of boundary ops a change removes — not by advised-op window share. If it aborts, fix its input or extend its op map. Do NOT hand-author its output.
 
-4. SCREEN each material chain AS ONE UNIT, one variable per measurement, against the frozen incumbent.
-   Every kept candidate records its own tt-perf-report CSV as perf_report, plus the incumbent's oracle at
-   its own PCC bar. Every chain ends with a measured number or below_threshold + its summed share.
+4. SCREEN in the order it gives, each chain as ONE UNIT, one variable per measurement, recording repeats_ms. Also screen dram_resident rows ("leave this in DRAM" is advice, and de-sharding has won here), and discharge material_ops_on_le_2_cores with a measured attempt or a quoted hard error. Screen DS-matmul advice LAST. Kept candidates need their own CSV as perf_report plus the incumbent's oracle at its own PCC bar.
 
-5. COMBINE — screening alone does not find the best decoder, because chains interact. Measure the
-   cumulative set of screened winners plus pairwise combinations of the top chains. Record EVERY measured
-   set in final.json.combination.measured_sets with its ms and oracle_passed; also record best_single_ms.
-   best_set is the best MEASURED set, never an inferred one.
+NEVER COPY AN ADVISED CORE COUNT: the advisor selects on bytes and lands below the divisors of the tile count — 11 or 22 cores on a 128-tile norm where 32 gives exactly 4 tiles/core, and the same choice has produced configs that cannot execute. Take the op SET and the DIRECTION, derive geometry from tile divisibility, and sweep both sides of your own choice. compute_config/math_fidelity in the IR is traced state, not advice.
 
-6. INVARIANT: final_ms <= incumbent_ms AND <= best_single_ms, within noise_floor_ms. Ties to the INCUMBENT.
+5. DECIDE BY NON-OVERLAP: ship iff every candidate repeat beats every incumbent repeat. No noise floor, no min baseline. Record winning_repeats_ms, CONFIRM the winner in a fresh process, set confirmed_fresh_process.
 
-7. ITERATE, BOUNDED. After applying winners, RE-PROFILE and re-run reconcile.py on the new CSV to re-rank
-   what remains; every iteration after the first records reranked_from, and all record a trigger.
-   Re-capture only after a topology rewrite changing an op's shape; max 3 captures per layer kind.
+6. COMBINE ACROSS LAYER KINDS where the reported latency is a weighted composite: the candidate space is the PRODUCT of per-kind winners, and those sets are arithmetic over independently measured series so cost no device time. Record each with chains, measured_ms, repeats_ms, oracle_passed. Do NOT enumerate pairwise chain combinations — chains are additive.
 
-USE THE ADVICE AS RECALL, NOT GEOMETRY. compute_config/math_fidelity in final_ir.mlir is TRACED STATE,
-NOT ADVICE; overriding it is mandatory.
-
-DELIVERABLES under doc/advisor_challenger/: incumbent.json, shard_advise/<layer_kind>/{report.json,
-final_ir.mlir}, reconciliation.json, final.json, README.md, tracy/ (tt-perf-report outputs only, no raw
-Tracy captures) — plus the updated tt/optimized_decoder.py.
+7. SHIP the best measured set and KEEP EVERY LOSING KNOB DEFAULT-OFF so rejected candidates stay re-measurable. final.json: outcome, changed, final_ms, incumbent_ms, winning_repeats_ms, confirmed_fresh_process, oracle, oracle_passed. README.md: the step-3 accounting, what was screened with its number, what was not and why, and the unreachable share.
 
 Finish by running .agents/prompts/model_bringup_multigoal/02b-advisor-challenger.check.sh MODEL_DIR

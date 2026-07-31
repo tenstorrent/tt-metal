@@ -1,29 +1,25 @@
 #!/usr/bin/env python3
-"""Diff what the advisor advised against what the decoder actually ships, and rank by measured cost.
-
-This is the piece that turns "rejected in one sentence" into a numbered row. It is model-independent:
-it reads only the advisor's own artifacts plus the incumbent's tt-perf-report CSV.
+"""Reconcile the advisor's placement against the shipped graph, and account for every device op.
 
   reconcile.py --report shard_advise/<kind>/report.json \
-               --ir     shard_advise/<kind>/final_ir.mlir \
-               --perf   tracy/incumbent_ops.csv \
-               --layers-of-kind 30 --total-layers 30 \
-               --threshold-pct 1.0 \
-               --out    reconciliation.json
+               --perf   tracy/incumbent_<kind>_ops.csv \
+               --layer-kind <kind> --layers-of-kind N --total-layers M \
+               --out    reconciliation_<kind>.json
 
-What it emits, per op the advisor would place differently than the shipped graph:
+Emits a partition of the measured window: every device op gets exactly one bucket, and the buckets sum
+to 100 %:
 
-  op, advised_layout, advised_program_config, shipped_layout, shipped_cores,
-  device_us, window_share_pct, verdict("pending"|"below_threshold"), reason
+  chain:<id>            in a maximal L1-resident run whose placement differs from shipped
+  boundary              a conversion op -- what joining the chains either side would remove
+  dram_resident         the advisor placed it in DRAM; that is advice too
+  agrees_with_shipped   advised == shipped
+  untraced              in the profile, absent from the advisor's graph
 
-`verdict` starts as "pending" for every material row: the STAGE has to fill in `measured_ms` and flip it
-to kept/rejected. The gate refuses any row still pending, which is what stops a prose rejection from
-passing for a result.
+Candidates are ranked by CONVERSION VALUE -- the microseconds of boundary ops a change would remove --
+not by the advised ops' window share. A chain-lengthening change removes conversions, and those are
+separate device ops that an op-share threshold never counts.
 
-Deliberate limitation, stated rather than hidden: the shipped side is read from the perf CSV, so an op the
-advisor names but which never appears in the CSV is reported with device_us=None and
-`reason="op not present in the incumbent's measured window"`. That is usually a capture/shape mismatch
-worth a human look, not a free win.
+Fails loudly: an unmapped op or an accounting that does not close is an error, not a silent gap.
 """
 from __future__ import annotations
 
@@ -34,250 +30,226 @@ import re
 import sys
 from pathlib import Path
 
-# ---- program configs and layouts live in the IR, not the report ---------------------------------
-# report.json gives per-op layout and the program-config FAMILY but omits block widths and per_core_N;
-# final_ir.mlir is authoritative for those. So the IR is parsed for geometry and the report for intent.
-IR_MATMUL = re.compile(
-    r'"ttnn\.(?P<op>matmul|linear|sparse_matmul)".*?'
-    r'(?:in0_block_w\s*=\s*(?P<blk>\d+))?.*?'
-    r'(?:per_core_N\s*=\s*(?P<pcn>\d+))?',
-    re.DOTALL,
-)
-IR_SHARD = re.compile(
-    r'"ttnn\.(?P<op>[a-z_0-9]+)"[^\n]*?'
-    r'#(?P<mem>l1|dram)[^\n]*?(?P<layout>block_sharded|width_sharded|height_sharded|interleaved)',
-)
-IR_GRID = re.compile(r"<(?P<r>\d+)x(?P<c>\d+)>")
+# ttnn op -> device op class. Extend rather than guess: an unmapped op aborts, because a wrong guess
+# misattributes every later op in the alignment.
+TTNN_TO_DEVICE = {
+    "rms_norm": "LayerNorm", "layer_norm": "LayerNorm",
+    "linear": "Matmul", "matmul": "Matmul", "sparse_matmul": "SparseMatmul",
+    "add": "BinaryNg", "multiply": "BinaryNg", "subtract": "BinaryNg", "div": "BinaryNg",
+    "nlp_create_qkv_heads_decode": "NLPCreateQKVHeadsDecode",
+    "nlp_concat_heads_decode": "NLPConcatHeadsDecode",
+    "concatenate_heads": "NLPConcatHeads",
+    "rotary_embedding_llama": "RotaryEmbeddingLlama", "rotary_embedding": "RotaryEmbedding",
+    "paged_scaled_dot_product_attention_decode": "SdpaDecode",
+    "scaled_dot_product_attention_decode": "SdpaDecode",
+    "paged_update_cache": "PagedUpdateCache", "update_cache": "UpdateCache",
+    "transpose": "Transpose", "embedding": "Embedding", "silu": "Silu", "gelu": "Gelu",
+    "softmax": "Softmax", "typecast": "Typecast",
+    # metadata / conversion only -- no device op of their own
+    "reshape": None, "to_layout": None, "to_memory_config": None, "view": None,
+}
+CONVERSION = {"Reshard": "l1_regrid", "ShardedToInterleaved": "l1_to_dram",
+              "InterleavedToSharded": "dram_to_l1", "Untilize": "retilize", "Tilize": "retilize"}
 
 
-def parse_ir(path: Path) -> dict:
-    """op-name -> {memory, layout, grid, in0_block_w, per_core_N} as ADVISED."""
-    if not path.exists():
-        return {}
-    text = path.read_text(errors="replace")
-    advised: dict[str, dict] = {}
-    for line in text.splitlines():
-        m = IR_SHARD.search(line)
-        if not m:
-            continue
-        op = m.group("op")
-        e = advised.setdefault(op, {})
-        e["memory"] = m.group("mem")
-        e["layout"] = m.group("layout")
-        g = IR_GRID.search(line)
-        if g:
-            e["grid"] = f'{g.group("r")}x{g.group("c")}'
-            try:
-                e["cores"] = int(g.group("r")) * int(g.group("c"))
-            except ValueError:
-                pass
-        for key, pat in (("in0_block_w", r"in0_block_w\s*=\s*(\d+)"),
-                         ("per_core_N", r"per_core_N\s*=\s*(\d+)")):
-            mm = re.search(pat, line)
-            if mm:
-                e[key] = int(mm.group(1))
-    return advised
+def device_class(op_code: str) -> str:
+    return op_code.split()[0].replace("DeviceOperation", "")
 
 
-# Ops that belong to one advised chain must be judged together. The grouping is deliberately coarse and
-# name-based: it only has to be good enough that a chain is not split below the materiality bar, and it is
-# recorded in the output so a reader can regroup differently.
-CHAIN_RULES = (
-    ("rope", ("rope", "rotary", "cos", "sin")),
-    ("norm_residual", ("rms_norm", "layer_norm", "residual", "add")),
-    ("attention_projections", ("qkv", "q_proj", "k_proj", "v_proj", "o_proj", "concat_heads")),
-    ("attention_core", ("sdpa", "scaled_dot", "softmax", "paged_cache", "cache_update")),
-    ("mlp", ("gate", "up_proj", "down", "silu", "mul", "glu")),
-    ("moe_router", ("router", "topk", "top_k", "sparse_matmul", "expert")),
-)
-
-
-def chain_of(op: str) -> str:
-    """Which advised chain this op belongs to. Unmatched ops become their own single-op chain."""
-    low = op.lower()
-    for name, keys in CHAIN_RULES:
-        if any(k in low for k in keys):
-            return name
-    return f"single:{low.split()[0] if low.split() else low}"
-
-
-def parse_perf(path: Path) -> tuple[dict, float]:
-    """op-name -> {device_us, cores, sharded} as SHIPPED, plus the total measured window."""
-    if not path.exists():
-        return {}, 0.0
-    shipped: dict[str, dict] = {}
-    total = 0.0
-    with path.open(newline="") as fh:
-        rows = list(csv.DictReader(fh))
+def parse_perf(path: Path):
+    """Device ops in program order, plus the window total. Accepts us or ns duration columns."""
+    rows = list(csv.DictReader(path.open(newline="")))
     if not rows:
-        return {}, 0.0
-
-    def col(row, *names):
-        for n in names:
-            for k in row:
-                if k and k.strip().lower() == n:
-                    return row[k]
-        # substring fallback: tt-perf-report column names vary across versions
-        for n in names:
-            for k in row:
-                if k and n in k.strip().lower():
-                    return row[k]
-        return None
-
-    for row in rows:
-        name = (col(row, "op code", "op_code", "op type", "name") or "").strip()
-        if not name:
+        sys.exit(f"FATAL: {path} has no rows")
+    col = next((c for c in rows[0] if c and c.strip().lower() in
+                ("device time", "device kernel duration [ns]", "device kernel duration",
+                 "device_kernel_duration_ns")), None)
+    if col is None:
+        sys.exit(f"FATAL: {path} has no recognised duration column; saw {list(rows[0])}")
+    scale = 1 / 1000.0 if "ns" in col.lower() else 1.0
+    ops, total = [], 0.0
+    for r in rows:
+        code = (r.get("OP Code") or "").strip()
+        if not code:
             continue
-        raw = col(row, "device kernel duration [ns]", "device kernel duration", "device_kernel_duration_ns")
         try:
-            us = float(str(raw).replace(",", "")) / 1000.0
+            us = float(str(r[col]).replace(",", "")) * scale
         except (TypeError, ValueError):
             us = 0.0
-        cores_raw = col(row, "core count", "core_count", "cores")
         try:
-            cores = int(float(str(cores_raw).replace(",", "")))
+            cores = int(float(str(r.get("Cores", "")).replace(",", "")))
         except (TypeError, ValueError):
             cores = None
-        ds = (col(row, "dram sharded", "dram_sharded") or "").strip().lower() in ("true", "1", "yes")
-        key = name.lower().replace("ttnn.", "")
-        e = shipped.setdefault(key, {"device_us": 0.0, "cores": cores, "dram_sharded": ds, "n": 0})
-        e["device_us"] += us
-        e["n"] += 1
-        if cores is not None:
-            # keep the SMALLEST core count seen: an op left on 1 core in any instance is the finding
-            e["cores"] = cores if e["cores"] is None else min(e["cores"], cores)
-        e["dram_sharded"] = e["dram_sharded"] or ds
+        ops.append({"id": r.get("ID"), "cls": device_class(code), "code": code,
+                    "us": us, "cores": cores,
+                    "dram_sharded": (r.get("DRAM Sharded") or "").strip().lower()
+                                    in ("true", "1", "yes")})
         total += us
-    return shipped, total
+    return ops, total
+
+
+def parse_advised(report: dict):
+    """Advised ops in program order. Geometry comes from report.json; the IR is not needed."""
+    out = []
+    for o in report.get("ops", []):
+        lay = o.get("layout", "")
+        m = re.search(r"cores=\((\d+),(\d+)\)-\((\d+),(\d+)\)", lay)
+        cores = ((int(m.group(3)) - int(m.group(1)) + 1) * (int(m.group(4)) - int(m.group(2)) + 1)
+                 if m else None)
+        name = o["op"].replace("ttnn.", "")
+        if name not in TTNN_TO_DEVICE:
+            sys.exit(f"FATAL: ttnn op {name!r} has no device-class mapping. Add it to TTNN_TO_DEVICE; "
+                     f"guessing would misattribute every later op.")
+        out.append({"index": o["index"], "op": name, "cls": TTNN_TO_DEVICE[name], "layout": lay,
+                    "cores": cores, "program_config": o.get("program_config", "") or "",
+                    "space": "dram" if lay.startswith("dram") else
+                             ("l1" if lay.startswith("l1") else None)})
+    return out
+
+
+def align(advised, device):
+    """Pair the two program-order sequences on device class, tolerating gaps on both sides.
+
+    Lengths differ: the advised graph omits ops the tracer never saw and includes metadata-only ops with
+    no device counterpart. A positional zip misattributes everything after the first gap.
+    """
+    pairs, di = [], 0
+    for a in advised:
+        if a["cls"] is None:
+            continue                                     # metadata only; nothing to account
+        j = di
+        while j < len(device) and device[j]["cls"] != a["cls"]:
+            j += 1
+        if j >= len(device):
+            pairs.append((a, None))                      # advised op never ran
+            continue
+        for k in range(di, j):
+            pairs.append((None, device[k]))              # device ops the advisor did not place
+        pairs.append((a, device[j]))
+        di = j + 1
+    for k in range(di, len(device)):
+        pairs.append((None, device[k]))
+    return pairs
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--report", required=True, type=Path)
-    ap.add_argument("--ir", required=True, type=Path)
     ap.add_argument("--perf", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--layer-kind", default="unknown")
     ap.add_argument("--layers-of-kind", type=int, default=1)
     ap.add_argument("--total-layers", type=int, default=1)
-    ap.add_argument("--threshold-pct", type=float, default=1.0)
+    ap.add_argument("--ir", type=Path, help="accepted and ignored; geometry comes from report.json")
     a = ap.parse_args()
 
-    try:
-        report = json.loads(a.report.read_text())
-    except Exception as e:
-        print(f"cannot read {a.report}: {e}", file=sys.stderr)
-        return 1
+    report = json.loads(a.report.read_text())
+    advised = parse_advised(report)
+    device, window = parse_perf(a.perf)
+    if window <= 0:
+        sys.exit(f"FATAL: measured window is 0 us from {a.perf}")
 
-    advised = parse_ir(a.ir)
-    shipped, window_us = parse_perf(a.perf)
-    if not advised:
-        print(f"warning: no advised placements parsed out of {a.ir}", file=sys.stderr)
-    if window_us <= 0:
-        print(f"warning: measured window is 0 us from {a.perf} -- window_share_pct will be null",
-              file=sys.stderr)
-
-    rows = []
-    for op, adv in sorted(advised.items()):
-        ship = shipped.get(op)
-        # The finding is: advisor puts it in SHARDED L1, the shipped graph leaves it interleaved or on
-        # <=2 cores. That set difference is the advisor's demonstrated strength; its geometry is not.
-        advises_sharded_l1 = adv.get("memory") == "l1" and adv.get("layout", "").endswith("sharded")
-        if not advises_sharded_l1:
+    rows, chains, cur = [], [], None
+    for adv, dev in align(advised, device):
+        if dev is None:
+            rows.append({"op": adv["op"], "bucket": "advised_but_not_present", "us": 0.0,
+                         "share_pct": 0.0, "advised": adv["layout"],
+                         "reason": "advised op absent from the measured window -- a capture/shape "
+                                   "mismatch worth a look, not a free win"})
             continue
-        if ship is None:
-            rows.append({
-                "op": op, "layer_kind": a.layer_kind,
-                "advised": adv, "shipped": None,
-                "device_us": None, "window_share_pct": None,
-                "verdict": "pending",
-                "reason": "op not present in the incumbent's measured window -- likely a capture/shape "
-                          "mismatch worth a human look, not a free win",
-            })
-            continue
-        ship_cores = ship.get("cores")
-        under_sharded = (ship_cores is not None and ship_cores <= 2) or not ship.get("dram_sharded", False)
-        if not under_sharded:
-            continue
-        # cost is per-layer-kind; scale to the whole model so ranking reflects real impact
-        per_model_us = ship["device_us"] * (a.layers_of_kind or 1)
-        share = (100.0 * ship["device_us"] / window_us) if window_us > 0 else None
-        row = {
-            "op": op, "layer_kind": a.layer_kind,
-            "advised": adv,
-            "shipped": {"cores": ship_cores, "dram_sharded": ship.get("dram_sharded"),
-                        "device_us": round(ship["device_us"], 3), "instances": ship["n"]},
-            "device_us": round(ship["device_us"], 3),
-            "per_model_us": round(per_model_us, 3),
-            "layers_of_kind": a.layers_of_kind,
-            "window_share_pct": None if share is None else round(share, 3),
-            "verdict": "pending",
-            "reason": None,
-        }
-        if share is not None and share < a.threshold_pct:
-            row["verdict"] = "below_threshold"
-            row["reason"] = f"{share:.3f}% of the measured window, under the {a.threshold_pct}% threshold"
-        rows.append(row)
-
-    rows.sort(key=lambda r: (r["window_share_pct"] or 0.0), reverse=True)
-
-    # ---- group into CHAINS, and threshold on the chain, not the op ------------------------------
-    # The advice is a chain, not a set of independent ops: an op resharded in isolation pays the
-    # conversion cost at both its edges, and only the whole L1-resident chain wins (OPT-003). Applying
-    # the materiality bar per op therefore discards precisely the advice class with the best track
-    # record. Measured consequence: one RoPE chain arrived as 9 rows of 0.46-0.97% each, every one
-    # under a 1% per-op bar, all dropped unmeasured -- summed share 5.86% of the decode window.
-    chains: dict[str, dict] = {}
-    for r in rows:
-        r["chain"] = chain_of(r["op"])
-        c = chains.setdefault(r["chain"], {"chain": r["chain"], "ops": [], "summed_window_share_pct": 0.0,
-                                           "verdict": "pending", "measured_ms": None, "reason": None})
-        c["ops"].append(r["op"])
-        c["summed_window_share_pct"] += r.get("window_share_pct") or 0.0
-    for c in chains.values():
-        c["summed_window_share_pct"] = round(c["summed_window_share_pct"], 3)
-        c["op_count"] = len(c["ops"])
-        if c["summed_window_share_pct"] < a.threshold_pct:
-            c["verdict"] = "below_threshold"
-            c["reason"] = (f'{c["summed_window_share_pct"]}% of the window summed across '
-                           f'{c["op_count"]} op(s), under the {a.threshold_pct}% threshold')
-    # a row inherits its chain's disposition: no row may be dropped while its CHAIN is material
-    for r in rows:
-        cv = chains[r["chain"]]["verdict"]
-        if cv == "below_threshold":
-            r["verdict"] = "below_threshold"
-            r["reason"] = f'chain {r["chain"]} is below threshold ({chains[r["chain"]]["reason"]})'
+        r = {"op": adv["op"] if adv else None, "device": dev["code"], "cls": dev["cls"],
+             "us": round(dev["us"], 3), "share_pct": round(100 * dev["us"] / window, 3),
+             "shipped_cores": dev["cores"]}
+        if dev["cls"] in CONVERSION:
+            # conversions live in the advisor's reshards[] list, not ops[], so they arrive unpaired;
+            # classify them first or they fall through to `untraced` and the ranking loses its input
+            r.update(bucket="boundary", conversion_class=CONVERSION[dev["cls"]])
+            cur = None                                   # a conversion ends the current L1 run
+        elif adv is None:
+            r.update(bucket="untraced", reason="in the profile, absent from the advisor's graph")
+            cur = None
+        elif adv["space"] == "dram":
+            r.update(bucket="dram_resident", advised=adv["layout"],
+                     reason="advisor placed it in DRAM -- that is advice, and it disagrees with a "
+                            "sharded shipped op")
+            cur = None
         else:
-            r["verdict"] = "pending"
-            r["reason"] = (f'chain {r["chain"]} is material at '
-                           f'{chains[r["chain"]]["summed_window_share_pct"]}% -- MEASURE THE CHAIN AS ONE '
-                           f'UNIT first; split per-op only after the chain has a number')
-    chain_list = sorted(chains.values(), key=lambda c: c["summed_window_share_pct"], reverse=True)
+            same = (adv["cores"] is not None and adv["cores"] == dev["cores"]) or \
+                   (dev["dram_sharded"] and "dram_sharded" in adv["program_config"])
+            r.update(bucket="agrees_with_shipped" if same else "chain",
+                     advised=adv["layout"], advised_cores=adv["cores"])
+            if not same:
+                if cur is None:
+                    cur = {"chain": f"{a.layer_kind}:{len(chains)}", "ops": [], "us": 0.0,
+                           "boundary_us": 0.0, "verdict": "pending", "measured_ms": None,
+                           "repeats_ms": None}
+                    chains.append(cur)
+                cur["ops"].append(adv["op"])
+                cur["us"] += dev["us"]
+                r["chain"] = cur["chain"]
+        rows.append(r)
+
+    # conversion value: boundary us adjacent to a chain -- what joining across it would remove
+    for i, r in enumerate(rows):
+        if r["bucket"] != "boundary":
+            continue
+        for j in (i - 1, i + 1):
+            if 0 <= j < len(rows) and rows[j].get("chain"):
+                ch = next(c for c in chains if c["chain"] == rows[j]["chain"])
+                ch["boundary_us"] += r["us"] / 2.0
+    for c in chains:
+        c["us"] = round(c["us"], 3)
+        c["boundary_us"] = round(c["boundary_us"], 3)
+        c["conversion_value_us"] = c["boundary_us"]
+        c["op_share_pct"] = round(100 * c["us"] / window, 3)
+        c["per_model_us"] = round((c["us"] + c["boundary_us"]) * a.layers_of_kind, 3)
+    chains.sort(key=lambda c: -(c["conversion_value_us"] + c["us"]))
+
+    acct, accounted = {}, 0.0
+    for r in rows:
+        if r["bucket"] == "advised_but_not_present":
+            continue
+        accounted += r["us"]
+        b = acct.setdefault(r["bucket"], {"us": 0.0, "ops": 0})
+        b["us"] += r["us"]
+        b["ops"] += 1
+    for v in acct.values():
+        v["us"] = round(v["us"], 3)
+        v["share_pct"] = round(100 * v["us"] / window, 3)
+    closes = abs(accounted - window) < 0.01
+
+    low = [r for r in rows if r["bucket"] in ("chain", "agrees_with_shipped")
+           and (r.get("shipped_cores") or 99) <= 2 and r["share_pct"] >= 1.0]
 
     out = {
-        "layer_kind": a.layer_kind,
-        "layers_of_kind": a.layers_of_kind,
-        "total_layers": a.total_layers,
-        "measured_window_us": round(window_us, 3),
-        "threshold_pct": a.threshold_pct,
-        "threshold_applied_to": "chain summed window share, NOT per-op",
-        "dram_sharded_considered": report.get("dram_sharded_considered"),
-        "dram_sharded_advised": report.get("dram_sharded_advised"),
-        "note": "Measure each material CHAIN as one unit and record its measured_ms; the gate refuses any "
-                "chain left pending, and refuses a set of same-chain rows dropped while their sum clears "
-                "the threshold. Advisor GEOMETRY is not evidence -- derive your own, or sweep its value in "
-                "both directions.",
-        "chains": chain_list,
+        "generated_by": "advisor-challenger/scripts/reconcile.py", "tool_version": 2,
+        "layer_kind": a.layer_kind, "layers_of_kind": a.layers_of_kind,
+        "total_layers": a.total_layers, "measured_window_us": round(window, 3),
+        "accounting": acct, "accounting_closes_100pct": closes,
+        "accounted_us": round(accounted, 3),
+        "ranked_by": "conversion_value_us + chain op us -- NOT advised-op window share",
+        "chains": chains, "material_ops_on_le_2_cores": low,
+        "note": "Screen chains in the order given, each as one unit, and record repeats_ms. Do NOT copy "
+                "advised core counts: they are selected under a bytes-shaped objective and are often "
+                "smaller than the divisors of the tensor's tile count. The advisor's contribution is the "
+                "op SET and the DIRECTION of the change; own the geometry.",
         "disagreements": rows,
     }
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(json.dumps(out, indent=2) + "\n")
-    material = [r for r in rows if r["verdict"] == "pending"]
-    print(f"{a.layer_kind}: {len(rows)} disagreement(s), {len(material)} above the "
-          f"{a.threshold_pct}% threshold -> {a.out}")
-    for r in material:
-        print(f"  {r['op']}: shipped {r['shipped']} ({r['window_share_pct']}% of window) "
-              f"vs advised {r['advised'].get('layout')} {r['advised'].get('grid')}")
+
+    print(f"{a.layer_kind}: window {window:.3f} us, {len(rows)} rows, closes: {closes}")
+    for b, v in sorted(acct.items(), key=lambda x: -x[1]["us"]):
+        print(f"   {b:22s} {v['us']:9.3f} us {v['share_pct']:6.2f} %  ({v['ops']} ops)")
+    print(f"   {len(chains)} chain(s), ranked by conversion value:")
+    for c in chains:
+        print(f"      {c['chain']:16s} ops {c['us']:8.3f} + boundaries {c['boundary_us']:7.3f} us"
+              f"   {'/'.join(c['ops'])[:52]}")
+    for r in low:
+        print(f"   !! {r['device']} on {r['shipped_cores']} core(s), {r['us']:.3f} us "
+              f"({r['share_pct']} %) -- needs a measured attempt or a quoted hard error")
+    if not closes:
+        sys.exit(f"FATAL: accounting does not close: {accounted:.3f} of {window:.3f} us")
     return 0
 
 
