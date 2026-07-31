@@ -309,7 +309,7 @@ bool MeshDeviceImpl::allocations_unsafe() const {
 
 std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(const MeshTraceId& trace_id) const {
     std::unordered_map<size_t, std::string> result;
-    for (const auto* allocator : this->trace_allocators()) {
+    for (auto* allocator : this->trace_allocators()) {
         result.merge(allocator->get_unsafe_tracked_ids(*trace_id));
     }
     return result;

@@ -86,7 +86,7 @@ public:
 
     // Unsafe allocation tracking is per trace. Allocation context remains per buffer because a
     // buffer has the same allocation site regardless of how many older traces can corrupt it.
-    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(std::uint32_t trace_id) const;
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(std::uint32_t trace_id);
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
     void clear_unsafe_tracked_ids(std::uint32_t trace_id);
     static std::vector<size_t> drain_pending_traceback_ids();
