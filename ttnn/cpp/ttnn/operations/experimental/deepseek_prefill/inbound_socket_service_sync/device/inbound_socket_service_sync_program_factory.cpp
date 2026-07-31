@@ -41,6 +41,9 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
     // Enumerate worker cores row-major (y outer, x inner) — must match the
     // service's worker enumeration so per-worker page slices stay stable.
     std::vector<CoreCoord> workers;
+    workers.reserve(
+        (args.worker_cores.end_coord.y - args.worker_cores.start_coord.y + 1) *
+        (args.worker_cores.end_coord.x - args.worker_cores.start_coord.x + 1));
     for (uint32_t y = args.worker_cores.start_coord.y; y <= args.worker_cores.end_coord.y; ++y) {
         for (uint32_t x = args.worker_cores.start_coord.x; x <= args.worker_cores.end_coord.x; ++x) {
             workers.emplace_back(x, y);

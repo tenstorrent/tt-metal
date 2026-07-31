@@ -44,6 +44,7 @@ struct AllToAllAsyncParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(8);
         attrs.emplace_back("in_dim", in_dim);
         attrs.emplace_back("out_dim", out_dim);
         attrs.emplace_back("num_links", num_links);

@@ -69,6 +69,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
         "(ceil_pad_h > 0 || ceil_pad_w > 0) or count_include_pad == false and (pad_h > 0 || pad_w > 0)");
 
     std::vector<ScalarInfo> scalars;
+    scalars.reserve(config.max_out_nhw_per_core);
     bool first_scalar = true;
     uint32_t last_pool_area = 0;
 
@@ -151,6 +152,8 @@ Tensor create_scalar_config_tensor(
         default: break;
     }
 
+    scalars_per_core.reserve(num_iterations);
+
     {
         uint32_t nhw_linear = 0;
         uint32_t output_stick_n = 0;
@@ -228,6 +231,7 @@ std::vector<uint32_t> generate_core_starting_indices(
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: repeat_factor = num_cores_x; break;
         default: TT_FATAL(false, "Unsupported shard scheme");
     };
+    starting_indices.reserve(shard_boundaries.size() * repeat_factor);
     for (const auto& item : shard_boundaries) {
         const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {
@@ -684,6 +688,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                                     : std::nullopt;
 
     std::vector<DataflowBufferSpec> dfbs;
+    dfbs.reserve(23);
 
     // scalar CB(s)
     // The pool2d split-reader compute kernel references dfb::in_cb_1 and dfb::in_scalar_cb_1
