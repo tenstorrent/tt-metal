@@ -66,6 +66,14 @@ def test_bucket_selection():
     logger.info("PASSED: bucket selection picks smallest pow2 >= num_active and never drops active rows")
 
 
+def test_async_capability_matches_device_sampling():
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+
+    capabilities = Qwen36ForCausalLM.model_capabilities
+    assert capabilities["supports_sample_on_device"]
+    assert capabilities["supports_async_decode"] == capabilities["supports_sample_on_device"]
+
+
 def test_bucket_warmup_compiles_all_widths_before_capture(monkeypatch):
     from models.common.warmup import WarmupForwardMixin
     from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM

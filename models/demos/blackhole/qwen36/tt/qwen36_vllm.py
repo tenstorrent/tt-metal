@@ -49,13 +49,11 @@ class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
 class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
 
-    # supports_async_decode: needs device continuity (sampler writes the next token; the trace
-    # advances cur_pos/rope). GDN is position-free and queue-ordered, so overlap is safe. Continuity
-    # and on-device sampling are TP-only; the plugin only overlaps those steps. Follow
-    # TT_QWEN36_DEVICE_DECODE (default on). supports_sample_on_device: decode-only.
+    # The supported P150x4 path has resident token feedback and device-advanced position/RoPE.
+    # Therefore every device-sampling steady step can use async decode.
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": os.environ.get("TT_QWEN36_DEVICE_DECODE", "1") == "1",
+        "supports_async_decode": True,
         "supports_sample_on_device": True,
     }
 

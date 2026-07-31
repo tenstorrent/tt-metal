@@ -73,8 +73,6 @@ def _build(mesh_device, bmax):
     )
     if model.sampling is None:
         pytest.skip("on-device sampling unsupported on this mesh; device continuity is a no-op")
-    if not model.device_decode_continuity:
-        pytest.skip("device decode continuity disabled (TT_QWEN36_DEVICE_DECODE=0)")
     args = model.args
     model.allocate_kv_caches((bmax * BPU, args.n_local_kv_heads, BLOCK, args.head_dim), ttnn.bfloat16, batch_size=bmax)
     page_table = torch.stack([torch.arange(u * BPU, (u + 1) * BPU, dtype=torch.int32) for u in range(bmax)])
@@ -135,8 +133,6 @@ def test_device_rope_gather_matches_host_rope(mesh_device, reset_seeds, ensure_g
     model = Qwen36Model.from_pretrained(
         mesh_device, max_batch_size=B, max_seq_len=CTX, n_layers=1, hf_model="Qwen/Qwen3.6-27B"
     )
-    if not model.device_decode_continuity:
-        pytest.skip("device decode continuity disabled")
     rd = model.args.rope_head_dim
     # Stay a step below the last table row: the plus_one check below reads position+1, and the
     # gather table has exactly max_seq_len rows (same bound as the host cos_cpu it replaces).
@@ -167,6 +163,15 @@ def test_device_rope_gather_matches_host_rope(mesh_device, reset_seeds, ensure_g
     got = ttnn.to_torch(ttnn.get_device_tensors(cos1)[0]).float().reshape(B, rd)
     want = model.rope.cos_cpu[(positions + 1).long()].to(torch.bfloat16).float()
     assert float((got - want).abs().max()) == 0.0, "plus_one on the rope index did not advance the rotation"
+
+    # Position continuity is independent from direct sampler token feedback.
+    model.device_token_feedback = False
+    host_inputs = model.prepare_decode_inputs_host(
+        torch.arange(B, dtype=torch.int32).reshape(B, 1),
+        positions,
+    )
+    assert list(host_inputs[0].shape) == [B, 1]
+    assert host_inputs[2].dtype == ttnn.uint32
     logger.info("PASSED: device rope gather is bit-identical to the host path, and advances correctly")
 
 
@@ -191,7 +196,8 @@ def test_continuity_matches_host_staged_decode(mesh_device, B, reset_seeds, ensu
     assert model.sampling.tt_sampling.force_argmax_sampling, "expected the greedy (argmax) sampler path"
 
     # ---- reference: host-staged, eager, tokens fed back through the host every step -----------
-    model.device_decode_continuity = False
+    model.device_position_continuity = False
+    model.device_token_feedback = False
     model.reset_tp()
     ref, tok, pos = [], tok0.clone(), pos0.clone()
     for _ in range(STEPS):
@@ -205,7 +211,8 @@ def test_continuity_matches_host_staged_decode(mesh_device, B, reset_seeds, ensu
     logger.info(f"reference (host-staged, eager) tokens: {ref}")
 
     # ---- device continuity: capture, then replay with nothing coming from host ----------------
-    model.device_decode_continuity = True
+    model.device_position_continuity = True
+    model.device_token_feedback = True
     model.reset_tp()
     dev = model.prepare_inputs_decode(tok0, pos0, pt)
     assert list(dev[0].shape) == [1, 1, 1, slots], f"token buffer {list(dev[0].shape)} is not sampler-shaped"
@@ -351,7 +358,8 @@ def test_bucket_switch_continuity_matches_host_reference(mesh_device, schedule, 
     model.sampling.apply_decode_state([_greedy_params(slots)], reset_batch=True)
 
     # Reference: eager decode with host-authoritative inputs every step.
-    model.device_decode_continuity = False
+    model.device_position_continuity = False
+    model.device_token_feedback = False
     model.reset_tp()
     ref_tokens, ref_positions = [], []
     tok, pos = tok0.clone(), pos0.clone()
@@ -370,7 +378,8 @@ def test_bucket_switch_continuity_matches_host_reference(mesh_device, schedule, 
     ref_gdn = _gdn_snapshot(model)
 
     # Subject: all traces share one canonical input set. Compile every width first.
-    model.device_decode_continuity = True
+    model.device_position_continuity = True
+    model.device_token_feedback = True
     model.initialize_decode_trace_inputs(BPU)
     canonical = model._canonical_decode_inputs
     for B in widths:

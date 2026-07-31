@@ -38,15 +38,17 @@ class Qwen36Model:
             self.tt_ccl = None
         self.configuration = args  # Generator reads model.configuration.max_seq_len
         self.sampling_dp = 1
-        # Decode advances token/position/rope on device, so async scheduling's one-step-stale host state is harmless.
-        self.device_decode_continuity = self.num_devices > 1 and os.environ.get("TT_QWEN36_DEVICE_DECODE", "1") == "1"
-        self._tt_vllm_always_refresh_decode_trace_inputs = not self.device_decode_continuity
         # Reuses the vocab-sharded lm_head as the sampler's shard: needs divisible vocab; 64K = top-k limit.
         self._supports_on_device_sampling = (
             self.num_devices > 1
             and args.vocab_size % self.num_devices == 0
             and (args.vocab_size // self.num_devices <= 64 * 1024)
         )
+        # Position/RoPE advancement is always device-owned. Direct token feedback is a separate
+        # capability: unsupported paths still reload host tokens while using the same decode graph.
+        self.device_position_continuity = True
+        self.device_token_feedback = self._supports_on_device_sampling
+        self._tt_vllm_always_refresh_decode_trace_inputs = not self.device_token_feedback
         if self._supports_on_device_sampling:
             from models.common.sampling.generator import SamplingGenerator
 
@@ -3203,7 +3205,7 @@ class Qwen36Model:
 
     def initialize_decode_trace_inputs(self, num_blocks):
         """Allocate canonical max-width decode buffers before any trace capture."""
-        if not self.device_decode_continuity:
+        if not self.device_token_feedback:
             return
         num_blocks = int(num_blocks)
         if self._canonical_decode_inputs is not None:
@@ -3230,7 +3232,7 @@ class Qwen36Model:
         """Copy trace inputs into the canonical device buffer set."""
         from models.tt_transformers.tt.common import copy_host_to_device
 
-        if not self.device_decode_continuity:
+        if not self.device_token_feedback:
             return copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         if self._canonical_decode_inputs is None:
             self._canonical_decode_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
@@ -3248,11 +3250,11 @@ class Qwen36Model:
         from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host
 
         B = tokens.shape[0]
-        canonical = bool(canonical and self.device_decode_continuity)
+        canonical = bool(canonical and self.device_token_feedback)
         target_B = int(self.args.max_batch_size) if canonical else B
-        if self.device_decode_continuity:
+        if self.device_position_continuity:
             self._active_decode_bucket = B
-        if self.device_decode_continuity:
+        if self.device_token_feedback:
             # The on-device sampler writes the sampled id straight back into this buffer, so it must
             # be a legal ttnn.sampling / ttnn.argmax output_tensor: rank 4, uint32, ROW_MAJOR, one
             # entry per sampler slot (measured — ttnn.sampling rejects rank 3). The decode graph
@@ -3279,7 +3281,7 @@ class Qwen36Model:
         # stays the true KV position. rope_delta is 0 for text, so this is a no-op there.
         rope_pos_vec = pos_vec.clone()
         rope_pos_vec[:B] += self.rope.rope_delta
-        if self.device_decode_continuity:
+        if self.device_position_continuity:
             # Hand the decode graph the rope POSITION, not a host-computed cos/sin: the graph
             # gathers cos/sin from the device tables and then advances this index itself, so a
             # step whose host position is stale (async scheduling) still rotates correctly.
