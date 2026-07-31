@@ -59,6 +59,7 @@ const std::vector<DemotedCase>& demoted_cases() {
         {{1, 4, 96, 32}, BufferType::L1, DataType::BFLOAT16},
         {{1, 96, 64}, BufferType::DRAM, DataType::FLOAT32},
         {{1, 96, 64}, BufferType::L1, DataType::FLOAT32},
+        {{12, 32, 160}, BufferType::L1, DataType::BFLOAT16},
         {{2, 1, 96, 32}, BufferType::DRAM, DataType::INT32},
         {{2, 1, 96, 32}, BufferType::DRAM, DataType::UINT16},
         {{2, 1, 96, 32}, BufferType::DRAM, DataType::UINT32},
