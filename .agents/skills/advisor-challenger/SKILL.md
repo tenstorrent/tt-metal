@@ -150,6 +150,9 @@ correct result and must be stated, not discovered later.
 
 ### 3. Reconcile — `scripts/reconcile.py`, once per layer kind
 
+Always pass **`--incumbent incumbent.json`**. Its `repeats_ms` give the harness noise floor, and without that
+number nothing below decides whether a measurement can mean anything.
+
 It partitions the measured window so that every device op lands in exactly one bucket and the buckets sum
 to 100 %: `chain`, `boundary`, `dram_resident`, `agrees_with_shipped`, `untraced`. It fails loudly rather
 than emitting a gap.
@@ -193,6 +196,23 @@ with the IR evidence** — do not edit the JSON.
 Advised ops pair with device classes automatically, so an abort means an input problem — an unbounded perf
 report, a wrong file, a window that cannot be the decode path. Fix the input, not the output: hand-authoring
 this file is the one failure the gate cannot detect for you.
+
+### 3a. Obey the feasibility verdict before spending device time
+
+`feasibility.verdict` compares what the advisor proposes removing against the spread of the incumbent's own
+repeats. Non-overlap cannot resolve an effect smaller than that spread, however good the advice is.
+
+| verdict | what it means | what to do |
+|---|---|---|
+| `measurable` | some chains clear the floor | screen those individually, group the rest |
+| `aggregate_only` | the total clears the floor, no single chain does | **apply the top chains together as one candidate first.** Screening them one at a time returns zero regardless of the advice — record `combined_with` |
+| `not_measurable` | even the total is below the floor | **do not screen.** Tighten the harness (more replays per timed block) or report a contribution of zero *with this arithmetic as the reason*, marking chains `not_measurable` |
+| `unknown` | no `repeats_ms` | fix the incumbent first |
+
+This is the difference between a real zero and an unmeasurable one, and the gate fails a cell that keeps a
+chain while sitting below its own floor. In the reference corpus one cell had a ceiling of 0.65× its floor and
+shipped a win anyway; another had 4.31× with no single chain above 1×, screened one at a time, and reported no
+change.
 
 ### 4. Screen, in the order the reconciliation gives
 

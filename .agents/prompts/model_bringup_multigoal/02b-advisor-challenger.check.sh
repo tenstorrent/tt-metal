@@ -126,12 +126,30 @@ if d.get("generated_by") != "advisor-challenger/scripts/reconcile.py":
                 "indistinguishable from a generated one; run the script and fix its input if it aborts.")
 if d.get("accounting_closes_100pct") is not True:
     crit.append("accounting does not close to 100% of the measured window")
+f = d.get("feasibility") or {}
+fv = f.get("verdict")
+if fv is None or fv == "unknown":
+    crit.append("no harness noise floor: rerun reconcile.py with --incumbent incumbent.json (needs >=2 "
+                "repeats_ms). Without it, a contribution of zero cannot be told apart from a cell where "
+                "nothing was ever measurable.")
+kept = [c for c in d.get("chains", []) if (c.get("verdict") or "").lower() == "kept"]
+if fv == "not_measurable" and kept:
+    crit.append(f"ceiling {f.get('ceiling_us')}us is {f.get('ceiling_vs_floor')}x the "
+                f"{f.get('noise_floor_us')}us noise floor, yet {len(kept)} chain(s) are kept. A win below "
+                "the floor is not attributable to the advice -- tighten the harness or report zero.")
+if fv == "aggregate_only" and not any(len(c.get("ops") or []) and c.get("combined_with") for c in d.get("chains", [])):
+    warn.append(f"no single chain clears the {f.get('noise_floor_us')}us floor, so chains screened alone "
+                "return zero regardless of the advice. Apply the top chains together as one candidate and "
+                "record it with combined_with.")
+if d.get("confidence", {}).get("degraded"):
+    crit.append("reconcile.py reported DEGRADED: " + "; ".join(d["confidence"].get("degraded_because", []))
+                + ". The buckets and ranking are unsafe -- resolve the input before screening.")
 for c in d.get("chains", []):
     v = (c.get("verdict") or "").lower()
-    if v not in ("kept", "rejected", "below_threshold"):
+    if v not in ("kept", "rejected", "below_threshold", "not_measurable"):
         crit.append(f"chain {c.get('chain')}: verdict {v!r} unresolved -- measure it or mark "
                     "below_threshold with its conversion value")
-    elif v != "below_threshold" and not isinstance(c.get("measured_ms"), (int, float)):
+    elif v not in ("below_threshold", "not_measurable") and not isinstance(c.get("measured_ms"), (int, float)):
         crit.append(f"chain {c.get('chain')}: {v} with no measured_ms. A prose rejection is not a result.")
     if v in ("kept", "rejected") and not c.get("repeats_ms"):
         warn.append(f"chain {c.get('chain')}: no repeats_ms, so non-overlap cannot be rechecked")

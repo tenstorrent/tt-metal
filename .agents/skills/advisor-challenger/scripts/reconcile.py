@@ -28,6 +28,7 @@ import csv
 import json
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 # Pairing is automatic by normalised name (see matches()). These two tables hold only what that cannot
@@ -313,12 +314,24 @@ def main() -> int:
     ap.add_argument("--total-layers", type=int, default=1)
     ap.add_argument("--incumbent-ms", type=float, default=None,
                     help="incumbent_ms from incumbent.json; enables a window sanity check")
+    ap.add_argument("--incumbent", type=Path, default=None,
+                    help="incumbent.json itself. Strongly preferred: repeats_ms gives the harness noise "
+                         "floor, without which this script cannot tell you whether a chain is measurable")
     ap.add_argument("--ir", type=Path, help="accepted and ignored; geometry comes from report.json")
     a = ap.parse_args()
 
     for f in (a.report, a.perf):
         if not f.is_file():
             sys.exit(f"FATAL: no such file: {f}")
+    incumbent, repeats = {}, []
+    if a.incumbent:
+        if not a.incumbent.is_file():
+            sys.exit(f"FATAL: no such file: {a.incumbent}")
+        incumbent = json.loads(a.incumbent.read_text())
+        repeats = [float(x) for x in (incumbent.get("repeats_ms") or [])]
+        if a.incumbent_ms is None:
+            a.incumbent_ms = incumbent.get("incumbent_ms")
+
     report = json.loads(a.report.read_text())
     advised = parse_advised(report)
     reshard_idx = parse_reshards(report)
@@ -377,6 +390,7 @@ def main() -> int:
                     chains.append(cur)
                 cur["ops"].append(adv["op"])
                 cur["us"] += dev["us"]
+                cur["_positional"] = cur.get("_positional", 0) + (r["pair_confidence"] == "position")
                 r["chain"] = cur["chain"]
         rows.append(r)
 
@@ -415,6 +429,8 @@ def main() -> int:
             if 0 <= j < len(rows) and rows[j].get("chain"):
                 ch = next(c for c in chains if c["chain"] == rows[j]["chain"])
                 ch["boundary_us"] += r["us"] / 2.0
+                if r.get("advisor_comparable") == "unresolved":
+                    ch["_unresolved_us"] = round(ch.get("_unresolved_us", 0.0) + r["us"] / 2.0, 3)
                 if r.get("advised_here") is False:
                     ch["advisor_removes_us"] = round(ch.get("advisor_removes_us", 0.0) + r["us"] / 2.0, 3)
     for c in chains:
@@ -422,6 +438,8 @@ def main() -> int:
         c["boundary_us"] = round(c["boundary_us"], 3)
         c["conversion_value_us"] = c["boundary_us"]
         c.setdefault("advisor_removes_us", 0.0)
+        c.setdefault("_positional", 0)
+        c.setdefault("_unresolved_us", 0.0)
         c["op_share_pct"] = round(100 * c["us"] / window, 3)
         c["per_model_us"] = round((c["us"] + c["boundary_us"]) * a.layers_of_kind, 3)
     # advisor-attributable value first: a boundary the advice also wants is not this stage's candidate.
@@ -466,7 +484,55 @@ def main() -> int:
         (f"{len(device)} device ops against {len(advised)} advised ({fanout}x)", fanout > 2.5)) if bad]
     degraded = bool(suspect) and not declared_blind
 
+    # THE HARNESS NOISE FLOOR. A chain whose value is below the spread of the incumbent's own repeats cannot
+    # be resolved by the non-overlap rule no matter how good the advice is, so measuring it burns device time
+    # and returns a zero that says nothing about the advisor. Both failure directions are real: one corpus
+    # cell had a whole-stage ceiling of 0.65x its floor and still shipped a win, and another had a ceiling of
+    # 4.31x its floor but no single chain above it, screened them one at a time, and reported no change.
+    floor_us = round((max(repeats) - min(repeats)) * 1000, 3) if len(repeats) >= 2 else None
+    ceiling_us = out_ceiling = round(sum(
+        r["us"] for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is False), 3)
+    for c in chains:
+        c["vs_noise_floor"] = round(c["advisor_removes_us"] / floor_us, 2) if floor_us else None
+        c["resolvable_alone"] = (c["advisor_removes_us"] > floor_us) if floor_us else None
+        c["confidence"] = "low" if (c.pop("_positional", 0) or c.pop("_unresolved_us", 0)) else "high"
+
+    feasibility = {"noise_floor_us": floor_us, "noise_floor_source": "max-min of incumbent repeats_ms",
+                   "repeats": len(repeats), "ceiling_us": ceiling_us,
+                   "ceiling_vs_floor": round(ceiling_us / floor_us, 2) if floor_us else None,
+                   "chains_resolvable_alone": sum(1 for c in chains if c["resolvable_alone"])}
+    if floor_us is None:
+        feasibility["verdict"] = "unknown"
+        feasibility["advice"] = ("Pass --incumbent incumbent.json with at least 2 repeats_ms. Without the "
+                                "noise floor there is no way to tell a real zero from an unmeasurable one.")
+    elif ceiling_us <= floor_us:
+        feasibility["verdict"] = "not_measurable"
+        feasibility["advice"] = (
+            f"STOP. Everything the advisor proposes removing here totals {ceiling_us} us, below this "
+            f"harness's own {floor_us} us spread. No non-overlap decision on this cell can be attributed to "
+            f"the advice. Either tighten the harness (more replays per timed block) or record a contribution "
+            f"of zero WITH THIS ARITHMETIC as the reason -- do not screen chains and call the result zero.")
+    elif not feasibility["chains_resolvable_alone"]:
+        feasibility["verdict"] = "aggregate_only"
+        feasibility["advice"] = (
+            f"Do not screen these chains one at a time: the total is {ceiling_us} us "
+            f"({feasibility['ceiling_vs_floor']}x the {floor_us} us floor) but no single chain clears it, so "
+            f"each one measured alone returns a zero regardless of the advice. Apply the top chains together "
+            f"as one candidate first to establish that anything is there, then split only what wins.")
+    else:
+        feasibility["verdict"] = "measurable"
+        feasibility["advice"] = (f"{feasibility['chains_resolvable_alone']} chain(s) exceed the {floor_us} us "
+                                 f"floor; screen those individually and group the rest.")
+    if repeats and incumbent.get("incumbent_ms") is not None:
+        med = sorted(repeats)[len(repeats) // 2]
+        if abs(incumbent["incumbent_ms"] - med) > 1e-9:
+            feasibility["incumbent_ms_is_not_median"] = {
+                "recorded": incumbent["incumbent_ms"], "median": med, "min": min(repeats),
+                "note": "min-of-n is biased low and the bias grows with n; cells with different n are not "
+                        "comparable. Fix the incumbent before screening."}
+
     out = {
+        "feasibility": feasibility,
         "generated_by": "advisor-challenger/scripts/reconcile.py", "tool_version": 4,
         "confidence": {
             "paired_by_name": len(byname), "paired_by_position": len(bypos),
@@ -526,10 +592,19 @@ def main() -> int:
           f"| UNRESOLVED {ab['unresolved_ops']} ({ab['us_unresolved']:.3f} us, check the IR)")
     print("   " + "  ".join(f"{k} {v['us']:.3f}us/{v['ops']}" for k, v in
                             sorted(ab["by_conversion_class"].items(), key=lambda x: -x[1]["us"])))
+    f = out["feasibility"]
+    print(f"   FEASIBILITY [{f['verdict']}] floor {f['noise_floor_us']} us (n={f['repeats']}), "
+          f"ceiling {f['ceiling_us']} us ({f['ceiling_vs_floor']}x)")
+    for line in textwrap.wrap(f["advice"], 108):
+        print("      " + line)
+    if "incumbent_ms_is_not_median" in f:
+        print(f"   !! incumbent_ms {f['incumbent_ms_is_not_median']['recorded']} is not the median "
+              f"{f['incumbent_ms_is_not_median']['median']} -- fix before screening")
     print(f"   {len(chains)} chain(s), ranked by advisor-attributable conversion value:")
     for c in chains:
         print(f"      {c['chain']:16s} ops {c['us']:8.3f} + boundaries {c['boundary_us']:7.3f} us"
-              f" (advisor drops {c['advisor_removes_us']:6.3f})"
+              f" (advisor drops {c['advisor_removes_us']:6.3f},"
+              f" {c['vs_noise_floor']}x floor, conf {c['confidence']})"
               f"   {'/'.join(c['ops'])[:52]}")
     for r in low:
         print(f"   !! {r['device']} on {r['shipped_cores']} core(s), {r['us']:.3f} us "
