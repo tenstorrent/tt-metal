@@ -22,6 +22,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "hostdevcommon/profiler_common.h"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -1136,6 +1137,8 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCD2HSocketEgress) {
         constexpr uint32_t kNumPages = 4000;
         const uint32_t fifo_size = 32 * page_size;
         {
+            // In paced mode the page count depends on the controller, so drain until the device is done
+            // rather than against a precomputed count.
             distributed::D2HSocket socket(
                 devices_[0],
                 distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(drisc_phys.x, drisc_phys.y)),
@@ -1471,6 +1474,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
 
     const uint32_t poll_ring = drisc_l1_base_;
     const uint32_t page_buf = poll_ring + num_cores * kCvBytes;
+    const uint32_t head_scratch = page_buf + 65536;  // past the largest page used here
 
     const CoreCoord d_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
     const CoreCoord d_virtual = device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
@@ -1500,7 +1504,17 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
 
     // 40960 is not a multiple of the 10496 B whole-core item, so the bulk tier pads every page.
     // 41984 = 4 x 10496 packs exactly.
-    auto run = [&](uint32_t tail_words, uint32_t kPageBytes, uint32_t hysteresis) {
+    // A threshold no lane can reach forces the partial tier at every occupancy: always poll the tails,
+    // always read each RISC individually, sized to its run. Never bulk.
+    constexpr uint32_t kNeverBulk = 0xFFFFFFFFu;
+    auto run = [&](uint32_t tail_words,
+                   uint32_t kPageBytes,
+                   uint32_t hysteresis,
+                   uint32_t no_adaptive = 0,
+                   uint32_t threshold = kBulkThresholdWords,
+                   uint32_t paced = 0,
+                   uint32_t prod_mw_per_us = 0,
+                   uint32_t writeback = 0) {
         const uint32_t cfg = page_buf + kPageBytes;
         const uint32_t res = cfg + 1024;
         TT_FATAL(
@@ -1509,20 +1523,23 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
             num_cores * kCvBytes,
             kPageBytes,
             drisc_l1_unreserved_size_);
+        // Prime the control vector at the enum-derived offsets. The identity word stands in for what
+        // BRISC FW would write once at init.
         std::vector<uint32_t> cv(kCvBytes / sizeof(uint32_t), 0);
         for (uint32_t r = 0; r < kNumRisc; r++) {
-            cv[5 + r] = tail_words;
+            cv[kernel_profiler::SPSC_RING_TAIL_0 + r] = tail_words;
         }
         for (uint32_t c = 0; c < num_cores; c++) {
-            cv[0] = 0xA5A50000u + c;
+            cv[kernel_profiler::SPSC_CORE_XY] = ((c / grid.x) << 16) | (c % grid.x);  // (y<<16)|x
+            cv[kernel_profiler::SPSC_RING_HEAD_0] = 0xA5A50000u + c;
             const CoreCoord v = device_->virtual_core_from_logical_core({c % grid.x, c / grid.x}, CoreType::WORKER);
             MetalContext::instance().get_cluster().write_core(
                 cv.data(), cv.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), v), tensix_l1_base_);
         }
 
         // Mirror the kernel's packing exactly so the host knows how many pages to expect.
-        const bool bulk = tail_words >= kBulkThresholdWords;
-        const uint32_t lane_bytes = (tail_words * 4u + 15u) & ~15u;
+        const bool bulk = paced || ((no_adaptive == 0) && tail_words >= threshold);
+        const uint32_t lane_bytes = no_adaptive ? kRingCapBytes : ((tail_words * 4u + 15u) & ~15u);
         uint64_t fill = 0;
         uint64_t exp_pages = 0;
         uint64_t exp_valid = 0;
@@ -1565,13 +1582,22 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
                     kCvBytes,
                     kRingCapBytes,
                     kCoreSpan,
-                    kBulkThresholdWords,
+                    threshold,
                     kPageBytes,
                     poll_ring,
                     page_buf,
                     socket.get_config_buffer_address(),
                     res,
-                    hysteresis}});
+                    hysteresis,
+                    no_adaptive,
+                    paced,
+                    prod_mw_per_us,
+                    kRingCapWords * 90 / 100,  // high watermark: 90% full
+                    kRingCapWords * 80 / 100,  // low watermark: 80% full
+                    clk_hz / 1000000u,
+                    6750u,  // delay step ~5 us
+                    writeback,
+                    head_scratch}});
         std::vector<uint32_t> rtas = {num_cores, kNumSweeps, tensix_l1_base_, tensix_l1_base_ + kCvBytes};
         rtas.insert(rtas.end(), coords.begin(), coords.end());
         SetRuntimeArgs(program, kid, d_logical, rtas);
@@ -1581,7 +1607,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
         distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
 
         std::vector<uint32_t> sink(static_cast<size_t>(kPageBytes) * kPagesPerRead / sizeof(uint32_t));
-        uint64_t left = exp_pages;
+        uint64_t left = paced ? static_cast<uint64_t>(kNumSweeps) * num_cores * kCoreSpan / kPageBytes : exp_pages;
         const auto t0 = std::chrono::steady_clock::now();
         const auto deadline = t0 + std::chrono::seconds(90);
         while (left > 0) {
@@ -1600,7 +1626,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
         socket.barrier(20000);
         distributed::Finish(mesh_device_->mesh_command_queue());
 
-        std::vector<uint32_t> o(15);
+        std::vector<uint32_t> o(26);
         MetalContext::instance().get_cluster().read_core(
             o.data(), o.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), d_virtual), res);
         const uint64_t cyc = (static_cast<uint64_t>(o[1]) << 32) | o[0];
@@ -1608,34 +1634,64 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
         const uint64_t poll = (static_cast<uint64_t>(o[8]) << 32) | o[7];
         const uint64_t fetch = (static_cast<uint64_t>(o[11]) << 32) | o[10];
         const uint64_t push = (static_cast<uint64_t>(o[13]) << 32) | o[12];
-        EXPECT_EQ(o[2], exp_pages) << "kernel pages != host packing model";
-        EXPECT_EQ(valid, exp_valid) << "kernel valid bytes != host model";
+        if (!paced) {
+            EXPECT_EQ(o[2], exp_pages) << "kernel pages != host packing model";
+            EXPECT_EQ(valid, exp_valid) << "kernel valid bytes != host model";
+        }
 
         const uint64_t pushed = static_cast<uint64_t>(o[2]) * kPageBytes;
+        const uint64_t live = (static_cast<uint64_t>(o[16]) << 32) | o[15];
         const double ns = 1e9 / clk_hz;
+        if (paced) {
+            log_info(
+                LogTest,
+                "  prod {:>5} mw/us/lane wb={} | {:>8.1f} us/sweep | live {:>6.2f} GB/s | WASTE {:>5.1f}% | avg "
+                "occ {:>3}/{} ({:>4.1f}%) | overflow {:>3} | wait {:>4.1f}% | head-wb {:>4.1f}%",
+                prod_mw_per_us,
+                writeback,
+                static_cast<double>(cyc) / kNumSweeps * ns / 1e3,
+                compute_bw_gbs(live, cyc, clk_hz),
+                100.0 * (1.0 - static_cast<double>(live) / static_cast<double>(pushed)),
+                o[18],
+                kRingCapWords,
+                100.0 * o[18] / kRingCapWords,
+                o[17],
+                100.0 * static_cast<double>((static_cast<uint64_t>(o[20]) << 32) | o[19]) / static_cast<double>(cyc),
+                100.0 * static_cast<double>((static_cast<uint64_t>(o[23]) << 32) | o[22]) / static_cast<double>(cyc));
+            return;
+        }
         log_info(
             LogTest,
-            "  tail {:>3} w ({:<7}) page {:>5} hyst {} | {:>7.2f} us/sweep | useful {:>6.2f} GB/s | pad {:>4.1f}% "
-            "| polls/sweep {:>4} | poll {:>4.1f}% decide {:>4.1f}% fetch {:>4.1f}% push {:>4.1f}%",
+            "  {:>3} w/lane ({:>4.1f}% full) {:<8} | {:>7.2f} us/sweep | live {:>6.2f} | xfer {:>6.2f} | pushed "
+            "{:>6.2f} GB/s | WASTE {:>5.1f}% | poll {:>4.1f}% decide {:>4.1f}% fetch {:>4.1f}% push {:>4.1f}%",
             tail_words,
+            100.0 * tail_words / kRingCapWords,
             bulk ? "BULK" : "PARTIAL",
-            kPageBytes,
-            hysteresis,
             static_cast<double>(cyc) / kNumSweeps * ns / 1e3,
+            compute_bw_gbs(live, cyc, clk_hz),
             compute_bw_gbs(valid, cyc, clk_hz),
-            100.0 * (1.0 - static_cast<double>(valid) / static_cast<double>(pushed)),
-            o[14] / kNumSweeps,
+            compute_bw_gbs(pushed, cyc, clk_hz),
+            100.0 * (1.0 - static_cast<double>(live) / static_cast<double>(pushed)),
             100.0 * static_cast<double>(poll) / static_cast<double>(cyc),
             100.0 * static_cast<double>(o[9]) / static_cast<double>(cyc),
             100.0 * static_cast<double>(fetch) / static_cast<double>(cyc),
             100.0 * static_cast<double>(push) / static_cast<double>(cyc));
     };
 
-    for (uint32_t rep = 0; rep < 2; rep++) {
-        for (uint32_t h : {0u, 1u}) {
-            for (uint32_t t : {8u, 64u, 256u, 358u, 480u}) {
-                run(t, 41984u, h);
-            }
+    run(256u, 41984u, 0u, 0u, kNeverBulk);  // warm the host staging allocation
+    log_info(LogTest, "-- paced always-bulk, wb=0 no head write-back / wb=1 with it --");
+    for (uint32_t wb : {0u, 1u}) {
+        for (uint32_t mw : {2000u, 4000u, 7500u, 12000u}) {
+            run(480u, 41984u, 0u, 0u, 0u, /*paced=*/1u, mw, wb);
+        }
+    }
+    for (uint32_t rep = 0; rep < 0; rep++) {
+        // Threshold sweep: at each occupancy run both tiers unconditionally (threshold 0 = always bulk,
+        // kNeverBulk = always partial) and compare live-marker throughput. Where BULK overtakes PARTIAL
+        // is where the threshold belongs.
+        for (uint32_t t : {32u, 64u, 128u, 192u, 256u, 320u, 384u, 448u, 512u}) {
+            run(t, 41984u, 0u, 0u, kNeverBulk);
+            run(t, 41984u, 0u, 0u, 0u);
         }
     }
 
@@ -2909,4 +2965,174 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCScatterReadMultiCoreScaling) {
         const BenchResult r = run_bench(free_drisc_cores(n), kMarkersPerRead, kReadsInFlight);
         log_row(fmt::format("{} DRISC(s)  grid partitioned", n), r, kMarkersPerRead);
     }
+}
+
+// The first end-to-end test against REAL producers. Every DRISC measurement before this one drained
+// synthetic tails the host had written into the control vector; here Tensix RISCs emit zones through
+// the ordinary DeviceZoneScopedN path and a DRISC has to keep them from blocking.
+//
+// The test is self-falsifying: each producer emits far more zones than its 512-word ring can hold, and
+// kernel_profiler.hpp's producer BLOCKS on a full ring by design ("a profiled run REQUIRES the consumer
+// to be draining"). If the drainer's flow control is wrong -- wrong tail offset, no head write-back,
+// desynced mirror -- the workers never finish and the program hangs rather than failing a comparison.
+TEST_F(DramKernelDRISCScatterFixture, DRISCServicesRealProfiledWorkers) {
+    constexpr uint32_t kWorkerDim = 4;  // 4x4 = 16 producing cores
+    constexpr uint32_t kZonesPerCore = 2000;
+    constexpr uint32_t kWorkPerZone = 4;
+    constexpr uint32_t kQuietStop = 4096;
+    constexpr uint32_t kMaxSweeps = 400000;
+    constexpr uint32_t kNumRisc = 5;
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t cv_src = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+    const uint32_t poll_bytes = kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
+    const uint32_t ring_words = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
+    const uint32_t data_bytes = kNumRisc * ring_words * sizeof(uint32_t);
+    const uint32_t ring0_src = cv_src + poll_bytes;
+
+    const CoreRange producer_range({0, 0}, {kWorkerDim - 1, kWorkerDim - 1});
+    std::vector<CoreCoord> producer_virtual;
+    std::vector<uint32_t> coords;
+    for (uint32_t y = 0; y < kWorkerDim; y++) {
+        for (uint32_t x = 0; x < kWorkerDim; x++) {
+            const CoreCoord v = device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
+            producer_virtual.push_back(v);
+            coords.push_back((v.x & 0xFFFFu) | ((v.y & 0xFFFFu) << 16));
+        }
+    }
+    const uint32_t num_cores = static_cast<uint32_t>(coords.size());
+
+    const CoreCoord drisc_logical = free_drisc_cores(1)[0];
+    const CoreCoord drisc_virtual = device_->virtual_core_from_logical_core(drisc_logical, CoreType::DRAM);
+
+    // DRISC L1 map
+    const uint32_t poll_ring = drisc_l1_base_;
+    const uint32_t data_buf = poll_ring + num_cores * poll_bytes;
+    const uint32_t head_scratch = data_buf + data_bytes;
+    const uint32_t results_addr = head_scratch + 16 * 32;
+    ASSERT_LT(results_addr + 64 - drisc_l1_base_, drisc_l1_unreserved_size_);
+
+    auto set_niu_mode = [&](uint32_t stream) {
+        Program p = CreateProgram();
+        CreateKernel(
+            p,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_niu_mode.cpp",
+            drisc_logical,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+        run_workload(std::move(p));
+    };
+    set_niu_mode(1);
+
+    Program program = CreateProgram();
+    auto producer_id = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/profiler_zone_producer.cpp",
+        producer_range,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(program, producer_id, producer_range, {kZonesPerCore, kWorkPerZone});
+
+    auto drain_id = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_service_workers.cpp",
+        drisc_logical,
+        DramConfig{
+            .noc = NOC::NOC_0,
+            .compile_args = {
+                poll_bytes,
+                data_bytes,
+                ring_words,
+                poll_ring,
+                data_buf,
+                head_scratch,
+                results_addr,
+                kQuietStop,
+                kMaxSweeps}});
+    std::vector<uint32_t> drain_args = {num_cores, cv_src, ring0_src};
+    drain_args.insert(drain_args.end(), coords.begin(), coords.end());
+    SetRuntimeArgs(program, drain_id, drisc_logical, drain_args);
+
+    log_info(
+        LogTest,
+        "servicing {} producers x {} zones each; ring {} words, so each lane overflows ~{}x",
+        num_cores,
+        kZonesPerCore,
+        ring_words,
+        (kZonesPerCore * 4) / ring_words);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    run_workload(std::move(program));
+    const double wall_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+
+    std::vector<uint32_t> out(10, 0);
+    MetalContext::instance().get_cluster().read_core(
+        out.data(),
+        out.size() * sizeof(uint32_t),
+        tt_cxy_pair(mesh_device_->build_id(), drisc_virtual),
+        drisc_l1_noc_addr_ + (results_addr - drisc_l1_base_));
+
+    const uint64_t cycles = (static_cast<uint64_t>(out[1]) << 32) | out[0];
+    const uint64_t total_words = (static_cast<uint64_t>(out[3]) << 32) | out[2];
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+
+    log_info(
+        LogTest,
+        "drained {} words ({:.2f} KB) in {} sweeps, {} core-visits with work, max run {} words, "
+        "overflows {}, checksum 0x{:08x}, quiet-at-exit {}",
+        total_words,
+        total_words * 4.0 / 1024.0,
+        out[4],
+        out[5],
+        out[6],
+        out[7],
+        out[8],
+        out[9]);
+    log_info(
+        LogTest,
+        "device {:.3f} ms, host wall {:.3f} s, drained {:.3f} MB/s",
+        cycles * 1000.0 / clk_hz,
+        wall_s,
+        total_words * 4.0 * clk_hz / cycles / 1e6);
+
+    if (total_words == 0) {
+        GTEST_SKIP() << "no markers produced -- run with TT_METAL_DEVICE_PROFILER=1 TT_METAL_NO_RT_PROFILER=1";
+    }
+
+    // The real proof: every lane fully drained, head == tail on every producing core.
+    uint32_t lanes_checked = 0;
+    uint32_t lanes_behind = 0;
+    uint64_t final_tail_sum = 0;
+    for (uint32_t c = 0; c < num_cores; c++) {
+        std::vector<uint32_t> cv(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+        MetalContext::instance().get_cluster().read_core(
+            cv.data(), poll_bytes, tt_cxy_pair(mesh_device_->build_id(), producer_virtual[c]), cv_src);
+        for (uint32_t r = 0; r < kNumRisc; r++) {
+            const uint32_t head = cv[kernel_profiler::SPSC_RING_HEAD_0 + r];
+            const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+            final_tail_sum += tail;
+            lanes_checked++;
+            if (head != tail) {
+                lanes_behind++;
+                log_warning(
+                    LogTest, "core {} lane {}: head {} != tail {} ({} words left)", c, r, head, tail, tail - head);
+            }
+        }
+        EXPECT_EQ(cv[kernel_profiler::SPSC_CORE_XY], (producer_virtual[c].y << 16) | (producer_virtual[c].x & 0xFFFF))
+            << "core " << c << " identity stamp";
+    }
+    log_info(
+        LogTest,
+        "final: {} lanes checked, {} still behind, tail sum {} words",
+        lanes_checked,
+        lanes_behind,
+        final_tail_sum);
+
+    EXPECT_EQ(out[7], 0u) << "ring overflow: a producer got ahead of the drainer, markers were lost";
+    EXPECT_LE(out[6], ring_words) << "run exceeded ring capacity";
+    EXPECT_NE(out[8], 0u) << "checksum zero: drained words were all zero, so no real markers moved";
+    EXPECT_EQ(lanes_behind, 0u) << "drainer exited with lanes still holding undrained markers";
+    // BRISC alone emits 2000 zones x 4 words; the FW adds its own wrapper zone and stickies.
+    EXPECT_GE(total_words, static_cast<uint64_t>(num_cores) * kZonesPerCore * 4)
+        << "fewer words than the producers must have emitted";
+
+    set_niu_mode(0);
 }
