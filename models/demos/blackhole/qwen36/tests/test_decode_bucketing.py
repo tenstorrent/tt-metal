@@ -6,6 +6,7 @@
 2. ``test_bucketed_decode_matches_full_width`` (device): width-B matches full-width rows.
 3. ``test_decode_width_scaling_traced`` (device): traced step time vs decode width.
 """
+
 import os
 import statistics
 import time
@@ -63,6 +64,86 @@ def test_bucket_selection():
     tokens, positions = _padded_decode_batch(1, 8)
     assert _pick_bucket(tokens, positions, 8) == 1
     logger.info("PASSED: bucket selection picks smallest pow2 >= num_active and never drops active rows")
+
+
+def test_bucket_warmup_compiles_all_widths_before_capture(monkeypatch):
+    from models.common.warmup import WarmupForwardMixin
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+
+    calls = []
+
+    def record_warmup(self, *args, **kwargs):
+        calls.append(
+            (
+                kwargs["max_batch_size"],
+                kwargs["enable_trace"],
+                kwargs.get("skip_trace_precompile", False),
+            )
+        )
+
+    monkeypatch.setattr(WarmupForwardMixin, "warmup_model_decode", record_warmup)
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *_: None)
+    monkeypatch.setenv("TT_DECODE_BUCKETING", "1")
+    generator = object.__new__(Qwen36ForCausalLM)
+    generator.mesh_device = object()
+    generator.model = []
+    generator.model_args = []
+    generator.data_parallel = 1
+
+    generator.warmup_model_decode(
+        kv_cache=None,
+        enable_trace=False,
+        max_batch_size=8,
+        num_blocks=1,
+        can_sample_on_device=True,
+    )
+    generator.warmup_model_decode(
+        kv_cache=None,
+        enable_trace=True,
+        max_batch_size=8,
+        num_blocks=1,
+        can_sample_on_device=True,
+    )
+
+    assert calls == [
+        (1, False, False),
+        (2, False, False),
+        (4, False, False),
+        (8, False, False),
+        (1, True, True),
+        (2, True, True),
+        (4, True, True),
+        (8, True, True),
+    ]
+
+
+def test_bucket_trace_teardown_releases_all_stores(monkeypatch):
+    from models.tt_transformers.tt.generator import Generator
+
+    released = []
+    sampling_resets = []
+    monkeypatch.setattr(ttnn, "release_trace", lambda device, trace_id: released.append((device, trace_id)))
+
+    sampling = SimpleNamespace(reset_trace=lambda: sampling_resets.append(True))
+    generator = object.__new__(Generator)
+    generator.model = [SimpleNamespace(sampling=sampling)]
+    generator.model_args = [SimpleNamespace(mesh_device="mesh")]
+    generator.mesh_device = "mesh"
+    generator.data_parallel = 1
+    width1 = ({True: {0: 11}}, {}, {})
+    width8 = ({True: {0: 88}}, {}, {})
+    generator._bucket_trace_store = {1: width1, 8: width8}
+    generator.trace_ids_decode = width8[0]
+
+    generator.__del__()
+
+    assert sampling_resets == [True]
+    assert released == [("mesh", 11), ("mesh", 88)]
+
+    generator._bucket_trace_store = {}
+    generator.trace_ids_decode = {}
+    generator.model = []
+    del generator
 
 
 @pytest.mark.parametrize("width", [1, 2, 4, 8])
@@ -157,6 +238,17 @@ def _parametrize_traced(max_tp=4, trace_bytes=1073741824):
         return fn
 
     return decorator
+
+
+def _mark_trace_buffers_corruptible(value):
+    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
+    if mark_corruptible is None or value is None:
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _mark_trace_buffers_corruptible(item)
+        return
+    mark_corruptible(value)
 
 
 @torch.no_grad()
@@ -579,39 +671,52 @@ def test_bucketed_on_device_sampling_traces(mesh_device, reset_seeds, ensure_gc)
     model.ttnn_decode_forward(_warm[0], _warm[1], rot_mat_idxs=_warm[2], page_table=_warm[3], on_device_logits=True)
     ttnn.synchronize_device(mesh_device)
 
-    # Per-width: a decode trace (stable logits tensor) + a sampling trace bound to it.
-    logits_of, dtrace_of, _keep = {}, {}, []
+    # Compile every width before capturing the first trace.
+    case_of = {}
     for width in (1, BMAX):
         model._reset_gdn_state_for_new_sequence()  # in-place; preserves baked trace addresses
         tokens = torch.tensor([[100 + u] for u in range(width)], dtype=torch.int32)
         positions = torch.full((width,), CTX - 64, dtype=torch.int32)
         pt = page_table_full[:width]
+        case_of[width] = (tokens, positions, pt)
 
         dev0 = model.prepare_inputs_decode(tokens, positions, pt)
-        model.ttnn_decode_forward(dev0[0], dev0[1], rot_mat_idxs=dev0[2], page_table=dev0[3], on_device_logits=True)
+        lg0 = model.ttnn_decode_forward(
+            dev0[0], dev0[1], rot_mat_idxs=dev0[2], page_table=dev0[3], on_device_logits=True
+        )
+        ttnn.synchronize_device(mesh_device)
+        model.sampling.set_trace_bucket(width)
+        model.sampling.sample(lg0, enable_trace=False)
         ttnn.synchronize_device(mesh_device)
 
+    # Per-width: a decode trace (stable logits tensor) + a sampling trace bound to it.
+    logits_of, dtrace_of, host_of, dev_of = {}, {}, {}, {}
+    for width in (1, BMAX):
+        model._reset_gdn_state_for_new_sequence()
+        tokens, positions, pt = case_of[width]
         host = model.prepare_decode_inputs_host(tokens, positions, page_table=pt)
         dev = copy_host_to_device(host, mesh_device=mesh_device)
+        _mark_trace_buffers_corruptible(dev)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         lg = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=True)
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.synchronize_device(mesh_device)
-        # The trace bakes these input tensors' addresses; keep them referenced for every replay.
+        _mark_trace_buffers_corruptible(lg)
         logits_of[width], dtrace_of[width] = lg, tid
-        _keep.append(dev)
+        host_of[width], dev_of[width] = host, dev
 
         # capture the sampling trace for THIS bucket
         model.sampling.set_trace_bucket(width)
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
-        model.sampling.sample(lg, enable_trace=True)
+        model.sampling.sample(lg, enable_trace=True, skip_precompile=True)
         ttnn.synchronize_device(mesh_device)
         logger.info(f"captured decode+sampling trace for bucket width={width} (logits shape {list(lg.shape)})")
 
     # Alternate widths. Without per-bucket namespacing this raises on the first switch.
     for step, width in enumerate((1, BMAX, 1, BMAX, 1)):
         model.sampling.set_trace_bucket(width)
+        copy_host_to_device(host_tensors=host_of[width], device_tensors=dev_of[width])
         ttnn.execute_trace(mesh_device, dtrace_of[width], cq_id=0, blocking=False)
         tok = model.sampling.sample(logits_of[width], enable_trace=True)
         ttnn.synchronize_device(mesh_device)
@@ -624,6 +729,7 @@ def test_bucketed_on_device_sampling_traces(mesh_device, reset_seeds, ensure_gc)
         ), f"step {step} width {width}: sampled ids out of range: {ids.tolist()}"
         logger.info(f"step {step} width={width}: sampled ids {ids.tolist()[: min(4, width)]} OK")
 
+    model.sampling.reset_trace()
     for tid in dtrace_of.values():
         ttnn.release_trace(mesh_device, tid)
     logger.info("PASSED: per-bucket sampling traces survive alternating widths with on-device sampling")
@@ -632,13 +738,7 @@ def test_bucketed_on_device_sampling_traces(mesh_device, reset_seeds, ensure_gc)
 @torch.no_grad()
 @_parametrize_traced(trace_bytes=1073741824)  # exactly the b8 model spec's trace_region_size
 def test_all_buckets_fit_trace_region(mesh_device, reset_seeds, ensure_gc):
-    """Do FOUR live decode traces (widths 1,2,4,8) + their sampling traces fit in 1 GB?
-
-    warmup_model_decode captures one decode trace per power-of-2 bucket, and the branch never
-    releases the non-last ones. Enabling TT_DECODE_BUCKETING therefore multiplies decode-trace
-    memory by 4 against the spec's trace_region_size. An overflow is a hard startup failure, so
-    this must be checked before turning bucketing on in the served spec.
-    """
+    """Four live decode and sampling traces fit in 1 GB and remain replay-safe."""
     from models.tt_transformers.tt.common import copy_host_to_device
 
     BMAX = 8
@@ -653,44 +753,76 @@ def test_all_buckets_fit_trace_region(mesh_device, reset_seeds, ensure_gc):
 
     # Allocate GDN state once (reset_state reallocates and would invalidate live traces).
     model.reset_tp()
-    tids = []
-    # A captured trace bakes the ADDRESSES of its device input tensors. Those tensors must stay
-    # referenced for the whole test, or Python frees them and replaying the trace reads freed
-    # memory and hangs the board. Hold every width's inputs (and logits) alive here.
-    keepalive = []
-    for width in (1, 2, 4, BMAX):
+    widths = (1, 2, 4, BMAX)
+    case_of = {}
+
+    # Compile all program-cache shapes before the first trace exists.
+    for width in widths:
         model._reset_gdn_state_for_new_sequence()
         tokens = torch.tensor([[100 + u] for u in range(width)], dtype=torch.int32)
         positions = torch.full((width,), CTX - 64, dtype=torch.int32)
         pt = page_table_full[:width]
+        case_of[width] = (tokens, positions, pt)
 
         dev0 = model.prepare_inputs_decode(tokens, positions, pt)
-        model.ttnn_decode_forward(dev0[0], dev0[1], rot_mat_idxs=dev0[2], page_table=dev0[3], on_device_logits=on_dev)
+        lg0 = model.ttnn_decode_forward(
+            dev0[0], dev0[1], rot_mat_idxs=dev0[2], page_table=dev0[3], on_device_logits=on_dev
+        )
         ttnn.synchronize_device(mesh_device)
+        if on_dev:
+            model.sampling.set_trace_bucket(width)
+            model.sampling.sample(lg0, enable_trace=False)
+            ttnn.synchronize_device(mesh_device)
 
+    tids, host_of, dev_of, logits_of = {}, {}, {}, {}
+    for width in (1, 2, 4, BMAX):
+        model._reset_gdn_state_for_new_sequence()
+        tokens, positions, pt = case_of[width]
         host = model.prepare_decode_inputs_host(tokens, positions, page_table=pt)
         dev = copy_host_to_device(host, mesh_device=mesh_device)
+        _mark_trace_buffers_corruptible(dev)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         lg = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=on_dev)
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.synchronize_device(mesh_device)
-        tids.append(tid)
-        keepalive.append((dev, lg))  # must outlive every replay below
+        _mark_trace_buffers_corruptible(lg)
+        tids[width], host_of[width], dev_of[width], logits_of[width] = tid, host, dev, lg
         if on_dev:
             model.sampling.set_trace_bucket(width)
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
-            model.sampling.sample(lg, enable_trace=True)
+            model.sampling.sample(lg, enable_trace=True, skip_precompile=True)
             ttnn.synchronize_device(mesh_device)
         logger.info(f"bucket width={width}: decode{'+sampling' if on_dev else ''} trace captured and live")
 
-    # Capture only: overflow fails at alloc. Do not replay earlier widths after later setup —
-    # H2D alloc with live traces corrupts memory / hangs the board. Replay coverage is in
-    # test_bucketed_on_device_sampling_traces (inputs bound before any replay).
-    assert len(tids) == 4 and len(keepalive) == 4
+    # Re-copy each acknowledged input before use. This replays B1 only after every later
+    # compilation, allocation, and capture has completed.
+    for width in widths:
+        copy_host_to_device(host_tensors=host_of[width], device_tensors=dev_of[width])
+        ttnn.execute_trace(mesh_device, tids[width], cq_id=0, blocking=False)
+        if on_dev:
+            model.sampling.set_trace_bucket(width)
+            tok = model.sampling.sample(logits_of[width], enable_trace=True)
+            ttnn.synchronize_device(mesh_device)
+            if isinstance(tok, tuple):
+                tok = tok[0]
+            ids = (
+                ttnn.to_torch(tok, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+                .reshape(-1)
+                .to(torch.int64)
+            )
+            assert torch.all((ids[:width] >= 0) & (ids[:width] < model.args.vocab_size))
+        else:
+            ttnn.synchronize_device(mesh_device)
+            logits = logits_of[width][0] if isinstance(logits_of[width], tuple) else logits_of[width]
+            assert model.process_output_decode(logits, width).shape == (width, 1, model.args.vocab_size)
+
+    assert len(tids) == 4
     logger.info(
         f"PASSED: all {len(tids)} bucket decode traces (+ sampling traces) captured inside the "
-        f"1 GB trace_region_size with no allocator failure -- the b8 spec's budget is sufficient"
+        f"1 GB trace_region_size and replayed after all later allocations"
     )
-    for tid in tids:
+    if on_dev:
+        model.sampling.reset_trace()
+    for tid in tids.values():
         ttnn.release_trace(mesh_device, tid)
