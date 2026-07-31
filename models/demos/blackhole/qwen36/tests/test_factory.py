@@ -169,7 +169,16 @@ def _resolve_mesh_shape(max_tp=8):
     # ``dict.get`` default, which Python evaluates eagerly) so an explicit MESH_DEVICE never
     # touches ttnn.get_device_ids() -- that call raises on clusters whose ClusterType lookup
     # fails, which would otherwise break collection even for a fully-specified mesh.
-    shape = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"))
+    shape = {
+        "P150": (1, 1),
+        "P150x4": (1, 4),
+        "P150x8": (1, 8),
+        # Wormhole meshes: the 9B needs the 2-chip N300 (a single N150 cannot hold it).
+        "N150": (1, 1),
+        "N300": (1, 2),
+        "N150x4": (1, 4),
+        "T3K": (1, 8),
+    }.get(os.environ.get("MESH_DEVICE"))
     if shape is not None:
         return shape
     return (1, min(len(ttnn.get_device_ids()), max_tp))
