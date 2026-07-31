@@ -33,7 +33,9 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         weights.layout() == Layout::ROW_MAJOR, "Weights tensor layout must be ROW_MAJOR but got {}", weights.layout());
     TT_FATAL(a.dtype() == DataType::UINT32 or a.dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
-    TT_FATAL(weights.dtype() == DataType::BFLOAT16, "Weights tensor must have BFLOAT16 dtype");
+    TT_FATAL(
+        weights.dtype() == DataType::BFLOAT16 or weights.dtype() == DataType::FLOAT32,
+        "Weights tensor must have BFLOAT16 or FLOAT32 dtype");
     TT_FATAL(
         a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Embedding does not currently support sharded inputs");

@@ -174,6 +174,14 @@ class Qwen36Model:
         # addresses are baked into the chunk-prefill trace and reused by every prefill_paged_slots
         # replay, so it is never freed/reallocated (only zeroed in place). See _bind_gdn_prefill_scratch.
         self._gdn_prefill_scratch = None
+        # vLLM MambaSpec lowering: compact scheduler-owned state pools are
+        # indexed through these persistent device tensors. They are allocated
+        # with the caches, before any trace can be captured, and only their
+        # contents change while serving.
+        self._managed_gdn_state = False
+        self._gdn_state_indices_device = None
+        self._gdn_prefill_state_index_device = None
+        self._paged_kv_block_size = None
 
         # Optional vision tower (DropInVisionTransformer), attached lazily by
         # init_vision_model() for the multimodal serving path. None on the text-only path.
@@ -824,7 +832,7 @@ class Qwen36Model:
                     # (slices the staged per-request table for multimodal; 1D RoPE otherwise).
                     cos, sin = self.rope.get_prefill_rot_mats(chunk_start, chunk_end - chunk_start)
 
-                    block_size = 64
+                    block_size = self._paged_kv_block_size or 64
                     chunk_blocks_end = math.ceil(chunk_end / block_size)
                     chunk_page_table = page_table[:, chunk_start // block_size : chunk_blocks_end]
                     chunk_page_table_tt = ttnn.from_torch(
@@ -1036,7 +1044,40 @@ class Qwen36Model:
         assert chunk_size % 128 == 0, f"chunk_size {chunk_size} must be a multiple of 128"
         B = 1
         block_size = get_block_size(self._paged_kv_caches)
+        assert chunk_size % block_size == 0, (
+            f"chunk_size {chunk_size} must be a multiple of paged-KV block_size {block_size}; "
+            "paged_fill_cache cannot encode an in-page chunk offset"
+        )
         blocks_per_chunk = chunk_size // block_size
+
+        # Phase-1 warmup may already have allocated and compiled this exact
+        # path. Reuse those persistent addresses during phase-2 capture:
+        # allocating replacements after the decode trace is parked is unsafe.
+        if self._chunk_token_buf is not None:
+            assert self._chunked_chunk_size == chunk_size
+            assert self._chunk_full_page_table_buf.shape[-1] == page_table.shape[-1]
+            if not capture_chunk_trace:
+                return
+            if self._chunked_trace_id is not None:
+                ttnn.release_trace(device, self._chunked_trace_id)
+            self._reset_dn_state_inplace()
+            self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            self._chunked_trace_output = self._forward_prefill_chunk(
+                self._chunk_token_buf,
+                self._chunk_cos_buf,
+                self._chunk_sin_buf,
+                self._chunk_start_idx_tensor,
+                self._chunk_full_page_table_buf,
+                self._chunk_page_table_buf,
+            )
+            ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
+            if hasattr(ttnn, "mark_corruptible"):
+                # A later replay of the coexisting decode trace may overwrite
+                # this allocation. That is intentional: every prefill replay
+                # rewrites it before it is read.
+                ttnn.mark_corruptible(self._chunked_trace_output)
+            logger.info("Chunked prefill trace captured from prepared buffers!")
+            return
 
         if self._chunked_trace_id is not None:
             ttnn.release_trace(device, self._chunked_trace_id)
@@ -1114,6 +1155,11 @@ class Qwen36Model:
         if warmup_masked_buckets:
             self.warmup_prefill_masked_buckets(page_table)
 
+        if not capture_chunk_trace:
+            self._reset_dn_state_inplace()
+            logger.info("Chunked prefill buffers/programs prepared; trace capture deferred.")
+            return
+
         # Capture trace.
         self._reset_dn_state_inplace()
         self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
@@ -1126,6 +1172,8 @@ class Qwen36Model:
             self._chunk_page_table_buf,
         )
         ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
+        if hasattr(ttnn, "mark_corruptible"):
+            ttnn.mark_corruptible(self._chunked_trace_output)
         logger.info("Chunked prefill trace captured successfully!")
 
     def _capture_prefill_trace_chunked_tp(
@@ -1138,7 +1186,40 @@ class Qwen36Model:
         assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
         assert chunk_size % 128 == 0, f"chunk_size {chunk_size} must be a multiple of 128"
         block_size = get_block_size(self._paged_kv_caches)
+        assert chunk_size % block_size == 0, (
+            f"chunk_size {chunk_size} must be a multiple of paged-KV block_size {block_size}; "
+            "paged_fill_cache cannot encode an in-page chunk offset"
+        )
         blocks_per_chunk = chunk_size // block_size
+
+        # Phase-1 warmup may already have allocated and compiled this exact
+        # path. Reuse those persistent addresses during phase-2 capture:
+        # allocating replacements after the decode trace is parked is unsafe.
+        if self._chunk_token_buf is not None:
+            assert self._chunked_chunk_size == chunk_size
+            assert self._chunk_full_page_table_buf.shape[-1] == page_table.shape[-1]
+            if not capture_chunk_trace:
+                return
+            if self._chunked_trace_id is not None:
+                ttnn.release_trace(device, self._chunked_trace_id)
+            self._reset_gdn_state_for_new_sequence()
+            self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            self._chunked_trace_output = self._forward_prefill_chunk_tp(
+                self._chunk_token_buf,
+                self._chunk_cos_buf,
+                self._chunk_sin_buf,
+                self._chunk_start_idx_tensor,
+                self._chunk_full_page_table_buf,
+                self._chunk_page_table_buf,
+            )
+            ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
+            if hasattr(ttnn, "mark_corruptible"):
+                # A later replay of the coexisting decode trace may overwrite
+                # this allocation. That is intentional: every prefill replay
+                # rewrites it before it is read.
+                ttnn.mark_corruptible(self._chunked_trace_output)
+            logger.info("Chunked prefill trace (TP) captured from prepared buffers!")
+            return
 
         if self._chunked_trace_id is not None:
             ttnn.release_trace(device, self._chunked_trace_id)
@@ -1223,6 +1304,8 @@ class Qwen36Model:
             self._chunk_page_table_buf,
         )
         ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
+        if hasattr(ttnn, "mark_corruptible"):
+            ttnn.mark_corruptible(self._chunked_trace_output)
         logger.info("Chunked prefill trace (TP) captured successfully!")
 
     # ----------------------------------------------------------------------- #
@@ -1571,7 +1654,6 @@ class Qwen36Model:
         per_user_rec = []
         per_user_conv = []
         comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-        dn_states = [layer.attention for layer in self.layers if not layer.is_full_attention]
 
         try:
             for u in range(B):
@@ -1744,8 +1826,6 @@ class Qwen36Model:
         # long-prompt path replays correctly; short prompts use the masked bucket on the same scratch.
         prev = self._bind_gdn_prefill_scratch()
         host_logits = []
-        per_user_rec = []
-        per_user_conv = []
         try:
             for u in range(N):
                 toks = token_ids_list[u]
@@ -1759,21 +1839,59 @@ class Qwen36Model:
                     ttnn.to_torch(lg, mesh_composer=comp).reshape(-1, self.args.vocab_size)[:1].float().view(1, 1, -1)
                 )
                 ttnn.deallocate(lg)
-                # Snapshot this user's B=1 scratch state (host round trip — the next user's reset
-                # overwrites the scratch in place; see prefill_traced_bucket_batched for why not clone).
-                per_user_rec.append([ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states])
-                per_user_conv.append(
-                    [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
-                )
+                if self._managed_gdn_state:
+                    # Finalize directly on device into the scheduler-owned
+                    # compact slot before the next request resets the scratch.
+                    self._store_gdn_prefill_state(int(empty_slots[u]))
+                else:
+                    raise RuntimeError(
+                        "continuous-batching prefill requires managed GDN state; "
+                        "allocate caches with managed_gdn_state=True"
+                    )
         finally:
             # Always rebind the batched decode buffers (a mid-loop assert must not leave GDN on scratch).
             # Does NOT free the scratch — it persists for the next request and keeps the trace valid.
             self._unbind_gdn_prefill_scratch(prev)
 
-        # Write each user's snapshot into its decode slot, preserving the other live rows.
-        for u in range(N):
-            self._write_gdn_slot(int(empty_slots[u]), per_user_rec[u], per_user_conv[u])
         return host_logits
+
+    def set_gdn_state_indices(self, state_indices):
+        """Refresh the decode trace's runtime state-index input.
+
+        ``state_indices`` contains compact live slots in decode row order.
+        Missing rows are mapped to row-specific dummy slots in the disjoint
+        second half of each layer's managed pool.
+        """
+        if not self._managed_gdn_state:
+            return
+        assert self._gdn_state_indices_device is not None
+        B = self.args.max_batch_size
+        indices = torch.as_tensor(state_indices, dtype=torch.int32).reshape(-1)
+        assert indices.numel() <= B, f"{indices.numel()} state indices exceed decode batch {B}"
+        padded = torch.arange(B, 2 * B, dtype=torch.int32)
+        padded[: indices.numel()] = indices
+        host = ttnn.from_torch(
+            padded.reshape(1, 1, 1, B),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        ttnn.copy_host_to_device_tensor(host, self._gdn_state_indices_device)
+
+    def _store_gdn_prefill_state(self, state_slot):
+        """Copy the bound B=1 prefill scratch into one managed state slot."""
+        assert self._managed_gdn_state and self._gdn_prefill_state_index_device is not None
+        assert 0 <= state_slot < 2 * self.args.max_batch_size
+        host = ttnn.from_torch(
+            torch.tensor([[[[state_slot]]]], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        ttnn.copy_host_to_device_tensor(host, self._gdn_prefill_state_index_device)
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                layer.attention.store_managed_prefill_state(self._gdn_prefill_state_index_device)
 
     def _write_gdn_slot(self, slot, rec_snap, conv_snap):
         """Upload one request's B=1 GDN state snapshot (host torch, per GDN layer) and write it
@@ -1899,7 +2017,7 @@ class Qwen36Model:
         """Eager final partial-chunk prefill (< chunk_size). GDN zero-pads to 128-multiple internally
         (not bucket padding). Returns hidden [1,T_tail_padded,hidden_size]."""
         T_tail = token_slice.shape[1]
-        block_size = 64
+        block_size = self._paged_kv_block_size or 64
         tok = ttnn.from_torch(
             token_slice.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
@@ -1968,7 +2086,7 @@ class Qwen36Model:
         cos, sin = self.rope.get_prefill_rot_mats(chunk_start, bucket)
         full_pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         blk0 = chunk_start // block_size
-        # Fill K/V only for real blocks (ceil(valid_len/64)); padded writes would corrupt block 0.
+        # Fill K/V only for real cache blocks; padded writes would corrupt block 0.
         blkN = num_blocks_in_seq(chunk_start + valid_len, block_size)
         chunk_pt = ttnn.from_torch(
             page_table[:, blk0:blkN].contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
@@ -2671,14 +2789,22 @@ class Qwen36Model:
             k_cache, v_cache = kv_caches[cache_idx]
             self.layers[layer_idx].attention.set_paged_kv_cache(k_cache, v_cache)
 
-    def allocate_kv_caches(self, kv_cache_shape, dtype, batch_size=1):
+    def allocate_kv_caches(self, kv_cache_shape, dtype, batch_size=1, managed_gdn_state=False):
         """Allocate caches for all 32 layers. Returns only the attention KV caches (for vLLM)."""
         assert self._deltanet_external_states is None, "allocate_kv_caches already called; deallocate first"
+        self._paged_kv_block_size = int(kv_cache_shape[2])
         # QWEN_SDPA_BF8: bf8 paged KV for SDPA; halves KV memory (gated — validate PCC at long ctx).
         if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
             dtype = ttnn.bfloat8_b
         if self.num_devices > 1:
-            return self._allocate_kv_caches_tp(kv_cache_shape, dtype, batch_size)
+            return self._allocate_kv_caches_tp(
+                kv_cache_shape,
+                dtype,
+                batch_size,
+                managed_gdn_state=managed_gdn_state,
+            )
+        if managed_gdn_state and batch_size > 1:
+            raise NotImplementedError("managed batched GDN state is currently implemented for the TP path")
 
         kv_caches = []
         for idx in self._attention_layer_indices:
@@ -2724,13 +2850,33 @@ class Qwen36Model:
             ttnn.deallocate(rec)
             ttnn.deallocate(conv)
         self._deltanet_external_states = None
+        if self._managed_gdn_state:
+            for layer in self.layers:
+                if layer.is_full_attention:
+                    continue
+                dn = layer.attention
+                if dn.managed_rec_state_pool is not None:
+                    ttnn.deallocate(dn.managed_rec_state_pool)
+                    dn.managed_rec_state_pool = None
+                if dn.managed_conv_state_pool is not None:
+                    ttnn.deallocate(dn.managed_conv_state_pool)
+                    dn.managed_conv_state_pool = None
+                dn.managed_state_indices = None
+                dn.managed_state_pool_slots = 0
+            if self._gdn_state_indices_device is not None:
+                ttnn.deallocate(self._gdn_state_indices_device)
+                self._gdn_state_indices_device = None
+            if self._gdn_prefill_state_index_device is not None:
+                ttnn.deallocate(self._gdn_prefill_state_index_device)
+                self._gdn_prefill_state_index_device = None
+            self._managed_gdn_state = False
         if getattr(self, "_paged_kv_caches", None) is not None:
             for k_cache, v_cache in self._paged_kv_caches:
                 ttnn.deallocate(k_cache)
                 ttnn.deallocate(v_cache)
             self._paged_kv_caches = None
 
-    def _allocate_kv_caches_tp(self, kv_cache_shape, dtype, batch_size):
+    def _allocate_kv_caches_tp(self, kv_cache_shape, dtype, batch_size, managed_gdn_state=False):
         """TP paged KV allocation (B=1). Replicated per device; GDN self-manages state."""
 
         def _mk():
@@ -2751,6 +2897,32 @@ class Qwen36Model:
                 layer.attention.reset_state()
                 # Fixed-address GDN state for decode trace compatibility.
                 layer.attention._stable_state = True
+                if managed_gdn_state:
+                    layer.attention.allocate_managed_state_pool(batch_size)
+        self._managed_gdn_state = managed_gdn_state
+        if managed_gdn_state:
+            mapper = ttnn.ReplicateTensorToMesh(self.device)
+            # Warmup and padded rows use the disjoint dummy bank [B, 2B).
+            dummy_indices = torch.arange(batch_size, 2 * batch_size, dtype=torch.int32).reshape(1, 1, 1, batch_size)
+            self._gdn_state_indices_device = ttnn.from_torch(
+                dummy_indices,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            self._gdn_prefill_state_index_device = ttnn.from_torch(
+                torch.tensor([[[[batch_size]]]], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            for layer in self.layers:
+                if not layer.is_full_attention:
+                    layer.attention.bind_managed_state_indices(self._gdn_state_indices_device)
         # Marker for re-entry assert; TP GDN state lives in module, not external buffers.
         self._deltanet_external_states = []
         return kv_caches

@@ -22,6 +22,38 @@ def test_base_case(device):
     assert_equal(expected_embeddings, embeddings)
 
 
+def test_float32_row_major_embedding(device):
+    """Embedding also serves as a runtime-indexed state gather.
+
+    Recurrent model state is kept in fp32, so the row-major data-movement
+    path must preserve fp32 values rather than forcing state through bf16.
+    """
+    torch.manual_seed(1234)
+    torch_indices = torch.tensor([[3, 0, 5, 1]], dtype=torch.int32)
+    torch_weights = torch.randn(8, 128, dtype=torch.float32)
+
+    indices = ttnn.from_torch(
+        torch_indices,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    weights = ttnn.from_torch(
+        torch_weights,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    output = ttnn.embedding(
+        indices,
+        weights,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    assert_equal(torch.nn.functional.embedding(torch_indices.long(), torch_weights), ttnn.to_torch(output))
+
+
 @pytest.mark.parametrize("batch_size", [1, 8, 9])
 @pytest.mark.parametrize("sentence_size", [32, 256, 512])
 @pytest.mark.parametrize("hidden_embedding_dim", [768, 4096])  # Bert_Num_Cols_768, Llama_Num_Cols
