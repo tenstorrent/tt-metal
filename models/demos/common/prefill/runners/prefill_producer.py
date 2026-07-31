@@ -18,6 +18,19 @@ CHIP_IN_USE lock the runner already holds, and deadlock.
 `run_schedule()` takes injectable seams (push_fn / now_fn / sleep_fn / rng) so the scheduling logic
 can be unit-tested with no device and reproduced deterministically.
 
+Config — a YAML manifest (like the runner's PREFILL_MANIFEST) or PREFILL_* env vars. Point at a
+  manifest with ``--manifest <path>`` (or PREFILL_PRODUCER_MANIFEST); main() applies it via setdefault
+  (importing this module applies nothing), so any exported PREFILL_* env var still wins. Typed blocks map to the
+  env vars documented below; a verbatim ``env:`` block passes any raw PREFILL_* key through (and wins
+  over the typed blocks). See producer_manifests/prefill_producer_manifest.example.yaml. Schema:
+    model:     {variant, num_layers, max_seq_len, chunk_size}
+    transport: {sp, tp, h2d_service_id, connect_timeout_s}
+    workload:  {num_users, chunks, max_requests, duration_s, interleave, p_gap, p_burst, gap_ms,
+                mid_end_prob, seed, check_pcc, trace_dir, slot_prompts}
+    env:       {ANY_PREFILL_KEY: value}   # escape hatch for anything unmodeled
+  Any other top-level block is ignored here and returned by _apply_manifest_env() for another entry point
+  to apply — that is how runners/migration_driver.py picks up ``migration:``.
+
 Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order run):
   PREFILL_NUM_USERS              concurrent cache slots (default 1)
   PREFILL_PRODUCER_CHUNKS        chunks per request: "N" fixed, or "min,max" random (default "11")
@@ -30,12 +43,25 @@ Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order
   PREFILL_PRODUCER_INTERLEAVE    slot order: "random" (default) | "round_robin"
   PREFILL_PRODUCER_SEED          RNG seed (default 1234)
   PREFILL_PRODUCER_CHECK_PCC     "1" to read KV back and PCC vs golden per slot (default 0)
+  PREFILL_PRODUCER_SLOT_TRACES   per-slot prompts: "dirA,dirB,..." assigns trace i to slot i (cycling by
+                                 slot % count if fewer than num_users). Each slot pushes tokens from — and
+                                 is PCC'd against — its OWN trace, and its depth is derived from that
+                                 prompt's real length (so PREFILL_PRODUCER_CHUNKS/MID_END are ignored per
+                                 slot). Unset (default) => one shared PREFILL_TRACE_DIR + the synthetic
+                                 schedule for all slots.
   PREFILL_SEND_SHUTDOWN          "1" to close the stream with an all -1 sentinel so the runner exits
                                  gracefully after the run (sent after the KV read; default 0). PR #48718.
+Scope — this module drives the RUNNER and nothing else: push, ack-drain, optional golden PCC. It issues no
+  KV migration and imports nothing that does. To prefill AND migrate, run runners/migration_driver.py: it
+  reuses the helpers here and adds the migration steps. The dependency runs that way only, never back into
+  this module, so a runner-only run can never pull migration in.
 Env — transport (must match the runner): PREFILL_SP / PREFILL_TP / PREFILL_CHUNK_SIZE /
   PREFILL_MAX_SEQ_LEN / PREFILL_NUM_LAYERS / PREFILL_H2D_SERVICE_ID / PREFILL_H2D_CONNECT_TIMEOUT.
 
 Usage:
+    # From a manifest (env still overrides individual knobs):
+    python -m models.demos.common.prefill.runners.prefill_producer \
+      --manifest models/demos/common/prefill/runners/producer_manifests/prefill_producer_manifest.example.yaml
     # 1 user, full depth, with PCC:
     PREFILL_PRODUCER_CHUNKS=11 PREFILL_PRODUCER_CHECK_PCC=1 \
       python -m models.demos.common.prefill.runners.prefill_producer
@@ -46,6 +72,7 @@ Usage:
       python -m models.demos.common.prefill.runners.prefill_producer
 """
 
+import argparse
 import os
 import random
 import struct
@@ -61,17 +88,97 @@ import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
+
+def _apply_manifest_env(manifest_path: str) -> dict:
+    """Populate the PREFILL_* env from a YAML producer manifest and RETURN the parsed manifest (setdefault
+    => an explicitly exported env var still wins). Mirrors the runner's _apply_manifest_env: a verbatim
+    ``env:`` passthrough (applied FIRST, so a raw PREFILL_* key wins over the typed mapping) plus typed
+    ``model`` / ``transport`` / ``workload`` blocks mapped to the same env vars _load_env_config() and
+    _config_from_env() read.
+
+    Blocks this module does not model are left untouched and reachable via the return value, so another
+    entry point can apply its own. That is how the migration driver picks up ``migration:`` — this module
+    stays unaware of it.
+
+    Called ONLY from main(), and necessarily before those two reads — see the call site. Deliberately not
+    invoked at import: this is the one function here that mutates os.environ, and a plain
+    ``import prefill_producer`` must not silently apply a manifest just because the env names one."""
+    import yaml
+
+    with open(manifest_path) as f:
+        manifest = yaml.safe_load(f) or {}
+
+    def sd(key, val):  # setdefault, stringified; skips None so an absent field leaves the default
+        if val is not None:
+            os.environ.setdefault(key, str(val))
+
+    def sd_bool(key, val):  # YAML true/false -> the "1"/"0" the env parsing expects
+        if val is not None:
+            os.environ.setdefault(key, "1" if val else "0")
+
+    # 1) verbatim escape hatch first — a raw PREFILL_* key wins over the typed blocks (setdefault:
+    #    first write wins; a shell-exported env var pre-empts both).
+    for key, val in (manifest.get("env") or {}).items():
+        sd(key, val)
+
+    # 2) typed blocks -> PREFILL_* env.
+    model = manifest.get("model") or {}
+    sd("PREFILL_MODEL", model.get("variant"))
+    sd("PREFILL_NUM_LAYERS", model.get("num_layers"))
+    sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
+    sd("PREFILL_CHUNK_SIZE", model.get("chunk_size"))
+
+    transport = manifest.get("transport") or {}
+    sd("PREFILL_SP", transport.get("sp"))
+    sd("PREFILL_TP", transport.get("tp"))
+    sd("PREFILL_H2D_SERVICE_ID", transport.get("h2d_service_id"))
+    sd("PREFILL_H2D_CONNECT_TIMEOUT", transport.get("connect_timeout_s"))
+
+    workload = manifest.get("workload") or {}
+    sd("PREFILL_NUM_USERS", workload.get("num_users"))
+    sd("PREFILL_PRODUCER_CHUNKS", workload.get("chunks"))
+    sd("PREFILL_PRODUCER_MAX_REQUESTS", workload.get("max_requests"))
+    sd("PREFILL_PRODUCER_DURATION_S", workload.get("duration_s"))
+    sd("PREFILL_PRODUCER_INTERLEAVE", workload.get("interleave"))
+    sd("PREFILL_PRODUCER_P_GAP", workload.get("p_gap"))
+    sd("PREFILL_PRODUCER_P_BURST", workload.get("p_burst"))
+    sd("PREFILL_PRODUCER_MID_END_PROB", workload.get("mid_end_prob"))
+    sd("PREFILL_PRODUCER_SEED", workload.get("seed"))
+    sd_bool("PREFILL_PRODUCER_CHECK_PCC", workload.get("check_pcc"))
+    sd("PREFILL_TRACE_DIR", workload.get("trace_dir"))
+    slot_prompts = workload.get("slot_prompts")  # per-slot prompt trace dirs; index = slot_id
+    if slot_prompts is not None:
+        sd("PREFILL_PRODUCER_SLOT_TRACES", slot_prompts if isinstance(slot_prompts, str) else ",".join(slot_prompts))
+    gap_ms = workload.get("gap_ms")  # accept a "lo,hi" string or a [lo, hi] list
+    if gap_ms is not None:
+        sd("PREFILL_PRODUCER_GAP_MS", gap_ms if isinstance(gap_ms, str) else ",".join(str(x) for x in gap_ms))
+
+    logger.info(f"[producer] applied manifest {manifest_path}")
+    return manifest
+
+
 # PrefillMetadata on the wire: 3 x uint32 = [slot_id, actual_start, actual_end].
 METADATA_SIZE_BYTES = 12
 
-SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
-TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
-GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
-CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
-NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 
-ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
+def _load_env_config() -> None:
+    """(Re)bind the transport/model constants below from the CURRENT environment.
+
+    Called once at import so a plain ``import prefill_producer`` still yields usable constants, and again
+    from ``main()`` right after the manifest is applied — the manifest only reaches the env at that point,
+    so the import-time values would otherwise be pre-manifest defaults. Importing this module never
+    MUTATES the environment; only ``main()`` does, via _apply_manifest_env."""
+    global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER
+    SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
+    TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
+    GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
+    CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
+    NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
+    ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
+
+
+_load_env_config()
 
 
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
@@ -333,6 +440,8 @@ class ProducerConfig:
     verify: bool  # read KV back and PCC each resident slot vs golden
     pcc_threshold: float
     interleave: str = "random"  # slot order: "random" | "round_robin" (fair alternation)
+    slot_lengths: dict = None  # per-slot real token count (from per-slot prompts); overrides the random
+    # chunk draw + mid_chunk_end when set (each slot pushes exactly its prompt). None => synthetic depth.
 
 
 def _config_from_env() -> ProducerConfig:
@@ -381,11 +490,20 @@ class _Slot:
 
 
 def _new_request(slot: _Slot, req_id: int, cfg: ProducerConfig, rng: random.Random) -> None:
-    """(Re)assign a fresh request to `slot`: a random chunk count, starting at chunk 0, optionally
-    ending mid-chunk."""
+    """(Re)assign a fresh request to `slot`, starting at chunk 0.
+
+    Per-slot-prompt mode (cfg.slot_lengths set): the slot pushes exactly its assigned prompt — depth is
+    ceil(real_len / CHUNK_SIZE) and actual_isl is the prompt's real token count, so validation covers
+    [0, real_len). The random chunk draw + mid_chunk_end are bypassed (interleave/gaps/bursts still apply).
+    Otherwise (shared-trace mode): a random chunk count, optionally ending mid-chunk."""
     slot.req_id = req_id
-    slot.target_chunks = rng.randint(cfg.chunks_min, cfg.chunks_max)
     slot.next_chunk = 0
+    if cfg.slot_lengths is not None and slot.slot_id in cfg.slot_lengths:
+        real_len = cfg.slot_lengths[slot.slot_id]
+        slot.target_chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+        slot.actual_isl = real_len
+        return
+    slot.target_chunks = rng.randint(cfg.chunks_min, cfg.chunks_max)
     full_tokens = slot.target_chunks * CHUNK_SIZE
     if cfg.mid_chunk_end_prob > 0 and rng.random() < cfg.mid_chunk_end_prob and slot.target_chunks >= 1:
         slot.actual_isl = full_tokens - rng.randint(1, CHUNK_SIZE - 1)
@@ -579,8 +697,13 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     """Read slot `slot_id`'s KV over [0, real_len) via the table and validate it. Config 0 (the KVPE
     cache) is PCC'd vs the golden trace. For a sparse/DSA model the merged table also carries config 1
     (the index-key cache), which is PCC'd vs the golden indexer key. Returns the min PCC across both
-    caches / all layers; raises on an index-cache read failure."""
-    from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_index_k, _load_golden_kv_post
+    caches / all layers, or across config 0 alone when the trace carries no indexer-key golden (warned,
+    not fatal — see below). Raises on an index-cache READ failure."""
+    from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
+        _load_golden_index_k,
+        _load_golden_kv_post,
+        index_golden_present,
+    )
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -618,7 +741,18 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     # via the table, decode, and PCC vs the golden indexer key. Config 1 holds all layers on GLM-5.1 and
     # only the full-indexer layers on GLM-5.2, so iterate its OWN layer count, not NUM_LAYERS. The index
     # cache is bf8 TILE, and the golden is already in the device rope frame (no re-interleave, unlike pe).
+    #
+    # A trace can carry the KVPE golden but no indexer-key golden (some vllm dumps store only
+    # dsa/dsa_topk_indices_layer_*). There is then nothing to PCC config 1 against, so warn and return the
+    # config-0 PCC rather than failing the slot: the KVPE result is still a valid check.
     if table.num_configs() > 1:
+        if not index_golden_present(trace_dir):
+            logger.warning(
+                f"[producer] slot {slot_id}: table has an index config but {trace_dir} carries no "
+                f"indexer-key golden; validating the KVPE cache only (device index cache NOT checked)."
+            )
+            return min_pcc
+
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         n_index_layers = table.config(1).num_layers
         index_decode = _decoder_for_config(table, 1, index_head_dim)  # bf8 TILE on GLM-5.1/5.2
@@ -647,14 +781,13 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     return min_pcc
 
 
-def _verify_resident_slots(kv_table, stats: RunStats, threshold: float) -> bool:
-    """PCC-check every slot that holds resident trace-derived KV. Returns True only if at least one slot
-    was checked and all of them met the threshold."""
+def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict) -> bool:
+    """PCC-check every slot that holds resident trace-derived KV, each against ITS OWN golden trace
+    (slot_traces[slot_id]). Returns True only if at least one slot was checked and all met the threshold."""
     device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
         return False
-    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
 
     min_pcc_overall = 1.0
     checked = 0
@@ -663,7 +796,7 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float) -> bool:
         real_len = min(chunks_pushed * CHUNK_SIZE, actual_isl)
         if real_len <= 0:
             continue
-        pcc = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, trace_dir)
+        pcc = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, slot_traces[slot_id])
         min_pcc_overall = min(min_pcc_overall, pcc)
         checked += 1
         if pcc < threshold:
@@ -693,15 +826,92 @@ def _percentile(sorted_values: list, p: float) -> float:
 
 
 def _load_token_pool(trace_dir, num_tokens: int) -> list:
-    """The shared token pool every request replays from chunk 0, padded up to `num_tokens` if the
-    trace is shorter."""
+    """A token pool a request replays from chunk 0, padded up to `num_tokens` if the trace is shorter."""
     pool = load_trace_token_ids(trace_dir, num_tokens)
     if len(pool) < num_tokens:
         pool = pool + [1] * (num_tokens - len(pool))
     return pool[:num_tokens]
 
 
+def _resolve_slot_prompts(cfg: ProducerConfig):
+    """Resolve each slot's prompt (tokens + golden trace) and load the token pool(s).
+
+    Returns ``(slot_traces, slot_lengths, pools_by_trace)``:
+      * slot_traces: {slot_id -> resolved trace Path}. Both the tokens pushed AND the golden PCC'd for a
+        slot come from its trace, so per-slot traces == per-slot prompts + per-slot goldens.
+      * slot_lengths: {slot_id -> real token count} in per-slot-prompt mode, else None (see _new_request).
+      * pools_by_trace: {trace Path -> token pool}, deduped so a trace shared by N slots loads once.
+
+    Single-prompt (default): no PREFILL_PRODUCER_SLOT_TRACES => every slot uses PREFILL_TRACE_DIR (or the
+    adapter default), the synthetic schedule drives depth (slot_lengths=None), one pool sized to chunks_max.
+
+    Multi-prompt: PREFILL_PRODUCER_SLOT_TRACES="dirA,dirB,..." assigns trace i to slot i (cycling by
+    ``slot % len`` if fewer entries than users, so "dirA,dirB" alternates across 8 users). Each slot then
+    pushes exactly its prompt: depth = ceil(real_len/CHUNK_SIZE), clamped to the per-user cache."""
+    default = os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)
+    spec = os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", "").strip()
+    max_chunks = MAX_SEQ_LEN // CHUNK_SIZE
+
+    if not spec:
+        trace = resolve_trace_dir(default)
+        slot_traces = {s: trace for s in range(cfg.num_users)}
+        return slot_traces, None, {trace: _load_token_pool(trace, cfg.chunks_max * CHUNK_SIZE)}
+
+    entries = [e.strip() for e in spec.split(",") if e.strip()]
+    resolved = [resolve_trace_dir(e) for e in entries]
+    if len(entries) not in (1, cfg.num_users):
+        logger.warning(
+            f"[producer] {len(entries)} slot prompt(s) for {cfg.num_users} user(s); assigning by slot % {len(entries)}"
+        )
+    slot_traces = {s: resolved[s % len(resolved)] for s in range(cfg.num_users)}
+
+    len_by_trace = {}
+    pools_by_trace = {}
+    for trace in set(slot_traces.values()):
+        real_len = len(load_trace_token_ids(trace))
+        chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+        if chunks > max_chunks:
+            logger.warning(
+                f"[producer] prompt {trace} is {real_len} tok ({chunks} chunks) > per-user cache "
+                f"{max_chunks} chunks (MAX_SEQ_LEN={MAX_SEQ_LEN}); clamping to {max_chunks} chunks."
+            )
+            chunks = max_chunks
+            real_len = min(real_len, max_chunks * CHUNK_SIZE)
+        len_by_trace[trace] = real_len
+        pools_by_trace[trace] = _load_token_pool(trace, chunks * CHUNK_SIZE)
+
+    slot_lengths = {s: len_by_trace[t] for s, t in slot_traces.items()}
+    logger.info(
+        "[producer] per-slot prompts: "
+        + ", ".join(f"slot {s}<-{slot_traces[s].name} ({slot_lengths[s]} tok)" for s in sorted(slot_traces))
+    )
+    return slot_traces, slot_lengths, pools_by_trace
+
+
 def main() -> None:
+    # argparse is the SINGLE place argv is read: --manifest defaults to PREFILL_PRODUCER_MANIFEST, so one
+    # parse covers both sources and unknown args still error out.
+    parser = argparse.ArgumentParser(
+        prog="prefill_producer",
+        description="H2D producer for the prefill runner. Config comes from a YAML manifest "
+        "(--manifest / PREFILL_PRODUCER_MANIFEST) mapped to PREFILL_* env vars, with any explicitly "
+        "exported PREFILL_* env var overriding the manifest.",
+    )
+    parser.add_argument(
+        "--manifest",
+        "-m",
+        default=os.environ.get("PREFILL_PRODUCER_MANIFEST"),
+        help="Path to the producer YAML manifest (applied at startup; exported env vars override it).",
+    )
+    args = parser.parse_args()
+
+    # Apply the manifest HERE, not at import: importing this module must never mutate os.environ. Order
+    # matters — the manifest lands in the env first, then _load_env_config() re-reads the module constants
+    # (bound to pre-manifest defaults at import) and _config_from_env() reads the schedule knobs.
+    if args.manifest:
+        _apply_manifest_env(args.manifest)
+    _load_env_config()
+
     cfg = _config_from_env()
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
@@ -729,11 +939,14 @@ def main() -> None:
             "the runner's migration self-test owns it)"
         )
 
-    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
-    token_pool = _load_token_pool(trace_dir, cfg.chunks_max * CHUNK_SIZE)
+    # Per-slot prompts: each slot pushes tokens from (and is PCC'd against) its own trace. With no
+    # PREFILL_PRODUCER_SLOT_TRACES every slot shares one trace (PREFILL_TRACE_DIR / the adapter default).
+    slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
+    cfg.slot_lengths = slot_lengths  # None => synthetic schedule depth; else depth per prompt length
 
     def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int) -> float:
-        chunk_bytes = _chunk_to_host_array(token_pool[actual_start : actual_start + CHUNK_SIZE])
+        pool = pools_by_trace[slot_traces[slot_id]]
+        chunk_bytes = _chunk_to_host_array(pool[actual_start : actual_start + CHUNK_SIZE])
         assert (
             chunk_bytes.nbytes == payload_bytes
         ), f"payload {chunk_bytes.nbytes}B != service-expected {payload_bytes}B"
@@ -757,11 +970,11 @@ def main() -> None:
     # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed.
     _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
 
-    # Opt-in: read the generated KV back per resident slot and PCC-check vs the golden trace.
+    # Golden PCC of every resident slot's KV, read back device-lessly over UMD (PREFILL_PRODUCER_CHECK_PCC).
     verify_ok = True
     if cfg.verify and kv_table is not None:
         try:
-            verify_ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold)
+            verify_ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces)
         except Exception as e:
             logger.error(f"[producer] KV read/PCC failed: {type(e).__name__}: {e}")
             verify_ok = False
@@ -775,7 +988,7 @@ def main() -> None:
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
         sentinel = struct.pack("<iii", -1, -1, -1)
         assert len(sentinel) == METADATA_SIZE_BYTES
-        sentinel_payload = _chunk_to_host_array(token_pool[:CHUNK_SIZE])  # ignored by the runner; size must match
+        sentinel_payload = _chunk_to_host_array([1] * CHUNK_SIZE)  # contents ignored by the runner; size must match
         assert sentinel_payload.nbytes == payload_bytes
         logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
         service.forward_to_tensor_bytes(sentinel_payload, metadata=sentinel)
