@@ -125,6 +125,19 @@ _KV_FOLD = True
 #   K=4  16/16/16  0.117 ms   <- chosen
 #   K=4   8/8/8    0.119 ms
 #   K=8  10/8/8    0.132 ms   <- more K-splits means more pairwise reduction; regresses hard
+# RE-SWEPT 2026-07-31 on the current build (post QK-transpose fix + fused mask, bf4 weights). The block
+# is now FASTER than the table above -- K=4/16-16-16 measures 0.100 ms, not 0.117 -- so compare against
+# 0.100, not the historical figures:
+#   K=4  16/16/16  0.100 ms   <- still the optimum
+#   K=8  10/8/8    0.117 ms
+#   K=8   8/8/8    0.116 ms
+#   K=16  5/4/4    L1 clash, infeasible
+#   K=16  4/4/4    L1 clash, infeasible
+# K=16 cannot fit and bf4 weights do NOT unlock it, because the weight shard is not what binds:
+# per-core weight bytes are (K_total/_K_BLOCKS) * (N_total/n_blocks), which is IDENTICAL at K=4/n=16 and
+# K=16/n=4 (both K*N/64). What scales with K is the cross-core REDUCTION buffer -- 16 partials to gather
+# per output instead of 4 -- which is what overflows L1, and the same mechanism that makes K=8 16%
+# slower even though it fits. Do not retry higher K on the strength of a smaller weight dtype.
 # Two non-obvious results: the optimum is INTERIOR (K=8 is much worse, so this is not "more
 # splitting is better"), and 64 cores beats 80 (QKV=16 over QKV=20) because at M=16 the activation
 # is tiny and gather/reduce overhead outweighs added parallelism -- the same reason _RESHARD_CORES=2
