@@ -614,6 +614,32 @@ def main() -> int:
                 "note": "min-of-n is biased low and the bias grows with n; cells with different n are not "
                         "comparable. Fix the incumbent before screening."}
 
+    # WHAT THE ADVICE ITSELF SAYS ABOUT ITS OWN CONSTRUCTION. `spill.ran` is true in every corpus cell, and
+    # a plan the optimizer had to spill out of L1 is less likely to survive being applied one chain at a time.
+    # The three op counts disagree in every cell and nothing defines their relationship, so report all three
+    # rather than trusting one.
+    sp = report.get("spill") or {}
+    capture_provenance = {
+        "capture_batch": report.get("capture_batch"),
+        "capture_policy_source": report.get("capture_policy_source"),
+        "traced_weight_dtypes": report.get("traced_weight_dtypes"),
+        "allow_bf16_dram_sharded_matmul": report.get("allow_bf16_dram_sharded_matmul"),
+        "spills": sp.get("total_spills"), "spill_ran": sp.get("ran"),
+        "op_counts": {"report_total_ops": report.get("total_ops"), "ops_listed": len(advised),
+                      "final_choices": report.get("final_choices")},
+        "dram_sharded_advised": report.get("dram_sharded_advised"),
+    }
+    if sp.get("total_spills"):
+        capture_provenance["spill_caution"] = (
+            f"the optimizer spilled {sp['total_spills']} time(s) building this plan, so it did not fit L1 as "
+            "a whole. Expect single-chain application to hit the same wall, and treat a capacity failure as "
+            "a partial-application artifact rather than evidence the direction is wrong.")
+    if not report.get("capture_policy_source"):
+        capture_provenance["provenance_gap"] = (
+            "capture_policy_source is unset, so there is no record that the traced decoder was built with "
+            "the SHIPPED policy rather than class defaults. Dtypes are checked by the gate; layouts and "
+            "DRAM-sharding flags are not.")
+
     model_estimate = {
         "this_kind_us": round(window * a.layers_of_kind, 3),
         "layers_of_kind": a.layers_of_kind, "total_layers": a.total_layers,
@@ -626,7 +652,8 @@ def main() -> int:
     }
 
     out = {
-        "feasibility": feasibility, "model_estimate": model_estimate, "untraced_detail": untraced_detail,
+        "feasibility": feasibility, "model_estimate": model_estimate,
+        "capture_provenance": capture_provenance, "untraced_detail": untraced_detail,
         "generated_by": "advisor-challenger/scripts/reconcile.py", "tool_version": 5,
         "confidence": {
             "paired_by_name": len(byname), "paired_by_position": len(bypos),
@@ -726,6 +753,12 @@ def main() -> int:
               f" conf {c['confidence']}, {c['advisor_removes_per_model_us']:7.1f} us/model)"
               f"   {'/'.join(c['ops'])[:36]}")
 
+    cp = out["capture_provenance"]
+    if cp.get("spills"):
+        print(f"   note: the advice spilled {cp['spills']}x out of L1 while being built -- a capacity "
+              f"failure on one chain is a partial-application artifact, not a wrong direction")
+    if cp.get("provenance_gap"):
+        print("   note: capture_policy_source unset -- no record the capture used the shipped policy")
     me = out["model_estimate"]
     print(f"   MODEL ESTIMATE this kind: {me['this_kind_us']:.1f} us "
           f"({a.layers_of_kind}/{a.total_layers} layers); ceiling per model {me['ceiling_per_model_us']:.1f} us")

@@ -107,6 +107,10 @@ if isinstance(traced, dict) and isinstance(shipped, dict):
         if s2 is not None and norm(t) != norm(s2):
             bad.append(f"WRONG-PRECISION CAPTURE: {role}: traced {t}, ships {s2}. Construct the "
                        "decoder with the SHIPPED POLICY, not class defaults.")
+if not r.get("capture_policy_source"):
+    bad.append("capture_policy_source unset: nothing records that the traced decoder was built with the "
+               "SHIPPED policy rather than class defaults. Dtypes are checked below; layouts and "
+               "DRAM-sharding flags are not, so name the artifact the policy came from.")
 cb, ib, rb = r.get("capture_batch"), i.get("decode_batch"), i.get("requested_decode_batch")
 for nm, v in (("report.json capture_batch", cb), ("incumbent.json decode_batch", ib),
               ("incumbent.json requested_decode_batch", rb)):
