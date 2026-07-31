@@ -744,6 +744,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     FusedGatherContext fused_gather =
         build_fused_gather_context(program, operation_attributes, mesh_coordinate, in0, master_ring_cores, device);
 
+    // NOTE: packet headers come from PacketHeaderPool (a per-RISC L1 region), NOT from a circular buffer.
+    // The CB carve-out is the older pattern; the pool is what current fabric kernels use.
+
     // ---- Circular buffers (spec §5) on all cores ----
     mkcb(program, all_cores, 0, cb.cb0_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in0 k-slice resident
     mkcb(program, all_cores, 1, cb.cb1_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in1 (depth 4)

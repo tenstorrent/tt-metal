@@ -20,6 +20,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 void kernel_main() {
     constexpr uint32_t M_block = get_compile_time_arg_val(0);
@@ -339,6 +342,12 @@ void kernel_main() {
             // ---- 1. stage OUR OWN shard: in0[m, k] -> staging[m, rank*k_shard_tiles + k] ----
             // Local DRAM->DRAM, no fabric. Read into the scratch L1 slot then write back out.
             const uint32_t scratch = get_write_ptr(in0_cb);  // cb0 is not yet in use at this point
+            // Packet headers come from the per-RISC PacketHeaderPool, allocated ONCE outside the loops.
+            // Two of them: to_noc_unicast_write and to_noc_unicast_atomic_inc overwrite the same
+            // command_fields union, so sharing one header between the payload and the credit would
+            // corrupt whichever was still in flight.
+            auto* pkt_hdr_write = PacketHeaderPool::allocate_header();
+            auto* pkt_hdr_seminc = PacketHeaderPool::allocate_header();
             const uint32_t own_k0 = rank * k_shard_tiles;
             for (uint32_t m = m_lo; m < m_hi; ++m) {
                 for (uint32_t k = 0; k < k_shard_tiles; ++k) {
@@ -370,17 +379,49 @@ void kernel_main() {
                     const uint32_t k0 = src_rank * k_shard_tiles;
                     for (uint32_t m = m_lo; m < m_hi; ++m) {
                         for (uint32_t k = 0; k < k_shard_tiles; ++k) {
-                            noc_async_read_page(m * Kt_global + k0 + k, stage_acc, scratch);
+                            const uint32_t page = m * Kt_global + k0 + k;
+                            noc_async_read_page(page, stage_acc, scratch);
                             noc_async_read_barrier();
-                            // Payload to the neighbour's staging at the SAME offset.
-                            sender.wait_for_empty_write_slot();
-                            sender.send_payload_flush_non_blocking_from_address(scratch, tile_bytes);
+                            // Destination is the SAME page of the SAME staging buffer on the neighbour.
+                            // Mesh tensors are allocated at a common address across the mesh, so the local
+                            // NoC address of this page is also its address on the peer chip -- the fabric
+                            // supplies the chip hop, the NoC address supplies the rest.
+                            // Fabric expects noc0 coords and DRAM has no virtual coords on some archs, so
+                            // build the destination through the fabric addrgen helper rather than a bare
+                            // get_noc_addr(). The peer's staging buffer sits at the same address as ours
+                            // (mesh tensors share an address across the mesh), so the same page id resolves
+                            // correctly there -- fabric supplies the chip hop.
+                            const uint64_t dst_noc =
+                                tt::tt_fabric::linear::addrgen_detail::get_noc_address(page, stage_acc, 0);
+                            tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
+                                &sender,
+                                pkt_hdr_write,
+                                scratch,
+                                tile_bytes,
+                                tt::tt_fabric::NocUnicastCommandHeader{dst_noc},
+                                /*num_hops=*/1);
+                            // The send is NON-blocking and the header + payload source stay live until
+                            // drained, so flush before the next iteration mutates either.
+                            noc_async_writes_flushed();
                         }
                     }
-                    // Readiness strictly AFTER the payload has been flushed.
-                    sender.flush();
-                    noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, get_semaphore(fwd_recv_sem_id)), 1);
+                    // Credit AFTER the payload. Ordering is enforced on the RECEIVING chip: flush=true makes
+                    // the peer drain every prior write on this channel before applying the increment.
+                    // sender.flush() would NOT do this -- it is a no-op unless EAGER_STAGING is on.
+                    const uint64_t peer_sem_noc =
+                        get_noc_addr(my_x[noc_index], my_y[noc_index], get_semaphore(fwd_recv_sem_id));
+                    tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+                        &sender,
+                        pkt_hdr_seminc,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{peer_sem_noc, 1, /*flush=*/true},
+                        /*num_hops=*/1);
+                    noc_async_writes_flushed();
                 }
+                // Drain writes AND non-posted atomics before closing, or the kernel exits with pending NOC
+                // transactions. close() is mandatory: the v2 mux self-terminates only once every client has
+                // closed, so skipping it hangs the mux kernels.
+                noc_async_write_barrier();
+                noc_async_atomic_barrier();
                 sender.close();
             }
         }
