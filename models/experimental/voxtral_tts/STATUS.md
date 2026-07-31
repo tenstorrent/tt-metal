@@ -463,11 +463,23 @@ builds the head layout in the same op — 3 linears + 6 reshape/permutes become 
 Worth 1.6%, numerically identical. The old comment claiming the fused op "needs a batch layout this
 does not have" was simply wrong.
 
-**Still available and untried: DRAM-sharded weights** (`create_dram_sharded_mem_config` +
-`MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`, as `tt_transformers` uses for decode). It
-requires the ACTIVATION to be L1-sharded too — `input_tensor_a.is_sharded()` is a hard TT_FATAL — so
-it is real plumbing, and note model_config.py:716 warns that a per_core_N mismatch gives silently bad
-PCC. Only worth it if 66% of peak is not enough.
+**DRAM-sharded weights — available, but the ceiling is ~1.5x and it is real plumbing.**
+`create_dram_sharded_mem_config` + `MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`, as
+`tt_transformers` uses for decode. Probed at Block 2's real shape and it needs THREE things to line
+up, each a hard TT_FATAL, found one at a time:
+1. the ACTIVATION must be L1 WIDTH_SHARDED (`input_tensor_a.is_sharded()`, matmul_device_operation
+   .cpp:1226ff), not just the weights;
+2. the shard grid must be **TENSIX** cores, whose grid is 8x8 — using the 12-wide DRAM bank grid
+   fails with "No core coordinate found at location: (8, 0, TENSIX, LOGICAL)". So the activation
+   shards over at most 8 cores here (3072/8 = 384, tile-aligned), not 12;
+3. the OUTPUT memory config must be sharded as well.
+Plus model_config.py:716 warns a per_core_N mismatch against the DRAM shard width gives **silently
+bad PCC**, so any attempt needs the integer-code gate wired in from the start.
+
+**The ceiling is modest.** After the batch fold, a plain interleaved matmul at this shape already
+runs at **192 GB/s, ~66% of peak**, so perfect sharding is worth at most ~1.5x on the matmuls, and
+less end to end. Block 1 is the larger target now (~48 ms of an ~80 ms frame). Do this as deliberate
+work with a numerical gate, not as a quick win.
 
 **Measured and REJECTED — sdpa in the attention interior.** `ttnn.transformer.scaled_dot_product_
 attention` fuses 7 ops into 1 there (2x `repeat_interleave`, transpose, matmul, scale, softmax,
