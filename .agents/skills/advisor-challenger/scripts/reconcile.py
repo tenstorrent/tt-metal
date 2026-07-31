@@ -393,7 +393,7 @@ def main() -> int:
            and (r.get("shipped_cores") or 99) <= 2 and r["share_pct"] >= 1.0]
 
     out = {
-        "generated_by": "advisor-challenger/scripts/reconcile.py", "tool_version": 2,
+        "generated_by": "advisor-challenger/scripts/reconcile.py", "tool_version": 3,
         "layer_kind": a.layer_kind, "layers_of_kind": a.layers_of_kind,
         "total_layers": a.total_layers, "measured_window_us": round(window, 3),
         "accounting": acct, "accounting_closes_100pct": closes,
