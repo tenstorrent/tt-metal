@@ -184,6 +184,20 @@ def trace_ms_from_profile(profile) -> float | None:
     return None
 
 
+def _ledger_dir() -> Path:
+    """Where keyed ledgers live. PERF_MCP_LEDGER_DIR redirects the whole namespace.
+
+    PERF_MCP_LEDGER redirects ONE file, which is not enough to isolate a caller: the moment a test
+    deletes it to exercise unkeyed behaviour, any KEYED call in the same test resolves back to the
+    shared temp dir and writes a real ledger there. That is how a stray
+    perf_measurements_named_model_main.jsonl -- from test_floor_anchor_writeonce's deliberate delenv
+    -- appeared beside a live run's ledger and was mistaken for the run having split its anchors
+    across two files. Redirecting the DIRECTORY survives the delenv, so the isolation cannot be
+    switched off by accident.
+    """
+    return Path(os.environ.get("PERF_MCP_LEDGER_DIR") or tempfile.gettempdir())
+
+
 def ledger_path(model: str = "", task: str = "") -> Path:
     """Keyed by (model, task), like every other per-run artifact. An unkeyed file is how another
     run's number became this run's baseline."""
@@ -217,7 +231,7 @@ def ledger_path(model: str = "", task: str = "") -> Path:
         # two long ids that share a prefix still get different ledgers.
         digest = hashlib.sha1(safe.encode()).hexdigest()[:12]
         safe = "%s_%s" % (safe[: _MAX_KEY_LEN - 13], digest)
-    return Path(tempfile.gettempdir()) / ("perf_measurements_%s.jsonl" % safe)
+    return _ledger_dir() / ("perf_measurements_%s.jsonl" % safe)
 
 
 def record(

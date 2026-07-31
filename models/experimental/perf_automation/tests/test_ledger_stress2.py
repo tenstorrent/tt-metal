@@ -77,11 +77,14 @@ def test_the_file_vanishing_mid_run_does_not_crash(tmp_path, monkeypatch):
 def test_an_unwritable_directory_is_survived(tmp_path, monkeypatch):
     """record() must never raise into the caller: a failed write is a lost row, not a failed run."""
     m = _mod()
-    # This exercises the DEFAULT tempdir path, so the suite-wide private-ledger override must be
-    # lifted -- with PERF_MCP_LEDGER set, ledger_path never consults gettempdir at all.
+    # This exercises the KEYED-directory path, so the suite-wide private-ledger override must be
+    # lifted -- with PERF_MCP_LEDGER set, ledger_path returns that file and never resolves a
+    # directory at all. The directory itself is pointed at the read-only dir via the supported
+    # override, which outranks the process temp dir.
     monkeypatch.delenv("PERF_MCP_LEDGER", raising=False)
     ro = tmp_path / "ro"
     ro.mkdir()
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(ro))
     monkeypatch.setattr(m.tempfile, "gettempdir", lambda: str(ro))
     ro.chmod(0o500)
     try:

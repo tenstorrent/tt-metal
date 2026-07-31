@@ -25,7 +25,14 @@ def _mod():
 
 
 def _tmpdir(m, tmp_path, monkeypatch):
+    """Point the KEYED ledger namespace at tmp_path.
+
+    PERF_MCP_LEDGER_DIR is the supported redirect and outranks the process temp dir, so patching
+    gettempdir alone no longer moves the namespace. Both are set, so the intent holds whichever the
+    code ends up consulting.
+    """
     monkeypatch.delenv("PERF_MCP_LEDGER", raising=False)
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(m.tempfile, "gettempdir", lambda: str(tmp_path))
     return m
 
