@@ -138,7 +138,7 @@ void kernel_main() {
     // adaLN. Only consumed when per_batch_weight/bias; harmless otherwise.
     const uint32_t tile_row_start = get_arg_val<uint32_t>(1);
 
-    binary_op_init_common(input_cb, input_cb, input_cb);
+    compute_kernel_hw_startup(input_cb, input_cb, input_cb);
 
     // Cold-start capture of a zeroed welford state into welford_zero_cb (mean=0 tile, M2=0 tile),
     // done ONCE here while the SFPU condition code is clean (before any row's combine). Each row's
@@ -414,7 +414,7 @@ void kernel_main() {
                     reconfig_data_format(norm_result_cb, weight_cb);
                     pack_reconfig_data_format(weight_result_cb);
                     if constexpr (per_token_weight != 0) {
-                        mul_tiles_init(norm_result_cb, weight_cb);
+                        mul_init(norm_result_cb, weight_cb);
                     } else {
                         mul_bcast_rows_init_short(norm_result_cb, weight_cb);
                     }
@@ -444,7 +444,7 @@ void kernel_main() {
                     reconfig_data_format(weight_result_cb, bias_cb);
                     pack_reconfig_data_format(output_cb);
                     if constexpr (per_token_bias != 0) {
-                        add_tiles_init(weight_result_cb, bias_cb);
+                        add_init(weight_result_cb, bias_cb);
                     } else {
                         add_bcast_rows_init_short(weight_result_cb, bias_cb);
                     }
@@ -537,7 +537,7 @@ void kernel_main() {
                 reconfig_data_format(norm_result_cb, weight_cb);
                 pack_reconfig_data_format(weight_result_cb);
                 if constexpr (per_token_weight != 0) {
-                    mul_tiles_init(norm_result_cb, weight_cb);
+                    mul_init(norm_result_cb, weight_cb);
                 } else {
                     mul_bcast_rows_init_short(norm_result_cb, weight_cb);
                 }
@@ -578,7 +578,7 @@ void kernel_main() {
                 reconfig_data_format(weight_result_cb, bias_cb);
                 pack_reconfig_data_format(output_cb);
                 if constexpr (per_token_bias != 0) {
-                    add_tiles_init(weight_result_cb, bias_cb);
+                    add_init(weight_result_cb, bias_cb);
                 } else {
                     add_bcast_rows_init_short(weight_result_cb, bias_cb);
                 }
