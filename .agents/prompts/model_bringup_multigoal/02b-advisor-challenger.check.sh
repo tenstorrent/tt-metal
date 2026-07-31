@@ -58,20 +58,32 @@ soft = []
 if not d.get("harness_scope"):
     soft.append("harness_scope missing -- state what the harness times end to end. Unrecorded scope is why "
                 "one cell's incumbent_ms is a derived per-model composite and another's is one layer.")
-if not isinstance(d.get("iters_per_repeat"), int):
+it = d.get("iters_per_repeat")
+if not isinstance(it, int):
     soft.append("iters_per_repeat missing. A timed block averaging N>=50 replays gives a floor ~sqrt(N) "
                 "tighter than single-shot timing; the corpus cell with the only material win is the one "
                 "that did this. Record N so floors are comparable across cells.")
+elif it < 50:
+    soft.append(f"iters_per_repeat is {it}: each timed block averages too few replays to tighten the floor "
+                "much. The corpus cell that reached a 0.03% floor used 50.")
+wu = d.get("warmup_replays")
+if not isinstance(wu, int) or wu < 10:
+    bad.append(f"warmup_replays is {wu!r}: record >=10 untimed warm-up replays before the timed blocks. "
+               "One corpus harness did exactly 1, and its first timed repeat then carried 73% of the "
+               "reported noise floor -- a settling ramp misread as variance, which inflated the floor "
+               "enough to make the whole stage look unmeasurable.")
 if isinstance(r, list) and len(r) >= 3:
     full = max(r) - min(r)
     exf = max(r[1:]) - min(r[1:])
     mono = all(r[i] >= r[i + 1] for i in range(len(r) - 1))
     if full > 0 and (mono or (1 - exf / full) > 0.5):
-        bad.append(f"the first timed repeat is {100 * (1 - exf / full):.0f}% of the whole spread"
+        soft.append(f"the first timed repeat is {100 * (1 - exf / full):.0f}% of the whole spread"
                    + (" and the repeats fall monotonically" if mono else "")
                    + f", so {full * 1000:.3f}us is a settling ramp, not a noise floor (without it: "
                      f"{exf * 1000:.3f}us). Add >=10 untimed warm-up replays and re-measure. A ramp also "
-                     "breaks non-overlap: a candidate timed after the incumbent in one process is warmer.")
+                     "breaks non-overlap: a candidate timed after the incumbent in one process is warmer. "
+                     "(Advisory: with few repeats this signature also occurs by chance -- P(monotone) is "
+                     "1/6 at n=3 -- so it corroborates warmup_replays rather than replacing it.)")
 for b in bad: print(f"CRITICAL: incumbent.json: {b}", file=sys.stderr)
 for b in soft: print(f"{'CRITICAL' if os.environ.get('CH_STRICT') == '1' else 'WARN'}: incumbent.json: {b}",
                      file=sys.stderr)
@@ -107,6 +119,19 @@ if isinstance(traced, dict) and isinstance(shipped, dict):
         if s2 is not None and norm(t) != norm(s2):
             bad.append(f"WRONG-PRECISION CAPTURE: {role}: traced {t}, ships {s2}. Construct the "
                        "decoder with the SHIPPED POLICY, not class defaults.")
+td = os.path.join(os.path.dirname(os.environ["CH_RJ"]), "traced_dtypes.json")
+prov = {}
+try: prov = json.load(open(td))
+except Exception: bad.append(f"{kind}: no traced_dtypes.json beside report.json -- run the capture through "
+                             "scripts/capture_template.py so what was traced is recorded independently")
+ac, pin = str(prov.get("advisor_commit") or ""), str(prov.get("advisor_pin_expected") or "")
+if not ac or ac.startswith("UNKNOWN"):
+    bad.append(f"{kind}: advisor_commit not recorded ({ac or 'absent'}). ttnn-advise does not put its version "
+               "in report.json and no corpus cell recorded it anywhere, so advice from two builds is "
+               "indistinguishable. Export TTMLIR_ADVISOR_HOME and re-capture.")
+elif pin and not ac.startswith(pin):
+    bad.append(f"{kind}: advisor at {ac[:12]} but the pin is {pin}. SETUP.md pins the commit so runs are "
+               "comparable; re-capture at the pin or state the deviation.")
 if not r.get("capture_policy_source"):
     bad.append("capture_policy_source unset: nothing records that the traced decoder was built with the "
                "SHIPPED policy rather than class defaults. Dtypes are checked below; layouts and "

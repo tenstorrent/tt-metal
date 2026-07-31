@@ -33,6 +33,8 @@ import torch
 import ttnn
 
 TT_METAL_ROOT = os.environ.get("TT_METAL_ROOT", "/home/mvasiljevic/tt-metal")
+# $shard-advise SETUP.md A.1 pins tt-mlir here so runs stay comparable. Recorded with every capture.
+ADVISOR_PIN = os.environ.get("CHALLENGER_ADVISOR_PIN", "618cd4e75d")
 if TT_METAL_ROOT not in sys.path:
     sys.path.append(TT_METAL_ROOT)
 
@@ -120,12 +122,24 @@ def _record_traced_dtypes(out_dir: str) -> None:
     The gate fails the stage on a mismatch. That check is the whole reason north's defect is not
     repeatable.
     """
+    import subprocess
+    # WHICH ADVISOR PRODUCED THE ADVICE. ttnn-advise does not put this in report.json, and no cell in the
+    # reference corpus recorded it anywhere -- so advice from two different builds is indistinguishable and
+    # the corpus is not comparable to itself. SETUP.md pins the commit for exactly this reason; record it.
+    advisor_home = os.environ.get("TTMLIR_ADVISOR_HOME", "")
+    try:
+        commit = subprocess.run(["git", "-C", advisor_home, "rev-parse", "HEAD"],
+                                capture_output=True, text=True, check=True).stdout.strip()
+    except Exception as exc:
+        commit = f"UNKNOWN: {exc}"
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "traced_dtypes.json"), "w") as fh:
         json.dump({"layer_kind": LAYER_KIND, "layer_idx": LAYER_IDX, "batch": BATCH,
                    "traced_weight_dtypes": SHIPPED_DTYPES,
                    "shipped_weight_dtypes": SHIPPED_DTYPES,
-                   "policy_source": _incumbent.get("shipped_policy_source")}, fh, indent=2)
+                   "policy_source": _incumbent.get("shipped_policy_source"),
+                   "advisor_commit": commit, "advisor_pin_expected": ADVISOR_PIN,
+                   "advisor_home": advisor_home}, fh, indent=2)
 
 
 if __name__ == "__main__":

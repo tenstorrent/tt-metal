@@ -482,6 +482,22 @@ def main() -> int:
                     ch["_unresolved_us"] = round(ch.get("_unresolved_us", 0.0) + r["us"] / 2.0, 3)
                 if r.get("advised_here") is False:
                     ch["advisor_removes_us"] = round(ch.get("advisor_removes_us", 0.0) + r["us"] / 2.0, 3)
+    # An attributable boundary with no chain either side is still a candidate -- arguably the cleanest one,
+    # since the advisor is saying these two placements can be adjacent with no conversion and no geometry
+    # change. Without this the value shows in the ceiling and in no candidate, and the agent sees nothing to
+    # screen. Found by running the tool against a synthetic well-formed cell.
+    for i, r in enumerate(rows):
+        if r["bucket"] != "boundary" or r.get("advised_here") is not False:
+            continue
+        if any(0 <= j < len(rows) and rows[j].get("chain") for j in (i - 1, i + 1)):
+            continue
+        ch = {"chain": f"{a.layer_kind}:b{i}", "ops": [], "us": 0.0, "boundary_us": round(r["us"], 3),
+              "advisor_removes_us": round(r["us"], 3), "verdict": "pending", "measured_ms": None,
+              "repeats_ms": None, "kind": "boundary_only", "edge": r.get("edge"),
+              "how": f"remove the {r.get('conversion_class')} on this edge; the advice places no conversion "
+                     "here and both neighbours already match shipped, so no geometry change is needed"}
+        chains.append(ch)
+
     for c in chains:
         c["us"] = round(c["us"], 3)
         c["boundary_us"] = round(c["boundary_us"], 3)
@@ -586,6 +602,12 @@ def main() -> int:
             f"harness's own {floor_us} us spread. No non-overlap decision on this cell can be attributed to "
             f"the advice. Either tighten the harness (more replays per timed block) or record a contribution "
             f"of zero WITH THIS ARITHMETIC as the reason -- do not screen chains and call the result zero.")
+    elif not chains:
+        feasibility["verdict"] = "no_candidates"
+        feasibility["advice"] = (
+            f"{ceiling_us} us is attributable and above the {floor_us} us floor, but it resolved to no "
+            "candidate. Read `disagreements` for boundary rows with advised_here=false and work out what "
+            "change would remove them; do not report zero without explaining this gap.")
     elif not feasibility["chains_resolvable_alone"]:
         feasibility["verdict"] = "aggregate_only"
         feasibility["advice"] = (

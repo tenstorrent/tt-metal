@@ -129,13 +129,28 @@ The one combination worth enumerating is **across layer kinds** (step 6).
 else.** In the reference corpus the single cell with a tight harness is the single cell that found a material
 win, and two cells were unmeasurable before the advisor was even consulted.
 
-Protocol, in this order:
+**Copy `scripts/harness_template.py` and fill its two model hooks. Do not write your own harness.** It fixes
+the protocol below and refuses to run under it, writes every field the gate reads, and emits the
+`PERF_DECODE` / `PERF_DECODE_END` signposts that bound the profile to one replay. One process measures one
+configuration, so a candidate cannot inherit the incumbent's warm-up:
 
-1. Capture the trace once, then **≥10 untimed warm-up replays.** Not 1. A device still settling produces
+```
+CHALLENGER_MODEL_DIR=<md> CHALLENGER_DECODE_BATCH=<b> python harness_template.py \
+    --label incumbent --policy <the artifact the shipped policy executed from> \
+    --out models/autoports/<md>/doc/advisor_challenger/incumbent.json
+```
+
+`--policy` must name a JSON carrying `shipped_policy` and `shipped_weight_dtypes` **as they executed** — read
+off the final `tt-perf-report` CSV or the datatype sweep's selected candidate, never
+`resolved_policy.constructor_defaults`. Write that file first; the harness refuses to time anything without it.
+
+What the template enforces, and why:
+
+1. **≥10 untimed warm-up replays**, recorded as `warmup_replays`. Not 1. A device still settling produces
    repeats that fall monotonically, and in four of nine corpus cells the first timed repeat alone was
    **45–73 % of the reported noise floor** — a ramp misread as variance. On one cell, discarding it takes the
    floor from 6.282 µs to 1.693 µs, which flips the whole stage from unmeasurable to measurable.
-2. **n = 5 timed blocks, each block the mean of `ITERS ≥ 50` replays.** Averaging inside the block tightens
+2. **n = 5 timed blocks, each the mean of `ITERS ≥ 50` replays.** Averaging inside the block tightens
    the floor by roughly √ITERS; the corpus cell that did this reached 0.03 % against 1.0–1.4 % for the cells
    that timed one replay per repeat. Record `iters_per_repeat` — floors from different protocols are not
    comparable numbers.
@@ -147,9 +162,10 @@ Protocol, in this order:
    is simply warmer, which hands the candidate a free win under a non-overlap rule that assumes exchangeable
    samples.
 
-`incumbent.json`: `decode_batch`, `requested_decode_batch`, `iters_per_repeat`, `measured_at`, `repeats_ms`,
-`incumbent_ms` (median), `noise_floor_ms`, `harness`, `harness_scope`, and `shipped_policy` /
-`shipped_weight_dtypes` sourced from what **executed** — the final `tt-perf-report` CSV or the selected
+`incumbent.json` — all written for you by the template: `decode_batch`, `requested_decode_batch`,
+`warmup_replays`, `iters_per_repeat`, `measured_at`, `repeats_ms`, `median_ms`, `incumbent_ms` (median),
+`noise_floor_ms`, `harness`, `harness_scope`, `signposts`, and `shipped_policy` / `shipped_weight_dtypes`
+sourced from what **executed** — the final `tt-perf-report` CSV or the selected
 candidate JSON, never `resolved_policy.constructor_defaults`.
 
 **State `harness_scope` explicitly, and say whether the metric is measured or derived.** It is unset in all
