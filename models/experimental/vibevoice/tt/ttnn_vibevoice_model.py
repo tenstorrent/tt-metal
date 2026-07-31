@@ -15,6 +15,7 @@ from typing import Optional
 import torch
 import ttnn
 
+from models.experimental.vibevoice.common.weight_cache import resolve_weight_cache
 from models.experimental.vibevoice.tt.vibevoice_config import (
     load_vibevoice_model_config,
     VibeVoiceModelConfig,
@@ -83,19 +84,37 @@ class TTVibeVoiceModel:
         model_path: str,
         cfg_scale: float = 1.3,
         num_diffusion_steps: int = 10,
+        weight_cache_dir: Optional[str] = None,
     ) -> "TTVibeVoiceModel":
-        """Load all submodule weights and build TT model."""
+        """Load all submodule weights and build TT model.
+
+        A byte-exact on-disk cache of the preprocessed device weights (LM, connectors,
+        diffusion head, and the acoustic/semantic tokenizers) is **on by default**. On the
+        first run the tiled tensors are serialised under a checkpoint-keyed subdirectory;
+        later runs load them straight to device, skipping the host transpose/tilize and the
+        fp32->bf16 cast. Enabling it cannot change output (identical bytes).
+
+        Cache location (first match wins): ``weight_cache_dir`` arg → ``VV_WEIGHT_CACHE_DIR``
+        → ``$TT_CACHE_PATH/vibevoice/weight_cache`` → ``generated/ttnn/vibevoice/weight_cache``.
+        Set ``VV_DISABLE_WEIGHT_CACHE=1`` to turn it off (rebuild from the checkpoint every run).
+        """
+        weight_cache = resolve_weight_cache(model_path, weight_cache_dir=weight_cache_dir)
+
         config = load_vibevoice_model_config(model_path)
         state_dict = load_vibevoice_state_dict(model_path)
         sub = split_submodule_weights(state_dict)
         speech_scale, speech_bias = load_speech_scale_bias(state_dict)
 
         lm_state = remap_lm_keys_to_tt_transformers(sub["lm"])
-        lm_weights = preprocess_lm_weights(lm_state, mesh_device, config.decoder)
+        lm_weights = preprocess_lm_weights(lm_state, mesh_device, config.decoder, weight_cache.child("lm"))
         lm = TTVibeVoiceLM(lm_weights, mesh_device)
 
-        ac_conn_params = preprocess_connector_parameters(sub["acoustic_connector"], mesh_device)
-        sem_conn_params = preprocess_connector_parameters(sub["semantic_connector"], mesh_device)
+        ac_conn_params = preprocess_connector_parameters(
+            sub["acoustic_connector"], mesh_device, weight_cache=weight_cache.child("acoustic_connector")
+        )
+        sem_conn_params = preprocess_connector_parameters(
+            sub["semantic_connector"], mesh_device, weight_cache=weight_cache.child("semantic_connector")
+        )
         acoustic_connector = TTSpeechConnector(ac_conn_params)
         semantic_connector = TTSpeechConnector(sem_conn_params)
 
@@ -108,6 +127,7 @@ class TTVibeVoiceModel:
             head_ffn_ratio=diff_cfg.head_ffn_ratio,
             norm_eps=diff_cfg.rms_norm_eps,
             num_layers=diff_cfg.head_layers,
+            weight_cache=weight_cache.child("diffusion_head"),
         )
         diffusion_head = TTDiffusionHead(diff_head_weights)
 
@@ -132,8 +152,12 @@ class TTVibeVoiceModel:
 
         ac_tok_weights = preprocess_acoustic_tokenizer_weights(ac_tok_state, mesh_device, config.acoustic_tokenizer)
         sem_tok_weights = preprocess_semantic_tokenizer_weights(sem_tok_state, mesh_device, config.semantic_tokenizer)
-        acoustic_tokenizer = TTAcousticTokenizer(ac_tok_weights, mesh_device)
-        semantic_tokenizer = TTSemanticTokenizer(sem_tok_weights, mesh_device)
+        acoustic_tokenizer = TTAcousticTokenizer(
+            ac_tok_weights, mesh_device, weight_cache=weight_cache.child("acoustic_tokenizer")
+        )
+        semantic_tokenizer = TTSemanticTokenizer(
+            sem_tok_weights, mesh_device, weight_cache=weight_cache.child("semantic_tokenizer")
+        )
 
         # Warm up the post-diffusion conv path on a dummy latent so the conv2d weights prep runs now (at load) instead of on the first decode frame.
         # Reset the streaming caches afterwards to ensure the first real frame is clean.
@@ -149,6 +173,12 @@ class TTVibeVoiceModel:
         semantic_tokenizer.forward(dummy_audio, use_cache=True)
         acoustic_tokenizer.reset_decode_cache()
         semantic_tokenizer.reset_cache()
+
+        if weight_cache.enabled:
+            print(
+                f"[vibevoice] weight cache ({weight_cache.cache_dir}): {weight_cache.summary()}",
+                flush=True,
+            )
 
         return cls(
             lm=lm,
