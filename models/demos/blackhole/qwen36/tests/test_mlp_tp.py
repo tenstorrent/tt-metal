@@ -91,9 +91,14 @@ def test_mlp_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     xf = x.to(torch.float32)[0, 0]  # [T, dim]
     ref = (torch.nn.functional.silu(xf @ g.T) * (xf @ u.T)) @ d.T  # [T, dim]
 
-    # Prefill fused gate/up AGMM expects a K-sharded input (ff_norm skips its
-    # post-norm all-gather in the real model); the op gathers it back internally.
-    x_tt = shard_to_device(mesh_device, x, dim=-1) if nd > 1 else replicate_to_device(mesh_device, x)
+    # Prefill fused gate/up AGMM (Blackhole only) expects a K-sharded input (ff_norm skips its
+    # post-norm all-gather in the real model); the op gathers it back internally. When the fusion
+    # is disabled (Wormhole; see tp_common.mlp_gateup_agmm_enabled), ff_norm does its own gather in
+    # the real model, so MLP expects an already-full-width input here instead.
+    if nd > 1 and mlp._fuse_gateup_agmm:
+        x_tt = shard_to_device(mesh_device, x, dim=-1)
+    else:
+        x_tt = replicate_to_device(mesh_device, x)
     out = mlp.forward(x_tt)
     out_torch = ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].to(torch.float32)  # [T, dim]
 
