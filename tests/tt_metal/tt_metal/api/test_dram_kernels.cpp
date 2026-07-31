@@ -1198,6 +1198,425 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCD2HSocketEgress) {
     set_niu_mode(0);  // restore NOC2AXI -- NIU_CFG_0 persists across programs
 }
 
+// What the reserved DRAM profiler region actually gives a DRISC drainer. The region sits at a fixed
+// bank-relative offset (DRAM_PROFILER_BASE), so it exists at the same address in every bank -- which is
+// the geometry a DRISC needs, since its DMA engine only reaches its own bank. Size is computed from
+// runtime options, so it is read from the HAL rather than derived.
+TEST_F(DramKernelDRISCScatterFixture, DRISCProfilerDramRegion) {
+    const auto& hal = MetalContext::instance().hal();
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const uint64_t base = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+    const uint64_t per_bank = hal.get_dev_size(HalDramMemAddrType::PROFILER);
+    const uint32_t banks = soc_desc.get_dram_compute_grid_size().x;
+    const uint64_t view_size = soc_desc.dram_view_size;
+
+    constexpr uint64_t kMarkerBytes = 8;
+    constexpr uint64_t kZoneBytes = 16;  // 2 markers
+    constexpr double kLegAGbs = 43.18;   // measured: one DRISC, ingest + DMA
+
+    log_info(LogTest, "DRAM profiler region: base 0x{:x}, {} B per bank ({:.2f} MB)", base, per_bank, per_bank / 1e6);
+    log_info(
+        LogTest,
+        "  one DRISC / one bank: {} markers, {} zones | whole bank view is {:.2f} GB",
+        per_bank / kMarkerBytes,
+        per_bank / kZoneBytes,
+        view_size / 1e9);
+    log_info(
+        LogTest,
+        "  fill time at leg A ({:.2f} GB/s): {:.2f} ms | across all {} banks: {} B ({:.2f} MB)",
+        kLegAGbs,
+        per_bank / (kLegAGbs * 1e9) * 1e3,
+        banks,
+        per_bank * banks,
+        per_bank * banks / 1e6);
+}
+
+// Host pull rate from the reserved DRAM profiler region, over the exact path the existing profiler
+// uses (cluster.read_dram_vec per channel). This is the number that decides whether a second DRISC is
+// needed to drain the DRAM buffer to host at all: if the host can pull fast enough, leg B does not
+// need to exist.
+TEST_F(DramKernelDRISCScatterFixture, HostPullFromDramProfilerRegion) {
+    const auto& hal = MetalContext::instance().hal();
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& soc_desc = cluster.get_soc_desc(mesh_device_->build_id());
+    const uint64_t base = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+    const uint32_t per_bank = hal.get_dev_size(HalDramMemAddrType::PROFILER);
+    const uint32_t banks = soc_desc.get_dram_compute_grid_size().x;
+    const auto dev_id = device_->id();
+    constexpr uint32_t kRepeats = 5;
+
+    log_info(LogTest, "host pull from DRAM profiler region: base 0x{:x}, {} B/bank, {} banks", base, per_bank, banks);
+
+    std::vector<uint32_t> dst(per_bank / sizeof(uint32_t));
+    for (uint32_t size : {64u << 10, 256u << 10, 1u << 20, 4u << 20, per_bank}) {
+        if (size > per_bank) {
+            continue;
+        }
+        // Single channel.
+        std::vector<double> gbs;
+        for (uint32_t rep = 0; rep < kRepeats; rep++) {
+            const auto t0 = std::chrono::steady_clock::now();
+            cluster.read_dram_vec(dst.data(), size, dev_id, 0, base);
+            const auto t1 = std::chrono::steady_clock::now();
+            gbs.push_back(size / std::chrono::duration<double>(t1 - t0).count() / 1e9);
+        }
+        std::sort(gbs.begin(), gbs.end());
+
+        // All channels, as the profiler readback loop does.
+        std::vector<double> all;
+        for (uint32_t rep = 0; rep < kRepeats; rep++) {
+            const auto t0 = std::chrono::steady_clock::now();
+            for (uint32_t ch = 0; ch < banks; ch++) {
+                cluster.read_dram_vec(dst.data(), size, dev_id, ch, base);
+            }
+            const auto t1 = std::chrono::steady_clock::now();
+            all.push_back(static_cast<double>(size) * banks / std::chrono::duration<double>(t1 - t0).count() / 1e9);
+        }
+        std::sort(all.begin(), all.end());
+
+        log_info(
+            LogTest,
+            "  {:>8} B | 1 channel: median {:>6.3f} GB/s (best {:>6.3f}) | all {} channels: median {:>6.3f} GB/s "
+            "(best {:>6.3f}) | full {} B region takes {:.2f} ms",
+            size,
+            gbs[kRepeats / 2],
+            gbs.back(),
+            banks,
+            all[kRepeats / 2],
+            all.back(),
+            per_bank * banks,
+            static_cast<double>(per_bank) * banks / (all[kRepeats / 2] * 1e9) * 1e3);
+    }
+}
+
+// The direct alternative to the two-DRISC DRAM pipeline: one DRISC reads whole cores out of worker L1
+// straight into a socket page and pushes it to the host. No DRAM hop, no second core.
+TEST_F(DramKernelDRISCScatterFixture, DRISCIngestStraightToHost) {
+    constexpr uint32_t kBytesPerCore = 1280 * 8;  // 10240, whole core
+    constexpr uint32_t kNumSweeps = 200;          // 200 x 1.2288 MB = 246 MB, same volume as the pipeline
+    constexpr uint32_t kPagesPerRead = 8;         // host-side batching, the measured-best setting
+
+    const std::vector<uint32_t> coords = worker_coords();
+    const uint32_t num_cores = static_cast<uint32_t>(coords.size());
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const CoreCoord d_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
+    const CoreCoord d_virtual = device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
+    const CoreCoord d_translated = soc_desc.dram_bank_endpoint_coords.at(d_logical.x).at(d_logical.y);
+    const tt::umd::CoreCoord d_phys = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(d_translated.x, d_translated.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
+
+    auto set_niu_mode = [&](uint32_t stream) {
+        Program p = CreateProgram();
+        CreateKernel(
+            p,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_niu_mode.cpp",
+            d_logical,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+        run_workload(std::move(p));
+    };
+
+    set_niu_mode(1);
+    prime_worker_l1(kBytesPerCore);
+    log_info(LogTest, "ingest straight to host: 1 DRISC at {},{}, {} cores", d_logical.x, d_logical.y, num_cores);
+
+    auto run = [&](uint32_t cores_per_page, uint32_t num_buffers, bool discard = false) {
+        const uint32_t page_bytes = cores_per_page * kBytesPerCore;
+        const uint32_t buf = drisc_l1_base_;
+        const uint32_t cfg = buf + num_buffers * page_bytes;
+        const uint32_t res = cfg + 1024;
+        TT_FATAL(
+            (res + 64 - drisc_l1_base_) <= drisc_l1_unreserved_size_,
+            "{} buffers x {} B overflow {} B of DRISC L1",
+            num_buffers,
+            page_bytes,
+            drisc_l1_unreserved_size_);
+        TT_FATAL(num_cores % cores_per_page == 0, "{} cores must divide by {}", num_cores, cores_per_page);
+        const uint32_t total_pages = kNumSweeps * (num_cores / cores_per_page);
+        TT_FATAL(total_pages % kPagesPerRead == 0, "{} pages must divide by {}", total_pages, kPagesPerRead);
+
+        distributed::D2HSocket socket(
+            devices_[0],
+            distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(d_phys.x, d_phys.y)),
+            32 * page_bytes,
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_is_l2cpu = true});
+        socket.set_page_size(page_bytes);
+
+        Program program = CreateProgram();
+        auto kid = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/drisc_ingest_to_host.cpp",
+            d_logical,
+            DramConfig{
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    cores_per_page, kBytesPerCore, num_buffers, buf, socket.get_config_buffer_address(), res}});
+        std::vector<uint32_t> rtas = {num_cores, kNumSweeps, tensix_l1_base_};
+        rtas.insert(rtas.end(), coords.begin(), coords.end());
+        SetRuntimeArgs(program, kid, d_logical, rtas);
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range_, std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+
+        std::vector<uint32_t> sink(static_cast<size_t>(page_bytes) * kPagesPerRead / sizeof(uint32_t));
+        const auto t0 = std::chrono::steady_clock::now();
+        if (discard) {
+            // Ack without reading the data region: isolates the memcpy from everything else.
+            uint32_t done = 0;
+            const auto deadline = t0 + std::chrono::seconds(30);
+            while (done < total_pages) {
+                done += socket.discard_pending_pages();
+                if (std::chrono::steady_clock::now() > deadline) {
+                    log_warning(LogTest, "discard timed out at {}/{}", done, total_pages);
+                    break;
+                }
+            }
+        } else {
+            for (uint32_t p = 0; p < total_pages / kPagesPerRead; p++) {
+                socket.read(sink.data(), kPagesPerRead);
+            }
+        }
+        socket.barrier(20000);
+        const auto t1 = std::chrono::steady_clock::now();
+        distributed::Finish(mesh_device_->mesh_command_queue());
+
+        std::vector<uint32_t> o(10);
+        MetalContext::instance().get_cluster().read_core(
+            o.data(), o.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), d_virtual), res);
+        const uint64_t cyc = (static_cast<uint64_t>(o[1]) << 32) | o[0];
+        const uint64_t rd = (static_cast<uint64_t>(o[5]) << 32) | o[4];
+        const uint64_t rsv = (static_cast<uint64_t>(o[7]) << 32) | o[6];
+        const uint64_t psh = (static_cast<uint64_t>(o[9]) << 32) | o[8];
+        const uint64_t total_bytes = static_cast<uint64_t>(kNumSweeps) * num_cores * kBytesPerCore;
+        const double host_s = std::chrono::duration<double>(t1 - t0).count();
+        EXPECT_EQ(o[2], total_pages) << "not all pages pushed";
+
+        log_info(
+            LogTest,
+            "  {}buf x {:>2} cores ({:>6} B page) {:<8} | dev {:>6.2f} GB/s | host {:>6.2f} GB/s | wbar {:>4.1f}% "
+            "read {:>4.1f}% reserve {:>4.1f}% push {:>4.1f}%",
+            num_buffers,
+            cores_per_page,
+            page_bytes,
+            discard ? "DISCARD" : "memcpy",
+            compute_bw_gbs(total_bytes, cyc, clk_hz),
+            static_cast<double>(total_bytes) / host_s / 1e9,
+            100.0 * static_cast<double>(o[3]) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(rd) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(rsv) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(psh) / static_cast<double>(cyc));
+    };
+
+    for (uint32_t rep = 0; rep < 2; rep++) {
+        run(4, 2);
+        run(8, 1);
+        run(8, 1, /*discard=*/true);
+        run(4, 2, /*discard=*/true);
+    }
+
+    set_niu_mode(0);
+}
+
+// Full circle: DRISC A sweeps the worker grid into a DRAM ping/pong buffer, DRISC B drains the other
+// buffer to host over a D2H socket, and the two exchange credits so A blocks when B falls behind.
+//
+// A is on bank 0's free subchannel and DMAs into bank 0's slice of the reserved DRAM profiler region.
+// B is on bank 1's free subchannel and NoC-reads bank 0's DRAM through bank 0's NOC1 worker endpoint,
+// which stays in NOC2AXI and therefore forwards DRAM-range addresses to GDDR. B cannot use DMA for
+// this: gddr_dma only reaches the DRISC's own bank.
+//
+// The headline is A's block time: it is how much of the pipeline A spends waiting on B.
+TEST_F(DramKernelDRISCScatterFixture, DRISCPipelineAtoBtoHost) {
+    constexpr uint32_t kBytesPerCore = 1280 * 8;  // 10240, whole core
+    constexpr uint32_t kCoresPerBatch = 4;        // measured-optimal A geometry
+    constexpr uint32_t kPageBytes = 81920;        // B's socket page, also its L1 staging buffer
+    constexpr uint32_t kNocChunk = 16384;         // NOC_MAX_BURST_SIZE; 5 of these fill a page
+    constexpr uint32_t kNumSweeps = 200;
+
+    const std::vector<uint32_t> coords = worker_coords();
+    const uint32_t num_cores = static_cast<uint32_t>(coords.size());
+    const uint32_t sweep_bytes = num_cores * kBytesPerCore;
+    TT_FATAL(sweep_bytes % kPageBytes == 0, "sweep {} B must be a whole number of {} B pages", sweep_bytes, kPageBytes);
+
+    const auto& hal = MetalContext::instance().hal();
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const uint32_t dram_base = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::PROFILER));
+    const uint32_t dram_region = hal.get_dev_size(HalDramMemAddrType::PROFILER);
+    TT_FATAL(
+        2u * sweep_bytes <= dram_region,
+        "ping+pong ({} B) exceed the {} B profiler region per bank",
+        2u * sweep_bytes,
+        dram_region);
+
+    // A on bank 0, B on bank 1 -- different banks, so B reaches A's DRAM over the NoC, not by DMA.
+    const CoreCoord a_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
+    const CoreCoord b_logical = mesh_device_->impl().pick_unused_dram_logical_core(1);
+    const CoreCoord a_virtual = device_->virtual_core_from_logical_core(a_logical, CoreType::DRAM);
+    const CoreCoord b_virtual = device_->virtual_core_from_logical_core(b_logical, CoreType::DRAM);
+    const CoreCoord bank0_noc1_ep = soc_desc.get_preferred_worker_core_for_dram_view(0, /*noc=*/1);
+
+    const CoreCoord b_translated = soc_desc.dram_bank_endpoint_coords.at(b_logical.x).at(b_logical.y);
+    const tt::umd::CoreCoord b_phys = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(b_translated.x, b_translated.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
+
+    // A's L1: two 40 KB batch buffers, then results and the drain flag B writes.
+    const uint32_t a_buf = drisc_l1_base_;
+    const uint32_t a_res = a_buf + 2 * kCoresPerBatch * kBytesPerCore;
+    const uint32_t a_drain_flag = a_res + 1024;
+    // B's L1: one 80 KB page buffer, socket config, results, then the fill flag A writes.
+    const uint32_t b_buf = drisc_l1_base_;
+    const uint32_t b_cfg = b_buf + kPageBytes;
+    const uint32_t b_res = b_cfg + 1024;
+    const uint32_t b_fill_flag = b_res + 1024;
+    TT_FATAL(
+        (b_fill_flag + 64 - drisc_l1_base_) <= drisc_l1_unreserved_size_,
+        "B's layout overflows {} B of DRISC L1",
+        drisc_l1_unreserved_size_);
+
+    auto set_niu_mode = [&](const CoreCoord& core, uint32_t stream) {
+        Program p = CreateProgram();
+        CreateKernel(
+            p,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_niu_mode.cpp",
+            core,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+        run_workload(std::move(p));
+    };
+
+    // B's NIU must be in stream mode before the socket is constructed: ExternalConfigBuffer::address is
+    // uint32_t and cannot carry the 0x2000000000 tag, and only stream mode makes a plain address land in L1.
+    set_niu_mode(b_logical, 1);
+    prime_worker_l1(kBytesPerCore);
+
+    log_info(
+        LogTest,
+        "pipeline: A={},{} (bank 0) -> DRAM 0x{:x} ping/pong {} B each -> B={},{} (bank 1) via NOC1 ep {},{} -> host",
+        a_logical.x,
+        a_logical.y,
+        dram_base,
+        sweep_bytes,
+        b_logical.x,
+        b_logical.y,
+        bank0_noc1_ep.x,
+        bank0_noc1_ep.y);
+
+    const uint32_t pages_per_sweep = sweep_bytes / kPageBytes;
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+
+    auto run_pipeline = [&](uint32_t pages_per_read) {
+        distributed::D2HSocket socket(
+            devices_[0],
+            distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(b_phys.x, b_phys.y)),
+            32 * kPageBytes,
+            distributed::D2HSocket::ExternalConfigBuffer{.address = b_cfg, .sender_is_l2cpu = true});
+        socket.set_page_size(kPageBytes);
+
+        Program program = CreateProgram();
+        auto ka = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_pipeline_a.cpp",
+            a_logical,
+            DramConfig{
+                .noc = NOC::NOC_0,
+                .compile_args = {kCoresPerBatch, kBytesPerCore, a_buf, a_res, a_drain_flag, sweep_bytes}});
+        std::vector<uint32_t> a_rtas = {
+            num_cores,
+            kNumSweeps,
+            tensix_l1_base_,
+            dram_base,
+            0u,
+            static_cast<uint32_t>((b_virtual.x & 0xFFFF) | (b_virtual.y << 16)),
+            b_fill_flag};
+        a_rtas.insert(a_rtas.end(), coords.begin(), coords.end());
+        SetRuntimeArgs(program, ka, a_logical, a_rtas);
+
+        auto kb = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/drisc_pipeline_b.cpp",
+            b_logical,
+            DramConfig{
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    socket.get_config_buffer_address(),
+                    b_buf,
+                    kPageBytes,
+                    kNocChunk,
+                    b_res,
+                    b_fill_flag,
+                    sweep_bytes}});
+        SetRuntimeArgs(
+            program,
+            kb,
+            b_logical,
+            {kNumSweeps,
+             static_cast<uint32_t>((bank0_noc1_ep.x & 0xFFFF) | (bank0_noc1_ep.y << 16)),
+             dram_base,
+             static_cast<uint32_t>((a_virtual.x & 0xFFFF) | (a_virtual.y << 16)),
+             a_drain_flag});
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range_, std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+
+        const uint32_t total_pages = kNumSweeps * pages_per_sweep;
+        TT_FATAL(total_pages % pages_per_read == 0, "{} pages must divide by {}", total_pages, pages_per_read);
+        std::vector<uint32_t> sink(static_cast<size_t>(kPageBytes) * pages_per_read / sizeof(uint32_t));
+        const auto t0 = std::chrono::steady_clock::now();
+        for (uint32_t p = 0; p < total_pages / pages_per_read; p++) {
+            socket.read(sink.data(), pages_per_read);
+        }
+        socket.barrier(20000);
+        const auto t1 = std::chrono::steady_clock::now();
+        distributed::Finish(mesh_device_->mesh_command_queue());
+
+        const double host_s = std::chrono::duration<double>(t1 - t0).count();
+        const uint64_t total_bytes = static_cast<uint64_t>(kNumSweeps) * sweep_bytes;
+
+        std::vector<uint32_t> ao(6);
+        MetalContext::instance().get_cluster().read_core(
+            ao.data(),
+            ao.size() * sizeof(uint32_t),
+            tt_cxy_pair(mesh_device_->build_id(), a_virtual),
+            drisc_l1_noc_addr_ + (a_res - drisc_l1_base_));
+        std::vector<uint32_t> bo(9);
+        MetalContext::instance().get_cluster().read_core(
+            bo.data(), bo.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), b_virtual), b_res);
+
+        const uint64_t a_cyc = (static_cast<uint64_t>(ao[1]) << 32) | ao[0];
+        const uint64_t a_blk = (static_cast<uint64_t>(ao[3]) << 32) | ao[2];
+        const uint64_t b_cyc = (static_cast<uint64_t>(bo[1]) << 32) | bo[0];
+        const uint64_t b_blk = (static_cast<uint64_t>(bo[3]) << 32) | bo[2];
+        const uint64_t b_dram = (static_cast<uint64_t>(bo[6]) << 32) | bo[5];
+        const uint64_t b_push = (static_cast<uint64_t>(bo[8]) << 32) | bo[7];
+
+        EXPECT_EQ(ao[4], kNumSweeps) << "A did not complete all sweeps";
+        EXPECT_EQ(bo[4], kNumSweeps) << "B did not drain all sweeps";
+
+        log_info(
+            LogTest,
+            "  {} pg/read | e2e {:>6.2f} GB/s | A {:>6.2f} ({:>4.1f}% blocked) | B {:>6.2f} ({:>4.1f}% blocked, "
+            "dram-read {:>4.1f}% push {:>4.1f}%)",
+            pages_per_read,
+            static_cast<double>(total_bytes) / host_s / 1e9,
+            compute_bw_gbs(total_bytes, a_cyc, clk_hz),
+            100.0 * static_cast<double>(a_blk) / static_cast<double>(a_cyc),
+            compute_bw_gbs(total_bytes, b_cyc, clk_hz),
+            100.0 * static_cast<double>(b_blk) / static_cast<double>(b_cyc),
+            100.0 * static_cast<double>(b_dram) / static_cast<double>(b_cyc),
+            100.0 * static_cast<double>(b_push) / static_cast<double>(b_cyc));
+    };
+
+    for (uint32_t rep = 0; rep < 2; rep++) {
+        for (uint32_t ppr : {1u, 2u, 4u, 8u}) {
+            run_pipeline(ppr);
+        }
+    }
+
+    set_niu_mode(b_logical, 0);
+}
+
 // Ingest + DMA on one DRISC. Reads land in L1 via the NIU and leave it via the DMA engine, so every
 // byte crosses L1 twice -- unavoidable, since a DRISC in stream mode cannot land NoC traffic in GDDR.
 // Whether that double-crossing costs anything is the question the DRAM-buffer design hinges on.
