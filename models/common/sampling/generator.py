@@ -428,10 +428,26 @@ def format_sampling_params(sampling_params, max_batch_size):
             return list(lst)
         return list(lst) + [defaults[name]] * (target_len - len(lst))
 
-    # Pad core sampling fields (scalar→list already done above)
-    temperature = _pad(sampling_params.temperature, "temperature")
-    top_p = _pad(sampling_params.top_p, "top_p")
-    top_k = _pad(sampling_params.top_k, "top_k")
+    # Pad core sampling fields. When temperature is supplied per-user (a list)
+    # but a companion field is a scalar / single-element list, broadcast that
+    # scalar across the active (temperature-length) lanes so it applies
+    # uniformly, then pad the remaining inactive lanes with the field default.
+    # (A scalar top_k alongside a per-user temperature must not leave lanes
+    # 1..N-1 on the k=1 default, which would silently force them greedy.)
+    active_len = len(sampling_params.temperature)
+
+    def _pad_core(value, name):
+        if not isinstance(value, List):
+            lst = [value] * active_len
+        elif len(value) == 1:
+            lst = list(value) * active_len
+        else:
+            lst = list(value)
+        return _pad(lst, name)
+
+    temperature = _pad_core(sampling_params.temperature, "temperature")
+    top_p = _pad_core(sampling_params.top_p, "top_p")
+    top_k = _pad_core(sampling_params.top_k, "top_k")
 
     # enable_log_probs / num_logprobs: scalar → broadcast to all users.
     # Multi-element list → pad with default (False/0) for inactive slots.
