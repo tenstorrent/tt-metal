@@ -104,10 +104,14 @@
 # copy the full source tree onto NFS — that OOMs the 4Gi Actions runner.
 # ttrun.py + MGD use absolute paths under TT_METAL_HOME (local build/source).
 # Phase 2 --wdir ${TT_METAL_HOME}. --bind-to none for Phase 1.
+# PYTHONPATH / LD_LIBRARY_PATH must point at TT_METAL_HOME: tt-run defaults both
+# to ORIGINAL_CWD (empty NFS ttrun-cwd), which breaks imports and native libs.
 
 - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}"
+    export LD_LIBRARY_PATH="${TT_METAL_HOME}/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging)}"
     TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
@@ -143,6 +147,8 @@
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}"
+    export LD_LIBRARY_PATH="${TT_METAL_HOME}/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging)}"
     TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
@@ -177,6 +183,8 @@
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}"
+    export LD_LIBRARY_PATH="${TT_METAL_HOME}/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging)}"
     TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
