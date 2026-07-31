@@ -257,14 +257,14 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     auto& cq = mesh_device.mesh_command_queue();
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-    enqueue_write_tensor(cq, reinterpret_cast<const std::byte*>(src0_vec.data()), tensors.src0);
-    enqueue_write_tensor(cq, reinterpret_cast<const std::byte*>(src1_vec.data()), tensors.src1);
+    auto src0_host = HostTensor::from_vector(src0_vec, tensors.src0.tensor_spec());
+    auto src1_host = HostTensor::from_vector(src1_vec, tensors.src1.tensor_spec());
+    enqueue_write_tensor(cq, src0_host, tensors.src0);
+    enqueue_write_tensor(cq, src1_host, tensors.src1);
 
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
-    const uint32_t bytesC = p.single_tile_size * p.Mt * p.Nt * p.B_total;
-    std::vector<uint32_t> result_vec(bytesC / sizeof(uint32_t));
-    enqueue_read_tensor(cq, tensors.dst, reinterpret_cast<std::byte*>(result_vec.data()));
+    auto result_vec = enqueue_read_tensor(cq, tensors.dst).to_vector<uint32_t>();
 
     int argfail = -1;
     bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);
