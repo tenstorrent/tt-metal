@@ -167,6 +167,30 @@ _KV_SPLITS = int(os.environ.get("PI05_KV_SPLITS", "1"))
 _PASS_EXPERT_MASK = int(os.environ.get("PI05_PASS_EXPERT_MASK", "0")) == 1
 _QKV_N_BLOCKS, _O_N_BLOCKS, _MLP_N_BLOCKS = (16, 16, 16) if TILE_HEIGHT < 32 else (40, 32, 32)
 
+# Resident-L1 weight dtype for the matmul_decode projections (QKV/o) and MLP (gate/up/down), settable
+# independently via PI05_PROJ_W_DTYPE / PI05_MLP_W_DTYPE.
+#
+# HONEST MEASUREMENT: bf4 is NOT a demonstrated speedup. 16-chip e2e 2CQ median at tile-16, 3 cams:
+#   bf8/bf8 27.16 ms | mlp bf4 27.14 | both bf4 27.07   (stdev 0.20, p10/p90 26.9-27.4)
+#   2 cams: bf8/bf8 24.58 | both bf4 24.53
+# The 0.09 ms delta sits inside run-to-run noise. The hypothesis that drove this -- that these matmuls
+# are weight-read-bound at M=1 -- is WRONG for the reason that matters: _pws_B keeps the weights
+# RESIDENT IN L1, sharded across cores, so there is no DRAM read to halve and each core touches only
+# its own shard. Do not expect dtype reduction on L1-resident operands to buy time.
+#
+# It is kept as the default for the L1 it frees, not the time: halving the resident weight footprint is
+# real headroom on a path that is already L1-tight (a K=4 split at tile-32 overflows outright, and the
+# tile-32 fused mask currently cannot fit cb_mask_in). Set both to bfloat8_b to revert.
+#
+# Accuracy at tile-16 (single-layer ragged-mask gate, threshold MAE < 5e-4):
+#   bf8/bf8 PCC 0.999892 MAE 4.69e-5 | mlp bf4 0.999863 / 4.53e-5
+#   proj bf4 0.999892 / 8.82e-5      | both bf4 0.999863 / 8.62e-5
+# bfloat4_b is block-float and needs full faces; that holds because _pws_B pins inputB to a full 32x32
+# tile regardless of the model's tiny activation tile.
+_W_DTYPES = {"bfloat4_b": ttnn.bfloat4_b, "bfloat8_b": ttnn.bfloat8_b, "bfloat16": ttnn.bfloat16}
+_MLP_W_DTYPE = _W_DTYPES[os.environ.get("PI05_MLP_W_DTYPE", "bfloat4_b")]
+_PROJ_W_DTYPE = _W_DTYPES[os.environ.get("PI05_PROJ_W_DTYPE", "bfloat4_b")]
+
 _LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
 )
@@ -193,8 +217,8 @@ def _crs(device, n):
     return ttnn.num_cores_to_corerangeset(n, device.compute_with_storage_grid_size(), True)
 
 
-def _pws_B(device, w_kn, n_blocks):
-    """Partial-width-sharded resident-L1 bf8_b weight for matmul_decode (w_kn is torch [K, N])."""
+def _pws_B(device, w_kn, n_blocks, dtype=ttnn.bfloat8_b):
+    """Partial-width-sharded resident-L1 weight for matmul_decode (w_kn is torch [K, N])."""
     k, n = w_kn.shape
     kc, nc = k // _K_BLOCKS, n // n_blocks
     br = w_kn.reshape(_K_BLOCKS, kc, n).permute(1, 0, 2).reshape(kc, n * _K_BLOCKS).contiguous()
@@ -207,7 +231,7 @@ def _pws_B(device, w_kn, n_blocks):
     )
     # matmul_decode requires its weight (inputB) at a full 32x32 tile (only the activation inputA
     # rides the tiny tile), so pin the tile explicitly rather than the model's tiny default.
-    return from_torch_pi05(br, device=device, memory_config=mc, dtype=ttnn.bfloat8_b, tile=ttnn.Tile((32, 32)))
+    return from_torch_pi05(br, device=device, memory_config=mc, dtype=dtype, tile=ttnn.Tile((32, 32)))
 
 
 def _ws_in_mc(device, m, k):
@@ -610,11 +634,16 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
             import torch
 
             dev = self.device
-            a.wqkv_b = _pws_B(dev, torch.cat([a._q_w.t(), a._k_w.t(), a._v_w.t()], dim=-1).contiguous(), _QKV_N_BLOCKS)
-            a.wo_b = _pws_B(dev, a._o_w.t().contiguous(), _O_N_BLOCKS)
-            m.gate_b = _pws_B(dev, m._gate_w.t().contiguous(), _MLP_N_BLOCKS)
-            m.up_b = _pws_B(dev, m._up_w.t().contiguous(), _MLP_N_BLOCKS)
-            m.down_b = _pws_B(dev, m._down_w.t().contiguous(), _MLP_N_BLOCKS)
+            a.wqkv_b = _pws_B(
+                dev,
+                torch.cat([a._q_w.t(), a._k_w.t(), a._v_w.t()], dim=-1).contiguous(),
+                _QKV_N_BLOCKS,
+                dtype=_PROJ_W_DTYPE,
+            )
+            a.wo_b = _pws_B(dev, a._o_w.t().contiguous(), _O_N_BLOCKS, dtype=_PROJ_W_DTYPE)
+            m.gate_b = _pws_B(dev, m._gate_w.t().contiguous(), _MLP_N_BLOCKS, dtype=_MLP_W_DTYPE)
+            m.up_b = _pws_B(dev, m._up_w.t().contiguous(), _MLP_N_BLOCKS, dtype=_MLP_W_DTYPE)
+            m.down_b = _pws_B(dev, m._down_w.t().contiguous(), _MLP_N_BLOCKS, dtype=_MLP_W_DTYPE)
             for t in (a.tt_wqkv, a.tt_o, m.tt_gate, m.tt_up, m.tt_down):
                 ttnn.deallocate(t)
             return
