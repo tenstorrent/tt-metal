@@ -33,21 +33,50 @@ inline void reduce_block_max_row_configure_addrmod()
 }
 
 /**
- * @brief Transpose one pooled 1x16 row partial (at the current DEST counter) into a 16x1 column.
+ * @brief Transpose one pooled 1xN row partial (at the current DEST counter) into an Nx1 column.
+ *
+ * @param face_r_dim Number of rows in the face = height of the transposed output column. The column is
+ *                   written back to DEST with MOVB2D moves of ELTWISE_MATH_ROWS rows each,
+ *                   so ceil(face_r_dim / ELTWISE_MATH_ROWS) moves are emitted -- one per
+ *                   ELTWISE_MATH_ROWS-row band the face actually spans.
  */
-inline void reduce_block_max_row_transpose_face_row(const bool wide_face)
+inline void reduce_block_max_row_transpose_face_row(const std::uint32_t face_r_dim)
 {
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
-    // Move the row partial into SrcB rows [16-31], transposed into rows [32-47].
+    // Move the 1xN row partial into SrcB rows [16-31] and transpose it into the Nx1 column at SrcB rows
+    // [32-47] (paired transpose-on / transpose-off MOVD2B, mirroring native reduce-row).
     TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1, 0);
     TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, 0);
-    // Write the transposed column back to DEST via plain MOVB2D (SrcB rows 32-47 -> DEST). First move
-    // covers DEST rows 0-7.
-    TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
-    if (wide_face)
+
+    // Write the transposed column back to DEST (SrcB rows 32-47 -> DEST rows 0..face_r_dim-1).
+    if constexpr (ELTWISE_MATH_ROWS == 8)
     {
-        // face_r_dim > ELTWISE_MATH_ROWS (full 16-row face): second move covers DEST rows 8-15.
-        TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
+        // Quasar: 8-row MOVB2D. A 16-row face needs 2 moves; an <=8-row face needs 1.
+        TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0); // rows 0-7
+        if (face_r_dim > 8)
+        {
+            TTI_MOVB2D(
+                p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8); // rows 8-15
+        }
+    }
+    else if constexpr (ELTWISE_MATH_ROWS == 4)
+    {
+        // (4-row FPU): 4-row MOVB2D -> up to 4 moves for a 16-row face.
+        TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 0); // rows 0-3
+        if (face_r_dim > 4)
+        {
+            TTI_MOVB2D(
+                p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 4, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 4); // rows 4-7
+        }
+        if (face_r_dim > 8)
+        {
+            TTI_MOVB2D(
+                p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 8); // rows 8-11
+        }
+        if (face_r_dim > 12)
+        {
+            TTI_MOVB2D(
+                p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW32_OFFSET + 12, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, 12); // rows 12-15
+        }
     }
 }
 
@@ -60,16 +89,10 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     LLK_ASSERT(!is_fp32_dest_acc_en, "32-bit DEST block reduce_max_row not supported on Quasar yet");
 
+    // A face_row is a term used for two faces in a 16x32 partial tile (F0&F1 or F2&F3).
+    // The pool phase of the block reduce_max_row MOP only pools the two face_rows into two fixed DEST slots (slot0 for F0&F1, slot1 for F2&F3).
     const bool two_face_rows = (tensor_shape.num_faces_r_dim > 1);
-    // dvalid-streaming pool. The unpacker writes every face to SrcA rows 0-15 and flips the write bank
-    // per face (see the unpacker's Dst_Face_Idx_Inc=0), so the two SrcA banks act as a double-buffer.
-    // Each GMPOOL reads rows 0-15 of the current read bank (ADDR_MOD_0 = no address advance) and
-    // CLR_SRCA_VLD clears that bank's dvalid -- which frees it for the unpacker to refill AND rotates the
-    // read bank to the next face. The four faces stream F0->F1->F2->F3 through the two rotating banks at
-    // a fixed address; the dst immediate routes F0,F1 -> slot0 and F2,F3 -> slot1.
-    // NOTE: GMPOOL consumes SrcA by bank rotation, NOT by an srca offset (that is the matmul/MVMUL
-    // model). An address-walk (Dst_Face_Idx_Inc=1 to rows 0/16/32/48 + srca+=16) was tried and fails --
-    // the faces scatter across both banks and the walk reads never-written rows.
+
     const std::uint32_t pool_len = (two_face_rows ? 4u : 2u);
 
     load_replay_buf(
@@ -80,11 +103,6 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32
         0,
         [two_face_rows]
         {
-            // Every face is pooled with CLR_SRCA_VLD (consume + rotate the SrcA read bank, releasing the
-            // consumed bank for the unpacker). The LAST GMPOOL's CLR_SRCA_VLD doubles as the tile's single
-            // SrcA release, so there is deliberately NO trailing SETRWC(CLR_A).
-            // RULE (device-verified): exactly ONE SrcA release per tile. A terminal CLR_SRCA_VLD *and* a
-            // SETRWC(CLR_A) both release -> double-release -> DEST is zeroed. Either one alone -> correct.
             TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0); // F0 -> slot0
             if (two_face_rows)
             {
@@ -138,14 +156,16 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 
     // TRANSPOSE PHASE: transpose each pooled row partial into a column (once).
+    // A face_row is a term used for two faces in a 16x32 partial tile (F0&F1 or F2&F3).
+    // The pool phase of the block reduce_max_row MOP only pools the two face_rows into two fixed DEST slots (slot0 for F0&F1, slot1 for F2&F3).
     const bool two_face_rows = (tensor_shape.num_faces_r_dim > 1);
-    const bool wide_face     = (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS);
 
-    reduce_block_max_row_transpose_face_row(wide_face);
+    reduce_block_max_row_transpose_face_row(tensor_shape.face_r_dim);
     if (two_face_rows)
     {
+        // Advance the DEST counter to slot1 (row TILE_R_DIM = 32, where the pool wrote the F2&F3 partial).
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, TILE_R_DIM, p_setrwc::SET_D);
-        reduce_block_max_row_transpose_face_row(wide_face);
+        reduce_block_max_row_transpose_face_row(tensor_shape.face_r_dim);
     }
 
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, p_setrwc::SET_ABD_F);
