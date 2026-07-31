@@ -1,25 +1,18 @@
-/goal Use $advisor-challenger to measure how much $shard-advise adds to the already-optimized MODEL_DIR decoder: ship the best measured decoder, or record a contribution of zero with numbers.
+/goal Use $advisor-challenger to measure how much $shard-advise adds to the already-optimized MODEL_DIR decoder at decode batch DECODE_BATCH: ship the best measured decoder, or record a contribution of zero with numbers.
 
-Read .agents/skills/advisor-challenger/SKILL.md FIRST and follow it; use $shard-advise for SETUP and capture mechanics only.
+Read .agents/skills/advisor-challenger/SKILL.md and follow it — it holds the method, the chain definition and the traps. Use $shard-advise for SETUP and capture mechanics only. Artifacts go under doc/advisor_challenger/.
 
-CONTRIBUTION MEASUREMENT: the incumbent is the control, the delta IS the result, and a no-change outcome is a publishable zero. Suppressing a candidate understates the contribution — measure the doubtful ones.
+This is a CONTRIBUTION MEASUREMENT: the frozen incumbent is the control, so the delta IS the result and a no-change outcome is a publishable zero. Suppressing a candidate understates the contribution — measure the doubtful ones.
 
-Everything runs at decode batch DECODE_BATCH. All artifacts under doc/advisor_challenger/.
+NON-NEGOTIABLE — getting any of these wrong makes the result wrong rather than merely suboptimal, and the gate checks each:
 
-1. FREEZE THE INCUMBENT before running the advisor. Its own perf harness at DECODE_BATCH, 10 untimed warm-ups then n=5 timed. incumbent.json: repeats_ms, incumbent_ms = MEDIAN (not min), decode_batch and requested_decode_batch (both DECODE_BATCH), measured_at, harness, harness_scope, plus shipped_policy and shipped_weight_dtypes from what EXECUTED (final CSV or selected candidate JSON), never constructor_defaults. Save the op-level CSV per layer kind; its window must be within ~5x of incumbent_ms.
+1. Everything at decode batch DECODE_BATCH, recorded as decode_batch, requested_decode_batch and capture_batch.
+2. Freeze the incumbent BEFORE the capture: captured_at must be after measured_at, or the control is contaminated.
+3. n=5 timed repeats after 10 untimed warm-ups; incumbent_ms = MEDIAN, not min; record repeats_ms everywhere.
+4. shipped_policy and shipped_weight_dtypes from what EXECUTED, never constructor_defaults.
+5. Run scripts/reconcile.py per layer kind and use its ranking. If it aborts, fix its input or extend its op map — never hand-author its output.
+6. Ship iff every candidate repeat beats every incumbent repeat, then confirm in a fresh process.
+7. Keep every losing knob default-off so rejected candidates stay re-measurable.
+8. Never sweep only at or below an advised core count — it is one candidate, not a recommendation.
 
-2. CAPTURE ONCE PER LAYER KIND at the shipped precision, decoder built with the shipped policy (template scripts/capture_template.py). Pass --pipeline-options allow-bf16-dram-sharded-matmul=true if any traced weight is bf16. Record capture_batch, captured_at (after measured_at), traced_weight_dtypes, and the LAYER SHARE of any kind you cannot capture — sparse_matmul and SSM ops are terminal in the tracer, so if such a kind dominates then "the advisor cannot reach N of M layers" is the result.
-
-3. RECONCILE with scripts/reconcile.py, once per layer kind. It partitions the window so every device op lands in one bucket summing to 100%, and ranks chains by CONVERSION VALUE — the microseconds of boundary ops a change removes — not by advised-op window share. If it aborts, fix its input or extend its op map. Do NOT hand-author its output.
-
-4. SCREEN in the order it gives, each chain as ONE UNIT, one variable per measurement, recording repeats_ms. Also screen dram_resident rows ("leave this in DRAM" is advice, and de-sharding has won here), and discharge material_ops_on_le_2_cores with a measured attempt or a quoted hard error. Screen DS-matmul advice LAST. Kept candidates need their own CSV as perf_report plus the incumbent's oracle at its own PCC bar.
-
-AN ADVISED CORE COUNT IS ONE CANDIDATE, NOT A RECOMMENDATION — not ranked on latency, and legal only inside the advisor's own WHOLE-GRAPH plan. Take the op SET and DIRECTION, derive geometry from tile divisibility, always measure an exactly-dividing grid, and never sweep only at or below the advised value. On a neighbour-constraint failure, first pull that neighbour's advised placement in too — a chain extension, not a dead end. See SKILL.md "The advice is a whole-graph plan". compute_config/math_fidelity is traced state, not advice.
-
-5. DECIDE BY NON-OVERLAP: ship iff every candidate repeat beats every incumbent repeat. No noise floor, no min baseline. Record winning_repeats_ms, CONFIRM the winner in a fresh process, set confirmed_fresh_process.
-
-6. COMBINE ACROSS LAYER KINDS where the reported latency is a weighted composite: the candidate space is the PRODUCT of per-kind winners, and those sets are arithmetic over independently measured series so cost no device time. Record each with chains, measured_ms, repeats_ms, oracle_passed. Do NOT enumerate pairwise chain combinations — chains are additive.
-
-7. SHIP the best measured set and KEEP EVERY LOSING KNOB DEFAULT-OFF so rejected candidates stay re-measurable. final.json: outcome, changed, final_ms, incumbent_ms, winning_repeats_ms, confirmed_fresh_process, oracle, oracle_passed. README.md: the step-3 accounting, what was screened with its number, what was not and why, and the unreachable share.
-
-Finish by running .agents/prompts/model_bringup_multigoal/02b-advisor-challenger.check.sh MODEL_DIR
+Then run .agents/prompts/model_bringup_multigoal/02b-advisor-challenger.check.sh MODEL_DIR and resolve what it reports.
