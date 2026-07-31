@@ -44,14 +44,22 @@ DEFAULT_OUT = os.path.join(_HERE, "generated")
 
 
 def frame_budget(text):
-    """~18 chars/s of speech at 12.5 frames/s, x2.2 margin, floor 200. See the docstring.
+    """~18 chars/s of speech at 12.5 frames/s, x2.2 margin, floor 320. See the docstring.
 
-    The margin is generous on purpose: a budget that merely *looks* sufficient produces a
-    truncated clip that reads as a non-terminating model. Measured usage is 68-102 frames for the
-    100-char prompts and 459-489 for the 676-char ones, so an expressive voice can want 1.5x what
-    a flat one does at the same length.
+    The margin is generous on purpose, and the budget is a CAP rather than a cost -- generation
+    stops on [END_AUDIO] regardless, so over-provisioning is free and under-provisioning silently
+    fakes a non-terminating model.
+
+    THE FLOOR IS WHAT MATTERS, and 200 was not enough. Character count only predicts duration for
+    prose: fixture case 10 is 55 characters of "Numbers 1234567890 and symbols !@#$%^&*()", which
+    the model VOCALISES at 240 frames (fp32) / 267 (bf16) -- 4.4 frames per character against the
+    1.53 this formula assumes. A 200-frame floor truncated it and looked like a bf16 regression
+    until the fp32 run was checked. 320 covers the measured worst case with room.
+
+    Measured usage otherwise: 68-102 frames for the 100-char prompts, 458-490 for the 676-char
+    ones, so an expressive voice can want 1.5x what a flat one does at the same length.
     """
-    return max(200, int(math.ceil(len(text) / 18.0 * FRAME_RATE * 2.2)))
+    return max(320, int(math.ceil(len(text) / 18.0 * FRAME_RATE * 2.2)))
 
 
 def save_wav(wav, path, sr=24000):

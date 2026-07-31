@@ -23,6 +23,14 @@ WHAT MAKES THIS BLOCK UNUSUAL:
     Not traced yet -- see STATUS.md; note the Block 3 tracing null result does NOT transfer,
     because these ops are tiny where Block 3's were device-bound.
 
+THIS BLOCK IS THE BOTTLENECK, measured -- 109 ms of a 158 ms frame at bf16 (69%), against 48 ms for
+Block 1's whole 3.4B decode step. Parameter count says the opposite and parameter count is wrong
+here: Block 1's step is a few big matmuls, while this is ~660 tiny dispatch-bound ops (3-token
+sequence x 7 sequential steps x batch-2 CFG). Of the 109 ms, ~79 ms is the 7 velocity evaluations
+and ~30 ms is the host work below, so BOTH are worth attention. The ordered wins are in STATUS.md
+section 7; the first is moving the Euler update and CFG combine onto the device, which removes 7
+host round-trips per frame and is also what currently makes the ODE untraceable.
+
 HOST vs DEVICE. The 7 Euler steps and the 3-layer transformer run on device. Three things stay on
 host, deliberately:
   * the semantic argmax -- a [B,8320] masked argmax whose result is an INDEX used to look up an
@@ -64,7 +72,27 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
-DTYPE = ttnn.float32
+# bf16 STORAGE, fp32 ACCUMULATION -- worth 1.55x on this block and 1.42x end-to-end, measured, for
+# no quality cost. Every ttnn op here inherits its input's dtype (verified: linear, rms_norm,
+# softmax, matmul, silu, add all return bf16 from bf16 inputs), so this one constant sets weights
+# AND all activations. What it does NOT touch:
+#   * matmul accumulation, which stays fp32 via fp32_dest_acc_en above;
+#   * the host-side fp32 arithmetic -- the Euler state `x`, the CFG combine, FSQ, semantic argmax.
+# That second exemption is load-bearing. `x` accumulates across all 7 Euler steps in fp32 and never
+# round-trips through bf16, so bf16 contributes a per-step rounding error rather than a compounding
+# one. Free-running generation bears that out: 458 frames vs fp32's 459 on a 125-word paragraph,
+# and 490 vs 489 on a second one.
+#
+# Cost, measured against the fp32 CPU reference over 12 seeds: acoustic codes differ in 1.16% of
+# positions vs fp32's own 0.81% (all off-by-one on 21 FSQ levels), semantic codes 0/24 wrong.
+# End to end over all 15 fixture prompts: natural-text WER 1.17%, IDENTICAL to fp32's 1.17%, with
+# the same four word-errors merely landing on different cases; 15/15 still stop on [END_AUDIO];
+# voice identity still passes (same-voice 0.985 vs 0.884 next-nearest). Output is ~2% quieter
+# (median over 12 pairs, ~0.2 dB, inaudible) and F0 is unchanged (negative in 6/12, median -0.25%).
+# Set to ttnn.float32 to revert; TtVoxtralFlow takes dtype= explicitly for A/B runs -- but note that
+# rebinding this module constant does NOT work, because __init__'s `dtype=DTYPE` default is bound at
+# definition time. Pass dtype= or replace the instance.
+DTYPE = ttnn.bfloat16
 
 
 class TtVoxtralFlow:
