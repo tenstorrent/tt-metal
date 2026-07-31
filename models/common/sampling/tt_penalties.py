@@ -145,6 +145,9 @@ class TTPenalties(LightweightModule):
             host=torch.ones(self._total_batch, 1), shard_dims=shard_dims_gathered, layout=ttnn.ROW_MAJOR_LAYOUT
         )
         self.zeros = self._alloc_int_buffer(shard_dims=shard_dims_gathered, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # All-ones scatter sources for the non-fast update path, cached by token width. See
+        # update_output_tokens: allocating these per call put device buffers behind live traces.
+        self._scatter_src_by_width = {}
         self.presence_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
         self.frequency_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
         self.repetition_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
@@ -294,11 +297,18 @@ class TTPenalties(LightweightModule):
             new_tokens = ttnn.reshape(new_tokens, [batch, 1], **self._op_kwargs)
             src = self.decode_src
         else:
-            src = self._alloc_int_buffer(
-                host=torch.ones(self._total_batch, new_tokens.shape[-1]),
-                shard_dims=self._shard_dims_gathered,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
+            # Cache per width: this used to allocate a fresh all-ones buffer on every call, which on the
+            # prefill-sampling path lands after the trace captures and is exactly the kind of allocation a
+            # live trace can corrupt. Its contents are constant, so one buffer per width is enough.
+            width = int(new_tokens.shape[-1])
+            src = self._scatter_src_by_width.get(width)
+            if src is None:
+                src = self._alloc_int_buffer(
+                    host=torch.ones(self._total_batch, width),
+                    shard_dims=self._shard_dims_gathered,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                self._scatter_src_by_width[width] = src
         self.token_bin_counts_and_mask(
             new_tokens=new_tokens,
             counts=self.output_counts_gathered,
