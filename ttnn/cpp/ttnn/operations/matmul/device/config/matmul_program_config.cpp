@@ -659,9 +659,8 @@ MatmulProgramConfig get_matmul_program_config(
             input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Input tensor B must have INTERLEAVED memory layout, got: {}",
             input_tensor_b.memory_config().memory_layout());
-        if ((input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or
-             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) and
-            (grid_size.x > 1 or grid_size.y > 1)) {
+        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             TT_FATAL(
                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
                 "Input tensor A must have ROW_MAJOR shard orientation, got: {}",
@@ -721,6 +720,10 @@ MatmulProgramConfig get_matmul_program_config(
                 /*adjust_in0_block_w=*/false);
             uint32_t out_block_h = mutlti_dim_per_core_factor[0];
             uint32_t out_block_w = mutlti_dim_per_core_factor[1];
+            // Sharded output requires out_block_h == 1 unless out_block_w == per_core_N.
+            if (per_core_N_equals_subblock_w_constraint && out_block_w != per_core_N) {
+                out_block_h = 1;
+            }
 
             auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
                 out_block_h, out_block_w, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
