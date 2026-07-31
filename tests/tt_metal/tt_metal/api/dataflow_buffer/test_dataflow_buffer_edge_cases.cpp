@@ -680,4 +680,69 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTensixTest1xDFB_RingPressure_4Sx4A_2_0
     run_single_dfb_program_2_0(this->devices_.at(0), params);
 }
 
+
+// =====================================================================================
+// BLOCKED A1 DRAM-pipeline data-verify tests (migrated from monolithic)
+// =====================================================================================
+// Identity cases (high confidence): BLOCKED any P, STRIDED P==1, ALL P==1.
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_1B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::BLOCKED, 1, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_STRIDED_1B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::STRIDED, 1, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_1B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::ALL, 1, 4, 16);
+}
+// Fan-in (P>1 → 1 Tensix consumer): BLOCKED identity, ALL permutation. Exercises real multi-sub-ring reads.
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_2B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::BLOCKED, 2, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_4B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::BLOCKED, 4, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_2B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::ALL, 2, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_4B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::ALL, 4, 4, 16);
+}
+// IMPLICIT-sync variants (same goldens — the golden is sync-agnostic). The DM producer/consumer use the
+// implicit-sync ISR/txn path; the Tensix consumer posts explicit credits (ISR path is DM-only). Closes the
+// "DM→Trisc data-verify is explicit-only" gap for the single-Tensix-thread (fan-in) cases.
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::BLOCKED, 1, 4, 16, /*implicit=*/true);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_STRIDED_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::STRIDED, 1, 4, 16, /*implicit=*/true);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::ALL, 1, 4, 16, /*implicit=*/true);
+}
+// Implicit-PRODUCER asymmetric BLOCKED (P=2 DM producers → 1 Tensix consumer): VERIFIED to work. The
+// device guard (dataflow_buffer.cpp) only forbids an implicit CONSUMER + asymmetric (the consumer drain
+// misroutes per-entry); an implicit producer with an explicit consumer — exactly the DM→Trisc case, since
+// a Tensix consumer is always explicit — is supported. Data-verified via the A1 DRAM pipeline.
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_2B_blk4_impl) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::BLOCKED, 2, 4, 16, /*implicit=*/true);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_2B_blk4_impl) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::ALL, 2, 4, 16, /*implicit=*/true);
+}
+
+// C>1 Tensix consumers (BLOCKED), data-verified. RUN WITH TT_METAL_WATCHER=1 (multi-thread coherence race).
+TEST_F(MeshDeviceFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx2_blk4) {
+    run_a1_fanout_blocked_pipeline(this->devices_.at(0), 2, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx4_blk4) {
+    run_a1_fanout_blocked_pipeline(this->devices_.at(0), 4, 4, 16);
+}
+// Implicit DM PRODUCER + fan-out (C>P) BLOCKED: previously lost block-granularity (per-entry tc_idx
+// round-robin produced a clean per-entry IDENTITY instead of the per-block fan-out result). With the
+// block-aware commit_implicit_read (`% block_size`), the implicit producer now routes a whole block to one
+// sub-ring and matches the explicit per-block golden. RUN WITH TT_METAL_WATCHER=1 (multi-thread coherence).
+TEST_F(MeshDeviceFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx2_blk4_impl) {
+    run_a1_fanout_blocked_pipeline(this->devices_.at(0), 2, 4, 16, /*implicit=*/true);
+}
+
 }  // namespace tt::tt_metal
