@@ -111,8 +111,8 @@ case "$ARCHITECTURE" in
         ;;
 esac
 
-# Marker expression shared by the collection pass and the real run so the
-# "expected" denominator and the "recorded" results select the exact same set.
+# Marker expression shared by the collection pass and the real run so both
+# apply the same architecture, nightly, performance, and accuracy filtering.
 case "$ARCHITECTURE" in
     quasar) MARKER_EXPR="quasar and not nightly and not perf and not accuracy" ;;
     *)      MARKER_EXPR="not quasar and not nightly and not perf and not accuracy" ;;
