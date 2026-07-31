@@ -167,6 +167,34 @@ Same mechanism deepseek_v3_d_p uses (`forward_layer_{i}_start` in `tt/tt_prefill
   than showing zeros.
 - `ops/layer` on a parent zone counts its children's ops too.
 
+## Optional: DRAM / NOC utilization (tt-npe)
+
+**Not set up yet — this is a candidate next step, not something that works today.**
+
+The profiler tells you how long a zone took and how many bytes it moved, so it can compute achieved
+GB/s. What it cannot tell you is whether that number is a *ceiling* or a *symptom*: `combine` at
+48 GB/s and `moe_reduce` at 45 GB/s might be saturating DRAM, or might be mostly one chip waiting for
+another. Those call for completely different fixes.
+
+`NOC_TRACES=1` answers it by adding per-op `DRAM BW UTIL (%)` and `NOC UTIL (%)`, which the report
+already knows how to display — the columns appear automatically once the data exists, no code change.
+
+The catch is that the analysis needs **tt-npe**, which is a separate repo, not vendored in tt-metal and
+not currently installed on the lab box:
+
+```bash
+git clone https://github.com/tenstorrent/tt-npe && cd tt-npe   # see its quick-start for the build
+source tt-npe/ENV_SETUP                                        # puts npe_analyze_noc_trace_dir on PYTHONPATH
+NOC_TRACES=1 LEVEL=2 LAYERS=6 CACHE=25600 ./run_prefill_profile.sh
+```
+
+Without it, `NOC_TRACES=1` still collects NoC traces during the run — paying the overhead and the disk
+— and then silently skips the analysis (`tools/tracy/process_ops_logs.py` logs *"Could not import
+tt-npe module"*). The report will show `-` in those columns and say they were not measured. So there is
+no point passing the flag until tt-npe is built.
+
+Worth doing if the MoE collectives become the thing you want to optimise; not worth it otherwise.
+
 ## Gotchas that will bite
 
 **The device profiler buffer.** It holds `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT` programs (default
