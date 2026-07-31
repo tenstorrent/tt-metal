@@ -234,15 +234,15 @@ def align(advised, device):
     while i < n and j < m:
         sc = pair_score(advised[i], device[j]["cls"], nameless[i])
         if sc and dp[i][j] == sc + dp[i + 1][j + 1]:
-            pairs.append((advised[i], device[j])); i += 1; j += 1
+            pairs.append((advised[i], device[j], sc)); i += 1; j += 1
         elif dp[i][j] == dp[i][j + 1]:
-            pairs.append((None, device[j])); j += 1
+            pairs.append((None, device[j], 0)); j += 1
         else:
-            pairs.append((advised[i], None)); i += 1
+            pairs.append((advised[i], None, 0)); i += 1
     while i < n:
-        pairs.append((advised[i], None)); i += 1
+        pairs.append((advised[i], None, 0)); i += 1
     while j < m:
-        pairs.append((None, device[j])); j += 1
+        pairs.append((None, device[j], 0)); j += 1
     return pairs
 
 
@@ -329,12 +329,12 @@ def main() -> int:
     # movement ops are boundaries regardless of what the advisor said, so keep them out of the pairing
     pairable = [d for d in device if not movement_class(d["cls"])]
     alignment = align([a for a in advised if a["explicit"] is not None], pairable)
-    paired = {id(d): a for a, d in alignment if d is not None}
-    unpaired_adv = [a for a, d in alignment if d is None]
-    seq = [(paired.get(id(d)), d) for d in device] + [(a, None) for a in unpaired_adv]
+    paired = {id(d): (a, sc) for a, d, sc in alignment if d is not None}
+    unpaired_adv = [a for a, d, _ in alignment if d is None]
+    seq = [paired.get(id(d), (None, 0)) + (d,) for d in device] + [(a, 0, None) for a in unpaired_adv]
 
     rows, chains, cur = [], [], None
-    for adv, dev in seq:
+    for adv, pair_sc, dev in seq:
         if dev is None:
             auto = adv["explicit"] == "__auto__"
             rows.append({"op": adv["op"],
@@ -345,6 +345,8 @@ def main() -> int:
                                    "with any device class -- add it to TTNN_TO_DEVICE if so."})
             continue
         r = {"op": adv["op"] if adv else None, "device": dev["code"], "cls": dev["cls"],
+             # how this pairing was made: a name match is evidence, a positional one is a guess
+             "pair_confidence": (None if adv is None else "name" if pair_sc == 2 else "position"),
              "us": round(dev["us"], 3), "share_pct": round(100 * dev["us"] / window, 3),
              "shipped_cores": dev["cores"]}
         mv = movement_class(dev["cls"])
@@ -442,8 +444,51 @@ def main() -> int:
     low = [r for r in rows if r["bucket"] in ("chain", "agrees_with_shipped")
            and (r.get("shipped_cores") or 99) <= 2 and r["share_pct"] >= 1.0]
 
+    # How much of the accounting rests on positional guesses rather than name evidence. This is the tool's
+    # generality check: on a model whose ops it does not recognise the buckets degrade, and it must SAY so
+    # rather than emit confident-looking wrong ones.
+    byname = [r for r in rows if r.get("pair_confidence") == "name"]
+    bypos = [r for r in rows if r.get("pair_confidence") == "position"]
+    pos_us = round(sum(r["us"] for r in bypos), 3)
+    pos_share = round(100 * pos_us / window, 3)
+
+    # DO THE TWO GRAPHS EVEN MATCH? Positional-pair share does not answer this: generic names (rms_norm,
+    # linear, add) match across any transformer, so feeding one model's advice against another's profile
+    # pairs happily and emits a confident, wrong accounting. What does answer it is unexplained blindness --
+    # a large `untraced` share that the report itself does not own up to. A report that declares
+    # `uncapturable` (an MoE whose experts are terminal in the tracer) is expected to be blind; one that
+    # declares nothing and still fails to account for a third of the window is describing a different graph.
+    untraced_share = acct.get("untraced", {}).get("share_pct", 0.0)
+    declared_blind = bool(report.get("uncapturable"))
+    fanout = round(len(device) / max(1, len(advised)), 2)
+    suspect = [x for x, bad in (
+        (f"untraced is {untraced_share:.2f} % of the window", untraced_share > 30.0),
+        (f"{len(device)} device ops against {len(advised)} advised ({fanout}x)", fanout > 2.5)) if bad]
+    degraded = bool(suspect) and not declared_blind
+
     out = {
-        "generated_by": "advisor-challenger/scripts/reconcile.py", "tool_version": 3,
+        "generated_by": "advisor-challenger/scripts/reconcile.py", "tool_version": 4,
+        "confidence": {
+            "paired_by_name": len(byname), "paired_by_position": len(bypos),
+            "us_paired_by_position": pos_us, "pct_paired_by_position": pos_share,
+            "device_to_advised_fanout": fanout, "report_declares_uncapturable": declared_blind,
+            "degraded": degraded, "degraded_because": suspect if degraded else [],
+            "hard": ["measured_window_us", "per-op us and share_pct", "accounting_closes_100pct",
+                     "the single-replay and window-ratio guards", "by_conversion_class us"],
+            "soft": ["which advised op each device op is", "advised_here / advisor_removes_us",
+                     "the chain ranking, since it is computed from the soft items above"]},
+        "limitations": [
+            "Ops are paired by normalised name, then by position when no name matches. A positional pair is "
+            "a guess; rows carry pair_confidence, and pct_paired_by_position says how much of the window "
+            "rests on guesses. On an unfamiliar model expect this to rise.",
+            "advised_here is keyed on producer/consumer op NAMES, so a repeated edge collapses to one key: "
+            "presence is a strong signal, absence a weak one.",
+            "untraced conflates 'terminal in the tracer' with 'ran but the advisor never placed it'. This "
+            "tool cannot tell them apart; the capture log can.",
+            "The profile exposes no grid and no output memory config, so a conversion that only regrids is "
+            "invisible here and unresolved classes cannot be settled without the IR.",
+            "Nothing here is a measurement. Every verdict comes from the device.",
+        ],
         "layer_kind": a.layer_kind, "layers_of_kind": a.layers_of_kind,
         "total_layers": a.total_layers, "measured_window_us": round(window, 3),
         "accounting": acct, "accounting_closes_100pct": closes,
@@ -461,6 +506,17 @@ def main() -> int:
     a.out.write_text(json.dumps(out, indent=2) + "\n")
 
     print(f"{a.layer_kind}: window {window:.3f} us, {len(rows)} rows, closes: {closes}")
+    print(f"   paired: {len(byname)} by name, {len(bypos)} by position "
+          f"({pos_us:.3f} us, {pos_share:.2f} % of window)")
+    if degraded:
+        print("   ** DEGRADED -- " + "; ".join(suspect) + ", and the report declares nothing uncapturable.")
+        print("   ** The profile and the advice may describe different graphs: wrong file, a stale capture, "
+              "or a capture that stopped early. Resolve this before screening -- the buckets and the "
+              "ranking below are unsafe, and every share is measured against a window that may not be the "
+              "graph the advice describes.")
+    elif untraced_share > 30.0:
+        print(f"   note: untraced is {untraced_share:.2f} %, expected -- the report declares uncapturable "
+              f"ops. State this share as the advisor's reach, do not imply coverage.")
     for b, v in sorted(acct.items(), key=lambda x: -x[1]["us"]):
         print(f"   {b:22s} {v['us']:9.3f} us {v['share_pct']:6.2f} %  ({v['ops']} ops)")
     ab = out["advised_boundaries"]

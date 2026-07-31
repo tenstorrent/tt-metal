@@ -170,6 +170,26 @@ Read four things out of it:
   marginal contribution here is zero by construction; **report the number as a headline**, and do not read it
   as wasted advice. How much a from-scratch optimization it would have saved is a different experiment.
 
+**What this script is authoritative about, and what it is only suggesting.** It prints the split, and its
+output carries a `limitations[]` list. Take it seriously:
+
+| hard — trust it over your own reading | soft — your own reading of the IR beats it |
+|---|---|
+| the measured window, per-op µs and shares | which advised op a given device op is |
+| `accounting_closes_100pct` | `advised_here` and `advisor_removes_us` |
+| the single-replay and window-ratio guards | the chain ranking, computed from the soft column |
+| `by_conversion_class` µs | whether an `unresolved` class is a real boundary |
+
+Pairing is by normalised name, falling back to **position** when nothing matches. Positional pairs are
+guesses; each row carries `pair_confidence` and the header prints what share of the window rests on them
+(1–5 % across the reference corpus). If it prints **DEGRADED**, stop: a large unexplained `untraced` share or
+a device-to-advised fan-out over 2.5× means the profile and the advice probably describe different graphs.
+Generic op names match across any transformer, so a wrong pairing does *not* announce itself as a name
+failure — this check is the one that catches it.
+
+Nothing in it is a measurement. If your reading of the IR contradicts its pairing, **write that in the README
+with the IR evidence** — do not edit the JSON.
+
 Advised ops pair with device classes automatically, so an abort means an input problem — an unbounded perf
 report, a wrong file, a window that cannot be the decode path. Fix the input, not the output: hand-authoring
 this file is the one failure the gate cannot detect for you.
