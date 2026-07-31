@@ -818,7 +818,13 @@
       timeout: 10  # fits models unit_tier1 wh_n150 budget (110 min); tune with real runtime
       tier: 1
     wh_galaxy_perf:
-      timeout: 20  # TODO: tune after first CI run
+      timeout: 20  # WH Galaxy: [1] + (4,8); job wall ~8 min measured
+      tier: 1
+    bh_p150:
+      timeout: 8  # BH single-card [1]; ~7 min job (pytest + fixed runner overhead)
+      tier: 1
+    bh_galaxy:
+      timeout: 20  # BH Galaxy: [1] + (4,8)
       tier: 1
   owner_id: U03PUAKE719 # TODO: replace with Filip Butić's Slack ID
   team: models
