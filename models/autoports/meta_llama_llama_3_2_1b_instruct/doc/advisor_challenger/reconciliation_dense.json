@@ -1,0 +1,545 @@
+{
+  "feasibility": {
+    "noise_floor_us": 0.146,
+    "noise_floor_source": "max-min of incumbent repeats_ms",
+    "noise_floor_excluding_first_us": 0.146,
+    "first_repeat_share_of_floor": 0.0,
+    "repeats_monotone_decreasing": false,
+    "repeats": 5,
+    "ceiling_us": 2.822,
+    "ceiling_vs_floor": 19.33,
+    "chains_resolvable_alone": 2,
+    "verdict": "measurable",
+    "advice": "2 chain(s) exceed the 0.146 us floor; screen those individually and group the rest."
+  },
+  "model_estimate": {
+    "this_kind_us": 5672.576,
+    "per_layer_window_us": 354.536,
+    "layers_in_window": 1,
+    "layers_of_kind": 16,
+    "total_layers": 16,
+    "kind_share_of_layers": 1.0,
+    "layer_counts": {
+      "dense": 16
+    },
+    "layer_counts_source": "incumbent.json layer_counts (cross-checked)",
+    "ceiling_per_model_us": 45.152,
+    "uncertainty_per_model_us": 2.336,
+    "layer_handoff": {
+      "entry_from_dram": false,
+      "exit_in_l1": true,
+      "note": "no layer-boundary DRAM round trip detected, or the profile does not show it"
+    },
+    "note": "Sum this_kind_us over every layer kind for the full-model estimate, and choose between candidates on THAT. Per-layer microseconds are for detection against the per-layer noise floor; per-model microseconds are for deciding, because layer counts differ by kind. Report the model estimate as before/after with the uncertainty band: a per-layer delta scaled by the layer count carries the per-layer floor scaled by the same factor."
+  },
+  "capture_provenance": {
+    "capture_batch": 32,
+    "capture_policy_source": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/advisor_challenger/incumbent.json",
+    "traced_weight_dtypes": {
+      "attention_qkv": "bfloat8_b",
+      "attention_wo": "bfloat8_b",
+      "mlp_gate_up_ff1_ff3": "bfloat8_b",
+      "mlp_down_ff2": "bfloat8_b",
+      "rmsnorm": "bfloat16"
+    },
+    "allow_bf16_dram_sharded_matmul": null,
+    "spills": 2,
+    "spill_ran": true,
+    "op_counts": {
+      "report_total_ops": 21,
+      "ops_listed": 17,
+      "final_choices": 18
+    },
+    "dram_sharded_advised": null,
+    "layers_in_window": 1,
+    "graph_input_reshards": 16,
+    "graph_input_note": "reshards with producer=='input' come off a graph input the py-to-IR boundary hardcodes to DRAM interleaved. Some are genuine weight placement (DRAM is where weights live); the one feeding the first op is the layer's activation entry and is an artifact. Capturing N consecutive layers reduces the artifact to 1/N of the layer boundaries.",
+    "spill_caution": "the optimizer spilled 2 time(s) building this plan, so it did not fit L1 as a whole. Expect single-chain application to hit the same wall, and treat a capacity failure as a partial-application artifact rather than evidence the direction is wrong."
+  },
+  "untraced_detail": {
+    "ops": [
+      {
+        "device": "PagedUpdateCacheDeviceOperation",
+        "us": 12.913,
+        "share_pct": 3.642
+      },
+      {
+        "device": "PagedUpdateCacheDeviceOperation",
+        "us": 13.304,
+        "share_pct": 3.753
+      }
+    ],
+    "declared_uncapturable_by_report": [
+      "nlp_concat_heads_decode",
+      "rotary_embedding_llama"
+    ],
+    "note": "untraced means the profile has it and the advisor's graph does not. That is expected for ops the report declares uncapturable (terminal in the tracer) and a problem otherwise. This tool cannot tell the two apart per op -- the capture log can."
+  },
+  "generated_by": "advisor-challenger/scripts/reconcile.py",
+  "tool_version": 5,
+  "confidence": {
+    "paired_by_name": 12,
+    "paired_by_position": 3,
+    "us_paired_by_position": 11.725,
+    "pct_paired_by_position": 3.307,
+    "device_to_advised_fanout": 1.18,
+    "report_declares_uncapturable": false,
+    "degraded": false,
+    "degraded_because": [],
+    "hard": [
+      "measured_window_us",
+      "per-op us and share_pct",
+      "accounting_closes_100pct",
+      "the single-replay and window-ratio guards",
+      "by_conversion_class us"
+    ],
+    "soft": [
+      "which advised op each device op is",
+      "advised_here / advisor_removes_us",
+      "the chain ranking, since it is computed from the soft items above"
+    ]
+  },
+  "limitations": [
+    "Ops are paired by normalised name, then by position when no name matches. A positional pair is a guess; rows carry pair_confidence, and pct_paired_by_position says how much of the window rests on guesses. On an unfamiliar model expect this to rise.",
+    "advised_here is keyed on producer/consumer op NAMES, so a repeated edge collapses to one key: presence is a strong signal, absence a weak one.",
+    "untraced conflates 'terminal in the tracer' with 'ran but the advisor never placed it'. This tool cannot tell them apart; the capture log can.",
+    "The profile exposes no grid and no output memory config, so a conversion that only regrids is invisible here and unresolved classes cannot be settled without the IR.",
+    "Nothing here is a measurement. Every verdict comes from the device."
+  ],
+  "layer_kind": "dense",
+  "layers_of_kind": 16,
+  "total_layers": 16,
+  "measured_window_us": 354.536,
+  "accounting": {
+    "chain": {
+      "us": 40.42,
+      "ops": 7,
+      "share_pct": 11.401
+    },
+    "agrees_with_shipped": {
+      "us": 258.26,
+      "ops": 5,
+      "share_pct": 72.845
+    },
+    "boundary": {
+      "us": 4.142,
+      "ops": 3,
+      "share_pct": 1.168
+    },
+    "dram_resident": {
+      "us": 25.497,
+      "ops": 3,
+      "share_pct": 7.192
+    },
+    "untraced": {
+      "us": 26.217,
+      "ops": 2,
+      "share_pct": 7.395
+    }
+  },
+  "accounting_closes_100pct": true,
+  "accounted_us": 354.536,
+  "scope": {
+    "window_us": 354.536,
+    "incumbent_us": 373.08,
+    "note": "The profile and the harness both cover ONE decoder layer, and window_us should be within a few percent of incumbent_us. per_model_us on each chain scales by layers_of_kind to the whole model and is an extrapolation -- never compare it to incumbent_ms, which is per layer.",
+    "layers_of_kind": 16,
+    "total_layers": 16
+  },
+  "ranked_by": "advisor_removes_us (conversions the advice does not place), then total conversion value + chain op us. NOT the advised ops' window share. Compare each chain's vs_noise_floor before spending a measurement on it.",
+  "advised_boundaries": {
+    "advisor_drops_ops": 2,
+    "us_advisor_drops": 2.822,
+    "advisor_agrees_ops": 1,
+    "us_advisor_agrees": 1.32,
+    "undetermined_ops": 0,
+    "us_undetermined": 0,
+    "unresolved_ops": 0,
+    "us_unresolved": 0,
+    "by_conversion_class": {
+      "l1_to_dram": {
+        "us": 1.32,
+        "ops": 1
+      },
+      "dram_to_l1": {
+        "us": 1.491,
+        "ops": 1
+      },
+      "l1_regrid": {
+        "us": 1.331,
+        "ops": 1
+      }
+    },
+    "note": "us_advisor_drops is what this stage can attribute to the advisor. us_advisor_agrees is real conversion time the advisor endorses: attacking it is a separate activity and crediting it here would contaminate the measurement. us_unresolved needs the IR to classify -- resolve it, do not skip it."
+  },
+  "chains": [
+    {
+      "chain": "dense:b9",
+      "ops": [],
+      "us": 0.0,
+      "boundary_us": 1.491,
+      "advisor_removes_us": 1.491,
+      "verdict": "rejected",
+      "measured_ms": null,
+      "repeats_ms": [],
+      "kind": "boundary_only",
+      "edge": "paged_scaled_dot_product_attention_decode -> nlp_concat_heads_decode",
+      "how": "remove the dram_to_l1 on this edge; the advice places no conversion here and both neighbours already match shipped, so no geometry change is needed",
+      "conversion_value_us": 1.491,
+      "op_share_pct": 0.0,
+      "per_model_us": 23.856,
+      "advisor_removes_per_model_us": 23.856,
+      "vs_noise_floor": 10.21,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "hard_error": "TT_FATAL: Sharded output not supported for GQA (paged SDPA decode); concat requires that unavailable sharded output"
+    },
+    {
+      "chain": "dense:2",
+      "ops": [
+        "add",
+        "rms_norm",
+        "multiply",
+        "add"
+      ],
+      "us": 17.752,
+      "boundary_us": 0.665,
+      "verdict": "rejected",
+      "measured_ms": 0.42034145444631577,
+      "repeats_ms": [
+        0.41995473206043243,
+        0.4205598868429661,
+        0.4202917590737343,
+        0.42034145444631577,
+        0.42050356045365334
+      ],
+      "advisor_removes_us": 0.665,
+      "conversion_value_us": 0.665,
+      "_unresolved_us": 0.0,
+      "op_share_pct": 5.007,
+      "per_model_us": 294.672,
+      "advisor_removes_per_model_us": 10.64,
+      "vs_noise_floor": 4.55,
+      "resolvable_alone": true,
+      "confidence": "low",
+      "candidate": "residual_chain_64",
+      "oracle_passed": false,
+      "hard_error": "legal extended 64-core chain ran but was 12.7% slower; 32-row exact-dividing isolate failed because RMSNorm forbids non-rectangular grids"
+    },
+    {
+      "chain": "dense:1",
+      "ops": [
+        "nlp_create_qkv_heads_decode",
+        "rotary_embedding_llama"
+      ],
+      "us": 17.421,
+      "boundary_us": 0.66,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 0.66,
+      "advisor_removes_us": 0.0,
+      "op_share_pct": 4.914,
+      "per_model_us": 289.296,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "high"
+    },
+    {
+      "chain": "dense:0",
+      "ops": [
+        "rms_norm"
+      ],
+      "us": 5.247,
+      "boundary_us": 0.0,
+      "verdict": "below_threshold",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 0.0,
+      "advisor_removes_us": 0.0,
+      "op_share_pct": 1.48,
+      "per_model_us": 83.952,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "high"
+    }
+  ],
+  "material_ops_on_le_2_cores": [],
+  "starved_ops_not_attributable": [],
+  "note": "Screen chains in the order given, each as one unit, and record repeats_ms. Do NOT copy advised core counts: they are selected under a bytes-shaped objective and are often smaller than the divisors of the tensor's tile count. The advisor's contribution is the op SET and the DIRECTION of the change; own the geometry.",
+  "disagreements": [
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 5.247,
+      "share_pct": 1.48,
+      "shipped_cores": 32,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x22 cores=(0,0)-(10,1)",
+      "advised_cores": 22,
+      "chain": "dense:0"
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 2048 x 3072",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 31.663,
+      "share_pct": 8.931,
+      "shipped_cores": 12,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x96 cores=(0,0)-(10,7)",
+      "advised_cores": 88
+    },
+    {
+      "op": null,
+      "device": "ShardedToInterleavedDeviceOperation",
+      "cls": "ShardedToInterleaved",
+      "pair_confidence": null,
+      "us": 1.32,
+      "share_pct": 0.372,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "l1_to_dram",
+      "edge": "linear -> nlp_create_qkv_heads_decode",
+      "advised_here": true,
+      "advised_reshard": {
+        "kind": "to_memory_config",
+        "from": "l1/width_sharded/1x96 cores=(0,0)-(10,7)",
+        "to": "l1/interleaved/10x11",
+        "transition": "l1->l1",
+        "output_revert": false
+      },
+      "reason": "the advisor puts a conversion here too -- agreement, not a candidate"
+    },
+    {
+      "op": "nlp_create_qkv_heads_decode",
+      "device": "NLPCreateQKVHeadsDecodeDeviceOperation",
+      "cls": "NLPCreateQKVHeadsDecode",
+      "pair_confidence": "name",
+      "us": 14.919,
+      "share_pct": 4.208,
+      "shipped_cores": 32,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 22,
+      "chain": "dense:1"
+    },
+    {
+      "op": "rotary_embedding_llama",
+      "device": "RotaryEmbeddingLlamaDeviceOperation",
+      "cls": "RotaryEmbeddingLlama",
+      "pair_confidence": "name",
+      "us": 2.502,
+      "share_pct": 0.706,
+      "shipped_cores": 32,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 22,
+      "chain": "dense:1"
+    },
+    {
+      "op": "rotary_embedding_llama",
+      "device": "RotaryEmbeddingLlamaDeviceOperation",
+      "cls": "RotaryEmbeddingLlama",
+      "pair_confidence": "name",
+      "us": 2.451,
+      "share_pct": 0.691,
+      "shipped_cores": 32,
+      "bucket": "dram_resident",
+      "advised": "dram/interleaved/1x1",
+      "reason": "advisor placed it in DRAM -- that is advice, and it disagrees with a sharded shipped op",
+      "verdict": "rejected_hard_error",
+      "hard_error": "paged_update_cache requires its rotary-K input to remain sharded"
+    },
+    {
+      "op": null,
+      "device": "PagedUpdateCacheDeviceOperation",
+      "cls": "PagedUpdateCache",
+      "pair_confidence": null,
+      "us": 12.913,
+      "share_pct": 3.642,
+      "shipped_cores": 32,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "PagedUpdateCacheDeviceOperation",
+      "cls": "PagedUpdateCache",
+      "pair_confidence": null,
+      "us": 13.304,
+      "share_pct": 3.753,
+      "shipped_cores": 32,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": "paged_scaled_dot_product_attention_decode",
+      "device": "SdpaDecodeDeviceOperation",
+      "cls": "SdpaDecode",
+      "pair_confidence": "name",
+      "us": 19.112,
+      "share_pct": 5.391,
+      "shipped_cores": 64,
+      "bucket": "dram_resident",
+      "advised": "dram/interleaved/1x1",
+      "reason": "advisor placed it in DRAM -- that is advice, and it disagrees with a sharded shipped op",
+      "verdict": "already_dram_resident_soft_pairing_artifact",
+      "evidence": "the op writes DRAM interleaved; Input 0 Memory in the profile describes the sharded Q input"
+    },
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 1.491,
+      "share_pct": 0.421,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "paged_scaled_dot_product_attention_decode -> nlp_concat_heads_decode",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "nlp_concat_heads_decode",
+      "device": "NLPConcatHeadsDecodeDeviceOperation",
+      "cls": "NLPConcatHeadsDecode",
+      "pair_confidence": "name",
+      "us": 3.934,
+      "share_pct": 1.11,
+      "shipped_cores": 32,
+      "bucket": "dram_resident",
+      "advised": "dram/interleaved/1x1",
+      "reason": "DRAM output candidate overlapped incumbent repeats and had a slower median",
+      "verdict": "rejected",
+      "measured_ms": 0.3732367791235447,
+      "repeats_ms": [
+        0.3795035742223263,
+        0.37337083369493484,
+        0.3732367791235447,
+        0.37300294265151024,
+        0.373117346316576
+      ]
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 2048 x 2048",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 26.001,
+      "share_pct": 7.334,
+      "shipped_cores": 12,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x64 cores=(0,0)-(10,4)",
+      "advised_cores": 55
+    },
+    {
+      "op": null,
+      "device": "ReshardDeviceOperation",
+      "cls": "Reshard",
+      "pair_confidence": null,
+      "us": 1.331,
+      "share_pct": 0.375,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "l1_regrid",
+      "edge": "linear -> add",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "add",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 1.445,
+      "share_pct": 0.408,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x64 cores=(0,0)-(10,4)",
+      "advised_cores": 55,
+      "chain": "dense:2"
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 6.027,
+      "share_pct": 1.7,
+      "shipped_cores": 32,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x22 cores=(0,0)-(10,1)",
+      "advised_cores": 22,
+      "chain": "dense:2"
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 2048 x 8192",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 67.436,
+      "share_pct": 19.021,
+      "shipped_cores": 12,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x86 cores=(0,0)-(10,6)",
+      "advised_cores": 77
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 2048 x 8192",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 67.753,
+      "share_pct": 19.11,
+      "shipped_cores": 12,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x86 cores=(0,0)-(10,6)",
+      "advised_cores": 77
+    },
+    {
+      "op": "multiply",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 8.219,
+      "share_pct": 2.318,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x86 cores=(0,0)-(10,6)",
+      "advised_cores": 77,
+      "chain": "dense:2"
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 8192 x 2048",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 65.407,
+      "share_pct": 18.449,
+      "shipped_cores": 12,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x64 cores=(0,0)-(10,4)",
+      "advised_cores": 55
+    },
+    {
+      "op": "add",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 2.061,
+      "share_pct": 0.581,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x64 cores=(0,0)-(10,4)",
+      "advised_cores": 55,
+      "chain": "dense:2"
+    }
+  ]
+}

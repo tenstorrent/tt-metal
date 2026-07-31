@@ -1,0 +1,42 @@
+{
+  "label": "incumbent_profile",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    0.38752827793359756,
+    0.38352563977241516,
+    0.384724922478199,
+    0.3847641870379448,
+    0.3822742588818073
+  ],
+  "median_ms": 0.384724922478199,
+  "noise_floor_ms": 0.005254019051790237,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one dense decoder layer, traced decode replay, batch 32, measured end to end on the host",
+  "measured_at": "2026-07-31T18:23:40+00:00",
+  "shipped_policy": {
+    "attention_weight_dtype": "bfloat8_b",
+    "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+    "mlp_ff2_weight_dtype": "bfloat8_b",
+    "kv_cache_dtype": "bfloat8_b",
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "norm_weight_dtype": "bfloat16",
+    "mul_dtype": "bfloat16",
+    "use_qk_fused_decode": false
+  },
+  "shipped_weight_dtypes": {
+    "attention_qkv": "bfloat8_b",
+    "attention_wo": "bfloat8_b",
+    "mlp_gate_up_ff1_ff3": "bfloat8_b",
+    "mlp_down_ff2": "bfloat8_b",
+    "rmsnorm": "bfloat16"
+  },
+  "shipped_policy_source": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/selected_precision_config.json",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

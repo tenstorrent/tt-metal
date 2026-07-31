@@ -19,7 +19,8 @@ switching the local MLP and precision policy to the optimized TTNN path:
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+import os
+from dataclasses import asdict, dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -37,7 +38,7 @@ from models.autoports.meta_llama_llama_3_2_1b_instruct.tt.functional_decoder imp
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig
 from models.common.modules.lazy_weight import LazyWeight
-from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
+from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig, _create_sharded_norm_program_config
 from models.common.tensor_utils import TILE_SIZE
 from models.common.utility_functions import is_blackhole
 
@@ -534,7 +535,9 @@ class _OptimizedLlamaMLP(LightweightModule):
     def decode_forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         self.load_device_weights()
         cfg = self.config
-        if hidden_states.memory_config() != cfg.decode_input_memcfg:
+        # The advisor tracer cannot inspect a symbolic tensor's memory config. The
+        # capture-only flag is default-off and makes the phase declaration explicit.
+        if getattr(self, "_advisor_capture", False) or hidden_states.memory_config() != cfg.decode_input_memcfg:
             hidden_states = ttnn.to_memory_config(hidden_states, cfg.decode_input_memcfg)
 
         gate = ttnn.linear(
@@ -564,7 +567,7 @@ class _OptimizedLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
-        if fused.memory_config() != cfg.decode_w2_input_memcfg:
+        if getattr(self, "_advisor_capture", False) or fused.memory_config() != cfg.decode_w2_input_memcfg:
             fused = ttnn.to_memory_config(fused, cfg.decode_w2_input_memcfg)
 
         out = ttnn.linear(
@@ -770,7 +773,28 @@ class OptimizedDecoder(LightweightModule):
                 li_o_prefill_compute_kernel_cfg=_compute_kernel_config_hifi2_fp16(),
             )
         )
-        decode_residual_memcfg = attention.config.decode_residual_memcfg
+        advisor_chain = os.environ.get("MD_LLAMA32_ADVISOR_CHAIN", "off")
+        attention._advisor_keep_sdpa_l1 = advisor_chain == "sdpa_concat"
+        attention._advisor_rotary_k_dram = advisor_chain == "rotary_k_dram"
+        attention._advisor_concat_output_dram = advisor_chain == "concat_output_dram"
+        decode_input_residual_memcfg = attention.config.decode_residual_memcfg
+        decode_residual_memcfg = decode_input_residual_memcfg
+
+        if advisor_chain == "residual_chain_64":
+            decode_residual_memcfg = ttnn.create_sharded_memory_config(
+                (TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE), hidden_size // 64),
+                ttnn.CoreGrid(x=8, y=8),
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            attention.config.decode_attn_output_prg_config = _dram_matmul_config(
+                m=TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE),
+                k=hidden_size,
+                n=hidden_size,
+                num_cores=64,
+            )
+            attention.config.decode_residual_memcfg = decode_residual_memcfg
 
         mlp = _OptimizedLlamaMLP.from_state_dict(
             state_dict,
@@ -784,6 +808,27 @@ class OptimizedDecoder(LightweightModule):
             cache_dir=cache_dir,
             cache_prefix=cache_prefix,
         )
+        if advisor_chain == "residual_chain_64":
+            advisor_mlp_wide_memcfg = ttnn.create_sharded_memory_config(
+                (TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE), intermediate_size // 64),
+                ttnn.CoreGrid(x=8, y=8), ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
+            )
+            mlp.config = replace(
+                mlp.config,
+                decode_input_memcfg=decode_residual_memcfg,
+                decode_w1_w3_output_memcfg=advisor_mlp_wide_memcfg,
+                decode_w2_input_memcfg=advisor_mlp_wide_memcfg,
+                decode_residual_memcfg=decode_residual_memcfg,
+                decode_w1_w3_prg_config=_dram_matmul_config(
+                    m=TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE), k=hidden_size,
+                    n=intermediate_size, num_cores=64,
+                ),
+                decode_w2_prg_config=_dram_matmul_config(
+                    m=TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE), k=intermediate_size,
+                    n=hidden_size, num_cores=64,
+                ),
+            )
 
         norm_eps = float(hf_config.rms_norm_eps)
         norm_compute_cfg = _compute_kernel_config_hifi2_fp16()
@@ -798,7 +843,7 @@ class OptimizedDecoder(LightweightModule):
                 eps=norm_eps,
                 max_batch_size=max_batch_size,
                 prefill_distributed=False,
-                decode_memory_config=decode_residual_memcfg,
+                decode_memory_config=decode_input_residual_memcfg,
                 compute_kernel_config=norm_compute_cfg,
             )
         )
@@ -817,13 +862,20 @@ class OptimizedDecoder(LightweightModule):
                 compute_kernel_config=norm_compute_cfg,
             )
         )
+        if advisor_chain == "residual_chain_64":
+            post_attention_norm.config.decode_memory_config = decode_residual_memcfg
+            post_attention_norm.config.decode_program_config = _create_sharded_norm_program_config(
+                hidden_size,
+                ttnn.CoreGrid(x=8, y=8),
+                TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE),
+            )
 
         decoder = cls(
             attention_norm=attention_norm,
             attention=attention,
             post_attention_norm=post_attention_norm,
             mlp=mlp,
-            decode_residual_memcfg=decode_residual_memcfg,
+            decode_residual_memcfg=decode_input_residual_memcfg,
             mesh_device=mesh_device,
             hf_config=hf_config,
             layer_idx=layer_idx,
@@ -890,12 +942,22 @@ class OptimizedDecoder(LightweightModule):
         residual = hidden_states
         normed = self.attention_norm.decode_forward(hidden_states)
         attn_out = self.attention.decode_forward(normed, current_pos, rot_mats, page_table=page_table)
-        hidden_states = ttnn.add(residual, attn_out, memory_config=self.decode_residual_memcfg, dtype=self.precision_policy.residual_dtype)
+        hidden_states = ttnn.add(
+            residual,
+            attn_out,
+            memory_config=self.attention.config.decode_residual_memcfg,
+            dtype=self.precision_policy.residual_dtype,
+        )
 
         residual = hidden_states
         normed = self.post_attention_norm.decode_forward(hidden_states)
         mlp_out = self.mlp.decode_forward(normed)
-        return ttnn.add(residual, mlp_out, memory_config=self.decode_residual_memcfg, dtype=self.precision_policy.residual_dtype)
+        return ttnn.add(
+            residual,
+            mlp_out,
+            memory_config=self.mlp.config.decode_residual_memcfg,
+            dtype=self.precision_policy.residual_dtype,
+        )
 
     def forward(self, hidden_states: ttnn.Tensor, *, mode: str, **kwargs: Any) -> ttnn.Tensor:
         if mode == "prefill":

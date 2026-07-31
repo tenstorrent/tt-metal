@@ -1,0 +1,21 @@
+{
+  "shipped_policy": {
+    "attention_weight_dtype": "bfloat8_b",
+    "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+    "mlp_ff2_weight_dtype": "bfloat8_b",
+    "kv_cache_dtype": "bfloat8_b",
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "norm_weight_dtype": "bfloat16",
+    "mul_dtype": "bfloat16",
+    "use_qk_fused_decode": false
+  },
+  "shipped_weight_dtypes": {
+    "attention_qkv": "bfloat8_b",
+    "attention_wo": "bfloat8_b",
+    "mlp_gate_up_ff1_ff3": "bfloat8_b",
+    "mlp_down_ff2": "bfloat8_b",
+    "rmsnorm": "bfloat16"
+  },
+  "shipped_policy_source": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/selected_precision_config.json"
+}

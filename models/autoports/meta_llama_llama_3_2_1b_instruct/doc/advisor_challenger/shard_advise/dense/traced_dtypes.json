@@ -1,0 +1,23 @@
+{
+  "layer_kind": "dense",
+  "layer_idx": 0,
+  "batch": 32,
+  "traced_weight_dtypes": {
+    "attention_qkv": "bfloat8_b",
+    "attention_wo": "bfloat8_b",
+    "mlp_gate_up_ff1_ff3": "bfloat8_b",
+    "mlp_down_ff2": "bfloat8_b",
+    "rmsnorm": "bfloat16"
+  },
+  "shipped_weight_dtypes": {
+    "attention_qkv": "bfloat8_b",
+    "attention_wo": "bfloat8_b",
+    "mlp_gate_up_ff1_ff3": "bfloat8_b",
+    "mlp_down_ff2": "bfloat8_b",
+    "rmsnorm": "bfloat16"
+  },
+  "policy_source": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/selected_precision_config.json",
+  "advisor_commit": "618cd4e75dae69d334bb9d8cdeff314816ccf214",
+  "advisor_pin_expected": "618cd4e75d",
+  "advisor_home": "/home/mvasiljevic/tt-mlir"
+}

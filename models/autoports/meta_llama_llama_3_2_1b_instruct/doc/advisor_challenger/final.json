@@ -1,0 +1,76 @@
+{
+  "outcome": "no_change",
+  "changed": false,
+  "changed_precision": false,
+  "incumbent_ms": 0.37307990714907646,
+  "final_ms": 0.37307990714907646,
+  "repeats_ms": [
+    0.3731231950223446,
+    0.37307990714907646,
+    0.3730061836540699,
+    0.373152457177639,
+    0.3730691038072109
+  ],
+  "winning_config": "incumbent",
+  "contribution_us_per_layer": 0.0,
+  "contribution_us_per_model": 0.0,
+  "oracle": "existing real-weight optimized-decoder correctness artifact; no candidate shipped",
+  "oracle_reference": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/optimized_decoder/real_weight_correctness.json",
+  "oracle_scope": "frozen incumbent retained unchanged",
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "model_estimate": {
+    "before_us": 5672.576,
+    "after_us": 5672.576,
+    "band_us": 2.336,
+    "per_kind": {
+      "dense": {
+        "before_us": 5672.576,
+        "after_us": 5672.576,
+        "layers": 16
+      }
+    },
+    "method": "per-layer measured op window x layers_of_kind, summed"
+  },
+  "advised_boundaries": {
+    "us_advisor_drops": 2.822,
+    "us_advisor_agrees": 1.320
+  },
+  "layer_handoff": {
+    "entry_from_dram": false,
+    "exit_in_l1": true,
+    "contribution_screened": false
+  },
+  "iterations": [
+    {
+      "trigger": "initial batch-32 reconciliation",
+      "candidate": "dense:b9 sdpa-to-concat L1 handoff",
+      "result": "hard_error: paged GQA SDPA explicitly rejects sharded output, which concat requires"
+    },
+    {
+      "trigger": "neighbor extension after 32-core geometry constraint",
+      "reranked_from": "reconciliation_dense.json",
+      "candidate": "dense:2 full residual chain on exactly-dividing 64-core grid",
+      "measured_ms": 0.42034145444631577,
+      "result": "rejected; slower than incumbent"
+    },
+    {
+      "trigger": "dram_resident advice",
+      "reranked_from": "reconciliation_dense.json",
+      "candidates": {
+        "rotary_k_dram": "hard_error: paged_update_cache requires sharded input",
+        "concat_output_dram": {
+          "measured_ms": 0.3732367791235447,
+          "repeats_ms": [0.3795035742223263, 0.37337083369493484, 0.3732367791235447, 0.37300294265151024, 0.373117346316576],
+          "result": "rejected; repeats overlap incumbent and median is slower"
+        }
+      }
+    }
+  ],
+  "rejected_knobs": [
+    "MD_LLAMA32_ADVISOR_CHAIN=sdpa_concat",
+    "MD_LLAMA32_ADVISOR_CHAIN=residual_chain_64",
+    "MD_LLAMA32_ADVISOR_CHAIN=rotary_k_dram",
+    "MD_LLAMA32_ADVISOR_CHAIN=concat_output_dram"
+  ]
+}
