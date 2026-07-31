@@ -9,6 +9,25 @@
 # Every entry is a debt: it must ship as a standalone upstream PR and then be REMOVED from this
 # file. Do not add an entry to make the gate green.
 #
+# BLAST RADIUS, measured 2026-07-30 (the question "does this affect other people's models?" is
+# already answered -- do not re-derive it, and do not trade a real regression risk for this
+# already-zero one):
+#   * ttnn.rand      -- NO file under models/ outside diffusion_gemma calls it. All 18 non-DG
+#                       callers are under tests/, i.e. ttnn's own suite. The one seed-pinned test
+#                       (tests/.../reduce/test_manual_seed.py) asserts on manual_seed ARGUMENT
+#                       handling, not on golden values, so it has no dependency on draw values.
+#   * compact output -- cannot be triggered by anyone else. It is selected by output-shape
+#                       inference (nnz.has_value() && out_volume == nnz*M*N), and the only non-DG
+#                       caller in the repo that passes optional_output_tensor at all is this
+#                       feature's own test. Every other caller keeps the expanded path, and
+#                       SPARSE_OUTPUT is defined only by the sparse factory, so all other matmul
+#                       callers stay byte-identical at TensorAccessorArgs<32>.
+# A DG-local rewrite of either was considered and REJECTED: relocating the rand fix means
+# hand-writing SFPU draw logic in a DG kernel and moving the default sampling path off ttnn.rand,
+# and relocating compact output means reimplementing the tuned multicore mcast-1d sparse matmul as
+# a generic_op. Both carry real regression risk to DG in exchange for zero reduction in risk to
+# others. See dg-out-of-folder-gate in project memory.
+#
 # --- PR A (tt_metal): Blackhole ttnn.rand advances its PRNG per element (#48291) -------------
 # A genuine ttnn.rand defect on Blackhole: the SFPU PRNG was one sliding window, so draws were
 # not independent across a row. The fix (5 draws/element) is an LLK header compiled into every
