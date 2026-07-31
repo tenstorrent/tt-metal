@@ -2707,15 +2707,19 @@ jobs:
 
             # Add individual user mentions
             SLACK_USER_MENTIONS=""
+            PING_RATE_LIMITED=false
             if [ -n "$SELECTED_OWNERS" ]; then
               IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
               for owner in "${SELECTED_ARRAY[@]}"; do
                 if [ -n "$owner" ]; then
                   # Get full name for this owner
                   USER_API="https://api.github.com/users/$owner"
-                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                  USER_RESPONSE=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                                  -H "Accept: application/vnd.github.v3+json" \
                                  "$USER_API" 2>/dev/null)
+                  USER_HTTP_CODE=$(echo "$USER_RESPONSE" | tail -n1)
+                  USER_DATA=$(echo "$USER_RESPONSE" | sed '$d')
+                  [ "$USER_HTTP_CODE" = "403" ] && PING_RATE_LIMITED=true
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                   if [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ]; then
                     USER_NAME="$owner"
@@ -2943,4 +2947,21 @@ jobs:
             echo "Slack notification enabled but no pending owners or groups to notify"
           else
             echo "Slack notification disabled"
+          fi
+
+          # Let devs know directly on the GitHub PR when resolving codeowner names
+          # hit a GitHub API rate limit — this is a GitHub-side signal about GitHub
+          # API failures, unrelated to whether the Slack notification above ran or
+          # succeeded. GitHub's reactions API has no "warning" content type, so a
+          # comment is the closest visible equivalent.
+          if [ "$PING_RATE_LIMITED" = "true" ] && [ "${{ github.event_name }}" = "issue_comment" ]; then
+            WARNING_JSON_FILE=$(mktemp)
+            jq -n --arg body "⚠️ CodeOwners ping hit a GitHub API rate limit while resolving names above — some may be inaccurate." '{"body": $body}' > "$WARNING_JSON_FILE"
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ github.token }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              --data-binary @"$WARNING_JSON_FILE" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments" > /dev/null
+            rm -f "$WARNING_JSON_FILE"
           fi

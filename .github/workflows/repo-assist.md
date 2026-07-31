@@ -1,7 +1,7 @@
 ---
 description: |
-  A friendly repository assistant for tt-metal that runs daily to support
-  contributors and maintainers. Can also be triggered on-demand via
+  A friendly repository assistant for tt-metal that runs 4 times a day
+  (every 6 hours) to support contributors and maintainers. Can also be triggered on-demand via
   '/repo-assist <instructions>' to perform specific tasks.
   - Triages open issues: labels, investigates, and comments helpfully
   - Identifies issues that can be fixed and opens pull requests with fixes
@@ -14,7 +14,7 @@ description: |
   Always polite, constructive, and mindful of the project's goals.
 
 on:
-  schedule: daily
+  schedule: every 6h
   workflow_dispatch:
     inputs:
       command:
@@ -40,7 +40,7 @@ permissions:
 # is gh-aw's own internal MCP Gateway sidecar hostname (image github/gh-aw-mcpg,
 # container awmg-mcpg), flagged by gh-aw's own firewall — it is benign and not a
 # real missing external dependency. It cannot be silenced via `network.allowed`:
-# the gh-aw compiler (v0.82.14) rejects a bare `awmgmcpg` token (not a valid
+# the gh-aw compiler (re-verified on v0.84.0) rejects a bare `awmgmcpg` token (not a valid
 # ecosystem id and no dot), and the gateway's real transport `host.docker.internal`
 # is already in the `defaults` allowlist, so allowlisting changes nothing. The block
 # is therefore handled at the instruction level instead — see the "Never forward
@@ -85,6 +85,7 @@ safe-outputs:
     max: 10
     target: "*"
     hide-older-comments: true
+    github-token: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
   create-pull-request:
     # Ready-for-review PRs are required so that tt-metal's pr-gate.yaml runs
     # build-artifact.yaml automatically. Draft PRs do not trigger pr-gate by design.

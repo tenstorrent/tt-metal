@@ -83,6 +83,7 @@
 #include "host_api.hpp"
 #include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
+#include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -464,10 +465,19 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                 ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
                 : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
 
-        for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
-            SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
+        ////////////////////////////////////////////////////////////
+        // Blaze-only experimental named args
+        // Removal is tracked by issue #50953
+        if (!kernel_descriptor.blaze_named_args.empty() || !kernel_descriptor.named_compile_time_args.empty()) {
+            experimental::blaze::process_named_args(*this, kernel_descriptor, kernel_handle);
+        } else {
+            ////////////////////////////////////////////////////////////
+            // Regular (non-Blaze) code path
+            for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
+                SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
+            }
+            SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
         }
-        SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
     }
 }
 
@@ -722,12 +732,12 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
 }
 
 void ProgramImpl::register_tensor_parameter(
-    const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only) {
+    const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
     auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
-        name, Metal2NameRegistry::RegisteredTensorParameter{spec, dynamic_tensor_shape, match_padded_shape_only});
+        name, Metal2NameRegistry::RegisteredTensorParameter{spec, relaxations});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
@@ -742,26 +752,15 @@ const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& na
     return &it->second.spec;
 }
 
-bool ProgramImpl::get_tensor_parameter_dynamic_tensor_shape(const std::string& name) const {
+experimental::TensorSpecRelaxations ProgramImpl::get_tensor_parameter_relaxations(const std::string& name) const {
     if (!metal2_registry_) {
-        return false;
+        return {};
     }
     auto it = metal2_registry_->tensor_parameter_layouts.find(name);
     if (it == metal2_registry_->tensor_parameter_layouts.end()) {
-        return false;
+        return {};
     }
-    return it->second.dynamic_tensor_shape;
-}
-
-bool ProgramImpl::get_tensor_parameter_match_padded_shape_only(const std::string& name) const {
-    if (!metal2_registry_) {
-        return false;
-    }
-    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
-    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
-        return false;
-    }
-    return it->second.match_padded_shape_only;
+    return it->second.relaxations;
 }
 
 std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {

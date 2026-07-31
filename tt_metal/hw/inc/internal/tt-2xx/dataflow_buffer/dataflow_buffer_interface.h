@@ -140,7 +140,7 @@ inline LocalDFBInterface& get_local_dfb_interface(uint32_t logical_dfb_id) {
 // It is used by the ISR to understand which tile counters need to update which credits (post/ack)
 struct TxnDFBDescriptor {
     uint8_t num_counters;
-    dfb::PackedTileCounter tile_counters[18];
+    dfb::PackedTileCounter tile_counters[dfb::MAX_TILE_COUNTERS_PER_SIDE];
     union {
         uint8_t tiles_to_post;
         uint8_t tiles_to_ack;

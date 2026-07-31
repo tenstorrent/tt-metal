@@ -69,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
         _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
-        _llk_unpack_binary_operands_init_(buf_desc_id_a, buf_desc_id_b, 1);
+        _llk_unpack_binary_operands_init_(buf_desc_id_a, buf_desc_id_b, 1 /*num_tiles_per_unpack*/);
         PROFILER_SYNC();
     }
     {
@@ -79,7 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * INPUT_TILE_CNT);
+            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * INPUT_TILE_CNT);
         }
         else
         {
@@ -124,8 +124,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
-        // Only L1_TO_L1 has a math-to-pack consumer.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        // End-to-end and math-isolate runs require FPU destination ownership.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
@@ -150,7 +150,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * INPUT_TILE_CNT);
+            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * INPUT_TILE_CNT);
         }
         else
         {
@@ -207,7 +207,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             volatile std::uint32_t* cfg                 = (volatile std::uint32_t*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
-        else
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
@@ -226,7 +226,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
-        _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
+        _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();
     }
     {

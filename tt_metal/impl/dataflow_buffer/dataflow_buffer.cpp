@@ -143,17 +143,27 @@ uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
 void RemapperIndexAllocator::reset() { next_index_.clear(); }
 
 std::vector<uint8_t> TxnIdAllocator::allocate(uint8_t count) {
-    // IDs are drawn from [1, 31]; id 0 is implicitly reserved (NOC_V2_TRID_STATIC).
+    // DFB pool is [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], allocated top-down so user
+    // kernels can keep constexpr trids in [0, USER_TXN_ID_MAX].
+    const uint8_t remaining =
+        (next_id_ >= DFB_TXN_ID_BASE) ? static_cast<uint8_t>(next_id_ - DFB_TXN_ID_BASE + 1) : static_cast<uint8_t>(0);
     TT_FATAL(
-        next_id_ + count <= 32,
-        "TxnIdAllocator exhausted: requested {} IDs at next_id_={}, but only [1, 31] are available",
+        count <= remaining,
+        "TxnIdAllocator exhausted: requested {} IDs but only {} remain in DFB pool [{}, {}] "
+        "(user kernels own [0, {}]; id 0 is NOC_V2_TRID_STATIC)",
         count,
-        next_id_);
+        remaining,
+        DFB_TXN_ID_BASE,
+        HW_TXN_ID_MAX,
+        USER_TXN_ID_MAX);
+    // Hand out a contiguous ascending block from the top of the remaining pool.
+    const uint8_t first = static_cast<uint8_t>(next_id_ - count + 1);
     std::vector<uint8_t> ids;
     ids.reserve(count);
     for (uint8_t i = 0; i < count; i++) {
-        ids.push_back(next_id_++);
+        ids.push_back(static_cast<uint8_t>(first + i));
     }
+    next_id_ = static_cast<uint8_t>(first - 1);
     return ids;
 }
 
@@ -511,6 +521,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         }
     }
 
+    // Mirrors the device's per-side tile-counter staging, which sums num_tcs_to_rr across that
+    // side's riscs in risc_mask order before copying the ids into a TxnDFBDescriptor.
+    uint32_t total_producer_tcs = 0;
+    uint32_t total_consumer_tcs = 0;
     // Write one dfb_initializer_per_risc_t per risc, in risc_mask order
     for (int bit = 0; bit < 16; bit++) {
         if (!(this->risc_mask & (1 << bit))) {
@@ -529,6 +543,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         dfb_initializer_per_risc_t per_risc = {};
 
         per_risc.num_tcs_and_init.num_tcs_to_rr = rc->config.num_tcs_to_rr;
+        (rc->is_producer ? total_producer_tcs : total_consumer_tcs) += rc->config.num_tcs_to_rr;
         per_risc.num_tcs_and_init.tc_init_done = 0;  // set by device when this producer finishes TC init
         per_risc.num_tcs_and_init.broadcast_tc = rc->config.broadcast_tc;
         log_debug(tt::LogMetal, "Num tcs to rr: {}", rc->config.num_tcs_to_rr);
@@ -562,6 +577,28 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         const auto* cfg_bytes = reinterpret_cast<const uint8_t*>(&per_risc);
         data.insert(data.end(), cfg_bytes, cfg_bytes + sizeof(per_risc));
     }
+
+    // A side only programs a TxnDFBDescriptor when it has transaction ids (implicit sync, and not
+    // Tensix-only). Such a side must fit the descriptor, otherwise the device would have to drop
+    // counter ids and the ISR would never credit them. Sides with no descriptor collect ids that
+    // are never read, so they are exempt.
+    TT_FATAL(
+        producer_txn_descriptor.num_txn_ids == 0 || total_producer_tcs <= ::dfb::MAX_TILE_COUNTERS_PER_SIDE,
+        "DFB {}: producer side needs {} tile counters ({} producers) but a transaction descriptor holds at "
+        "most {}.",
+        this->id,
+        total_producer_tcs,
+        this->config.num_producers,
+        static_cast<uint32_t>(::dfb::MAX_TILE_COUNTERS_PER_SIDE));
+    TT_FATAL(
+        consumer_txn_descriptor.num_txn_ids == 0 || total_consumer_tcs <= ::dfb::MAX_TILE_COUNTERS_PER_SIDE,
+        "DFB {}: consumer side needs {} tile counters ({} consumers x {} producers) but a transaction "
+        "descriptor holds at most {}.",
+        this->id,
+        total_consumer_tcs,
+        this->config.num_consumers,
+        this->config.num_producers,
+        static_cast<uint32_t>(::dfb::MAX_TILE_COUNTERS_PER_SIDE));
 
     log_debug(tt::LogMetal, "Serialized DFB {} for core ({},{}) size: {}", this->id, core.x, core.y, data.size());
 

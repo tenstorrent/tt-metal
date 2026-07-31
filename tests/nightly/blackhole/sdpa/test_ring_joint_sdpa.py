@@ -34,6 +34,7 @@ from ttnn.operations.ccl import Topology
 
 import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 
 # ============================================================================
 # CONFIGURATION CONSTANTS
@@ -491,7 +492,7 @@ class RingJointSDPARuntime:
     compute_kernel_config: object
 
 
-def open_ring_joint_sdpa_runtime(mesh_config, *, fp32_dest_acc_en: bool = False):
+def open_ring_joint_sdpa_runtime(mesh_config, *, fp32_dest_acc_en: bool = False, trace_region_size: int = 0):
     use_ring = mesh_config.sp_size > 2
     fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
     topology = Topology.Ring if use_ring else Topology.Linear
@@ -515,7 +516,9 @@ def open_ring_joint_sdpa_runtime(mesh_config, *, fp32_dest_acc_en: bool = False)
         )
 
         mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+        # trace_region_size defaults to 0 (no trace region), leaving every existing caller unchanged; only
+        # the trace-replay test asks for one.
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
 
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -3032,6 +3035,564 @@ def test_ring_mla_nd_sharded_indexed_kv_cache_accuracy():
     )
 
 
+# ============================================================================
+# TRACE-SAFE METADATA PATH: metadata-path == scalar-path (bit-exact)
+# ============================================================================
+# ring_mla gains an opt-in `metadata` tensor (the runner's canonical h2d_socket_sync payload
+# [slot_id, actual_start, actual_end], replicated uint32 DRAM). When set, the per-chunk scalars
+# (kv_cache_batch_idx = slot_id; kv_actual_isl = actual_start; logical_n = actual_start +
+# chunk_size_global) are read ON-DEVICE from this tensor instead of being baked into the program by
+# the host, so a single captured ttnn trace replays across chunks. These tests assert the metadata
+# path is BIT-IDENTICAL to the classic host-scalar path on every supported case (the op is the same
+# kernel math; only where the scalars come from differs).
+#
+# The migration is incremental (see TRACEABLE_METADATA_PATH.md): each scalar is moved on-device one
+# at a time. `META_PATH_HOST_SCALARS` lists the scalars whose on-device read has NOT landed yet -- a
+# listed scalar is still passed as a host arg on the metadata path so the comparison stays exact.
+# Drop an entry the moment its on-device read is implemented; the bit-exact assert then proves the
+# new on-device computation matches the host one.
+# kv_cache_batch_idx (metadata[0]) and kv_actual_isl (metadata[1]) are BOTH read on-device now (all-gather
+# reader + SDPA reader), so the metadata path passes neither as a host scalar -- the set is empty and the
+# bit-exact assert is fully discriminating. (The rotation test passes kv_actual_isl=None and relies
+# entirely on the on-device derivation, so keeping it in the set was stale/misleading.)
+META_PATH_HOST_SCALARS: set = set()
+
+
+def _make_ring_mla_scalar_tensor(mesh_device, value):
+    """1-element uint32 replicated DRAM tensor ([1,1,1,1]) holding a single per-chunk scalar that the
+    trace-safe ring_mla reads on-device. Mirrors the update_padded_kv_cache / rotary metadata layout."""
+    payload = torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1)
+    return ttnn.from_torch(
+        payload,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _make_ring_mla_metadata(mesh_device, slot_id, actual_start):
+    """Build the two 1-element uint32 DRAM tensors the trace-safe ring_mla reads on-device: slot_id
+    (was metadata[0]) and kv_actual_isl == actual_start (was metadata[1]). Returns
+    (slot_id_tensor, kv_actual_isl_tensor). The runner's canonical h2d payload also carries actual_end,
+    but this op never reads it (logical_n stays a host arg), so it is not a parameter here."""
+    return (
+        _make_ring_mla_scalar_tensor(mesh_device, slot_id),
+        _make_ring_mla_scalar_tensor(mesh_device, actual_start),
+    )
+
+
+@pytest.mark.parametrize("kv_cache_batch_idx", [0, 1], ids=["slot0", "slot1"])
+def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx):
+    """Indexed K/V cache (no rotation): the metadata path (slot read on-device from metadata[0])
+    must produce a bit-identical output to the scalar path (kv_cache_batch_idx host arg).
+
+    This is the first migration increment -- it exercises kv_cache_batch_idx, which the fused
+    all-gather reader will read from metadata[0]. While 'kv_cache_batch_idx' is still in
+    META_PATH_HOST_SCALARS the metadata path also passes the host scalar, so the only thing under
+    test today is the metadata plumbing (nanobind kwarg + tensor_args + program hash). Once the
+    on-device read lands, drop it from the set and this asserts the on-device slot select."""
+    mesh_config = MESH_CONFIG
+    if mesh_config.sp_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
+
+    b, local_heads, per_device_seq_len = 1, 4, 128
+    nhq = local_heads * mesh_config.tp_size
+    nhk = 1
+    sq = per_device_seq_len * mesh_config.sp_size
+    d_q, d_k, d_v = 64, 64, 32
+    cache_batch = 2
+    assert 0 <= kv_cache_batch_idx < cache_batch
+
+    torch.manual_seed(1234)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    mesh_device = runtime.mesh_device
+    sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
+    try:
+        Q = fa_rand(b, nhq, sq, d_q)
+        KV = fa_rand(b, nhk, sq, d_k)
+        # Embed the real K/V at the requested cache slot; other slots are garbage that must not leak.
+        KV_input = fa_rand(cache_batch, nhk, sq, d_k) * 100
+        KV_input[kv_cache_batch_idx : kv_cache_batch_idx + 1] = KV
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=32,
+            k_chunk_size=32,
+            exp_approx_mode=False,
+        )
+
+        q_shard_dims = [None, None]
+        q_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            q_shard_dims[tp_axis] = 1
+        kv_shard_dims = [None, None]
+        kv_shard_dims[sp_axis] = 2
+        persistent_shard_dims = [None, None]  # gathered KV replicated (single latent head)
+
+        tt_Q = ttnn.from_torch(
+            Q,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims),
+        )
+        tt_KV = ttnn.from_torch(
+            KV_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
+        )
+
+        # ring_mla writes into the persistent gather buffer, so each run gets its OWN freshly-zeroed
+        # instance: sharing one across the two runs would let the scalar run's leftovers stand in for
+        # anything the metadata run fails to gather, and the comparison could pass on stale data.
+        def make_persistent_output_buffer_kv():
+            return ttnn.from_torch(
+                torch.zeros(cache_batch, nhk, sq, d_k),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_shard_dims
+                ),
+            )
+
+        # No rotation here: the whole sq is valid, so actual_start=0.
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, slot_id=kv_cache_batch_idx, actual_start=0)
+
+        main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
+        main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
+        composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
+
+        def run(use_metadata):
+            # On the metadata path, a scalar still in META_PATH_HOST_SCALARS is also passed as a host
+            # arg (its on-device read has not landed yet) so the result stays bit-exact.
+            pass_kv_idx = (not use_metadata) or ("kv_cache_batch_idx" in META_PATH_HOST_SCALARS)
+            tt_out, _ = ttnn.transformer.ring_mla(
+                tt_Q,
+                tt_KV,
+                persistent_output_buffer_kv=make_persistent_output_buffer_kv(),
+                head_dim_v=d_v,
+                logical_n=sq,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+                kv_cache_batch_idx=kv_cache_batch_idx if pass_kv_idx else None,
+                slot_id=tt_slot_id if use_metadata else None,
+                kv_actual_isl_tensor=tt_kv_actual_isl if use_metadata else None,
+            )
+            return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, :sq, :d_v]
+
+        out_scalar = run(use_metadata=False)
+        out_meta = run(use_metadata=True)
+
+        assert torch.equal(out_scalar, out_meta), (
+            f"slot {kv_cache_batch_idx}: metadata-path ring_mla output differs from scalar-path "
+            f"(max abs diff {(out_scalar - out_meta).abs().max().item()})"
+        )
+        logger.success(f"ring_mla slot {kv_cache_batch_idx}: metadata path == scalar path (bit-exact)")
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+@pytest.mark.parametrize("kv_actual_isl", [64, 256, 320], ids=["kv64", "kv256", "kv320"])
+def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl):
+    """KV-pad rotation: the metadata path (kv_actual_isl read on-device from metadata[1], with logical_nt
+    / q-mapping / ring masks derived in the reader and handed to compute via cb_kv_pad_derived) must be
+    bit-identical to the scalar path (host kv_actual_isl). This is the discriminating test for the task-4
+    on-device derivation: on the metadata path kv_actual_isl is dropped, so the host CANNOT compute the
+    q-mapping -- it comes solely from the reader's metadata-driven derivation. Both paths run indexed
+    (single-slot) mode at slot 0 so the only difference under test is where kv_actual_isl comes from."""
+    mesh_config = MESH_CONFIG
+    if mesh_config.sp_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
+    sp_size = mesh_config.sp_size
+    tile = 32
+    chunk_size_local = 64
+    chunk_size_global = chunk_size_local * sp_size
+    new_actual_isl = chunk_size_global  # one full new chunk
+    assert kv_actual_isl % tile == 0
+
+    b, local_heads = 1, 4
+    nhq = local_heads * mesh_config.tp_size
+    nhk = 1
+    d_q, d_k, d_v = 64, 64, 32
+    logical_n = kv_actual_isl + new_actual_isl
+
+    torch.manual_seed(1234)
+    old_cache_kv = fa_rand(b, nhk, kv_actual_isl, d_k)
+    new_tokens_q = fa_rand(b, nhq, new_actual_isl, d_q)
+    new_tokens_kv = fa_rand(b, nhk, new_actual_isl, d_k)
+    q_host, kv_host, valid_rows, _, num_cache_slabs = build_kv_pad_rotation_mla_inputs(
+        old_cache_kv, new_tokens_q, new_tokens_kv, kv_actual_isl, sp_size, chunk_size_local
+    )
+    cache_seq_per_dev = num_cache_slabs * chunk_size_local
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    mesh_device = runtime.mesh_device
+    sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
+    try:
+        q_shard_dims = [None, None]
+        q_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            q_shard_dims[tp_axis] = 1
+        kv_shard_dims = [None, None]
+        kv_shard_dims[sp_axis] = 2  # latent K/V sharded along seq across the ring
+        persistent_shard_dims = [None, None]  # gathered KV replicated
+
+        tt_q = ttnn.from_torch(
+            q_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims),
+        )
+        tt_kv = ttnn.from_torch(
+            kv_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
+        )
+
+        # Own instance per run -- ring_mla writes this buffer, so sharing it between the two runs would let
+        # the scalar run's leftovers stand in for anything the metadata run fails to gather.
+        def make_persistent_output_buffer_kv():
+            return ttnn.from_torch(
+                torch.zeros(b, nhk, sp_size * cache_seq_per_dev, d_k),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_shard_dims
+                ),
+            )
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=32,
+            k_chunk_size=32,
+            exp_approx_mode=False,
+        )
+        # metadata tensors: slot_id=0, kv_actual_isl tensor = kv_actual_isl.
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, slot_id=0, actual_start=kv_actual_isl)
+
+        main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
+        main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
+        composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
+
+        def run(use_metadata):
+            tt_out, _ = ttnn.transformer.ring_mla(
+                tt_q,
+                tt_kv,
+                persistent_output_buffer_kv=make_persistent_output_buffer_kv(),
+                head_dim_v=d_v,
+                logical_n=logical_n,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+                # Both paths run indexed at slot 0; the metadata path additionally drops kv_actual_isl so
+                # the q-mapping must be derived on-device from metadata[1].
+                kv_cache_batch_idx=None if use_metadata else 0,
+                kv_actual_isl=None if use_metadata else kv_actual_isl,
+                slot_id=tt_slot_id if use_metadata else None,
+                kv_actual_isl_tensor=tt_kv_actual_isl if use_metadata else None,
+            )
+            return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, valid_rows, :d_v]
+
+        out_scalar = run(use_metadata=False)
+        out_meta = run(use_metadata=True)
+        assert torch.equal(out_scalar, out_meta), (
+            f"kv_actual_isl={kv_actual_isl}: metadata-path ring_mla output differs from scalar-path "
+            f"(max abs diff {(out_scalar - out_meta).abs().max().item()})"
+        )
+        logger.success(f"ring_mla rotation kv_actual_isl={kv_actual_isl}: metadata path == scalar path (bit-exact)")
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+def _ring_mla_host_scalar_tensor(mesh_device, value):
+    """HOST-side twin of _make_ring_mla_scalar_tensor, for refreshing a metadata tensor in place with
+    ttnn.copy_host_to_device_tensor (the specs must match exactly). Mirrors the runner's own update path."""
+    return ttnn.from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+# One captured ring_mla is small; 4 MB is ample headroom for the segment plus its runtime args.
+RING_MLA_TRACE_REGION_SIZE = 4 * 1024 * 1024
+
+
+@pytest.mark.parametrize("num_chunks", [4], ids=["chunks4"])
+def test_ring_mla_metadata_trace_replay_matches_scalar(num_chunks):
+    """ONE captured trace, replayed once per chunk with only the metadata tensors refreshed in place,
+    must match the scalar path chunk-for-chunk.
+
+    This is the coverage the single-dispatch metadata tests structurally cannot provide, and it is the
+    whole point of the metadata path. Both hazards the kernels work around are multi-dispatch phenomena:
+
+      * the op-start NoC drop-to-zero on a reader's FIRST read recurs on every dispatch, so it can appear
+        on replay 3 having been absent on replays 0-2;
+      * the metadata tensors sit at FIXED DRAM addresses that the host rewrites between replays, so a
+        missing invalidate_l1_cache() surfaces as a replay computing from the PRIOR chunk's slot /
+        kv_actual_isl.
+
+    Neither is a small numeric drift: a chunk that replays the previous chunk's kv_actual_isl gathers the
+    wrong KV prefix and mis-maps Q, so a bit-exact comparison fails loudly rather than degrading.
+
+    What makes this discriminating is where the per-chunk geometry comes from. The metadata path is driven
+    exactly as the model drives it (mla.py: `ring_logical_n = global cache capacity` when metadata is
+    set): the host `logical_n` is a CONSTANT placeholder -- full capacity, identical for every chunk --
+    because logical_n is excluded from the program hash and runtime-patched
+    (compute_program_hash: cache_key_logical_n = 0 when rotation is on), and a captured trace freezes
+    runtime args. So the only thing that distinguishes one replay from the next is the metadata tensors,
+    and a replay is correct ONLY IF logical_nt, the q-mapping and the ring masks are truly re-derived
+    on-device from kv_actual_isl. The scalar reference, by contrast, gets the real per-chunk logical_n."""
+    mesh_config = MESH_CONFIG
+    sp_size = mesh_config.sp_size
+    if sp_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={sp_size}")
+
+    tile_height = 32
+    chunk_size_local = 32
+    chunk_size_global = chunk_size_local * sp_size
+    # Chunk starts drift across cache-slab boundaries (not slab-aligned), so consecutive chunks exercise
+    # different rotation geometry -- a stale kv_actual_isl cannot accidentally produce the right answer.
+    new_actual_isl = chunk_size_global // 2 + tile_height
+    assert new_actual_isl % tile_height == 0 and new_actual_isl <= chunk_size_global
+    total_seq = new_actual_isl * num_chunks
+
+    b, local_heads, nhk = 1, 4, 1
+    nhq = local_heads * mesh_config.tp_size
+    d_q, d_k, d_v = 64, 64, 32
+    cache_batch = 2
+    slot_id = 1  # non-zero: a dropped/stale slot read lands on the garbage slot, not silently on ours
+
+    # Fixed max-sized allocations, exactly as the model does: the buffers are sized for the longest chunk
+    # and only kv_actual_isl grows, so shapes stay constant and a single capture is legitimate.
+    max_cache_slabs = max(2, math.ceil(total_seq / chunk_size_global) + 1)
+    persistent_seq_len = sp_size * max_cache_slabs * chunk_size_local
+    max_input_cache_slabs = max(
+        max(2, math.ceil(((i + 1) * new_actual_isl) / chunk_size_global)) for i in range(num_chunks)
+    )
+    stable_kv_input_seq_len = sp_size * max_input_cache_slabs * chunk_size_local
+    stable_cache_seq_per_dev = stable_kv_input_seq_len // sp_size
+
+    torch.manual_seed(CHUNKED_PREFILL_SEED)
+    q_full = fa_rand(b, nhq, total_seq, d_q)
+    kv_full = fa_rand(b, nhk, total_seq, d_k)
+
+    # Per-chunk host inputs, built up front so both paths see byte-identical device inputs.
+    chunks = []
+    for i in range(num_chunks):
+        kv_actual_isl = i * new_actual_isl
+        logical_n = kv_actual_isl + new_actual_isl
+        q_host, kv_host, valid_rows, kv_valid_per_dev, _ = build_kv_pad_rotation_mla_inputs(
+            kv_full[:, :, :kv_actual_isl, :],
+            q_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            kv_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            kv_actual_isl,
+            sp_size,
+            chunk_size_local,
+        )
+        cache_seq_per_dev = kv_host.shape[2] // sp_size
+        assert stable_kv_input_seq_len >= kv_host.shape[2] and persistent_seq_len > kv_host.shape[2]
+        # Embed this chunk's rotated KV into the stable physical layout; the untouched remainder is
+        # garbage that must not leak into the result.
+        kv_input_per_dev = torch.randn(cache_batch, nhk, sp_size, stable_cache_seq_per_dev, d_k) * 100
+        active = kv_input_per_dev[slot_id : slot_id + 1, :, :, :cache_seq_per_dev, :]
+        active.copy_(
+            torch.where(
+                kv_valid_per_dev.reshape(1, 1, sp_size, cache_seq_per_dev, 1),
+                kv_host.reshape(1, nhk, sp_size, cache_seq_per_dev, d_k),
+                active,
+            )
+        )
+        chunks.append(
+            {
+                "kv_actual_isl": kv_actual_isl,
+                "logical_n": logical_n,
+                "q_host": q_host,
+                "kv_host": kv_input_per_dev.reshape(cache_batch, nhk, stable_kv_input_seq_len, d_k),
+                "valid_rows": valid_rows,
+            }
+        )
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, trace_region_size=RING_MLA_TRACE_REGION_SIZE)
+    mesh_device = runtime.mesh_device
+    sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
+    trace_id = None
+    try:
+        mesh_device.enable_program_cache()  # a trace replays cached programs; capture cannot JIT-compile
+
+        q_shard_dims = [None, None]
+        q_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            q_shard_dims[tp_axis] = 1
+        kv_shard_dims = [None, None]
+        kv_shard_dims[sp_axis] = 2
+        persistent_shard_dims = [None, None]
+
+        def host_sharded(host_tensor, dims):
+            return ttnn.from_torch(
+                host_tensor,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        def upload(host_tensor, dims):
+            return ttnn.from_torch(
+                host_tensor,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        # Allocated ONCE. Under trace these addresses are baked into the capture, so every chunk must be
+        # delivered by updating these same buffers in place -- the model's exact discipline.
+        tt_q = upload(chunks[0]["q_host"], q_shard_dims)
+        tt_kv = upload(chunks[0]["kv_host"], kv_shard_dims)
+        persistent_output_buffer_kv = upload(
+            torch.zeros(cache_batch, nhk, persistent_seq_len, d_k), persistent_shard_dims
+        )
+        zeros_persistent_host = host_sharded(
+            torch.zeros(cache_batch, nhk, persistent_seq_len, d_k), persistent_shard_dims
+        )
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(
+            mesh_device, slot_id=slot_id, actual_start=chunks[0]["kv_actual_isl"]
+        )
+
+        def load_chunk(i):
+            """Deliver chunk i the way a traced runner does: in-place refresh of the input and metadata
+            tensors, no reallocation. The gather buffer is re-zeroed so a replay that fails to gather
+            cannot pass on the previous chunk's leftovers."""
+            ttnn.copy_host_to_device_tensor(host_sharded(chunks[i]["q_host"], q_shard_dims), tt_q)
+            ttnn.copy_host_to_device_tensor(host_sharded(chunks[i]["kv_host"], kv_shard_dims), tt_kv)
+            ttnn.copy_host_to_device_tensor(zeros_persistent_host, persistent_output_buffer_kv)
+            ttnn.copy_host_to_device_tensor(_ring_mla_host_scalar_tensor(mesh_device, slot_id), tt_slot_id)
+            ttnn.copy_host_to_device_tensor(
+                _ring_mla_host_scalar_tensor(mesh_device, chunks[i]["kv_actual_isl"]), tt_kv_actual_isl
+            )
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=32,
+            k_chunk_size=32,
+            exp_approx_mode=False,
+        )
+        main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
+        main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
+        composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
+
+        def call(*, use_metadata, logical_n, kv_actual_isl):
+            tt_out, _ = ttnn.transformer.ring_mla(
+                tt_q,
+                tt_kv,
+                persistent_output_buffer_kv=persistent_output_buffer_kv,
+                head_dim_v=d_v,
+                logical_n=logical_n,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+                kv_cache_batch_idx=None if use_metadata else slot_id,
+                kv_actual_isl=None if use_metadata else kv_actual_isl,
+                slot_id=tt_slot_id if use_metadata else None,
+                kv_actual_isl_tensor=tt_kv_actual_isl if use_metadata else None,
+            )
+            return tt_out
+
+        # 1) Scalar reference per chunk (host scalars, eager) -- the ground truth to match.
+        references = []
+        for i, chunk in enumerate(chunks):
+            load_chunk(i)
+            out = call(use_metadata=False, logical_n=chunk["logical_n"], kv_actual_isl=chunk["kv_actual_isl"])
+            references.append(ttnn.to_torch(out, mesh_composer=composer)[:, :, chunk["valid_rows"], :d_v])
+            ttnn.deallocate(out)
+
+        # 2) Compile the metadata-path program, then capture it ONCE. logical_n is the model's constant
+        #    placeholder -- the KV input's global capacity, the same for every chunk (mla.py sets
+        #    ring_logical_n = cache capacity on the metadata path) -- so the capture carries no per-chunk
+        #    information at all and every replay must derive its geometry from the metadata tensors.
+        capture_logical_n = stable_kv_input_seq_len
+        load_chunk(0)
+        warm = call(use_metadata=True, logical_n=capture_logical_n, kv_actual_isl=None)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(warm)
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        tt_out_traced = call(use_metadata=True, logical_n=capture_logical_n, kv_actual_isl=None)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        # 3) Replay the single capture, refreshing only the inputs + metadata in place before each replay.
+        #    The order is deliberately not just ascending: a forward pass, a descending pass (where a stale
+        #    kv_actual_isl would be too LARGE and over-gather), then an out-of-order pass. Repeated
+        #    dispatches also matter in their own right -- the op-start drop-to-zero recurs per dispatch, so
+        #    more replays is strictly more exposure at ~10ms each.
+        replay_order = list(range(num_chunks)) + list(reversed(range(num_chunks))) + [0, num_chunks - 1, 1]
+        for replay_idx, i in enumerate(replay_order):
+            chunk = chunks[i]
+            load_chunk(i)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            got = ttnn.to_torch(tt_out_traced, mesh_composer=composer)[:, :, chunk["valid_rows"], :d_v]
+            assert torch.equal(got, references[i]), (
+                f"replay {replay_idx} of order {replay_order}: "
+                f"chunk {i} (kv_actual_isl={chunk['kv_actual_isl']}, real logical_n={chunk['logical_n']}, "
+                f"capture placeholder logical_n={capture_logical_n}): traced metadata replay differs from the "
+                f"scalar path (max abs diff {(got - references[i]).abs().max().item()}). A replay matching "
+                f"chunk {i - 1} instead points at a stale metadata read; zeros point at the op-start "
+                f"drop-to-zero."
+            )
+            logger.info(
+                f"ring_mla trace replay {replay_idx} (chunk {i}, kv_actual_isl={chunk['kv_actual_isl']}): bit-exact"
+            )
+
+        logger.success(
+            f"ring_mla trace: 1 capture, {len(replay_order)} replays over {num_chunks} chunks "
+            f"(order {replay_order}), all bit-exact vs the scalar path"
+        )
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(mesh_device, trace_id)
+        close_ring_joint_sdpa_runtime(runtime)
+
+
 # Generate perf test parameters dynamically based on detected hardware for different models (WAN, MLA, VideGen...)
 TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MESH_CONFIG, RING_JOINT_PERF_MODEL_CONFIGS)
 TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
@@ -3541,6 +4102,10 @@ else:
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.skipif(
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+)
 def test_ring_joint_attention_perf_check(
     model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin
 ):
@@ -4406,6 +4971,10 @@ else:
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.skipif(
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+)
 def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
     chunk against a 50k K/V prefix), simulated on the 4-device QuietBox, via realtime profiler and assert

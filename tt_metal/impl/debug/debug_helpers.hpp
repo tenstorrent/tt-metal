@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <optional>
 #include <set>
 #include <vector>
 #include <cctype>
@@ -112,6 +113,114 @@ inline std::string_view get_core_type_name(CoreType ct) {
     }
 }
 
+// The kQuasarErr* shifts and masks for the error code layout live in error_handling.h, shared
+// with the device side so both decode the same bits.
+
+// enchantum::to_string gives back an empty view for unnamed values, which ends up as a blank
+// field in the watcher log.
+template <typename E>
+inline std::string quasar_enum_name_or_hex(uint32_t raw) {
+    const auto name = enchantum::to_string(static_cast<E>(raw));
+    return name.empty() ? fmt::format("unknown code 0x{:02x}", raw) : std::string{name};
+}
+
+// Only the per-TRISC blocks put a PC in ERR_DATA, and those print it up front like the DM
+// faults. Everything else gets it as a trailing field, see get_quasar_error_data_name().
+inline bool quasar_error_data_is_pc(TriscErrors block) {
+    switch (block) {
+        case TriscErrors::ERROR_TRISC0:
+        case TriscErrors::ERROR_TRISC1:
+        case TriscErrors::ERROR_TRISC2:
+        case TriscErrors::ERROR_TRISC3: return true;
+        default: return false;
+    }
+}
+
+// What's in ERR_DATA, which depends on the block. For the per-TRISC errors it's a PC, the last
+// instruction to commit, so for a timeout it's roughly where the thread gave up rather than the
+// exact culprit. Disassemble around it: on a MEM_READ_NO_RESPONSE that points at the load whose
+// response never arrived.
+inline std::string_view get_quasar_error_data_name(TriscErrors block) {
+    switch (block) {
+        case TriscErrors::ERROR_TRISC0:
+        case TriscErrors::ERROR_TRISC1:
+        case TriscErrors::ERROR_TRISC2:
+        case TriscErrors::ERROR_TRISC3: return "PC";
+        case TriscErrors::NEO_SEMAPHORES:
+        case TriscErrors::GLOBAL_SEMAPHORES: return "semaphore index";
+        case TriscErrors::TILE_COUNTERS: return "tile counter index";
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC0:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC1:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC2:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC3: return "offending instruction";
+        default: return "faulting address or instruction";
+    }
+}
+
+// Which TRISC reported, or nullopt for the Neo-level blocks (TDMA, EDC, semaphores, SFPU, tile
+// counters) since those aren't tied to a single thread.
+//
+// Careful: the illegal-instruction blocks count backwards, 32 is TRISC3 and 35 is TRISC0, the
+// opposite way round to ERROR_TRISC0..3. Keep that in here rather than open-coding it.
+inline std::optional<uint32_t> get_quasar_error_trisc_id(TriscErrors block) {
+    const auto raw = static_cast<uint32_t>(block);
+    if (raw <= static_cast<uint32_t>(TriscErrors::ERROR_TRISC3)) {
+        return raw;
+    }
+    if (raw >= static_cast<uint32_t>(TriscErrors::ILLEGAL_INSTRUCTION_TRISC3) &&
+        raw <= static_cast<uint32_t>(TriscErrors::ILLEGAL_INSTRUCTION_TRISC0)) {
+        return static_cast<uint32_t>(TriscErrors::ILLEGAL_INSTRUCTION_TRISC0) - raw;
+    }
+    return std::nullopt;
+}
+
+// Decodes error_code[7:0]. Takes the block as well because the index means nothing on its own.
+// Empty for the blocks that don't carry an index (EDC, unallocated IDs).
+inline std::string get_quasar_error_index_description(TriscErrors block, uint32_t index) {
+    switch (block) {
+        case TriscErrors::ERROR_TRISC0:
+        case TriscErrors::ERROR_TRISC1:
+        case TriscErrors::ERROR_TRISC2:
+        case TriscErrors::ERROR_TRISC3: return quasar_enum_name_or_hex<TriscRiscErrors>(index);
+
+        case TriscErrors::UNPACKER_0:
+        case TriscErrors::UNPACKER_1:
+        case TriscErrors::UNPACKER_2:
+        case TriscErrors::PACKER_0:
+        case TriscErrors::PACKER_1: return quasar_enum_name_or_hex<TdmaErrors>(index);
+
+        case TriscErrors::NEO_SEMAPHORES:
+        case TriscErrors::GLOBAL_SEMAPHORES: return quasar_enum_name_or_hex<SemaphoreErrors>(index & 0x7);
+
+        // Sticky bitmask rather than a single value, so both bits can be up at once.
+        case TriscErrors::SFPU: {
+            std::vector<std::string_view> flags;
+            if (index & static_cast<uint32_t>(SfpuErrors::CC_STACK_OVERFLOW)) {
+                flags.emplace_back("CC_STACK_OVERFLOW");
+            }
+            if (index & static_cast<uint32_t>(SfpuErrors::CC_STACK_UNDERFLOW)) {
+                flags.emplace_back("CC_STACK_UNDERFLOW");
+            }
+            return flags.empty() ? fmt::format("unknown code 0x{:02x}", index)
+                                 : fmt::format("{}", fmt::join(flags, " + "));
+        }
+
+        // Which counter went bad, not a reason code.
+        case TriscErrors::TILE_COUNTERS: return fmt::format("counter {}", index);
+
+        case TriscErrors::EDC_FATAL_ERROR:
+        case TriscErrors::EDC_CORRECTABLE_ERROR: return {};
+
+        // Only the opcode here, the caller prints the whole instruction out of ERR_DATA.
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC0:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC1:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC2:
+        case TriscErrors::ILLEGAL_INSTRUCTION_TRISC3: return fmt::format("opcode 0x{:02x}", index);
+
+        default: return {};
+    }
+}
+
 // Returns the assert message portion for a given assert type
 // Returns empty string for unknown types (callers must handle this)
 // For DebugAssertTripped, line_num is used in the message
@@ -149,12 +258,40 @@ inline std::string get_debug_assert_message(
                     enchantum::to_string(static_cast<DmErrors>(hw_fault_info & 0xffffffff)),
                     (hw_fault_info >> 32) & 0xffffffff);
             } else {
+                const uint32_t error_code = hw_fault_info & 0xffffffff;
+                const uint32_t neo = (error_code >> kQuasarErrNeoShift) & kQuasarErrNeoMask;
+                const auto block =
+                    static_cast<TriscErrors>((error_code >> kQuasarErrBlockShift) & kQuasarErrBlockMask);
+                const uint32_t index = error_code & kQuasarErrIndexMask;
+
+                const std::string block_name =
+                    quasar_enum_name_or_hex<TriscErrors>((error_code >> kQuasarErrBlockShift) & kQuasarErrBlockMask);
+                const std::string detail = get_quasar_error_index_description(block, index);
+
+                // Left off entirely for Neo-level blocks instead of defaulting to 0, otherwise
+                // "no thread" and "thread 0" look the same.
+                const auto trisc = get_quasar_error_trisc_id(block);
+                const std::string where = fmt::format(
+                    "Neo {}{}", neo, trisc.has_value() ? fmt::format(" TRISC{}", *trisc) : std::string{});
+                const std::string cause = fmt::format(
+                    "{}{}", block_name, detail.empty() ? std::string{} : fmt::format(" ({})", detail));
+                const uint32_t err_data = (hw_fault_info >> 32) & 0xffffffff;
+
+                if (quasar_error_data_is_pc(block)) {
+                    return fmt::format(
+                        "hardware fault occurred at PC 0x{:08x} on {} with cause: {}, error_code 0x{:04x}",
+                        err_data,
+                        where,
+                        cause,
+                        error_code & 0xffff);
+                }
                 return fmt::format(
-                    "hardware fault occurred with cause: {}, additional code: 0x{:08x}, faulting address or "
-                    "instruction: 0x{:08x}",
-                    enchantum::to_string(static_cast<TriscErrors>((hw_fault_info >> 8) & 0x3f)),
-                    hw_fault_info & 0xff,
-                    (hw_fault_info >> 32) & 0xffffffff);
+                    "hardware fault occurred on {} with cause: {}, error_code 0x{:04x}, {}: 0x{:08x}",
+                    where,
+                    cause,
+                    error_code & 0xffff,
+                    get_quasar_error_data_name(block),
+                    err_data);
             }
         default: return "";
     }

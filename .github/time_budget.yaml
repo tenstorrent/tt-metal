@@ -237,7 +237,7 @@ runtime:
     bh_p150b_civ2: 214
     bh_p300: 69
     bh_p150b_civ2_viommu: 11
-    bh_p100a_civ2_viommu: 74
+    bh_p100a_civ2_viommu: 79
     bh_loudbox: 20
     wh_galaxy: 39
   integration:
@@ -277,6 +277,9 @@ llk:
   perf:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
+  bit_exact:
+    wh_n150_civ2: 90
+    bh_p150b_civ2: 180
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
@@ -337,7 +340,7 @@ models:
     wh_galaxy_perf: 45
     bh_p150: 20
     bh_quietbox_2: 260
-    bh_galaxy: 70
+    bh_galaxy: 75
     bh_sc1: 25  # Flux multihost tests (timeout 20 + headroom)
   unit_tier2:
     wh_llmbox: 114
@@ -369,7 +372,8 @@ models:
     wh_galaxy_perf: 150
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
-    bh_sc1: 480
+    bh_sc1: 437
+    bh_sc1_high_power: 108
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
