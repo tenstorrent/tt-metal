@@ -161,7 +161,7 @@ class ProgramConfig:
                 divisors = [d for d in range(2, in0_block_w + 1) if Kt % d == 0]
                 in0_block_w = max(divisors) if divisors else Kt
 
-        # Reject configs that hit the PR #51514 reload defect. That defect is
+        # Reject configs that hit the PR #51514 reload issue. That issue is
         # silent: no crash, no warning, just wrong values that grow to infinity
         # a few decode steps later. Checked after in0_block_w is snapped above,
         # so the values here are the ones the kernel actually receives.

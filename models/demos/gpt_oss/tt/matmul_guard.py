@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Guard against the sparse/1D matmul reload defect described in PR #51514.
+"""Guard against the sparse/1D matmul reload issue described in PR #51514.
 
 The compute kernel bmm_large_block_zm_fused_bias_activation.cpp splits the
 reduction over K into chunks when in0_block_w does not cover the whole depth.
@@ -14,7 +14,7 @@ every three are wrong (60 of 90). Nothing crashes and nothing warns: the wrong
 values feed the next layer, grow, and reach infinity a few decode steps later,
 so the model writes nonsense.
 
-The defect needs all three of these at the same time:
+The issue needs all three of these at the same time:
 
   1. out_subblock_w > 1        the subblock spans more than one tile, so a
                                later tile exists for the reload to corrupt
@@ -29,7 +29,7 @@ Remove any one condition and the result is correct. Two ways to do that:
     num_blocks_inner_dim = 1, so spill stays false and the reload never runs
   * set out_block_w equal to per_core_N, which makes num_blocks_w_dim = 1
 
-A second and separate defect: the destination register file holds 8 tiles, but
+A second and separate issue: the destination register file holds 8 tiles, but
 only 4 when fp32_dest_acc_en is set. out_subblock_h * out_subblock_w above that
 limit also corrupts the output, so that bound is checked here as well.
 """
@@ -47,7 +47,7 @@ def check_matmul_program_config(
     out_subblock_h: int = 1,
     fp32_dest_acc_en: bool = False,
 ) -> None:
-    """Raise ValueError if this program config hits the PR #51514 defect.
+    """Raise ValueError if this program config hits the PR #51514 issue.
 
     All arguments are in tiles. Kt is the reduction depth, so K / 32.
     """
@@ -62,7 +62,7 @@ def check_matmul_program_config(
 
     if out_subblock_w > 1 and num_blocks_w_dim > 1 and num_blocks_inner_dim > 1:
         raise ValueError(
-            f"{name}: this matmul program config hits the reload defect in "
+            f"{name}: this matmul program config hits the reload issue in "
             f"PR #51514 and would silently produce wrong values.\n"
             f"  out_subblock_w       = {out_subblock_w} (must be 1, or remove one condition below)\n"
             f"  num_blocks_w_dim     = {num_blocks_w_dim} (per_core_N {per_core_N} / out_block_w {out_block_w})\n"

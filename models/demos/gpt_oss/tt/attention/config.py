@@ -152,8 +152,8 @@ class ProgramConfig:
     ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
         """Build matmul program config for attention projections"""
         core_x, core_y = cores
-        # Reject configs that hit the PR #51514 reload defect before the config
-        # reaches the device. The defect is silent, so an unguarded config shows
+        # Reject configs that hit the PR #51514 reload issue before the config
+        # reaches the device. The issue is silent, so an unguarded config shows
         # up as nonsense output several decode steps later, not as an error.
         check_matmul_program_config(
             name=f"attention matmul (cores={cores}, n={n})",
@@ -172,7 +172,7 @@ class ProgramConfig:
             out_block_h=1,
             # out_block_w must follow out_subblock_w: in1_num_subblocks is
             # out_block_w / out_subblock_w, so a hardcoded 1 makes that 0 for any
-            # out_subblock_w > 1 (the PR #51514 defect, also present in the expert
+            # out_subblock_w > 1 (the PR #51514 issue, also present in the expert
             # path until it was fixed there).
             out_block_w=out_subblock_w,
             # CEIL on the row count too: decode passes the LOGICAL seq len (1), so
