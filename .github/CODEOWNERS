@@ -635,5 +635,6 @@ tt-train/tests/**/CMakeLists.txt @mdragulaTT @vmelnykovTT @dyurshevichTT @zbacze
 
 # Tech reports
 tech_reports/LLMs/vLLM_integration.md @viktorpusTT @tchedaTT @tenstorrent/codeowner-bypass
+tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrestness.md @tchedaTT @tenstorrent/codeowner-bypass
 tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT @tenstorrent/codeowner-bypass
 models/experimental/yunet @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
