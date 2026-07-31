@@ -424,24 +424,30 @@ uint32_t ring_offset(const ttnn::MeshCoordinate& from, const ttnn::MeshCoordinat
 
 // Split this device's movements across its producers.
 //
-// A producer can only inject into ITS OWN cable, and `fabric_set_unicast_route` stamps a route decoded
-// from a precomputed per-destination path (tt_fabric_api.h: routing_info->paths[dst_dev_id]). That path
-// describes the journey FROM THIS CHIP, so a packet injected on a cable that is not the path's first hop
-// arrives at a chip that then executes the remaining route from the wrong origin — and lands somewhere
-// else entirely. Measured: assigning the diametrically-opposite chip to both directions corrupted exactly
-// the 64 offset-extent/2 movements, because half of them went the way the routing table did not choose.
+// Since P9.2 the op does its own forwarding: every packet travels exactly ONE hop, to the chip across the
+// sending producer's own cable, and the next hop is decided by the downstream reader. So the DIRECTION a
+// movement takes is once again ours to choose — it is simply which producer we hand it to. (In P8 it was
+// not: `fabric_set_unicast_route` stamped a precomputed per-destination path, and injecting on a cable that
+// was not that path's first hop landed the packet on the wrong chip. That constraint is gone with the
+// fabric's forwarding.)
 //
-// So the direction of every movement is the FABRIC's decision, not ours: we ask
-// ControlPlane::get_forwarding_direction which way it routes each destination and hand the movement to a
-// producer whose cable points that way. Consequence for the diametrically-opposite chip (equally far
-// either way): all of its traffic goes whichever way the routing table picked, so per plane one producer
-// gets H assignments and the other H-1 instead of H each. That imbalance is inherent to letting the fabric
-// forward; phase 9 takes forwarding over and can then split it evenly, because the direction becomes ours
-// to choose.
+// So the split goes back to the balanced form. With R chips on the ring and H = R/2:
+//   * the producer whose cable steps +1 takes ring offsets +1 .. +(H-1);
+//   * the one stepping -1 takes -1 .. -(H-1);
+//   * the offset-H movement (the diametrically opposite chip, equally far either way) is HALVED — the
+//     forward producer takes its first num_tokens/2 tokens, the backward producer the rest.
+//
+// That balances the link load at H^2/2 tokens per direction instead of H(H+1)/2 and H(H-1)/2 — 8x tok
+// instead of 10x and 6x on an 8-ring, a 20% cut in the bottleneck. Every producer then serves m = H
+// destinations, so the forwarding geometry (incoming = m(m-1)/2 = 6 chunks per quarter, own forwarding
+// m-1 = 3, re-forwarded (m-1)(m-2)/2 = 3) becomes uniform too.
+//
+// Chunk sizes are no longer all equal — the halved one is num_tokens/2 — which is exactly what the sentinel
+// terminator exists for; nothing downstream assumes a fixed chunk length.
 //
 // Within one ring offset there are `num_links` interchangeable movements (one per plane); which plane
-// claims which is arbitrary, so we index the bucket by link_idx. Nothing outside this function depends
-// on that choice — only that every movement is claimed exactly once, which the caller asserts.
+// claims which is arbitrary, so we index the bucket by link_idx. Nothing outside this function depends on
+// that choice — only that every movement is claimed exactly once, which the caller asserts.
 std::map<CoreCoord, std::vector<ProducerAssignment>> assign_movements_to_producers(
     const CombineFabric2dParams& args,
     const ttnn::MeshCoordinate& coord,
@@ -451,7 +457,7 @@ std::map<CoreCoord, std::vector<ProducerAssignment>> assign_movements_to_produce
     uint32_t axis,
     uint32_t extent) {
     const uint32_t half = extent / 2;
-    const auto self_node = node_by_coord.at(coord);
+    // (The fabric's own forwarding direction is no longer consulted: we never send more than one hop.)
 
     // Bucket this device's movements by ring offset to their destination.
     std::map<uint32_t, std::vector<const CombineFabric2dMovement*>> by_offset;
@@ -509,25 +515,15 @@ std::map<CoreCoord, std::vector<ProducerAssignment>> assign_movements_to_produce
             args.num_links);
     }
 
-    // Ask the fabric which way it forwards each destination. This is the authority — see the note above.
-    std::map<uint32_t, tt::tt_fabric::RoutingDirection> dir_by_offset;
-    for (const auto& [off, bucket] : by_offset) {
-        ttnn::MeshCoordinate dst_coord = coord;
-        dst_coord[static_cast<int32_t>(axis)] = (coord[static_cast<int32_t>(axis)] + off) % extent;
-        const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(self_node, node_by_coord.at(dst_coord));
-        TT_FATAL(
-            dir.has_value(),
-            "combine_fabric2d {}: the fabric reports no forwarding direction to {} (ring offset {}), so that "
-            "destination is unreachable",
-            coord,
-            dst_coord,
-            off);
-        dir_by_offset.emplace(off, *dir);
-    }
+    TT_FATAL(
+        args.tokens_per_movement % 2 == 0,
+        "combine_fabric2d {}: tokens_per_movement {} must be even — the offset-{} movement is split in half "
+        "between the two producers of each plane",
+        coord,
+        args.tokens_per_movement,
+        half);
 
-    // Label each producer with the direction its own cable points, by asking the same question about its
-    // immediate neighbour. Keeps us out of the business of mapping mesh axes onto N/E/S/W ourselves.
-    std::map<CoreCoord, tt::tt_fabric::RoutingDirection> dir_by_eth;
+    std::map<CoreCoord, std::vector<ProducerAssignment>> out;
     for (const auto& [eth_logical, wp] : self_placement.by_eth_logical) {
         const auto fit = far_coord_by_eth.find(eth_logical);
         TT_FATAL(fit != far_coord_by_eth.end(), "combine_fabric2d {}: no far coord resolved for an eth core", coord);
@@ -541,55 +537,37 @@ std::map<CoreCoord, std::vector<ProducerAssignment>> assign_movements_to_produce
             eth_logical.y,
             step,
             axis);
-        const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(self_node, node_by_coord.at(fit->second));
-        TT_FATAL(
-            dir.has_value(),
-            "combine_fabric2d {}: the fabric reports no forwarding direction to our own cable neighbour {}",
-            coord,
-            fit->second);
-        dir_by_eth.emplace(eth_logical, *dir);
-    }
+        const bool forward = (step == 1);
 
-    std::map<CoreCoord, std::vector<ProducerAssignment>> out;
-    for (const auto& [eth_logical, wp] : self_placement.by_eth_logical) {
-        const auto my_dir = dir_by_eth.at(eth_logical);
         auto& list = out[eth_logical];
-
-        // Offsets the fabric routes out of THIS cable, nearest first. P9.3 experiments with this order,
-        // which is why it is expressed here rather than baked into the kernels.
-        std::vector<uint32_t> my_offsets;
-        for (uint32_t k = 1; k <= half; k++) {
-            for (uint32_t off : {k, extent - k}) {
-                if (off == 0 || off >= extent) {
-                    continue;
-                }
-                if (dir_by_offset.at(off) == my_dir &&
-                    std::find(my_offsets.begin(), my_offsets.end(), off) == my_offsets.end()) {
-                    my_offsets.push_back(off);
-                }
-            }
-        }
-
-        for (uint32_t off : my_offsets) {
-            const CombineFabric2dMovement* m = by_offset.at(off).at(wp.link_idx);
+        auto claim = [&](uint32_t offset, uint32_t token_lo, uint32_t token_count, bool halved) {
+            const CombineFabric2dMovement* m = by_offset.at(offset).at(wp.link_idx);
             ttnn::MeshCoordinate dst_coord = coord;
-            dst_coord[static_cast<int32_t>(axis)] = (coord[static_cast<int32_t>(axis)] + off) % extent;
+            dst_coord[static_cast<int32_t>(axis)] = (coord[static_cast<int32_t>(axis)] + offset) % extent;
             const auto& dst_node = node_by_coord.at(dst_coord);
             list.push_back(ProducerAssignment{
-                .in_base_token = m->in_base_token,
-                .out_base_token = m->out_base_token,
-                .num_tokens = args.tokens_per_movement,
+                .in_base_token = m->in_base_token + token_lo,
+                .out_base_token = m->out_base_token + token_lo,
+                .num_tokens = token_count,
                 .dst_chip_id = static_cast<uint32_t>(dst_node.chip_id),
                 .dst_mesh_id = *dst_node.mesh_id,
-                .ring_offset = off,
-                .halved = false});
+                .ring_offset = offset,
+                .halved = halved});
+        };
+
+        // Nearest destination first. P9.3 experiments with this order, which is why it lives here rather
+        // than baked into the kernels.
+        for (uint32_t k = 1; k < half; k++) {
+            claim(forward ? k : extent - k, 0, args.tokens_per_movement, /*halved=*/false);
         }
+        const uint32_t h = args.tokens_per_movement / 2;
+        claim(half, forward ? 0 : h, h, /*halved=*/true);
         TT_FATAL(
-            !list.empty(),
-            "combine_fabric2d {}: eth core ({},{}) got no assignments — the fabric routes nothing out of it",
+            list.size() == half,
+            "combine_fabric2d {}: producer got {} assignment(s), expected {}",
             coord,
-            eth_logical.x,
-            eth_logical.y);
+            list.size(),
+            half);
     }
     return out;
 }
@@ -786,7 +764,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             static_cast<uint32_t>(fwd_worker.x),
             static_cast<uint32_t>(fwd_worker.y),
             fwd_arrived_addr,
-            CMBF2D_FWD_BUMP_EVERY,
+            args.fwd_bump_every,
         };
         // The producer no longer needs the assignment table: every send is one hop to its own cable's peer,
         // and both the command and the destination address arrive per token in the slot's metadata tail.
