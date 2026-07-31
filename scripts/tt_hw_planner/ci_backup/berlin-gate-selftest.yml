@@ -1,0 +1,68 @@
+name: berlin-gate-selftest
+
+# Proves .github/scripts/berlin_gate.sh -- the DST discriminator sync-upstream.yml depends on --
+# by running every (Berlin offset x fired cron) combination plus the fail-open cases, on GitHub's
+# own runner, against real tzdata. Dispatch-only and device-free: it runs no sync, touches no
+# branch, needs no TT hardware. Exists because the gate's failure mode is a SILENT skip, which
+# would drift the tool branch behind upstream with nothing in the logs to notice.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Assert every gate combination
+        run: |
+          GATE=.github/scripts/berlin_gate.sh
+          SUMMER="2026-07-15"   # Europe/Berlin is +0200 (CEST)
+          WINTER="2027-01-15"   # Europe/Berlin is +0100 (CET)
+          fails=0
+
+          check() {  # check <label> <expected> <fired-cron> <ref-date>
+            got=$("$GATE" "$3" "$4" 2>/dev/null)
+            if [ "$got" = "$2" ]; then
+              printf '  ok   %-46s -> %s\n' "$1" "$got"
+            else
+              printf '  FAIL %-46s -> %s (expected %s)\n' "$1" "$got" "$2"
+              fails=$((fails + 1))
+            fi
+          }
+
+          echo "Real tzdata sanity:"
+          echo "  $SUMMER -> $(TZ=Europe/Berlin date -d $SUMMER +%z) | $WINTER -> $(TZ=Europe/Berlin date -d $WINTER +%z)"
+
+          echo "DST discrimination (the whole point):"
+          check "summer, 04:00Z cron fired"   true  "0 4 * * *" "$SUMMER"
+          check "summer, 05:00Z cron fired"   false "0 5 * * *" "$SUMMER"
+          check "winter, 04:00Z cron fired"   false "0 4 * * *" "$WINTER"
+          check "winter, 05:00Z cron fired"   true  "0 5 * * *" "$WINTER"
+
+          echo "Fail-open cases (a spurious sync is a no-op; a spurious skip is silent drift):"
+          check "empty cron (manual dispatch), summer" true "" "$SUMMER"
+          check "empty cron (manual dispatch), winter" true "" "$WINTER"
+          check "unrecognised cron, summer"            true "0 9 * * *" "$SUMMER"
+          check "unrecognised cron, winter"            true "17 3 * * 1" "$WINTER"
+
+          echo "Exactly one twin runs per day:"
+          for ref in "$SUMMER" "$WINTER"; do
+            n=0
+            for c in "0 4 * * *" "0 5 * * *"; do
+              [ "$("$GATE" "$c" "$ref")" = "true" ] && n=$((n + 1))
+            done
+            if [ "$n" = "1" ]; then printf '  ok   %-46s -> 1 run\n' "$ref"
+            else printf '  FAIL %-46s -> %s runs (expected 1)\n' "$ref" "$n"; fails=$((fails + 1)); fi
+          done
+
+          echo
+          if [ "$fails" != "0" ]; then echo "::error::$fails gate assertion(s) failed"; exit 1; fi
+          echo "All gate assertions passed."

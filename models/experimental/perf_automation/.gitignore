@@ -1,0 +1,24 @@
+# credentials — NEVER commit
+.env.agent
+.env
+# run artifacts (large; per-run)
+runs/
+.cache/
+# python bytecode
+__pycache__/
+*.pyc
+.benchmarks/
+generated/
+.pytest_cache/
+
+# scratch / local
+_run_*.sh
+_synth_responses/
+*.log
+model_cache/
+
+# provisional learned knobs — local only; only GRADUATED_* (cross-model-proven) is committed/pushed
+GUIDELINES/LEARNED_*.md
+
+# per-run scratch mcp configs
+cc_optimize/.mcp_config_*.json
