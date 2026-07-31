@@ -78,7 +78,7 @@ public:
         ttsl::Span<const T> buffer,
         const tt::tt_metal::TensorSpec& spec,
         tt::tt_metal::distributed::MeshDevice* device = nullptr,
-        std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
+        std::optional<QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
@@ -122,7 +122,7 @@ public:
         const std::vector<T>& buffer,
         const tt::tt_metal::TensorSpec& spec,
         tt::tt_metal::distributed::MeshDevice* device = nullptr,
-        std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
+        std::optional<QueueId> cq_id = std::nullopt,
         T pad_value = 0) {
         return from_span(ttsl::Span<const T>(buffer), spec, device, cq_id, pad_value);
     }
@@ -134,7 +134,7 @@ public:
         std::vector<T>&& buffer,
         const tt::tt_metal::TensorSpec& spec,
         tt::tt_metal::distributed::MeshDevice* device = nullptr,
-        std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
+        std::optional<QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
     // Converts a `Tensor` to a `std::vector<T>`.
@@ -143,12 +143,12 @@ public:
     //
     // If the tensor resides on a device, it will be brought back to host.
     template <typename T>
-    [[nodiscard]] std::vector<T> to_vector(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
+    [[nodiscard]] std::vector<T> to_vector(std::optional<QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_device(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         ttsl::optional_reference<const tt::tt_metal::MemoryConfig> mem_config = std::nullopt,
-        std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
+        std::optional<QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_layout(tt::tt_metal::Layout target_layout) const;
 
@@ -157,7 +157,7 @@ public:
         const tt::tt_metal::Shape& input_tensor_start,
         float pad_value) const;
 
-    [[nodiscard]] Tensor cpu(bool blocking = true, std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
+    [[nodiscard]] Tensor cpu(bool blocking = true, std::optional<QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor unpad(
         const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end) const;
