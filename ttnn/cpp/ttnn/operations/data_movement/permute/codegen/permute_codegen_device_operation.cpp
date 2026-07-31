@@ -133,9 +133,9 @@ ttnn::operations::data_movement::PermuteCodegenDeviceOperation::tensor_return_va
         // stick_bytes; only the per-buffer-type alignment (DRAM vs L1) differs.
         const uint32_t stick_bytes = input_shape[rank - 1] * input_tensor.element_size();
         const uint32_t source_pitch = permute_codegen_round_up(
-            stick_bytes, permute_codegen_buffer_alignment(input_tensor.memory_config().buffer_type));
+            stick_bytes, permute_codegen_buffer_alignment(input_tensor.memory_config().buffer_type()));
         const uint32_t dest_pitch =
-            permute_codegen_round_up(stick_bytes, permute_codegen_buffer_alignment(output_mem_config.buffer_type));
+            permute_codegen_round_up(stick_bytes, permute_codegen_buffer_alignment(output_mem_config.buffer_type()));
         aligned_stick_bytes = std::max(source_pitch, dest_pitch);
     } else {
         // W-changing (blocked-generic) block count, transcribed from
