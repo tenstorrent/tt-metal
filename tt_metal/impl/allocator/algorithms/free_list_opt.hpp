@@ -73,6 +73,12 @@ public:
     void reset_size() override;
 
 private:
+    // Sentinel meaning "no such block", used both in the prev/next vectors below and for local block
+    // indices before a block has been found. Must stay signed: assigning it to a size_t silently turns
+    // it into SIZE_MAX, which still compares equal to a literal -1 but is not a value anyone can reason
+    // about.
+    static constexpr ssize_t no_block = -1;
+
     // SoA free list components
     std::vector<DeviceAddr> block_address_;
     std::vector<DeviceAddr> block_size_;
@@ -120,6 +126,15 @@ private:
     // Put the block at block_index into the size segregated list at the appropriate index (data taken from
     // the SoA vectors)
     void insert_block_to_segregated_list(size_t block_index);
+
+    // Sentinel-aware accessor for the prev/next links, so callers never index the SoA vectors with a
+    // link that may hold no_block
+    bool has_prev_block(size_t block_index) const { return block_prev_block_[block_index] != no_block; }
+
+    // Remove block_index from the prev/next chain, healing both neighbours' links. Does not touch the
+    // block's own links, its size, or the segregated lists. This is the single place that knows how to
+    // take a block out of the list; every caller that drops a block should go through it.
+    void unlink_block(size_t block_index);
 
     // Allocate a new block and return the index to the block
     size_t alloc_meta_block(
