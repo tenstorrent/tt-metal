@@ -379,7 +379,15 @@ class TestConfig:
 
     @staticmethod
     def setup_paths(sources_path: Path):
-        TestConfig.ARTEFACTS_DIR = TestConfig.resolve_artefacts_path()
+        # Queue workers may compile and consume different jobs concurrently on
+        # one host.  Give each producer/consumer pair an isolated artefact root
+        # when requested; retain the historical path for interactive use.
+        configured_artefacts = os.environ.get("TT_LLK_ARTEFACTS_DIR", "").strip()
+        TestConfig.ARTEFACTS_DIR = (
+            Path(configured_artefacts).expanduser()
+            if configured_artefacts
+            else TestConfig.resolve_artefacts_path()
+        )
 
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
