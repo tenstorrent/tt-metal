@@ -61,10 +61,15 @@ class ProgramConfig:
     decode_qkv_out_subblock_w: int = 1
 
     # Decode output projection
-    decode_out_cores: tuple[int, int] | None = None
-    decode_out_in0_block_w: int = 1
+    # o_proj [32,4096]x[4096,2880]. Swept offline (.auto/oproj_sweep.py) against the
+    # device default: 8x8 cores, in0_block_w=8, out_subblock_w=2 gives 45.13 us/op
+    # vs 93.25 us/op with no program config (-51.6%), pcc 0.9998 vs the device
+    # baseline. per_core_N = 90/64 -> 2, so num_blocks_w_dim = 2/2 = 1 and the
+    # PR #51514 wide-subblock corruption (needs nbwd>1) cannot trigger.
+    decode_out_cores: tuple[int, int] | None = (8, 8)
+    decode_out_in0_block_w: int = 8
     decode_out_out_subblock_h: int = 1
-    decode_out_out_subblock_w: int = 1
+    decode_out_out_subblock_w: int = 2
 
     # Prefill QKV projection
     prefill_qkv_cores: tuple[int, int] | None = None
@@ -149,7 +154,11 @@ class ProgramConfig:
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
             out_block_h=1,
-            out_block_w=1,
+            # out_block_w must follow out_subblock_w: in1_num_subblocks is
+            # out_block_w / out_subblock_w, so a hardcoded 1 makes that 0 for any
+            # out_subblock_w > 1 (the PR #51514 deadlock/corruption). Same defect
+            # that was in the expert path.
+            out_block_w=out_subblock_w,
             per_core_M=m // 32,
             per_core_N=n // 32 // (core_x * core_y),
             fuse_batch=False,

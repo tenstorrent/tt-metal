@@ -216,6 +216,9 @@ def decode_forward(
         bias=weights.o_proj_bias,
         dtype=ttnn.bfloat8_b,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        program_config=program_config.get_decode_out_config(
+            tt_sdpa_out.shape[-2], weights.o_proj.shape[-1], tt_sdpa_out.shape[-1]
+        ),
     )
 
     tt_sdpa_out.deallocate(True)
