@@ -221,7 +221,7 @@
   model_family: Qwen
   skus:
     wh_llmbox_perf:
-      timeout: 40
+      timeout: 15
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -281,9 +281,7 @@
   model_family: Qwen
   skus:
     wh_llmbox_perf:
-      # Sized for the one-time cold TTTv2 weight-cache build (~13 min for a 32B) on top of the two warm
-      # cases (~18 min); lower back toward 18 once tt_cache/tttv2/Qwen/Qwen2.5-Coder-32B-Instruct is populated.
-      timeout: 40
+      timeout: 18
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -296,7 +294,7 @@
   model_family: Qwen
   skus:
     wh_n300:
-      timeout: 8
+      timeout: 5
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -569,10 +567,7 @@
   model_family: Mistral
   skus:
     wh_n150:
-      # 13 (not 10) because this leg pays the one-time cold TTTv2 weight-cache build (~6 min for a 7B)
-      # on top of the retained TTTv1 ci-eval-32 command; lower back toward 7 once
-      # tt_cache/tttv2/mistralai/Mistral-7B-Instruct-v0.3 is populated.
-      timeout: 13
+      timeout: 7
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
