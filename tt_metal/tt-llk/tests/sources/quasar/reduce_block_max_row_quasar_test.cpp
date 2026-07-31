@@ -18,7 +18,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "experimental/llk_unpack_AB_reduce_custom_runtime.h"
+#include "experimental/llk_unpack_AB_reduce_runtime_custom.h"
 #include "llk_unpack_common.h"
 #include "params.h"
 
