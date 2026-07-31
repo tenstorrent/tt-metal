@@ -46,6 +46,33 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import CFG_ALPHA, TtVo
 
 FRAME_RATE = 12.5
 
+# Clear ttnn's program cache at the start of every utterance. THIS IS A CORRECTNESS FIX, not a
+# tuning knob: without it a multi-utterance run hangs, and the hang takes the card down with it
+# (recovery needs a tt-smi board reset).
+#
+# Diagnosis, on the sequence that fails -- fixture cases 0,1,2,3, which hangs inside case 3's
+# Block 3 decode. Every block is fine alone: Block 1 runs 1400 decode steps standalone, Block 3
+# decodes case 3's own real frames in 0.10 s in a fresh process, and cases 2,3 run clean as a
+# pair. What decides it is how many programs have accumulated:
+#     memory at the hang         flat, 8 GB free -- NOT exhaustion, so bucketing is not the lever
+#     program cache DISABLED     completes, but ~12x slower (every op rebuilds its program)
+#     Block 1 decode shape pinned (VOXTRAL_GPT_WINDOW=1024)   still hangs
+#     cache CLEARED per utterance                             completes
+#     entries: 193 after case 1, 325 after case 2, hang during case 3's decode; with clearing,
+#     never above 245
+# So it is cumulative program-cache growth, and Block 1's decode shapes are not the driver --
+# pinning them changes nothing. Ours merely reaches the threshold sooner than the tt_transformers
+# path, which contributes far fewer distinct shapes.
+#
+# The cost is a per-utterance rebuild of ~245 entries, amortised over tens of seconds of
+# generation, with per-step cost untouched -- which is why this is preferred over disabling the
+# cache or pinning the decode window, both of which are far more expensive.
+#
+# This is a MITIGATION. The underlying failure is in the program cache itself and is not
+# understood; a hang rather than an error, past a few hundred entries, is worth an upstream
+# report with a minimal repro.
+CLEAR_PROGRAM_CACHE = os.environ.get("VOXTRAL_CLEAR_PCACHE", "1") != "0"
+
 # Which Block 1 to run. "tt_transformers" is the older wrapper and REMAINS THE DEFAULT; "gpt" is
 # ours (tt/ttnn_voxtral_gpt.py), selected with VOXTRAL_BACKBONE=gpt.
 #
@@ -107,6 +134,8 @@ class TtVoxtralPipeline:
         """prompt embeds [1,P,3072] -> frames [T,37] int64 (offset applied, [END_AUDIO] excluded)."""
         if seed is not None:
             torch.manual_seed(seed)
+        if CLEAR_PROGRAM_CACHE:
+            self.device.clear_program_cache()
         t0 = time.perf_counter()
         # Only the last position conditions the first frame, matching the reference's
         # IncrementalBackbone.prefill which returns x[:, -1:]. Both backbones expose this as

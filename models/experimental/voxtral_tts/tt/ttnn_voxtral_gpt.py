@@ -82,9 +82,21 @@ PREFILL_MULTIPLE = 128
 # positions: attention is ~4 ms of a ~34 ms step at L=224, so the overshoot costs ~2% and buys back
 # tens of seconds. It also leaves few enough distinct shapes for device tracing to be feasible.
 DECODE_WINDOW = 256
-# Both are free to grow, but not off the tile grid: prefill's mask and decode's cache slice are
-# both cut at these boundaries, and a ragged one would silently misalign them rather than raise.
+# FIXED_WINDOW pins decode to ONE window for every step instead of bucketing up as `pos` grows, so
+# the whole generation has a single decode kernel shape. Set it to a length (a TILE multiple, >=
+# the longest prompt+generation you will run) via VOXTRAL_GPT_WINDOW.
+#
+# This exists because of the cumulative Block 3 hang (see ttnn_voxtral_pipeline.BACKBONE_IMPL):
+# shape churn is the leading suspect, and pinning the shape is the direct test of that. It is a
+# DIAGNOSTIC FIRST -- it costs real time, because attention then covers the full window every
+# step. Attention is ~3.9 ms of a 33.6 ms step at L=224 and scales with L, so a pinned L=1024
+# projects to ~48 ms/step, giving back the entire margin over tt_transformers. If it does cure
+# the hang, prefer a cheaper remedy that keeps the bucketing.
+FIXED_WINDOW = int(os.environ.get("VOXTRAL_GPT_WINDOW", "0"))
+# None of these may leave the tile grid: prefill's mask and decode's cache slice are cut at these
+# boundaries, and a ragged one would silently misalign them rather than raise.
 assert PREFILL_MULTIPLE % TILE == 0 and DECODE_WINDOW % TILE == 0
+assert FIXED_WINDOW % TILE == 0, f"VOXTRAL_GPT_WINDOW must be a multiple of {TILE}"
 
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True,
@@ -361,8 +373,16 @@ class TtVoxtralGPT:
         if self.pos >= self.max_seq_len:
             raise ValueError(f"KV cache full at {self.max_seq_len} positions")
         pos = self.pos
-        # Smallest bucketed window holding pos. Bucketed, not tile-aligned -- see DECODE_WINDOW.
-        L = min(self.max_seq_len, (pos + DECODE_WINDOW) // DECODE_WINDOW * DECODE_WINDOW)
+        if FIXED_WINDOW:
+            # One shape for the whole generation. See FIXED_WINDOW.
+            if pos >= FIXED_WINDOW:
+                raise ValueError(f"pos {pos} past the pinned window {FIXED_WINDOW}; "
+                                 f"raise VOXTRAL_GPT_WINDOW")
+            L = min(self.max_seq_len, FIXED_WINDOW)
+        else:
+            # Smallest bucketed window holding pos. Bucketed, not just tile-aligned -- see
+            # DECODE_WINDOW.
+            L = min(self.max_seq_len, (pos + DECODE_WINDOW) // DECODE_WINDOW * DECODE_WINDOW)
         cosb, sinb = rope_tables(1, offset=pos)
         up = lambda t, d=None: ttnn.from_torch(t.contiguous(), dtype=d or self.dtype,
                                               layout=ttnn.TILE_LAYOUT, device=self.device)
