@@ -136,7 +136,7 @@ class TT_Qwen3VLProcessingInfo(Qwen3VLProcessingInfo):
 class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": True,
+        "supports_async_decode": False,
     }
 
     def __init__(self, *args, **kwargs):

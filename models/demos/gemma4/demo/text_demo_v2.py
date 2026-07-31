@@ -661,6 +661,10 @@ def test_demo_text(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             sampling_params=device_sampling_params,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         if device_sampling_params is not None:
             out_tok = decode_out.long().view(batch_size, 1)

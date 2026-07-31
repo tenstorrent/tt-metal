@@ -127,6 +127,10 @@ class WarmupForwardMixin:
                 enable_trace=enable_trace,
                 read_from_device=read_from_device,
                 sampling_params=param,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=param is not None,
+                reset_sampling_state=param is not None,
             )
             if skip_trace_precompile:
                 decode_kwargs["skip_trace_precompile"] = True

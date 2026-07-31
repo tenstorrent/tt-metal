@@ -3,13 +3,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import random
 from types import SimpleNamespace
 
 import pytest
 import torch
 
 import ttnn
-from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
+from models.common.sampling import SamplingGenerator, SamplingParams, SeedManager, format_sampling_params
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, make_deepseek_sampling_args
 
@@ -67,8 +68,21 @@ class _FakeSeedManager:
         self.reset_calls = []
         self.new_value_calls = []
 
-    def reset_seed(self, seeds, user_ids):
+        self.conditional_reset_calls = []
+        self.align_calls = []
+        self.remap_calls = []
+
+    def reset_seed_from_slots(self, seeds, user_ids):
         self.reset_calls.append((seeds, user_ids))
+
+    def reset_seed_from_slots_if_needed(self, seeds, user_ids):
+        self.conditional_reset_calls.append((seeds, user_ids))
+
+    def align_seed_counters_to_positions(self, seeds, user_ids, positions):
+        self.align_calls.append((seeds, user_ids, positions))
+
+    def apply_slot_remap(self, remap):
+        self.remap_calls.append(remap)
 
     def get_new_values(self, user_slots):
         self.new_value_calls.append(user_slots)
@@ -86,13 +100,20 @@ class _FakeSamplingGenerator:
 
 def _fake_deepseek_generator(*, batch_size_per_row=8, sampling_dp=2):
     class _FakeDeepseekGenerator:
-        _reset_sampling_state = DeepseekGenerator._reset_sampling_state
+        _apply_sampling_state = DeepseekGenerator._apply_sampling_state
         _sampling_device_slot = DeepseekGenerator._sampling_device_slot
         _sampling_device_slots = DeepseekGenerator._sampling_device_slots
+        _sampling_device_positions = DeepseekGenerator._sampling_device_positions
+        _sampling_params_for_user_slots = DeepseekGenerator._sampling_params_for_user_slots
+        _sampling_history_for_user_slots = DeepseekGenerator._sampling_history_for_user_slots
+        _sampling_device_history = DeepseekGenerator._sampling_device_history
+        _sampling_device_slot_remap = DeepseekGenerator._sampling_device_slot_remap
+        _apply_sampling_slot_remap = DeepseekGenerator._apply_sampling_slot_remap
         _sampling_device_seed_slots = DeepseekGenerator._sampling_device_seed_slots
 
         def __init__(self):
             self.batch_size_per_row = batch_size_per_row
+            self.batch_size = batch_size_per_row * sampling_dp
             self.sampling_generator = _FakeSamplingGenerator(padded_batch_size=32, sampling_dp=sampling_dp)
 
     return _FakeDeepseekGenerator()
@@ -110,7 +131,14 @@ def test_deepseek_reset_sampling_state_does_not_preformat_sampling_params():
         seed=[1234] * batch_size,
     )
 
-    DeepseekGenerator._reset_sampling_state(generator, sampling_params, batch_size, batch_size_per_row)
+    DeepseekGenerator._apply_sampling_state(
+        generator,
+        sampling_params,
+        batch_size,
+        batch_size_per_row,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+    )
 
     [(sampling_param_chunks, kwargs)] = sampling_generator.decode_state_calls
     assert len(sampling_param_chunks) == 2
@@ -120,9 +148,11 @@ def test_deepseek_reset_sampling_state_does_not_preformat_sampling_params():
         sampling_param_chunks[0], max_batch_size=batch_size_per_row
     ).temperature[0]
     assert first_chunk_temperature == pytest.approx(1 / 0.6)
-    assert kwargs["reset_batch"] is True
-    assert kwargs["prompt_tokens"].shape == (batch_size_per_row, 1)
-    assert kwargs["output_tokens"].shape == (batch_size_per_row, 1)
+    assert kwargs["reload_sampling_params"] is True
+    assert kwargs["reset_sampling_state"] is True
+    assert kwargs["prompt_tokens"].shape == (batch_size, 1)
+    assert torch.all(kwargs["prompt_tokens"] == -1)
+    assert kwargs["output_tokens"] is None
     [seed_reset] = sampling_generator.seed_manager.reset_calls
     assert seed_reset == ([1234] * batch_size, list(range(batch_size)))
 
@@ -143,7 +173,14 @@ def test_deepseek_sampling_seed_reset_uses_row_padded_device_slots():
         seed=list(range(100, 100 + batch_size)),
     )
 
-    DeepseekGenerator._reset_sampling_state(generator, sampling_params, batch_size, generator.batch_size_per_row)
+    DeepseekGenerator._apply_sampling_state(
+        generator,
+        sampling_params,
+        batch_size,
+        generator.batch_size_per_row,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+    )
 
     [(seeds, user_ids)] = generator.sampling_generator.seed_manager.reset_calls
     assert user_ids == list(range(128))
@@ -158,8 +195,8 @@ def test_deepseek_sampling_seed_reset_uses_row_padded_device_slots():
 
 
 def test_deepseek_unseeded_sampling_reset_initializes_all_device_slots():
-    batch_size = 16
-    generator = _fake_deepseek_generator(batch_size_per_row=8, sampling_dp=2)
+    batch_size = 32
+    generator = _fake_deepseek_generator(batch_size_per_row=16, sampling_dp=2)
     sampling_params = SamplingParams(
         temperature=[0.6] * batch_size,
         top_k=[32] * batch_size,
@@ -167,16 +204,177 @@ def test_deepseek_unseeded_sampling_reset_initializes_all_device_slots():
         seed=None,
     )
 
-    DeepseekGenerator._reset_sampling_state(generator, sampling_params, batch_size, generator.batch_size_per_row)
+    DeepseekGenerator._apply_sampling_state(
+        generator,
+        sampling_params,
+        batch_size,
+        generator.batch_size_per_row,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+    )
 
     [(seeds, user_ids)] = generator.sampling_generator.seed_manager.reset_calls
     assert seeds == [None] * 64
     assert user_ids == list(range(64))
 
 
-def test_deepseek_force_reset_rebuilds_unchanged_sampling_state():
+def test_deepseek_sampling_reset_aligns_active_row_padded_seed_positions():
+    batch_size = 32
+    generator = _fake_deepseek_generator(batch_size_per_row=16, sampling_dp=2)
+    sampling_params = SamplingParams(
+        temperature=[0.6] * batch_size,
+        top_k=[32] * batch_size,
+        top_p=[0.95] * batch_size,
+        seed=list(range(100, 100 + batch_size)),
+    )
+    positions = torch.tensor([10] + [-1] * 15 + [20] + [-1] * 15)
+
+    DeepseekGenerator._apply_sampling_state(
+        generator,
+        sampling_params,
+        batch_size,
+        generator.batch_size_per_row,
+        reload_sampling_params=False,
+        reset_sampling_state=True,
+        user_slots=[0, 16],
+        positions=positions,
+    )
+
+    [(seeds, user_ids)] = generator.sampling_generator.seed_manager.reset_calls
+    assert user_ids == [0, 32]
+    [(aligned_seeds, aligned_user_ids, device_positions)] = generator.sampling_generator.seed_manager.align_calls
+    assert aligned_seeds == seeds
+    assert aligned_user_ids == [0, 32]
+    assert device_positions[0] == 10
+    assert device_positions[32] == 20
+    assert device_positions[1:32] == [-1] * 31
+
+
+def test_deepseek_sampling_histories_use_row_padded_device_layout():
+    generator = _fake_deepseek_generator(batch_size_per_row=2, sampling_dp=2)
+    compact = torch.tensor([[10, 11], [20, 21], [30, 31], [40, 41]])
+
+    padded = DeepseekGenerator._sampling_device_history(generator, compact)
+
+    assert padded.shape == (64, 2)
+    assert padded[0].tolist() == [10, 11]
+    assert padded[1].tolist() == [20, 21]
+    assert padded[32].tolist() == [30, 31]
+    assert padded[33].tolist() == [40, 41]
+    assert torch.all(padded[2:32] == -1)
+    assert torch.all(padded[34:] == -1)
+
+
+def test_deepseek_prefill_sampling_state_uses_nonidentity_stable_slots():
+    generator = _fake_deepseek_generator(batch_size_per_row=16, sampling_dp=2)
+    sampling_params = SamplingParams(
+        temperature=[0.6, 0.8],
+        top_k=[16, 32],
+        top_p=[0.9, 0.95],
+        seed=[111, 222],
+    )
+    stable_slots = [17, 0]
+    prompt_tokens = torch.tensor([[10, 11], [20, -1]])
+
+    stable_params = DeepseekGenerator._sampling_params_for_user_slots(
+        generator,
+        sampling_params,
+        stable_slots,
+    )
+    stable_history = DeepseekGenerator._sampling_history_for_user_slots(
+        generator,
+        prompt_tokens,
+        stable_slots,
+    )
+    DeepseekGenerator._apply_sampling_state(
+        generator,
+        stable_params,
+        generator.batch_size,
+        generator.batch_size_per_row,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+        user_slots=stable_slots,
+        prompt_tokens=stable_history,
+    )
+
+    [(seeds, active_slots)] = generator.sampling_generator.seed_manager.reset_calls
+    assert active_slots == [33, 0]
+    assert seeds[33] == 111
+    assert seeds[0] == 222
+    [(_, commands)] = generator.sampling_generator.decode_state_calls
+    assert commands["prompt_tokens"][33].tolist() == [10, 11]
+    assert commands["prompt_tokens"][0].tolist() == [20, -1]
+
+
+def test_deepseek_prompt_history_excludes_padding_tokens():
+    tokens = torch.tensor([[10, 11, 99, 99], [20, 21, 22, 99]])
+    lengths = torch.tensor([2, 3])
+
+    history = DeepseekGenerator._prompt_history(tokens, lengths)
+
+    assert history.tolist() == [[10, 11, -1, -1], [20, 21, 22, -1]]
+
+
+def test_deepseek_sampling_reset_uses_vllm_penalty_histories():
+    batch_size = 32
+    generator = _fake_deepseek_generator(batch_size_per_row=16, sampling_dp=2)
+    sampling_params = SamplingParams(
+        temperature=[0.6] * batch_size,
+        top_k=[32] * batch_size,
+        top_p=[0.95] * batch_size,
+        presence_penalty=[0.5] * batch_size,
+        seed=[1234] * batch_size,
+    )
+    prompt_tokens = torch.arange(batch_size * 2).reshape(batch_size, 2)
+    output_tokens = torch.arange(batch_size).reshape(batch_size, 1)
+
+    DeepseekGenerator._apply_sampling_state(
+        generator,
+        sampling_params,
+        batch_size,
+        generator.batch_size_per_row,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+        prompt_tokens=prompt_tokens,
+        output_tokens=output_tokens,
+    )
+
+    [(_, commands)] = generator.sampling_generator.decode_state_calls
+    assert commands["prompt_tokens"][[0, 1, 32, 33]].tolist() == prompt_tokens[[0, 1, 16, 17]].tolist()
+    assert commands["output_tokens"][[0, 1, 32, 33]].tolist() == output_tokens[[0, 1, 16, 17]].tolist()
+
+
+def test_deepseek_sampling_params_can_reload_without_state_reset():
+    batch_size = 32
+    generator = _fake_deepseek_generator(batch_size_per_row=16, sampling_dp=2)
+    sampling_params = SamplingParams(
+        temperature=[0.7] * batch_size,
+        top_k=[16] * batch_size,
+        top_p=[0.9] * batch_size,
+        seed=[1234] * batch_size,
+    )
+
+    DeepseekGenerator._apply_sampling_state(
+        generator,
+        sampling_params,
+        batch_size,
+        generator.batch_size_per_row,
+        reload_sampling_params=True,
+        reset_sampling_state=False,
+        user_slots=[0, 16],
+    )
+
+    [(_, commands)] = generator.sampling_generator.decode_state_calls
+    assert commands["reload_sampling_params"] is True
+    assert commands["reset_sampling_state"] is False
+    assert generator.sampling_generator.seed_manager.reset_calls == []
+    [(_, user_ids)] = generator.sampling_generator.seed_manager.conditional_reset_calls
+    assert user_ids == [0, 32]
+
+
+def test_deepseek_sampling_update_obeys_explicit_commands_without_value_comparison():
     sampling_params = SamplingParams(temperature=0.6, top_k=32, top_p=0.95, seed=None)
-    reset_calls = []
+    update_calls = []
     generator = SimpleNamespace(
         batch_size=1,
         batch_size_per_row=1,
@@ -184,10 +382,9 @@ def test_deepseek_force_reset_rebuilds_unchanged_sampling_state():
         sampling_generator=object(),
         _to_local_sampling_params=lambda params: params,
         _normalize_sampling_params_for_batch=lambda params, batch_size: params,
-        _are_sampling_params_same=lambda new, previous: True,
         _get_sampling_value=lambda value, index: value[index] if isinstance(value, list) else value,
-        _reset_sampling_state=lambda params, batch_size, batch_size_per_row: reset_calls.append(
-            (params, batch_size, batch_size_per_row)
+        _apply_sampling_state=lambda params, batch_size, batch_size_per_row, **commands: update_calls.append(
+            (params, batch_size, batch_size_per_row, commands)
         ),
     )
 
@@ -195,10 +392,83 @@ def test_deepseek_force_reset_rebuilds_unchanged_sampling_state():
         generator,
         sampling_params,
         sample_on_device=True,
-        force_reset=True,
+        reload_sampling_params=False,
+        reset_sampling_state=True,
     )
 
-    assert reset_calls == [(sampling_params, 1, 1)]
+    assert update_calls == [
+        (
+            sampling_params,
+            1,
+            1,
+            {
+                "reload_sampling_params": False,
+                "reset_sampling_state": True,
+                "user_slots": None,
+                "positions": None,
+                "prompt_tokens": None,
+                "output_tokens": None,
+            },
+        )
+    ]
+
+
+def test_deepseek_slot_remap_maps_users_to_row_padded_seed_slots():
+    generator = _fake_deepseek_generator(batch_size_per_row=2, sampling_dp=2)
+
+    remap = DeepseekGenerator._sampling_device_slot_remap(generator, [3, 1, 2, 3])
+
+    assert len(remap) == 64
+    assert remap[0] == 33
+    assert remap[1] == 1
+    assert remap[32] == 32
+    assert remap[33] == 33
+    assert remap[2:32] == list(range(2, 32))
+
+
+def test_deepseek_slot_remap_moves_seeded_state_across_padded_rows():
+    generator = _fake_deepseek_generator(batch_size_per_row=2, sampling_dp=2)
+    manager = SeedManager.__new__(SeedManager)
+    manager.max_batch_size = 64
+    manager.seeds = [None] * 64
+    manager.seed_counters = [0] * 64
+    manager.rngs = [random.Random(i) for i in range(64)]
+    manager._seed_active = True
+    manager.seeds[33] = 1234
+    manager.seed_counters[33] = 17
+    old_rng_state = manager.rngs[33].getstate()
+    generator.sampling_generator.seed_manager = manager
+
+    DeepseekGenerator._apply_sampling_slot_remap(generator, [3, 1, 2, 3])
+
+    assert manager.seeds[0] == 1234
+    assert manager.seed_counters[0] == 17
+    assert manager.rngs[0].getstate() == old_rng_state
+    assert manager.seeds[33] is None
+    assert manager.seed_counters[33] == 0
+
+
+def test_deepseek_sampling_applies_remap_before_update_and_advance():
+    events = []
+    sampling_params = SamplingParams(temperature=0.6, top_k=32, top_p=0.95, seed=1234)
+    generator = SimpleNamespace(
+        _apply_sampling_slot_remap=lambda remap: events.append(("remap", remap)),
+        _validate_and_initialize_sampling=lambda *args, **kwargs: events.append(("update", kwargs)),
+        _sample_tokens_device=lambda *args, **kwargs: events.append(("advance", kwargs)) or "tokens",
+    )
+
+    result = DeepseekGenerator.sample_decode_on_device(
+        generator,
+        "logits",
+        sampling_params=sampling_params,
+        slot_remap=[1, 1],
+        user_slots=[0],
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+    )
+
+    assert result == "tokens"
+    assert [event[0] for event in events] == ["remap", "update", "advance"]
 
 
 @torch.no_grad()

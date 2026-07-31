@@ -117,7 +117,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": True,
+        "supports_async_decode": False,
     }
 
     def __init__(self, *args, **kwargs):

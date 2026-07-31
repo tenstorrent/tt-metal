@@ -38,10 +38,10 @@ class Qwen36Model:
             self.tt_ccl = None
         self.configuration = args  # Generator reads model.configuration.max_seq_len
         self.sampling_dp = 1
-        # RoPE is host-recomputed each step, so refresh all decode trace inputs.
-        self._tt_vllm_always_refresh_decode_trace_inputs = True
-        # On-device sampling: allowlist 1x4/1x8 TP only — vocab/TP must fit Top-K's 64K shard limit (TP=2 does not).
-        mesh_shape = tuple(int(dim) for dim in mesh_device.shape)
+        # Rope is host-recomputed each step, so callers explicitly request a
+        # full input reload. Sampling does not alias the decode token input.
+        self._tt_supports_decode_token_feedback = False
+        # Reuses the vocab-sharded lm_head as the sampler's shard: needs divisible vocab; 64K = top-k limit.
         self._supports_on_device_sampling = (
             mesh_shape in ((1, 4), (1, 8))
             and args.vocab_size % self.num_devices == 0

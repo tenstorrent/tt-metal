@@ -243,16 +243,8 @@ class HybridAttentionForCausalLM(Generator):
 
     @staticmethod
     def _reload_per_layer_page_tables(kwargs) -> bool:
-        """Honor the explicit decode update contract, with legacy fallback."""
-        reload_inputs = kwargs.get("reload_inputs")
-        reload_page_table = kwargs.get("reload_page_table")
-        if reload_inputs is None and reload_page_table is None:
-            return True
-        if reload_inputs is None or reload_page_table is None:
-            raise ValueError(
-                "reload_inputs and reload_page_table must be provided together"
-            )
-        return bool(reload_inputs or reload_page_table)
+        """Whether the explicit contract requests per-layer page-table upload."""
+        return bool(kwargs["reload_inputs"] or kwargs["reload_page_table"])
 
     def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
         """When invoked outside the vLLM hybrid plugin (e.g. by warmup
@@ -521,7 +513,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     # declare on-device sampling unsupported.
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": True,
+        "supports_async_decode": False,
         "supports_sample_on_device": False,
     }
 
@@ -631,16 +623,8 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         reload_page_table = kwargs.pop("reload_page_table")
         reload_sampling_params = kwargs.pop("reload_sampling_params")
         reset_sampling_state = kwargs.pop("reset_sampling_state")
-        if (
-            not reload_inputs
-            or reload_page_table
-            or reload_sampling_params
-            or reset_sampling_state
-        ):
-            raise ValueError(
-                "Mllama requires a full host-input reload and has no "
-                "device sampling state"
-            )
+        if not reload_inputs or reload_page_table or reload_sampling_params or reset_sampling_state:
+            raise ValueError("Mllama requires a full host-input reload and has no " "device sampling state")
         logits = super().decode_forward_llama_vision(*args, **kwargs)
         if isinstance(logits, tuple):
             return logits[0]

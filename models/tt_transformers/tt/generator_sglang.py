@@ -152,7 +152,7 @@ class LlamaForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -195,7 +195,7 @@ class QwenForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -238,7 +238,7 @@ class MistralForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -302,7 +302,7 @@ class GptOssForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)

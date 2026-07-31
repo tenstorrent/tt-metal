@@ -113,10 +113,11 @@ class Generator(WarmupForwardMixin):
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
-        reload_inputs: bool | None = None,
-        reload_page_table: bool | None = None,
-        reload_sampling_params: bool | None = None,
-        reset_sampling_state: bool | None = None,
+        *,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
     ):
         return self._ttt_generator.decode_forward(
             tokens=tokens,

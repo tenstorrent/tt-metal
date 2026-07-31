@@ -15,6 +15,7 @@ from transformers import AutoConfig
 import ttnn
 from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.sampling.generator import (
+    SAMPLING_PARAM_FIELDS,
     SamplingGenerator,
     SamplingParams,
     chunk_sampling_params,
@@ -271,7 +272,14 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
 
         # Configure sampling
-        self._validate_and_initialize_sampling(sampling_params, sample_on_device, enable_trace, enable_mtp)
+        self._validate_and_initialize_sampling(
+            sampling_params,
+            sample_on_device,
+            enable_trace,
+            enable_mtp,
+            reload_sampling_params=sample_on_device,
+            reset_sampling_state=sample_on_device,
+        )
 
         # Weight cache to avoid loading weights multiple times
         self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
@@ -453,13 +461,20 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         sample_on_device: bool,
         enable_trace: bool = False,
         enable_mtp: bool = False,
-        force_reset: bool = False,
+        *,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        user_slots: list[int] | None = None,
+        positions: torch.Tensor | list[int] | None = None,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
     ) -> None:
         if enable_mtp and sample_on_device:
             raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
+        if not sample_on_device and (reload_sampling_params or reset_sampling_state):
+            raise ValueError("DeepSeek sampling update commands require device sampling")
 
         self.sample_on_device = sample_on_device
-        previous_sampling_params = getattr(self, "sampling_params", None)
 
         # sampling params of all users are assumed to be the same default values if not provided.
         local_sampling_params = (
@@ -474,21 +489,17 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         normalized_sampling_params = self._normalize_sampling_params_for_batch(local_sampling_params, self.batch_size)
 
         if self.sample_on_device:
-            params_same = previous_sampling_params is not None and self._are_sampling_params_same(
-                normalized_sampling_params, previous_sampling_params
-            )
-
             if self._get_sampling_value(normalized_sampling_params.top_k, 0) == 0:
                 raise SystemExit(
                     "top-k=0 is not supported when sampling on device. Sampling on host instead. See https://github.com/tenstorrent/tt-metal/issues/40236"
                 )
 
-            if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
-                # vLLM can require a state reset even when the values are
-                # unchanged, for example on first decode after a layout change.
-                if force_reset or not params_same:
-                    self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
-            else:
+            if not hasattr(self, "sampling_generator") or self.sampling_generator is None:
+                if not reload_sampling_params or not reset_sampling_state:
+                    raise ValueError(
+                        "Initializing DeepSeek device sampling requires both "
+                        "reload_sampling_params and reset_sampling_state"
+                    )
                 # create new sampling generator
                 self.sampling_args = make_deepseek_sampling_args(
                     self.mesh_device,
@@ -501,9 +512,26 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     mesh_device=self.mesh_device,
                     tt_ccl=self.ccl,
                 )
-                self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
+            if reload_sampling_params or reset_sampling_state:
+                state_params = (
+                    normalized_sampling_params if reload_sampling_params else getattr(self, "sampling_params", None)
+                )
+                if state_params is None:
+                    raise ValueError("Cannot reset DeepSeek sampling state before sampling parameters are initialized")
+                self._apply_sampling_state(
+                    state_params,
+                    self.batch_size,
+                    self.batch_size_per_row,
+                    reload_sampling_params=reload_sampling_params,
+                    reset_sampling_state=reset_sampling_state,
+                    user_slots=user_slots,
+                    positions=positions,
+                    prompt_tokens=prompt_tokens,
+                    output_tokens=output_tokens,
+                )
 
-        self.sampling_params = normalized_sampling_params
+        if reload_sampling_params or not sample_on_device:
+            self.sampling_params = normalized_sampling_params
 
     def _to_local_sampling_params(self, params_obj) -> SamplingParams:
         """Project duck-typed sampling params to local SamplingParams fields."""
@@ -566,21 +594,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             enable_log_probs=_normalize_field(sampling_params.enable_log_probs, fallback_if_none=False),
             num_logprobs=_normalize_field(sampling_params.num_logprobs, fallback_if_none=0),
         )
-
-    def _are_sampling_params_same(self, new_sampling_params, current_sampling_params) -> bool:
-        """Return True when both sampling params are equivalent after formatting.
-
-        Inputs may be local ``SamplingParams`` or vLLM duck-typed sampling params.
-        We first project each object to the local ``SamplingParams`` fields and then
-        normalize with ``format_sampling_params`` for an apples-to-apples comparison.
-        """
-        normalized_new = format_sampling_params(
-            self._to_local_sampling_params(new_sampling_params), max_batch_size=self.batch_size
-        )
-        normalized_current = format_sampling_params(
-            self._to_local_sampling_params(current_sampling_params), max_batch_size=self.batch_size
-        )
-        return normalized_new == normalized_current
 
     @staticmethod
     def _shape_or_type(value):
@@ -949,8 +962,19 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-    def _reset_sampling_state(self, sampling_params: SamplingParams, batch_size: int, batch_size_per_row: int) -> None:
-        # TODO(vllm): Thread prompt/output token state into sampling resets for penalty correctness.
+    def _apply_sampling_state(
+        self,
+        sampling_params: SamplingParams,
+        batch_size: int,
+        batch_size_per_row: int,
+        *,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        user_slots: list[int] | None = None,
+        positions: torch.Tensor | list[int] | None = None,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
+    ) -> None:
         sampling_dp = self.sampling_generator.tt_sampling._sampling_dp
         sampling_param_chunks = chunk_sampling_params(sampling_params, sampling_dp)
         # apply_decode_state() formats user-facing params for TT sampling. Keep
@@ -960,15 +984,39 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if seed is None:
             seed = [None] * batch_size
         seed_slots = self._sampling_device_seed_slots(seed, batch_size)
-        # This must be unconditional: when both requested and cached seeds are
-        # None, a conditional reset would skip the fresh device-seed upload.
-        self.sampling_generator.seed_manager.reset_seed(seed_slots, list(range(len(seed_slots))))
+        prompt_tokens_device = (
+            self._sampling_device_history(prompt_tokens)
+            if prompt_tokens is not None
+            else torch.full(
+                (self.sampling_generator.seed_manager.max_batch_size, 1),
+                -1,
+                dtype=torch.int64,
+            )
+        )
+        output_tokens_device = self._sampling_device_history(output_tokens) if output_tokens is not None else None
         self.sampling_generator.apply_decode_state(
             sampling_param_chunks,
-            reset_batch=True,
-            prompt_tokens=torch.zeros((batch_size_per_row, 1), dtype=torch.int64),
-            output_tokens=torch.zeros((batch_size_per_row, 1), dtype=torch.int64),
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+            prompt_tokens=prompt_tokens_device,
+            output_tokens=output_tokens_device,
         )
+        seed_manager = self.sampling_generator.seed_manager
+        active_seed_slots = self._sampling_device_slots(user_slots)
+        if active_seed_slots is None:
+            active_seed_slots = list(range(seed_manager.max_batch_size))
+        if reset_sampling_state:
+            # This must be unconditional: when both requested and cached seeds
+            # are None, a conditional reset would skip the fresh device upload.
+            seed_manager.reset_seed_from_slots(seed_slots, active_seed_slots)
+            if positions is not None:
+                seed_manager.align_seed_counters_to_positions(
+                    seed_slots,
+                    active_seed_slots,
+                    self._sampling_device_positions(positions),
+                )
+        elif reload_sampling_params:
+            seed_manager.reset_seed_from_slots_if_needed(seed_slots, active_seed_slots)
 
     def _sampling_device_slot(self, user_id: int) -> int:
         row = int(user_id) // self.batch_size_per_row
@@ -987,6 +1035,111 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if user_slots is None:
             return None
         return [self._sampling_device_slot(user_id) for user_id in user_slots]
+
+    def _sampling_device_positions(self, positions: torch.Tensor | list[int]) -> list[int]:
+        user_positions = torch.as_tensor(positions).reshape(-1).tolist()
+        device_positions = [-1] * self.sampling_generator.seed_manager.max_batch_size
+        for user_id, position in enumerate(user_positions[: self.batch_size]):
+            device_positions[self._sampling_device_slot(user_id)] = int(position)
+        return device_positions
+
+    def _sampling_params_for_user_slots(
+        self,
+        sampling_params: SamplingParams,
+        user_slots: list[int],
+    ) -> SamplingParams:
+        """Place front-packed request parameters into stable model slots."""
+        if not user_slots:
+            raise ValueError("DeepSeek sampling parameter slots cannot be empty")
+        if len(set(user_slots)) != len(user_slots) or any(slot < 0 or slot >= self.batch_size for slot in user_slots):
+            raise ValueError(f"DeepSeek sampling parameter slots must be unique values in [0, {self.batch_size})")
+        compact = self._normalize_sampling_params_for_batch(
+            self._to_local_sampling_params(sampling_params),
+            len(user_slots),
+        )
+        stable_fields = {}
+        for field_name in SAMPLING_PARAM_FIELDS:
+            compact_values = list(getattr(compact, field_name))
+            stable_values = [compact_values[-1]] * self.batch_size
+            for request_index, stable_slot in enumerate(user_slots):
+                stable_values[stable_slot] = compact_values[request_index]
+            stable_fields[field_name] = stable_values
+        return SamplingParams(**stable_fields)
+
+    def _sampling_history_for_user_slots(
+        self,
+        tokens: torch.Tensor,
+        user_slots: list[int],
+    ) -> torch.Tensor:
+        """Place front-packed request history into stable model slots."""
+        compact_tokens = torch.as_tensor(tokens)
+        if compact_tokens.ndim == 1:
+            compact_tokens = compact_tokens.unsqueeze(1)
+        else:
+            compact_tokens = compact_tokens.reshape(compact_tokens.shape[0], -1)
+        if compact_tokens.shape[0] != len(user_slots):
+            raise ValueError(
+                f"DeepSeek sampling history has {compact_tokens.shape[0]} rows " f"but {len(user_slots)} stable slots"
+            )
+        stable_tokens = torch.full(
+            (self.batch_size, compact_tokens.shape[1]),
+            -1,
+            dtype=compact_tokens.dtype,
+            device=compact_tokens.device,
+        )
+        for request_index, stable_slot in enumerate(user_slots):
+            stable_tokens[stable_slot] = compact_tokens[request_index]
+        return stable_tokens
+
+    def _sampling_device_history(self, tokens: torch.Tensor) -> torch.Tensor:
+        compact_tokens = torch.as_tensor(tokens)
+        if compact_tokens.ndim == 1:
+            compact_tokens = compact_tokens.unsqueeze(1)
+        else:
+            compact_tokens = compact_tokens.reshape(compact_tokens.shape[0], -1)
+        if compact_tokens.shape[0] > self.batch_size:
+            raise ValueError(
+                f"DeepSeek sampling history has {compact_tokens.shape[0]} rows, " f"but batch size is {self.batch_size}"
+            )
+        device_tokens = torch.full(
+            (self.sampling_generator.seed_manager.max_batch_size, compact_tokens.shape[1]),
+            -1,
+            dtype=compact_tokens.dtype,
+            device=compact_tokens.device,
+        )
+        for user_id in range(compact_tokens.shape[0]):
+            device_tokens[self._sampling_device_slot(user_id)] = compact_tokens[user_id]
+        return device_tokens
+
+    @staticmethod
+    def _prompt_history(tokens: torch.Tensor, lengths: torch.Tensor | list[int]) -> torch.Tensor:
+        prompt_tokens = torch.as_tensor(tokens).clone()
+        if prompt_tokens.ndim != 2:
+            raise ValueError(f"DeepSeek prompt history expects [B, S], got {tuple(prompt_tokens.shape)}")
+        prompt_lengths = torch.as_tensor(lengths, device=prompt_tokens.device).reshape(-1)
+        if prompt_lengths.numel() != prompt_tokens.shape[0]:
+            raise ValueError(
+                f"DeepSeek prompt history has {prompt_tokens.shape[0]} rows " f"but {prompt_lengths.numel()} lengths"
+            )
+        positions = torch.arange(prompt_tokens.shape[1], device=prompt_tokens.device).unsqueeze(0)
+        return prompt_tokens.masked_fill(positions >= prompt_lengths.unsqueeze(1), -1)
+
+    def _sampling_device_slot_remap(self, slot_remap: torch.Tensor | list[int]) -> list[int]:
+        user_remap = torch.as_tensor(slot_remap).reshape(-1).tolist()
+        if len(user_remap) != self.batch_size:
+            raise ValueError(f"DeepSeek slot_remap must have {self.batch_size} entries, got {len(user_remap)}")
+        device_remap = list(range(self.sampling_generator.seed_manager.max_batch_size))
+        for new_user, old_user_value in enumerate(user_remap):
+            old_user = int(old_user_value)
+            if old_user < 0 or old_user >= self.batch_size:
+                raise ValueError(f"DeepSeek slot_remap[{new_user}]={old_user} is outside [0, {self.batch_size})")
+            device_remap[self._sampling_device_slot(new_user)] = self._sampling_device_slot(old_user)
+        return device_remap
+
+    def _apply_sampling_slot_remap(self, slot_remap: torch.Tensor | list[int] | None) -> None:
+        if slot_remap is None:
+            return
+        self.sampling_generator.seed_manager.apply_slot_remap(self._sampling_device_slot_remap(slot_remap))
 
     def _sampling_device_seed_slots(self, seeds: list[int | None], batch_size: int) -> list[int | None]:
         seed_slot_count = self.sampling_generator.seed_manager.max_batch_size
@@ -1071,12 +1224,14 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self,
         tt_logits,
         sampling_params=None,
-        reset_batch=False,
         prompt_tokens=None,
         output_tokens=None,
         slot_remap=None,
         enable_trace=False,
         user_slots=None,
+        *,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
     ):
         """Public on-device decode-sampling entry point.
 
@@ -1086,20 +1241,23 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         returned by ``decode_forward(sample_on_device=True)``, return sampled
         token ids on device.
 
-        Contract differences vs the tt_transformers base (deferred reconciliation):
-        - Deepseek applies sampling *state* (params/seeds, lazy generator
-          creation) in :meth:`_validate_and_initialize_sampling`. The vLLM
-          bridge passes ``force_reset=True`` when its explicit state-reset
-          command is set, including when parameter values are unchanged, then
-          passes ``None`` here because it already applied the state before the
-          forward.
-        - ``prompt_tokens`` / ``output_tokens`` / ``slot_remap`` are not yet
-          threaded into deepseek's penalty/seed state (see
-          :meth:`_reset_sampling_state` TODO); accepted for signature
-          compatibility and currently ignored.
+        Sampling update commands are mandatory. Slot remaps are applied before
+        parameter/state updates and seed advancement.
         """
+        self._apply_sampling_slot_remap(slot_remap)
         if sampling_params is not None:
-            self._validate_and_initialize_sampling(sampling_params, sample_on_device=True, enable_trace=enable_trace)
+            self._validate_and_initialize_sampling(
+                sampling_params,
+                sample_on_device=True,
+                enable_trace=enable_trace,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+                user_slots=user_slots,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+            )
+        elif reload_sampling_params or reset_sampling_state:
+            raise ValueError("DeepSeek sampling updates require sampling_params")
         return self._sample_tokens_device(
             tt_logits, enable_trace=enable_trace, user_slots=user_slots, skip_precompile=True
         )
@@ -2133,10 +2291,13 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             if self.sample_on_device:
                 # reset sampling state for each repeat batch, o/p tokens will be different for each repeat batch
                 assert self.sampling_params is not None, "sampling_params must be set when sampling on device"
-                self._reset_sampling_state(
+                self._apply_sampling_state(
                     self.sampling_params,
                     self.batch_size,
                     self.batch_size_per_row,
+                    reload_sampling_params=True,
+                    reset_sampling_state=True,
+                    prompt_tokens=self._prompt_history(tokens_batched, lengths),
                 )
             # Reset teacher-forcing state per batch.
             if teacher_forcing is not None:
@@ -3277,6 +3438,8 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         original_sampling_params,
                         sample_on_device,
                         enable_trace=enable_trace,
+                        reload_sampling_params=True,
+                        reset_sampling_state=True,
                     )
 
                     # Warmup precompile happens at this flow; skip sampling-module precompile.
@@ -3300,6 +3463,8 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 original_sampling_params,
                 original_sample_on_device,
                 enable_trace=enable_trace,
+                reload_sampling_params=original_sample_on_device,
+                reset_sampling_state=original_sample_on_device,
             )
         # Warmup creates temporary page tables; clean them up to free memory.
         try:

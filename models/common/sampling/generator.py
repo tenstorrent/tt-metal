@@ -23,18 +23,6 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
-def should_align_decode_seed_counters(
-    *,
-    explicit_contract: bool,
-    reset_sampling_state: bool,
-    legacy_alignment: bool,
-) -> bool:
-    """Keep legacy seed-position alignment while honoring explicit state flags."""
-    return reset_sampling_state or (
-        not explicit_contract and legacy_alignment
-    )
-
-
 def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
     """Derive a stable per-token device seed from a request seed.
 
@@ -211,9 +199,8 @@ class SamplingGenerator:
         self,
         sampling_params_chunks: list,
         *,
-        reload_sampling_params: bool = True,
-        reset_sampling_state: bool = False,
-        reset_batch: bool | None = None,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
@@ -230,29 +217,17 @@ class SamplingGenerator:
         Does NOT call ``seed_manager.get_new_values()`` — callers manage seed
         advancement separately since generators call it at different points.
         """
-        if reset_batch is not None:
-            # Compatibility for demos/executors that predate the split
-            # contract. ``reset_batch`` historically always uploaded params
-            # and optionally rebuilt mutable state.
-            reload_sampling_params = True
-            reset_sampling_state = reset_batch
-
         if reload_sampling_params:
             chunks_per_model = len(sampling_params_chunks)
             max_batch_size = self.tt_sampling.max_batch_size
 
             if chunks_per_model == 1:
-                formatted_params = format_sampling_params(
-                    sampling_params_chunks[0], max_batch_size
-                )
+                formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
                 self.reset_sampling_params(formatted_params)
             else:
                 # Row-sharded case: format each chunk to max_batch_size,
                 # concatenate, then upload one merged parameter set.
-                formatted_chunks = [
-                    format_sampling_params(chunk, max_batch_size)
-                    for chunk in sampling_params_chunks
-                ]
+                formatted_chunks = [format_sampling_params(chunk, max_batch_size) for chunk in sampling_params_chunks]
                 concat_fields = {}
                 for field in SAMPLING_PARAM_FIELDS:
                     lists = [getattr(fc, field) for fc in formatted_chunks]
