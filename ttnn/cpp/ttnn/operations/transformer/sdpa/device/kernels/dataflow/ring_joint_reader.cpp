@@ -10,6 +10,8 @@
 #include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
+#include "ring_joint_kv_pad_derivation.hpp"
+#include "metadata_scalar_read.hpp"
 #include "chain_link.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
@@ -206,6 +208,10 @@ void kernel_main() {
     constexpr bool has_sliding_window = sliding_window_size > 0;
     constexpr bool enable_kv_chains = !has_sliding_window;
     constexpr uint32_t gathered_padded_Nt = get_compile_time_arg_val(34);
+    // Slots 35/36 are trace-safe metadata controls. Attention-sink and sliding-window
+    // fields occupy 32..34 in this branch.
+    constexpr bool slot_from_metadata = get_compile_time_arg_val(35) == 1;
+    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(36) == 1;
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     constexpr bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
@@ -220,7 +226,7 @@ void kernel_main() {
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
     constexpr bool has_joint_inputs = has_joint_q || has_joint_k;
 
-    constexpr auto q_args = TensorAccessorArgs<35>();
+    constexpr auto q_args = TensorAccessorArgs<37>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -230,6 +236,15 @@ void kernel_main() {
         get_post_tensor_args_offset<has_joint_inputs, joint_tensor_args_offset>();
     constexpr auto attention_sink_args = TensorAccessorArgs<post_joint_tensor_args_offset>();
     constexpr uint32_t post_tensor_args_offset = attention_sink_args.next_compile_time_args_offset();
+    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 37;
+    constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();
+    constexpr uint32_t kv_meta_args_offset =
+        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
+    constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
+    constexpr uint32_t chains_base_no_kv_pad =
+        slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
+    constexpr uint32_t chains_base_offset =
+        kv_pad_from_metadata ? kv_meta_args.next_compile_time_args_offset() : chains_base_no_kv_pad;
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -248,7 +263,7 @@ void kernel_main() {
     const uint32_t attention_sink_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
+    uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     ChainConfig head_cfg;
@@ -270,8 +285,8 @@ void kernel_main() {
         gqa_max_q_per_core = get_arg_val<uint32_t>(argidx++);
     }
 
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
@@ -289,21 +304,19 @@ void kernel_main() {
     uint32_t head_valid_semaphore_id = 0;
     constexpr bool head_mcast_enabled = []() {
         if constexpr (use_head_chain) {
-            return get_compile_time_arg_val(post_tensor_args_offset + chain_mcast_enabled_arg_offset) == 1;
+            return get_compile_time_arg_val(chains_base_offset + chain_mcast_enabled_arg_offset) == 1;
         }
         return false;
     }();
     if constexpr (use_head_chain) {
-        head_sender_semaphore_id =
-            get_compile_time_arg_val(post_tensor_args_offset + chain_sender_semaphore_arg_offset);
-        head_receiver_semaphore_id =
-            get_compile_time_arg_val(post_tensor_args_offset + chain_receiver_semaphore_arg_offset);
-        head_valid_semaphore_id = get_compile_time_arg_val(post_tensor_args_offset + chain_valid_semaphore_arg_offset);
+        head_sender_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_sender_semaphore_arg_offset);
+        head_receiver_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_receiver_semaphore_arg_offset);
+        head_valid_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_valid_semaphore_arg_offset);
     }
     constexpr uint32_t head_chain_arg_count = use_head_chain ? chain_compile_arg_count : 0;
     constexpr uint32_t batch_chain_arg_count = enable_kv_chains && k_uses_batch_chain ? chain_compile_arg_count : 0;
     constexpr uint32_t gqa_chain_arg_count = enable_kv_chains && gqa_grouped_kv ? chain_compile_arg_count : 0;
-    constexpr uint32_t batch_chain_ct_offset = post_tensor_args_offset + head_chain_arg_count;
+    constexpr uint32_t batch_chain_ct_offset = chains_base_offset + head_chain_arg_count;
     constexpr uint32_t gqa_chain_ct_offset = batch_chain_ct_offset + batch_chain_arg_count;
 
     // Batch chain semaphores (only present for non-GQA shared-K modes).
@@ -343,11 +356,60 @@ void kernel_main() {
     }
 
     constexpr uint32_t cb_arg_offset =
-        post_tensor_args_offset + head_chain_arg_count + batch_chain_arg_count + gqa_chain_arg_count;
+        chains_base_offset + head_chain_arg_count + batch_chain_arg_count + gqa_chain_arg_count;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 3);
+    constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 4);
+
+    if constexpr (slot_from_metadata || kv_pad_from_metadata) {
+        Noc meta_noc;
+        CircularBuffer cb_q_scratch(cb_q_in);
+        const uint32_t meta_l1 = cb_q_scratch.get_write_ptr();
+        if constexpr (slot_from_metadata) {
+            const uint32_t slot_id =
+                trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, get_common_arg_val<uint32_t>(0), meta_l1);
+            kv_cache_batch_idx = slot_id * get_common_arg_val<uint32_t>(1) + get_common_arg_val<uint32_t>(2);
+        }
+        if constexpr (kv_pad_from_metadata) {
+            const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
+                meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(3), meta_l1);
+            const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
+            logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
+            const auto qmap = ring_joint::build_kv_pad_q_mapping_device(
+                kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Nt, fused_op_receiver.seq.ring_index);
+            const auto masks = ring_joint::build_ring_work_masks_device(
+                fused_op_receiver.seq.ring_index,
+                ring_size,
+                fused_op_receiver.seq.expected[0],
+                fused_op_receiver.seq.expected[1],
+                num_local_k_chunks,
+                Sk_chunk_t,
+                kv_local_padded_Nt,
+                chunked_enabled,
+                chunk_size_t,
+                q_local_padded_Nt,
+                logical_nt,
+                num_joint_k_chunks,
+                L,
+                kv_pad_rotation_enabled,
+                is_causal != 0,
+                is_balanced != 0);
+            active_ring_iter_mask = masks.active_ring_iter_mask;
+
+            CircularBuffer cb_derived(cb_kv_pad_derived);
+            cb_derived.reserve_back(1);
+            CoreLocalMem<volatile uint32_t> d(cb_derived.get_write_ptr());
+            d[0] = logical_nt;
+            d[1] = qmap.q_pre_wrap_start_tile;
+            d[2] = qmap.q_pre_wrap_tile_count;
+            d[3] = qmap.q_post_wrap_start_tile;
+            d[4] = qmap.q_valid_tile_count;
+            d[5] = active_ring_iter_mask;
+            cb_derived.push_back(1);
+        }
+    }
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);

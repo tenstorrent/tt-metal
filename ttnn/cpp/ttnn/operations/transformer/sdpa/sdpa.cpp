@@ -264,6 +264,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_actual_isl,
         std::nullopt,  // latent_v_head_dim
         attention_sink,
+        std::nullopt,  // slot_id
+        std::nullopt,  // kv_actual_isl_tensor
+        1,             // kv_cache_num_layers
+        0,             // kv_cache_layer_idx
         sliding_window_size);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
@@ -325,10 +329,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         kv_cache_batch_idx,
         kv_actual_isl,
         head_dim_v,
+        std::nullopt,  // attention_sink
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers.value_or(1),
-        kv_cache_layer_idx.value_or(0));
+        kv_cache_layer_idx.value_or(0),
+        std::nullopt);  // sliding_window_size
     return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 

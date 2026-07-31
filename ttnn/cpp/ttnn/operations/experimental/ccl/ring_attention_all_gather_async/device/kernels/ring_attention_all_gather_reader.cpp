@@ -10,6 +10,8 @@
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ring_attention_all_gather_metadata.hpp"
 #include "ring_attention_prefetch_utils.hpp"
 #include <cstdint>
 #include <utility>
@@ -31,6 +33,8 @@ constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(7);  // 2
 constexpr uint32_t num_inputs = get_compile_time_arg_val(8);
 constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
 constexpr bool fuse_op = get_compile_time_arg_val(10);
+constexpr bool has_metadata = get_compile_time_arg_val(11);
+constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
@@ -38,11 +42,17 @@ constexpr bool fuse_op = get_compile_time_arg_val(10);
 constexpr uint32_t PREFETCH_PACKETS = 4;
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 11;
+    constexpr uint32_t page_size_base_idx = 13;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
         std::get<num_inputs - 1>(inputs_args).next_compile_time_args_offset()>();
+    constexpr uint32_t kMetaArgsOffset = has_metadata
+                                             ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
+                                             : (page_size_base_idx + num_inputs);
+    constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
+    constexpr uint32_t kKvMetaArgsOffset = has_metadata ? meta_args.next_compile_time_args_offset() : kMetaArgsOffset;
+    constexpr auto kv_meta_args = TensorAccessorArgs<kKvMetaArgsOffset>();
 
     ///////////////////////////////////////////////////
     // ARGS
@@ -88,6 +98,31 @@ void kernel_main() {
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
     auto output_tensor_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
+
+    if constexpr (has_metadata) {
+        const uint32_t slot_id_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t chunk_local_tiles = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t kv_cache_num_layers = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t kv_cache_layer_idx = get_arg_val<uint32_t>(arg_idx++);
+        Noc meta_noc;
+        // Use the data CB as temporary metadata scratch. It is empty at this point and avoids
+        // a separate tiny-CB read race on the all-gather worker cores.
+        CircularBuffer cb_meta(cb_output_id);
+        const uint32_t slot_id =
+            trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, cb_meta.get_write_ptr());
+        const uint32_t cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
+        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            input_batch_base[input_idx] = cache_batch_idx * input_batch_head_count[input_idx] *
+                                          input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
+        }
+        const uint32_t kv_actual = trace_metadata::read_metadata_scalar_u32(
+            meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
+        const uint32_t gather_valid_Ht =
+            ring_attention_all_gather::compute_gather_valid_Ht(kv_actual, chunk_local_tiles, ring_size);
+        ring_attention_all_gather::clamp_input_ranges_to_gather_extent(
+            gather_valid_Ht, input_tensor_Ht, input_tensor_Wt, input_tile_id_end);
+    }
 
     OpSignaler op_signaler;
     if constexpr (fuse_op) {

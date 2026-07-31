@@ -38,6 +38,10 @@ namespace ttnn {
 struct RingAttentionNeighborHaloConfig {
     uint32_t send_to_next_start_Ht;
     uint32_t send_to_next_count_Ht;
+    // A linear topology has no physical wrap link. The final device sends its
+    // predecessor tail back to device 0 over the backward fabric direction.
+    bool send_backward = false;
+    uint32_t unicast_hops = 1;
 };
 
 namespace ring_attention_all_gather_async_detail {
@@ -129,7 +133,8 @@ void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,
     const std::vector<Tensor>& input_tensors,
     const MeshCoordinate& target_device_coord,
-    const MeshCoordinate& forward_device_coord,
+    const MeshCoordinate& transport_device_coord,
+    const MeshCoordinate& unicast_destination_coord,
     std::vector<Tensor>& output_tensors,
     uint32_t num_links,
     uint32_t ring_size,

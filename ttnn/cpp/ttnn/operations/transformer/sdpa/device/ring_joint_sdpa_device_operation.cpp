@@ -300,6 +300,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         tensor_args.joint_q.has_value() == has_joint_tensors && tensor_args.joint_k.has_value() == has_joint_tensors &&
             tensor_args.joint_v.has_value() == has_joint_tensors,
         "Joint tensors must be provided all together or omitted altogether");
+    TT_FATAL(
+        tensor_args.slot_id.has_value() == tensor_args.kv_actual_isl.has_value(),
+        "metadata tensors slot_id and kv_actual_isl must be supplied together, or neither supplied");
 
     if (tensor_args.attention_sink.has_value()) {
         const auto& attention_sink = tensor_args.attention_sink.value();
@@ -350,7 +353,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     validate_ring_joint_all_gather_on_program_cache_miss(
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args,
-        args.has_indexed_kv_cache(),
+        args.has_indexed_kv_cache() || tensor_args.has_metadata(),
         compact_gather_dim_minimum);
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
@@ -376,7 +379,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto joint_q_shape = has_joint_tensors ? tensor_args.joint_q.value().logical_shape() : q_shape;
     const auto joint_k_shape = has_joint_tensors ? tensor_args.joint_k.value().logical_shape() : q_shape;
     const auto joint_v_shape = has_joint_tensors ? tensor_args.joint_v.value().logical_shape() : q_shape;
-    const bool has_indexed_kv_cache = args.has_indexed_kv_cache();
+    const bool has_indexed_kv_cache = args.has_indexed_kv_cache() || tensor_args.has_metadata();
     const uint32_t NVH = tensor_args.v_num_heads();
     const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 
@@ -805,6 +808,54 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
+ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation();
+    const auto cache_key_logical_n = kv_pad_rotation_enabled ? 0 : args.logical_n;
+
+    std::vector<Tensor> input_tensors = {tensor_args.input_q, tensor_args.input_k};
+    if (tensor_args.input_v.has_value()) {
+        input_tensors.emplace_back(tensor_args.input_v.value());
+    }
+    if (tensor_args.joint_q.has_value()) {
+        input_tensors.emplace_back(tensor_args.joint_q.value());
+        input_tensors.emplace_back(tensor_args.joint_k.value());
+    }
+    if (tensor_args.joint_v.has_value()) {
+        input_tensors.emplace_back(tensor_args.joint_v.value());
+    }
+    input_tensors.emplace_back(tensor_args.gathered_k);
+    if (tensor_args.gathered_v.has_value()) {
+        input_tensors.emplace_back(tensor_args.gathered_v.value());
+    }
+    if (tensor_args.attention_sink.has_value()) {
+        input_tensors.emplace_back(tensor_args.attention_sink.value());
+    }
+
+    return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
+        input_tensors,
+        args.joint_strategy,
+        args.scale,
+        args.is_causal,
+        args.is_balanced,
+        args.is_cross,
+        cache_key_logical_n,
+        args.ring_size,
+        args.compute_kernel_config,
+        args.program_config,
+        args.ccl_core_grid_offset,
+        args.kv_cache_batch_idx.has_value(),
+        kv_pad_rotation_enabled,
+        tensor_args.has_metadata(),
+        args.kv_cache_num_layers,
+        args.kv_cache_layer_idx,
+        tensor_args.has_latent_v(),
+        tensor_args.v_num_heads(),
+        tensor_args.v_head_dim(args.latent_v_head_dim),
+        args.all_gather_operation_attributes,
+        args.all_gather_tensor_args);
+}
+
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceOperation::create_op_performance_model(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, RingJointSDPAResult& output_tensors) {
     Tensors input_tensors = {tensor_args.input_q, tensor_args.input_k};
@@ -924,6 +975,10 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<uint32_t> kv_actual_isl,
     const std::optional<uint32_t> latent_v_head_dim,
     const std::optional<ttnn::Tensor>& attention_sink,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
+    const uint32_t kv_cache_num_layers,
+    const uint32_t kv_cache_layer_idx,
     const std::optional<uint32_t> sliding_window_size) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
@@ -1006,6 +1061,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         kv_cache_batch_idx,
         kv_actual_isl,
         latent_v_head_dim.value_or(0),
+        kv_cache_num_layers,
+        kv_cache_layer_idx,
         sliding_window_size);
 
     auto tensor_args = OperationType::tensor_args_t{
@@ -1017,7 +1074,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .joint_v = joint_tensor_v,
         .gathered_k = persistent_output_buffer_k,
         .gathered_v = persistent_output_buffer_v,
-        .attention_sink = attention_sink};
+        .attention_sink = attention_sink,
+        .slot_id = slot_id,
+        .kv_actual_isl = kv_actual_isl_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

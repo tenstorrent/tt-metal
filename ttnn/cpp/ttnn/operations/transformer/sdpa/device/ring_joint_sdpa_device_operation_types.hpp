@@ -35,6 +35,8 @@ struct RingJointSDPAParams {
     std::optional<std::uint32_t> kv_cache_batch_idx = std::nullopt;
     std::optional<std::uint32_t> kv_actual_isl = std::nullopt;
     uint32_t latent_v_head_dim = 0;
+    uint32_t kv_cache_num_layers = 1;
+    uint32_t kv_cache_layer_idx = 0;
     std::optional<uint32_t> sliding_window_size = std::nullopt;
 
     // We need a constructor, because all_gather_struct is not default initializable.
@@ -55,6 +57,8 @@ struct RingJointSDPAParams {
         std::optional<std::uint32_t> kv_cache_batch_idx = std::nullopt,
         std::optional<std::uint32_t> kv_actual_isl = std::nullopt,
         uint32_t latent_v_head_dim = 0,
+        uint32_t kv_cache_num_layers = 1,
+        uint32_t kv_cache_layer_idx = 0,
         std::optional<uint32_t> sliding_window_size = std::nullopt) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
@@ -72,6 +76,8 @@ struct RingJointSDPAParams {
         kv_cache_batch_idx(kv_cache_batch_idx),
         kv_actual_isl(kv_actual_isl),
         latent_v_head_dim(latent_v_head_dim),
+        kv_cache_num_layers(kv_cache_num_layers),
+        kv_cache_layer_idx(kv_cache_layer_idx),
         sliding_window_size(sliding_window_size) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
@@ -132,6 +138,10 @@ struct RingJointSDPAInputs {
     Tensor gathered_k;
     std::optional<Tensor> gathered_v;
     std::optional<Tensor> attention_sink;
+    std::optional<Tensor> slot_id;
+    std::optional<Tensor> kv_actual_isl;
+
+    bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.

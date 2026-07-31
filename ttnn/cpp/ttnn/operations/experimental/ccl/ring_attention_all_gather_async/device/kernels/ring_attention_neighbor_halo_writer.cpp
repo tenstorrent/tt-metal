@@ -27,8 +27,9 @@ constexpr uint32_t output_page_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_inputs = get_compile_time_arg_val(4);
 constexpr uint32_t unicast_route_arg0 = get_compile_time_arg_val(5);
 constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(6);
+constexpr bool send_backward = get_compile_time_arg_val(7);
 
-constexpr uint32_t page_size_base_idx = 7;
+constexpr uint32_t page_size_base_idx = 8;
 
 void kernel_main() {
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
@@ -80,7 +81,8 @@ void kernel_main() {
 
     fabric_connection.open();
 
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection = fabric_connection.get_forward_connection();
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection =
+        send_backward ? fabric_connection.get_backward_connection() : fabric_connection.get_forward_connection();
     const uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
 

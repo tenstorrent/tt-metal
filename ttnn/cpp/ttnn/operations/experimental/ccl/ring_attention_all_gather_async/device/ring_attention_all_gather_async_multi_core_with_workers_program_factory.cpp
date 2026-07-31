@@ -109,7 +109,8 @@ void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,
     const std::vector<Tensor>& input_tensors,
     const MeshCoordinate& target_device_coord,
-    const MeshCoordinate& forward_device_coord,
+    const MeshCoordinate& transport_device_coord,
+    const MeshCoordinate& unicast_destination_coord,
     std::vector<Tensor>& output_tensors,
     uint32_t num_links,
     uint32_t ring_size,
@@ -131,15 +132,18 @@ void ring_attention_neighbor_halo_exchange_helper(
     using tt::tt_metal::WriterConfigDescriptor;
 
     TT_FATAL(!input_tensors.empty() && input_tensors.size() == output_tensors.size(), "Invalid halo tensor list");
-    TT_FATAL(semaphores.size() >= 1, "Neighbor halo requires an incoming-ready semaphore");
+    TT_FATAL(!semaphores.empty(), "Neighbor halo requires an incoming-ready semaphore");
 
     auto* mesh_device = input_tensors.front().device();
     const bool wrap_endpoint = ring_index == 0 || ring_index + 1 == ring_size;
     const auto transport_topology = wrap_endpoint ? topology : ttnn::ccl::Topology::Linear;
     auto mutable_input_tensors = input_tensors;
     const auto op_config = ttnn::ccl::CCLOpConfig(mutable_input_tensors, output_tensors, transport_topology);
-    const auto unicast_forward_args = std::get<0>(ccl::get_forward_backward_line_unicast_configuration(
-        target_device_coord, forward_device_coord, std::nullopt, mesh_device));
+    auto unicast_forward_args = std::get<0>(ccl::get_forward_backward_line_unicast_configuration(
+        target_device_coord, unicast_destination_coord, std::nullopt, mesh_device));
+    if (tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+        unicast_forward_args[1] = halo.unicast_hops;
+    }
 
     const auto [worker_core_range, worker_cores] = ttnn::ccl::choose_worker_cores(
         num_links, 1, mesh_device, sub_device_id, core_grid_offset, std::nullopt, core_allocation_strategy);
@@ -201,6 +205,7 @@ void ring_attention_neighbor_halo_exchange_helper(
         num_inputs,
         unicast_forward_args[0],
         unicast_forward_args[1],
+        static_cast<uint32_t>(halo.send_backward),
     };
     for (uint32_t input = 0; input < num_inputs; ++input) {
         writer_kernel.compile_time_args.push_back(page_size);
@@ -316,17 +321,25 @@ void ring_attention_neighbor_halo_exchange_helper(
         for (const auto& output : output_tensors) {
             writer_args.push_back(output.buffer());
         }
-        writer_args.push_back(1u);
         std::vector<uint32_t> fabric_args;
+        // FabricConnectionManager consumes flags in forward-then-backward order. The linear
+        // wrap sender uses the backward connection, so its sender descriptor must follow the
+        // backward flag instead of the forward one.
+        writer_args.push_back(halo.send_backward ? 0u : 1u);
+        if (halo.send_backward) {
+            writer_args.push_back(1u);
+        }
         tt::tt_fabric::append_fabric_connection_rt_args(
             mesh_device->get_fabric_node_id(target_device_coord),
-            mesh_device->get_fabric_node_id(forward_device_coord),
+            mesh_device->get_fabric_node_id(transport_device_coord),
             link,
             desc,
             worker_cores[link],
             fabric_args);
         writer_args.append(fabric_args);
-        writer_args.push_back(0u);
+        if (!halo.send_backward) {
+            writer_args.push_back(0u);
+        }
         writer_kernel.emplace_runtime_args(worker_cores[link], writer_args);
     }
 
@@ -352,7 +365,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const CoreCoord core_grid_offset,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     std::optional<uint32_t> input_batch_slice_idx,
-    std::optional<uint32_t> gather_valid_Ht) {
+    std::optional<uint32_t> gather_valid_Ht,
+    std::optional<Tensor> slot_id,
+    std::optional<Tensor> kv_actual_isl,
+    uint32_t chunk_local_tiles,
+    uint32_t kv_cache_num_layers,
+    uint32_t kv_cache_layer_idx) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -480,6 +498,25 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         }}},
     });
 
+    // The host value is a structural placeholder for the indexed gather. On the
+    // trace-safe path the reader derives the actual cache slot from slot_id.
+    const bool has_metadata = slot_id.has_value();
+    const uint32_t meta_cb_index = tt::CB::c_in3;
+    if (has_metadata) {
+        constexpr uint32_t meta_cb_page_size_bytes = 32;
+        for (const auto& core_ranges : {sender_forward_core_ranges, sender_backward_core_ranges}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = meta_cb_page_size_bytes,
+                .core_ranges = core_ranges,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(meta_cb_index),
+                    .data_format = tt::DataFormat::RawUInt32,
+                    .page_size = meta_cb_page_size_bytes,
+                }}},
+            });
+        }
+    }
+
     // Tensor Info
     const uint32_t num_inputs = input_tensor.size();
     constexpr const char* exchange_writer_kernel_source =
@@ -509,6 +546,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         num_inputs,                       // num_inputs
         1,                                // direction
         fuse_op,                          // fused op
+        static_cast<uint32_t>(has_metadata),
+        meta_cb_index,
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -519,6 +558,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+            .append_to(sender_reader_forward_kernel.compile_time_args);
+    }
+    if (has_metadata) {
+        tt::tt_metal::TensorAccessorArgs(slot_id->buffer()).append_to(sender_reader_forward_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer())
             .append_to(sender_reader_forward_kernel.compile_time_args);
     }
 
@@ -545,12 +589,18 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         1,                                        // direction
         unicast_backward_args[0],                 // unicast route arg0 (dst_mesh_id or 0)
         unicast_backward_args[1],                 // unicast route arg1 (dst_chip_id or distance_in_hops)
+        static_cast<uint32_t>(has_metadata),
+        meta_cb_index,
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+            .append_to(sender_writer_forward_kernel.compile_time_args);
+    }
+    if (has_metadata) {
+        tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer())
             .append_to(sender_writer_forward_kernel.compile_time_args);
     }
 
@@ -575,6 +625,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         num_inputs,                       // num_inputs
         0,                                // direction
         fuse_op,                          // fused op
+        static_cast<uint32_t>(has_metadata),
+        meta_cb_index,
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -585,6 +637,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+            .append_to(sender_reader_backward_kernel.compile_time_args);
+    }
+    if (has_metadata) {
+        tt::tt_metal::TensorAccessorArgs(slot_id->buffer()).append_to(sender_reader_backward_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer())
             .append_to(sender_reader_backward_kernel.compile_time_args);
     }
 
@@ -611,12 +668,18 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         0,                                         // direction
         unicast_forward_args[0],                   // unicast route arg0 (dst_mesh_id or 0)
         unicast_forward_args[1],                   // unicast route arg1 (dst_chip_id or distance_in_hops)
+        static_cast<uint32_t>(has_metadata),
+        meta_cb_index,
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+            .append_to(sender_writer_backward_kernel.compile_time_args);
+    }
+    if (has_metadata) {
+        tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer())
             .append_to(sender_writer_backward_kernel.compile_time_args);
     }
 
@@ -736,6 +799,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_forward_rt_args.push_back(output_tensor[input_idx].buffer());
         }
+        if (has_metadata) {
+            reader_forward_rt_args.push_back(slot_id->buffer());
+            reader_forward_rt_args.push_back(kv_actual_isl->buffer());
+            reader_forward_rt_args.push_back(chunk_local_tiles);
+            reader_forward_rt_args.push_back(kv_cache_num_layers);
+            reader_forward_rt_args.push_back(kv_cache_layer_idx);
+        }
         if (fuse_op) {
             std::vector<uint32_t> reader_forward_signaler_args;
             fused_op_signaler_forward->push_all_gather_fused_op_rt_args(
@@ -755,6 +825,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_backward_rt_args.push_back(output_tensor[input_idx].buffer());
+        }
+        if (has_metadata) {
+            reader_backward_rt_args.push_back(slot_id->buffer());
+            reader_backward_rt_args.push_back(kv_actual_isl->buffer());
+            reader_backward_rt_args.push_back(chunk_local_tiles);
+            reader_backward_rt_args.push_back(kv_cache_num_layers);
+            reader_backward_rt_args.push_back(kv_cache_layer_idx);
         }
         if (fuse_op) {
             std::vector<uint32_t> reader_backward_signaler_args;
@@ -782,6 +859,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_forward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer());
+        }
+        if (has_metadata) {
+            writer_forward_rt_args.push_back(kv_actual_isl->buffer());
+            writer_forward_rt_args.push_back(chunk_local_tiles);
         }
         writer_forward_rt_args.push_back(0u);
         writer_forward_rt_args.push_back(static_cast<uint32_t>(backward_device_coord.has_value()));
@@ -818,6 +899,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_backward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer());
+        }
+        if (has_metadata) {
+            writer_backward_rt_args.push_back(kv_actual_isl->buffer());
+            writer_backward_rt_args.push_back(chunk_local_tiles);
         }
         writer_backward_rt_args.push_back(static_cast<uint32_t>(forward_device_coord.has_value()));
         std::vector<uint32_t> writer_backward_extra_args;

@@ -345,7 +345,9 @@ RingJointRuntimeDerivation build_runtime_derivation(
     // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
     // non-chunked path.
     derivation.kernel_chunked = tensor_args.is_chunked() && !args.is_cross;
-    derivation.kv_pad_rotation_enabled = args.has_kv_pad_rotation();
+    // The metadata path derives kv_actual_isl on-device for chunked prefill.
+    derivation.kv_pad_rotation_enabled =
+        args.has_kv_pad_rotation() || (tensor_args.has_metadata() && tensor_args.is_chunked());
     derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
 
     TT_FATAL(
@@ -366,8 +368,8 @@ RingJointRuntimePlan build_runtime_plan(
     RingJointRuntimePlan plan;
     plan.logical_nt = derivation.logical_nt;
     const uint32_t kv_actual_tile_count =
-        derivation.kv_pad_rotation_enabled ? args.kv_actual_isl.value() / tt::constants::TILE_HEIGHT : 0;
-    if (derivation.kv_pad_rotation_enabled) {
+        args.kv_actual_isl.has_value() ? args.kv_actual_isl.value() / tt::constants::TILE_HEIGHT : 0;
+    if (args.kv_actual_isl.has_value()) {
         plan.kv_pad_q_mapping = build_kv_pad_q_mapping(
             kv_actual_tile_count,
             derivation.logical_nt,
@@ -440,7 +442,7 @@ void write_runtime_arg(RuntimeArgsData& args, uint32_t index, uint32_t value, co
 // dispatch is bounded) and the cache-hit override path.
 std::optional<uint32_t> compute_gather_valid_Ht(
     const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    if (!args.has_kv_pad_rotation()) {
+    if (!args.has_kv_pad_rotation() && !(tensor_args.has_metadata() && tensor_args.is_chunked())) {
         return std::nullopt;
     }
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
@@ -728,6 +730,8 @@ namespace {
 // create_workload_descriptor() can loop coords and reuse this body verbatim. The
 // op-specific name suffix avoids Unity-build collisions with the sibling ring
 // sdpa factories that share the same helper signature.
+// Descriptor construction must keep host/runtime argument layouts together.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const RingJointSDPAParams& args,
     const RingJointSDPAInputs& tensor_args,
@@ -863,7 +867,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
 
     // q_local_padded_N (Q rows per device) can be shorter than kv_local_padded_N for chunked prefill.
-    const bool indexed_kv_cache = args.has_indexed_kv_cache();
+    // Metadata uses an on-device cache-slot value, but needs the same single-slot program structure.
+    const bool slot_from_metadata = tensor_args.has_metadata();
+    const bool indexed_kv_cache = args.has_indexed_kv_cache() || slot_from_metadata;
     // Latent-V mode: V tensors are omitted; the reader reuses K's buffer and
     // reads only the first vDHt head-dim tiles.
     const uint32_t B = q_shape[0];
@@ -896,7 +902,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
-    const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation();
+    const bool kv_pad_from_metadata = tensor_args.has_metadata() && tensor_args.is_chunked();
+    const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation() || kv_pad_from_metadata;
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
     const uint32_t logical_nt = runtime_plan.logical_nt;
@@ -1295,6 +1302,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(use_attention_sink),
         sliding_window_size,
         gathered_padded_Nt,
+        static_cast<uint32_t>(slot_from_metadata),
+        static_cast<uint32_t>(kv_pad_from_metadata),
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1309,6 +1318,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
         .append_to(reader_compile_time_args);
+    // These metadata tensors may use separate DRAM banks, so each gets its own accessor.
+    if (slot_from_metadata) {
+        TensorAccessorArgs(tensor_args.slot_id->buffer()).append_to(reader_compile_time_args);
+        if (kv_pad_from_metadata) {
+            TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(reader_compile_time_args);
+        }
+    }
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -1428,11 +1444,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compile_time_last_active_ring_iter,
         compile_time_single_valid_kv_chunk_mask,
         sliding_window_size,
+        static_cast<uint32_t>(kv_pad_from_metadata),
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
+    if (kv_pad_from_metadata) {
+        TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(writer_compile_time_args);
+    }
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
@@ -1486,6 +1506,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(v_shares_k_buffer),
         static_cast<uint32_t>(use_attention_sink),
         sliding_window_size,
+        static_cast<uint32_t>(kv_pad_from_metadata),
     };
 
     std::map<std::string, std::string> defines;
@@ -1630,13 +1651,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     constexpr uint32_t signal_page_size = 16;
     const uint32_t cb_signal =
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
+    // Reader-to-compute mailbox for the metadata-derived logical geometry.
+    const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
 
     const std::vector<uint32_t> cb_compile_time_args = {
-        cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,    cb_identity_scale_in,
-        cb_stats_in, cb_prev_out, cb_col_identity, cb_recip_scratch, cb_sum_out,     cb_sum_in,
-        cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,    cb_out_im_B,
-        cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff};
-    const std::vector<uint32_t> reader_cb_compile_time_args = {cb_q_in, cb_k_in, cb_v_in, cb_attention_sink};
+        cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
+        cb_stats_in, cb_prev_out, cb_col_identity, cb_recip_scratch, cb_sum_out,      cb_sum_in,
+        cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,     cb_out_im_B,
+        cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff, cb_kv_pad_derived};
+    const std::vector<uint32_t> reader_cb_compile_time_args = {
+        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, cb_kv_pad_derived};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
     writer_compile_time_args.insert(
@@ -2368,6 +2392,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
+    if (slot_from_metadata) {
+        reader_kernel.emplace_common_runtime_args(
+            {tensor_args.slot_id->buffer()->address(),  // smuggled-rta-ok: metadata tensor addr (on-device)
+             args.kv_cache_num_layers,
+             args.kv_cache_layer_idx,
+             tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
+    }
 
     KernelDescriptor writer_kernel{};
     writer_kernel.kernel_source =
@@ -2377,6 +2408,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
+    if (kv_pad_from_metadata) {
+        writer_kernel.emplace_common_runtime_args(
+            {tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
+    }
 
     KernelDescriptor compute_kernel{};
     compute_kernel.kernel_source =
@@ -2545,10 +2580,30 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_output_tensors.push_back(gathered_input_tensor_v);
     }
     if (has_sliding_window) {
-        TT_FATAL(forward_coord.has_value(), "Sliding attention requires a cyclic next-device route");
+        const bool linear_wrap_halo = args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear &&
+                                      device_index + 1 == ring_size;
+        std::optional<MeshCoordinate> halo_transport_coord = forward_coord;
+        std::optional<MeshCoordinate> halo_destination_coord = forward_coord;
+        if (linear_wrap_halo) {
+            // Preserve the cyclic logical Q/K layout on a physical line: send device N-1's
+            // predecessor tail backward over N-1 hops to device 0. The transport connection is
+            // its immediate backward neighbor; the packet route names the actual endpoint.
+            TT_FATAL(backward_coord.has_value(), "Linear sliding halo wrap requires a backward neighbor");
+            TT_FATAL(
+                args.all_gather_operation_attributes.cluster_axis.has_value(),
+                "Linear sliding halo wrap requires cluster_axis");
+            halo_transport_coord = backward_coord;
+            halo_destination_coord = coord;
+            halo_destination_coord->operator[](args.all_gather_operation_attributes.cluster_axis.value()) = 0;
+        }
+        TT_FATAL(
+            halo_transport_coord.has_value() && halo_destination_coord.has_value(),
+            "Sliding attention requires a next-device route");
         const RingAttentionNeighborHaloConfig neighbor_halo{
             .send_to_next_start_Ht = chunked_sliding_halo_layout.send_tail_start_tile(device_index),
             .send_to_next_count_Ht = chunked_sliding_halo_layout.halo_tile_rows,
+            .send_backward = linear_wrap_halo,
+            .unicast_hops = linear_wrap_halo ? ring_size - 1 : 1,
         };
         log_debug(
             tt::LogOp,
@@ -2562,7 +2617,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             desc,
             all_gather_input_tensors,
             coord,
-            forward_coord.value(),
+            halo_transport_coord.value(),
+            halo_destination_coord.value(),
             all_gather_output_tensors,
             args.all_gather_operation_attributes.num_links,
             args.all_gather_operation_attributes.ring_size,
@@ -2577,6 +2633,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             compute_gather_valid_Ht(args, tensor_args),
             neighbor_halo);
     } else {
+        const bool ag_indexed = args.has_indexed_kv_cache() || tensor_args.has_metadata();
+        const std::optional<uint32_t> gather_slice_idx =
+            ag_indexed ? std::optional<uint32_t>(args.kv_cache_batch_idx.value_or(0)) : std::nullopt;
         ring_attention_all_gather_async_multi_core_with_workers_helper(
             desc,
             all_gather_input_tensors,
@@ -2594,8 +2653,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             all_gather_fused_op_signaler,
             args.ccl_core_grid_offset,
             args.all_gather_operation_attributes.core_allocation_strategy,
-            args.kv_cache_batch_idx,
-            compute_gather_valid_Ht(args, tensor_args));
+            gather_slice_idx,
+            compute_gather_valid_Ht(args, tensor_args),
+            tensor_args.slot_id,
+            tensor_args.kv_actual_isl,
+            tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
+            args.kv_cache_num_layers,
+            args.kv_cache_layer_idx);
     }
 
     return desc;
