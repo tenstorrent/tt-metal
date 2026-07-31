@@ -62,6 +62,13 @@ MOVEMENT_PREFIXES = (("Reshard", "l1_regrid"), ("ShardedToInterleaved", "l1_to_d
                      ("FillPad", "fill_pad"), ("Copy", "copy"))
 
 
+# Only these four are placement/layout decisions the advisor expresses as a to_memory_config edge, so only
+# these can be compared against reshards[]. ReshapeView / FillPad / Copy are real cost -- ReshapeView ran at
+# 8-19 us on 110 cores in this corpus -- but the advisor never places them, so scoring them as "the advisor
+# drops this" is an artifact of the classification, not evidence. Counted, reported, never ranked.
+ADVISOR_COMPARABLE = {"l1_regrid", "l1_to_dram", "dram_to_l1", "retilize"}
+
+
 def movement_class(dev_cls: str):
     for pref, name in MOVEMENT_PREFIXES:
         if dev_cls.startswith(pref):
@@ -259,6 +266,40 @@ def parse_reshards(report):
     return idx
 
 
+def bsum(rows):
+    """Split the shipped conversions by who wants them, and by which move they are.
+
+    `us_advisor_drops` is this stage's ceiling on conversion-removal value: it is the DRAM round trips and
+    regrids the advice does NOT place, so removing them is attributable to the advisor. `us_advisor_agrees`
+    is conversion time that is real and worth attacking but is OUT OF SCOPE here -- removing it is the
+    agent's own idea, and crediting it to the advisor would contaminate the measurement. Report it, hand it
+    to $optimize, do not screen it in this stage.
+    """
+    allb = [r for r in rows if r["bucket"] == "boundary"]
+    b = [r for r in allb if r.get("advisor_comparable") is not False]
+    us = lambda pred: round(sum(r["us"] for r in b if pred(r)), 3)
+    by_class = {}
+    for r in allb:
+        e = by_class.setdefault(r.get("conversion_class", "?"), {"us": 0.0, "ops": 0})
+        e["us"] = round(e["us"] + r["us"], 3)
+        e["ops"] += 1
+    return {
+        "advisor_drops_ops": sum(1 for r in b if r.get("advised_here") is False),
+        "us_advisor_drops": us(lambda r: r.get("advised_here") is False),
+        "advisor_agrees_ops": sum(1 for r in b if r.get("advised_here") is True),
+        "us_advisor_agrees": us(lambda r: r.get("advised_here") is True),
+        "undetermined_ops": sum(1 for r in b if r.get("advised_here") is None),
+        "us_undetermined": us(lambda r: r.get("advised_here") is None),
+        "not_advisor_comparable_ops": sum(1 for r in allb if r.get("advisor_comparable") is False),
+        "us_not_advisor_comparable": round(
+            sum(r["us"] for r in allb if r.get("advisor_comparable") is False), 3),
+        "by_conversion_class": by_class,
+        "note": "us_advisor_drops is what this stage can attribute to the advisor. us_advisor_agrees is "
+                "real conversion time the advisor endorses: attacking it is a separate activity, and "
+                "crediting it here would contaminate the contribution measurement.",
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--report", required=True, type=Path)
@@ -343,7 +384,11 @@ def main() -> int:
         nxt = next((dev_rows[j]["op"] for j in range(i + 1, len(dev_rows)) if dev_rows[j].get("op")), None)
         hits = reshard_idx.get((prev, nxt))
         r["edge"] = f"{prev} -> {nxt}"
-        if prev is None or nxt is None:
+        if r.get("conversion_class") not in ADVISOR_COMPARABLE:
+            r["advisor_comparable"] = False
+            r["reason"] = (f"{r.get('conversion_class')} is not a placement edge the advisor expresses, so "
+                           "it cannot be attributed to the advice. Real cost, but not this stage's candidate")
+        elif prev is None or nxt is None:
             r["advised_here"] = None
             r["reason"] = "boundary on an edge with no paired advised op either side -- undetermined"
         elif hits:
@@ -399,16 +444,7 @@ def main() -> int:
         "accounting": acct, "accounting_closes_100pct": closes,
         "accounted_us": round(accounted, 3),
         "ranked_by": "advisor_removes_us, then conversion_value_us + chain op us -- NOT advised-op share",
-        "advised_boundaries": {
-            "advised_reshard_edges": len(reshard_idx),
-            "shipped_boundaries_advisor_drops": sum(
-                1 for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is False),
-            "us_advisor_drops": round(sum(
-                r["us"] for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is False), 3),
-            "shipped_boundaries_advisor_agrees": sum(
-                1 for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is True),
-            "undetermined": sum(
-                1 for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is None)},
+        "advised_boundaries": bsum(rows),
         "chains": chains, "material_ops_on_le_2_cores": low,
         "note": "Screen chains in the order given, each as one unit, and record repeats_ms. Do NOT copy "
                 "advised core counts: they are selected under a bytes-shaped objective and are often "
@@ -423,9 +459,12 @@ def main() -> int:
     for b, v in sorted(acct.items(), key=lambda x: -x[1]["us"]):
         print(f"   {b:22s} {v['us']:9.3f} us {v['share_pct']:6.2f} %  ({v['ops']} ops)")
     ab = out["advised_boundaries"]
-    print(f"   boundaries: advisor drops {ab['shipped_boundaries_advisor_drops']} "
-          f"({ab['us_advisor_drops']:.3f} us), agrees {ab['shipped_boundaries_advisor_agrees']}, "
-          f"undetermined {ab['undetermined']}")
+    print(f"   boundaries: advisor drops {ab['advisor_drops_ops']} ({ab['us_advisor_drops']:.3f} us, "
+          f"in scope) | agrees {ab['advisor_agrees_ops']} ({ab['us_advisor_agrees']:.3f} us, out of scope) "
+          f"| undetermined {ab['undetermined_ops']} ({ab['us_undetermined']:.3f} us) "
+          f"| not comparable {ab['not_advisor_comparable_ops']} ({ab['us_not_advisor_comparable']:.3f} us)")
+    print("   " + "  ".join(f"{k} {v['us']:.3f}us/{v['ops']}" for k, v in
+                            sorted(ab["by_conversion_class"].items(), key=lambda x: -x[1]["us"])))
     print(f"   {len(chains)} chain(s), ranked by advisor-attributable conversion value:")
     for c in chains:
         print(f"      {c['chain']:16s} ops {c['us']:8.3f} + boundaries {c['boundary_us']:7.3f} us"
