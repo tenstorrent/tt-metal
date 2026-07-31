@@ -1118,7 +1118,7 @@
   model: ltx-2.3-pro-t2v
   model_family: LTX
   skus:
-    bh_galaxy:
+    bh_sc1:
       timeout: 100
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
@@ -1151,7 +1151,7 @@
   model: ltx-2.3-fast-t2v
   model_family: LTX
   skus:
-    bh_galaxy:
+    bh_sc1:
       timeout: 100
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
@@ -1185,7 +1185,7 @@
   model: ltx-2.3-pro-i2v
   model_family: LTX
   skus:
-    bh_galaxy:
+    bh_sc1:
       timeout: 100
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
@@ -1218,7 +1218,7 @@
   model: ltx-2.3-fast-i2v
   model_family: LTX
   skus:
-    bh_galaxy:
+    bh_sc1:
       timeout: 100
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
