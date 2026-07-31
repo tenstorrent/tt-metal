@@ -1,0 +1,109 @@
+{
+  "batch": 1,
+  "candidate": "dram_sharded_dense_bfp8_hifi4",
+  "candidate_contract": {
+    "dtype": "bfloat8_b",
+    "family": "dram_sharded_weight_l1_width_sharded_activation_output",
+    "fidelity": "HiFi4",
+    "roles": {
+      "dense_down": {
+        "core_count": 6,
+        "in0_block_w": 11,
+        "input_shard": [
+          32,
+          352
+        ],
+        "logical_n": 2816,
+        "output_shard": [
+          32,
+          512
+        ],
+        "padded_n": 3072,
+        "per_core_M": 1,
+        "per_core_N": 16,
+        "weight_shard": [
+          2112,
+          512
+        ]
+      },
+      "packed_gate_up": {
+        "core_count": 8,
+        "in0_block_w": 11,
+        "input_shard": [
+          32,
+          352
+        ],
+        "logical_n": 4224,
+        "output_shard": [
+          32,
+          544
+        ],
+        "padded_n": 4352,
+        "per_core_M": 1,
+        "per_core_N": 17,
+        "weight_shard": [
+          2816,
+          544
+        ]
+      }
+    }
+  },
+  "candidate_matrix_sha256": "f45148713aefab18131a35767c84db16ed090b7d516631b1f2f1c269215a3693",
+  "correctness_artifact": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/candidates/whole_layer/dram_sharded_dense_bfp8_hifi4/pcc_layer5_full_attention_shared0.json",
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "logical_m": 1,
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "per_core_M": 1,
+  "physical_m": 32,
+  "provenance": {
+    "captured_at_utc": "2026-07-31T06:13:25.116328+00:00",
+    "checkout_git_sha": "e5623e55e6997208dd64347103c52747b6e51df8",
+    "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_WHOLE_LAYER_SWEEP=1 pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py -k optimized_whole_layer",
+    "functional_decoder_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
+    "hardware": {
+      "arch": "Arch.BLACKHOLE",
+      "device_ids": [
+        3
+      ],
+      "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39"
+    },
+    "implementation": "optimized",
+    "optimized_decoder_sha256": "6b80003c7a96758a9a5aae6e38227da3e848733a12319ec8c4ab0127fcdc458d",
+    "optimized_test_sha256": "72e98d7722a7596275f96d4c272ff6ca9cf3ae6ec447d2ae1b3891b10d781c68"
+  },
+  "timing": {
+    "cache_shape": [
+      9,
+      2,
+      128,
+      512
+    ],
+    "decode_batch": 1,
+    "decode_current_pos": 1024,
+    "decode_trace_host_ms": 3.2184161245822906,
+    "implementation": "optimized",
+    "layer_idx": 5,
+    "layer_type": "full_attention",
+    "model_id": "google/gemma-4-26B-A4B-it",
+    "prefill_host_ms": 680.7214375585318,
+    "provenance": {
+      "captured_at_utc": "2026-07-31T06:13:25.099533+00:00",
+      "checkout_git_sha": "e5623e55e6997208dd64347103c52747b6e51df8",
+      "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_DECODER_PERF=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_decoder_perf_profile -k 'full_attention and batch1'",
+      "functional_decoder_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
+      "hardware": {
+        "arch": "Arch.BLACKHOLE",
+        "device_ids": [
+          3
+        ],
+        "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39"
+      },
+      "implementation": "optimized",
+      "optimized_decoder_sha256": "6b80003c7a96758a9a5aae6e38227da3e848733a12319ec8c4ab0127fcdc458d",
+      "optimized_test_sha256": "72e98d7722a7596275f96d4c272ff6ca9cf3ae6ec447d2ae1b3891b10d781c68"
+    },
+    "sequence_length": 1024,
+    "shared_physical_cache": false
+  }
+}

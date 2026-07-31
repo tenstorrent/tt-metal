@@ -1,0 +1,33 @@
+{
+  "cache_shape": [
+    288,
+    2,
+    128,
+    512
+  ],
+  "decode_batch": 32,
+  "decode_current_pos": 1024,
+  "decode_trace_host_ms": 50.498479045927525,
+  "implementation": "optimized",
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "provenance": {
+    "captured_at_utc": "2026-07-31T06:13:37.457639+00:00",
+    "checkout_git_sha": "e5623e55e6997208dd64347103c52747b6e51df8",
+    "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_DECODER_PERF=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_decoder_perf_profile -k 'full_attention and batch32'",
+    "functional_decoder_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
+    "hardware": {
+      "arch": "Arch.BLACKHOLE",
+      "device_ids": [
+        3
+      ],
+      "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39"
+    },
+    "implementation": "optimized",
+    "optimized_decoder_sha256": "6b80003c7a96758a9a5aae6e38227da3e848733a12319ec8c4ab0127fcdc458d",
+    "optimized_test_sha256": "72e98d7722a7596275f96d4c272ff6ca9cf3ae6ec447d2ae1b3891b10d781c68"
+  },
+  "sequence_length": 1024,
+  "shared_physical_cache": false
+}

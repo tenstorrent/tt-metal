@@ -1,0 +1,38 @@
+{
+  "candidate_family": "sparse_expert_gate_up_down",
+  "checkout_git_sha": "e5623e55e6997208dd64347103c52747b6e51df8",
+  "command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_WHOLE_LAYER_SWEEP=1 pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_whole_layer_candidate_{pcc,perf} -k sparse_in0_block_w_{22,44}",
+  "hardware": "Blackhole P300c",
+  "logical_batches": [
+    1,
+    32
+  ],
+  "results": {
+    "in0_block_w_22": {
+      "batch1": {
+        "full_decode_ms": 2.2626351565122604,
+        "pcc": "passed both representative layer kinds",
+        "sliding_decode_ms": 2.0520128309726715,
+        "verdict": "slower than selected width 11"
+      },
+      "batch32": {
+        "error": "L1 buffer allocated at 1236992 while static circular-buffer region ends at 1238272",
+        "verdict": "rejected: exact corrected full-layer L1-capacity blocker"
+      }
+    },
+    "in0_block_w_44": {
+      "batch1": {
+        "error": "static circular buffers grow to 2319616 B, beyond max L1 size 1572864 B",
+        "verdict": "rejected: exact corrected full-layer L1-capacity blocker"
+      },
+      "batch32": {
+        "error": "not run after the stricter batch-1 allocation exceeded physical L1 by 746752 B",
+        "verdict": "rejected by hard device limit"
+      }
+    }
+  },
+  "selected": {
+    "in0_block_w": 11,
+    "reason": "best correct geometry at both required batches"
+  }
+}

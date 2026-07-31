@@ -1,0 +1,105 @@
+{
+  "captured_at_utc": "2026-07-31T07:01:19Z",
+  "checkout_git_sha": "e5623e55e6997208dd64347103c52747b6e51df8",
+  "hardware": {
+    "arch": "Arch.BLACKHOLE",
+    "board": "p300c",
+    "device_ids": [3]
+  },
+  "implementation": "optimized",
+  "evidence_phase": "candidate-era comparison; production selection was subsequently promoted",
+  "optimized_decoder_sha256": "f9681e75d52cff8de00cebe5a343c9d9b637d2094c225859f6c906e37bc0db59",
+  "optimized_test_sha256": "a9f3ae7f867a4a6c5acc9455e527b5d205c74865554f572660ec951a292c7580",
+  "final_selected_decoder_sha256": "3589c270b4c8f8b57348479eaf62479ace88702d0775e21d61ff2052133886b3",
+  "final_selected_test_sha256": "3e09e6704bc5977c1235baea61ad4275e4a72c15c28cd6d003509ccfcf001a27",
+  "final_selected_artifacts": "root pcc_layer*.json, trace_*.json, *repeated_timings.json, and tracy/",
+  "group": "sparse expert gate/up/down",
+  "topology": {
+    "nnz": 8,
+    "in0_block_w": 11,
+    "activation_dtype": "BFLOAT16",
+    "weight_memory": "DRAM_INTERLEAVED"
+  },
+  "candidates": {
+    "expert_bfp8_hifi2": {
+      "weight_dtype": "BFLOAT8_B",
+      "math_fidelity": "HiFi2",
+      "fp32_dest_acc_en": false,
+      "real_weight_pcc": "pass at 0.995 for sliding and full-attention layers",
+      "warmed_prefill_ms": {
+        "sliding_batch1": 669.7488622739911,
+        "full_batch1": 670.9821429103613
+      },
+      "traced_decode_ms": {
+        "sliding_batch1": 1.8424354493618011,
+        "sliding_batch32": 32.408494502305984,
+        "full_batch1": 2.0347721874713898,
+        "full_batch32": 32.30247367173433
+      }
+    },
+    "expert_bfp8_lofi": {
+      "weight_dtype": "BFLOAT8_B",
+      "math_fidelity": "LoFi",
+      "fp32_dest_acc_en": false,
+      "real_weight_pcc": "pass at 0.995 for sliding and full-attention layers",
+      "warmed_prefill_ms": {
+        "sliding_batch1": 669.8276177048683,
+        "full_batch1": 671.015502884984
+      },
+      "traced_decode_ms": {
+        "sliding_batch1": 1.8346896395087242,
+        "sliding_batch32": 32.067764550447464,
+        "full_batch1": 2.0258240401744843,
+        "full_batch32": 31.92545287311077
+      },
+      "profiler_runtime_verification": {
+        "artifact": "../tracy/sliding_b1_decode_perf_report.csv",
+        "op_code": "SparseMatmulDeviceOperation",
+        "input_0_datatype": "BFLOAT16",
+        "input_1_datatype": "BFLOAT8_B",
+        "math_fidelity": "LoFi",
+        "roles_observed": ["expert_gate", "expert_up", "expert_down"]
+      }
+    },
+    "expert_bfp4_lofi": {
+      "weight_dtype": "BFLOAT4_B",
+      "math_fidelity": "LoFi",
+      "fp32_dest_acc_en": false,
+      "decision": "rejected: exact adapted real-weight correctness blocker",
+      "pcc": {
+        "sliding_prefill": 0.993716496227201,
+        "sliding_decode": 0.9943835531498402,
+        "full_prefill": 0.992966287502948,
+        "full_decode": 0.993188995360541
+      },
+      "threshold": 0.995,
+      "artifacts": [
+        "expert_bfp4_lofi/pcc_layer0_sliding_attention_shared1.json",
+        "expert_bfp4_lofi/pcc_layer5_full_attention_shared0.json"
+      ]
+    }
+  },
+  "commands": {
+    "pcc": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_PRECISION_SWEEP=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_precision_candidate_real_weights -k '<candidate>'",
+    "timing": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_FIDELITY_REPEAT_PERF=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_precision_candidate_repeated_perf -k expert_bfp8",
+    "profiler": "TT_METAL_DEVICE_PROFILER=1 GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_FIDELITY_REPEAT_PERF=1 TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m tracy -r -p --op-support-count=10000 --check-exit-code -o <artifact-dir> -m pytest '<exact expert_bfp8_lofi sliding batch1 node>' -q"
+  },
+  "selected_default": {
+    "expert_weight_dtype": "BFLOAT8_B",
+    "expert_compute_fidelity": "LoFi",
+    "context_capacity": "unchanged: expert weight precision does not alter paged KV-cache allocation or advertised context",
+    "real_weight_pcc": "3/3 pass: sliding, full natural cache, full shared physical cache",
+    "trace_contract": "4/4 pass at batch 1 and 32 for both layer kinds",
+    "repeated_final": {
+      "sliding_batch1_prefill_ms": 669.7424938902259,
+      "sliding_batch1_decode_ms": 1.848326064646244,
+      "sliding_batch32_decode_ms": 32.0723932236433,
+      "full_batch1_prefill_ms": 671.0623297840357,
+      "full_batch1_decode_ms": 2.0259851589798927,
+      "full_batch32_decode_ms": 31.933266669511795
+    },
+    "watcher": "9/9 pass with disabled features: None; watcher_bfp8_lofi_selected.log",
+    "static_contracts": "4/4 pass"
+  },
+  "selection": "expert BF8/LoFi promoted into production selected_default after passing PCC and beating the prior default at batch 1 and 32"
+}

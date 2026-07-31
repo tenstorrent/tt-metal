@@ -1,0 +1,12 @@
+{
+  "decode_current_pos": 32,
+  "decode_pcc": 0.9997272319935798,
+  "decode_threshold": 0.995,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "prefill_pcc": 0.9986195115849243,
+  "prefill_threshold": 0.995,
+  "sequence_length": 32,
+  "shared_physical_cache": true
+}
