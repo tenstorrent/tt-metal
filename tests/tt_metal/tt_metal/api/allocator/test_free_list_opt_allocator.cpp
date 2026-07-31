@@ -148,6 +148,20 @@ TEST(FreeListOptTest, ShrinkAndReset) {
     ASSERT_TRUE(e.has_value());
 }
 
+// Shrinking away the whole pool consumes the only block, which leaves it with no next block to relink
+TEST(FreeListOptTest, ShrinkEntirePoolAndReset) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
+
+    allocator.shrink_size(1_GiB);
+    auto a = allocator.allocate(1_KiB);
+    ASSERT_FALSE(a.has_value());
+
+    allocator.reset_size();
+    auto b = allocator.allocate(1_GiB);
+    ASSERT_TRUE(b.has_value());
+    ASSERT_EQ(b.value(), 0);
+}
+
 TEST(FreeListOptTest, Statistics) {
     auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
     auto a = allocator.allocate(1_KiB);
