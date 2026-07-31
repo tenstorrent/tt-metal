@@ -37,14 +37,11 @@ from helpers.utils import passed_test
 # bank switching across the block).
 BLOCK_CT_DIMS = [1, 2, 3, 4, 8, 16]
 
-# 32x32 (num_faces=4) and 16x32 tiny tile (num_faces=2, a single input face-row).
 TILE_DIMENSIONS = [(32, 32), (16, 32)]
 
 
 @pytest.mark.quasar
 @parametrize(
-    # bf16 operand/scaler, 16-bit DEST (contract for block reduce_max_row). 32-bit DEST is not yet
-    # supported on Quasar (the LLK asserts on it).
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16]),
     block_ct_dim=BLOCK_CT_DIMS,
     tile_dimensions=TILE_DIMENSIONS,
@@ -62,11 +59,7 @@ def test_reduce_block_max_row_quasar(
     input_dimensions = [tile_dimensions[0], tile_dimensions[1] * block_ct_dim]
 
     # DIAGNOSTIC stimulus: each of the block_ct_dim tiles is a distinct ASCENDING constant
-    # (tile k = 0.1*(k+1)). Constant tiles are layout-invariant, so no tilize is needed. Each tile's
-    # row-max is its constant; the block-max is the LAST (largest) tile = 0.1*block_ct_dim EVERYWHERE.
-    # Reading the result: a cell == 0.1*block_ct_dim is correct; a cell == 0.1*(j+1) with j < last
-    # reveals the highest tile still accumulated there (tiles j+1..last were dropped); a 0 means no
-    # tile was accumulated at that position.
+    # (tile k = 0.1*(k+1)). Constant tiles are layout-invariant, so no tilize is needed.
     tile_size = tile_shape.total_tile_size()
     src_A = torch.cat(
         [torch.full((tile_size,), 0.1 * (k + 1)) for k in range(block_ct_dim)]

@@ -16,9 +16,6 @@
 
 using namespace ckernel;
 
-// Block reduce_max_row unpacker (runtime block_ct_dim). A single MOP walks the whole block (its
-// last-inner op advances the source tile); the scaler (SrcB) is unpacked once in the execute fn.
-
 /**
  * @brief Enables/disables the UNPACKER0 hardware transpose used for row reduction.
  *
@@ -45,11 +42,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
     LLK_ASSERT(!respect_trigger, "respect_trigger is not supported on Quasar");
 
     // Single MOP walks the WHOLE block. Its outer loop = block_ct_dim (one tile per outer iteration); its
-    // inner loop = the tile's faces. The face index restarts every outer iteration (exactly why the naive
-    // version re-read tile 0), so the ONLY thing missing was a per-tile source TILE advance. We put that
-    // on the LAST face of each inner loop via set_last_inner_loop_instr: it sets Src_Tile_Offset_Idx_Inc=1,
-    // so after a tile's last face the source tile advances and the next outer iteration reads the next
-    // tile's face 0.
+    // inner loop = the tile's faces.
     // The scaler (SrcB) is NOT in this MOP: the template's START_OP runs once PER OUTER ITERATION (see the
     // loop diagram in ckernel_template.h), so putting the scaler there would re-copy the constant scaler
     // block_ct_dim times. It is unpacked exactly ONCE in the execute fn instead.
@@ -72,10 +65,13 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
         unpack_srcA_face_last = unpack_srcA_face;
     }
 
+    // Partial-face tiles (face_r_dim < 16, e.g. 8x32 / 4x32) fill only the top face_r_dim SrcA rows.
     const bool needs_srca_clear = (tensor_shape.face_r_dim < FACE_R_DIM);
 
     if (needs_srca_clear)
     {
+        // Seed the unfilled SrcA rows with -inf so GMPOOL's DIM_16X16 MAX over the full 16-row face
+        // ignores them (max(x, -inf) = x). This clear op is prepended before each face unpack (the MOP's first inner-loop op).
         constexpr std::uint32_t clr_mode = p_unpacr::UNP_CLRSRC_NEGINF;
         const std::uint32_t unpack_zero_srcA =
             TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC_ZERO /* UNP_CLR_SRC */);

@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Standalone tt-llk test for the experimental Quasar block reduce_max_row kernel. Drives the LLK
-// lib directly (no metal layer). A block of params.TILE_CNT operand tiles is row-max reduced into a
-// single result tile. Exercises the runtime-block_ct_dim lib path.
-
+// lib directly. A block of params.TILE_CNT operand tiles is row-max reduced into a
+// single result tile.
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
