@@ -276,6 +276,7 @@ void FabricTensixDatamoverBaseConfig::set_fabric_endpoint_status_address(size_t 
 
 std::vector<std::pair<size_t, size_t>> FabricTensixDatamoverBaseConfig::get_memory_regions_to_clear() const {
     std::vector<std::pair<size_t, size_t>> regions;
+    regions.reserve(1 + 3 * channel_configs_.size());
 
     // Always clear termination signal region
     regions.push_back({termination_signal_region_.get_address(), termination_signal_region_.get_total_size()});
@@ -431,6 +432,7 @@ std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_conne
     auto downstream_dirs = builder::get_all_other_directions(direction, /*exclude_z=*/true);
 
     std::vector<MuxConnectionInfo> mux_infos;
+    mux_infos.reserve(downstream_dirs.size());
 
     // Collect connection info for each downstream mux
     for (uint32_t i = 0; i < downstream_dirs.size(); i++) {
@@ -1119,6 +1121,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
 
 std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_runtime_args(tt::tt_metal::Program& program) const {
     std::vector<uint32_t> runtime_args;
+    runtime_args.reserve(upstream_routers_noc_x_.size() + upstream_routers_noc_y_.size());
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         TT_FATAL(
@@ -1232,6 +1235,7 @@ std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_runtime_args(tt::tt
     std::vector<uint32_t> runtime_args;
     // Memory regions to clear at startup
     auto regions_to_clear = config_->get_memory_regions_to_clear();
+    runtime_args.reserve(1 + 2 * regions_to_clear.size());
     runtime_args.push_back(static_cast<uint32_t>(regions_to_clear.size()));
     for (const auto& [address, size] : regions_to_clear) {
         runtime_args.push_back(static_cast<uint32_t>(address));

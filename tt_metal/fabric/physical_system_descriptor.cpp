@@ -259,6 +259,7 @@ std::vector<AsicID> PhysicalSystemDescriptor::get_asic_neighbors(AsicID asic_id)
     for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         if (asic_group.contains(asic_id)) {
             std::vector<AsicID> neighbors;
+            neighbors.reserve(asic_group.at(asic_id).size());
             for (const auto& edge : asic_group.at(asic_id)) {
                 neighbors.push_back(edge.first);
             }
@@ -341,6 +342,7 @@ ChipId PhysicalSystemDescriptor::get_umd_unique_id(AsicID asic_id) const {
 std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(const std::string& hostname) const {
     std::vector<AsicID> asics;
     if (system_graph_.asic_connectivity_graph.contains(hostname)) {
+        asics.reserve(system_graph_.asic_connectivity_graph.at(hostname).size());
         for (const auto& [asic_id, _] : system_graph_.asic_connectivity_graph.at(hostname)) {
             asics.push_back(asic_id);
         }
@@ -376,6 +378,7 @@ std::vector<std::string> PhysicalSystemDescriptor::get_host_neighbors(const std:
     TT_FATAL(
         system_graph_.host_connectivity_graph.contains(hostname), "No Host connectivity found for host {}", hostname);
     std::vector<std::string> neighbors;
+    neighbors.reserve(system_graph_.host_connectivity_graph.at(hostname).size());
     for (const auto& edge : system_graph_.host_connectivity_graph.at(hostname)) {
         neighbors.push_back(edge.first);
     }
