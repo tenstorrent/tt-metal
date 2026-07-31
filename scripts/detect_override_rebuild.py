@@ -15,18 +15,20 @@ a walk over every kernel x core x arg plus every CB. It is strictly slower than 
 ``get_dynamic_runtime_args`` the hook replaced, and it is the slow-path-rebuild-on-hit anti-pattern
 behind the ResNet50 regressions (#46506, #50347).
 
-The drift concern is real but has a cheaper answer, used by the merged reference fixes
-(#50351 sparse_sdpa, #50894 slice): on a cache hit, patch only the slots that actually vary. Overwrite
-scalar/address runtime args in place with ``tt::tt_metal::GetRuntimeArgs(program, kernel_idx, core)``,
-and re-point CB-backed addresses through a MINIMAL (CB-only) ``ProgramDescriptor`` +
-``apply_descriptor_runtime_args`` (mark that one line ``// override-rebuild-ok: cb-addr-only`` — it is
-O(1), not a rebuild). Nothing is re-split, no per-core arg vector is reallocated, and the hit stays O(1).
+Every hit is a live per-dispatch regression, so there is no baseline and no suppression marker: the
+only way to satisfy this check is to fix the op. The drift concern is real but has a cheaper answer,
+used by the merged reference fixes (#50351 sparse_sdpa, #50894 slice): on a cache hit, patch only the
+slots that actually vary. Overwrite scalar/address runtime args in place with
+``tt::tt_metal::GetRuntimeArgs(program, kernel_idx, core)``, and re-point CB-backed addresses by
+building a CB-only ``ProgramDescriptor`` inline — no ``create_descriptor`` — and handing that to
+``apply_descriptor_runtime_args``. Nothing is re-split, no per-core arg vector is reallocated, and the
+hit stays O(1). Verify parity with ``-DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK=ON``.
 
 This is a BUILD-TIME text check (no runtime cost). It scans the body of every
-``override_runtime_arguments`` definition and rejects a descriptor rebuild inside it. Ops that
-legitimately delegate to the framework's cheap binding path (``descriptor_adapter_t::apply_descriptor``)
-are unaffected. A genuinely unavoidable case suppresses a line with a trailing
-``// override-rebuild-ok: <reason>``.
+``override_runtime_arguments`` definition and rejects a descriptor rebuild inside it. pre-commit passes
+the staged files, like the other local hooks; run with no arguments it sweeps all of ttnn (~1s), which
+is the audit mode. Ops that legitimately delegate to the framework's cheap binding path
+(``descriptor_adapter_t::apply_descriptor``) are unaffected.
 """
 
 import os
@@ -34,7 +36,8 @@ import re
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASELINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "detect_override_rebuild_baseline.txt")
+SCAN_ROOT = os.path.join(REPO_ROOT, "ttnn")
+SCAN_SUFFIXES = (".cpp", ".hpp")
 
 
 def _safe_path(path):
@@ -50,38 +53,19 @@ def _safe_path(path):
     return resolved
 
 
-def _baseline():
-    """Pre-existing violations, keyed per offender so the guard is never disabled for a whole file.
-
-    Each entry grandfathers ONE known hit as a ``<repo-relative-path>\\t<symbol>\\t<source-line>``
-    fingerprint (line-number independent, so unrelated edits above it don't churn the baseline). A
-    baselined file is still fully scanned: any NEW or additional violation whose fingerprint is not
-    listed is blocked. Fixing an op means deleting its line(s) here (or ``--update-baseline``).
-
-    Returns ``{normpath: {(symbol, source_line), ...}}``.
-    """
-    result = {}
-    try:
-        with open(BASELINE_PATH) as f:
-            for raw in f:
-                stripped = raw.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                parts = raw.rstrip("\n").split("\t")
-                if len(parts) != 3:
-                    continue
-                path, what, src = parts
-                result.setdefault(os.path.normpath(path), set()).add((what, src))
-    except OSError:
-        pass
-    return result
+def _all_sources():
+    """Every ttnn source, for the default whole-tree run."""
+    for dirpath, dirnames, filenames in os.walk(SCAN_ROOT):
+        dirnames[:] = [d for d in dirnames if d != "build" and not d.startswith(".")]
+        for name in sorted(filenames):
+            if name.endswith(SCAN_SUFFIXES):
+                yield os.path.relpath(os.path.join(dirpath, name), REPO_ROOT)
 
 
 HOOK = re.compile(r"\boverride_runtime_arguments\s*\(")
-# A descriptor rebuild, or the framework's bulk copy-everything applier (which only makes sense when
-# handed a freshly built descriptor, so it is the same defect wearing a different hat).
-REBUILD = re.compile(r"\b(?:[A-Za-z_]\w*::)?create_(?:\w+_)?descriptor\s*\(|\bapply_descriptor_runtime_args\s*\(")
-SUPPRESS = re.compile(r"//\s*override-rebuild-ok\b")
+# The rebuild itself. A CB-only ProgramDescriptor assembled inline is the sanctioned O(1) patch and
+# does not match; only re-deriving a full descriptor does.
+REBUILD = re.compile(r"\b(?:[A-Za-z_]\w*::)?create_(?:\w+_)?descriptor\s*\(")
 
 
 def _mask_comments(text):
@@ -194,8 +178,6 @@ def check(path):
             pos = span[0] + bad.start()
             lineno = line_of(pos)
             line = text[line_starts[lineno - 1] : (line_starts[lineno] if lineno < len(line_starts) else len(text))]
-            if SUPPRESS.search(line):
-                continue
             findings.append((lineno, bad.group(0).rstrip("("), line.strip()))
     return findings
 
@@ -225,33 +207,37 @@ def _selftest():
     expect(_safe_path("../../../../etc/passwd") is None, "path traversal not rejected")
     expect(_safe_path("scripts/detect_override_rebuild.py") is not None, "in-repo path wrongly rejected")
 
-    # A body that rebuilds, plus a legitimately-suppressed line and a bare comment mention.
-    good = (
+    src = (
         "void Op::override_runtime_arguments(Program& p) {\n"
         "    // create_descriptor(a) mentioned in a comment must NOT flag\n"
         "    auto& r = GetRuntimeArgs(p, 0, core);\n"
-        "    create_descriptor(b);\n"
-        "    apply_descriptor_runtime_args(p, cb);  // override-rebuild-ok: cb-addr-only\n"
+        "    r[3] = addr;\n"
+        "    ProgramDescriptor cb_only;\n"
+        "    cb_only.cbs.push_back(CBDescriptor{.buffer = t.buffer()});\n"
+        "    apply_descriptor_runtime_args(p, cb_only);\n"
+        "}\n"
+        "void Op2::override_runtime_arguments(Program& p) {\n"
+        "    auto desc = Factory::create_descriptor(attrs, args, out);\n"
+        "    apply_descriptor_runtime_args(p, desc);\n"
         "}\n"
     )
     with tempfile.NamedTemporaryFile("w", dir=REPO_ROOT, suffix=".cpp", delete=False) as tf:
-        tf.write(good)
+        tf.write(src)
         tmp = tf.name
     try:
+        # The sanctioned O(1) CB-only patch stays clean; only the rebuild is flagged.
         findings = check(tmp)
-        symbols = sorted(w for _l, w, _line in findings)
-        expect(symbols == ["create_descriptor"], f"expected only create_descriptor flagged, got {symbols}")
+        expect(len(findings) == 1, f"expected exactly 1 finding, got {[f[1] for f in findings]}")
+        expect(findings and findings[0][1] == "Factory::create_descriptor", f"wrong symbol: {findings}")
 
-        # (c) grandfathering the known offender must NOT hide a NEW, differently-worded violation.
-        rel = os.path.relpath(tmp, REPO_ROOT)
-        base = {os.path.normpath(rel): {("create_descriptor", "create_descriptor(b);")}}
-        new_hits = [(w, line) for _l, w, line in check(tmp) if (w, line) not in base[os.path.normpath(rel)]]
-        expect(new_hits == [], "baseline fingerprint failed to grandfather the exact known offender")
-
+        # A trailing marker no longer buys an exemption.
         with open(tmp, "a") as f:
-            f.write("void Op2::override_runtime_arguments(Program& p) { create_descriptor(NEW); }\n")
-        new_hits = [(w, line) for _l, w, line in check(tmp) if (w, line) not in base[os.path.normpath(rel)]]
-        expect(any("NEW" in line for _w, line in new_hits), "baselined file did not catch a NEW violation")
+            f.write(
+                "void Op3::override_runtime_arguments(Program& p) {\n"
+                "    create_descriptor(x);  // override-rebuild-ok: allowed before this change\n"
+                "}\n"
+            )
+        expect(len(check(tmp)) == 2, "a suppression comment still exempted a rebuild")
     finally:
         os.unlink(tmp)
 
@@ -260,79 +246,24 @@ def _selftest():
     return 0 if ok else 1
 
 
-BASELINE_HEADER = """\
-# Baseline for scripts/detect_override_rebuild.py
-#
-# Pre-existing rebuilds of a ProgramDescriptor inside override_runtime_arguments, grandfathered one
-# offender at a time. Every listed file is still FULLY scanned: any new or additional violation not
-# already fingerprinted below is blocked, so a baselined file keeps its guard.
-#
-# Each entry is a live per-dispatch cost: override_runtime_arguments runs on EVERY program-cache hit,
-# so calling create_descriptor() there pays the full cache-MISS host cost (work split, CoreRangeSet
-# construction, arch queries, TensorAccessorArgs, kernel-source strings, compile-time arg vectors, a
-# heap-allocated arg vector per core) on every dispatch. Fixing an op means deleting its line(s) here.
-#
-# For reference, the equivalent fix measured on the ops migrated in #49889 / #50338:
-#   rotary_embedding cache hit  35.1 -> 27.2 us
-#   uniform          cache hit  23.2 -> 13.8 us
-#
-# Format: one tab-separated <repo-relative-path>\\t<symbol>\\t<source-line> per offender. Regenerate
-# with:  python3 scripts/detect_override_rebuild.py --update-baseline <files...>
-# Comments (#) and blank lines are ignored.
-"""
-
-
-def _write_baseline(baseline):
-    entries = []
-    for path in sorted(baseline):
-        for what, src in sorted(baseline[path]):
-            entries.append(f"{path}\t{what}\t{src}\n")
-    with open(BASELINE_PATH, "w") as f:
-        f.write(BASELINE_HEADER)
-        if entries:
-            f.write("\n")
-            f.writelines(entries)
-
-
-def _update_baseline(paths):
-    """Refresh baseline fingerprints for the given files, preserving entries for all others."""
-    baseline = _baseline()
-    for path in paths:
-        np = os.path.normpath(path)
-        found = {(what, line) for _lineno, what, line in check(path)}
-        if found:
-            baseline[np] = found
-        else:
-            baseline.pop(np, None)
-    _write_baseline(baseline)
-    return 0
-
-
 def main(argv):
-    if argv[1:2] == ["--update-baseline"]:
-        return _update_baseline(argv[2:])
     if argv[1:2] == ["--selftest"]:
         return _selftest()
     failed = False
-    baseline = _baseline()
-    for path in argv[1:]:
-        known = baseline.get(os.path.normpath(path), set())
+    for path in argv[1:] or _all_sources():
         for lineno, what, line in check(path):
-            if (what, line) in known:
-                continue  # grandfathered pre-existing offender; new hits in this file still fail
             failed = True
             print(f"{path}:{lineno}: error: '{what}' called inside override_runtime_arguments")
             print(f"    {line}")
     if failed:
         print()
         print("override_runtime_arguments runs on EVERY program-cache hit; rebuilding the descriptor there pays the")
-        print("full cache-MISS host cost per dispatch. Patch only what varies instead (see #50351 sparse_sdpa and")
-        print("#50894 slice): overwrite scalar/address args in place with")
-        print("tt::tt_metal::GetRuntimeArgs(program, kernel_idx, core), and re-point CB-backed addresses via a")
-        print("minimal CB-only ProgramDescriptor + apply_descriptor_runtime_args (mark that one line")
-        print("'// override-rebuild-ok: cb-addr-only' -- it is O(1), not a full rebuild), or with")
-        print("UpdateDynamicCircularBufferAddress matched by CBIndex. No per-core reallocation on a hit.")
-        print("Verify parity with -DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK=ON.")
+        print("full cache-MISS host cost per dispatch. There is no baseline and no suppression -- patch only what")
+        print("varies instead (see #50351 sparse_sdpa and #50894 slice): overwrite scalar/address args in place with")
+        print("tt::tt_metal::GetRuntimeArgs(program, kernel_idx, core), and re-point CB-backed addresses by building")
+        print("a CB-only ProgramDescriptor inline (no create_descriptor) and passing that to")
+        print("apply_descriptor_runtime_args, or with UpdateDynamicCircularBufferAddress matched by CBIndex.")
+        print("No per-core reallocation on a hit. Verify parity with -DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK=ON.")
         return 1
     return 0
 
