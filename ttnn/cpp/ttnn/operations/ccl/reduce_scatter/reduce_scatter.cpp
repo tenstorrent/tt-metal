@@ -17,8 +17,6 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_op_device_operation.hpp"
 
-#include <cstdlib>
-
 namespace ttnn {
 using namespace ttnn::operations::ccl;
 
@@ -32,34 +30,33 @@ namespace {
 // collective is dominated by fill latency and loses once it is bandwidth-bound, by a margin that grows
 // with size.
 //
-// MEASURED 2026-07-30, blackhole 1x8 ring, bf16/bf8, trace, op-allocated buffers (which is how this
-// dispatch calls it, so the writer's start barrier is compiled in) -- direct/ring ratio by per-device
-// input size: see the threshold below. Past the crossover the ring op wins and keeps pulling away
-// (1.55x at 512K elements, 3.52x at 5M, 3.95x at 25M).
+// MEASURED 2026-07-31, blackhole 1x8 ring, trace, op-allocated buffers -- which is how THIS dispatch
+// calls it, so the writer's start barrier is compiled in and the numbers below include it. Ratio is
+// direct/ring, so < 1.00 means direct wins; per-device input bytes on the left:
 //
-// TTNN_DISABLE_RS_DIRECT=1 forces the ring op regardless -- an escape hatch while this path is new,
-// since it routes the default ttnn.reduce_scatter onto an experimental op.
-constexpr uint64_t k_direct_rs_max_input_bytes = 0;  // PLACEHOLDER -- set from the crossover sweep
-
-bool direct_reduce_scatter_disabled() {
-    const char* env = std::getenv("TTNN_DISABLE_RS_DIRECT");
-    return env != nullptr && env[0] != '\0' && env[0] != '0';
-}
+//     bf16                              bf8
+//      16 KB  0.54                       8 KB  0.66
+//      64 KB  0.70 / 0.56 (repeats)     34 KB  0.52
+//     128 KB  0.65                      68 KB  0.55
+//     256 KB  0.59                     136 KB  0.69
+//     448 KB  0.78, 0.85               238 KB  0.62, 0.63
+//    1024 KB  1.29  <-- ring wins      544 KB  0.98  (tie)
+//
+// The crossover sits between 448 KB and 1 MB, so the gate is 512 KB. Past it the ring op keeps pulling
+// away -- independently confirmed on device crit-path time: 1.55x at 512K elements, 3.52x at 5M,
+// 3.95x at 25M. bf8 is still break-even at 544 KB, so a single byte-based gate is slightly
+// conservative for it; that costs nothing, since it is a tie there anyway.
+constexpr uint64_t k_direct_rs_max_input_bytes = 512ull << 10;
 
 bool use_direct_reduce_scatter(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
     tt::tt_fabric::Topology topology,
-    const ttnn::MemoryConfig& output_memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-    if (direct_reduce_scatter_disabled()) {
-        return false;
-    }
     if (topology != tt::tt_fabric::Topology::Ring) {
         return false;
     }
@@ -68,14 +65,6 @@ bool use_direct_reduce_scatter(
     // op rather than silently dropping it.
     if (chunks_per_sync.has_value() || num_workers_per_link.has_value() || num_buffers_per_channel.has_value() ||
         compute_kernel_config.has_value()) {
-        return false;
-    }
-    // Only interleaved has been validated end-to-end; the staging aliasing and the tiled output walk
-    // both assume it.
-    if (input_tensor.memory_config().is_sharded() || output_memory_config.is_sharded()) {
-        return false;
-    }
-    if (optional_output_tensor.has_value() && optional_output_tensor->memory_config().is_sharded()) {
         return false;
     }
     // Structural constraints (ring, TILE, whole-page split, 1D fabric) are the op's own to state.
@@ -169,8 +158,6 @@ ttnn::Tensor reduce_scatter(
             dim,
             cluster_axis,
             topology_,
-            memory_config_,
-            optional_output_tensor,
             chunks_per_sync,
             num_workers_per_link,
             num_buffers_per_channel,

@@ -16,6 +16,7 @@
 namespace ttnn::experimental::prim {
 
 using namespace ::ttnn::ccl;
+using tt::tt_metal::TensorSpec;
 
 namespace {
 
@@ -51,7 +52,7 @@ constexpr uint64_t k_l1_shard_budget_bytes = 640ull << 10;  // aliased-CB path, 
 // reader, and b == 1..N-1 are the remote sources in ascending device order skipping ourselves. Rows are
 // sized by chunks_per_slice rather than the actual per-core chunk count so the spec stays independent of
 // how the chunks happen to be partitioned across workers.
-static ttnn::TensorSpec reduce_scatter_direct_staging_spec(
+static TensorSpec reduce_scatter_direct_staging_spec(
     const ReduceScatterMinimalDirectParams& args, const ttnn::Tensor& input_tensor, bool fp32_dest_acc_en) {
     const uint32_t num_devices = args.num_devices;
     // A slice is chunked as one flat page run (chunks_per_slice), whatever dim it was cut on -- the
@@ -78,7 +79,7 @@ static ttnn::TensorSpec reduce_scatter_direct_staging_spec(
         // what lets a sender address the mirror core's reduce CB with nothing but its own staging address.
         tt::tt_metal::ShardSpec shard_spec(
             shard_grid, {shard_rows, geom.page_bytes}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
-        return ttnn::TensorSpec(
+        return TensorSpec(
             ttnn::Shape({num_shards * shard_rows, geom.page_bytes}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::UINT8,
@@ -95,7 +96,7 @@ static ttnn::TensorSpec reduce_scatter_direct_staging_spec(
     // = one chunk (page_bytes, DRAM-aligned). Interleaved so chunks spread across banks. The mesh
     // allocator is lockstep, so the buffer lands at the same address on every device -- required, since a
     // sender computes the destination address from its own accessor.
-    return ttnn::TensorSpec(
+    return TensorSpec(
         ttnn::Shape({2 * total_chunks, geom.page_bytes}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT8,
