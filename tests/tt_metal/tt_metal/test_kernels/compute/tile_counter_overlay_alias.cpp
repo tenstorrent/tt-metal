@@ -16,7 +16,7 @@ namespace {
 // T6 update and the routed copy on one counter (2x), while routing to a second counter keeps each at 1x and
 // still stops the copy from aliasing down into the overlay's 0-15 range.
 constexpr std::uint32_t kProducerTc = 16;
-constexpr std::uint32_t kConsumerTc = 16;
+constexpr std::uint32_t kConsumerTc = 17;
 constexpr std::uint32_t kOverlayTc = 0;
 constexpr std::uint32_t kMaxSteps = 4;
 
