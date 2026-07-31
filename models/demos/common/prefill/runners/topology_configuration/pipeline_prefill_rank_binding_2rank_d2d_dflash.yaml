@@ -61,6 +61,15 @@ global_env:
   # see: /data is nfs4 (10.32.13.1:/data) — the same NFS clone the repo + venv launch from. The launcher
   # clears this dir per run so no stale hidden_g*.pt from a prior run leaks in.
   PREFILL_DFLASH_GATHER_DIR: "/data/nbabin/build_logs/dflash_stage2_gather"
+  # D2D activation fingerprint (this run only, off by default): per-shard CRC32 of the packed
+  # [hidden||partial] activation at SEND (rank 0, before deallocate) and RECV (rank 1), plus page
+  # geometry (width 2H vs H, pages/shard). ttrun does NOT forward shell PREFILL_* env, so it lives here.
+  PREFILL_D2D_DEBUG: "1"
+  # D2D activation capture (this run only): compose + torch.save the full packed [hidden||partial]
+  # activation at SEND (rank 0) and RECV (rank 1) to this shared-FS dir, one file per hop, so
+  # tools/compare_d2d_pcc.py can PCC the sent vs received tensor and split the hidden half [...,:H] from
+  # the drafter partial [...,H:]. ~150MB per file (2H*chunk*2B); a re-run overwrites same-named files.
+  PREFILL_D2D_DUMP_DIR: "/data/nbabin/build_logs/dflash_stage2_d2d_dump"
   # Layer split: default even split (auto-snapped to valid boundaries), same as the known-good non-dflash
   # 2rank binding. 61 layers / 2 ranks -> rank0 [0,31) owns {1,12,24}, rank1 [31,61) owns {35,47,58}:
   # union == all 6 targets, and rank 1 is the last rank (holds the drafter KV tail + runs the PCC check).
