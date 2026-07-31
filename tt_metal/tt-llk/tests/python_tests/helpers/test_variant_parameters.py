@@ -530,6 +530,39 @@ class TOPK(TemplateParameter):
 
 
 @dataclass
+class TOPK_XL(TemplateParameter):
+    k: int = 512
+    num_chunks: int = 1
+    tail_elements: int = 512
+    num_rows: int = 1
+    index_op: int = 0
+    group_id: int = 0
+    group_shift: int = 16
+    core_id: int = 0
+    ascending: bool = False
+    fused_reduce: bool = False
+    chunk_base_mode: int = 0
+    chunk_base: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t TOPK_XL_K = {self.k};",
+            f"constexpr std::uint32_t TOPK_XL_NUM_CHUNKS = {self.num_chunks};",
+            f"constexpr std::uint32_t TOPK_XL_TAIL_ELEMENTS = {self.tail_elements};",
+            f"constexpr std::uint32_t TOPK_XL_NUM_ROWS = {self.num_rows};",
+            f"constexpr std::uint32_t TOPK_XL_INDEX_OP = {self.index_op};",
+            f"constexpr std::uint32_t TOPK_XL_GROUP_ID = {self.group_id};",
+            f"constexpr std::uint32_t TOPK_XL_GROUP_SHIFT = {self.group_shift};",
+            f"constexpr std::uint32_t TOPK_XL_CORE_ID = {self.core_id};",
+            f"constexpr std::uint32_t TOPK_XL_ASCENDING = {int(self.ascending)};",
+            f"constexpr std::uint32_t TOPK_XL_FUSED_REDUCE = {int(self.fused_reduce)};",
+            f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE_MODE = {self.chunk_base_mode};",
+            f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE = {self.chunk_base};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class ADD_TOP_ROW(TemplateParameter):
     add_top_row: bool
 
