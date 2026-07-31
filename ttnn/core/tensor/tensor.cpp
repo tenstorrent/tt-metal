@@ -234,8 +234,8 @@ template Tensor Tensor::from_span<int32_t>(
 template Tensor Tensor::from_span<int8_t>(
     ttsl::Span<const int8_t> buffer,
     const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    tt::tt_metal::distributed::MeshDevice* device,
+    std::optional<QueueId> cq_id,
     int8_t pad_value);
 template Tensor Tensor::from_span<uint8_t>(
     ttsl::Span<const uint8_t> buffer,
@@ -311,8 +311,8 @@ template Tensor Tensor::from_vector<int32_t>(
 template Tensor Tensor::from_vector<int8_t>(
     std::vector<int8_t>&& buffer,
     const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::QueueId> cq_id,
+    tt::tt_metal::distributed::MeshDevice* device,
+    std::optional<QueueId> cq_id,
     int8_t pad_value);
 template Tensor Tensor::from_vector<uint8_t>(
     std::vector<uint8_t>&& buffer,

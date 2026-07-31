@@ -522,13 +522,13 @@ TEST(HostTensorToTensorSpec, TypedPadInt8AndWrongTFatal) {
     auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::INT8, Tile({16, 16}));
 
     auto source = HostTensor::from_vector<int8_t>(data, src_spec);
-    auto result = to_tensor_spec<int8_t>(source, dest_spec, /*pad_value=*/int8_t{-2});
+    auto result = host_tensor_to_tensor_spec_with_pad_value<int8_t>(source, dest_spec, /*pad_value=*/int8_t{-2});
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
     EXPECT_THAT(result.to_vector<int8_t>(), Pointwise(Eq(), data));
     EXPECT_EQ(host_buffer::get_as<int8_t>(result).back(), static_cast<int8_t>(-2));
 
     // Wrong T vs working encode dtype (source INT8).
-    EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, 0.f));
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, 0.f));
 }
 
 TEST(HostTensorToTensorSpec, FloatPadToInt8DestRejectsOor) {
@@ -541,10 +541,10 @@ TEST(HostTensorToTensorSpec, FloatPadToInt8DestRejectsOor) {
     auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::INT8, Tile({16, 16}));
     auto source = HostTensor::from_vector<float>(data, src_spec);
 
-    EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, -129.f));
-    EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, 128.f));
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, -129.f));
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, 128.f));
 
-    auto ok = to_tensor_spec<float>(source, dest_spec, -2.f);
+    auto ok = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, -2.f);
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(ok.tensor_spec(), dest_spec));
     EXPECT_EQ(ok.dtype(), DataType::INT8);
     EXPECT_EQ(ok.layout(), Layout::TILE);
