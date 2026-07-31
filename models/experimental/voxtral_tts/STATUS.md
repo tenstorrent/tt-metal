@@ -372,6 +372,54 @@ single fixed-precision step inside the fused pipeline. Pinning it further needs 
   for a ~1% speed gain. The knob exists for experiments; do not ship it.
 - Minor: the suite tests to T=469; T=1500 is measured by hand but not pinned.
 
+### Block 1 — DECIDED: replace `tt_transformers` with our own implementation
+
+**Why, beyond speed.** Block 1 is the only block we do not own, and it is the only one whose numbers
+we cannot explain: 48 ms per decode step streams ~6.1 GB of bf16 weights = ~126 GB/s, against the
+**192 GB/s (66% of peak) that a plain interleaved matmul demonstrably reaches** on this hardware after
+the Block 2 work. The ~1.5x gap is per-op overhead in machinery we do not use — paged attention,
+32-user batch sharding, mesh handling. Owning it also drops:
+  * the HF-export shim (`scripts/export_backbone_hf.py`) and its RoPE-permute hazard, since we could
+    load the Mistral-native checkpoint directly;
+  * the L1 ceiling that forces `FF1_FF3` to BFP8 and caps prefill near 512;
+  * `HF_MODEL` as a required environment variable.
+
+**The batch fold does NOT transfer** — check this before assuming otherwise. `tt_transformers` decode
+already pads the batch to 32 users in the ROW dimension (our `DECODE_BATCH_PAD`), so weights are
+already read once for all 32 slots. There is no per-batch re-read to remove. The corollary from
+Block 2 does apply though, and harder: we use **1 of 32 rows**, so a decode step costs the same for
+1 user as for 32 — latency cannot improve by shrinking it, but throughput could scale ~32x with
+concurrent requests.
+
+**Expected payoff:** ~1.5x from removing overhead (48 -> ~32 ms), and BFP8 weights are orthogonal and
+worth ~2x on top (~16-24 ms), since Block 1 is bandwidth-limited on weight bytes with no layout trick
+left. Frame ~80 -> ~50 ms, RTF ~1.05 -> ~0.65.
+
+**What carries over from Block 2, already validated:** the fold (`[1, rows, dim]`, batch only split
+for attention), k+v fused into one weight, `nlp_create_qkv_heads` for the split + head layout,
+HiFi4 + `fp32_dest_acc_en` (nearly free and worth a lot of accuracy), bf16 activations, and the rule
+that any accumulator stays fp32.
+
+**What is genuinely new and must be got right:**
+1. **RoPE — the meta/interleaved convention**, not HF half-split. Our reference is bit-exact against
+   `mistral_inference`; mixing conventions is silently wrong, not an error. Loading the native
+   checkpoint means NO permute at all, which is simpler than the export path.
+2. **Causal mask** for prefill. Block 2 is unmasked, so this is new code here.
+3. **KV cache** on device: allocate once, append per decode step, attend over `[0, pos]`. Note the
+   XTTS-v2 finding that `sdpa_decode` is wrong when the cache length is an odd number of 32-tiles —
+   round the cache length to a multiple of 64.
+4. **Prefill length handling.** Our own implementation sets its own L1 budget, so the 512 ceiling and
+   the 256-multiple padding are ours to choose rather than inherited.
+
+**Increment order — each step must gate on PCC against `voxtral_backbone_ref` before the next:**
+1. Load the Mistral-native checkpoint to device; assert weight shapes against the reference.
+2. ONE layer, prefill only, vs `_layer()` — this is where a RoPE convention error shows up.
+3. All 26 layers, prefill, vs `reference_forward()`. Expect the bf16 weight floor, ~0.9996 on real
+   prompts; **use real prompts, not random inputs** (trap #12).
+4. KV cache + single decode step vs `IncrementalBackbone.step()`.
+5. Swap into the pipeline; gate on WER and long-form frame counts, and diff the WAV bytes against the
+   current build to see exactly what changed.
+
 ### Block 1 — DONE, on `tt_transformers`
 3.4B params, 26 layers, dim 3072, GQA 32/8, head_dim 128, SwiGLU 9216, RMSNorm, RoPE θ=1e6, tied
 embeddings, **`n_heads*head_dim` (4096) != `dim` (3072)** so wq/wo are not square.
