@@ -27,7 +27,6 @@ end-to-end row identity through the real HF loader.
 
 import os
 import sys
-from typing import Optional
 
 import numpy as np
 import pytest
@@ -38,7 +37,6 @@ import ttnn
 pytestmark = pytest.mark.requires_device
 
 TP_AXIS_SIZE = 2
-MESH_SHAPE = (1, TP_AXIS_SIZE)
 
 # 96 % 32 == 0 (so the naive lcm formula pads nothing) but 96 / 2 = 48 is not a
 # multiple of 32 -- the shape of Qwen3's 151936 at TP=8.
@@ -46,74 +44,7 @@ MISALIGNED_VOCAB = 96
 HIDDEN = 64
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_MGD_FOR_ARCH_AND_SHAPE = {
-    ("blackhole", MESH_SHAPE): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
-    ("wormhole_b0", MESH_SHAPE): os.path.join(_REPO_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
-}
-
 sys.path.insert(0, os.path.join(_REPO_ROOT, "sources", "examples", "qwen3"))
-
-
-# ---------------------------------------------------------------------------
-# Mesh fixture (same shape/skip conventions as test_vocab_parallel_embedding.py)
-# ---------------------------------------------------------------------------
-def _detect_arch() -> Optional[str]:
-    try:
-        name = ttnn.get_arch_name().lower()
-    except Exception:  # noqa: BLE001
-        return None
-    if "blackhole" in name:
-        return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
-    return None
-
-
-def _close_device_mesh_quietly() -> None:
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _ensure_mgd_path(shape) -> Optional[str]:
-    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    if previous:
-        return previous
-    arch = _detect_arch()
-    if arch is None:
-        return previous
-    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape))
-    if candidate and os.path.isfile(candidate):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    return previous
-
-
-def _restore_mgd_path(previous: Optional[str]) -> None:
-    if previous is None:
-        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    else:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
-
-
-@pytest.fixture(scope="module")
-def tp_mesh():
-    """Open a ``[1, TP_AXIS_SIZE]`` mesh with axes ``("dp", "tp")``; skip if unavailable."""
-    previous_mgd = _ensure_mgd_path(MESH_SHAPE)
-    _close_device_mesh_quietly()
-    try:
-        ttml.open_device_mesh(ttml.Mesh(MESH_SHAPE, ("dp", "tp")))
-        ttml.autograd.AutoContext.get_instance().initialize_parallelism_context(
-            ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True)
-        )
-    except Exception as e:  # noqa: BLE001
-        _restore_mgd_path(previous_mgd)
-        pytest.skip(f"qwen3 tied-TP vocab tests need {TP_AXIS_SIZE} devices on the 'tp' axis: {e}")
-
-    yield ttml.mesh()
-
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous_mgd)
 
 
 def _tied_model(vocab):
@@ -218,8 +149,7 @@ def test_every_rank_reads_its_own_vocab_rows(tp_mesh):
     """Token id -> embedding row must be identity on every TP rank.
 
     Writes a row-index ramp through ``load_weights_from_hf_distributed`` and decodes
-    which row each probe id actually gathered. Under the bug, rank 0 was correct and
-    every later rank read rows shifted by the tile pad.
+    which row each probe id actually gathered.
     """
     from model_qwen3_distributed import load_weights_from_hf_distributed
 
@@ -228,10 +158,17 @@ def test_every_rank_reads_its_own_vocab_rows(tp_mesh):
     stride = emb.num_embeddings_per_partition
     width = stride * TP_AXIS_SIZE
 
-    # Row i encodes i in base 128 across columns 0 and 1 -- both < 128, so bf16
+    # Row i encodes i + 1 in base 128 across columns 0 and 1 -- both < 128, so bf16
     # represents them exactly and the row index survives the round trip.
-    ramp = np.zeros((width, HIDDEN), dtype=np.float32)
-    idx = np.arange(width)
+    #
+    # The ramp is vocab_size rows, not the padded width: the loader validates the
+    # incoming shape against the config-implied one and pads the rest with zeros. So
+    # a shifted read can land in that zero padding, and the +1 is what keeps that
+    # distinguishable -- encoding i directly would make padding decode as row 0, i.e.
+    # identical to a correct read of row 0. Offsetting by one sends padding to -1,
+    # which is not a valid id, so any shift is caught no matter where it lands.
+    ramp = np.zeros((MISALIGNED_VOCAB, HIDDEN), dtype=np.float32)
+    idx = np.arange(MISALIGNED_VOCAB) + 1
     ramp[:, 0] = idx % 128
     ramp[:, 1] = idx // 128
     load_weights_from_hf_distributed(
@@ -254,6 +191,7 @@ def test_every_rank_reads_its_own_vocab_rows(tp_mesh):
     composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
     got = out.to_numpy(composer=composer).astype(np.float32)[0, 0]
 
-    rows_read = [int(round(got[i, 1])) * 128 + int(round(got[i, 0])) for i in range(len(probes))]
+    # -1 undoes the +1 above; a read that fell in the zero padding decodes to -1.
+    rows_read = [int(round(got[i, 1])) * 128 + int(round(got[i, 0])) - 1 for i in range(len(probes))]
     shifted = [(p, r) for p, r in zip(probes, rows_read) if p != r]
-    assert not shifted, f"(id, row_read) pairs disagree: {shifted}"
+    assert not shifted, f"(id, row_read) pairs disagree, -1 means the zero padding: {shifted}"
