@@ -90,16 +90,6 @@ MemoryConfig::attribute_values() const {
         impl().created_with_nd_shard_spec_);
 }
 
-MemoryConfig MemoryConfig::create_with_prepopulated_shard_specs(
-    TensorMemoryLayout memory_layout,
-    BufferType buffer_type,
-    std::optional<ShardSpec> shard_spec,
-    std::optional<NdShardSpec> nd_shard_spec,
-    bool created_with_nd_shard_spec) {
-    return MemoryConfig(
-        memory_layout, buffer_type, std::move(shard_spec), std::move(nd_shard_spec), created_with_nd_shard_spec);
-}
-
 bool MemoryConfig::is_sharded() const {
     switch (impl().memory_layout_) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
