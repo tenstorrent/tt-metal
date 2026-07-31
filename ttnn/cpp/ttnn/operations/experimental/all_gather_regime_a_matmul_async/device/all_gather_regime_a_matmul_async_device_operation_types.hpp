@@ -5,7 +5,9 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
+#include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/regime_a_matmul/device/regime_a_matmul_config.hpp"
@@ -43,6 +45,21 @@ struct AllGatherRegimeAMatmulAsyncParams {
     uint32_t cluster_axis = 0;     // mesh axis the TP group runs along
     uint32_t num_links = 1;        // fabric links per direction
     bool topology_is_ring = true;  // ring vs linear device topology
+
+    // Cross-chip arrival credits, supplied by the caller. REQUIRED when tp >= 2 (>= 1 entry; the second is
+    // used by the backward stream once it is driven), ignored when tp == 1.
+    //
+    // These deliberately are NOT CreateSemaphore program semaphores. A program semaphore is zeroed as part
+    // of program launch, and a fabric atomic-inc crosses chips with no such ordering: the sending chip can
+    // credit us before our own program has launched and written the zero, which erases the credit and hangs
+    // the receiver on a count that will never arrive. A global semaphore is allocated up-front by the caller
+    // and is live before any device in the group starts, which closes that window.
+    //
+    // The caller must ping-pong them (depth >= 2) and ttnn.synchronize_device() after creating them; see
+    // models/tt_dit/parallel/manager.py. The kernel resets its slot to 0 once it has seen all tp-1 arrivals
+    // -- safe because in a store-and-forward ring exactly one neighbour ever increments a given slot, so the
+    // (tp-1)'th credit proves that neighbour is done for this invocation.
+    std::vector<tt::tt_metal::GlobalSemaphore> gather_semaphores;
 
     // NOTE: numerics are FIXED production behavior, not options — BF16 in/out, HiFi2, FP32 dest-accumulation,
     // DRAM-interleaved output. There is deliberately no output dtype / memory_config / compute_kernel_config

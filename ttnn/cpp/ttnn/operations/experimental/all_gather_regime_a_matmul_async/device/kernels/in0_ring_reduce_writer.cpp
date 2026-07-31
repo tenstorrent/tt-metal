@@ -314,7 +314,9 @@ void kernel_main() {
         const uint32_t Kt_global = get_arg_val<uint32_t>(fa++);
         const uint32_t shard_addr = get_arg_val<uint32_t>(fa++);
         const uint32_t bank_id = get_arg_val<uint32_t>(fa++);
-        const uint32_t fwd_recv_sem_id = get_arg_val<uint32_t>(fa++);
+        // GLOBAL semaphore ADDRESS (not a program semaphore id): a peer chip's atomic-inc can land before
+        // this program launches, so the credit has to live in memory the caller allocated up front.
+        const uint32_t fwd_recv_sem_addr = get_arg_val<uint32_t>(fa++);
         (void)has_bwd;  // v1 is forward-only; the backward mux is deployed but not yet driven.
 
         // LOCAL-SHARD accessor: the factory appends it AFTER every other accessor, and ONLY when tp > 1.
@@ -369,7 +371,7 @@ void kernel_main() {
                 auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(fa);
                 sender.open();
                 volatile tt_l1_ptr uint32_t* fwd_recv =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(fwd_recv_sem_id));
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_recv_sem_addr);
 
                 for (uint32_t r = 1; r < tp; ++r) {
                     if (r >= 2) {
@@ -408,8 +410,9 @@ void kernel_main() {
                     // Credit AFTER the payload. Ordering is enforced on the RECEIVING chip: flush=true makes
                     // the peer drain every prior write on this channel before applying the increment.
                     // sender.flush() would NOT do this -- it is a no-op unless EAGER_STAGING is on.
-                    const uint64_t peer_sem_noc =
-                        get_noc_addr(my_x[noc_index], my_y[noc_index], get_semaphore(fwd_recv_sem_id));
+                    // Same core index on the peer chip: core i owns a disjoint M slice on every device, so
+                    // core i credits core i and each core's counter is its own private arrival count.
+                    const uint64_t peer_sem_noc = get_noc_addr(my_x[noc_index], my_y[noc_index], fwd_recv_sem_addr);
                     tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
                         &sender,
                         pkt_hdr_seminc,
@@ -430,9 +433,17 @@ void kernel_main() {
         // Coarse barrier in v1: wait for all tp-1 remote shards before the on-chip ring starts. The design
         // spec's progressive per-chunk consumption is the overlap step and comes next.
         if (is_fabric_client) {
-            volatile tt_l1_ptr uint32_t* fwd_recv =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(fwd_recv_sem_id));
+            volatile tt_l1_ptr uint32_t* fwd_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_recv_sem_addr);
             noc_semaphore_wait_min(fwd_recv, tp - 1);
+            // Re-arm for the next invocation. A global semaphore is caller-owned memory and nothing else
+            // zeroes it, so without this the next call that lands on this same ping-pong slot would see a
+            // satisfied counter and read staging before any shard arrived.
+            //
+            // Safe to do here: only ONE neighbour ever increments this slot (store-and-forward), and it
+            // sends exactly tp-1 credits, so seeing the (tp-1)'th proves that neighbour has finished with
+            // this slot for this invocation. It does NOT protect against a neighbour running a whole
+            // ping-pong cycle ahead -- that is what the caller's depth>=2 rotation is for.
+            noc_semaphore_set(fwd_recv, 0);
         }
         noc_semaphore_wait_min(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem_id)), 0);  // placeholder

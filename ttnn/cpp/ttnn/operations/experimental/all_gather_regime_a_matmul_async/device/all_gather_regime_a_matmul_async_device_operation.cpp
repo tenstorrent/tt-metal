@@ -333,16 +333,39 @@ AllGatherRegimeAMatmulAsyncDeviceOperation::invoke(
     std::optional<float> fused_ternary_scalar,
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
-    int32_t chunks) {
+    int32_t chunks,
+    uint32_t tp,
+    uint32_t cluster_axis,
+    uint32_t num_links,
+    bool topology_is_ring,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& gather_semaphores,
+    const std::optional<Tensor>& gather_staging_buffer) {
+    if (tp > 1) {
+        TT_FATAL(tp % 2 == 0, "the fused gather requires an EVEN TP group (bidirectional schedule), got {}", tp);
+        TT_FATAL(
+            gather_staging_buffer.has_value(),
+            "the fused gather (tp={}) needs a persistent [M, K] staging buffer to gather into",
+            tp);
+        TT_FATAL(
+            !gather_semaphores.empty(),
+            "the fused gather (tp={}) needs at least one caller-supplied global semaphore",
+            tp);
+    }
     return {
         operation_attributes_t{
             .config = config,
             .fused_activation = std::move(fused_activation),
             .fused_ternary_scalar = fused_ternary_scalar,
-            .chunks = chunks},
+            .chunks = chunks,
+            .tp = tp,
+            .cluster_axis = cluster_axis,
+            .num_links = num_links,
+            .topology_is_ring = topology_is_ring,
+            .gather_semaphores = gather_semaphores},
         tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,
+            .gather_staging_buffer = gather_staging_buffer,
             .bias_tensor = bias_tensor,
             .fused_ternary_input_a = fused_ternary_input_a,
             .fused_ternary_input_b = fused_ternary_input_b}};
@@ -361,7 +384,13 @@ std::vector<Tensor> all_gather_regime_a_matmul_async(
     std::optional<float> fused_ternary_scalar,
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
-    int32_t chunks) {
+    int32_t chunks,
+    uint32_t tp,
+    uint32_t cluster_axis,
+    uint32_t num_links,
+    bool topology_is_ring,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& gather_semaphores,
+    const std::optional<Tensor>& gather_staging_buffer) {
     using OperationType = experimental::prim::AllGatherRegimeAMatmulAsyncDeviceOperation;
     auto [attributes, tensor_args] = OperationType::invoke(
         input_tensor,
@@ -372,7 +401,13 @@ std::vector<Tensor> all_gather_regime_a_matmul_async(
         fused_ternary_scalar,
         fused_ternary_input_a,
         fused_ternary_input_b,
-        chunks);
+        chunks,
+        tp,
+        cluster_axis,
+        num_links,
+        topology_is_ring,
+        gather_semaphores,
+        gather_staging_buffer);
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }
 

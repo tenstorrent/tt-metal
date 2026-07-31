@@ -44,7 +44,14 @@ struct AllGatherRegimeAMatmulAsyncDeviceOperation {
         std::optional<float> fused_ternary_scalar = std::nullopt,
         const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
         const std::optional<Tensor>& fused_ternary_input_b = std::nullopt,
-        int32_t chunks = 1);
+        int32_t chunks = 1,
+        // ---- fused fabric all-gather; tp == 1 leaves every one of these inert ----
+        uint32_t tp = 1,
+        uint32_t cluster_axis = 0,
+        uint32_t num_links = 1,
+        bool topology_is_ring = true,
+        const std::vector<tt::tt_metal::GlobalSemaphore>& gather_semaphores = {},
+        const std::optional<Tensor>& gather_staging_buffer = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -63,6 +70,12 @@ std::vector<Tensor> all_gather_regime_a_matmul_async(
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
     const std::optional<Tensor>& fused_ternary_input_b = std::nullopt,
-    int32_t chunks = 1);
+    int32_t chunks = 1,
+    uint32_t tp = 1,
+    uint32_t cluster_axis = 0,
+    uint32_t num_links = 1,
+    bool topology_is_ring = true,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& gather_semaphores = {},
+    const std::optional<Tensor>& gather_staging_buffer = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -320,7 +320,31 @@ struct FusedGatherContext {
     // Readiness: one semaphore slot per (source rank, chunk). Receivers block on these; senders
     // atomic-inc AFTER the payload is flushed.
     uint32_t chunk_ready_sem_id = 0;
-    uint32_t fwd_recv_sem_id = 0;  // counts forward-stream shard arrivals from the backward neighbour
+    // Counts forward-stream shard arrivals from the backward neighbour. This is a caller-owned GLOBAL
+    // semaphore address, not a program semaphore id: see the note in the operation types header for why a
+    // cross-chip credit cannot land in a program semaphore.
+    uint32_t fwd_recv_sem_addr = 0;
+};
+
+// Offsets WITHIN the fused-gather writer arg block, i.e. relative to fused_rt_base. The kernel reads this
+// block sequentially, create_at pushes it in this order, and override_runtime_arguments patches the three
+// entries that can change between invocations. All three places must agree, so they name these constants
+// rather than counting; kFusedArgCount is checked against the actual push count at the end of the block.
+enum FusedGatherArg : uint32_t {
+    kFgIsClient = 0,
+    kFgRank = 1,
+    kFgTp = 2,
+    kFgKShardTiles = 3,
+    kFgStageAddr = 4,  // patched on replay (caller ping-pongs the staging buffer)
+    kFgChunkReadySem = 5,
+    kFgHasFwd = 6,
+    kFgHasBwd = 7,
+    kFgMtTotal = 8,
+    kFgKtGlobal = 9,
+    kFgShardAddr = 10,    // patched on replay (in0 may be a fresh allocation)
+    kFgBankId = 11,       //
+    kFgFwdRecvSem = 12,   // patched on replay (caller ping-pongs the global semaphore)
+    kFusedArgCount = 13,  // mux client-connection args, if any, follow this
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
@@ -366,8 +390,16 @@ FusedGatherContext build_fused_gather_context(
         }
         return v;
     }()));
+    // chunk_ready stays a PROGRAM semaphore on purpose: it is the on-chip credit from the master ring to the
+    // other ring groups, so both sides are in the same program launch and the cross-chip race does not apply.
     ctx.chunk_ready_sem_id = CreateSemaphore(program, ring_crs, 0);
-    ctx.fwd_recv_sem_id = CreateSemaphore(program, ring_crs, 0);
+    TT_FATAL(
+        !attrs.gather_semaphores.empty(),
+        "the fused gather (tp={}) needs at least one caller-supplied global semaphore for the cross-chip "
+        "arrival credit; a program semaphore cannot be used here because a peer can credit it before this "
+        "device's program has launched and zeroed it",
+        attrs.tp);
+    ctx.fwd_recv_sem_addr = attrs.gather_semaphores[0].address();
 
     const size_t mux_base_l1 = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
@@ -1082,7 +1114,13 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(geo.Kt);                        // global K tiles (staging row stride)
             wa.push_back(in0.buffer()->address());       // LOCAL shard base (in0_addr now points at staging)
             wa.push_back(i / preaders_pf);               // bank id 0..7 -> which M-slice this core stages
-            wa.push_back(fused_gather.fwd_recv_sem_id);  // incremented by my BACKWARD neighbour
+            wa.push_back(fused_gather.fwd_recv_sem_addr);  // incremented by my BACKWARD neighbour
+            TT_FATAL(
+                wa.size() == fused_rt_base + kFusedArgCount,
+                "fused-gather arg block is {} words but FusedGatherArg says {}; the push order and the "
+                "offsets used by override_runtime_arguments have drifted",
+                wa.size() - fused_rt_base,
+                static_cast<uint32_t>(kFusedArgCount));
             if (is_master_ring) {
                 if (fused_gather.mux_cfg_fwd) {
                     const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
@@ -1139,7 +1177,10 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             .compute = compute,
             .has_bias = has_bias,
             .has_ternary = has_ternary,
-            .n_chunks = n_chunks}};
+            .n_chunks = n_chunks,
+            .fused_gather = fused_gather.enabled,
+            .fused_rt_base = fused_rt_base,
+            .preaders = preaders_pf}};
 }
 
 AllGatherRegimeAMatmulAsyncProgramFactory::cached_mesh_workload_t
@@ -1215,6 +1256,19 @@ void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
                 for (uint32_t c = 1; c < sv.n_chunks; ++c) {
                     wa[fidx++] = tensor_return_value[c].buffer()->address();
                 }
+            }
+
+            // ---- fused-gather block ----
+            // Everything the caller ping-pongs lives here, so it MUST be refreshed on every replay. The
+            // staging buffer and the global semaphore rotate between invocations by design (that is what
+            // makes repeated CCL safe), which means a cached program that kept the first invocation's
+            // addresses would gather into a buffer nobody reads and wait on a credit nobody sends.
+            // Offsets mirror the push order in create_at; fused_rt_base is captured there.
+            if (sv.fused_gather) {
+                const uint32_t g = sv.fused_rt_base;
+                wa[g + kFgStageAddr] = tensor_args.gather_staging_buffer->buffer()->address();
+                wa[g + kFgShardAddr] = tensor_args.input_tensor.buffer()->address();
+                wa[g + kFgFwdRecvSem] = operation_attributes.gather_semaphores[0].address();
             }
         }
     }  // per-coordinate program
