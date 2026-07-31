@@ -1376,10 +1376,13 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
 
     // Every page in this command is the same size, so when a page fits in one packet the transaction length is
     // programmed here and left alone for the rest of the command: the only NoC state the reads below share the
-    // command buffer with is their own, since the writes to the dispatcher go out on a different one.
+    // command buffer with is their own, since the writes to the dispatcher go out on a different one. Programming it
+    // with no send is the same thing paged_read_into_cmddat_q and noc_read_64bit_any_len do, and leaves the address
+    // registers to the read loop, which has to write them anyway.
     const bool single_packet = page_size <= NOC_MAX_BURST_SIZE;
     if (single_packet) {
-        noc_async_read_one_packet_set_state(addr_gen.get_noc_addr(page_id), page_size);
+        noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT>(
+            noc_index, 0, 0, 0, page_size);
     }
 
     // Folding the shared bank offset into the row address is only worth a separate loop when there is at least one
