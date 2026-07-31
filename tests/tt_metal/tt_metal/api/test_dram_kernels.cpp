@@ -23,6 +23,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "hostdevcommon/profiler_common.h"
+#include "tests/tt_metal/tt_metal/test_kernels/misc/drisc_drain_frame.h"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -3167,6 +3168,295 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCServicesRealProfiledWorkers) {
         EXPECT_EQ(lanes_silent, 0u) << label << ": some lane never produced -- all 5 should be live";
         EXPECT_EQ(produced_this_round, total_words) << label << ": drained != produced this round";
         EXPECT_GE(produced_this_round, expected) << label << ": fewer words than producers must have emitted";
+    };
+
+    const CoreCoord full_grid = device_->compute_with_storage_grid_size();
+    run_round("4x4", {4, 4}, 2000);
+    run_round("full-grid", full_grid, 500);
+
+    set_niu_mode(0);
+}
+
+// The whole path, end to end: real Tensix producers -> DRISC drainer -> D2H socket -> host decode.
+//
+// DRISCServicesRealProfiledWorkers proved the flow-control loop closes but discarded the payload; it
+// could only count. This carries every word off the device and re-attributes it host-side, so the
+// assertions are about DATA rather than bookkeeping:
+//
+//   - every word a producer emitted arrives at the host, exactly once
+//   - each arrives labelled with the (core, lane) that produced it
+//   - the per-lane totals reconcile against the workers' own tail advance
+//
+// That last one is the real check. The drainer's word count and the host's word count could agree with
+// each other and both be wrong; reconciling against the tails the PRODUCERS advanced closes the loop
+// against a third, independent source.
+TEST_F(DramKernelDRISCScatterFixture, DRISCDrainsRealWorkersToHost) {
+    constexpr uint32_t kWorkPerZone = 4;
+    constexpr uint32_t kQuietStop = 4096;
+    constexpr uint32_t kMaxSweeps = 2000000;
+    constexpr uint32_t kNumRisc = 5;
+    constexpr uint32_t kPageBytes = 8192;
+    constexpr uint32_t kPageWords = kPageBytes / sizeof(uint32_t);
+    constexpr uint32_t kFifoPages = 32;
+    constexpr uint32_t kPagesPerRead = 8;
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t cv_src = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+    const uint32_t poll_bytes = kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
+    const uint32_t ring_words = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
+    const uint32_t ring0_src = cv_src + poll_bytes;
+
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const CoreCoord drisc_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
+    const CoreCoord drisc_translated = soc_desc.dram_bank_endpoint_coords.at(drisc_logical.x).at(drisc_logical.y);
+    const tt::umd::CoreCoord drisc_phys = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(drisc_translated.x, drisc_translated.y, CoreType::DRAM, CoordSystem::TRANSLATED),
+        CoordSystem::NOC0);
+    const CoreCoord drisc_virtual = device_->virtual_core_from_logical_core(drisc_logical, CoreType::DRAM);
+
+    auto set_niu_mode = [&](uint32_t stream) {
+        Program p = CreateProgram();
+        CreateKernel(
+            p,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_niu_mode.cpp",
+            drisc_logical,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+        run_workload(std::move(p));
+    };
+    set_niu_mode(1);  // stream mode, left on so the socket config can land in L1
+
+    auto run_round = [&](const char* label, CoreCoord grid, uint32_t zones) {
+        const CoreRange producer_range({0, 0}, {grid.x - 1, grid.y - 1});
+        std::vector<CoreCoord> producer_virtual;
+        std::vector<uint32_t> coords;
+        for (uint32_t y = 0; y < grid.y; y++) {
+            for (uint32_t x = 0; x < grid.x; x++) {
+                const CoreCoord v = device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
+                producer_virtual.push_back(v);
+                coords.push_back((v.x & 0xFFFFu) | ((v.y & 0xFFFFu) << 16));
+            }
+        }
+        const uint32_t num_cores = static_cast<uint32_t>(coords.size());
+
+        // Snapshot the producers' tails before the round, so the round's own emission can be isolated
+        // (tails are monotonic for the whole FW session).
+        auto read_tails = [&]() {
+            std::vector<std::array<uint32_t, kNumRisc>> t(num_cores);
+            for (uint32_t c = 0; c < num_cores; c++) {
+                std::vector<uint32_t> cv(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+                MetalContext::instance().get_cluster().read_core(
+                    cv.data(), poll_bytes, tt_cxy_pair(mesh_device_->build_id(), producer_virtual[c]), cv_src);
+                for (uint32_t r = 0; r < kNumRisc; r++) {
+                    t[c][r] = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+                }
+            }
+            return t;
+        };
+        const auto tails_before = read_tails();
+
+        // DRISC L1 map
+        const uint32_t poll_ring = drisc_l1_base_;
+        const uint32_t page_buf = poll_ring + num_cores * poll_bytes;
+        const uint32_t head_scratch = page_buf + kPageBytes;
+        const uint32_t done_addr = head_scratch + 16 * 32;
+        const uint32_t results_addr = done_addr + 64;
+        const uint32_t cfg_l1 = drisc_l1_base_ + 48 * 1024;
+        ASSERT_LT(results_addr + 64 - drisc_l1_base_, 48u * 1024u) << "drainer state must stay below the socket config";
+        ASSERT_LE(distributed::D2HSocket::required_config_buffer_size(), 8u * 1024u);
+
+        distributed::D2HSocket socket(
+            devices_[0],
+            distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(drisc_phys.x, drisc_phys.y)),
+            kFifoPages * kPageBytes,
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = true});
+        socket.set_page_size(kPageBytes);
+
+        const uint64_t done_noc = drisc_l1_noc_addr_ + (done_addr - drisc_l1_base_);
+        uint32_t zero = 0;
+        MetalContext::instance().get_cluster().write_core(
+            &zero, sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), drisc_virtual), done_noc);
+
+        Program program = CreateProgram();
+        auto brisc_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/profiler_zone_producer.cpp",
+            producer_range,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(program, brisc_id, producer_range, {zones, kWorkPerZone});
+        auto ncrisc_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/profiler_zone_producer.cpp",
+            producer_range,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        SetRuntimeArgs(program, ncrisc_id, producer_range, {zones, kWorkPerZone});
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/profiler_zone_producer_compute.cpp",
+            producer_range,
+            ComputeConfig{.compile_args = {zones, kWorkPerZone}});
+
+        auto drain_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/drisc_drain_to_host.cpp",
+            drisc_logical,
+            DramConfig{
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    poll_bytes,
+                    ring_words,
+                    poll_ring,
+                    page_buf,
+                    head_scratch,
+                    results_addr,
+                    done_addr,
+                    kPageBytes,
+                    socket.get_config_buffer_address(),
+                    kQuietStop,
+                    kMaxSweeps}});
+        std::vector<uint32_t> drain_args = {num_cores, cv_src, ring0_src};
+        drain_args.insert(drain_args.end(), coords.begin(), coords.end());
+        SetRuntimeArgs(program, drain_id, drisc_logical, drain_args);
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range_, std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+
+        // ---- host: consume pages and decode frames while the device runs ----
+        std::vector<uint32_t> sink(static_cast<size_t>(kPageWords) * kPagesPerRead);
+        std::map<std::pair<uint32_t, uint32_t>, uint64_t> received;  // (core_xy, lane) -> words
+        uint64_t total_received = 0;
+        uint64_t frames_seen = 0;
+        uint64_t pages_seen = 0;
+        uint32_t bad_frames = 0;
+        bool device_done = false;
+
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto deadline = t0 + std::chrono::seconds(120);
+        while (true) {
+            const uint32_t avail = socket.pages_available();
+            if (avail > 0) {
+                const uint32_t take = std::min(avail, kPagesPerRead);
+                socket.read(sink.data(), take);
+                pages_seen += take;
+                for (uint32_t pg = 0; pg < take; pg++) {
+                    const uint32_t* pw = sink.data() + static_cast<size_t>(pg) * kPageWords;
+                    uint32_t i = 0;
+                    while (i + drisc_drain::FRAME_HEADER_WORDS <= kPageWords) {
+                        const uint32_t w0 = pw[i];
+                        if (drisc_drain::frame_kind(w0) == drisc_drain::KIND_PAD) {
+                            break;  // rest of the page is padding
+                        }
+                        if (drisc_drain::frame_kind(w0) != drisc_drain::KIND_DATA) {
+                            bad_frames++;
+                            break;
+                        }
+                        const uint32_t lane = drisc_drain::frame_lane(w0);
+                        const uint32_t n = drisc_drain::frame_nwords(w0);
+                        const uint32_t xy = pw[i + 1];
+                        if (i + drisc_drain::FRAME_HEADER_WORDS + n > kPageWords) {
+                            bad_frames++;  // a frame must never straddle a page
+                            break;
+                        }
+                        received[{xy, lane}] += n;
+                        total_received += n;
+                        frames_seen++;
+                        i += drisc_drain::FRAME_HEADER_WORDS + n;
+                    }
+                }
+                continue;  // drain greedily before re-checking the flag
+            }
+            if (!device_done) {
+                std::vector<uint32_t> d(1, 0);
+                MetalContext::instance().get_cluster().read_core(
+                    d.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), drisc_virtual), done_noc);
+                device_done = (d[0] & 0xFFFF0000u) == 0xD09E0000u;
+            } else if (socket.pages_available() == 0) {
+                break;  // device finished (after its socket barrier) and nothing left in flight
+            }
+            if (std::chrono::steady_clock::now() > deadline) {
+                log_warning(LogTest, "[{}] drain timed out", label);
+                break;
+            }
+        }
+        const double wall_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        socket.barrier(20000);
+        distributed::Finish(mesh_device_->mesh_command_queue());
+
+        std::vector<uint32_t> out(9, 0);
+        MetalContext::instance().get_cluster().read_core(
+            out.data(),
+            out.size() * sizeof(uint32_t),
+            tt_cxy_pair(mesh_device_->build_id(), drisc_virtual),
+            drisc_l1_noc_addr_ + (results_addr - drisc_l1_base_));
+        const uint64_t cycles = (static_cast<uint64_t>(out[1]) << 32) | out[0];
+        const uint64_t dev_words = (static_cast<uint64_t>(out[3]) << 32) | out[2];
+        const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+
+        const auto tails_after = read_tails();
+        uint64_t produced = 0;
+        std::map<std::pair<uint32_t, uint32_t>, uint64_t> expected;
+        for (uint32_t c = 0; c < num_cores; c++) {
+            for (uint32_t r = 0; r < kNumRisc; r++) {
+                const uint32_t adv = tails_after[c][r] - tails_before[c][r];
+                produced += adv;
+                if (adv) {
+                    expected[{coords[c], r}] += adv;
+                }
+            }
+        }
+
+        log_info(
+            LogTest,
+            "[{}] {} cores x 5 lanes x {} zones | host got {} words in {} frames / {} pages ({:.2f} MB)",
+            label,
+            num_cores,
+            zones,
+            total_received,
+            frames_seen,
+            pages_seen,
+            total_received * 4.0 / (1024.0 * 1024.0));
+        log_info(
+            LogTest,
+            "[{}] device: {} words, {} pages, {} frames, max run {}, overflows {}, {:.3f} ms | host wall {:.3f} s",
+            label,
+            dev_words,
+            out[5],
+            out[6],
+            out[7],
+            out[8],
+            cycles * 1000.0 / clk_hz,
+            wall_s);
+        log_info(LogTest, "[{}] producers advanced {} words across {} lanes", label, produced, expected.size());
+
+        if (produced == 0) {
+            GTEST_SKIP() << "no markers produced -- need TT_METAL_DEVICE_PROFILER=1 TT_METAL_DRISC_PROFILER=1";
+        }
+
+        EXPECT_EQ(bad_frames, 0u) << label << ": malformed frames in the stream";
+        EXPECT_EQ(out[8], 0u) << label << ": ring overflow -- producer outran the drainer";
+        EXPECT_EQ(pages_seen, out[5]) << label << ": host page count != device page count";
+        EXPECT_EQ(total_received, dev_words) << label << ": host words != device words";
+        EXPECT_EQ(total_received, produced) << label << ": host words != what the producers emitted";
+        EXPECT_EQ(received.size(), expected.size()) << label << ": lane count mismatch";
+        // Per-lane reconciliation -- the check that a mis-labelled frame cannot survive.
+        uint32_t lane_mismatches = 0;
+        for (const auto& [key, want] : expected) {
+            const auto it = received.find(key);
+            if (it == received.end() || it->second != want) {
+                if (lane_mismatches < 5) {
+                    log_warning(
+                        LogTest,
+                        "[{}] lane (xy=0x{:08x}, risc={}) expected {} words, host got {}",
+                        label,
+                        key.first,
+                        key.second,
+                        want,
+                        it == received.end() ? 0 : it->second);
+                }
+                lane_mismatches++;
+            }
+        }
+        EXPECT_EQ(lane_mismatches, 0u) << label << ": per-lane word counts do not reconcile";
     };
 
     const CoreCoord full_grid = device_->compute_with_storage_grid_size();

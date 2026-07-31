@@ -604,6 +604,66 @@ TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_DRISC_PROFILER
 Still open: only BRISC produced, so 4 of 5 lanes per core were empty; no host egress (the drained
 bytes are counted and checksummed, not shipped); and no decode of the marker stream.
 
+## End to end to the HOST: framed egress over the D2H socket
+
+The servicing test proved the flow-control loop closes but discarded the payload -- it could only
+count. This carries every word off the device and re-attributes it host-side.
+
+Test `DramKernelDRISCScatterFixture.DRISCDrainsRealWorkersToHost`, kernel
+`socket/drisc_drain_to_host.cpp`, wire format in `test_kernels/misc/drisc_drain_frame.h`.
+
+| | 4x4 / 2000 zones | full grid / 500 zones |
+|---|---|---|
+| host received | 646,108 words | 1,210,592 words (4.62 MB) |
+| device sent | 646,108 | 1,210,592 |
+| **producers advanced** | **646,108** | **1,210,592** |
+| lanes reconciled | 80 | **600** |
+| frames / pages | 1,686 / 341 | 2,441 / 652 |
+| malformed frames | 0 | 0 |
+| ring overflows | 0 | 0 |
+
+**Three independent counters agree exactly**: the host decode, the drainer's own tally, and the tails
+the *producers* advanced. Two of those could agree and both be wrong; the third closes it.
+
+The per-lane reconciliation is the assertion with teeth. Totals alone cannot catch a mis-labelled
+frame -- swap two frames' identities and every total still balances. Reconciling each
+`(core_xy, lane)` against that lane's own tail advance cannot be satisfied that way, and all 600 lanes
+match.
+
+### Format
+
+A page is a flat run of frames; a frame is a 2-word header (`kind | lane | nwords`, then
+`core_xy = (y<<16)|x`) followed by exactly the live words. `KIND_PAD` terminates a page.
+
+Three decisions worth keeping:
+
+1. **Identity is free.** `SPSC_CORE_XY` is already in the 256 B control vector the poll fetches, so the
+   drainer never constructs or injects identity -- it copies a word the core wrote about itself. This
+   is why the X280's `PP_STICKY_SRC` machinery has no counterpart here.
+
+2. **Read per-lane straight into the page.** The alternative -- one whole-core 10 KB read into staging,
+   then a local copy of the live words into the page -- costs a device-side memcpy and ships dead ring
+   space. Each read instead lands exactly where it belongs. This deliberately trades *more read issues*
+   (up to 5/core rather than 1) for *fewer bytes*, the opposite of the pure-ingest tuning above,
+   because here the bytes have to cross PCIe.
+
+3. **Ring wrap is resolved on the device**, by splitting the run into two reads that land contiguously.
+   The host never needs the ring geometry, so the decoder stays a flat walk.
+
+4. **One shared header for the wire format**, included by kernel and host both. Duplicating those
+   constants is exactly how the X280 readers rotted -- each self-consistent, all wrong.
+
+### Cost of the framing
+
+652 pages x 8 KB = 5.34 MB shipped for 4.62 MB of payload, so **~87% efficiency**. Headers are
+negligible (2,441 frames x 8 B = 19 KB); essentially all of the 0.72 MB overhead is page padding,
+because a page is flushed whenever the next frame would not fit and a frame can be up to 514 words.
+Two ways to close it if it matters: let frames straddle pages (costs a reassembly buffer on the host),
+or raise the page size. Not tuned here -- correctness first.
+
+Throughput is again **not** meaningful from this run: the device figure is dominated by the quiet
+sweeps used to detect completion, and the host wall (0.076 s) includes them.
+
 ## Verdict: the DRAM round-trip does not pay
 
 | approach | GB/s | DRISCs | DRAM traffic |
