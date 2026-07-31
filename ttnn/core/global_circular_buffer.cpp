@@ -23,7 +23,7 @@ GlobalCircularBuffer create_global_circular_buffer(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) {
-    tt::tt_metal::AllocationContextGuard guard("ttnn.create_global_circular_buffer");
+    auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_circular_buffer");
     return tt::tt_metal::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, size, buffer_type);
 }
@@ -33,7 +33,7 @@ GlobalCircularBuffer create_global_circular_buffer(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) {
-    tt::tt_metal::AllocationContextGuard guard("ttnn.create_global_circular_buffer");
+    auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_circular_buffer");
     return tt::tt_metal::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, size, buffer_type);
 }

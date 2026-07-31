@@ -96,7 +96,7 @@ void MeshTrace::populate_mesh_buffer(
     // storage in the reserved trace region, but intentionally tracks top-down BufferType::DRAM trace storage because
     // it can be unsafe for older traces.
     {
-        tt::tt_metal::AllocationContextGuard trace_storage_context("trace_storage");
+        auto trace_storage_context = tt::tt_metal::make_allocation_context_guard("trace_storage");
         trace_buffer->mesh_buffer =
             MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
     }
