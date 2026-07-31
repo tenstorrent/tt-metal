@@ -1,0 +1,214 @@
+{
+  "accepted_path": "completed multichip decoder TP8 path retained unchanged after optimization trials; no rejected trial preserved correctness and latency together",
+  "after": [
+    {
+      "ccl_device_time_us": 421.36,
+      "ccl_ops": 4,
+      "data_movement_device_time_us": 0,
+      "data_movement_ops": 0,
+      "device_time_us": 1487.611,
+      "host_ops": 0,
+      "layer_kind": "sliding",
+      "matmul_device_time_us": 563.834,
+      "matmul_ops": 5,
+      "mode": "prefill",
+      "op_to_op_gap_us": 1111.227,
+      "ops": 26,
+      "raw_ops_csv": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/sliding/ops.csv",
+      "source_csv": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/sliding/prefill_perf_report.csv",
+      "source_txt": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/sliding/prefill_perf_report.txt"
+    },
+    {
+      "ccl_device_time_us": 216.587,
+      "ccl_ops": 4,
+      "data_movement_device_time_us": 107.574,
+      "data_movement_ops": 18,
+      "device_time_us": 679.406,
+      "host_ops": 0,
+      "layer_kind": "sliding",
+      "matmul_device_time_us": 197.993,
+      "matmul_ops": 5,
+      "mode": "decode",
+      "op_to_op_gap_us": 631.727,
+      "ops": 47,
+      "raw_ops_csv": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/sliding/ops.csv",
+      "source_csv": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/sliding/decode_perf_report.csv",
+      "source_txt": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/sliding/decode_perf_report.txt"
+    },
+    {
+      "ccl_device_time_us": 420.338,
+      "ccl_ops": 4,
+      "data_movement_device_time_us": 0,
+      "data_movement_ops": 0,
+      "device_time_us": 1713.979,
+      "host_ops": 0,
+      "layer_kind": "full",
+      "matmul_device_time_us": 682.993,
+      "matmul_ops": 5,
+      "mode": "prefill",
+      "op_to_op_gap_us": 906.137,
+      "ops": 26,
+      "raw_ops_csv": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/full/ops.csv",
+      "source_csv": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/full/prefill_perf_report.csv",
+      "source_txt": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/full/prefill_perf_report.txt"
+    },
+    {
+      "ccl_device_time_us": 225.801,
+      "ccl_ops": 4,
+      "data_movement_device_time_us": 164.049,
+      "data_movement_ops": 18,
+      "device_time_us": 881.606,
+      "host_ops": 0,
+      "layer_kind": "full",
+      "matmul_device_time_us": 284.531,
+      "matmul_ops": 5,
+      "mode": "decode",
+      "op_to_op_gap_us": 75.282,
+      "ops": 47,
+      "raw_ops_csv": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/full/ops.csv",
+      "source_csv": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/full/decode_perf_report.csv",
+      "source_txt": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/full/decode_perf_report.txt"
+    }
+  ],
+  "before": [
+    {
+      "ccl_device_time_us": 421.36,
+      "ccl_ops": 4,
+      "data_movement_device_time_us": 0,
+      "data_movement_ops": 0,
+      "device_time_us": 1487.611,
+      "host_ops": 0,
+      "layer_kind": "sliding",
+      "matmul_device_time_us": 563.834,
+      "matmul_ops": 5,
+      "mode": "prefill",
+      "op_to_op_gap_us": 1111.227,
+      "ops": 26,
+      "raw_ops_csv": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/sliding/ops.csv",
+      "source_csv": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/sliding/prefill_perf_report.csv",
+      "source_txt": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/sliding/prefill_perf_report.txt"
+    },
+    {
+      "ccl_device_time_us": 216.587,
+      "ccl_ops": 4,
+      "data_movement_device_time_us": 107.574,
+      "data_movement_ops": 18,
+      "device_time_us": 679.406,
+      "host_ops": 0,
+      "layer_kind": "sliding",
+      "matmul_device_time_us": 197.993,
+      "matmul_ops": 5,
+      "mode": "decode",
+      "op_to_op_gap_us": 631.727,
+      "ops": 47,
+      "raw_ops_csv": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/sliding/ops.csv",
+      "source_csv": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/sliding/decode_perf_report.csv",
+      "source_txt": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/sliding/decode_perf_report.txt"
+    },
+    {
+      "ccl_device_time_us": 420.338,
+      "ccl_ops": 4,
+      "data_movement_device_time_us": 0,
+      "data_movement_ops": 0,
+      "device_time_us": 1713.979,
+      "host_ops": 0,
+      "layer_kind": "full",
+      "matmul_device_time_us": 682.993,
+      "matmul_ops": 5,
+      "mode": "prefill",
+      "op_to_op_gap_us": 906.137,
+      "ops": 26,
+      "raw_ops_csv": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/full/ops.csv",
+      "source_csv": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/full/prefill_perf_report.csv",
+      "source_txt": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/full/prefill_perf_report.txt"
+    },
+    {
+      "ccl_device_time_us": 225.801,
+      "ccl_ops": 4,
+      "data_movement_device_time_us": 164.049,
+      "data_movement_ops": 18,
+      "device_time_us": 881.606,
+      "host_ops": 0,
+      "layer_kind": "full",
+      "matmul_device_time_us": 284.531,
+      "matmul_ops": 5,
+      "mode": "decode",
+      "op_to_op_gap_us": 75.282,
+      "ops": 47,
+      "raw_ops_csv": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/full/ops.csv",
+      "source_csv": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/full/decode_perf_report.csv",
+      "source_txt": "models/autoports/google/gemma-4-12B/doc/multichip_decoder/tracy/full/decode_perf_report.txt"
+    }
+  ],
+  "delta_device_time_us": [
+    {
+      "delta_pct": 0.0,
+      "delta_us": 0.0,
+      "layer_kind": "sliding",
+      "mode": "prefill"
+    },
+    {
+      "delta_pct": 0.0,
+      "delta_us": 0.0,
+      "layer_kind": "sliding",
+      "mode": "decode"
+    },
+    {
+      "delta_pct": 0.0,
+      "delta_us": 0.0,
+      "layer_kind": "full",
+      "mode": "prefill"
+    },
+    {
+      "delta_pct": 0.0,
+      "delta_us": 0.0,
+      "layer_kind": "full",
+      "mode": "decode"
+    }
+  ],
+  "model": "google/gemma-4-12B",
+  "rejected_trials": [
+    {
+      "artifact_root": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/async_ccl",
+      "metrics_us": {
+        "full_decode": 883.397,
+        "full_prefill": 1709.462,
+        "sliding_decode": 681.769,
+        "sliding_prefill": 1490.959
+      },
+      "name": "ttnn.experimental.all_reduce_async simple replacement",
+      "result": "correctness passed, but traced decode was slower and CCL time did not improve; reverted to ttnn.all_reduce"
+    },
+    {
+      "evidence": "TT_FATAL Unexpected values for event in completion queue, got CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST, is event 0, length 8208, pad1 0 expected 1024",
+      "name": "RingCCLManager num_links=2",
+      "result": "rejected after runtime fatal during focused correctness"
+    },
+    {
+      "artifact_root": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/tracy/prefill_l1",
+      "metrics_us": {
+        "full_decode": 882.515,
+        "full_prefill": 1716.737,
+        "sliding_decode": 677.761,
+        "sliding_prefill": 1481.033
+      },
+      "name": "prefill L1 inputs for attention/MLP",
+      "result": "short-sequence profile was neutral/mixed; rejected because long sliding prefill PCC dropped to 0.9915908094485228 below 0.995"
+    },
+    {
+      "artifact": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/precision_trials.jsonl",
+      "name": "precision/fidelity reductions on TP8 path",
+      "result": "BFP4 MLP decode and full-attention BFP8 qkv/o failed decode PCC; final BF16/BFP8 mix retained"
+    }
+  ],
+  "stage": "optimized_multichip_decoder",
+  "target_mesh": "1x8 T3K, TP8 on mesh axis 1, FABRIC_1D_RING, Ring topology",
+  "watcher": {
+    "clean_command": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_DISPATCH=1 TT_METAL_LOGS_PATH=models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/watcher_eth_no_dispatch pytest -q models/autoports/google/gemma-4-12B/tests/test_multichip_decoder.py::test_multichip_paged_prefill_then_decode_pcc_vs_optimized --tb=short --timeout=1200",
+    "clean_log": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/watcher_eth_no_dispatch/generated/watcher/watcher.log",
+    "clean_result": "2 passed, 3 warnings in 556.97s; grep for assert/error/fault/hang/tripped/critical/watcher stopped/invalid NOC returned no matches",
+    "dispatch_watcher_disabled_reason": "repo watcher docs document TT_METAL_WATCHER_DISABLE_DISPATCH for dispatch-kernel watcher trouble; ETH watcher and the FABRIC_1D_RING multichip CCL path remained enabled",
+    "full_eth_dispatch_watcher_failure": "full watcher with dispatch watcher enabled tripped idleth dispatch cq_prefetch invalid NOC command buffer state before next kernel; isolated to dispatch watcher instrumentation, not accepted as decoder clean evidence",
+    "tensix_clean_log": "models/autoports/google/gemma-4-12B/doc/optimized_multichip_decoder/watcher_tensix/generated/watcher/watcher.log"
+  }
+}

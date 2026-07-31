@@ -1,0 +1,2 @@
+
+Let's denote the time Aya spends walking at a constant speed of $s$ kilometers per hour as $t_1$ hours, and the time
