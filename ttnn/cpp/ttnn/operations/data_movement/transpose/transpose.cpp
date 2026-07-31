@@ -272,13 +272,13 @@ ttnn::Tensor transpose_impl(
         TT_ASSERT(normalized_dim1 != normalized_dim2, "Unsupported transpose dims");
 
         using ttnn::prim::TransposeOpDim;
-        constexpr auto tod_default__value = TransposeOpDim::NW;
+        constexpr auto tod_default_value = TransposeOpDim::NW;
         constexpr TransposeOpDim transpose_dims[4][4] = {
             //     dim2=0              dim2=1              dim2=2              dim2=3
-            {tod_default__value, TransposeOpDim::CN, TransposeOpDim::NH, TransposeOpDim::NW},  // dim1=0
-            {TransposeOpDim::CN, tod_default__value, TransposeOpDim::HC, TransposeOpDim::CW},  // dim1=1
-            {TransposeOpDim::NH, TransposeOpDim::HC, tod_default__value, TransposeOpDim::WH},  // dim1=2
-            {TransposeOpDim::NW, TransposeOpDim::CW, TransposeOpDim::WH, tod_default__value},  // dim1=3
+            {tod_default_value, TransposeOpDim::CN, TransposeOpDim::NH, TransposeOpDim::NW},  // dim1=0
+            {TransposeOpDim::CN, tod_default_value, TransposeOpDim::HC, TransposeOpDim::CW},  // dim1=1
+            {TransposeOpDim::NH, TransposeOpDim::HC, tod_default_value, TransposeOpDim::WH},  // dim1=2
+            {TransposeOpDim::NW, TransposeOpDim::CW, TransposeOpDim::WH, tod_default_value},  // dim1=3
         };
 
         output = detail::transpose_(
