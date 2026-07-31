@@ -19,7 +19,7 @@ It is NOT free, though: one RISC is one NoC, so handing an operand to BRISC also
 NoC 1 — and NoC 1 is the worse route for DRAM reads at spread core placements (NoC 0's east->south
 routing disperses column-localized DRAM traffic; NoC 1's north->west concentrates it). Whether the
 extra issue engine outweighs that depends on transaction size and core count: at a bf16 tile page on
-a mid-size grid it does not, and the split is a REGRESSION. See README.md for the measured matrix.
+a single row of cores it does not, and the split is a REGRESSION. See README.md for the matrix.
 
   one_riscv     (BASELINE)  NCRISC reads A and B, both on NoC 0. BRISC idle.
   two_riscv                 NCRISC reads A on NoC 0; BRISC reads B on NoC 1. Each RISC OWNS its own

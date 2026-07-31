@@ -283,11 +283,11 @@ def test_dual_noc_read_device_perf(device):
 #
 # PER-CORE work is held CONSTANT (TILES_PER_CORE tiles per core, so the tensor grows with the grid).
 # That way the only thing changing across grids is cross-core DRAM/NoC contention, not each core's
-# own workload. Grids are 11 wide to match a realistic N-parallel matmul grid, ending at 11x8.
+# own workload. Square-ish 8-wide rectangles up to 8x8 = 64 cores.
 # =============================================================================
 TILES_PER_CORE = int(os.environ.get("DNR_TPC", "32"))
 GRID_SWEEP = tuple(
-    tuple(int(v) for v in g.split("x")) for g in os.environ.get("DNR_GRIDS", "1x1,11x1,11x2,11x4,11x8").split(",")
+    tuple(int(v) for v in g.split("x")) for g in os.environ.get("DNR_GRIDS", "1x1,8x1,8x2,8x4,8x8").split(",")
 )
 
 
@@ -367,7 +367,7 @@ def test_dual_noc_read_multicore_txn_probe(device):
     matters for real weight reads, which often use block-float pages far smaller than a bf16 tile.
     """
     grids = tuple(
-        tuple(int(v) for v in g.split("x")) for g in os.environ.get("DNR_TXN_GRIDS", "1x1,11x1,11x8").split(",")
+        tuple(int(v) for v in g.split("x")) for g in os.environ.get("DNR_TXN_GRIDS", "1x1,8x1,8x8").split(",")
     )
     txns = tuple(int(x) for x in os.environ.get("DNR_TXNS", "2048,1024,512,256").split(","))
     variants = (BASELINE, "two_riscv", DIAG_VARIANT)

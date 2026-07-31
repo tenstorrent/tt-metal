@@ -94,7 +94,7 @@ operand to each data-movement RISC-V instead. A second-tensor sibling of `split_
 **Situation:** two operand streams with no dependency between them, in a read-heavy phase where the
 writer has nothing to drain yet.
 **Measured win:** **up to 1.85×** on the read (small transactions), **1.34×** on a full bf16 op —
-but a **0.63× REGRESSION** for large tile-sized reads on a mid-size grid (BH P150). It is a
+but a **0.68× REGRESSION** for large tile-sized reads spread over a row of cores (BH P150). It is a
 small-transaction optimization, not a more-cores one; read the README before applying it.
 
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)

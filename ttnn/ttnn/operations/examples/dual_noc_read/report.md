@@ -162,7 +162,7 @@ scaled) plus the NoC-model cross-check above. Both point at issue rate.
 ## Multi-core scaling — and why the split can turn into a LOSS
 
 Per-core work held constant (32 tiles/operand/core, so total bytes grow with the grid), payload
-ablated, `block=8`. Grids are 11 wide, ending at 11×8 = 88 cores.
+ablated, `block=8`. 8-wide rectangles up to 8×8 = 64 cores.
 
 `one_riscv_brisc` is a **diagnostic**, not part of the ladder: BRISC reads *both* operands, so all
 reads ride NoC 1 with the SAME single-RISC issue load as the baseline. Since a RISC and its port move
@@ -171,30 +171,30 @@ is the NoC, not issue rate.
 
 | cores | grid | variant | ns/op | GB/s | GB/s/core | vs base |
 |---|---|---|---|---|---|---|
-| 1 | 1×1 | `one_riscv` | 3524 | 37.2 | 37.2 | (base) |
-| 1 | 1×1 | `two_riscv` | 2657 | 49.3 | 49.3 | **1.33×** |
-| 1 | 1×1 | `one_riscv_brisc` | 3609 | 36.3 | 36.3 | 0.98× |
-| 11 | 11×1 | `one_riscv` | 4615 | 312.4 | 28.4 | (base) |
-| 11 | 11×1 | `two_riscv` | 7357 | 196.0 | 17.8 | **0.63×** ← loss |
-| 11 | 11×1 | `one_riscv_brisc` | 14710 | 98.0 | 8.9 | **0.31×** |
-| 22 | 11×2 | `one_riscv` | 7562 | 381.3 | 17.3 | (base) |
-| 22 | 11×2 | `two_riscv` | 10668 | 270.3 | 12.3 | 0.71× |
-| 22 | 11×2 | `one_riscv_brisc` | 20636 | 139.7 | 6.4 | 0.37× |
-| 44 | 11×4 | `one_riscv` | 14503 | 397.7 | 9.0 | (base) |
-| 44 | 11×4 | `two_riscv` | 15965 | 361.2 | 8.2 | 0.91× |
-| 44 | 11×4 | `one_riscv_brisc` | 30866 | 186.8 | 4.3 | 0.47× |
-| 88 | 11×8 | `one_riscv` | 28406 | 406.0 | 4.6 | (base) |
-| 88 | 11×8 | `two_riscv` | 26310 | 438.4 | 5.0 | 1.08× |
-| 88 | 11×8 | `one_riscv_brisc` | 51995 | 221.8 | 2.5 | 0.55× |
+| 1 | 1×1 | `one_riscv` | 3525 | 37.2 | 37.2 | (base) |
+| 1 | 1×1 | `two_riscv` | 2686 | 48.8 | 48.8 | **1.31×** |
+| 1 | 1×1 | `one_riscv_brisc` | 3607 | 36.3 | 36.3 | 0.98× |
+| 8 | 8×1 | `one_riscv` | 4151 | 252.6 | 31.6 | (base) |
+| 8 | 8×1 | `two_riscv` | 6129 | 171.1 | 21.4 | **0.68×** ← loss |
+| 8 | 8×1 | `one_riscv_brisc` | 12152 | 86.3 | 10.8 | **0.34×** |
+| 16 | 8×2 | `one_riscv` | 6368 | 329.3 | 20.6 | (base) |
+| 16 | 8×2 | `two_riscv` | 8239 | 254.5 | 15.9 | 0.77× |
+| 16 | 8×2 | `one_riscv_brisc` | 15795 | 132.8 | 8.3 | 0.40× |
+| 32 | 8×4 | `one_riscv` | 12229 | 343.0 | 10.7 | (base) |
+| 32 | 8×4 | `two_riscv` | 12349 | 339.7 | 10.6 | 0.99× |
+| 32 | 8×4 | `one_riscv_brisc` | 22815 | 183.8 | 5.7 | 0.54× |
+| 64 | 8×8 | `one_riscv` | 23426 | 358.1 | 5.6 | (base) |
+| 64 | 8×8 | `two_riscv` | 20447 | 410.3 | 6.4 | 1.15× |
+| 64 | 8×8 | `one_riscv_brisc` | 38082 | 220.3 | 3.4 | 0.62× |
 
 **Two things are happening, and they fight each other.**
 
-**(i) DRAM saturates.** Aggregate read bandwidth plateaus at ~400–440 GB/s from 22 cores up, while
-per-core bandwidth collapses 37.2 → 4.6 GB/s. At 88 cores the read is DRAM-bound, not issue-bound, so
+**(i) DRAM saturates.** Aggregate read bandwidth plateaus at ~340–410 GB/s from 16 cores up, while
+per-core bandwidth collapses 37.2 → 5.6 GB/s. At 64 cores the read is DRAM-bound, not issue-bound, so
 relieving issue rate has almost nothing left to give.
 
 **(ii) NoC 1 is a much worse route for DRAM reads at spread placements.** The diagnostic isolates
-this: same issue load, reads moved to the other port, and it costs **0.31–0.55×** from 11 cores up —
+this: same issue load, reads moved to the other port, and it costs **0.34–0.62×** from 8 cores up —
 while being neutral (0.98×) on a single core, where routing is irrelevant. Reads want NoC 0: its
 dimension-ordered east→south routing *disperses* column-localized DRAM traffic, whereas NoC 1's
 north→west *concentrates* it onto the DRAM columns. Writes are the mirror image, which is exactly why
@@ -204,8 +204,8 @@ placements) — here it arrives as a side effect of the operand split, since a R
 together.
 
 Splitting the operands puts **half the read traffic on the worse route**. At a bf16 tile page that
-costs more than the second engine gains — hence the 0.63× at 11 cores. At 88 cores DRAM saturation
-flattens both effects and it comes back to roughly neutral (1.08×).
+costs more than the second engine gains — hence the 0.68× on a single row of 8 cores. As the grid
+fills out the penalty eases and DRAM saturation flattens both effects, so it returns to ~1.15×.
 
 ## Transaction size flips the sign
 
@@ -213,23 +213,23 @@ Same grids, `block=8`, payload ablated, sweeping bytes per NoC command.
 
 | cores | txn B | `two_riscv` vs base | `one_riscv_brisc` (NoC-1 penalty) |
 |---|---|---|---|
-| 1 | 2048 | 1.32× | 0.98× |
+| 1 | 2048 | 1.32× | 0.97× |
 | 1 | 1024 | 1.58× | 1.00× |
-| 1 | 512 | 1.73× | 0.99× |
+| 1 | 512 | 1.74× | 1.00× |
 | 1 | 256 | **1.85×** | 1.00× |
-| 11 | 2048 | **0.63×** | 0.32× |
-| 11 | 1024 | 0.79× | 0.41× |
-| 11 | 512 | **1.19×** | 0.66× |
-| 11 | 256 | **1.56×** | 0.95× |
-| 88 | 2048 | 1.08× | 0.55× |
-| 88 | 1024 | 1.14× | 0.58× |
-| 88 | 512 | **1.49×** | 0.81× |
-| 88 | 256 | **1.74×** | 1.13× |
+| 8 | 2048 | **0.68×** | 0.34× |
+| 8 | 1024 | 0.94× | 0.48× |
+| 8 | 512 | **1.34×** | 0.76× |
+| 8 | 256 | **1.74×** | 1.05× |
+| 64 | 2048 | 1.14× | 0.62× |
+| 64 | 1024 | 1.18× | 0.63× |
+| 64 | 512 | **1.46×** | 0.78× |
+| 64 | 256 | **1.66×** | 1.05× |
 
 As transactions shrink, per-command issue cost grows (favouring the split) **and** the NoC-1 route
-penalty fades (0.32 → 0.95 at 11 cores) — both push the same way. So the loss at 11 cores is specific
-to large, tile-sized reads: by ~512 B the split is already a **1.19×** win there, and **1.49×** at 88
-cores.
+penalty fades (0.34 → 1.05 at 8 cores) — both push the same way. So the loss is specific to large,
+tile-sized reads on a spread placement: by ~512 B the split is already a **1.34×** win at 8 cores and
+**1.46×** at 64.
 
 **Practical rule.** The split is worth it when reads are *command*-limited, i.e. many small
 transactions — which is the normal case for block-float weight pages (a bfp4 tile page is 576 B, bfp8

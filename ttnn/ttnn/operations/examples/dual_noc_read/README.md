@@ -165,9 +165,9 @@ The single-core numbers above do **not** generalize. `two_riscv` vs baseline, pa
 
 | cores | grid | 2048 B (bf16 tile) | 1024 B | 512 B | 256 B |
 |---|---|---|---|---|---|
-| 1 | 1×1 | 1.32× | 1.58× | 1.73× | **1.85×** |
-| 11 | 11×1 | **0.63× ← regression** | 0.79× | 1.19× | 1.56× |
-| 88 | 11×8 | 1.08× | 1.14× | **1.49×** | **1.74×** |
+| 1 | 1×1 | 1.32× | 1.58× | 1.74× | **1.85×** |
+| 8 | 8×1 | **0.68× ← regression** | 0.94× | 1.34× | 1.74× |
+| 64 | 8×8 | 1.14× | 1.18× | **1.46×** | **1.66×** |
 
 Two forces compete, and their balance sets the sign.
 
@@ -188,34 +188,36 @@ issue engine does not pay for it at a 2 KB tile page.
 Measured here in isolation by the `one_riscv_brisc` diagnostic, which keeps the baseline's
 single-RISC issue load but puts *all* reads on NoC 1:
 
-| cores | all reads on NoC 1, vs all on NoC 0 |
-|---|---|
-| 1 | 0.98× — routing is irrelevant on one core |
-| 11 | **0.31×** |
-| 22 | 0.37× |
-| 44 | 0.47× |
-| 88 | 0.55× |
+| cores | grid | all reads on NoC 1, vs all on NoC 0 |
+|---|---|---|
+| 1 | 1×1 | 0.98× — routing is irrelevant on one core |
+| 8 | 8×1 | **0.34×** |
+| 16 | 8×2 | 0.40× |
+| 32 | 8×4 | 0.54× |
+| 64 | 8×8 | 0.62× |
 
 Consistent with `noc_placement`, and it explains the shape of the first table: the penalty is absent
-at one core, worst at 11, and shrinks as the grid grows.
+at one core, worst on a single row of cores, and eases as the grid fills out.
 
-**Why 88 cores recovers to ~1.1×:** DRAM saturates. Aggregate read bandwidth plateaus at **~400–440
-GB/s from 22 cores up** while per-core bandwidth collapses 37 → 4.6 GB/s. Once the read is
-DRAM-bound, neither force has much left to express, so both the win and the penalty flatten out.
+**Why 64 cores recovers to ~1.1×:** DRAM saturates. Aggregate read bandwidth plateaus at **~340–410
+GB/s from 16 cores up** while per-core bandwidth collapses 37 → 5.6 GB/s. Once the read is DRAM-bound,
+neither force has much left to express, so both the win and the penalty flatten out.
 
-**Why small transactions flip the sign:** they push both forces the same way — issue cost rises
-*and* the NoC-1 penalty fades (0.31× → 0.95× at 11 cores, because per-command cost starts to dominate
+**Why small transactions flip the sign:** they push both forces the same way — issue cost rises *and*
+the NoC-1 penalty fades (0.34× → 1.05× at 8 cores, because per-command cost starts to dominate
 routing). By ~512 B the split is a win at every core count tested.
 
 **The rule: this is a small-transaction optimization, not a "more cores" one.**
 
 - **Use it** when reads are command-limited — many small transactions. Block-float weight pages sit
   exactly there (a bfp4 tile page is 576 B, bfp8 1088 B), and at ~512 B the split wins at **every**
-  core count tested: 1.19× at 11 cores, 1.49× at 88, 1.85× on one core.
+  core count tested: 1.34× at 8 cores, 1.46× at 64, 1.74× on one core.
 - **Don't** use it for large, tile-sized reads spread over a moderate core count — at bf16 2048 B on
-  11 cores it is a **0.63× regression**, because you pay the NoC-1 read-route penalty for nothing.
+  8 cores it is a **0.68× regression**, because you pay the NoC-1 read-route penalty for nothing.
 - On a **single core** it always wins, and routing does not matter.
 - If you are already DRAM-bandwidth-bound, expect little either way.
+- The shape above is not specific to this grid width; it reproduced on both 8-wide and wider
+  rectangles, with the regression always landing on the single-row placement.
 
 ## Gist — how to apply it
 
@@ -245,7 +247,7 @@ python -m ttnn.operations.examples.dual_noc_read [options]
 | `--iters` | int | `10` | launches averaged inside each window |
 
 Multi-core sweeps run through the test directly (the grids and per-core tile count are env knobs):
-`DNR_GRIDS=1x1,11x1,11x8`, `DNR_TPC=32` (tiles per operand per core), `DNR_TXN_GRIDS`, `DNR_TXNS`.
+`DNR_GRIDS=1x1,8x1,8x8`, `DNR_TPC=32` (tiles per operand per core), `DNR_TXN_GRIDS`, `DNR_TXNS`.
 
 There is deliberately **no `--kernel-iters`**: the output is L1-resident and nothing drains it, so a
 launch performs exactly one pass over the tiles. Amortize launch overhead with `--shape` instead.
