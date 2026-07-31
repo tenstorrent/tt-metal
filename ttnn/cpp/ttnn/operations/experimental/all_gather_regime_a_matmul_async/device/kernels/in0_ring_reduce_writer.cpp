@@ -326,9 +326,12 @@ void kernel_main() {
         const uint32_t num_masters = get_arg_val<uint32_t>(fa++);
         const uint32_t master0_x = get_arg_val<uint32_t>(fa++);
         const uint32_t master0_y = get_arg_val<uint32_t>(fa++);
+        const uint32_t local_done_sem_id = get_arg_val<uint32_t>(fa++);
         const uint32_t num_release_ranges = get_arg_val<uint32_t>(fa++);
         const std::size_t release_base = fa;  // 5 words per range: sx, sy, ex, ey, num_dests
         fa += 5u * num_release_ranges;
+        const std::size_t master_base = fa;  // num_masters (x, y) virtual coord pairs
+        fa += 2u * num_masters;
         // has_fwd / has_bwd are mutually exclusive: a core is a client of exactly the one mux it drives
         // (or neither, at a line end). Which one it is comes from my_dir; the mux client block that
         // follows is whichever the host appended.
@@ -383,6 +386,31 @@ void kernel_main() {
                 }
             }
             noc_async_write_barrier();
+
+            // ---- 1b. barrier across the masters: local staging complete everywhere ----
+            // The local copy splits M 8 ways by bank_id, but the fabric send below splits it by
+            // (bank_id mod m_groups) -- a DIFFERENT partition. So the pages a core is about to forward
+            // were, in general, written by some OTHER core. At Mt=1 that is stark: bank 0 stages the only
+            // tile row and bank 4 immediately forwards it. Without this barrier the backward stream ships
+            // a half-written shard: measured as PCC 0.79 with rank d+1 partly zero on the small shapes.
+            //
+            // Every master credits every master (including itself) and then waits for the full count, so
+            // there is no coordinator and no second flag. 8x8 atomic incs is nothing next to the transfer.
+            // noc_async_write_barrier() above is what makes our staging writes visible before we credit.
+            {
+                volatile tt_l1_ptr uint32_t* local_done =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(local_done_sem_id));
+                for (uint32_t mi = 0; mi < num_masters; ++mi) {
+                    noc_semaphore_inc(
+                        get_noc_addr(
+                            get_arg_val<uint32_t>(master_base + 2u * mi),
+                            get_arg_val<uint32_t>(master_base + 2u * mi + 1u),
+                            get_semaphore(local_done_sem_id)),
+                        1);
+                }
+                noc_async_atomic_barrier();
+                noc_semaphore_wait(local_done, num_masters);
+            }
 
             // ---- 2. bidirectional store-and-forward ring ----
             // This core drives ONE direction (my_dir) for my_rounds rounds. fwd runs ceil((tp-1)/2) and

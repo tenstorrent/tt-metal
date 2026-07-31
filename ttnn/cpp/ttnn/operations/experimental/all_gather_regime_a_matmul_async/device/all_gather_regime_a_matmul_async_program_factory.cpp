@@ -321,6 +321,7 @@ struct FusedGatherContext {
     // atomic-inc AFTER the payload is flushed.
     uint32_t chunk_ready_sem_id = 0;   // VALID/INVALID go-ahead flag, on EVERY core
     uint32_t gather_count_sem_id = 0;  // masters-done counter, meaningful on master 0
+    uint32_t local_done_sem_id = 0;    // local-staging-done counter, held by EVERY master
     // Barrier geometry, in VIRTUAL (translated) coords.
     CoreCoord master0_virtual{};
     // Multicast rectangles covering every core master 0 releases: {start_x, start_y, end_x, end_y, dests}.
@@ -328,6 +329,7 @@ struct FusedGatherContext {
         uint32_t sx, sy, ex, ey, dests;
     };
     std::vector<ReleaseRange> release_ranges;
+    std::vector<CoreCoord> master_virtuals;  // all masters, for the local-staging barrier
     uint32_t num_masters = 8;
     // Counts forward-stream shard arrivals from the backward neighbour. This is a caller-owned GLOBAL
     // semaphore address, not a program semaphore id: see the note in the operation types header for why a
@@ -366,11 +368,12 @@ enum FusedGatherArg : uint32_t {
     kFgNumMasters = 18,
     kFgMaster0X = 19,
     kFgMaster0Y = 20,
-    kFgNumReleaseRanges = 21,
+    kFgLocalDoneSem = 21,  // masters-finished-local-staging counter (one per master, not just master 0)
+    kFgNumReleaseRanges = 22,
     // Followed by kFgNumReleaseRanges 5-word records {start_x, start_y, end_x, end_y, num_dests} in VIRTUAL
     // coords: the multicast rectangles master 0 releases. Per-range rather than one bounding box because
     // the bank-adjacent placement is deliberately not a filled rectangle.
-    kFusedArgCount = 22,  // + 5 * num_release_ranges words, then the mux client block
+    kFusedArgCount = 23,  // + 5*num_release_ranges + 2*num_masters words, then the mux client block
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
@@ -434,6 +437,7 @@ FusedGatherContext build_fused_gather_context(
     // Both live on ALL cores: every core waits on the go-ahead flag, not just the master ring.
     ctx.chunk_ready_sem_id = CreateSemaphore(program, all_cores, 0);  // 0 == INVALID
     ctx.gather_count_sem_id = CreateSemaphore(program, all_cores, 0);
+    ctx.local_done_sem_id = CreateSemaphore(program, all_cores, 0);
     ctx.num_masters = static_cast<uint32_t>(master_ring_cores.size());
     // Hard-tie the mux sizing to the client split. Getting these out of step does not fail loudly: the
     // mux's forwarder RISC just spins waiting for close() calls that never come.
@@ -851,6 +855,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         // worker_core_from_logical_core returns TRANSLATED (virtual) coords, in which the Blackhole grid is
         // dense whatever the harvesting mask. Raw physical coords would straddle harvested columns here.
         fused_gather.master0_virtual = device->worker_core_from_logical_core(master_ring_cores[0]);
+        for (const auto& mc : master_ring_cores) {
+            fused_gather.master_virtuals.push_back(device->worker_core_from_logical_core(mc));
+        }
 
         // Release the grid with ONE MULTICAST PER CoreRange. A single bounding-box mcast is not an option:
         // the bank-adjacent placement is deliberately not a filled rectangle, so the box also covers cores
@@ -1262,6 +1269,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(fused_gather.num_masters);
             wa.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.x));
             wa.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.y));
+            wa.push_back(fused_gather.local_done_sem_id);
             wa.push_back(static_cast<uint32_t>(fused_gather.release_ranges.size()));
             for (const auto& rr : fused_gather.release_ranges) {
                 wa.push_back(rr.sx);
@@ -1270,8 +1278,13 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
                 wa.push_back(rr.ey);
                 wa.push_back(rr.dests);
             }
+            for (const auto& mv : fused_gather.master_virtuals) {
+                wa.push_back(static_cast<uint32_t>(mv.x));
+                wa.push_back(static_cast<uint32_t>(mv.y));
+            }
             TT_FATAL(
-                wa.size() == fused_rt_base + kFusedArgCount + 5u * fused_gather.release_ranges.size(),
+                wa.size() == fused_rt_base + kFusedArgCount + 5u * fused_gather.release_ranges.size() +
+                                 2u * fused_gather.master_virtuals.size(),
                 "fused-gather arg block is {} words but FusedGatherArg says {} + 5*{}; the push order and "
                 "the offsets used by override_runtime_arguments have drifted",
                 wa.size() - fused_rt_base,
