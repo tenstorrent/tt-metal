@@ -38,7 +38,18 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+_MESH_SHAPE = {
+    "P150": (1, 1),
+    "P150x4": (1, 4),
+    "P150x8": (1, 8),
+    # Wormhole: N300 is the 2-chip mesh the 9B needs (a single N150 cannot hold it: ~12GB DRAM/chip
+    # vs BH P150's ~32GB). Listing these explicitly matters — the old dict fell through to the (1,4)
+    # default for any WH mesh name, which both picked the wrong shape and flipped _MULTI on.
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 _TP_TRACE_REGION_SIZE = 1024 * 1024 * 1024
 DEVICE_PARAMS = [
