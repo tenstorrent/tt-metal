@@ -212,7 +212,8 @@ environment limitation.
   the AST audit now covers all reachable optimized and inherited decoder hot
   methods and rejects `from_torch`/`to_torch` within them.
 
-Stage commit SHA: pending.
+Stage implementation/evidence commit SHA:
+`6222e693ec8d8e83381535bd17f385508a93074d`.
 
 ## AutoFix reviewer-finding ledger
 
