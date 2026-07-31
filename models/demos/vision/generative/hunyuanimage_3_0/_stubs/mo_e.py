@@ -76,12 +76,16 @@ def _linear_weight(w, device, dtype=ttnn.bfloat16):
 
 
 def _is_mesh_device(device) -> bool:
+    # A 1-device mesh (or a plain single device) is treated as single-chip: the
+    # TP/EP collectives below then no-op, so the model runs fabric-free on one
+    # chip (matches the hunyuan-image3-bringup path; unblocks single-chip PCC when
+    # the inter-chip fabric is unavailable). Real multi-chip (>1 device) unchanged.
     try:
         if isinstance(device, ttnn.MeshDevice):
-            return True
+            return device.get_num_devices() > 1
     except AttributeError:
         pass
-    return hasattr(device, "get_num_devices") and hasattr(device, "get_device_ids")
+    return hasattr(device, "get_num_devices") and hasattr(device, "get_device_ids") and device.get_num_devices() > 1
 
 
 # --- env-gated CHEAP perf knobs (ladder rungs 1/2/5), OFF by default ----------
@@ -334,6 +338,8 @@ class _TtMoE:
         bytes) on every chip before a local reduce; the ring all_reduce moves ~2×
         the shard bytes/chip and drops the separate sum — the exact prefill-MoE
         reduce gpt_oss/gemma4/deepseek use. Same math, same shape."""
+        if not _is_mesh_device(self.device):
+            return x  # single chip: the per-device partial already IS the full sum
         x = ttnn.all_reduce(x, cluster_axis=self.tp_axis, num_links=_ccl_links(), topology=ttnn.Topology.Linear)
         if getattr(self, "_ep_fullmesh", False):
             # EP=32: experts sharded over BOTH mesh axes -> also sum over the DP axis (63cfd0eb26).

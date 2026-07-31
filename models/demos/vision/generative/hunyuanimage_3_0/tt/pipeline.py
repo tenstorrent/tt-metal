@@ -1055,6 +1055,13 @@ def _open_selftest_device():
     Blackhole Galaxy only brings FABRIC_1D up on the FULL physical mesh, so
     enable FABRIC_1D and open the full mesh (falls back to a single device only
     if the mesh open itself is unavailable)."""
+    if os.environ.get("HY3_SINGLE_CHIP") == "1":
+        # Single-chip / fabric-free selftest: open a plain device and DON'T enable
+        # the inter-chip fabric. The mesh model's collectives (_mesh_reduce, shard
+        # mappers) all no-op on a non-mesh device, so the full per-chip math runs
+        # without the (possibly wedged) FABRIC_1D. Multi-chip default is below.
+        print("[pipeline] HY3_SINGLE_CHIP=1: opening a single fabric-free device")
+        return ttnn.open_device(device_id=0, l1_small_size=24576, trace_region_size=200_000_000)
     enable_fabric_1d()
     try:
         return ttnn.open_mesh_device(

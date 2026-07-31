@@ -136,12 +136,16 @@ def _linear_weight(w: torch.Tensor, device, dtype=ttnn.bfloat16):
 # mesh helpers (TP shard path)
 # ----------------------------------------------------------------------------
 def _is_mesh_device(device) -> bool:
+    # A 1-device mesh (or a plain single device) is treated as single-chip: the
+    # TP/EP collectives below then no-op, so the model runs fabric-free on one
+    # chip (matches the hunyuan-image3-bringup path; unblocks single-chip PCC when
+    # the inter-chip fabric is unavailable). Real multi-chip (>1 device) unchanged.
     try:
         if isinstance(device, ttnn.MeshDevice):
-            return True
+            return device.get_num_devices() > 1
     except AttributeError:
         pass
-    return hasattr(device, "get_num_devices") and hasattr(device, "get_device_ids")
+    return hasattr(device, "get_num_devices") and hasattr(device, "get_device_ids") and device.get_num_devices() > 1
 
 
 class _TtDecoderLayer:
@@ -346,6 +350,8 @@ class _TtDecoderLayer:
         all_gather along the TP axis (cluster_axis) then sum, so every device on
         that axis holds the full result. Confined to the TP axis so the
         DP-replicated columns each keep their own identical full result."""
+        if not self.is_mesh:
+            return x  # single chip: no TP axis to gather over; partial is complete
         g = ttnn.all_gather(
             x, dim=0, cluster_axis=self.tp_axis, num_links=_mo_e._ccl_links(), topology=ttnn.Topology.Linear
         )
