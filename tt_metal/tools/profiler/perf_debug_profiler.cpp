@@ -17,7 +17,15 @@
 #include <tracy/Tracy.hpp>
 #include <common/TracyTTDeviceData.hpp>  // tracy::RiscType X280_RD0/X280_RELAY0 lanes
 
+#include <chrono>
+#include <thread>
+
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/kernel_types.hpp>
+
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
@@ -26,6 +34,7 @@
 
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/kernels/kernel.hpp"  // DramConfig (a DRISC kernel is not in the public headers yet)
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "hostdevcommon/profiler_common.h"
@@ -292,13 +301,25 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     if (!devices_.empty()) {
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] active on {} device(s): X280 drain ({} readers + {} relays, {} MiB sockets, "
-            "adaptive) -> Tracy",
+            "[perf-debug profiler] active on {} device(s): DRISC drain -> {} MiB D2H socket -> Tracy",
             devices_.size(),
-            kNRead,
-            kNRelay,
             (static_cast<uint64_t>(kHRingWords) * 4) / (1024 * 1024));
     }
+}
+
+// Put a DRISC's NIU into stream mode (1) or back to NOC2AXI (0). Its own program, run to completion:
+// D2HSocket construction writes the config into DRISC L1 from the host, which only lands once the NIU
+// terminates inbound traffic at L1. Launched outside the command queue like the drainer itself.
+void PerfDebugProfiler::set_drisc_niu_mode(IDevice* device, const CoreCoord& drisc_logical, uint32_t stream) {
+    Program p = CreateProgram();
+    CreateKernel(
+        p,
+        "tt_metal/tools/profiler/kernels/drisc_niu_mode.cpp",
+        drisc_logical,
+        DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+    detail::CompileProgram(device, p, /*force_slow_dispatch=*/true);
+    detail::WriteRuntimeArgsToDevice(device, p, /*force_slow_dispatch=*/true);
+    detail::LaunchProgram(device, p, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
 }
 
 bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx) {
@@ -308,25 +329,9 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     const uint32_t device_id = ctx.chip_id;
     const auto& soc = cluster.get_soc_desc(device_id);
 
-    if (soc.get_cores(CoreType::L2CPU, CoordSystem::NOC0).empty()) {
-        return false;
-    }
-    std::string active_fw_path = BuildEnvManager::get_instance(context_id).get_x280_firmware_path(device_id);
-    std::string idle_fw_path = BuildEnvManager::get_instance(context_id).get_x280_idle_firmware_path(device_id);
-    if (active_fw_path.empty() || idle_fw_path.empty()) {
-        return false;
-    }
-    auto read_file = [](const std::string& p) {
-        std::ifstream f(p, std::ios::binary);
-        std::vector<uint8_t> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-        while (b.size() % 4 != 0) {
-            b.push_back(0);
-        }
-        return b;
-    };
-    std::vector<uint8_t> active_fw = read_file(active_fw_path);
-    std::vector<uint8_t> idle_fw = read_file(idle_fw_path);
-    if (active_fw.empty() || idle_fw.empty()) {
+    // The drainer is a DRISC: one DM RISC-V on a DRAM core. Nothing else here is Blackhole-specific, but
+    // that is the only place they exist today.
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         return false;
     }
 
@@ -337,19 +342,19 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     ctx.nl = static_cast<uint32_t>(num_cores) * kNRisc;
     ctx.core_virt.resize(num_cores);
 
-    // MBOX_COORDS payload: per core {u32 virtual_x, u32 virtual_y} (what the X280 NoC-addresses), in
-    // grid order (idx = ly*gx + lx) -- the SAME order the SRCLUT lane L=core*NRISC+risc resolves. Also
-    // pre-zero each core's profiler control vector, and build the virtual->NOC0 map (for Tracy lanes).
-    std::vector<uint8_t> coord_buf(num_cores * 8, 0);
-    std::vector<uint8_t> zero_ctrl(256, 0);  // zero each core's profiler control vector (head/tail start clean)
+    // Pre-zero every core's profiler control vector (heads and tails start clean) and build the maps the
+    // HOST owns: core index -> virtual (x,y), which is the drainer's poll list and Tracy's view, and the
+    // inverse packed (y<<16)|x -> core index, which is the one thing the drainer does not put on the wire.
+    // Identity travels in the payload instead, written by the producing core into SPSC_CORE_XY.
+    std::vector<uint32_t> coords(num_cores, 0);
+    std::vector<uint8_t> zero_ctrl(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, 0);
     for (uint32_t ly = 0; ly < gy; ly++) {
         for (uint32_t lx = 0; lx < gx; lx++) {
             const uint32_t idx = ly * gx + lx;
             CoreCoord v =
                 cluster.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord{lx, ly}, CoreType::WORKER);
             const uint32_t vx = static_cast<uint32_t>(v.x), vy = static_cast<uint32_t>(v.y);
-            std::memcpy(coord_buf.data() + idx * 8 + 0, &vx, 4);
-            std::memcpy(coord_buf.data() + idx * 8 + 4, &vy, 4);
+            coords[idx] = (vx & 0xFFFFu) | ((vy & 0xFFFFu) << 16);
             cluster.write_core(zero_ctrl.data(), (uint32_t)zero_ctrl.size(), tt_cxy_pair(device_id, v), prof_l1);
             const CoreCoord noc0 = cluster.get_physical_coordinate_from_logical_coordinates(
                 device_id, CoreCoord{lx, ly}, CoreType::WORKER, /*no_warn=*/true);
@@ -359,92 +364,107 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         }
     }
 
-    const auto pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
-    if (pcie_cores.empty()) {
-        return false;
-    }
-    const auto pc = pcie_cores.front();
-    const uint64_t pcie_enc = (static_cast<uint64_t>(pc.x) & 0x3f) | ((static_cast<uint64_t>(pc.y) & 0x3f) << 6);
+    // ---- pick the DRISC ----
+    ctx.device = mesh_device->get_devices().front();
+    ctx.drisc_logical = mesh_device->impl().pick_unused_dram_logical_core(0);
+    const CoreCoord translated = soc.dram_bank_endpoint_coords.at(ctx.drisc_logical.x).at(ctx.drisc_logical.y);
+    const tt::umd::CoreCoord drisc_phys = soc.translate_coord_to(
+        tt::umd::CoreCoord(translated.x, translated.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
+    ctx.drisc_virtual = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical, CoreType::DRAM);
+    ctx.drisc_l1_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    ctx.drisc_l1_noc = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
 
-    ctx.driver = std::make_unique<pz::X280Driver>(cluster, static_cast<int>(device_id), /*l2cpu=*/0);
-    auto& drv = *ctx.driver;
-
-    // Two D2HSockets (one per relay), sender = X280 L2CPU, config at the FW's X280_SOCKET_CONFIG_BASE
-    // (0x08019000 + h*0x100). FIFO = 4 MiB (multi-window). Created BEFORE boot so the config md is
-    // resident; the FIFO NoC addr is read back and packed into P_HOST_BASE (bytes_acked is host-written
-    // live post-boot, so nothing needs to survive ensure_idle).
-    const CoreCoord l2phys = pz::x280_l2cpu_tile(0);
-    const distributed::MeshCoordinate scoord = *distributed::MeshCoordinateRange(mesh_device->shape()).begin();
-    const uint32_t cfg_sz = distributed::D2HSocket::required_config_buffer_size();
-    const uint64_t fifo_bytes = static_cast<uint64_t>(kHRingWords) * 4;
-    uint64_t fifo_lo[kNSockets] = {0, 0};
-    for (uint32_t h = 0; h < kNSockets; h++) {
-        const uint32_t caddr = 0x08019000u + h * 0x100u;
-        ctx.sockets[h] = std::make_unique<distributed::D2HSocket>(
-            mesh_device,
-            distributed::MeshCoreCoord{scoord, l2phys},
-            static_cast<uint32_t>(fifo_bytes),
-            distributed::D2HSocket::ExternalConfigBuffer{.address = caddr, .sender_is_l2cpu = true});
-        ctx.sockets[h]->set_page_size(kPageSize);
-        std::vector<uint8_t> cfgbuf(cfg_sz, 0);
-        drv.read_block(cfgbuf.data(), cfg_sz, caddr);
-        const uint32_t* c = reinterpret_cast<const uint32_t*>(cfgbuf.data());
-        const uint64_t fifo = (static_cast<uint64_t>(c[13]) << 32) | c[4];
-        fifo_lo[h] = fifo & 0xffffffffull;
-        ctx.decode[h] = std::make_unique<pz::ProfzoneDecodeState>();
-        ctx.decode[h]->reset(ctx.nl);
-    }
-
-    pz::ProfzoneBootCfg bcfg;
-    bcfg.idle_fw = std::move(idle_fw);
-    bcfg.active_fw = std::move(active_fw);
-    bcfg.pll_mhz = 1000;
-    bcfg.pcie_enc = pcie_enc;
-    bcfg.host_base = static_cast<uint64_t>(fifo_lo[0]) | (static_cast<uint64_t>(fifo_lo[1]) << 32);
-    bcfg.prof_l1 = prof_l1;
-    bcfg.num_cores = num_cores;
-    bcfg.hring_words = kHRingWords;
-    bcfg.ndh = kNSockets;
-    bcfg.nread = kNRead;
-    bcfg.coords = coord_buf.data();
-    bcfg.coords_bytes = static_cast<uint32_t>(coord_buf.size());
-    bcfg.dualrelay = true;
-    bcfg.adaptive = true;
-    bcfg.socket = true;
-    // TT_METAL_PERF_DEBUG_HART_ZONES=1: also profile the X280 DRAIN HARTS themselves (reader/relay busy +
-    // stall spans), injected in-band. Enabling this also makes hart0 write the rdcycle->Tensix calibration
-    // samples at boot, which stop() needs to place the hart spans on the device timeline. Off by default: it
-    // adds ~24 B per drain-hart span to the same D2H stream the markers use.
-    bcfg.hartzones = hart_zones_enabled();
-    if (bcfg.hartzones) {
-        ctx.nharts = kNRead + kNRelay;
-        ctx.hz_raw.assign(ctx.nharts, {});
-    }
-
-    uint64_t nharts = 0;
-    bool half_broken = false;
-    if (!pz::boot_profzone(drv, bcfg, nharts, half_broken)) {
+    // ---- DRISC L1 map ----
+    const uint32_t poll_bytes = kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE;
+    const uint32_t frame_bytes =
+        (kernel_profiler::SPSC_SPAN_PREFIX_WORDS + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE +
+         kNRisc * kernel_profiler::PROFILER_L1_VECTOR_SIZE) *
+        sizeof(uint32_t);
+    const uint32_t poll_ring = ctx.drisc_l1_base;
+    const uint32_t frame_buf = poll_ring + static_cast<uint32_t>(num_cores) * poll_bytes;
+    const uint32_t head_scratch = frame_buf + frame_bytes;
+    ctx.done_addr = head_scratch + 128 * 32;
+    ctx.stop_addr = ctx.done_addr + 64;
+    ctx.results_addr = ctx.stop_addr + 64;
+    const uint32_t cfg_l1 = ctx.drisc_l1_base + 64 * 1024;
+    if (ctx.results_addr + 64 - ctx.drisc_l1_base >= 64 * 1024) {
         log_warning(
             tt::LogMetal,
-            "[perf-debug profiler] Device {}: profzone bring-up failed (half_broken={}). If half_broken, "
-            "`tt-smi -r {}` then rerun. Continuing without X280 capture.",
+            "[perf-debug profiler] Device {}: {} worker cores need more DRISC L1 than the socket config "
+            "leaves; skipping DRISC capture",
             device_id,
-            half_broken,
-            device_id);
-        ctx.sockets[0].reset();
-        ctx.sockets[1].reset();
-        ctx.driver.reset();
+            num_cores);
         return false;
     }
-    ctx.params_addr = pz::kProfzoneMboxParams;
+
+    // Stream mode first: the socket config is written from the host, and it can only land in L1 once the
+    // NIU stops forwarding inbound DRAM-range addresses to GDDR. Restored in stop().
+    set_drisc_niu_mode(ctx.device, ctx.drisc_logical, 1);
+
+    const distributed::MeshCoordinate scoord = *distributed::MeshCoordinateRange(mesh_device->shape()).begin();
+    ctx.sockets[0] = std::make_unique<distributed::D2HSocket>(
+        mesh_device,
+        distributed::MeshCoreCoord{scoord, CoreCoord(drisc_phys.x, drisc_phys.y)},
+        static_cast<uint32_t>(static_cast<uint64_t>(kHRingWords) * 4),
+        distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = true});
+    ctx.sockets[0]->set_page_size(kPageSize);
+    ctx.decode[0] = std::make_unique<pz::ProfzoneDecodeState>();
+    ctx.decode[0]->reset(ctx.nl);
+    for (uint32_t c = 0; c < num_cores; c++) {
+        ctx.decode[0]->core_of_xy[coords[c]] = c;
+    }
+
+    // Clear `done` before the drainer can publish it.
+    uint32_t zero = 0;
+    cluster.write_core(
+        &zero,
+        sizeof(uint32_t),
+        tt_cxy_pair(device_id, ctx.drisc_virtual),
+        ctx.drisc_l1_noc + (ctx.done_addr - ctx.drisc_l1_base));
+
+    // ---- launch the drainer, resident ----
+    //
+    // Outside the command queue on purpose (see DeviceCtx::drain_program). kQuietStop = 0 means it never
+    // stops on its own: it runs until stop() sets the stop word.
+    ctx.drain_program = std::make_unique<Program>(CreateProgram());
+    auto drain_id = CreateKernel(
+        *ctx.drain_program,
+        "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp",
+        ctx.drisc_logical,
+        DramConfig{
+            .noc = NOC::NOC_0,
+            .compile_args = {
+                poll_ring,
+                frame_buf,
+                head_scratch,
+                ctx.results_addr,
+                ctx.done_addr,
+                ctx.stop_addr,
+                ctx.sockets[0]->get_config_buffer_address(),
+                0 /*kQuietStop: never quit on quiescence*/,
+                0xFFFFFFFFu /*kMaxSweeps*/,
+                static_cast<uint32_t>(num_cores)}});
+    std::vector<uint32_t> rt = {
+        static_cast<uint32_t>(num_cores), static_cast<uint32_t>(prof_l1), static_cast<uint32_t>(prof_l1 + poll_bytes)};
+    rt.insert(rt.end(), coords.begin(), coords.end());
+    SetRuntimeArgs(*ctx.drain_program, drain_id, ctx.drisc_logical, rt);
+
+    detail::CompileProgram(ctx.device, *ctx.drain_program, /*force_slow_dispatch=*/true);
+    detail::WriteRuntimeArgsToDevice(ctx.device, *ctx.drain_program, /*force_slow_dispatch=*/true);
+    detail::LaunchProgram(
+        ctx.device, *ctx.drain_program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+
     log_info(
         tt::LogMetal,
-        "[perf-debug profiler] Device {}: booted X280 drainer ({} cores, prof_l1=0x{:x}, pcie=({},{}))",
+        "[perf-debug profiler] Device {}: DRISC drainer resident on logical DRAM core ({},{}) "
+        "[noc0 ({},{})], {} worker cores, prof_l1=0x{:x}",
         device_id,
+        ctx.drisc_logical.x,
+        ctx.drisc_logical.y,
+        drisc_phys.x,
+        drisc_phys.y,
         num_cores,
-        prof_l1,
-        pc.x,
-        pc.y);
+        prof_l1);
     return true;
 }
 
@@ -869,14 +889,34 @@ void PerfDebugProfiler::stop() {
     if (stopped_.exchange(true)) {
         return;
     }
-    // Signal the X280 to end its drain (P_STOP) -- no reset; the idle FW stays resident.
+    // Tell each DRISC to quiesce, then wait for it to publish `done` -- which it does only after its
+    // socket barrier, so every page is already on its way to the host when we stop reading.
     for (auto& ctx : devices_) {
-        if (ctx.driver) {
-            try {
-                pz::profzone_stop(*ctx.driver);
-            } catch (const std::exception&) {
-            }
+        if (ctx.drain_program == nullptr) {
+            continue;
         }
+        auto& cluster = MetalContext::instance().get_cluster();
+        const tt_cxy_pair drisc(ctx.chip_id, ctx.drisc_virtual);
+        uint32_t one = 1;
+        cluster.write_core(&one, sizeof(uint32_t), drisc, ctx.drisc_l1_noc + (ctx.stop_addr - ctx.drisc_l1_base));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        uint32_t done = 0;
+        while (std::chrono::steady_clock::now() < deadline) {
+            cluster.read_core(&done, sizeof(uint32_t), drisc, ctx.drisc_l1_noc + (ctx.done_addr - ctx.drisc_l1_base));
+            if ((done & 0xFFFF0000u) == 0xD09E0000u) {
+                break;
+            }
+            // The writer thread is still draining, so the socket keeps emptying while we wait.
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if ((done & 0xFFFF0000u) != 0xD09E0000u) {
+            log_warning(
+                tt::LogMetal, "[perf-debug profiler] Device {}: DRISC drainer did not acknowledge stop", ctx.chip_id);
+        }
+        // Release it to restore the NIU. It cannot do that until we say so: NOC2AXI forwards inbound
+        // DRAM-range addresses to GDDR, so the flip takes this L1 out of the host's view.
+        uint32_t two = 2;
+        cluster.write_core(&two, sizeof(uint32_t), drisc, ctx.drisc_l1_noc + (ctx.stop_addr - ctx.drisc_l1_base));
     }
     stop_.store(true, std::memory_order_release);
     if (writer_.joinable()) {

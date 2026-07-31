@@ -20,6 +20,8 @@
 
 #include <atomic>
 #include <cstdint>
+
+#include <tt-metalium/core_coord.hpp>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -36,6 +38,8 @@ class MeshDevice;
 class D2HSocket;
 }  // namespace distributed
 class PerfDebugTracyHandler;
+class Program;
+class IDevice;
 struct RecRingHolder;  // pimpl for BroadcastRing<PerfDebugRec> (keeps the ring header out of this one)
 
 namespace profiler {
@@ -74,7 +78,7 @@ private:
     // 2 reader harts + 2 relay harts (dual relay), one 12 MiB D2HSocket FIFO per relay, adaptive per-core drain.
     static constexpr uint32_t kNRead = 2;
     static constexpr uint32_t kNRelay = 2;    // dual relay
-    static constexpr uint32_t kNSockets = 2;  // one D2H FIFO per relay
+    static constexpr uint32_t kNSockets = 1;  // one DRISC, one D2H FIFO
     // 12 MiB / socket. RAISED from 4 MiB (1048576 words), which was sized from a "4 MiB knee" measurement
     // that later proved to be 4 MiB's OWN floor, not the hardware's. On a host-bound box 4 MiB pins the FIFO
     // at 100%: relay hostfull 415k -> reader spsc-wait 155M -> producers stall, reader copy% 0.8 (spinning),
@@ -131,6 +135,21 @@ private:
         std::unique_ptr<distributed::D2HSocket> sockets[kNSockets];
         uint64_t params_addr = 0;  // profzone MBOX_PARAMS (P_STOP at teardown)
         uint32_t nl = 0;           // lanes = num_cores * NRISC
+        // ---- DRISC drainer ----
+        // The program stays alive for the life of the profiler: its kernel is still running. It was
+        // launched OUTSIDE the command queue (detail::LaunchProgram with force_slow_dispatch), which is
+        // what makes a resident drainer possible at all -- a DRAM-only program touches none of the fast
+        // dispatch worker grid or dispatch column, so it can sit there across every user workload. Going
+        // through the CQ instead would deadlock the first Finish().
+        std::unique_ptr<Program> drain_program;
+        IDevice* device = nullptr;
+        CoreCoord drisc_logical{0, 0};
+        CoreCoord drisc_virtual{0, 0};
+        uint64_t drisc_l1_noc = 0;  // NoC-addressable base of the DRISC L1 window
+        uint32_t drisc_l1_base = 0;
+        uint32_t stop_addr = 0;  // host writes 1 here to quiesce the drainer
+        uint32_t done_addr = 0;  // drainer publishes 0xD09E**** once its last page is out
+        uint32_t results_addr = 0;
         // core_index -> virtual (x,y) [what the SRC lane resolves to], and virtual -> NOC0 (x,y) [Tracy view].
         std::vector<std::pair<uint32_t, uint32_t>> core_virt;
         std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> virt_to_noc0;
@@ -172,6 +191,9 @@ private:
     };
 
     void start(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+    // Put this DRISC's NIU into stream mode (1) or back to NOC2AXI (0). Its own program, launched and
+    // waited on, because the socket config has to be able to land in DRISC L1 before the drainer runs.
+    static void set_drisc_niu_mode(IDevice* device, const CoreCoord& drisc_logical, uint32_t stream);
     bool boot_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
     // ONE read+decode pass over (ctx, sock): pages -> decode -> records -> ring. Returns true if it moved data.
     bool drain_pass(DeviceCtx& ctx, uint32_t sock_idx);

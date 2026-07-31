@@ -36,6 +36,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/socket_api.h"
+#include "experimental/drisc_mode.h"
 #include "hostdevcommon/profiler_common.h"
 #include "internal/tt-1xx/risc_common.h"
 
@@ -277,4 +278,20 @@ void kernel_main() {
     // Published last, after the socket barrier, so the host only sees `done` once every page is out.
     volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr);
     *done = 0xD09E0000u | (frames & 0xFFFFu);
+
+    // -------- NIU restore, on the host's word --------
+    //
+    // NIU_CFG_0 persists until a chip reset, so whoever set stream mode owns putting it back. It has to
+    // happen HERE rather than from the host, because by the time the profiler stops the mesh device is
+    // already coming down and cannot launch a program -- and it has to happen LAST, because in NOC2AXI
+    // mode an inbound address in the DRAM range is forwarded to GDDR, so the host would lose its view of
+    // this L1 (`done`, the results, the socket's bytes_acked) the instant we flip.
+    //
+    // So the host acknowledges with 2 once it has read everything it wants. The wait is bounded: leaving
+    // the NIU in stream mode is untidy, but hanging a DRISC at teardown is worse, and the next firmware
+    // boot forces NOC2AXI back anyway.
+    for (uint32_t spins = 0; spins < 200000000u && *stop != 2u; spins++) {
+        invalidate_l1_cache();
+    }
+    experimental::drisc_set_noc2axi_mode_all();
 }
