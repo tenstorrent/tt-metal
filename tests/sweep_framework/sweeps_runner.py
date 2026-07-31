@@ -1848,12 +1848,30 @@ def _should_skip_device_profiler(config):
 def enable_profiler():
     logger.info("Enabling Device Profiler")
     os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
-    os.environ["ENABLE_TRACY"] = "1"
+    # NOTE: ENABLE_TRACY is deliberately NOT set here. It is a CMake option
+    # (-DENABLE_TRACY=ON in setup.py; the profiler test scripts only ever print "Make sure
+    # this test runs in a build with cmake option ENABLE_TRACY=ON"). Setting it as an env var
+    # was a no-op -- this was the ONLY runtime reference to it in the repo -- and it gave the
+    # false impression that Tracy was being turned on when Tracy support is fixed at build
+    # time. Check the built binary instead and say so plainly.
     os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
     # C++ post-process exposes per-chip perf in memory via
     # ttnn._ttnn.profiler.get_latest_programs_perf_data(); required for the
     # modern (multi-chip-safe) device-perf read in perf_utils.gather_single_test_perf.
     os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
+    # Surface a non-Tracy build instead of silently collecting nothing: the two APIs the
+    # device-perf path depends on only exist in a Tracy-enabled build.
+    try:
+        import ttnn
+
+        missing = [n for n in ("ReadDeviceProfiler", "get_latest_programs_perf_data") if not hasattr(ttnn, n)]
+        if missing:
+            logger.warning(
+                f"Device profiler requested but this ttnn build is missing {missing} -- it was very "
+                "likely built without -DENABLE_TRACY=ON. Device-perf will be reported N/A."
+            )
+    except Exception as e:
+        logger.warning(f"Could not verify Tracy support in this ttnn build ({e}).")
 
 
 def disable_profiler():

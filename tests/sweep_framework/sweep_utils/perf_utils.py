@@ -96,6 +96,65 @@ def _resolve_perf_device(device, test_module):
     return None
 
 
+class ProfilerReadTimeout(RuntimeError):
+    """ttnn.ReadDeviceProfiler() did not return within the watchdog budget."""
+
+
+def _read_device_profiler_with_watchdog(ttnn_mod, device):
+    """ttnn.ReadDeviceProfiler(device) with a wall-clock budget.
+
+    On a 32-chip Galaxy this call intermittently NEVER RETURNS. Reproduced on
+    wh-glx6u-02 with the CI flag set: 42 rounds of matmul+read completed at ~1.2s per read,
+    then round 43's read hung with no device exception -- the op itself had already finished
+    (matmul 0.00s, synchronize_device returned immediately). Two further 80-round arms then
+    ran clean, so the rate is roughly 1 in 200 reads. In CI that stall is what surfaces as
+    a 300s vector timeout -> FAIL_CRASH_HANG, and (when the read returns corrupt instead of
+    hanging) as "profiler.cpp:1830 Invalid packet type" or a near-zero PCC on the NEXT
+    vector, whose output never lands.
+
+    A hang is not an exception, so the try/except around this call cannot see it -- hence a
+    watchdog. On timeout we raise, which the caller converts into
+    DEVICE_PERF_READBACK_FAILED: a passing vector keeps its PASS with device-perf N/A, and a
+    failing one triggers the wedged-device abort. Profiling stays ENABLED throughout; this
+    only stops one stalled read from costing the vector (and, via the retry+reset path, the
+    whole suite).
+
+    Caveat: the stuck call is in C++ and cannot be cancelled, so the worker thread is leaked
+    (daemon, so it cannot block interpreter exit). That is why a stalled read is treated as
+    evidence the device is suspect rather than something to retry in-process.
+    Budget: TTNN_SWEEP_PROFILER_READ_TIMEOUT_S (default 120s, ~100x the observed 1.2s).
+    """
+    import threading
+
+    budget = max(1, int(os.environ.get("TTNN_SWEEP_PROFILER_READ_TIMEOUT_S", "120")))
+    box = {}
+
+    def _read():
+        try:
+            ttnn_mod.ReadDeviceProfiler(device)
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+            box["exc"] = exc
+
+    worker = threading.Thread(target=_read, name="ReadDeviceProfiler-watchdog", daemon=True)
+    worker.start()
+    worker.join(budget)
+    if worker.is_alive():
+        raise ProfilerReadTimeout(
+            f"ttnn.ReadDeviceProfiler() did not return within {budget}s on a "
+            f"{_safe_device_count(ttnn_mod)}-chip mesh; treating device-perf as unavailable "
+            "for this vector (thread leaked -- the stuck call cannot be cancelled)."
+        )
+    if "exc" in box:
+        raise box["exc"]
+
+
+def _safe_device_count(ttnn_mod):
+    try:
+        return ttnn_mod.get_num_devices()
+    except Exception:
+        return "?"
+
+
 def gather_single_test_perf(device, test_passed):
     if device is None:
         logger.error("Device perf: no device available. Failing.")
@@ -112,7 +171,7 @@ def gather_single_test_perf(device, test_passed):
     # read remote chips mid-run -> inter-chip ethernet timeout.
     logger.info("Reading profiler data from device")
     try:
-        ttnn.ReadDeviceProfiler(device)
+        _read_device_profiler_with_watchdog(ttnn, device)
     except Exception as e:
         # A profiler READBACK failure must not OVERWRITE the vector's own verdict. execute_test()
         # has already run the op and its PCC check by the time we get here, so `status` is
