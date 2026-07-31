@@ -19,8 +19,7 @@ bool supported_by_codegen(const Tensor& input_tensor, const ttsl::SmallVector<ui
 
 // Perf-only routing gate, consulted by the "auto" selector alone (never by validate or a forced
 // "codegen" call). See permute.yaml's perf-demoted ledger: no general mechanism was found for these
-// cases, so each is an exact (shape, dims) regression-example branch — dtype-independent, since
-// bf16/fp32/int32 were all measured slow for the same shape+dims.
+// cases, so each is an exact (shape, dims, dtype) regression-example branch.
 bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& dims);
 
 enum class ImplementationSelector { Auto, Native, Codegen };
