@@ -20,6 +20,7 @@
 #include <string>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -382,7 +383,7 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_
     // address is assigned yet, and the estimation-path peak math only reads sizes. A real-run
     // (RunMode::NORMAL) trace returns above and would need real addresses, since that trace is
     // rendered positionally rather than summed.
-    for (const auto& dfb : program->dataflow_buffer_footprints()) {
+    for (const auto& dfb : tt::tt_metal::experimental::GetDataflowBufferFootprints(*program)) {
         track_allocate_cb(dfb.core_ranges, 0, dfb.total_size, dfb.borrows_memory, device);
     }
 }

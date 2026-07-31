@@ -9,8 +9,6 @@
 #include <span>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-
 namespace tt::tt_metal {
 
 // Fwd declares
@@ -56,25 +54,6 @@ public:
 
     // Used in ops.
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers() const;
-
-    // Per-core L1 footprint of one dataflow buffer, for consumers that account for L1 usage
-    // without needing the buffer itself (graph capture, memory estimation).
-    //
-    // A narrow view rather than the DataflowBufferImpl: those live in an internal namespace, and
-    // the alias semantics below are metal-side knowledge that shouldn't be re-derived per consumer.
-    struct DataflowBufferFootprint {
-        CoreRangeSet core_ranges;
-        // entry_size * num_entries — the per-core L1 cost, analogous to CircularBuffer::size().
-        uint32_t total_size = 0;
-        // Built on memory owned elsewhere (a tensor's buffer) rather than program-lifetime L1.
-        // The DFB analog of CircularBuffer::globally_allocated(): the bytes are already accounted
-        // for by whoever owns them, so a consumer summing L1 must not count them a second time.
-        bool borrows_memory = false;
-    };
-
-    // One entry per distinct L1 region. Aliased DFBs share a single region, so only the alias
-    // primary is reported — returning every alias would multiply-count one allocation.
-    std::vector<DataflowBufferFootprint> dataflow_buffer_footprints() const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }

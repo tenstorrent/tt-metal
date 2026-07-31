@@ -2614,22 +2614,6 @@ std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {
     return {res_view.begin(), res_view.end()};
 }
 
-std::vector<Program::DataflowBufferFootprint> Program::dataflow_buffer_footprints() const {
-    const auto& dfbs = impl().dataflow_buffers();
-    std::vector<DataflowBufferFootprint> footprints;
-    footprints.reserve(dfbs.size());
-    for (const auto& dfb : dfbs) {
-        // Secondaries alias the primary's L1 region rather than adding one, so reporting them
-        // would multiply-count a single allocation for any consumer that sums these.
-        if (dfb->alias_primary_id.has_value()) {
-            continue;
-        }
-        footprints.push_back(DataflowBufferFootprint{
-            .core_ranges = dfb->core_ranges, .total_size = dfb->total_size(), .borrows_memory = dfb->borrows_memory()});
-    }
-    return footprints;
-}
-
 const std::vector<Semaphore>& detail::ProgramImpl::semaphores() const { return semaphores_; }
 
 void detail::ProgramImpl::add_buffer(std::shared_ptr<Buffer> buf) { owned_buffer_pool.push_back(std::move(buf)); }
