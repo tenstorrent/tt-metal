@@ -30,9 +30,9 @@ FORCE_INLINE void generate_reduce_scaler(uint32_t cb_id, uint16_t scaler) {
     cb_push_back(cb_id, 1);
 }
 
-// Fill a single tile with 1.0 (bf16 hi-half) inside the valid HxH block and 0 elsewhere,
+// Fill a single tile with `value` (bf16 hi-half) inside the valid HxH block and 0 elsewhere,
 // honouring the 4x(16x16)-face tile layout. H <= 32.
-FORCE_INLINE void generate_hxh_mask(uint32_t cb_id, uint32_t h, uint16_t one_bits) {
+FORCE_INLINE void generate_hxh_mask(uint32_t cb_id, uint32_t h, uint16_t value) {
     cb_reserve_back(cb_id, 1);
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
     for (uint32_t i = 0; i < 1024; ++i) {
@@ -42,7 +42,7 @@ FORCE_INLINE void generate_hxh_mask(uint32_t cb_id, uint32_t h, uint16_t one_bit
         for (uint32_t c = 0; c < h; ++c) {
             const uint32_t face = ((r >= 16) ? 2u : 0u) + ((c >= 16) ? 1u : 0u);
             const uint32_t idx = face * 256u + (r & 15u) * 16u + (c & 15u);
-            ptr[idx] = one_bits;
+            ptr[idx] = value;
         }
     }
     cb_push_back(cb_id, 1);
@@ -60,8 +60,10 @@ void kernel_main() {
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(3);
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);
     constexpr uint32_t num_streams = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_eps_mask = get_compile_time_arg_val(6);
+    constexpr uint32_t eps_bits = get_compile_time_arg_val(7);
 
-    constexpr auto comb_w_args = TensorAccessorArgs<6>();
+    constexpr auto comb_w_args = TensorAccessorArgs<8>();
     constexpr auto comb_bias_args = TensorAccessorArgs<comb_w_args.next_compile_time_args_offset()>();
 
     const auto comb_w = TensorAccessor(comb_w_args, comb_w_addr);
@@ -71,6 +73,8 @@ void kernel_main() {
     generate_reduce_scaler(cb_scaler, static_cast<uint16_t>(scaler_bits >> 16));
     // Ones mask delimiting the valid HxH block (1.0 inside, 0 in the tile padding).
     generate_hxh_mask(cb_mask, num_streams, static_cast<uint16_t>(scaler_bits >> 16));
+    // The same mask scaled by eps, so that "comb += eps then re-mask" is a single masked add.
+    generate_hxh_mask(cb_eps_mask, num_streams, static_cast<uint16_t>(eps_bits >> 16));
 
     Noc noc;
     CircularBuffer cb_w(cb_comb_w);

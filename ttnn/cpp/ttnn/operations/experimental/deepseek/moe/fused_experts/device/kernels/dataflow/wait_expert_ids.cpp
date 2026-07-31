@@ -38,11 +38,12 @@
 //   16: sem_bcast
 //   17: num_weights
 //   18: cb_rscalar
-//   19+: TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
+//   19: down_prefetch (down slices to fetch before the gather/broadcast sync)
+//   20+: TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
 //
 // Runtime args:
-//   0: col_start_tile  (this core's first output tile)
+//   0: core_index      (this core's flat grid index, x*8 + y)
 void kernel_main() {
     constexpr uint32_t sem_id = get_compile_time_arg_val(0);
     constexpr uint32_t sem_input_id = get_compile_time_arg_val(1);
@@ -63,15 +64,16 @@ void kernel_main() {
     constexpr uint32_t sem_bcast_id = get_compile_time_arg_val(16);
     constexpr uint32_t num_weights = get_compile_time_arg_val(17);
     constexpr uint32_t cb_rscalar_id = get_compile_time_arg_val(18);
+    constexpr uint32_t down_prefetch = get_compile_time_arg_val(19);
 
-    constexpr auto gate_up_args = TensorAccessorArgs<19>();
+    constexpr auto gate_up_args = TensorAccessorArgs<20>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
     // in the compile-time args, indexed by the runtime-selected expert id.
     constexpr uint32_t kGateUpAddrBase = down_args.next_compile_time_args_offset();
     constexpr uint32_t kDownAddrBase = kGateUpAddrBase + num_weights;
 
-    const uint32_t col_start_tile = get_arg_val<uint32_t>(0);
+    const uint32_t core_index = get_arg_val<uint32_t>(0);
 
     // Activation arrived via multicast: publish it to the compute kernel.
     Semaphore<>(sem_input_id).wait(1);
@@ -83,7 +85,7 @@ void kernel_main() {
     run_reader_loop<false>(
         noc,
         num_active,
-        col_start_tile,
+        core_index,
         i_tiles,
         k_tiles,
         gate_up_tile_bytes,
@@ -107,5 +109,6 @@ void kernel_main() {
         down_args,
         kDownAddrBase,
         cb_rscalar_id,
-        num_weights);
+        num_weights,
+        down_prefetch);
 }

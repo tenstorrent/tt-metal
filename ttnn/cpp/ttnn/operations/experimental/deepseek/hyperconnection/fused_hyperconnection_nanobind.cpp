@@ -13,12 +13,13 @@ void bind_fused_hyperconnection(nb::module_& mod) {
     ttnn::bind_function<"fused_hyperconnection", "ttnn.experimental.deepseek.">(
         mod,
         R"doc(
-        Experimental fused Manifold-Constrained Hyper-Connection (mHC) post-projection stage.
-
         Implements the ``pre`` / ``post`` / ``comb`` / ``collapsed`` portion of
-        ``DeepSeekV4HyperConnection.forward`` (lines 87-108) given the three already-computed
-        linear projections ``pre_w`` / ``post_w`` / ``comb_w``. The RMSNorm + fn matmuls that
-        produce them are NOT part of this op.
+        ``DeepSeekV4HyperConnection.forward`` given the packed linear projection ``fused_w``
+        (shape ``[1, 1, T, (2+H)*H]``). The op splits ``fused_w`` into its ``pre_w`` /
+        ``post_w`` / ``comb_w`` slices inside the ``fused_hyperconnection_pre_post`` device
+        kernel; ``pre_w`` / ``post_w`` are consumed in-place and ``comb_w`` is returned
+        already laid out as the ``[1, 1, H, H]`` comb matrix. The RMSNorm + fn matmul that
+        produces ``fused_w`` is NOT part of this op.
 
             pre        = sigmoid(pre_w  * pre_scale  + pre_bias)  + eps
             post       = 2 * sigmoid(post_w * post_scale + post_bias)
@@ -28,9 +29,7 @@ void bind_fused_hyperconnection(nb::module_& mod) {
 
         Args:
             hidden_streams: Residual-stream stack, [B, S, H, D].
-            pre_w: Pre projection output, [1, 1, T, H] (T == B*S).
-            post_w: Post projection output, [1, 1, T, H].
-            comb_w: Comb projection output, [1, 1, T, H*H].
+            fused_w: Packed pre/post/comb projection output, [1, 1, T, (2+H)*H] (T == B*S).
             pre_bias: Bias row [1, 1, 1, H].
             post_bias: Bias row [1, 1, 1, H].
             comb_bias: Bias row [1, 1, 1, H*H].
@@ -48,9 +47,7 @@ void bind_fused_hyperconnection(nb::module_& mod) {
         &ttnn::experimental::deepseek::hyperconnection::fused_hyperconnection,
         nb::arg("hidden_streams"),
         nb::kw_only(),
-        nb::arg("pre_w"),
-        nb::arg("post_w"),
-        nb::arg("comb_w"),
+        nb::arg("fused_w"),
         nb::arg("pre_bias"),
         nb::arg("post_bias"),
         nb::arg("comb_bias"),

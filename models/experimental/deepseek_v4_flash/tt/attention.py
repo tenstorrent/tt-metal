@@ -294,7 +294,6 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Te
     output is converted back to ``x``'s original memory config.
     """
     device = x.device()
-    orig_mem = x.memory_config()
     d = x.shape[-1]
     rows = x.shape[-2]
 
@@ -307,11 +306,11 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Te
     assert cos.memory_config().buffer_type == ttnn.BufferType.DRAM, "cos must be DRAM-interleaved"
     assert sin.memory_config().buffer_type == ttnn.BufferType.DRAM, "sin must be DRAM-interleaved"
 
-    num_cores = (rows + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    x_sh = ttnn.to_memory_config(x, _rope_height_sharded_config(d, num_cores, device))
+    if not x.is_sharded():
+        x = ttnn.to_memory_config(x, width_sharded_l1_config(rows, d, device))
 
-    out_sh = ttnn.experimental.fused_partial_rope(x_sh, cos, sin, _trans_mat_for(rot), rope_dim)
-    return ttnn.to_memory_config(out_sh, orig_mem)
+    out_sh = ttnn.experimental.fused_partial_rope(x, cos, sin, _trans_mat_for(rot), rope_dim)
+    return out_sh
 
 
 # ---------------------------------------------------------------------------- #

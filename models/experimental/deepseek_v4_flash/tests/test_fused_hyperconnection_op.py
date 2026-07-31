@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit test for the fused ``ttnn.experimental.deepseek.fused_hyperconnection`` op.
 
-The op implements only the ``pre`` / ``post`` / ``comb`` / ``collapsed`` portion of
-``DeepSeekV4HyperConnection.forward`` (hyperconnection.py lines 87-108) given the three
-already-computed linear projections ``pre_w`` / ``post_w`` / ``comb_w``. This test is fully
-self-contained: it builds random projections + biases, runs the op on device, and compares
-against a torch reference of exactly that math (no HuggingFace / RMSNorm / matmul involved).
+The op implements the ``pre`` / ``post`` / ``comb`` / ``collapsed`` portion of
+``DeepSeekV4HyperConnection.forward`` (hyperconnection.py) given the packed linear
+projection ``fused_w`` (shape ``[1, 1, T, (2+H)*H]``). It splits ``fused_w`` into its
+``pre_w`` / ``post_w`` / ``comb_w`` slices inside the ``fused_hyperconnection_pre_post``
+device kernel; ``pre_w`` / ``post_w`` are consumed in-place and ``comb_w`` is returned
+already laid out as the ``[1, 1, H, H]`` comb matrix. This test is fully self-contained:
+it builds a random ``fused_w`` + biases, runs the op on device, and compares against a
+torch reference of exactly that math (no HuggingFace / RMSNorm / matmul involved).
 """
 
 from __future__ import annotations
@@ -25,9 +28,7 @@ PCC_THRESHOLD = 0.98
 
 def _torch_reference(
     hidden_streams: torch.Tensor,
-    pre_w: torch.Tensor,
-    post_w: torch.Tensor,
-    comb_w: torch.Tensor,
+    fused_w: torch.Tensor,
     pre_b: torch.Tensor,
     post_b: torch.Tensor,
     comb_b: torch.Tensor,
@@ -38,10 +39,11 @@ def _torch_reference(
     comb_scale: float,
     eps: float,
 ):
-    """Mirror of hyperconnection.py lines 87-108, in torch float32."""
+    """Mirror of hyperconnection.py, in torch float32."""
     b, s, _, d = hidden_streams.shape
     t = b * s
 
+    pre_w, post_w, comb_w = torch.split(fused_w, [hc, hc, hc * hc], dim=-1)
     pre = torch.sigmoid(pre_w * pre_scale + pre_b) + eps  # [1,1,T,H]
     post = 2.0 * torch.sigmoid(post_w * post_scale + post_b)  # [1,1,T,H]
 
@@ -74,18 +76,14 @@ def test_fused_hyperconnection_op(device, reset_seeds, batch_size, seq_len, sink
     pre_scale, post_scale, comb_scale = 1.0, 1.0, 1.0
 
     hidden_streams = torch.randn(batch_size, seq_len, hc, d, dtype=torch.float32)
-    pre_w = torch.randn(1, 1, t, hc, dtype=torch.float32) * 0.5
-    post_w = torch.randn(1, 1, t, hc, dtype=torch.float32) * 0.5
-    comb_w = torch.randn(1, 1, t, hc * hc, dtype=torch.float32) * 0.5
+    fused_w = torch.randn(1, 1, t, (2 + hc) * hc, dtype=torch.float32) * 0.5
     pre_b = torch.randn(1, 1, 1, hc, dtype=torch.float32) * 0.1
     post_b = torch.randn(1, 1, 1, hc, dtype=torch.float32) * 0.1
     comb_b = torch.randn(1, 1, 1, hc * hc, dtype=torch.float32) * 0.1
 
     ref_post, ref_comb, ref_collapsed = _torch_reference(
         hidden_streams,
-        pre_w,
-        post_w,
-        comb_w,
+        fused_w,
         pre_b,
         post_b,
         comb_b,
@@ -102,9 +100,7 @@ def test_fused_hyperconnection_op(device, reset_seeds, batch_size, seq_len, sink
 
     post_tt, comb_tt, collapsed_tt = ttnn.experimental.deepseek.fused_hyperconnection(
         to_tt(hidden_streams),
-        pre_w=to_tt(pre_w),
-        post_w=to_tt(post_w),
-        comb_w=to_tt(comb_w),
+        fused_w=to_tt(fused_w),
         pre_bias=to_tt(pre_b),
         post_bias=to_tt(post_b),
         comb_bias=to_tt(comb_b),

@@ -33,6 +33,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import render_message
+from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
@@ -42,7 +43,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     resolve_snapshot_dir,
 )
 
-_DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark")
+_DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731")
 _DEFAULT_TEXT = "Tell me the name of the top 10 movies of all time. Also list out the top 10 worst movies of all time. Give me details of why you choose those movies. Try to make your response as humours as possible."
 if int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "1024")) < 10:
     _DEFAULT_TEXT = "Tell"
@@ -172,7 +173,8 @@ def _build_and_prefill(mesh_device, text: str):
             logits = model.decode_traced(prompt_ids[pos], pos).reshape(1, -1).float()
         else:
             hidden = model.decode(prompt_ids[pos], pos, rope)  # [1, 1, D]
-            logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()
+            with _region("LM_HEAD"):
+                logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()
         next_id = int(logits[0].argmax().item())
     logger.info(f"prefill ({real_len} tokens) -> token id {next_id} {tokenizer.decode([next_id])!r}")
 
@@ -230,7 +232,8 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
             logits = model.decode_traced(next_id, pos).reshape(1, -1).float()
         else:
             hidden = model.decode(next_id, pos, rope)  # [1, 1, D]
-            logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()  # forces device sync
+            with _region("LM_HEAD"):
+                logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()  # forces device sync
         next_id = int(logits[0].argmax().item())
         decode_time += time.perf_counter() - t0
         decode_tokens += 1
