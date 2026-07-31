@@ -163,26 +163,82 @@ A real drainer needs five more loads per core, pushing the poll floor toward ~17
 ## Egress — D2H socket
 
 Real socket push (`socket_reserve_pages` / write through the PCIe tile / `socket_push_pages` /
-`socket_notify_receiver`), DRISC as sender:
+`socket_notify_receiver`), DRISC as sender. Device-measured and host-observed rates agree to within
+0.2% everywhere. Every configuration below is the median of 3 repeats.
 
-| page | device GB/s | ns/page | device time waiting on host | host-observed GB/s |
+**Note on repeats:** a first pass with single samples had the same configuration landing 74% apart
+between sections. The cause is the host staging buffer: `sink` grows with pages-per-read, and the
+first run at each new size eats first-touch page faults inside the timed loop. Revisiting a size the
+allocator has already served is clean (spread 1.00x). Single samples here are worthless.
+
+### Host-side tuning
+
+| configuration | GB/s | device time waiting |
+|---|---|---|
+| 32 KB pages, 1 page per read (baseline) | 16.85 | 79.8% |
+| 64 KB pages | 18.94 | 42.7% |
+| 80 KB pages | 19.32 | 39.2% |
+| 80 KB, 2 pages per read | 20.72 | 28.7% |
+| 80 KB, 4 pages per read | 22.84 | 33.3% |
+| **80 KB, 8 pages per read** | **25.36** | 26.3% |
+| 80 KB, 4 pages/read, ack every 4 | 23.17 | 37.5% |
+| **80 KB, no memcpy (`discard_pending_pages`)** | **57.60** | **3.5%** |
+
+Page size and pages-per-read both help (16.85 -> 25.36 GB/s, +50%). Host ack batching does not.
+80 KB is near the maximum: DRISC L1 UNRESERVED measured 88,448 B and the socket config buffer is only
+64 B, so the page is bounded by L1, not by the socket.
+
+**The memcpy inside `D2HSocket::read()` is the whole remaining gap: 25.4 -> 57.6 GB/s, 2.3x.**
+
+### Per-page breakdown
+
+A page costs thousands of cycles against a 26-cycle timer, so unlike the read benchmarks in-loop
+timestamps are affordable here (4 probes/page, ~2%).
+
+| phase | tuned (80 KB x 8 pg/read) | ceiling (no memcpy) |
+|---|---|---|
+| `socket_reserve_pages` (wait on host) | 804-891 ns (26%) | 50 ns (3.5%) |
+| `noc_write_page_chunked` (issue to PCIe tile) | 1921-1925 ns (60%) | 1053 ns (74%) |
+| `socket_push_pages` + `notify_receiver` | 397 ns (12%) | 274 ns (19%) |
+| loop + barrier | 64 ns (2%) | 49 ns (3.4%) |
+| **total** | **~3200 ns** | **1424 ns** |
+
+**These measure where the core blocks, not intrinsic operation cost.** The writes are posted, so
+`t_write` is issue cost plus whatever back-pressure the command buffer absorbs. The same device code
+takes 1053 ns at the ceiling and 1921 ns under memcpy; in the 32 KB baseline it is only 111 ns,
+because there the host is slow enough (1511 ns of wait) that the NoC drains before the next issue.
+
+That decomposition shows the memcpy hurting in two roughly equal places: +808 ns of `wait` (host
+slower to free FIFO space) and +899 ns of `write` (the host's PCIe reads contending with the device's
+PCIe writes). **The memcpy does not merely delay the consumer, it degrades the producer.**
+
+### Device-side notify batching: no effect
+
+`socket_notify_receiver` is a 4 B PCIe write; `socket_push_pages` is local state. Publishing
+`bytes_sent` every N pages instead of every page:
+
+| notify every | total ns/page | write | notify | GB/s |
 |---|---|---|---|---|
-| 2 KB | 4.539 | 451.2 | 79.3% | 4.535 |
-| 8 KB | 10.633 | 770.5 | 87.7% | 10.643 |
-| 32 KB | **16.551** | 1979.8 | 79.8% | **16.581** |
+| 1 | 1424 | 1053 | 274 | 57.47 |
+| 2 | 1423 | 1167 | 156 | 57.55 |
+| 4 | 1424 | 1229 | 95 | 57.54 |
+| 8 | 1423 | 1260 | 64 | 57.57 |
+| 16 | 1422 | 1274 | **48** | 57.60 |
 
-Device-measured and host-observed agree within 0.2%.
+The notify phase collapses 5.7x exactly as intended -- **and the write phase absorbs precisely the
+same amount.** Total is pinned at ~1423 ns; throughput does not move.
 
-**~80% of device time is spent spinning in `socket_reserve_pages`, so 16.55 GB/s is the host
-consumption rate, not the DRISC's.** Backing the wait out gives the device write path:
+The notify was never costing wall-clock: being a posted write, it overlapped with writes still
+draining. Removing it only exposes more of the underlying drain in the write phase. **On a
+posted-write pipeline, blocking time migrates between phases when you remove work -- only the total
+is trustworthy.** Keep notify batching anyway (it frees ~340 ns/page of DRISC time, which a combined
+read+push drainer can spend on ingest), but do not expect throughput from it.
 
-- 8 KB: 94.8 ns for 8192 B → **86.4 GB/s**
-- 32 KB: 400 ns for 32768 B → **81.9 GB/s**
+### What egress is actually bound by
 
-At 8 KB and above the DRISC writes at the same 86.3 GB/s NoC port limit the reads hit. **The device
-side of egress is already maxed; every remaining lever is host-side** — larger pages (64 KB still fits
-DRISC L1), zero-copy instead of the `memcpy` into the sink buffer, or parallel readers. The page-size
-trend says the host loop is per-page-overhead-bound.
+1423 ns per 80 KB page is **57.6 GB/s**, rock-steady across every configuration (spread 1.00x, 3.5%
+wait). That is not the 86.3 GB/s NoC port the reads hit -- it is ~90% of a **PCIe Gen5 x16** link's
+64 GB/s. Egress is PCIe-bound, and no device-side software change will move it.
 
 ## What it means: the zone budget
 
@@ -192,12 +248,14 @@ back-to-back on one lane:
 
 | limited by | rate | min zone duration |
 |---|---|---|
-| ingest, whole-core sweep @ 18.29 µs | 67.4 GB/s | **143 ns** |
-| egress, today's host consumer | 16.55 GB/s | **580 ns** |
-| egress, device side alone | ~86 GB/s | 112 ns |
+| ingest, whole-core sweep @ 18.29 us | 67.4 GB/s | **143 ns** |
+| egress, untuned host consumer | 16.85 GB/s | 580 ns |
+| egress, tuned host consumer | 25.36 GB/s | **387 ns** |
+| egress, zero-copy (measured via discard) | 57.60 GB/s | **167 ns** |
 
-**Egress binds, by 4x — and it binds on host software, not hardware.** Fix the consumer and ingest
-becomes the constraint again at 143 ns.
+Host tuning closed a third of the gap. **Zero-copy consumption would bring egress to 167 ns against
+ingest's 143 ns -- the two sides finally comparable**, and the drainer viable at ~150-170 ns zones.
+Until then egress binds by ~2.7x.
 
 ## Design implications
 
@@ -212,6 +270,12 @@ becomes the constraint again at 143 ns.
    NoC-read the reader's L1 and pay every byte twice.
 5. **Scale with DRISCs.** Scaling is linear to at least 4, and it is the only fix for poll latency,
    which does not benefit from bandwidth at all.
+6. **On egress, tune the host, not the device.** 80 KB pages and 8 pages per host read are worth +50%
+   together. Host ack batching and device notify batching are both worth nothing. The device write
+   path is already at ~90% of the PCIe link.
+7. **Consume the FIFO in place.** The `memcpy` in `D2HSocket::read()` is the single largest remaining
+   cost anywhere in the pipeline -- 2.3x -- and it penalises the producer as well as the consumer,
+   because the host's PCIe reads contend with the device's PCIe writes.
 
 ## Gotchas
 
@@ -234,11 +298,28 @@ becomes the constraint again at 143 ns.
 
 ## Open questions
 
-- Can the host consumer approach the device's ~86 GB/s? That decides whether the design is
-  ingest-bound at 143 ns/zone or stuck at 580.
+- **Zero-copy host consumption** is the last big lever: 25.4 -> 57.6 GB/s, taking the minimum zone
+  duration from 387 ns to 167 ns against ingest's 143 ns. `discard_pending_pages()` proves the
+  ceiling but throws the data away; a real consumer needs to serialize out of the pinned FIFO
+  directly. `ProcessScope::CrossProcess` already exports the FIFO for exactly this.
+- Poll cost with a real head mirror (this measurement primed heads to zero, so it is optimistic by
+  roughly five L1 loads per core).
 - The second NIU is untouched. `Noc(uint8_t noc_id)` lets one kernel drive both, which is the only way
-  a single DRISC could exceed one port's 86.3 GB/s.
-- Poll cost with a real head mirror (this measurement primed heads to zero).
+  a single DRISC could exceed one port's 86.3 GB/s on ingest.
+- A combined read+push drainer has not been built. Ingest and egress were measured separately and
+  both are near their respective walls; whether they interfere when interleaved on one core is
+  unknown, and notify batching's freed ~340 ns/page would matter there.
 - Attempted clock calibration from `cycles / host_wall_time` did not converge — JIT compile time
   dominates the host wall clock even at a 512 MB target. The 86.3 GB/s wire-rate match is the better
   anchor; a warm-JIT second pass would settle it directly.
+
+## A caution on the instrumentation
+
+Two different regimes, and they need opposite treatment:
+
+- **Reads (~40 cycles/op)** cannot be timed with a 26-cycle timer. Separate phases by *ablation* —
+  compile one out and diff the totals.
+- **Egress pages (thousands of cycles)** are fine to bracket in-loop, but the writes are *posted*, so
+  a phase timer records where the core blocks, not what an operation costs. Removing work migrates
+  the blocking time into a neighbouring phase rather than shrinking the total. Notify batching cut
+  its phase 5.7x and moved throughput 0.2%. **Only the total is trustworthy.**

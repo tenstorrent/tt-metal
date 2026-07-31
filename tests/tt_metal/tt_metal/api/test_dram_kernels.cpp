@@ -1198,6 +1198,194 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCD2HSocketEgress) {
     set_niu_mode(0);  // restore NOC2AXI -- NIU_CFG_0 persists across programs
 }
 
+// Tuning the host side of D2H egress. The baseline test showed the DRISC idle ~80% of the time
+// waiting in socket_reserve_pages, so 16.55 GB/s was the host consumption rate, not the device's
+// (which runs at the ~86 GB/s NoC port limit). Every knob here is host-side:
+//
+//   page size        fewer, larger transfers -- up to ~84 KB, all that fits beside the config
+//                    buffer in 86 KB of DRISC L1
+//   pages per read   one memcpy and one bytes_acked PCIe write per call instead of per page
+//   ack batching     notify_sender=false on most calls, so the device sees fewer ack round-trips
+//   discard mode     discard_pending_pages() acks without touching the data region, which
+//                    isolates how much of the cost is the memcpy versus the socket protocol
+//
+// Every config is repeated: a first pass showed the same parameters landing 74% apart between
+// sections, so single samples here are not trustworthy.
+//
+// Teardown is defensive because an earlier version of this test wedged the card: the discard loop is
+// bounded by a deadline, every barrier has a timeout, and the NIU restore runs even if the sweep
+// throws. Leaving the NIU in stream mode is survivable (DRISC firmware forces NOC2AXI at boot) but a
+// hung socket is not.
+TEST_F(DramKernelDRISCScatterFixture, DRISCD2HSocketEgressTuned) {
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const CoreCoord drisc_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
+    const CoreCoord drisc_translated = soc_desc.dram_bank_endpoint_coords.at(drisc_logical.x).at(drisc_logical.y);
+    const tt::umd::CoreCoord drisc_phys = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(drisc_translated.x, drisc_translated.y, CoreType::DRAM, CoordSystem::TRANSLATED),
+        CoordSystem::NOC0);
+    const CoreCoord drisc_virtual = device_->virtual_core_from_logical_core(drisc_logical, CoreType::DRAM);
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const uint32_t cfg_bytes = distributed::D2HSocket::required_config_buffer_size();
+    constexpr uint32_t kRepeats = 3;
+
+    auto set_niu_mode = [&](uint32_t stream) {
+        Program p = CreateProgram();
+        CreateKernel(
+            p,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_niu_mode.cpp",
+            drisc_logical,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+        run_workload(std::move(p));
+    };
+
+    set_niu_mode(1);
+    log_info(
+        LogTest,
+        "egress tuning: DRISC L1 unreserved {} B, socket config buffer {} B, {} repeats per config",
+        drisc_l1_unreserved_size_,
+        cfg_bytes,
+        kRepeats);
+
+    auto run_one = [&](uint32_t page_size,
+                       uint32_t pages_per_read,
+                       uint32_t ack_every,
+                       bool discard,
+                       uint32_t notify_every = 1) {
+        constexpr uint64_t kTargetBytes = 256ull << 20;
+        constexpr uint32_t kFifoPages = 32;
+
+        const uint32_t src_l1 = drisc_l1_base_;
+        const uint32_t cfg_l1 = tt::align(drisc_l1_base_ + page_size, 1024u);
+        const uint32_t res_l1 = tt::align(cfg_l1 + cfg_bytes, 1024u);
+        TT_FATAL(
+            (res_l1 - drisc_l1_base_) + 32 <= drisc_l1_unreserved_size_,
+            "page {} B leaves no room for config+results in {} B of DRISC L1",
+            page_size,
+            drisc_l1_unreserved_size_);
+
+        uint32_t num_pages = static_cast<uint32_t>(kTargetBytes / page_size);
+        num_pages -= num_pages % pages_per_read;
+
+        distributed::D2HSocket socket(
+            devices_[0],
+            distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(drisc_phys.x, drisc_phys.y)),
+            kFifoPages * page_size,
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = true});
+        socket.set_page_size(page_size);
+
+        std::vector<uint32_t> payload(page_size / sizeof(uint32_t), 0xD2D2D2D2u);
+        MetalContext::instance().get_cluster().write_core(
+            payload.data(), page_size, tt_cxy_pair(mesh_device_->build_id(), drisc_virtual), src_l1);
+
+        Program program = CreateProgram();
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/drisc_d2h_egress.cpp",
+            drisc_logical,
+            DramConfig{
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    socket.get_config_buffer_address(), src_l1, page_size, res_l1, num_pages, notify_every}});
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range_, std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+
+        std::vector<uint32_t> sink(static_cast<size_t>(page_size) * pages_per_read / sizeof(uint32_t));
+        const auto t0 = std::chrono::steady_clock::now();
+        if (discard) {
+            uint32_t done = 0;
+            const auto deadline = t0 + std::chrono::seconds(30);
+            while (done < num_pages) {
+                done += socket.discard_pending_pages();
+                if (std::chrono::steady_clock::now() > deadline) {
+                    log_warning(LogTest, "discard timed out at {}/{} pages", done, num_pages);
+                    break;
+                }
+            }
+        } else {
+            const uint32_t calls = num_pages / pages_per_read;
+            for (uint32_t c = 0; c < calls; c++) {
+                socket.read(sink.data(), pages_per_read, ((c + 1) % ack_every) == 0 || c + 1 == calls);
+            }
+        }
+        // Always bounded: an untimed barrier here is what let the earlier version hang the board.
+        socket.barrier(10000);
+        const auto t1 = std::chrono::steady_clock::now();
+        distributed::Finish(mesh_device_->mesh_command_queue());
+
+        std::vector<uint32_t> out(10);
+        MetalContext::instance().get_cluster().read_core(
+            out.data(), out.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), drisc_virtual), res_l1);
+        const uint64_t cycles = (static_cast<uint64_t>(out[1]) << 32) | out[0];
+        const uint64_t wait = (static_cast<uint64_t>(out[3]) << 32) | out[2];
+        const uint64_t wr = (static_cast<uint64_t>(out[6]) << 32) | out[5];
+        const uint64_t nt = (static_cast<uint64_t>(out[8]) << 32) | out[7];
+        const uint64_t total_bytes = static_cast<uint64_t>(num_pages) * page_size;
+        const double host_s = std::chrono::duration<double>(t1 - t0).count();
+        const double ns = 1e9 / clk_hz;
+
+        // Per-page phase breakdown, in ns. `other` is whatever the three phases do not account for
+        // (loop overhead, the final socket_barrier, timer probes).
+        log_info(
+            LogTest,
+            "    breakdown/page: total {:>7.0f} ns = wait {:>7.0f} + write {:>7.0f} + notify {:>6.0f} "
+            "+ other {:>6.0f} ns   (timer {} cyc x4/page)",
+            static_cast<double>(cycles) / num_pages * ns,
+            static_cast<double>(wait) / num_pages * ns,
+            static_cast<double>(wr) / num_pages * ns,
+            static_cast<double>(nt) / num_pages * ns,
+            static_cast<double>(cycles - wait - wr - nt) / num_pages * ns,
+            out[9]);
+
+        return std::tuple<double, double, double>{
+            compute_bw_gbs(total_bytes, cycles, clk_hz),
+            static_cast<double>(total_bytes) / host_s / 1e9,
+            100.0 * static_cast<double>(wait) / static_cast<double>(cycles)};
+    };
+
+    auto sweep =
+        [&](uint32_t page_size, uint32_t pages_per_read, uint32_t ack_every, bool discard, uint32_t notify_every = 1) {
+            std::vector<double> dev;
+            std::string detail;
+            for (uint32_t rep = 0; rep < kRepeats; rep++) {
+                auto [d, h, w] = run_one(page_size, pages_per_read, ack_every, discard, notify_every);
+                dev.push_back(d);
+                detail += fmt::format(" {:>6.2f}({:>4.1f}%)", d, w);
+            }
+            std::sort(dev.begin(), dev.end());
+            log_info(
+                LogTest,
+                "page {:>6} B | {:>2} pg/read | ack {:<2} | notify/{:<2} | {:<7} | median {:>6.2f} GB/s | spread "
+                "{:>5.2f}x |{}",
+                page_size,
+                pages_per_read,
+                ack_every,
+                notify_every,
+                discard ? "DISCARD" : "memcpy",
+                dev[dev.size() / 2],
+                dev.back() / dev.front(),
+                detail);
+        };
+
+    try {
+        log_info(LogTest, "-- tuned baseline: 80 KB x 8 pages/read, notify every page --");
+        sweep(81920u, 8, 1, false, 1);
+        log_info(LogTest, "-- device-side notify batching, memcpy host --");
+        for (uint32_t ne : {2u, 4u, 8u, 16u}) {
+            sweep(81920u, 8, 1, false, ne);
+        }
+        log_info(LogTest, "-- device-side notify batching, protocol ceiling (DISCARD) --");
+        for (uint32_t ne : {1u, 2u, 4u, 8u, 16u}) {
+            sweep(81920u, 8, 1, true, ne);
+        }
+    } catch (const std::exception& e) {
+        ADD_FAILURE() << "egress sweep threw: " << e.what();
+    }
+
+    set_niu_mode(0);
+}
+
 // Whole-core (10 KB) reads with reads-in-flight pushed past what DRISC L1 can hold, by letting
 // outstanding reads share landing slots. NOC_MAX_TRANSACTION_ID_COUNT is 255 per trid, so the NIU can
 // track far more than the 8 distinct 10 KB buffers that fit in 86 KB -- this separates the hardware
