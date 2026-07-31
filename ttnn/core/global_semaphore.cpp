@@ -5,7 +5,7 @@
 #include "ttnn/global_semaphore.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocation_context.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 
 namespace ttnn::global_semaphore {

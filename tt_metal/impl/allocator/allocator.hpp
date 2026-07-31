@@ -94,7 +94,7 @@ public:
     static void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators);
     static void pop_corruptible_allocation_scope();
 
-    // See <tt-metalium/allocation_context.hpp> for the thread-local context stack API.
+    // See <tt-metalium/experimental/allocation_context.hpp> for the thread-local context stack API.
 
     // High water mark tracking for DRAM allocations during trace capture
     // Delegates to BankManager to account for banking properly
