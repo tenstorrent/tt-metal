@@ -73,6 +73,19 @@ uint32_t largest_divisor_le(uint32_t n, uint32_t limit) {
 // ops/tilize/builder.py _compute_cb_block_limit
 uint32_t compute_cb_block_limit(uint32_t tile_size_bytes, uint32_t l1_size) { return l1_size / (2 * tile_size_bytes); }
 
+// ops/tilize/spec.py _tilize_required_cb_out.
+// The batched writer holds the previous batch un-popped while waiting on the next, so both must be
+// resident at once. Compute only ever adds pages in whole tilize_block-sized groups of
+// compute_chunk, so a capacity that is not a whole number of those groups is unreachable: the
+// packer blocks reserving the group that would not fit while the writer blocks waiting for pages
+// only that group can supply.
+uint32_t required_cb_out(uint32_t write_batch, uint32_t compute_chunk) {
+    if (write_batch <= 1) {
+        return compute_chunk;
+    }
+    return align_up(2 * write_batch, compute_chunk);
+}
+
 // UnpackToDestMode vector forcing a FLOAT32 input CB to unpack straight into DEST (avoids the
 // SRCA Float16_b truncation for RM fp32 tilize input) — mirrors builder_utils.unpack_to_dest_fp32_modes.
 std::vector<UnpackToDestMode> unpack_to_dest_fp32_modes(uint32_t cb_index, uint32_t num_cbs = 64) {
@@ -279,11 +292,7 @@ ProgramDescriptor build_row(
     const uint32_t write_batch = force_single_write ? 1 : kDefaultWriteBatch;
 
     uint32_t cb_in_depth = cb_depth * chunk_wt;
-    // The batched writer holds the previous batch un-popped while waiting on the next, so it needs
-    // 2*write_batch tiles resident at once; compute only ever adds them in tilize_block-sized groups
-    // of chunk_wt. A capacity that is not a whole number of those groups is unreachable, and the
-    // writer and the packer deadlock waiting on each other.
-    uint32_t cb_out_depth = std::max(cb_depth * chunk_wt, align_up(write_batch * 2, chunk_wt));
+    uint32_t cb_out_depth = std::max(cb_depth * chunk_wt, required_cb_out(write_batch, chunk_wt));
     if (minimal_work) {
         cb_out_depth = 1;
     }
@@ -422,16 +431,19 @@ ProgramDescriptor build_2d_column(
         cb_depth = 1;
     }
     const uint32_t write_batch = minimal_work ? 1 : kDefaultWriteBatch;
+
+    // sub_wt is the packer's reservation granularity, so it has to be known before the output depth.
+    const uint32_t cb_block_limit = compute_cb_block_limit(g.ts_in, l1);
+    const uint32_t sub_wt = (tpc <= cb_block_limit) ? tpc : largest_divisor_le(tpc, cb_block_limit);
+    const uint32_t n_sub = (sub_wt == tpc) ? 1 : (tpc / sub_wt);
+
     uint32_t cb_in_depth = cb_depth * tpc;
-    uint32_t cb_out_depth = std::max(cb_depth * tpc, write_batch * 2);
+    uint32_t cb_out_depth = std::max(cb_depth * tpc, required_cb_out(write_batch, sub_wt));
     if (minimal_work) {
         cb_out_depth = 1;
     }
 
     const uint32_t out_page = align_up(g.ts_out, dram_alignment);
-    const uint32_t cb_block_limit = compute_cb_block_limit(g.ts_in, l1);
-    const uint32_t sub_wt = (tpc <= cb_block_limit) ? tpc : largest_divisor_le(tpc, cb_block_limit);
-    const uint32_t n_sub = (sub_wt == tpc) ? 1 : (tpc / sub_wt);
     const uint32_t elem_w_bytes = constants::TILE_WIDTH * g.elem_size;
 
     const std::vector<CoreCoord> cores = grid_to_cores(num_cores, grid.x, grid.y, /*row_wise=*/true);
@@ -578,12 +590,15 @@ ProgramDescriptor build_block(
     }
 
     uint32_t max_bw = 0;
+    uint32_t max_compute_chunk = 0;
     for (const auto& [w, _] : groups) {
         max_bw = std::max(max_bw, w);
+        max_compute_chunk =
+            std::max(max_compute_chunk, (w <= cb_block_limit) ? w : largest_divisor_le(w, cb_block_limit));
     }
     const uint32_t cb_depth = (2 * 2 * max_bw * g.ts_in <= l1) ? 2 : 1;
     const uint32_t cb_in_depth = cb_depth * max_bw;
-    const uint32_t cb_out_depth = std::max(cb_depth * max_bw, write_batch * 2);
+    const uint32_t cb_out_depth = std::max(cb_depth * max_bw, required_cb_out(write_batch, max_compute_chunk));
 
     const uint32_t stick_size_bytes = g.w * g.elem_size;
     const uint32_t aligned_ps = align_up(stick_size_bytes, dram_alignment);
