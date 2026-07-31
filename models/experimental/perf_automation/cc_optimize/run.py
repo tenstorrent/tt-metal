@@ -235,6 +235,27 @@ def pipelines_from_manifest(manifest: dict, model_rel: str) -> list[dict]:
     return out
 
 
+def _model_rel_from_perf_test(perf_test) -> str:
+    """The model directory, from a perf-test node id.
+
+    pipelines_from_manifest builds every node as "<model_rel>/<path>::<case>", and model_rel is a
+    PARAMETER of that function rather than a key on the pipe -- so the model dir has to be recovered
+    from the node. A demo's tests live under the model dir, so the model root is everything above
+    the first "tests/" segment:
+
+        models/demos/multimodal/gemma3/tests/e2e/test_main_perf.py::test_main_perf
+        -> models/demos/multimodal/gemma3
+    """
+    s = str(perf_test or "").split("::")[0].strip()
+    if not s:
+        return ""
+    parts = Path(s).parts
+    if "tests" in parts:
+        return str(Path(*parts[: parts.index("tests")]))
+    # No tests/ segment: fall back to the file's own directory, which is still inside the model.
+    return str(Path(s).parent)
+
+
 def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, kernel_log: str) -> dict:
     env = {
         "PERF_MCP_MANIFEST": manifest_path,
@@ -247,6 +268,20 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
     }
     if pipe.get("case"):
         env["PERF_MCP_PERF_CASE"] = pipe["case"]
+    # TELL THE SERVER WHERE THE RUN IS. perf_mcp is a SEPARATE PROCESS and resolves its model dir as
+    # `PERF_MCP_MODEL_ROOT or manifest.config.model_root or "."` -- and nothing ever set that
+    # variable, so it landed on "." (the server's own cwd), which has no relationship to the run.
+    # On gemma-3-12b-it the matmul sweep wrote 14 PCC-gated shapes into the worktree's demo dir
+    # while _warm_start_for looked for ./matmul_sweep.json: every lookup returned None and the whole
+    # pre-pass was invisible to the deterministic path. Derived from the pipeline's own model_rel so
+    # it points INSIDE the isolated worktree -- the copy the sweep actually writes to.
+    # Derived from perf_test, which pipelines_from_manifest always builds as
+    # "<model_rel>/<path>::<case>" -- model_rel itself is a PARAMETER of that function, not a key on
+    # the pipe, so reading pipe["model_rel"] would silently yield None and no-op (the same
+    # missing-value-becomes-wrong-answer shape this whole fix is about).
+    _mrel = pipe.get("model_rel") or _model_rel_from_perf_test(pipe.get("perf_test"))
+    if _mrel:
+        env["PERF_MCP_MODEL_ROOT"] = str((Path(repo_root) / _mrel).resolve())
     vis = _visible_devices(devices)
     if vis is not None:
         env["TT_VISIBLE_DEVICES"] = vis
