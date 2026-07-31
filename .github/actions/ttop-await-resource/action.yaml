@@ -44,7 +44,12 @@ runs:
         RETRIES: ${{ inputs.retries }}
       run: |
         POLL_INTERVAL=5
-        MAX_AUTH_FAILURES=3
+        # Consecutive failed calls before giving up. Was MAX_AUTH_FAILURES=3, which
+        # was right when only confirmed auth failures reached that branch; now that
+        # ANY failure counts (see the error path below), 3 would abort on a 15s API
+        # blip. 60 x 5s rides out a real blip while still bounding a hopeless case
+        # to ~5 min instead of the caller's timeoutSeconds (999m for allocations).
+        MAX_CONSECUTIVE_ERRORS=60
         # Default 5 min: long enough to ride out a token expiry / transient blip,
         # short enough not to pin a runner. Override via the timeoutSeconds input.
         OVERALL_TIMEOUT="${OVERALL_TIMEOUT:-300}"
@@ -80,8 +85,10 @@ runs:
 
         mint_token || true
 
-        auth_failures=0
+        errors=0
         start=$SECONDS
+        errfile=$(mktemp)
+        trap 'rm -f "$errfile"' EXIT
         while true; do
           if (( SECONDS - start >= OVERALL_TIMEOUT )); then
             echo "::error::Timed out after $((OVERALL_TIMEOUT / 60))m waiting for ${RESOURCE} to be (${MODE})."
@@ -101,37 +108,56 @@ runs:
             fi
           fi
 
+          # stderr is captured SEPARATELY, never merged into $output. Merging it
+          # (the previous `2>&1`) put kubectl's warnings into the value compared
+          # against $EXPECTED on an otherwise-SUCCESSFUL call, so a ready resource
+          # read as not-ready. Seen in tt-blaze run 30573758666, where
+          # `E0730 ... memcache.go:265] "Unhandled Error" ...` arrived where a phase
+          # belonged while rc was 0.
           case "$MODE" in
             delete)
-              output=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" delete "$RESOURCE" --ignore-not-found 2>&1) && rc=0 || rc=$?
+              output=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" delete "$RESOURCE" --ignore-not-found 2>"$errfile") && rc=0 || rc=$?
               if ((rc==0)); then
                 echo "::notice::$RESOURCE is deleted."
                 exit 0
               fi
               ;;
             poll)
-              output=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" get "$RESOURCE" -o jsonpath="$JSONPATH" 2>&1) && rc=0 || rc=$?
+              output=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" get "$RESOURCE" -o jsonpath="$JSONPATH" 2>"$errfile") && rc=0 || rc=$?
               if (( rc == 0 )); then
-                auth_failures=0                                  # successful read → auth is fine, reset streak
+                errors=0                                         # successful read → reset the failure streak
+                output="${output//[[:space:]]/}"                 # jsonpath can carry stray whitespace
                 if [[ "$output" == "$EXPECTED" ]]; then
-                  echo "::notice::$RESOURCE is ready ($EXPECTED)."; exit 0
+                  echo "::notice::$RESOURCE is ready ($EXPECTED) after $(( (SECONDS - start) / 60 ))m."; exit 0
                 fi
                 echo "[info] $RESOURCE not ready (got '${output:-<empty>}', want '$EXPECTED') — waiting..."
                 sleep "$POLL_INTERVAL"; continue                 # <-- the "waiting" case: loop, DON'T fall into errors
               fi
-              ;;                                                 # rc != 0 falls through to shared auth/transient
+              ;;                                                 # rc != 0 falls through to the shared error path
           esac
 
-          if echo "$output" | grep -qiE 'unauthorized|must be logged in|401'; then
-            auth_failures=$((auth_failures + 1))
-            echo "::warning::Auth failure (${auth_failures}/${MAX_AUTH_FAILURES}) on ${RESOURCE}; reissuing token."
-            if (( auth_failures >= MAX_AUTH_FAILURES )); then
-              echo "::error::Repeated auth failures despite token reissue; failing."
-              exit 1
-            fi
-            mint_token || true
-          else
-            echo "::warning::Transient error on ${RESOURCE} (rc=${rc}): ${output}"
+          # Re-mint on ANY failed call rather than only on ones matching an auth
+          # regex. The previous `grep -qiE 'unauthorized|must be logged in|401'`
+          # sent everything else to a warn-and-retry branch that never re-minted,
+          # so an expired-but-non-empty token whose message did not match kept
+          # being used forever — the empty-token guard above cannot catch that,
+          # because the token is not empty, just dead. Observed text that matches
+          # none of the three:
+          #   "couldn't get current server API group list: the server has asked
+          #    for the client to provide credentials"
+          # Minting is cheap, retried in-place and idempotent, so there is nothing
+          # to gain by classifying first and a hang to lose by getting it wrong.
+          #
+          # This is not a rare path: on a 64-minute placement wait measured in
+          # tt-blaze run 30585556114 the token expired 12 times, every ~308s
+          # (min 301, max 316). Expiry recovery runs on essentially every
+          # non-trivial wait, so it must not depend on error-message matching.
+          errors=$((errors + 1))
+          echo "::warning::${MODE} failed on ${RESOURCE} (${errors}/${MAX_CONSECUTIVE_ERRORS}, rc=${rc}); reissuing token: $(tr '\n' ' ' < "$errfile" | cut -c1-300)"
+          if (( errors >= MAX_CONSECUTIVE_ERRORS )); then
+            echo "::error::Giving up on ${RESOURCE} after ${errors} consecutive failures ($(( errors * POLL_INTERVAL ))s). Last error: $(tr '\n' ' ' < "$errfile" | cut -c1-300)"
+            exit 1
           fi
+          mint_token || true
           sleep "$POLL_INTERVAL"
         done
