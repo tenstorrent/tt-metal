@@ -35,6 +35,13 @@ struct RingJointSDPAParams {
     std::optional<std::uint32_t> kv_cache_batch_idx = std::nullopt;
     std::optional<std::uint32_t> kv_actual_isl = std::nullopt;
     uint32_t latent_v_head_dim = 0;
+    // (user, layer)-major KV-cache batch dim (metadata path). The SDPA + all-gather readers compute the
+    // cache slot on-device as metadata[0] * kv_cache_num_layers + kv_cache_layer_idx (mirrors
+    // update_padded_kv_cache). Defaults (1, 0) reduce to metadata[0], so existing callers are unaffected.
+    // Hashed by compute_program_hash: each distinct (kv_cache_num_layers, kv_cache_layer_idx) gets its own
+    // cached program, so different layers can't collide onto one cached program and gather the wrong slot.
+    uint32_t kv_cache_num_layers = 1;
+    uint32_t kv_cache_layer_idx = 0;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -53,7 +60,9 @@ struct RingJointSDPAParams {
         CoreCoord ccl_core_grid_offset,
         std::optional<std::uint32_t> kv_cache_batch_idx = std::nullopt,
         std::optional<std::uint32_t> kv_actual_isl = std::nullopt,
-        uint32_t latent_v_head_dim = 0) :
+        uint32_t latent_v_head_dim = 0,
+        uint32_t kv_cache_num_layers = 1,
+        uint32_t kv_cache_layer_idx = 0) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -69,7 +78,9 @@ struct RingJointSDPAParams {
         ccl_core_grid_offset(ccl_core_grid_offset),
         kv_cache_batch_idx(kv_cache_batch_idx),
         kv_actual_isl(kv_actual_isl),
-        latent_v_head_dim(latent_v_head_dim) {}
+        latent_v_head_dim(latent_v_head_dim),
+        kv_cache_num_layers(kv_cache_num_layers),
+        kv_cache_layer_idx(kv_cache_layer_idx) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -124,6 +135,21 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> joint_v;
     Tensor gathered_k;
     std::optional<Tensor> gathered_v;
+
+    // Trace-safe metadata path (opt-in): two 1-element uint32 DRAM tensors holding the per-chunk
+    // scalars that would otherwise be host-computed and frozen by a ttnn trace. slot_id holds the
+    // cache-user slot (was metadata[0]); kv_actual_isl holds the prior valid global KV length (was
+    // metadata[1]). When present (both together), the readers/writer compute
+    // kv_cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx and derive
+    // logical_nt / q-mapping / ring masks on-device from kv_actual_isl, so one captured program
+    // replays across chunks. std::nullopt => classic host-scalar path (unchanged).
+    std::optional<Tensor> slot_id;
+    std::optional<Tensor> kv_actual_isl;
+
+    // Both metadata tensors are supplied together or not at all (enforced in validate_on_program_cache_miss);
+    // require both here so a caller that set only one takes the scalar path instead of nullopt-derefing the
+    // missing tensor downstream.
+    bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.

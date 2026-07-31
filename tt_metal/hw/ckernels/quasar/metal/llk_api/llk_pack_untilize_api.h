@@ -10,6 +10,7 @@
 #include "tensor_shape.h"
 #include "ckernel_template.h"
 #include "cpack_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_outputs.h"
@@ -36,7 +37,14 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
 
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
-    if (tensor_shape.face_r_dim < ckernel::pack::PACR_STRIDE_OFFSET_ROWS) {
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES ||
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
+        "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
+
+    if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
+        _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(output_id, tensor_shape);
+    } else {
         const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
             tensor_shape,
             get_local_dfb_interface(output_id).tc_slots[0].base_addr,
@@ -44,9 +52,8 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
             output_id,
             pack_src_format[output_id]);
         ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
+        _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(output_id, tensor_shape);
     }
-
-    _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(output_id, tensor_shape);
 }
 
 /**
@@ -79,6 +86,11 @@ inline void llk_pack_untilize(
     // merging adjacent face-columns into a single output row. Hence we use num_faces_r_dim instead of num_faces for L1
     // strides
 
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES ||
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
+        "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
+
     const std::uint32_t y_stride = full_ct_dim * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
     const std::uint32_t base_l1 = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx *
@@ -87,6 +99,10 @@ inline void llk_pack_untilize(
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         const std::uint32_t dest_idx = block_rt * block_ct_dim + tile_dst_rt_offset;
         const std::uint32_t l1_tile_idx = base_l1 + block_rt * y_stride + block_c_index * block_ct_dim;
-        _llk_pack_untilize_(dest_idx, l1_tile_idx);
+        if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
+            _llk_pack_untilize_(dest_idx, l1_tile_idx);
+        } else {
+            _llk_pack_untilize_strided_<full_ct_dim>(output_id, tensor_shape, l1_tile_idx, dest_idx);
+        }
     }
 }

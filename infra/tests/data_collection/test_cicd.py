@@ -1,5 +1,6 @@
 import pytest
 import pathlib
+from datetime import datetime
 
 from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
@@ -172,11 +173,41 @@ def test_create_pipeline_json_for_gtest_testcases(
         assert len([x for x in job.tests if not x.success]) > 0
 
 
+def test_gtest_disabled_tests_do_not_get_epoch_timestamp():
+    """gtest stamps not-run suites (e.g. all-DISABLED_ suites) with a 1970-01-01 epoch sentinel.
+    The producer should substitute the job start timestamp instead of emitting epoch timestamps."""
+    report_path = (INFRA_TESTS_DIR / "_data/data_collection/cicd/gtest_disabled_epoch_timestamp/report.xml").resolve()
+
+    job_start_timestamp = datetime.fromisoformat("2026-07-30T13:00:00")
+    tests = workflows.get_tests_from_test_report_path(report_path, job_start_timestamp)
+
+    assert len(tests) == 3
+    for test in tests:
+        assert test.test_start_ts != workflows.GTEST_NOT_RUN_TIMESTAMP
+        assert test.test_end_ts != workflows.GTEST_NOT_RUN_TIMESTAMP
+
+    # The two not-run (disabled) suites fall back to the job start timestamp. Note DISABLED_ can
+    # sit on the testcase name (DISABLED_L1Usage) or on the fixture/suite (DISABLED_MemoryUtilsTest).
+    disabled_tests = [t for t in tests if t.test_case_name in ("DISABLED_L1Usage", "SnapshotFeature")]
+    assert len(disabled_tests) == 2
+    for test in disabled_tests:
+        assert test.test_start_ts == job_start_timestamp
+        assert test.test_end_ts == job_start_timestamp
+
+    # A real (run) test keeps its own suite timestamp, not the job start fallback.
+    real_test = next(t for t in tests if t.test_case_name == "RunsForReal")
+    assert real_test.test_start_ts == datetime.fromisoformat("2026-07-30T13:24:31.500")
+
+
 def test_empty_gtest_xml(workflow_run_gh_environment):
     github_runner_environment = workflow_run_gh_environment
     workflow_outputs_dir = (INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_job_37712709106/").resolve()
+    job_start_timestamp = datetime.fromisoformat("2026-07-30T13:00:00")
     assert (
-        workflows.get_tests_from_test_report_path(workflow_outputs_dir / "distributed_unit_tests_wormhole_b0.xml") == []
+        workflows.get_tests_from_test_report_path(
+            workflow_outputs_dir / "distributed_unit_tests_wormhole_b0.xml", job_start_timestamp
+        )
+        == []
     )
 
 
