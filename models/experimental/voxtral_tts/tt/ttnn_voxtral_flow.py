@@ -18,17 +18,28 @@ WHAT MAKES THIS BLOCK UNUSUAL:
     layout. `rope_theta` in params.json is inert here. Adding RoPE would be silently wrong.
   * CFG is batched, not doubled: cond and uncond (zeroed h) go through as one 2B forward, so a
     step is a batch-2 graph rather than two graphs.
-  * Every one of the 7 steps is THE SAME SHAPE, which is what makes the whole solver a natural
-    single-trace target. Upstream CUDA-graph the ODE and report 47% lower latency / 2.5x RTF.
-    Not traced yet -- see STATUS.md; note the Block 3 tracing null result does NOT transfer,
-    because these ops are tiny where Block 3's were device-bound.
+  * Every one of the 7 steps is THE SAME SHAPE, so the whole solver captures as one device trace
+    (`_trace`). It is implemented and correct but OFF, because it measured worth ~6% -- see below.
 
-THIS BLOCK IS THE BOTTLENECK, measured -- 109 ms of a 158 ms frame at bf16 (69%), against 48 ms for
-Block 1's whole 3.4B decode step. Parameter count says the opposite and parameter count is wrong
-here: Block 1's step is a few big matmuls, while this is ~660 tiny dispatch-bound ops (3-token
-sequence x 7 sequential steps x batch-2 CFG). Of the 109 ms, ~79 ms is the 7 velocity evaluations
-and the rest is the host work below, so BOTH are worth attention. The ordered wins are in STATUS.md
-section 7; the next one is tracing the solve, which is now possible.
+THIS BLOCK IS THE BOTTLENECK, measured -- ~100 ms of a ~110 ms frame, against ~48 ms for Block 1's
+whole 3.4B decode step. Parameter count says the opposite and parameter count is the wrong proxy.
+
+IT IS WEIGHT-BANDWIDTH BOUND. Not dispatch, and not arithmetic -- both were assumed and both were
+measured wrong:
+  * NOT arithmetic. LoFi, with 4x fewer math passes than HiFi4, is **2.7% faster**. Fidelity is not
+    a lever here; HiFi4 + fp32_dest_acc_en is kept because it is nearly free AND much more accurate
+    (dropping fp32_dest_acc_en alone takes differing codes from 1.16% to 20.49%).
+  * NOT dispatch. Host work is a flat ~6.5 ms per frame, visible as the constant gap between the
+    traced device floor and the eager frame time at every configuration. An earlier claim of
+    "121.7 ms of dispatch" was queue BACKPRESSURE being misread as host cost -- enqueueing faster
+    than the device drains blocks the enqueue call. Hence tracing is worth ~6%, not 47%.
+  * IT IS BYTES. ~390M parameters get streamed per velocity evaluation, 7 evaluations per frame.
+    Halving weight bytes (bf16 -> bfp8) is worth **1.38x** on device time. That is why WEIGHT_DTYPE
+    exists separately from DTYPE.
+A 3-token sequence does NOT mean small ops, which is what misled the first round of analysis: a tile
+is 32x32, so every matmul does 32 rows of work for 3 useful tokens against 3072x9216 weights. The
+tile padding is the root inefficiency and it is largely irreducible -- the 7 steps are sequential and
+CFG is already batched.
 
 HOST vs DEVICE. The whole Euler solve -- the 3-layer transformer, the CFG combine and the state
 update -- runs on device, with nothing left in the loop that a trace could not capture. Two things
@@ -101,13 +112,30 @@ DTYPE = ttnn.bfloat16
 # argument, so it can still be flipped for A/B measurement.
 USE_TRACE = False
 
+# MATMUL weight storage, independent of the activation DTYPE above (None = same as DTYPE). This is
+# the lever that actually moves device time, because the block is weight-bandwidth bound: halving
+# weight bytes is worth 1.38x on device work (139.1 -> 100.5 ms), where 4x less arithmetic is worth
+# 2.7%. RMSNorm gammas are excluded -- see __init__.
+#
+# Cost of bfp8 vs bf16 weights, 12 seeds against the fp32 CPU reference: differing acoustic codes
+# 1.16% -> 2.55%, still all off-by-one on 21 FSQ levels, semantic codes still 0/24 wrong. End to end
+# it holds: 0.0% WER on English including the 125-word paragraph, 0.0% French, 5/5 natural
+# [END_AUDIO], and the paragraph free-runs to 448 frames against bf16's 458 and fp32's 459.
+# bfp4 was measured and REJECTED: 1.54x but 34.26% of codes differ and max deviation reaches 4.
+WEIGHT_DTYPE = ttnn.bfloat8_b
+
 
 class TtVoxtralFlow:
     """Block 2 on device. __call__(h) -> audio_codes torch [B,37] int64."""
 
-    def __init__(self, device, ckpt_path=DEFAULT_CKPT, dtype=DTYPE):
+    def __init__(self, device, ckpt_path=DEFAULT_CKPT, dtype=DTYPE, weight_dtype=None):
         self.device = device
         self.dtype = dtype
+        # Weights are dtype'd separately from activations because this block is WEIGHT-BANDWIDTH
+        # bound, not math bound: LoFi is only 2.7% faster than HiFi4+fp32_dest_acc_en, so 4x less
+        # arithmetic buys nothing, while ~390M parameters get streamed per velocity evaluation and
+        # 7 evaluations happen per frame. Bytes are the lever; passes are not.
+        weight_dtype = weight_dtype or WEIGHT_DTYPE or dtype
         w = load_flow_state(ckpt_path)
         self.inv_freq = w["time_embedding.inv_freq"]          # host: time_embedding
         self.semantic_host = w["semantic_codebook_output.weight"].float()  # host: masked argmax
@@ -115,10 +143,13 @@ class TtVoxtralFlow:
         self._cfgbuf = {}                    # batch -> reused [2B,3072] cond++uncond host buffer
         self._traces = {}                    # (batch, n_steps, cfg_alpha) -> (tid, x_in, h_in, out)
 
-        dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT,
-                                       device=device)
-        vec = lambda t: dev(t.reshape(1, 1, -1))
-        lin = lambda t: dev(t.t())   # torch Linear [out,in] -> ttnn.linear wants [in,out]
+        up = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT,
+                                         device=device)
+        # RMSNorm gammas stay at the ACTIVATION dtype: 3072 values each is no bandwidth at all, and a
+        # per-block shared exponent is a poor fit for a 1-D scale vector. Only the matmul weights --
+        # which are the ~390M parameters actually being streamed -- take weight_dtype.
+        vec = lambda t: up(t.reshape(1, 1, -1), dtype)
+        lin = lambda t: up(t.t(), weight_dtype)   # torch Linear [out,in] -> ttnn.linear wants [in,out]
 
         self.proj = {k: lin(w[f"{k}.weight"]) for k in
                      ("input_projection", "time_projection", "llm_projection",

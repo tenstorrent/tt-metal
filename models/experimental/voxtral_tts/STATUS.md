@@ -456,19 +456,20 @@ that matters, at batch 2:
 | traced | **0.0 ms** | 139.1 ms |
 | eager | **121.7 ms** | 139.3 ms |
 
-Host dispatch here is real and large — 121.7 ms, and tracing removes all of it. It buys nothing
-because ttnn enqueues asynchronously, so that 121.7 ms is **already hidden behind** 139.3 ms of
-device execution. Max win from *any* tracing approach right now: **0.1%**. This is the same null
-result Block 3 got, and the reason I predicted it would not transfer was **wrong**: I assumed a
-3-token sequence meant tiny ops, but a tile is 32x32, so every matmul does 32 rows of work for 3
-useful tokens against 3072x9216 weights. That is real arithmetic.
+That 121.7 ms "host enqueue" figure is **backpressure, not host cost** — enqueueing faster than the
+device drains blocks the enqueue call. The real host overhead is the constant gap between the traced
+device floor and the eager frame time, and it is ~6.5 ms at every configuration measured (bf16 W
+139.1/145.5, bfp8 W 100.5/107.0, bfp4 W 90.1/96.6). **So tracing is worth ~6.5 ms — about 6% at the
+current device floor.** An earlier version of this section claimed dispatch would become a binding
+wall at 121.7 ms once device work dropped; that was wrong, built on the backpressure misreading.
 
-**THE TRIGGER CONDITION — do not delete the trace code.** Dispatch sits only 17.6 ms (13%) below the
-device floor. Cut device work by less than that and tracing stays worthless; cut it by more and
-**dispatch becomes the binding constraint at 121.7 ms** and you cannot go faster without the trace.
-If fidelity work halves device time to ~70 ms, the untraced frame would stall at ~122 ms — a 12%
-gain instead of the 50% paid for. `USE_TRACE` is therefore left **False** (it is worth 0.1% and
-forces `trace_region_size` on every caller); flip it the moment device work drops under ~120 ms.
+Also wrong in that earlier version: predicting the Block 3 tracing null result would not transfer,
+on the grounds that a 3-token sequence means tiny ops. A tile is 32x32, so every matmul does 32 rows
+of work for 3 useful tokens against 3072x9216 weights. Upstream's 47%-from-CUDA-graphs does not
+apply — their bottleneck was launch overhead.
+
+`USE_TRACE` is left **False**: ~6% is real but it forces `trace_region_size` on every caller. Flip it
+when that 6% is worth the coupling. Read trap #1 before touching capture code.
 Upstream's 47%-from-CUDA-graphs figure does not apply to us: their bottleneck was launch overhead,
 ours is arithmetic. Read trap #1 before touching capture code.
 
