@@ -135,5 +135,8 @@ current-source timing provenance, forced-cache candidate, profiler topology,
 watcher evidence, context contract, and later-stage exclusion without editing
 files or using hardware.
 
-The local implementation commit SHA is appended in the follow-up evidence-log
-commit. No push is performed.
+Local implementation commit:
+`e2440ba65de7c763b6e3903fc9444abade040720`.
+
+This SHA entry is recorded by a follow-up evidence-log commit. No push is
+performed.
