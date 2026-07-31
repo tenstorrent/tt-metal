@@ -16,6 +16,7 @@ from helpers.perf_parquet import (
     align_to_schema,
     arrow_schema,
     build_run_batch,
+    convert_csvs_to_parquet,
     stamp_provenance,
     to_table,
     write_parquet,
@@ -149,3 +150,60 @@ def test_write_run_batch_is_one_file_per_run(tmp_path):
     table = pq.read_table(path)
     assert table.schema.names == [c.name for c in DB_SCHEMA]
     assert table.num_rows == 4
+
+
+# ── CSV -> Parquet conversion ─────────────────────────────────────────────────
+
+
+def _write_csv(tmp_path, name, df):
+    path = tmp_path / name
+    df.to_csv(path, index=False)
+    return path
+
+
+def test_convert_compacts_multiple_csvs(tmp_path):
+    a = _write_csv(tmp_path, "perf_a.csv", _output_row())
+    b = _write_csv(tmp_path, "perf_b.csv", _output_row_b())
+    out = tmp_path / "run.parquet"
+
+    convert_csvs_to_parquet([a, b], out, **_RUN_PROV)
+
+    table = pq.read_table(out)
+    assert table.schema.names == [c.name for c in DB_SCHEMA]
+    assert set(table.to_pandas()["test_name"]) == {"perf_a", "perf_b"}
+
+
+def test_convert_drops_and_reports_unknown_columns(tmp_path):
+    df = pd.DataFrame({"marker": ["INIT"], "tile_cnt": [4], "made_up_col": [9]})
+    p = _write_csv(tmp_path, "perf_x.csv", df)
+
+    diag = convert_csvs_to_parquet([p], tmp_path / "out.parquet", **_RUN_PROV)
+
+    assert diag["unknown_columns"]["perf_x"] == ["made_up_col"]
+    assert "made_up_col" not in pq.read_table(tmp_path / "out.parquet").schema.names
+
+
+def test_convert_coerces_and_reports_bad_values(tmp_path):
+    # value_bits is int64 in the schema; "2.0f" can't parse -> NULL, and reported.
+    df = pd.DataFrame({"marker": ["INIT"], "value_bits": ["2.0f"], "tile_cnt": [4]})
+    p = _write_csv(tmp_path, "perf_x.csv", df)
+
+    diag = convert_csvs_to_parquet([p], tmp_path / "out.parquet", **_RUN_PROV)
+
+    assert "value_bits" in diag["coerced_values"]["perf_x"]
+    table = pq.read_table(tmp_path / "out.parquet")
+    idx = table.schema.get_field_index("value_bits")
+    assert table.column(idx).null_count == 1
+
+
+def test_convert_stringifies_bool_valued_string_column(tmp_path):
+    # unpack_to_dest is "string" in the schema but a bool in the CSV -> "True"/"False".
+    df = pd.DataFrame(
+        {"marker": ["INIT", "TILE_LOOP"], "unpack_to_dest": [True, False]}
+    )
+    p = _write_csv(tmp_path, "perf_x.csv", df)
+
+    convert_csvs_to_parquet([p], tmp_path / "out.parquet", **_RUN_PROV)
+
+    back = pq.read_table(tmp_path / "out.parquet").to_pandas()
+    assert list(back["unpack_to_dest"]) == ["True", "False"]
