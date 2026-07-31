@@ -37,6 +37,9 @@ constexpr uint32_t kDefaultWriteBatch = 4;
 constexpr uint32_t kModeTilerow = 1;
 // ops/tilize/builder.py _BLOCK_THRESHOLD
 constexpr uint32_t kBlockThreshold = 32;
+// ops/tilize/spec.py _L1_RESERVE — L1 held back for kernel code and stacks, so the CB plan is
+// sized against l1_size_per_core() minus this, not the whole physical bank.
+constexpr uint32_t kL1Reserve = 128 * 1024;
 
 constexpr const char* kReaderStickUnified =
     "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/reader_stick_interleaved_unified.cpp";
@@ -91,6 +94,85 @@ uint32_t required_cb_out(uint32_t write_batch, uint32_t compute_chunk) {
         return compute_chunk;
     }
     return align_up(2 * write_batch, compute_chunk);
+}
+
+struct CbDepths {
+    uint32_t in_depth = 0;
+    uint32_t out_depth = 0;
+};
+
+// common/codegen_common/factory/cb_policy.py scale_cb_depths_to_l1: when the requested plan
+// overruns the usable budget both depths shrink by the same floored factor, then any rounding
+// excess left by the min-1 clamp is taken off whichever CB still has a page to give.
+CbDepths scale_cb_depths_to_l1(
+    uint32_t in_depth, uint32_t out_depth, uint32_t in_page, uint32_t out_page, uint32_t l1) {
+    TT_FATAL(l1 > kL1Reserve, "tilize codegen: L1 size {} does not exceed the {}-byte reserve", l1, kL1Reserve);
+    const uint32_t available = l1 - kL1Reserve;
+    const uint64_t minimum_bytes = static_cast<uint64_t>(in_page) + out_page;
+    TT_FATAL(
+        available >= minimum_bytes,
+        "tilize codegen: a one-page input/output CB plan needs {} L1 bytes, exceeding the available {}",
+        minimum_bytes,
+        available);
+
+    uint64_t total = static_cast<uint64_t>(in_depth) * in_page + static_cast<uint64_t>(out_depth) * out_page;
+    if (total <= available) {
+        return {in_depth, out_depth};
+    }
+    in_depth = std::max<uint32_t>(1, static_cast<uint32_t>(static_cast<uint64_t>(in_depth) * available / total));
+    out_depth = std::max<uint32_t>(1, static_cast<uint32_t>(static_cast<uint64_t>(out_depth) * available / total));
+
+    uint64_t scaled = static_cast<uint64_t>(in_depth) * in_page + static_cast<uint64_t>(out_depth) * out_page;
+    while (scaled > available) {
+        const uint64_t in_bytes = static_cast<uint64_t>(in_depth) * in_page;
+        const uint64_t out_bytes = static_cast<uint64_t>(out_depth) * out_page;
+        // Give back from the larger CB, input first on a tie (cb_policy.py's max() over the
+        // (bytes, which) pairs keeps the first maximum).
+        const bool pick_in = in_depth > 1 && (out_depth <= 1 || in_bytes >= out_bytes);
+        const bool pick_out = !pick_in && out_depth > 1;
+        TT_FATAL(pick_in || pick_out, "tilize codegen: scaled CB plan cannot fit the available {} L1 bytes", available);
+        const uint32_t depth = pick_in ? in_depth : out_depth;
+        const uint32_t page = pick_in ? in_page : out_page;
+        const uint64_t excess = scaled - available;
+        const uint32_t reduction = std::min<uint32_t>(depth - 1, static_cast<uint32_t>((excess + page - 1) / page));
+        if (pick_in) {
+            in_depth -= reduction;
+        } else {
+            out_depth -= reduction;
+        }
+        scaled = static_cast<uint64_t>(in_depth) * in_page + static_cast<uint64_t>(out_depth) * out_page;
+    }
+    return {in_depth, out_depth};
+}
+
+// ops/tilize/spec.py _select_tilize_cb_depths + _validate_tilize_pipeline: fit the plan to L1,
+// then prove the surviving contract cannot wedge the device. A depth below the compute chunk or
+// below the batched writer's residency leaves the packer blocked on a reservation the writer can
+// only release by consuming pages the packer has not produced — fail on the host instead.
+CbDepths select_cb_depths(
+    uint32_t in_depth,
+    uint32_t out_depth,
+    uint32_t compute_chunk,
+    uint32_t write_batch,
+    uint32_t in_page,
+    uint32_t out_page,
+    uint32_t l1) {
+    TT_FATAL(compute_chunk > 0, "tilize codegen: compute chunk must be positive");
+    const CbDepths depths = scale_cb_depths_to_l1(in_depth, out_depth, in_page, out_page, l1);
+    TT_FATAL(
+        depths.in_depth >= compute_chunk,
+        "tilize codegen: CB_IN depth {} is smaller than compute chunk {}",
+        depths.in_depth,
+        compute_chunk);
+    const uint32_t required_out = required_cb_out(write_batch, compute_chunk);
+    TT_FATAL(
+        depths.out_depth >= required_out,
+        "tilize codegen: CB_OUT depth {} is smaller than the {} pages required for write_batch {} and compute chunk {}",
+        depths.out_depth,
+        required_out,
+        write_batch,
+        compute_chunk);
+    return depths;
 }
 
 // UnpackToDestMode vector forcing a FLOAT32 input CB to unpack straight into DEST (avoids the
@@ -300,11 +382,15 @@ ProgramDescriptor build_row(
     const bool force_single_write = attrs.use_low_perf || (g.total_ht > num_cores) || minimal_work;
     const uint32_t write_batch = force_single_write ? 1 : kDefaultWriteBatch;
 
-    uint32_t cb_in_depth = cb_depth * chunk_wt;
-    uint32_t cb_out_depth = std::max(cb_depth * chunk_wt, required_cb_out(write_batch, chunk_wt));
+    const uint32_t requested_in_depth = cb_depth * chunk_wt;
+    uint32_t requested_out_depth = std::max(cb_depth * chunk_wt, required_cb_out(write_batch, chunk_wt));
     if (minimal_work) {
-        cb_out_depth = 1;
+        requested_out_depth = 1;
     }
+    const CbDepths cb =
+        select_cb_depths(requested_in_depth, requested_out_depth, chunk_wt, write_batch, g.ts_in, g.ts_out, l1);
+    const uint32_t cb_in_depth = cb.in_depth;
+    const uint32_t cb_out_depth = cb.out_depth;
 
     const uint32_t out_page = align_up(g.ts_out, dram_alignment);
     const uint32_t elem_w_bytes = constants::TILE_WIDTH * g.elem_size;
@@ -446,11 +532,15 @@ ProgramDescriptor build_2d_column(
     const uint32_t sub_wt = (tpc <= cb_block_limit) ? tpc : largest_divisor_le(tpc, cb_block_limit);
     const uint32_t n_sub = (sub_wt == tpc) ? 1 : (tpc / sub_wt);
 
-    uint32_t cb_in_depth = cb_depth * tpc;
-    uint32_t cb_out_depth = std::max(cb_depth * tpc, required_cb_out(write_batch, sub_wt));
+    const uint32_t requested_in_depth = cb_depth * tpc;
+    uint32_t requested_out_depth = std::max(cb_depth * tpc, required_cb_out(write_batch, sub_wt));
     if (minimal_work) {
-        cb_out_depth = 1;
+        requested_out_depth = 1;
     }
+    const CbDepths cb =
+        select_cb_depths(requested_in_depth, requested_out_depth, sub_wt, write_batch, g.ts_in, g.ts_out, l1);
+    const uint32_t cb_in_depth = cb.in_depth;
+    const uint32_t cb_out_depth = cb.out_depth;
 
     const uint32_t out_page = align_up(g.ts_out, dram_alignment);
     const uint32_t elem_w_bytes = constants::TILE_WIDTH * g.elem_size;
@@ -500,14 +590,16 @@ ProgramDescriptor build_2d_column(
     writer_desc.compile_time_args = std::move(writer_ct);
     writer_desc.config = WriterConfigDescriptor{};
 
-    const bool fp32 = (attrs.input_dtype == DataType::FLOAT32);
+    const bool fp32 = (attrs.input_dtype == DataType::FLOAT32 || attrs.output_dtype == DataType::FLOAT32);
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kComputeTilize;
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = {kCbInId, kCbOutId, n_sub, sub_wt};
     ComputeConfigDescriptor compute_cfg;
     compute_cfg.fp32_dest_acc_en = fp32;
-    if (fp32) {
+    // The unpack-to-DEST override keys off the INPUT dtype alone: it exists to stop an RM fp32
+    // input from unpacking through SRCA as Float16_b, which an fp32 output cannot cause.
+    if (attrs.input_dtype == DataType::FLOAT32) {
         compute_cfg.unpack_to_dest_mode = unpack_to_dest_fp32_modes(kCbInId);
     }
     compute_desc.config = compute_cfg;
@@ -606,8 +698,16 @@ ProgramDescriptor build_block(
             std::max(max_compute_chunk, (w <= cb_block_limit) ? w : largest_divisor_le(w, cb_block_limit));
     }
     const uint32_t cb_depth = (2 * 2 * max_bw * g.ts_in <= l1) ? 2 : 1;
-    const uint32_t cb_in_depth = cb_depth * max_bw;
-    const uint32_t cb_out_depth = std::max(cb_depth * max_bw, required_cb_out(write_batch, max_compute_chunk));
+    const CbDepths cb = select_cb_depths(
+        cb_depth * max_bw,
+        std::max(cb_depth * max_bw, required_cb_out(write_batch, max_compute_chunk)),
+        max_compute_chunk,
+        write_batch,
+        g.ts_in,
+        g.ts_out,
+        l1);
+    const uint32_t cb_in_depth = cb.in_depth;
+    const uint32_t cb_out_depth = cb.out_depth;
 
     const uint32_t stick_size_bytes = g.w * g.elem_size;
     const uint32_t aligned_ps = align_up(stick_size_bytes, dram_alignment);
@@ -641,7 +741,7 @@ ProgramDescriptor build_block(
         }}},
     });
 
-    const bool fp32 = (attrs.input_dtype == DataType::FLOAT32);
+    const bool fp32 = (attrs.input_dtype == DataType::FLOAT32 || attrs.output_dtype == DataType::FLOAT32);
 
     for (const auto& [grp_wt, assignments] : groups) {
         std::vector<CoreRange> grp_ranges;
@@ -677,7 +777,8 @@ ProgramDescriptor build_block(
         compute_desc.compile_time_args = {kCbInId, kCbOutId, n_sub, sub_wt};
         ComputeConfigDescriptor compute_cfg;
         compute_cfg.fp32_dest_acc_en = fp32;
-        if (fp32) {
+        // Input dtype alone drives the override — see build_2d_column.
+        if (attrs.input_dtype == DataType::FLOAT32) {
             compute_cfg.unpack_to_dest_mode = unpack_to_dest_fp32_modes(kCbInId);
         }
         compute_desc.config = compute_cfg;
