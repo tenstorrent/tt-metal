@@ -12,12 +12,18 @@
 //   DRAIN for each core with work, one 10,240 B whole-core read of the five rings
 //   HEAD  publish the five advanced heads in ONE 20 B write -- this is what unblocks the producer
 //
-// Ordering matters and is not interchangeable with the fused single-read shape. The tail is read in the
-// POLL, the data in the DRAIN that follows it, so the data is at least as fresh as the tail that
-// authorises consuming it. A fused read of the whole 10,496 B span would return the control vector and
-// the ring data from different instants inside one burst, so a fresh tail could pair with stale data and
-// the drainer would consume words the producer had not written yet. Correctness first here; the fused
-// shape can come back later by using the PREVIOUS sweep's tail against the current sweep's data.
+// Ordering follows X280: poll the control vector, then read the rings. profzone.c does the same --
+// five tails in one 20 B vector load, then a bulk read of the rings only.
+//
+// This is NOT because a fused read of the whole 10,496 B span would tear. It would not: the control
+// vector sits at LOWER addresses than the rings, so one burst samples the tail BEFORE the data, which
+// makes the tail conservative relative to the data it authorises -- the safe direction. (The unsafe
+// order is data-then-tail, which this layout cannot produce.) Wrap is covered separately, since the
+// producer blocks rather than overwrite [head, tail).
+//
+// The fused shape is therefore worth taking later: it deletes the poll entirely and cost here is
+// issue-dominated. It rests on NoC bursts sampling their source in address order -- an assumption
+// still to be confirmed against the NoC spec, which is the only reason this kernel keeps two reads.
 //
 // Head seeding. Tails are MONOTONIC for the whole FW session -- kernel_profiler.hpp seeds wIndex from L1
 // once and never resets per launch (init_profiler, "do NOT re-read TAIL_INDEX per launch"). So a drainer

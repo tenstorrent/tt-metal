@@ -569,12 +569,22 @@ pacing results above already measured.
    control vector the poll already fetches. (This is also the honest answer to "why head loads?": once,
    to seed, never per sweep.)
 
-2. **Poll-then-drain is required for correctness, not just convention.** The fused single-read shape
-   (one 10,496 B burst covering control vector + rings) returns the tail and the data from different
-   instants inside the burst, so a fresh tail can pair with stale data and the drainer consumes words
-   the producer has not written. Reading the tail first and the data second makes the data at least as
-   fresh as the tail authorising it. The fused shape can return by pairing the *previous* sweep's tail
-   with the current sweep's data.
+2. **Poll-then-drain is what X280 does -- but NOT for the reason first claimed here.** This drainer
+   polls the control vector, then reads the rings, matching X280: `profzone.c` reads the five tails in
+   one 20 B vector-load NoC transaction (`read_tails`) and then bulk-reads the **rings only**
+   (`rbufs = cbase + ring_off`, 5 x 2048 B, no control vector).
+
+   An earlier version of this section claimed a fused read of the whole 10,496 B span was unsafe
+   because a fresh tail could pair with stale data. **That is backwards.** `profiler_msg_t` places the
+   control vector at *lower* addresses than the rings, so one burst samples the tail **before** the
+   data -- the tail is conservative relative to the data it authorises, which is the safe direction.
+   The unsafe order (data first, tail second) is not what this layout produces. Wrap is covered
+   separately: the producer blocks rather than overwrite `[head, tail)`, since head has not moved.
+
+   So the fused single-read shape is **probably safe**, and worth pursuing -- it deletes the poll
+   outright, roughly halving transactions, and cost here is issue-dominated (~29.5 ns/read regardless
+   of payload). What it rests on is whether a NoC burst samples its source in address order. That is
+   an assumption, not a verified fact: confirm it in the NoC spec before relying on it.
 
 3. **A third run mode had to exist.** Producers emit whenever `get_profiler_enabled()` is set, but both
    pre-existing modes ship a competing consumer: default starts `RealtimeProfilerManager`, and
@@ -697,6 +707,20 @@ Until then egress binds by ~2.7x.
   `DeviceZoneScopedN` compiles to nothing. Use the watcher ring buffer + `get_timestamp_32b()` idiom.
 
 ## Open questions
+
+**`profstream.c` is stale in two places, not one.** Alongside the known `CTRL_TAIL(r) = 5u + r` it
+hardcodes `rbufs = cbase + 128`. 128 B is 32 words -- the OLD control-vector size; it is now 64 words
+(256 B). Both literals are self-consistent for the old layout and both wrong for the current one, so
+that reader would land 128 B inside the control vector rather than on ring data. `profcons.c` and
+`profll.c` carry the same tail literal. `profzone.c` is fine: the host passes `SPSC_RING_TAIL_0` and
+`PROFILER_L1_CONTROL_BUFFER_SIZE` through the boot nonce, with 128 only as a documented fallback for
+an out-of-date host.
+
+**Does a NoC burst sample its source in address order?** The fused single-read shape (control vector +
+rings in one 10,496 B transaction) depends on it, and it would delete the poll phase outright. See the
+poll-then-drain note above.
+
+
 
 - **Zero-copy host consumption** is the last big lever: 25.4 -> 57.6 GB/s, taking the minimum zone
   duration from 387 ns to 167 ns against ingest's 143 ns. `discard_pending_pages()` proves the
