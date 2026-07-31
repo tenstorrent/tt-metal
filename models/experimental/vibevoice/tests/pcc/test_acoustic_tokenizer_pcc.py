@@ -44,8 +44,10 @@ def ac_tok_state():
 @pytest.fixture(scope="function")
 def ac_tokenizer_tt(mesh_device, ac_tok_state, vv_config):
     cfg = vv_config.acoustic_tokenizer
+    from models.experimental.vibevoice.tests.pcc.pcc_helpers import tt_weight_cache
+
     weights = preprocess_acoustic_tokenizer_weights(ac_tok_state, mesh_device, cfg)
-    return TTAcousticTokenizer(weights, mesh_device)
+    return TTAcousticTokenizer(weights, mesh_device, weight_cache=tt_weight_cache("acoustic_tokenizer"))
 
 
 def _reference_acoustic_encode(hf_state, audio, vv_config):
