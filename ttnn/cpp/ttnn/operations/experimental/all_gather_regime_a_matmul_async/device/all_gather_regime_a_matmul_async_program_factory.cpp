@@ -323,12 +323,17 @@ struct FusedGatherContext {
     uint32_t gather_count_sem_id = 0;  // masters-done counter, meaningful on master 0
     // Barrier geometry, in VIRTUAL (translated) coords.
     CoreCoord master0_virtual{};
-    std::vector<CoreCoord> release_list;  // every core master 0 releases once the gather is complete
+    // Multicast rectangles covering every core master 0 releases: {start_x, start_y, end_x, end_y, dests}.
+    struct ReleaseRange {
+        uint32_t sx, sy, ex, ey, dests;
+    };
+    std::vector<ReleaseRange> release_ranges;
     uint32_t num_masters = 8;
     // Counts forward-stream shard arrivals from the backward neighbour. This is a caller-owned GLOBAL
     // semaphore address, not a program semaphore id: see the note in the operation types header for why a
     // cross-chip credit cannot land in a program semaphore.
     uint32_t fwd_recv_sem_addr = 0;
+    uint32_t bwd_recv_sem_addr = 0;  // gather_semaphores[1]; the backward stream's own counter
 };
 
 // Offsets WITHIN the fused-gather writer arg block, i.e. relative to fused_rt_base. The kernel reads this
@@ -346,25 +351,34 @@ enum FusedGatherArg : uint32_t {
     kFgHasBwd = 7,
     kFgMtTotal = 8,
     kFgKtGlobal = 9,
-    kFgShardAddr = 10,   // patched on replay (in0 may be a fresh allocation)
-    kFgBankId = 11,      //
-    kFgFwdRecvSem = 12,  // patched on replay (caller ping-pongs the global semaphore)
+    kFgShardAddr = 10,  // patched on replay (in0 may be a fresh allocation)
+    kFgBankId = 11,     //
+    kFgMyRecvSem = 12,  // THIS core's direction's credit; patched on replay (caller ping-pongs it)
+    // Bidirectional schedule. One direction per core: masters 0..m_groups-1 drive forward, the rest
+    // backward, and each direction's cores cover all of M between them. Only the mux for a core's own
+    // direction is registered, so a core is never a client of a mux it does not drive.
+    kFgDir = 13,      // 0 = forward, 1 = backward
+    kFgRounds = 14,   // rounds this direction runs: ceil((tp-1)/2) fwd, floor((tp-1)/2) bwd
+    kFgMGroups = 15,  // M groups for the FABRIC split (= num_masters / 2); the local copy stays 8-way
     // On-chip gather barrier: every master reports to master 0, which multicasts one go-ahead to the grid.
-    kFgIsMaster0 = 13,
-    kFgGatherCountSem = 14,
-    kFgNumMasters = 15,
-    kFgMaster0X = 16,
-    kFgMaster0Y = 17,
-    kFgNumAllCores = 18,
-    // Followed by kFgNumAllCores (x, y) VIRTUAL coord pairs -- the release list master 0 unicasts to.
-    // A multicast would be cheaper but the regime-A placement is bank-adjacent and deliberately NOT a
-    // filled rectangle, so a bounding-box mcast would also hit cores running no kernel of ours.
-    kFusedArgCount = 19,  // + 2 * num_all_cores coord words, then the mux client block
+    kFgIsMaster0 = 16,
+    kFgGatherCountSem = 17,
+    kFgNumMasters = 18,
+    kFgMaster0X = 19,
+    kFgMaster0Y = 20,
+    kFgNumReleaseRanges = 21,
+    // Followed by kFgNumReleaseRanges 5-word records {start_x, start_y, end_x, end_y, num_dests} in VIRTUAL
+    // coords: the multicast rectangles master 0 releases. Per-range rather than one bounding box because
+    // the bank-adjacent placement is deliberately not a filled rectangle.
+    kFusedArgCount = 22,  // + 5 * num_release_ranges words, then the mux client block
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
 // 4 KiB fabric packet, and one channel per direction is enough while a single ring does the forwarding.
-constexpr uint8_t kMuxNumChannels = 8;  // one logical channel per master-ring core
+// One channel per client that will ACTUALLY register with this mux. Mux v2 self-terminates by counting
+// close() calls against its compile-time channel count, so an over-provisioned mux simply never exits:
+// with one direction per core only half the masters register with each mux, and leaving this at 8 hangs.
+constexpr uint8_t kMuxChannelsPerDirection = 4;
 constexpr uint8_t kMuxBuffersPerChannel = 8;
 constexpr size_t kMuxChannelBufferBytes = 4096;  // 4 KiB packet
 
@@ -421,13 +435,27 @@ FusedGatherContext build_fused_gather_context(
     ctx.chunk_ready_sem_id = CreateSemaphore(program, all_cores, 0);  // 0 == INVALID
     ctx.gather_count_sem_id = CreateSemaphore(program, all_cores, 0);
     ctx.num_masters = static_cast<uint32_t>(master_ring_cores.size());
+    // Hard-tie the mux sizing to the client split. Getting these out of step does not fail loudly: the
+    // mux's forwarder RISC just spins waiting for close() calls that never come.
+    TT_FATAL(
+        ctx.num_masters / 2u == kMuxChannelsPerDirection,
+        "each direction's mux is built with {} channels but {} masters will register with it; mux v2 "
+        "terminates on a close() count, so a mismatch hangs rather than erroring",
+        static_cast<uint32_t>(kMuxChannelsPerDirection),
+        ctx.num_masters / 2u);
     TT_FATAL(
         !attrs.gather_semaphores.empty(),
         "the fused gather (tp={}) needs at least one caller-supplied global semaphore for the cross-chip "
         "arrival credit; a program semaphore cannot be used here because a peer can credit it before this "
         "device's program has launched and zeroed it",
         attrs.tp);
+    TT_FATAL(
+        attrs.gather_semaphores.size() >= 2u,
+        "the bidirectional fused gather needs TWO global semaphores (one credit counter per direction), "
+        "got {}",
+        attrs.gather_semaphores.size());
     ctx.fwd_recv_sem_addr = attrs.gather_semaphores[0].address();
+    ctx.bwd_recv_sem_addr = attrs.gather_semaphores[1].address();
 
     const size_t mux_base_l1 = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
@@ -445,7 +473,7 @@ FusedGatherContext build_fused_gather_context(
         }
         const CoreCoord mux_logical = mux_core_for(slot);
         cfg_out = std::make_unique<tt::tt_fabric::FabricMuxV2Config>(
-            kMuxNumChannels, kMuxBuffersPerChannel, kMuxChannelBufferBytes, mux_base_l1);
+            kMuxChannelsPerDirection, kMuxBuffersPerChannel, kMuxChannelBufferBytes, mux_base_l1);
         tt::tt_fabric::add_fabric_mux_v2_to_program(
             program,
             *cfg_out,
@@ -458,11 +486,11 @@ FusedGatherContext build_fused_gather_context(
     };
 
     deploy(fwd_coord, 0, ctx.mux_cfg_fwd, ctx.mux_virtual_core_fwd);
-    // The backward mux is NOT deployed yet. Mux v2 self-terminates by counting close() calls against its
-    // compile-time channel count and has no host-side termination signal (that existed only in v1), so a
-    // mux whose 8 registered clients never open/close leaves its forwarder RISC spinning forever and the
-    // program never completes. Deploy it in the same commit that makes the kernel drive it, not before.
-    (void)bwd_coord;
+    // Both muxes are deployed now that the kernel drives both directions. Mux v2 self-terminates by
+    // counting close() calls against its compile-time channel count and has no host-side termination
+    // signal, so a mux must only ever be given clients that really do open/close it -- which is why each
+    // master registers with the mux for its OWN direction only.
+    deploy(bwd_coord, 1, ctx.mux_cfg_bwd, ctx.mux_virtual_core_bwd);
     return ctx;
 }
 
@@ -823,18 +851,43 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         // worker_core_from_logical_core returns TRANSLATED (virtual) coords, in which the Blackhole grid is
         // dense whatever the harvesting mask. Raw physical coords would straddle harvested columns here.
         fused_gather.master0_virtual = device->worker_core_from_logical_core(master_ring_cores[0]);
-        fused_gather.release_list.reserve(cores.size());
-        for (const auto& c : cores) {
-            fused_gather.release_list.push_back(device->worker_core_from_logical_core(c));
+
+        // Release the grid with ONE MULTICAST PER CoreRange. A single bounding-box mcast is not an option:
+        // the bank-adjacent placement is deliberately not a filled rectangle, so the box also covers cores
+        // running no kernel of ours. Per-range keeps the arg cost at 5 words per rectangle instead of 2 per
+        // core, which is what makes the 80- and 96-core shapes fit.
+        //
+        // Non-loopback multicast throughout: master 0 sets its own flag directly, and this variant
+        // explicitly does not write to self, so any range containing master 0 must not count it in
+        // num_dests.
+        const bool master0_on_noc1 = (core_noc[0] != 0u);
+        // all_cores was built one CoreRange(c, c) per core and CoreRangeSet does NOT auto-coalesce, so
+        // without this the "per-range" multicast degenerates to one rectangle per core (79 for an 80-core
+        // grid) and buys nothing.
+        const CoreRangeSet release_crs = all_cores.merge_ranges();
+        for (const auto& cr : release_crs.ranges()) {
+            CoreCoord s = device->worker_core_from_logical_core(cr.start_coord);
+            CoreCoord e = device->worker_core_from_logical_core(cr.end_coord);
+            if (master0_on_noc1) {
+                std::swap(s, e);  // NOC_1 traverses the grid in the opposite direction
+            }
+            const bool holds_master0 = cr.contains(master_ring_cores[0]);
+            const uint32_t dests = static_cast<uint32_t>(cr.size()) - (holds_master0 ? 1u : 0u);
+            if (dests == 0u) {
+                continue;  // a range that is master 0 alone: it already set its own flag
+            }
+            fused_gather.release_ranges.push_back(
+                {static_cast<uint32_t>(s.x),
+                 static_cast<uint32_t>(s.y),
+                 static_cast<uint32_t>(e.x),
+                 static_cast<uint32_t>(e.y),
+                 dests});
         }
-        // Two coord words per core ride in every core's arg block. Runtime args are a bounded resource, so
-        // cap this rather than silently overflowing; past this size the barrier wants a per-CoreRange
-        // multicast instead of a unicast fan-out.
         TT_FATAL(
-            fused_gather.release_list.size() <= 64u,
-            "fused gather barrier currently unicasts the release to each of {} cores, which exceeds the "
-            "64-core runtime-arg budget; switch to a per-CoreRange multicast for grids this large",
-            fused_gather.release_list.size());
+            fused_gather.release_ranges.size() <= 48u,
+            "fused gather barrier needs {} multicast rectangles to cover the worker set, over the 48 the "
+            "runtime-arg budget allows",
+            fused_gather.release_ranges.size());
     }
 
     // NOTE: packet headers come from PacketHeaderPool (a per-RISC L1 region), NOT from a circular buffer.
@@ -1173,32 +1226,54 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(k_shard_tiles);
             wa.push_back(tensor_args.gather_staging_buffer->buffer()->address());
             wa.push_back(fused_gather.chunk_ready_sem_id);
-            wa.push_back(fused_gather.mux_cfg_fwd ? 1u : 0u);
-            wa.push_back(fused_gather.mux_cfg_bwd ? 1u : 0u);
+            // Direction split: the first half of the masters drive forward, the second half backward.
+            // Each direction's cores between them cover all of M, so a core's fabric M range is indexed by
+            // (bank_id mod m_groups), not by bank_id.
+            const uint32_t m_groups_pf = fused_gather.num_masters / 2u;
+            const uint32_t bank_pf = i / preaders_pf;
+            const bool core_is_bwd = is_master_ring && (bank_pf >= m_groups_pf);
+            const bool has_fwd_client = is_master_ring && !core_is_bwd && fused_gather.mux_cfg_fwd != nullptr;
+            const bool has_bwd_client = is_master_ring && core_is_bwd && fused_gather.mux_cfg_bwd != nullptr;
+            wa.push_back(has_fwd_client ? 1u : 0u);
+            wa.push_back(has_bwd_client ? 1u : 0u);
             wa.push_back(Mt_r);                          // global M tiles (staging row count)
             wa.push_back(geo.Kt);                        // global K tiles (staging row stride)
             wa.push_back(in0.buffer()->address());       // LOCAL shard base (in0_addr now points at staging)
-            wa.push_back(i / preaders_pf);               // bank id 0..7 -> which M-slice this core stages
-            wa.push_back(fused_gather.fwd_recv_sem_addr);  // incremented by my BACKWARD neighbour
+            wa.push_back(bank_pf);                       // bank id 0..7 -> which M-slice this core stages locally
+            // My direction's credit counter, and the round split. fwd = ceil((tp-1)/2), bwd = the rest, so
+            // they sum to exactly tp-1: at even tp the antipode rides the forward stream only and is
+            // therefore delivered exactly once.
+            const uint32_t fwd_rounds = (fused_gather.tp - 1u + 1u) / 2u;
+            const uint32_t bwd_rounds = (fused_gather.tp - 1u) - fwd_rounds;
+            wa.push_back(core_is_bwd ? fused_gather.bwd_recv_sem_addr : fused_gather.fwd_recv_sem_addr);
+            wa.push_back(core_is_bwd ? 1u : 0u);
+            wa.push_back(core_is_bwd ? bwd_rounds : fwd_rounds);
+            wa.push_back(m_groups_pf);
             wa.push_back((is_master_ring && (i == 0u)) ? 1u : 0u);
             wa.push_back(fused_gather.gather_count_sem_id);
             wa.push_back(fused_gather.num_masters);
             wa.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.x));
             wa.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.y));
-            wa.push_back(static_cast<uint32_t>(fused_gather.release_list.size()));
-            for (const auto& rc : fused_gather.release_list) {
-                wa.push_back(static_cast<uint32_t>(rc.x));
-                wa.push_back(static_cast<uint32_t>(rc.y));
+            wa.push_back(static_cast<uint32_t>(fused_gather.release_ranges.size()));
+            for (const auto& rr : fused_gather.release_ranges) {
+                wa.push_back(rr.sx);
+                wa.push_back(rr.sy);
+                wa.push_back(rr.ex);
+                wa.push_back(rr.ey);
+                wa.push_back(rr.dests);
             }
             TT_FATAL(
-                wa.size() == fused_rt_base + kFusedArgCount + 2u * fused_gather.release_list.size(),
-                "fused-gather arg block is {} words but FusedGatherArg says {} + 2*{}; the push order and "
+                wa.size() == fused_rt_base + kFusedArgCount + 5u * fused_gather.release_ranges.size(),
+                "fused-gather arg block is {} words but FusedGatherArg says {} + 5*{}; the push order and "
                 "the offsets used by override_runtime_arguments have drifted",
                 wa.size() - fused_rt_base,
                 static_cast<uint32_t>(kFusedArgCount),
-                fused_gather.release_list.size());
+                fused_gather.release_ranges.size());
+            // Register ONLY with the mux this core actually drives. Registering with both would hand each
+            // mux clients that never open or close it, and mux v2 terminates by counting close() calls --
+            // its forwarder RISC would spin forever.
             if (is_master_ring) {
-                if (fused_gather.mux_cfg_fwd) {
+                if (has_fwd_client) {
                     const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
                     const auto tc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
                     fused_gather.mux_cfg_fwd->append_client_connection_rt_args(
@@ -1207,7 +1282,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
                         tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{fc, tc},
                         wa);
                 }
-                if (fused_gather.mux_cfg_bwd) {
+                if (has_bwd_client) {
                     const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
                     const auto tc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
                     fused_gather.mux_cfg_bwd->append_client_connection_rt_args(
@@ -1344,7 +1419,11 @@ void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
                 const uint32_t g = sv.fused_rt_base;
                 wa[g + kFgStageAddr] = tensor_args.gather_staging_buffer->buffer()->address();
                 wa[g + kFgShardAddr] = tensor_args.input_tensor.buffer()->address();
-                wa[g + kFgFwdRecvSem] = operation_attributes.gather_semaphores[0].address();
+                // Per-direction credit: the first half of the 8 masters run forward, the rest backward.
+                // Must mirror the split in create_at exactly, or a replay hands a core the other
+                // direction's counter and it waits on credits that arrive somewhere else.
+                const bool is_bwd = ((i / sv.preaders) >= 4u);
+                wa[g + kFgMyRecvSem] = operation_attributes.gather_semaphores[is_bwd ? 1u : 0u].address();
             }
         }
     }  // per-coordinate program

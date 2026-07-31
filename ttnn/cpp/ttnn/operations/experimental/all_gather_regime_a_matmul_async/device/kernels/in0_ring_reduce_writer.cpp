@@ -316,17 +316,22 @@ void kernel_main() {
         const uint32_t bank_id = get_arg_val<uint32_t>(fa++);
         // GLOBAL semaphore ADDRESS (not a program semaphore id): a peer chip's atomic-inc can land before
         // this program launches, so the credit has to live in memory the caller allocated up front.
-        const uint32_t fwd_recv_sem_addr = get_arg_val<uint32_t>(fa++);
+        const uint32_t my_recv_sem_addr = get_arg_val<uint32_t>(fa++);
+        const uint32_t my_dir = get_arg_val<uint32_t>(fa++);  // 0 = forward, 1 = backward
+        const uint32_t my_rounds = get_arg_val<uint32_t>(fa++);
+        const uint32_t m_groups = get_arg_val<uint32_t>(fa++);
         // On-chip barrier args (see the FusedGatherArg enum on the host).
         const uint32_t is_master0 = get_arg_val<uint32_t>(fa++);
         const uint32_t gather_count_sem_id = get_arg_val<uint32_t>(fa++);
         const uint32_t num_masters = get_arg_val<uint32_t>(fa++);
         const uint32_t master0_x = get_arg_val<uint32_t>(fa++);
         const uint32_t master0_y = get_arg_val<uint32_t>(fa++);
-        const uint32_t num_all_cores = get_arg_val<uint32_t>(fa++);
-        const std::size_t release_list_base = fa;  // num_all_cores (x, y) virtual coord pairs
-        fa += 2u * num_all_cores;
-        (void)has_bwd;  // v1 is forward-only; the backward mux is deployed but not yet driven.
+        const uint32_t num_release_ranges = get_arg_val<uint32_t>(fa++);
+        const std::size_t release_base = fa;  // 5 words per range: sx, sy, ex, ey, num_dests
+        fa += 5u * num_release_ranges;
+        // has_fwd / has_bwd are mutually exclusive: a core is a client of exactly the one mux it drives
+        // (or neither, at a line end). Which one it is comes from my_dir; the mux client block that
+        // follows is whichever the host appended.
 
         // LOCAL-SHARD accessor: the factory appends it AFTER every other accessor, and ONLY when tp > 1.
         // It must therefore be declared in here -- declaring it unconditionally reads past the end of the
@@ -379,26 +384,36 @@ void kernel_main() {
             }
             noc_async_write_barrier();
 
-            // ---- 2. forward ring: tp-1 rounds, each hop one shard further around ----
-            // Round r forwards the shard that ORIGINATED at rank-(r-1). It already sits at the same
-            // staging offset on this device as it will on the neighbour, so source and destination
-            // offsets are identical -- the hop is a straight staging->staging copy.
+            // ---- 2. bidirectional store-and-forward ring ----
+            // This core drives ONE direction (my_dir) for my_rounds rounds. fwd runs ceil((tp-1)/2) and
+            // bwd the remainder, so the two sum to exactly tp-1: at even tp the antipode rides the forward
+            // stream alone and is delivered exactly once, never twice and never dropped.
             //
-            // v1 sends over NoC to the neighbour through the mux's unicast write. Dependencies: round r
-            // (r >= 2) may only forward once round r-1 has landed here, tracked by fwd_recv_sem.
-            if (has_fwd) {
+            // Round r forwards the shard that ORIGINATED at rank -/+ (r-1) (forward/backward). It already
+            // sits at the same staging offset here as on the neighbour, so source and destination offsets
+            // are identical -- the hop is a straight staging->staging copy. Round r (r >= 2) may only
+            // forward once round r-1 has landed, tracked by this direction's own credit counter.
+            //
+            // The FABRIC M split is by (bank_id mod m_groups), not bank_id: each direction has half the
+            // masters and they must cover all of M between them. The local copy above stays 8-way.
+            const uint32_t fab_group = bank_id % m_groups;
+            const uint32_t fab_per = (Mt_total + m_groups - 1u) / m_groups;
+            const uint32_t fab_lo = fab_group * fab_per;
+            const uint32_t fab_hi = (fab_lo + fab_per < Mt_total) ? (fab_lo + fab_per) : Mt_total;
+
+            if (has_fwd || has_bwd) {
                 auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(fa);
                 sender.open();
-                volatile tt_l1_ptr uint32_t* fwd_recv =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_recv_sem_addr);
+                volatile tt_l1_ptr uint32_t* my_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_recv_sem_addr);
 
-                for (uint32_t r = 1; r < tp; ++r) {
+                for (uint32_t r = 1; r <= my_rounds; ++r) {
                     if (r >= 2) {
-                        noc_semaphore_wait_min(fwd_recv, r - 1);  // previous hop has landed
+                        noc_semaphore_wait_min(my_recv, r - 1);  // previous hop has landed
                     }
-                    const uint32_t src_rank = (rank + tp - (r - 1)) % tp;
+                    // Forward carries ranks rank-1, rank-2, ...; backward carries rank+1, rank+2, ...
+                    const uint32_t src_rank = (my_dir == 0u) ? ((rank + tp - (r - 1)) % tp) : ((rank + (r - 1)) % tp);
                     const uint32_t k0 = src_rank * k_shard_tiles;
-                    for (uint32_t m = m_lo; m < m_hi; ++m) {
+                    for (uint32_t m = fab_lo; m < fab_hi; ++m) {
                         for (uint32_t k = 0; k < k_shard_tiles; ++k) {
                             const uint32_t page = m * Kt_global + k0 + k;
                             noc_async_read_page(page, stage_acc, scratch);
@@ -438,7 +453,7 @@ void kernel_main() {
                     // mirrors twice and credits the mirror-image core. Invisible on Blackhole, where
                     // virtual coords make my_x[0] == my_x[1]; a hang on Wormhole. This writer runs on
                     // RISCV_1 / noc_index == 1, so the distinction is live.
-                    const uint64_t peer_sem_noc = safe_get_noc_addr(my_x[0], my_y[0], fwd_recv_sem_addr, 0);
+                    const uint64_t peer_sem_noc = safe_get_noc_addr(my_x[0], my_y[0], my_recv_sem_addr, 0);
                     tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
                         &sender,
                         pkt_hdr_seminc,
@@ -459,17 +474,17 @@ void kernel_main() {
         // Coarse barrier in v1: wait for all tp-1 remote shards before the on-chip ring starts. The design
         // spec's progressive per-chunk consumption is the overlap step and comes next.
         if (is_fabric_client) {
-            volatile tt_l1_ptr uint32_t* fwd_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_recv_sem_addr);
-            noc_semaphore_wait_min(fwd_recv, tp - 1);
+            volatile tt_l1_ptr uint32_t* my_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_recv_sem_addr);
+            noc_semaphore_wait_min(my_recv, my_rounds);
             // Re-arm for the next invocation. A global semaphore is caller-owned memory and nothing else
             // zeroes it, so without this the next call that lands on this same ping-pong slot would see a
             // satisfied counter and read staging before any shard arrived.
             //
-            // Safe to do here: only ONE neighbour ever increments this slot (store-and-forward), and it
-            // sends exactly tp-1 credits, so seeing the (tp-1)'th proves that neighbour has finished with
-            // this slot for this invocation. It does NOT protect against a neighbour running a whole
-            // ping-pong cycle ahead -- that is what the caller's depth>=2 rotation is for.
-            noc_semaphore_set(fwd_recv, 0);
+            // Safe to do here: only ONE neighbour ever increments this slot (store-and-forward, one
+            // direction per core), and it sends exactly my_rounds credits, so seeing the last one proves
+            // that neighbour has finished with this slot for this invocation. It does NOT protect against
+            // a neighbour running a whole ping-pong cycle ahead -- that is the caller's depth>=2 rotation.
+            noc_semaphore_set(my_recv, 0);
 
             // Report in to master 0. A master's own fwd_recv count only proves ITS M slice landed, and the
             // gather splits M by bank_id while the matmul splits it by the planner's m_start -- so no core
@@ -486,14 +501,18 @@ void kernel_main() {
             noc_semaphore_wait(count, num_masters);
             noc_semaphore_set(count, 0);  // re-arm within this launch; dispatch re-zeroes across launches
 
-            // Release every core by unicast. Includes master 0 itself: writing our own L1 through the NoC
-            // is fine and keeps the loop uniform.
+            // Our own flag first: the multicasts below are NON-loopback (they never write to self, and
+            // their num_dests already excludes master 0), so nothing else sets it.
             noc_semaphore_set(ready, VALID);
-            for (uint32_t c = 0; c < num_all_cores; ++c) {
-                const uint32_t cx = get_arg_val<uint32_t>(release_list_base + 2u * c);
-                const uint32_t cy = get_arg_val<uint32_t>(release_list_base + 2u * c + 1u);
-                noc_semaphore_set_remote(
-                    get_semaphore(ready_sem_id), get_noc_addr(cx, cy, get_semaphore(ready_sem_id)));
+            for (uint32_t r = 0; r < num_release_ranges; ++r) {
+                const std::size_t b = release_base + 5u * r;
+                const uint64_t box = get_noc_multicast_addr(
+                    get_arg_val<uint32_t>(b),
+                    get_arg_val<uint32_t>(b + 1u),
+                    get_arg_val<uint32_t>(b + 2u),
+                    get_arg_val<uint32_t>(b + 3u),
+                    get_semaphore(ready_sem_id));
+                noc_semaphore_set_multicast(get_semaphore(ready_sem_id), box, get_arg_val<uint32_t>(b + 4u));
             }
             // The sends SOURCE from our own `ready` word, so it must not be touched until they drain.
             // Blackhole makes this the likely case rather than the rare one: NoC latency there exceeds
