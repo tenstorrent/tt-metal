@@ -762,20 +762,23 @@ def _run_chunked_prefill(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=hidden_shard_dims
                 ),
             )
-            # Trace-safe metadata variant: build the runner's canonical [slot_id, actual_start, actual_end]
-            # uint32 DRAM tensor here (the "outside") and hand it to forward verbatim -- ttMLA threads it
-            # to all chunked ops (update/rope/zero_pad/ring_mla), which read their per-chunk scalars
-            # on-device. slot_id = cache_user_id (layer_num=1, so it is also the flat cache slot).
+            # Trace-safe metadata variant: build the runner's canonical metadata and hand it to forward
+            # verbatim -- ttMLA threads it to all chunked ops (update/rope/zero_pad/ring_mla), which read
+            # their per-chunk scalars on-device. The contract is a 3-tuple of separate 1-element uint32
+            # tensors indexed as metadata[0]=slot_id, [1]=actual_start, [2]=actual_end -- NOT one packed
+            # tensor. slot_id = cache_user_id (layer_num=1, so it is also the flat cache slot).
             kv_pad_metadata = None
             if use_metadata_tensor:
-                meta_payload = torch.tensor([u, kv_actual, valid_end, 0], dtype=torch.int64).reshape(1, 1, 1, 4)
-                kv_pad_metadata = ttnn.from_torch(
-                    meta_payload,
-                    device=mesh_device,
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                kv_pad_metadata = tuple(
+                    ttnn.from_torch(
+                        torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+                        device=mesh_device,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    )
+                    for val in (u, kv_actual, valid_end)
                 )
             # Metadata path: pass ONLY the metadata tensor (the runner hands tt_metadata straight from
             # inbound_socket_service_sync) -- actual_start/actual_end are read on-device, so leave them
@@ -790,7 +793,8 @@ def _run_chunked_prefill(
                 metadata=kv_pad_metadata,
             )
             if kv_pad_metadata is not None:
-                ttnn.deallocate(kv_pad_metadata)
+                for meta_tensor in kv_pad_metadata:
+                    ttnn.deallocate(meta_tensor)
             out_flat = ttnn.to_torch(
                 tt_out,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
