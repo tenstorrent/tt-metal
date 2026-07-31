@@ -1,0 +1,32 @@
+{
+  "selected_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/selected_precision_config.json",
+  "selected_config_id": "cfg08_bfp8_weights_bfp8_kv_bf16_ccl",
+  "full_model_from_pretrained_default_policy": {
+    "attention_weight_dtype": "bfloat8_b",
+    "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+    "mlp_ff2_weight_dtype": "bfloat8_b",
+    "kv_cache_dtype": "bfloat8_b",
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "norm_weight_dtype": "bfloat16",
+    "mul_dtype": "bfloat16",
+    "use_qk_fused_decode": false
+  },
+  "full_model_from_pretrained_matches_selected": true,
+  "build_generator_default_evidence_artifact": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/post_selection_token_out/token_out_no_readback_perf.json",
+  "build_generator_default_config_id": "cfg08_bfp8_weights_bfp8_kv_bf16_ccl",
+  "build_generator_default_policy": {
+    "attention_weight_dtype": "bfloat8_b",
+    "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+    "mlp_ff2_weight_dtype": "bfloat8_b",
+    "kv_cache_dtype": "bfloat8_b",
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "norm_weight_dtype": "bfloat16",
+    "mul_dtype": "bfloat16",
+    "use_qk_fused_decode": false
+  },
+  "build_generator_default_matches_selected": true,
+  "vllm_adapter_status": "not present in this autoport before vLLM integration; no vLLM integration was started in this datatype-sweep goal",
+  "future_vllm_consumption_contract": "vLLM adapter should call build_generator or Llama32FullModel.from_pretrained with the autoport cache_path so the selected config is loaded by default."
+}

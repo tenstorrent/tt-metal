@@ -1,0 +1,201 @@
+{
+  "baseline": "OptimizedDecoder single-chip TTNN",
+  "mesh_shape": [
+    1,
+    8
+  ],
+  "prefill_seq_len": 4096,
+  "decode_current_pos": 4096,
+  "prefill_pcc_vs_single_chip": 0.9999963575098795,
+  "traced_decode_replay_pcc_vs_single_chip": 0.9999943920041826,
+  "repeated_trace_replay_pcc": 0.9999999999999925,
+  "threshold": 0.995,
+  "layout_info": {
+    "mesh_shape": [
+      1,
+      8
+    ],
+    "page_table": [
+      [
+        30,
+        52,
+        17,
+        58,
+        36,
+        61,
+        59,
+        56,
+        35,
+        49,
+        44,
+        42,
+        1,
+        27,
+        5,
+        8,
+        6,
+        60,
+        24,
+        0,
+        4,
+        51,
+        22,
+        41,
+        18,
+        21,
+        64,
+        45,
+        29,
+        12,
+        28,
+        50,
+        33,
+        16,
+        46,
+        14,
+        26,
+        10,
+        3,
+        57,
+        38,
+        25,
+        55,
+        47,
+        13,
+        48,
+        11,
+        43,
+        39,
+        15,
+        32,
+        23,
+        2,
+        34,
+        62,
+        63,
+        19,
+        40,
+        7,
+        37,
+        53,
+        31,
+        20,
+        54,
+        9
+      ]
+    ],
+    "current_pos": [
+      4096
+    ],
+    "kv_cache_shape": [
+      65,
+      1,
+      64,
+      64
+    ],
+    "local_key_shapes": [
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ]
+    ],
+    "local_value_shapes": [
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ],
+      [
+        65,
+        1,
+        64,
+        64
+      ]
+    ],
+    "prefill_output_topology": "TensorTopology(distribution_shape=MeshShape([1, 8]), placements=SmallVector([PlacementReplicate(), PlacementReplicate()]), mesh_coords=MeshCoordinate([0, 0]), MeshCoordinate([0, 1]), MeshCoordinate([0, 2]), MeshCoordinate([0, 3]), MeshCoordinate([0, 4]), MeshCoordinate([0, 5]), MeshCoordinate([0, 6]), MeshCoordinate([0, 7]))",
+    "decode_output_topology": "TensorTopology(distribution_shape=MeshShape([1, 8]), placements=SmallVector([PlacementReplicate(), PlacementReplicate()]), mesh_coords=MeshCoordinate([0, 0]), MeshCoordinate([0, 1]), MeshCoordinate([0, 2]), MeshCoordinate([0, 3]), MeshCoordinate([0, 4]), MeshCoordinate([0, 5]), MeshCoordinate([0, 6]), MeshCoordinate([0, 7]))",
+    "page_block_size": 64
+  },
+  "status": "passed"
+}

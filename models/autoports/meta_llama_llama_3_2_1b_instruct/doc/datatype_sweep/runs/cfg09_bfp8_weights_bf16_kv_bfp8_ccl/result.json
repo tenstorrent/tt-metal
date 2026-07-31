@@ -1,0 +1,168 @@
+{
+  "config_id": "cfg09_bfp8_weights_bf16_kv_bfp8_ccl",
+  "precision_config_path": "/localdev/moconnor/tt-metal/models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg09_bfp8_weights_bf16_kv_bfp8_ccl.json",
+  "reference": {
+    "path": "/localdev/moconnor/tt-metal/models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt",
+    "hf_model_id": "meta-llama/Llama-3.2-1B-Instruct",
+    "k": 100,
+    "entries": 1,
+    "prompt_lens": [
+      184
+    ],
+    "generated_lens": [
+      100
+    ]
+  },
+  "thresholds": {
+    "top1": 0.9,
+    "top5": 0.98,
+    "top100": "recorded_not_gated"
+  },
+  "prefill": {
+    "entries": [
+      {
+        "top1": 0.97,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 97,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100
+      }
+    ],
+    "aggregate": {
+      "top1": 0.97,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 97,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100
+    }
+  },
+  "teacher_forcing": {
+    "entries": [
+      {
+        "top1": 0.97,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 97,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100,
+        "elapsed_s": 1.3532141149044037,
+        "e2e_t/s/u": 73.8981354824727,
+        "ttft_ms": 258.8675320148468,
+        "decode_tokens": 99.0,
+        "decode_elapsed_s": 1.0884575918316841,
+        "decode_t/s/u": 90.9543933938669
+      }
+    ],
+    "aggregate": {
+      "top1": 0.97,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 97,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100,
+      "elapsed_s": 1.3532141149044037,
+      "e2e_t/s/u": 73.8981354824727,
+      "ttft_ms": 258.8675320148468,
+      "decode_tokens": 99.0,
+      "decode_elapsed_s": 1.0884575918316841,
+      "decode_t/s/u": 90.9543933938669
+    },
+    "trace_verified": true,
+    "trace_evidence": [
+      {
+        "model": "meta-llama/Llama-3.2-1B-Instruct",
+        "max_seq_len": 4096,
+        "max_batch_size": 32,
+        "page_block_size": 64,
+        "prefill_ttft_ms": 209.19806137681007,
+        "decode_token_out_t_s_u": 91.00516437699022,
+        "decode_latency_ms_mean": 10.988387382692762,
+        "trace_state": {
+          "model_trace_captured": true,
+          "sampling_internal_traces": 1,
+          "split_greedy_trace_captured": true
+        },
+        "counters": {
+          "model_trace_captures": 1,
+          "model_trace_replays": 98,
+          "sampling_trace_captures_or_replays": 99,
+          "token_refreshes": 99,
+          "current_position_refreshes": 99,
+          "rope_index_refreshes": 99,
+          "page_table_refreshes": 99,
+          "synchronizations": 3,
+          "readbacks": 99,
+          "host_argmax_decode_steps": 0,
+          "full_logits_decode_readbacks": 0,
+          "device_position_advances": 99,
+          "device_token_feedback_steps": 99
+        },
+        "last_generation": {
+          "prompt_len": 184,
+          "max_new_tokens": 100,
+          "top_k": 1,
+          "top_p": 0.0,
+          "temperature": 1.0,
+          "teacher_forcing": true
+        },
+        "sampling_policy": {
+          "canonical": "split greedy top-1 for greedy; SamplingGenerator split top-k/top-p for sampled requests",
+          "force_argmax_enabled": false,
+          "allow_force_argmax": false,
+          "max_top_k": 32
+        },
+        "precision_policy": {
+          "attention_weight_dtype": "bfloat8_b",
+          "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+          "mlp_ff2_weight_dtype": "bfloat8_b",
+          "kv_cache_dtype": "bfloat16",
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "norm_weight_dtype": "bfloat16",
+          "mul_dtype": "bfloat16",
+          "use_qk_fused_decode": false
+        },
+        "precision_config_path": "/localdev/moconnor/tt-metal/models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg09_bfp8_weights_bf16_kv_bfp8_ccl.json",
+        "precision_config_id": "cfg09_bfp8_weights_bf16_kv_bfp8_ccl"
+      }
+    ]
+  },
+  "measurement_regime": {
+    "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+    "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+    "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+    "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+  },
+  "pass_fail": {
+    "passed": true,
+    "reasons": {
+      "top1_gate": true,
+      "top5_gate": true,
+      "trace_verified": true
+    }
+  },
+  "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg09_bfp8_weights_bf16_kv_bfp8_ccl --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg09_bfp8_weights_bf16_kv_bfp8_ccl.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg09_bfp8_weights_bf16_kv_bfp8_ccl/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+  "repo": {
+    "branch": "agentic-research/experiment-17-llama32-1b",
+    "commit": "3f9459fb070a586fc5009a65f3a69d352c5438a3"
+  },
+  "hardware": {
+    "mesh_device": "T3K",
+    "fabric_config": "FABRIC_1D_RING",
+    "mesh_shape": [
+      1,
+      8
+    ],
+    "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+  }
+}

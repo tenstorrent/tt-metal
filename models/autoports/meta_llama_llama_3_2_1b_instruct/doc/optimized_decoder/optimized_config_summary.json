@@ -1,0 +1,53 @@
+{
+  "precision_policy": {
+    "attention_weight_dtype": "BFLOAT8_B",
+    "mlp_ff1_ff3_weight_dtype": "BFLOAT4_B",
+    "mlp_ff2_weight_dtype": "BFLOAT4_B",
+    "kv_cache_dtype": "BFLOAT8_B",
+    "activation_dtype": "BFLOAT16",
+    "residual_dtype": "BFLOAT16",
+    "norm_weight_dtype": "BFLOAT16",
+    "mul_dtype": "BFLOAT16",
+    "use_qk_fused_decode": false
+  },
+  "attention": {
+    "wqkv_dtype": "BFLOAT8_B",
+    "wo_dtype": "BFLOAT8_B",
+    "kv_cache_dtype": "BFLOAT8_B",
+    "activation_dtype": "BFLOAT16",
+    "decode_qkv_program_config": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+    "decode_wo_program_config": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+    "decode_sdpa_program_config": "SDPAProgramConfig",
+    "prefill_qkv_program_config": "MatmulMultiCoreReuseMultiCastProgramConfig",
+    "prefill_wo_program_config": "MatmulMultiCoreReuseMultiCastProgramConfig",
+    "prefill_qkv_8192_in0_block_w": 8,
+    "prefill_qkv_8192_out_subblock": [
+      1,
+      4
+    ],
+    "prefill_wo_8192_in0_block_w": 8,
+    "prefill_wo_8192_out_subblock": [
+      1,
+      4
+    ],
+    "decode_input_sharded": true,
+    "decode_residual_sharded": true,
+    "uses_paged_attention": true
+  },
+  "mlp": {
+    "implementation": "_OptimizedLlamaMLP",
+    "gate_dtype": "BFLOAT4_B",
+    "up_dtype": "BFLOAT4_B",
+    "down_dtype": "BFLOAT4_B",
+    "decode_w1_w3_program_config": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+    "decode_w2_program_config": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+    "decode_w1_w3_in0_block_w": 2,
+    "decode_w2_in0_block_w": 8,
+    "decode_input_sharded": true,
+    "decode_w1_w3_output_sharded": true,
+    "decode_w2_input_sharded": true,
+    "decode_residual_sharded": true,
+    "prefill_w1_w3_program_config": "MatmulMultiCoreReuseMultiCastProgramConfig",
+    "prefill_w2_program_config": "MatmulMultiCoreReuseMultiCastProgramConfig"
+  }
+}

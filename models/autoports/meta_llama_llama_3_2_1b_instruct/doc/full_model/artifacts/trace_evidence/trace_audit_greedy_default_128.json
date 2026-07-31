@@ -1,0 +1,43 @@
+{
+  "model": "meta-llama/Llama-3.2-1B-Instruct",
+  "max_seq_len": 4096,
+  "max_batch_size": 32,
+  "page_block_size": 64,
+  "prefill_ttft_ms": 173.64128679037094,
+  "decode_token_out_t_s_u": 56.442885110807154,
+  "decode_latency_ms_mean": 17.717024883416695,
+  "trace_state": {
+    "model_trace_captured": true,
+    "sampling_internal_traces": 1,
+    "split_greedy_trace_captured": true
+  },
+  "counters": {
+    "model_trace_captures": 1,
+    "model_trace_replays": 126,
+    "sampling_trace_captures_or_replays": 127,
+    "token_refreshes": 1,
+    "current_position_refreshes": 1,
+    "rope_index_refreshes": 1,
+    "page_table_refreshes": 1,
+    "synchronizations": 3,
+    "readbacks": 127,
+    "host_argmax_decode_steps": 0,
+    "full_logits_decode_readbacks": 0,
+    "device_position_advances": 127,
+    "device_token_feedback_steps": 127
+  },
+  "last_generation": {
+    "prompt_len": 60,
+    "max_new_tokens": 128,
+    "top_k": 1,
+    "top_p": 0.0,
+    "temperature": 1.0,
+    "teacher_forcing": false
+  },
+  "sampling_policy": {
+    "canonical": "split greedy top-1 for greedy; SamplingGenerator split top-k/top-p for sampled requests",
+    "force_argmax_enabled": false,
+    "allow_force_argmax": false,
+    "max_top_k": 32
+  }
+}

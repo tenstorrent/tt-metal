@@ -1,0 +1,8 @@
+{
+  "status": "hardware_still_blocked",
+  "timestamp_utc": "2026-06-15T15:00:35Z",
+  "command": "timeout 30 tt-smi -ls --local",
+  "exit_code": 124,
+  "stdout": "",
+  "interpretation": "T3K discovery remains unhealthy on the third consecutive blocker turn after the watcher ETH/fabric failure. The optimized-multichip-decoder goal cannot safely collect watcher-clean or final tt-perf-report evidence until the physical host/devices are recovered."
+}

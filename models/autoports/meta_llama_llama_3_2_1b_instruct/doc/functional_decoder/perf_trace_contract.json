@@ -1,0 +1,13 @@
+{
+  "prefill_seq_len": 8192,
+  "decode_current_pos": 8192,
+  "prefill_signposts": [
+    "PERF_PREFILL",
+    "PERF_PREFILL_END"
+  ],
+  "decode_signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ],
+  "decode_measurement": "single warmed ttnn.execute_trace replay"
+}

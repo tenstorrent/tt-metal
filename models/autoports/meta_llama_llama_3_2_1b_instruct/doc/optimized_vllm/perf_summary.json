@@ -1,0 +1,121 @@
+{
+  "model": "meta-llama/Llama-3.2-1B-Instruct",
+  "stage": "optimized-vllm",
+  "date_utc": "2026-06-15",
+  "status": "passed",
+  "measured_path": "real vLLM TT plugin serving through models/autoports/meta_llama_llama_3_2_1b_instruct/tt/generator_vllm.py",
+  "workload": {
+    "runner": "models/common/readiness_check/run_vllm_server.py",
+    "prompt_len": 128,
+    "gen_len": 128,
+    "num_requests": 8,
+    "concurrency": 1,
+    "batch": 1,
+    "max_num_seqs": 1,
+    "max_model_len": 4096,
+    "block_size": 64,
+    "mesh": "T3K 1x8",
+    "sampling_mode": "sample_on_device_mode=all",
+    "tt_config": {
+      "trace_region_size": 100000000,
+      "fabric_config": "FABRIC_1D_RING",
+      "sample_on_device_mode": "all"
+    }
+  },
+  "before": {
+    "source": "doc/vllm_integration/README.md",
+    "ttft_ms": {
+      "p50": 52.5598,
+      "p99": 62.8154,
+      "mean": 54.5469
+    },
+    "itl_ms": {
+      "p50": 7.5216,
+      "p99": 10.0567,
+      "mean": 7.6129
+    },
+    "output_throughput_tok_per_s": 110.798,
+    "request_throughput_per_s": 0.9838,
+    "mean_per_request_decode_tps": 116.0061,
+    "qualitative_sampled_status": "failed"
+  },
+  "after": {
+    "source": "readiness_vllm/vllm_benchmark.json",
+    "completed_requests": 8,
+    "elapsed_s": 8.185753777623177,
+    "total_output_tokens": 901,
+    "ttft_ms": {
+      "p50": 52.981674671173096,
+      "p99": 78.87373119592667,
+      "mean": 56.640701834112406
+    },
+    "itl_ms": {
+      "p50": 7.55845382809639,
+      "p99": 10.008081793785095,
+      "mean": 7.63468282487064
+    },
+    "output_throughput_tok_per_s": 110.06927699963329,
+    "request_throughput_per_s": 0.9773076759123932,
+    "mean_per_request_decode_tps": 115.6349301709903,
+    "decode_ms_per_token_e2e_from_mean_per_request_decode_tps": 8.647905680475387,
+    "qualitative_sampled_status": "passed"
+  },
+  "optimized_full_model_comparison": {
+    "optimized_vllm_decode_t_s_u": 115.6349301709903,
+    "optimized_full_model_teacher_forcing_decode_t_s_u": 91.89,
+    "optimized_full_model_token_out_no_readback_t_s_u": 159.96620445175557,
+    "datatype_sweep_token_out_no_readback_t_s_u": 146.75009872500144,
+    "vllm_to_full_model_teacher_forcing_ratio": 1.2584080416903863,
+    "vllm_to_full_model_token_out_no_readback_ratio": 0.7228748017714716
+  },
+  "device_time_decode_ms_per_token": null,
+  "roofline_ms_per_token_estimate": null,
+  "device_time_reason": "live vLLM serving profiler collection is intentionally disabled by the vLLM/optimize skill to protect T3K hardware; equivalent reduced full-model profiler artifacts are referenced instead",
+  "profiler_evidence": {
+    "live_vllm_profiler_collected": false,
+    "equivalent_artifacts": [
+      "doc/optimized_full_model/perf/eager_decode_reduced_tt_perf_report.txt",
+      "doc/optimized_full_model/perf/eager_decode_reduced_per_device_tt_perf_report.txt",
+      "doc/optimized_full_model/perf/ops_perf_results_raw.csv",
+      "doc/optimized_full_model/perf/perf_summary.json"
+    ],
+    "terminal_profile_summary": {
+      "lm_head_matmul_us": 619.595,
+      "sampler_pad_topk_us": 202.631,
+      "sampler_candidate_all_gather_us": 63.129125,
+      "sampler_argmax_gather_pack_us": 166.023,
+      "force_argmax_enabled": false,
+      "full_vocab_all_gather": false,
+      "local_logits_width": 16032,
+      "local_topk_input_width": 16384
+    }
+  },
+  "contract_evidence": {
+    "sampling_tests": "19 passed, 42 deselected",
+    "qualitative_prompts": 6,
+    "degenerate_output_check": "passed",
+    "supports_async_decode": true,
+    "tt_async_decode_allows_overlap": false,
+    "async_boundary_artifact": "readiness_vllm/async_boundary_debug.jsonl",
+    "async_read_events": 39,
+    "async_read_true_events": 39,
+    "stale_input_artifact": "readiness_vllm/adapter_trace_input_refresh_contract.json",
+    "unchanged_page_table_refreshes": 0,
+    "changed_page_table_refreshes": 1,
+    "host_argmax_decode_steps": 0,
+    "full_logits_decode_readbacks": 0,
+    "readbacks_in_stale_contract": 0,
+    "blocking_trace_replay": false,
+    "execute_trace_blocking_false": true,
+    "device_token_feedback": true,
+    "device_position_advance": true
+  },
+  "named_limitations": [
+    "batch-1 serving only",
+    "tt_async_decode_allows_overlap remains false",
+    "prefix caching disabled",
+    "vLLM logprob API support disabled",
+    "unbounded/default vLLM sampled requests are mapped to split-greedy, so qualitative sampled completions equal greedy completions",
+    "device-time and roofline fields are null because live vLLM profiling is intentionally skipped"
+  ]
+}

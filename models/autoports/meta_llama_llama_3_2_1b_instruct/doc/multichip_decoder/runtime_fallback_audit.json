@@ -1,0 +1,17 @@
+{
+  "mesh_shape": [
+    1,
+    8
+  ],
+  "prefill_seq_len": 128,
+  "decode_current_pos": 128,
+  "guarded_python_bridges": [
+    "ttnn.from_torch",
+    "ttnn.to_torch"
+  ],
+  "measured_passes": [
+    "prefill_forward",
+    "decode_forward_trace_capture_and_replay"
+  ],
+  "status": "passed"
+}

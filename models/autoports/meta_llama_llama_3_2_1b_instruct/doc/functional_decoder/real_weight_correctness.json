@@ -1,0 +1,8 @@
+{
+  "prefill_seq_len": 128,
+  "decode_current_pos": 128,
+  "prefill_pcc": 0.9999887962958824,
+  "traced_decode_replay_pcc": 0.9999900152159172,
+  "repeated_trace_replay_pcc": 0.9999999999999991,
+  "threshold": 0.995
+}

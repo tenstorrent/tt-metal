@@ -1,0 +1,1561 @@
+{
+  "schema_version": 1,
+  "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+  "generated_at_utc": "2026-06-15T19:26:52.262186+00:00",
+  "acceptance_thresholds": {
+    "top1": 0.9,
+    "top5": 0.98,
+    "top100": "recorded_not_gated"
+  },
+  "reference": {
+    "path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt",
+    "provenance": "AIME24 prompt source with Llama chat template, gen_len=100, top_k=100",
+    "prompt_len": 184,
+    "generated_tokens": 100
+  },
+  "official_refreshed_builtin_baseline": {
+    "prefill": {
+      "top1": 0.88,
+      "matches_top1": 88,
+      "total": 100,
+      "top5": 1.0,
+      "matches_top5": 100,
+      "top100": 1.0,
+      "matches_top100": 100
+    },
+    "teacher_forcing": {
+      "top1": 0.86,
+      "matches_top1": 86,
+      "total": 100,
+      "top5": 1.0,
+      "matches_top5": 100,
+      "top100": 1.0,
+      "matches_top100": 100,
+      "ttft_ms": 245.25,
+      "decode_t_s_u": 98.5,
+      "e2e_t_s_u": 79.59
+    },
+    "commands": {
+      "prefill": "python -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "teacher_forcing": "python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --mesh-device T3K --fabric-config FABRIC_1D_RING"
+    },
+    "logs": {
+      "prefill": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/baseline_builtin/prefill.log",
+      "teacher_forcing": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/baseline_builtin/teacher_forcing.log"
+    }
+  },
+  "selected_config_id": "cfg08_bfp8_weights_bfp8_kv_bf16_ccl",
+  "selected_precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/selected_precision_config.json",
+  "selected_result": {
+    "config_id": "cfg08_bfp8_weights_bfp8_kv_bf16_ccl",
+    "precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg08_bfp8_weights_bfp8_kv_bf16_ccl.json",
+    "description": "BFP8 attention and MLP weights with BFP8 KV cache but BF16 CCL payloads.",
+    "dtype_policy": {
+      "attention_weight_dtype": "bfloat8_b",
+      "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+      "mlp_ff2_weight_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat8_b",
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "norm_weight_dtype": "bfloat16",
+      "mul_dtype": "bfloat16",
+      "use_qk_fused_decode": false
+    },
+    "weight_groups": {
+      "tok_embeddings": {
+        "dtype": "bfloat16",
+        "layers": "global"
+      },
+      "attention_qkv": {
+        "dtype": "bfloat8_b",
+        "layers": "0-15"
+      },
+      "attention_wo": {
+        "dtype": "bfloat8_b",
+        "layers": "0-15"
+      },
+      "mlp_gate_up_ff1_ff3": {
+        "dtype": "bfloat8_b",
+        "layers": "0-15"
+      },
+      "mlp_down_ff2": {
+        "dtype": "bfloat8_b",
+        "layers": "0-15"
+      },
+      "rmsnorm": {
+        "dtype": "bfloat16",
+        "layers": "0-15 plus final norm"
+      },
+      "lm_head": {
+        "dtype": "bfloat8_b",
+        "layers": "global tied embedding transpose"
+      }
+    },
+    "layer_exceptions": [],
+    "activation_residual": {
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "mul_dtype": "bfloat16"
+    },
+    "ccl": {
+      "all_gather_dtype": "bfloat16",
+      "reduce_scatter_dtype": "bfloat16",
+      "persistent_buffers": true,
+      "runtime_env_overrides": {
+        "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat16",
+        "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat16",
+        "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+      }
+    },
+    "kv_cache": {
+      "dtype": "bfloat8_b",
+      "layout": "paged local one-KV-head cache per chip"
+    },
+    "logits_sampling": {
+      "lm_head_weight_dtype": "bfloat8_b",
+      "lm_head_output_dtype": "bfloat16",
+      "local_logits_sampler_input_dtype": "bfloat16",
+      "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+    },
+    "compute_fidelities": {
+      "attention_qkv_decode": "HiFi2 fp16 accumulate",
+      "attention_wo_decode": "HiFi2 fp16 accumulate",
+      "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+      "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+      "attention_wo_prefill": "HiFi2 fp16 accumulate",
+      "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+      "mlp_gate_up": "HiFi2 fp16 accumulate",
+      "mlp_down": "HiFi2 fp16 accumulate",
+      "rmsnorm": "HiFi2 fp16 accumulate",
+      "lm_head": "HiFi2 fp16 accumulate"
+    },
+    "prefill_top1": 0.96,
+    "prefill_top5": 1.0,
+    "prefill_top100": 1.0,
+    "top1": 0.96,
+    "top5": 1.0,
+    "top100": 1.0,
+    "matches_top1": 96,
+    "matches_top5": 100,
+    "matches_top100": 100,
+    "total_tokens": 100,
+    "ttft_ms": 183.02760645747185,
+    "trace_verified_teacher_forcing_decode_t_s_u": 92.67547693697753,
+    "teacher_forcing_decode_tokens": 99.0,
+    "teacher_forcing_decode_elapsed_s": 1.0682437606155872,
+    "measurement_regime": {
+      "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+      "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+      "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+      "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+    },
+    "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg08_bfp8_weights_bfp8_kv_bf16_ccl --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg08_bfp8_weights_bfp8_kv_bf16_ccl.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg08_bfp8_weights_bfp8_kv_bf16_ccl/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+    "hardware": {
+      "mesh_device": "T3K",
+      "fabric_config": "FABRIC_1D_RING",
+      "mesh_shape": [
+        1,
+        8
+      ],
+      "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+    },
+    "mesh": {
+      "mesh_device": "T3K",
+      "fabric_config": "FABRIC_1D_RING",
+      "mesh_shape": [
+        1,
+        8
+      ]
+    },
+    "pass_fail": {
+      "passed": true,
+      "reasons": {
+        "top1_gate": true,
+        "top5_gate": true,
+        "trace_verified": true
+      }
+    },
+    "trace_verified": true,
+    "result_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg08_bfp8_weights_bfp8_kv_bf16_ccl/result.json"
+  },
+  "post_selection_token_out": {
+    "artifact": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/post_selection_token_out/token_out_no_readback_perf.json",
+    "config_id": "cfg08_bfp8_weights_bfp8_kv_bf16_ccl",
+    "ttft_ms": 1407.0162884891033,
+    "decode_token_out_no_readback_t_s_u": 146.75009872500144,
+    "decode_latency_ms_mean": 6.814305466832593,
+    "prompt_len": 60,
+    "decode_steps": 128,
+    "warmup_steps": 1,
+    "counter_deltas_measured_decode": {
+      "model_trace_captures": 0,
+      "model_trace_replays": 128,
+      "sampling_trace_captures_or_replays": 128,
+      "token_refreshes": 0,
+      "current_position_refreshes": 0,
+      "rope_index_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 1,
+      "readbacks": 0,
+      "host_argmax_decode_steps": 0,
+      "full_logits_decode_readbacks": 0,
+      "device_position_advances": 128,
+      "device_token_feedback_steps": 128
+    },
+    "measurement_regime": "warmed traced token-out no-readback benchmark, normal selected-config construction path"
+  },
+  "propagation_check": {
+    "selected_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/selected_precision_config.json",
+    "selected_config_id": "cfg08_bfp8_weights_bfp8_kv_bf16_ccl",
+    "full_model_from_pretrained_default_policy": {
+      "attention_weight_dtype": "bfloat8_b",
+      "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+      "mlp_ff2_weight_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat8_b",
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "norm_weight_dtype": "bfloat16",
+      "mul_dtype": "bfloat16",
+      "use_qk_fused_decode": false
+    },
+    "full_model_from_pretrained_matches_selected": true,
+    "build_generator_default_evidence_artifact": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/post_selection_token_out/token_out_no_readback_perf.json",
+    "build_generator_default_config_id": "cfg08_bfp8_weights_bfp8_kv_bf16_ccl",
+    "build_generator_default_policy": {
+      "attention_weight_dtype": "bfloat8_b",
+      "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+      "mlp_ff2_weight_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat8_b",
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "norm_weight_dtype": "bfloat16",
+      "mul_dtype": "bfloat16",
+      "use_qk_fused_decode": false
+    },
+    "build_generator_default_matches_selected": true,
+    "vllm_adapter_status": "not present in this autoport before vLLM integration; no vLLM integration was started in this datatype-sweep goal",
+    "future_vllm_consumption_contract": "vLLM adapter should call build_generator or Llama32FullModel.from_pretrained with the autoport cache_path so the selected config is loaded by default."
+  },
+  "results": [
+    {
+      "config_id": "cfg06_bf16_attn_bfp4_mlp_bfp8_kv_ccl",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg06_bf16_attn_bfp4_mlp_bfp8_kv_ccl.json",
+      "description": "Restore attention weights to BF16 while keeping BFP4 MLP, BFP8 KV, and BFP8 CCL.",
+      "dtype_policy": {
+        "attention_weight_dtype": "bfloat16",
+        "mlp_ff1_ff3_weight_dtype": "bfloat4_b",
+        "mlp_ff2_weight_dtype": "bfloat4_b",
+        "kv_cache_dtype": "bfloat8_b",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "norm_weight_dtype": "bfloat16",
+        "mul_dtype": "bfloat16",
+        "use_qk_fused_decode": false
+      },
+      "weight_groups": {
+        "tok_embeddings": {
+          "dtype": "bfloat16",
+          "layers": "global"
+        },
+        "attention_qkv": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "attention_wo": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "mlp_gate_up_ff1_ff3": {
+          "dtype": "bfloat4_b",
+          "layers": "0-15"
+        },
+        "mlp_down_ff2": {
+          "dtype": "bfloat4_b",
+          "layers": "0-15"
+        },
+        "rmsnorm": {
+          "dtype": "bfloat16",
+          "layers": "0-15 plus final norm"
+        },
+        "lm_head": {
+          "dtype": "bfloat8_b",
+          "layers": "global tied embedding transpose"
+        }
+      },
+      "layer_exceptions": [],
+      "activation_residual": {
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "mul_dtype": "bfloat16"
+      },
+      "ccl": {
+        "all_gather_dtype": "bfloat8_b",
+        "reduce_scatter_dtype": "bfloat8_b",
+        "persistent_buffers": true,
+        "runtime_env_overrides": {
+          "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+        }
+      },
+      "kv_cache": {
+        "dtype": "bfloat8_b",
+        "layout": "paged local one-KV-head cache per chip"
+      },
+      "logits_sampling": {
+        "lm_head_weight_dtype": "bfloat8_b",
+        "lm_head_output_dtype": "bfloat16",
+        "local_logits_sampler_input_dtype": "bfloat16",
+        "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+      },
+      "compute_fidelities": {
+        "attention_qkv_decode": "HiFi2 fp16 accumulate",
+        "attention_wo_decode": "HiFi2 fp16 accumulate",
+        "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+        "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+        "attention_wo_prefill": "HiFi2 fp16 accumulate",
+        "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+        "mlp_gate_up": "HiFi2 fp16 accumulate",
+        "mlp_down": "HiFi2 fp16 accumulate",
+        "rmsnorm": "HiFi2 fp16 accumulate",
+        "lm_head": "HiFi2 fp16 accumulate"
+      },
+      "prefill_top1": 0.87,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "top1": 0.86,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 86,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total_tokens": 100,
+      "ttft_ms": 255.0615444779396,
+      "trace_verified_teacher_forcing_decode_t_s_u": 93.38915953320233,
+      "teacher_forcing_decode_tokens": 99.0,
+      "teacher_forcing_decode_elapsed_s": 1.060080211609602,
+      "measurement_regime": {
+        "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+        "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+        "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+        "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+      },
+      "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg06_bf16_attn_bfp4_mlp_bfp8_kv_ccl --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg06_bf16_attn_bfp4_mlp_bfp8_kv_ccl.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg06_bf16_attn_bfp4_mlp_bfp8_kv_ccl/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "hardware": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+      },
+      "mesh": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ]
+      },
+      "pass_fail": {
+        "passed": false,
+        "reasons": {
+          "top1_gate": false,
+          "top5_gate": true,
+          "trace_verified": true
+        }
+      },
+      "trace_verified": true,
+      "result_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg06_bf16_attn_bfp4_mlp_bfp8_kv_ccl/result.json"
+    },
+    {
+      "config_id": "cfg08_bfp8_weights_bfp8_kv_bf16_ccl",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg08_bfp8_weights_bfp8_kv_bf16_ccl.json",
+      "description": "BFP8 attention and MLP weights with BFP8 KV cache but BF16 CCL payloads.",
+      "dtype_policy": {
+        "attention_weight_dtype": "bfloat8_b",
+        "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+        "mlp_ff2_weight_dtype": "bfloat8_b",
+        "kv_cache_dtype": "bfloat8_b",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "norm_weight_dtype": "bfloat16",
+        "mul_dtype": "bfloat16",
+        "use_qk_fused_decode": false
+      },
+      "weight_groups": {
+        "tok_embeddings": {
+          "dtype": "bfloat16",
+          "layers": "global"
+        },
+        "attention_qkv": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "attention_wo": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "mlp_gate_up_ff1_ff3": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "mlp_down_ff2": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "rmsnorm": {
+          "dtype": "bfloat16",
+          "layers": "0-15 plus final norm"
+        },
+        "lm_head": {
+          "dtype": "bfloat8_b",
+          "layers": "global tied embedding transpose"
+        }
+      },
+      "layer_exceptions": [],
+      "activation_residual": {
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "mul_dtype": "bfloat16"
+      },
+      "ccl": {
+        "all_gather_dtype": "bfloat16",
+        "reduce_scatter_dtype": "bfloat16",
+        "persistent_buffers": true,
+        "runtime_env_overrides": {
+          "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat16",
+          "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat16",
+          "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+        }
+      },
+      "kv_cache": {
+        "dtype": "bfloat8_b",
+        "layout": "paged local one-KV-head cache per chip"
+      },
+      "logits_sampling": {
+        "lm_head_weight_dtype": "bfloat8_b",
+        "lm_head_output_dtype": "bfloat16",
+        "local_logits_sampler_input_dtype": "bfloat16",
+        "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+      },
+      "compute_fidelities": {
+        "attention_qkv_decode": "HiFi2 fp16 accumulate",
+        "attention_wo_decode": "HiFi2 fp16 accumulate",
+        "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+        "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+        "attention_wo_prefill": "HiFi2 fp16 accumulate",
+        "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+        "mlp_gate_up": "HiFi2 fp16 accumulate",
+        "mlp_down": "HiFi2 fp16 accumulate",
+        "rmsnorm": "HiFi2 fp16 accumulate",
+        "lm_head": "HiFi2 fp16 accumulate"
+      },
+      "prefill_top1": 0.96,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "top1": 0.96,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 96,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total_tokens": 100,
+      "ttft_ms": 183.02760645747185,
+      "trace_verified_teacher_forcing_decode_t_s_u": 92.67547693697753,
+      "teacher_forcing_decode_tokens": 99.0,
+      "teacher_forcing_decode_elapsed_s": 1.0682437606155872,
+      "measurement_regime": {
+        "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+        "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+        "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+        "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+      },
+      "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg08_bfp8_weights_bfp8_kv_bf16_ccl --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg08_bfp8_weights_bfp8_kv_bf16_ccl.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg08_bfp8_weights_bfp8_kv_bf16_ccl/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "hardware": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+      },
+      "mesh": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ]
+      },
+      "pass_fail": {
+        "passed": true,
+        "reasons": {
+          "top1_gate": true,
+          "top5_gate": true,
+          "trace_verified": true
+        }
+      },
+      "trace_verified": true,
+      "result_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg08_bfp8_weights_bfp8_kv_bf16_ccl/result.json"
+    },
+    {
+      "config_id": "cfg04_bfp8_weights_bf16_kv_ccl",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg04_bfp8_weights_bf16_kv_ccl.json",
+      "description": "BFP8 attention and MLP weights with BF16 KV cache and CCL payloads.",
+      "dtype_policy": {
+        "attention_weight_dtype": "bfloat8_b",
+        "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+        "mlp_ff2_weight_dtype": "bfloat8_b",
+        "kv_cache_dtype": "bfloat16",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "norm_weight_dtype": "bfloat16",
+        "mul_dtype": "bfloat16",
+        "use_qk_fused_decode": false
+      },
+      "weight_groups": {
+        "tok_embeddings": {
+          "dtype": "bfloat16",
+          "layers": "global"
+        },
+        "attention_qkv": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "attention_wo": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "mlp_gate_up_ff1_ff3": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "mlp_down_ff2": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "rmsnorm": {
+          "dtype": "bfloat16",
+          "layers": "0-15 plus final norm"
+        },
+        "lm_head": {
+          "dtype": "bfloat8_b",
+          "layers": "global tied embedding transpose"
+        }
+      },
+      "layer_exceptions": [],
+      "activation_residual": {
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "mul_dtype": "bfloat16"
+      },
+      "ccl": {
+        "all_gather_dtype": "bfloat16",
+        "reduce_scatter_dtype": "bfloat16",
+        "persistent_buffers": true,
+        "runtime_env_overrides": {
+          "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat16",
+          "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat16",
+          "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+        }
+      },
+      "kv_cache": {
+        "dtype": "bfloat16",
+        "layout": "paged local one-KV-head cache per chip"
+      },
+      "logits_sampling": {
+        "lm_head_weight_dtype": "bfloat8_b",
+        "lm_head_output_dtype": "bfloat16",
+        "local_logits_sampler_input_dtype": "bfloat16",
+        "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+      },
+      "compute_fidelities": {
+        "attention_qkv_decode": "HiFi2 fp16 accumulate",
+        "attention_wo_decode": "HiFi2 fp16 accumulate",
+        "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+        "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+        "attention_wo_prefill": "HiFi2 fp16 accumulate",
+        "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+        "mlp_gate_up": "HiFi2 fp16 accumulate",
+        "mlp_down": "HiFi2 fp16 accumulate",
+        "rmsnorm": "HiFi2 fp16 accumulate",
+        "lm_head": "HiFi2 fp16 accumulate"
+      },
+      "prefill_top1": 0.96,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "top1": 0.96,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 96,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total_tokens": 100,
+      "ttft_ms": 181.604266166687,
+      "trace_verified_teacher_forcing_decode_t_s_u": 92.12936959425365,
+      "teacher_forcing_decode_tokens": 99.0,
+      "teacher_forcing_decode_elapsed_s": 1.0745758973062038,
+      "measurement_regime": {
+        "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+        "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+        "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+        "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+      },
+      "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg04_bfp8_weights_bf16_kv_ccl --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg04_bfp8_weights_bf16_kv_ccl.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg04_bfp8_weights_bf16_kv_ccl/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "hardware": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+      },
+      "mesh": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ]
+      },
+      "pass_fail": {
+        "passed": true,
+        "reasons": {
+          "top1_gate": true,
+          "top5_gate": true,
+          "trace_verified": true
+        }
+      },
+      "trace_verified": true,
+      "result_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg04_bfp8_weights_bf16_kv_ccl/result.json"
+    },
+    {
+      "config_id": "cfg00_optimized_default",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg00_optimized_default.json",
+      "description": "Current optimized full-model default: BFP8 attention, BFP4 MLP, BFP8 KV/cache collectives.",
+      "dtype_policy": {
+        "attention_weight_dtype": "bfloat8_b",
+        "mlp_ff1_ff3_weight_dtype": "bfloat4_b",
+        "mlp_ff2_weight_dtype": "bfloat4_b",
+        "kv_cache_dtype": "bfloat8_b",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "norm_weight_dtype": "bfloat16",
+        "mul_dtype": "bfloat16",
+        "use_qk_fused_decode": false
+      },
+      "weight_groups": {
+        "tok_embeddings": {
+          "dtype": "bfloat16",
+          "layers": "global"
+        },
+        "attention_qkv": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "attention_wo": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "mlp_gate_up_ff1_ff3": {
+          "dtype": "bfloat4_b",
+          "layers": "0-15"
+        },
+        "mlp_down_ff2": {
+          "dtype": "bfloat4_b",
+          "layers": "0-15"
+        },
+        "rmsnorm": {
+          "dtype": "bfloat16",
+          "layers": "0-15 plus final norm"
+        },
+        "lm_head": {
+          "dtype": "bfloat8_b",
+          "layers": "global tied embedding transpose"
+        }
+      },
+      "layer_exceptions": [],
+      "activation_residual": {
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "mul_dtype": "bfloat16"
+      },
+      "ccl": {
+        "all_gather_dtype": "bfloat8_b",
+        "reduce_scatter_dtype": "bfloat8_b",
+        "persistent_buffers": true,
+        "runtime_env_overrides": {
+          "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+        }
+      },
+      "kv_cache": {
+        "dtype": "bfloat8_b",
+        "layout": "paged local one-KV-head cache per chip"
+      },
+      "logits_sampling": {
+        "lm_head_weight_dtype": "bfloat8_b",
+        "lm_head_output_dtype": "bfloat16",
+        "local_logits_sampler_input_dtype": "bfloat16",
+        "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+      },
+      "compute_fidelities": {
+        "attention_qkv_decode": "HiFi2 fp16 accumulate",
+        "attention_wo_decode": "HiFi2 fp16 accumulate",
+        "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+        "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+        "attention_wo_prefill": "HiFi2 fp16 accumulate",
+        "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+        "mlp_gate_up": "HiFi2 fp16 accumulate",
+        "mlp_down": "HiFi2 fp16 accumulate",
+        "rmsnorm": "HiFi2 fp16 accumulate",
+        "lm_head": "HiFi2 fp16 accumulate"
+      },
+      "prefill_top1": 0.88,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "top1": 0.86,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 86,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total_tokens": 100,
+      "ttft_ms": 272.93845638632774,
+      "trace_verified_teacher_forcing_decode_t_s_u": 90.9726199496922,
+      "teacher_forcing_decode_tokens": 99.0,
+      "teacher_forcing_decode_elapsed_s": 1.0882395170629025,
+      "measurement_regime": {
+        "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+        "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+        "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+        "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+      },
+      "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg00_optimized_default --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg00_optimized_default.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg00_optimized_default/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "hardware": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+      },
+      "mesh": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ]
+      },
+      "pass_fail": {
+        "passed": false,
+        "reasons": {
+          "top1_gate": false,
+          "top5_gate": true,
+          "trace_verified": true
+        }
+      },
+      "trace_verified": true,
+      "result_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg00_optimized_default/result.json"
+    },
+    {
+      "config_id": "cfg09_bfp8_weights_bf16_kv_bfp8_ccl",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg09_bfp8_weights_bf16_kv_bfp8_ccl.json",
+      "description": "BFP8 attention and MLP weights with BF16 KV cache but BFP8 CCL payloads.",
+      "dtype_policy": {
+        "attention_weight_dtype": "bfloat8_b",
+        "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+        "mlp_ff2_weight_dtype": "bfloat8_b",
+        "kv_cache_dtype": "bfloat16",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "norm_weight_dtype": "bfloat16",
+        "mul_dtype": "bfloat16",
+        "use_qk_fused_decode": false
+      },
+      "weight_groups": {
+        "tok_embeddings": {
+          "dtype": "bfloat16",
+          "layers": "global"
+        },
+        "attention_qkv": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "attention_wo": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "mlp_gate_up_ff1_ff3": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "mlp_down_ff2": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "rmsnorm": {
+          "dtype": "bfloat16",
+          "layers": "0-15 plus final norm"
+        },
+        "lm_head": {
+          "dtype": "bfloat8_b",
+          "layers": "global tied embedding transpose"
+        }
+      },
+      "layer_exceptions": [],
+      "activation_residual": {
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "mul_dtype": "bfloat16"
+      },
+      "ccl": {
+        "all_gather_dtype": "bfloat8_b",
+        "reduce_scatter_dtype": "bfloat8_b",
+        "persistent_buffers": true,
+        "runtime_env_overrides": {
+          "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+        }
+      },
+      "kv_cache": {
+        "dtype": "bfloat16",
+        "layout": "paged local one-KV-head cache per chip"
+      },
+      "logits_sampling": {
+        "lm_head_weight_dtype": "bfloat8_b",
+        "lm_head_output_dtype": "bfloat16",
+        "local_logits_sampler_input_dtype": "bfloat16",
+        "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+      },
+      "compute_fidelities": {
+        "attention_qkv_decode": "HiFi2 fp16 accumulate",
+        "attention_wo_decode": "HiFi2 fp16 accumulate",
+        "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+        "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+        "attention_wo_prefill": "HiFi2 fp16 accumulate",
+        "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+        "mlp_gate_up": "HiFi2 fp16 accumulate",
+        "mlp_down": "HiFi2 fp16 accumulate",
+        "rmsnorm": "HiFi2 fp16 accumulate",
+        "lm_head": "HiFi2 fp16 accumulate"
+      },
+      "prefill_top1": 0.97,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "top1": 0.97,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 97,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total_tokens": 100,
+      "ttft_ms": 258.8675320148468,
+      "trace_verified_teacher_forcing_decode_t_s_u": 90.9543933938669,
+      "teacher_forcing_decode_tokens": 99.0,
+      "teacher_forcing_decode_elapsed_s": 1.0884575918316841,
+      "measurement_regime": {
+        "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+        "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+        "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+        "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+      },
+      "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg09_bfp8_weights_bf16_kv_bfp8_ccl --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg09_bfp8_weights_bf16_kv_bfp8_ccl.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg09_bfp8_weights_bf16_kv_bfp8_ccl/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "hardware": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+      },
+      "mesh": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ]
+      },
+      "pass_fail": {
+        "passed": true,
+        "reasons": {
+          "top1_gate": true,
+          "top5_gate": true,
+          "trace_verified": true
+        }
+      },
+      "trace_verified": true,
+      "result_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg09_bfp8_weights_bf16_kv_bfp8_ccl/result.json"
+    },
+    {
+      "config_id": "cfg05_bfp8_attn_bfp4_gateup_bf16_down_bfp8_kv_ccl",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg05_bfp8_attn_bfp4_gateup_bf16_down_bfp8_kv_ccl.json",
+      "description": "Restore FF2/down projection to BF16 while keeping BFP4 gate/up, BFP8 attention, KV, and CCL.",
+      "dtype_policy": {
+        "attention_weight_dtype": "bfloat8_b",
+        "mlp_ff1_ff3_weight_dtype": "bfloat4_b",
+        "mlp_ff2_weight_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "norm_weight_dtype": "bfloat16",
+        "mul_dtype": "bfloat16",
+        "use_qk_fused_decode": false
+      },
+      "weight_groups": {
+        "tok_embeddings": {
+          "dtype": "bfloat16",
+          "layers": "global"
+        },
+        "attention_qkv": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "attention_wo": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "mlp_gate_up_ff1_ff3": {
+          "dtype": "bfloat4_b",
+          "layers": "0-15"
+        },
+        "mlp_down_ff2": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "rmsnorm": {
+          "dtype": "bfloat16",
+          "layers": "0-15 plus final norm"
+        },
+        "lm_head": {
+          "dtype": "bfloat8_b",
+          "layers": "global tied embedding transpose"
+        }
+      },
+      "layer_exceptions": [],
+      "activation_residual": {
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "mul_dtype": "bfloat16"
+      },
+      "ccl": {
+        "all_gather_dtype": "bfloat8_b",
+        "reduce_scatter_dtype": "bfloat8_b",
+        "persistent_buffers": true,
+        "runtime_env_overrides": {
+          "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+        }
+      },
+      "kv_cache": {
+        "dtype": "bfloat8_b",
+        "layout": "paged local one-KV-head cache per chip"
+      },
+      "logits_sampling": {
+        "lm_head_weight_dtype": "bfloat8_b",
+        "lm_head_output_dtype": "bfloat16",
+        "local_logits_sampler_input_dtype": "bfloat16",
+        "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+      },
+      "compute_fidelities": {
+        "attention_qkv_decode": "HiFi2 fp16 accumulate",
+        "attention_wo_decode": "HiFi2 fp16 accumulate",
+        "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+        "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+        "attention_wo_prefill": "HiFi2 fp16 accumulate",
+        "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+        "mlp_gate_up": "HiFi2 fp16 accumulate",
+        "mlp_down": "HiFi2 fp16 accumulate",
+        "rmsnorm": "HiFi2 fp16 accumulate",
+        "lm_head": "HiFi2 fp16 accumulate"
+      },
+      "prefill_top1": 0.86,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "top1": 0.88,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 88,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total_tokens": 100,
+      "ttft_ms": 249.3857927620411,
+      "trace_verified_teacher_forcing_decode_t_s_u": 88.92274482505984,
+      "teacher_forcing_decode_tokens": 99.0,
+      "teacher_forcing_decode_elapsed_s": 1.1133259572088718,
+      "measurement_regime": {
+        "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+        "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+        "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+        "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+      },
+      "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg05_bfp8_attn_bfp4_gateup_bf16_down_bfp8_kv_ccl --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg05_bfp8_attn_bfp4_gateup_bf16_down_bfp8_kv_ccl.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg05_bfp8_attn_bfp4_gateup_bf16_down_bfp8_kv_ccl/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "hardware": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+      },
+      "mesh": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ]
+      },
+      "pass_fail": {
+        "passed": false,
+        "reasons": {
+          "top1_gate": false,
+          "top5_gate": true,
+          "trace_verified": true
+        }
+      },
+      "trace_verified": true,
+      "result_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg05_bfp8_attn_bfp4_gateup_bf16_down_bfp8_kv_ccl/result.json"
+    },
+    {
+      "config_id": "cfg02_bf16_weights_bfp8_kv_ccl",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg02_bf16_weights_bfp8_kv_ccl.json",
+      "description": "BF16 weights with optimized BFP8 KV cache and CCL payloads.",
+      "dtype_policy": {
+        "attention_weight_dtype": "bfloat16",
+        "mlp_ff1_ff3_weight_dtype": "bfloat16",
+        "mlp_ff2_weight_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "norm_weight_dtype": "bfloat16",
+        "mul_dtype": "bfloat16",
+        "use_qk_fused_decode": false
+      },
+      "weight_groups": {
+        "tok_embeddings": {
+          "dtype": "bfloat16",
+          "layers": "global"
+        },
+        "attention_qkv": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "attention_wo": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "mlp_gate_up_ff1_ff3": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "mlp_down_ff2": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "rmsnorm": {
+          "dtype": "bfloat16",
+          "layers": "0-15 plus final norm"
+        },
+        "lm_head": {
+          "dtype": "bfloat8_b",
+          "layers": "global tied embedding transpose"
+        }
+      },
+      "layer_exceptions": [],
+      "activation_residual": {
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "mul_dtype": "bfloat16"
+      },
+      "ccl": {
+        "all_gather_dtype": "bfloat8_b",
+        "reduce_scatter_dtype": "bfloat8_b",
+        "persistent_buffers": true,
+        "runtime_env_overrides": {
+          "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+        }
+      },
+      "kv_cache": {
+        "dtype": "bfloat8_b",
+        "layout": "paged local one-KV-head cache per chip"
+      },
+      "logits_sampling": {
+        "lm_head_weight_dtype": "bfloat8_b",
+        "lm_head_output_dtype": "bfloat16",
+        "local_logits_sampler_input_dtype": "bfloat16",
+        "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+      },
+      "compute_fidelities": {
+        "attention_qkv_decode": "HiFi2 fp16 accumulate",
+        "attention_wo_decode": "HiFi2 fp16 accumulate",
+        "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+        "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+        "attention_wo_prefill": "HiFi2 fp16 accumulate",
+        "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+        "mlp_gate_up": "HiFi2 fp16 accumulate",
+        "mlp_down": "HiFi2 fp16 accumulate",
+        "rmsnorm": "HiFi2 fp16 accumulate",
+        "lm_head": "HiFi2 fp16 accumulate"
+      },
+      "prefill_top1": 0.96,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "top1": 0.97,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 97,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total_tokens": 100,
+      "ttft_ms": 258.6306892335415,
+      "trace_verified_teacher_forcing_decode_t_s_u": 80.63271635285332,
+      "teacher_forcing_decode_tokens": 99.0,
+      "teacher_forcing_decode_elapsed_s": 1.227789469063282,
+      "measurement_regime": {
+        "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+        "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+        "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+        "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+      },
+      "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg02_bf16_weights_bfp8_kv_ccl --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg02_bf16_weights_bfp8_kv_ccl.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg02_bf16_weights_bfp8_kv_ccl/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "hardware": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+      },
+      "mesh": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ]
+      },
+      "pass_fail": {
+        "passed": true,
+        "reasons": {
+          "top1_gate": true,
+          "top5_gate": true,
+          "trace_verified": true
+        }
+      },
+      "trace_verified": true,
+      "result_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg02_bf16_weights_bfp8_kv_ccl/result.json"
+    },
+    {
+      "config_id": "cfg07_bfp8_attn_bf16_mlp_bfp8_kv_ccl",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg07_bfp8_attn_bf16_mlp_bfp8_kv_ccl.json",
+      "description": "Restore all MLP weights to BF16 while keeping BFP8 attention, KV, and CCL.",
+      "dtype_policy": {
+        "attention_weight_dtype": "bfloat8_b",
+        "mlp_ff1_ff3_weight_dtype": "bfloat16",
+        "mlp_ff2_weight_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "norm_weight_dtype": "bfloat16",
+        "mul_dtype": "bfloat16",
+        "use_qk_fused_decode": false
+      },
+      "weight_groups": {
+        "tok_embeddings": {
+          "dtype": "bfloat16",
+          "layers": "global"
+        },
+        "attention_qkv": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "attention_wo": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "mlp_gate_up_ff1_ff3": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "mlp_down_ff2": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "rmsnorm": {
+          "dtype": "bfloat16",
+          "layers": "0-15 plus final norm"
+        },
+        "lm_head": {
+          "dtype": "bfloat8_b",
+          "layers": "global tied embedding transpose"
+        }
+      },
+      "layer_exceptions": [],
+      "activation_residual": {
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "mul_dtype": "bfloat16"
+      },
+      "ccl": {
+        "all_gather_dtype": "bfloat8_b",
+        "reduce_scatter_dtype": "bfloat8_b",
+        "persistent_buffers": true,
+        "runtime_env_overrides": {
+          "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+        }
+      },
+      "kv_cache": {
+        "dtype": "bfloat8_b",
+        "layout": "paged local one-KV-head cache per chip"
+      },
+      "logits_sampling": {
+        "lm_head_weight_dtype": "bfloat8_b",
+        "lm_head_output_dtype": "bfloat16",
+        "local_logits_sampler_input_dtype": "bfloat16",
+        "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+      },
+      "compute_fidelities": {
+        "attention_qkv_decode": "HiFi2 fp16 accumulate",
+        "attention_wo_decode": "HiFi2 fp16 accumulate",
+        "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+        "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+        "attention_wo_prefill": "HiFi2 fp16 accumulate",
+        "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+        "mlp_gate_up": "HiFi2 fp16 accumulate",
+        "mlp_down": "HiFi2 fp16 accumulate",
+        "rmsnorm": "HiFi2 fp16 accumulate",
+        "lm_head": "HiFi2 fp16 accumulate"
+      },
+      "prefill_top1": 0.95,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "top1": 0.95,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 95,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total_tokens": 100,
+      "ttft_ms": 251.8829144537449,
+      "trace_verified_teacher_forcing_decode_t_s_u": 79.07314972162871,
+      "teacher_forcing_decode_tokens": 99.0,
+      "teacher_forcing_decode_elapsed_s": 1.2520052678883076,
+      "measurement_regime": {
+        "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+        "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+        "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+        "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+      },
+      "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg07_bfp8_attn_bf16_mlp_bfp8_kv_ccl --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg07_bfp8_attn_bf16_mlp_bfp8_kv_ccl.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg07_bfp8_attn_bf16_mlp_bfp8_kv_ccl/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "hardware": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+      },
+      "mesh": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ]
+      },
+      "pass_fail": {
+        "passed": true,
+        "reasons": {
+          "top1_gate": true,
+          "top5_gate": true,
+          "trace_verified": true
+        }
+      },
+      "trace_verified": true,
+      "result_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg07_bfp8_attn_bf16_mlp_bfp8_kv_ccl/result.json"
+    },
+    {
+      "config_id": "cfg03_bfp8_weights_bfp8_kv_ccl",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg03_bfp8_weights_bfp8_kv_ccl.json",
+      "description": "BFP8 attention and MLP weights with BFP8 KV cache and CCL payloads.",
+      "dtype_policy": {
+        "attention_weight_dtype": "bfloat8_b",
+        "mlp_ff1_ff3_weight_dtype": "bfloat8_b",
+        "mlp_ff2_weight_dtype": "bfloat8_b",
+        "kv_cache_dtype": "bfloat8_b",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "norm_weight_dtype": "bfloat16",
+        "mul_dtype": "bfloat16",
+        "use_qk_fused_decode": false
+      },
+      "weight_groups": {
+        "tok_embeddings": {
+          "dtype": "bfloat16",
+          "layers": "global"
+        },
+        "attention_qkv": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "attention_wo": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "mlp_gate_up_ff1_ff3": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "mlp_down_ff2": {
+          "dtype": "bfloat8_b",
+          "layers": "0-15"
+        },
+        "rmsnorm": {
+          "dtype": "bfloat16",
+          "layers": "0-15 plus final norm"
+        },
+        "lm_head": {
+          "dtype": "bfloat8_b",
+          "layers": "global tied embedding transpose"
+        }
+      },
+      "layer_exceptions": [],
+      "activation_residual": {
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "mul_dtype": "bfloat16"
+      },
+      "ccl": {
+        "all_gather_dtype": "bfloat8_b",
+        "reduce_scatter_dtype": "bfloat8_b",
+        "persistent_buffers": true,
+        "runtime_env_overrides": {
+          "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat8_b",
+          "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+        }
+      },
+      "kv_cache": {
+        "dtype": "bfloat8_b",
+        "layout": "paged local one-KV-head cache per chip"
+      },
+      "logits_sampling": {
+        "lm_head_weight_dtype": "bfloat8_b",
+        "lm_head_output_dtype": "bfloat16",
+        "local_logits_sampler_input_dtype": "bfloat16",
+        "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+      },
+      "compute_fidelities": {
+        "attention_qkv_decode": "HiFi2 fp16 accumulate",
+        "attention_wo_decode": "HiFi2 fp16 accumulate",
+        "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+        "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+        "attention_wo_prefill": "HiFi2 fp16 accumulate",
+        "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+        "mlp_gate_up": "HiFi2 fp16 accumulate",
+        "mlp_down": "HiFi2 fp16 accumulate",
+        "rmsnorm": "HiFi2 fp16 accumulate",
+        "lm_head": "HiFi2 fp16 accumulate"
+      },
+      "prefill_top1": 0.97,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "top1": 0.97,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 97,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total_tokens": 100,
+      "ttft_ms": 1632.6266825199127,
+      "trace_verified_teacher_forcing_decode_t_s_u": 41.213813286306575,
+      "teacher_forcing_decode_tokens": 99.0,
+      "teacher_forcing_decode_elapsed_s": 2.4021072573959827,
+      "measurement_regime": {
+        "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+        "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+        "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+        "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+      },
+      "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg03_bfp8_weights_bfp8_kv_ccl --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg03_bfp8_weights_bfp8_kv_ccl.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg03_bfp8_weights_bfp8_kv_ccl/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "hardware": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+      },
+      "mesh": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ]
+      },
+      "pass_fail": {
+        "passed": true,
+        "reasons": {
+          "top1_gate": true,
+          "top5_gate": true,
+          "trace_verified": true
+        }
+      },
+      "trace_verified": true,
+      "result_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg03_bfp8_weights_bfp8_kv_ccl/result.json"
+    },
+    {
+      "config_id": "cfg01_all_bf16",
+      "precision_config_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg01_all_bf16.json",
+      "description": "Canonical accuracy policy: BF16 attention, MLP, KV cache, and CCL payloads.",
+      "dtype_policy": {
+        "attention_weight_dtype": "bfloat16",
+        "mlp_ff1_ff3_weight_dtype": "bfloat16",
+        "mlp_ff2_weight_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat16",
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "norm_weight_dtype": "bfloat16",
+        "mul_dtype": "bfloat16",
+        "use_qk_fused_decode": false
+      },
+      "weight_groups": {
+        "tok_embeddings": {
+          "dtype": "bfloat16",
+          "layers": "global"
+        },
+        "attention_qkv": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "attention_wo": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "mlp_gate_up_ff1_ff3": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "mlp_down_ff2": {
+          "dtype": "bfloat16",
+          "layers": "0-15"
+        },
+        "rmsnorm": {
+          "dtype": "bfloat16",
+          "layers": "0-15 plus final norm"
+        },
+        "lm_head": {
+          "dtype": "bfloat8_b",
+          "layers": "global tied embedding transpose"
+        }
+      },
+      "layer_exceptions": [],
+      "activation_residual": {
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "mul_dtype": "bfloat16"
+      },
+      "ccl": {
+        "all_gather_dtype": "bfloat16",
+        "reduce_scatter_dtype": "bfloat16",
+        "persistent_buffers": true,
+        "runtime_env_overrides": {
+          "MD_MULTICHIP_ALL_GATHER_DTYPE": "bfloat16",
+          "MD_MULTICHIP_REDUCE_SCATTER_DTYPE": "bfloat16",
+          "MD_MULTICHIP_USE_PERSISTENT_CCL_BUFFERS": "1"
+        }
+      },
+      "kv_cache": {
+        "dtype": "bfloat16",
+        "layout": "paged local one-KV-head cache per chip"
+      },
+      "logits_sampling": {
+        "lm_head_weight_dtype": "bfloat8_b",
+        "lm_head_output_dtype": "bfloat16",
+        "local_logits_sampler_input_dtype": "bfloat16",
+        "sampling_policy": "split greedy top-1 for greedy readiness and token-out benchmark"
+      },
+      "compute_fidelities": {
+        "attention_qkv_decode": "HiFi2 fp16 accumulate",
+        "attention_wo_decode": "HiFi2 fp16 accumulate",
+        "attention_sdpa_decode": "HiFi2 fp16 accumulate",
+        "attention_qkv_prefill": "HiFi2 fp16 accumulate",
+        "attention_wo_prefill": "HiFi2 fp16 accumulate",
+        "attention_sdpa_prefill": "HiFi4 fp32 dest accumulate",
+        "mlp_gate_up": "HiFi2 fp16 accumulate",
+        "mlp_down": "HiFi2 fp16 accumulate",
+        "rmsnorm": "HiFi2 fp16 accumulate",
+        "lm_head": "HiFi2 fp16 accumulate"
+      },
+      "prefill_top1": 0.96,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "top1": 0.97,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 97,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total_tokens": 100,
+      "ttft_ms": 5201.18672773242,
+      "trace_verified_teacher_forcing_decode_t_s_u": 23.025303062179937,
+      "teacher_forcing_decode_tokens": 99.0,
+      "teacher_forcing_decode_elapsed_s": 4.299617674201727,
+      "measurement_regime": {
+        "selection_metric": "trace-verified teacher-forcing decode t/s/u",
+        "workload": "batch-1 AIME24 chat-template reference with 100 generated tokens",
+        "prefill": "run_prefill_check-compatible full-sequence prefill accuracy",
+        "decode": "generator.generate(..., next_input=..., enable_trace=True)"
+      },
+      "command": "models/autoports/meta_llama_llama_3_2_1b_instruct/tools/run_datatype_candidate.py --model-dir models/autoports/meta_llama_llama_3_2_1b_instruct --reference models/autoports/meta_llama_llama_3_2_1b_instruct/doc/full_model/artifacts/aime24_chat_template_gen100_top100.refpt --config-id cfg01_all_bf16 --precision-config models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg01_all_bf16.json --output models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg01_all_bf16/result.json --mesh-device T3K --fabric-config FABRIC_1D_RING",
+      "hardware": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ],
+        "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.35"
+      },
+      "mesh": {
+        "mesh_device": "T3K",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          1,
+          8
+        ]
+      },
+      "pass_fail": {
+        "passed": true,
+        "reasons": {
+          "top1_gate": true,
+          "top5_gate": true,
+          "trace_verified": true
+        }
+      },
+      "trace_verified": true,
+      "result_path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/runs/cfg01_all_bf16/result.json"
+    }
+  ]
+}

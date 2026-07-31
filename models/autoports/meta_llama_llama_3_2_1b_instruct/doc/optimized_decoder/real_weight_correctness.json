@@ -1,0 +1,20 @@
+{
+  "prefill_seq_len": 128,
+  "decode_current_pos": 128,
+  "prefill_pcc": 0.9995253470016736,
+  "traced_decode_replay_pcc": 0.999546366342165,
+  "repeated_trace_replay_pcc": 1.0,
+  "threshold": 0.995,
+  "optimized_path": "_OptimizedLlamaMLP",
+  "precision_policy": {
+    "attention_weight_dtype": "BFLOAT8_B",
+    "mlp_ff1_ff3_weight_dtype": "BFLOAT4_B",
+    "mlp_ff2_weight_dtype": "BFLOAT4_B",
+    "kv_cache_dtype": "BFLOAT8_B",
+    "activation_dtype": "BFLOAT16",
+    "residual_dtype": "BFLOAT16",
+    "norm_weight_dtype": "BFLOAT16",
+    "mul_dtype": "BFLOAT16",
+    "use_qk_fused_decode": false
+  }
+}

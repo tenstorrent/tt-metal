@@ -1,0 +1,54 @@
+{
+  "configs": [
+    {
+      "config_id": "cfg00_optimized_default",
+      "path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg00_optimized_default.json",
+      "description": "Current optimized full-model default: BFP8 attention, BFP4 MLP, BFP8 KV/cache collectives."
+    },
+    {
+      "config_id": "cfg01_all_bf16",
+      "path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg01_all_bf16.json",
+      "description": "Canonical accuracy policy: BF16 attention, MLP, KV cache, and CCL payloads."
+    },
+    {
+      "config_id": "cfg02_bf16_weights_bfp8_kv_ccl",
+      "path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg02_bf16_weights_bfp8_kv_ccl.json",
+      "description": "BF16 weights with optimized BFP8 KV cache and CCL payloads."
+    },
+    {
+      "config_id": "cfg03_bfp8_weights_bfp8_kv_ccl",
+      "path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg03_bfp8_weights_bfp8_kv_ccl.json",
+      "description": "BFP8 attention and MLP weights with BFP8 KV cache and CCL payloads."
+    },
+    {
+      "config_id": "cfg04_bfp8_weights_bf16_kv_ccl",
+      "path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg04_bfp8_weights_bf16_kv_ccl.json",
+      "description": "BFP8 attention and MLP weights with BF16 KV cache and CCL payloads."
+    },
+    {
+      "config_id": "cfg05_bfp8_attn_bfp4_gateup_bf16_down_bfp8_kv_ccl",
+      "path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg05_bfp8_attn_bfp4_gateup_bf16_down_bfp8_kv_ccl.json",
+      "description": "Restore FF2/down projection to BF16 while keeping BFP4 gate/up, BFP8 attention, KV, and CCL."
+    },
+    {
+      "config_id": "cfg06_bf16_attn_bfp4_mlp_bfp8_kv_ccl",
+      "path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg06_bf16_attn_bfp4_mlp_bfp8_kv_ccl.json",
+      "description": "Restore attention weights to BF16 while keeping BFP4 MLP, BFP8 KV, and BFP8 CCL."
+    },
+    {
+      "config_id": "cfg07_bfp8_attn_bf16_mlp_bfp8_kv_ccl",
+      "path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg07_bfp8_attn_bf16_mlp_bfp8_kv_ccl.json",
+      "description": "Restore all MLP weights to BF16 while keeping BFP8 attention, KV, and CCL."
+    },
+    {
+      "config_id": "cfg08_bfp8_weights_bfp8_kv_bf16_ccl",
+      "path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg08_bfp8_weights_bfp8_kv_bf16_ccl.json",
+      "description": "BFP8 attention and MLP weights with BFP8 KV cache but BF16 CCL payloads."
+    },
+    {
+      "config_id": "cfg09_bfp8_weights_bf16_kv_bfp8_ccl",
+      "path": "models/autoports/meta_llama_llama_3_2_1b_instruct/doc/datatype_sweep/configs/cfg09_bfp8_weights_bf16_kv_bfp8_ccl.json",
+      "description": "BFP8 attention and MLP weights with BF16 KV cache but BFP8 CCL payloads."
+    }
+  ]
+}

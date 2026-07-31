@@ -1,0 +1,143 @@
+{
+  "baseline": "OptimizedDecoder single-chip TTNN",
+  "mesh_shape": [
+    1,
+    8
+  ],
+  "prefill_seq_len": 128,
+  "decode_current_pos": 128,
+  "page_block_size": 64,
+  "prefill_pcc_vs_single_chip": 0.9999924439802064,
+  "eager_decode_pcc_vs_single_chip": 0.9999913349012335,
+  "traced_decode_replay_pcc_vs_single_chip": 0.9999913349012335,
+  "repeated_trace_replay_pcc": 1.0,
+  "baseline_repeated_trace_replay_pcc": 0.9999999999999885,
+  "threshold": 0.995,
+  "layout_info": {
+    "mesh_shape": [
+      1,
+      8
+    ],
+    "page_table": [
+      [
+        2,
+        0,
+        1,
+        3
+      ]
+    ],
+    "current_pos": [
+      128
+    ],
+    "kv_cache_shape": [
+      4,
+      1,
+      64,
+      64
+    ],
+    "local_key_shapes": [
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ]
+    ],
+    "local_value_shapes": [
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ],
+      [
+        4,
+        1,
+        64,
+        64
+      ]
+    ],
+    "prefill_output_topology": "TensorTopology(distribution_shape=MeshShape([1, 8]), placements=SmallVector([PlacementReplicate(), PlacementReplicate()]), mesh_coords=MeshCoordinate([0, 0]), MeshCoordinate([0, 1]), MeshCoordinate([0, 2]), MeshCoordinate([0, 3]), MeshCoordinate([0, 4]), MeshCoordinate([0, 5]), MeshCoordinate([0, 6]), MeshCoordinate([0, 7]))",
+    "decode_output_topology": "TensorTopology(distribution_shape=MeshShape([1, 8]), placements=SmallVector([PlacementReplicate(), PlacementReplicate()]), mesh_coords=MeshCoordinate([0, 0]), MeshCoordinate([0, 1]), MeshCoordinate([0, 2]), MeshCoordinate([0, 3]), MeshCoordinate([0, 4]), MeshCoordinate([0, 5]), MeshCoordinate([0, 6]), MeshCoordinate([0, 7]))",
+    "page_block_size": 64
+  },
+  "status": "passed"
+}

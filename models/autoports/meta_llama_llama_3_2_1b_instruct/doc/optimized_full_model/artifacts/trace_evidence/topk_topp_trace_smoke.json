@@ -1,0 +1,72 @@
+{
+  "model": "meta-llama/Llama-3.2-1B-Instruct",
+  "prompt_tokens": 26,
+  "generated_tokens": 16,
+  "sampling": {
+    "top_k": 16,
+    "top_p": 0.9,
+    "temperature": 0.8
+  },
+  "tokens": [
+    2057,
+    1505,
+    279,
+    323,
+    198,
+    10590,
+    13,
+    27,
+    2054,
+    314,
+    11,
+    92,
+    818,
+    1144,
+    32288,
+    59
+  ],
+  "trace_audit": {
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "max_seq_len": 4096,
+    "max_batch_size": 32,
+    "page_block_size": 64,
+    "prefill_ttft_ms": 174.8407781124115,
+    "decode_token_out_t_s_u": 33.764451672701526,
+    "decode_latency_ms_mean": 29.616947720448174,
+    "trace_state": {
+      "model_trace_captured": true,
+      "sampling_internal_traces": 1,
+      "split_greedy_trace_captured": false
+    },
+    "counters": {
+      "model_trace_captures": 1,
+      "model_trace_replays": 14,
+      "sampling_trace_captures_or_replays": 15,
+      "token_refreshes": 1,
+      "current_position_refreshes": 1,
+      "rope_index_refreshes": 1,
+      "page_table_refreshes": 1,
+      "synchronizations": 3,
+      "readbacks": 15,
+      "host_argmax_decode_steps": 0,
+      "full_logits_decode_readbacks": 0,
+      "device_position_advances": 15,
+      "device_token_feedback_steps": 15
+    },
+    "last_generation": {
+      "prompt_len": 26,
+      "max_new_tokens": 16,
+      "top_k": 16,
+      "top_p": 0.9,
+      "temperature": 0.8,
+      "teacher_forcing": false
+    },
+    "sampling_policy": {
+      "canonical": "split greedy top-1 for greedy; SamplingGenerator split top-k/top-p for sampled requests",
+      "force_argmax_enabled": false,
+      "allow_force_argmax": false,
+      "max_top_k": 32
+    }
+  },
+  "status": "passed"
+}
