@@ -13,9 +13,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 namespace {
 
-// Both regions are plain interleaved uint32 ROW_MAJOR DRAM tensors: one row is exactly one page is
-// exactly one token, which is what lets the kernels address them by page index.
-void validate_region(const ttnn::Tensor& t, uint32_t min_tokens, uint32_t token_size_bytes, const char* what) {
+void validate_dram_row_major(const ttnn::Tensor& t, const char* what) {
     TT_FATAL(t.storage_type() == tt::tt_metal::StorageType::DEVICE, "combine_fabric2d: {} must be on device", what);
     TT_FATAL(
         t.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
@@ -23,30 +21,36 @@ void validate_region(const ttnn::Tensor& t, uint32_t min_tokens, uint32_t token_
         "combine_fabric2d: {} must be an interleaved DRAM tensor",
         what);
     TT_FATAL(
-        t.dtype() == tt::tt_metal::DataType::UINT32,
-        "combine_fabric2d: {} must be UINT32 (the op moves raw bytes; {} would only confuse the check)",
+        t.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "combine_fabric2d: {} must be ROW_MAJOR so one row is exactly one page",
+        what);
+}
+
+// The 32-bit control tensors carry page indices and counts, so either signedness is fine — the values are
+// non-negative by construction and the kernels read them as uint32.
+void validate_control_tensor(const ttnn::Tensor& t, uint32_t rows, uint32_t num_routed_experts, const char* what) {
+    validate_dram_row_major(t, what);
+    TT_FATAL(
+        t.dtype() == tt::tt_metal::DataType::INT32 || t.dtype() == tt::tt_metal::DataType::UINT32,
+        "combine_fabric2d: {} must be INT32 or UINT32, got {}",
         what,
         t.dtype());
-    TT_FATAL(
-        t.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-        "combine_fabric2d: {} must be ROW_MAJOR so one row is exactly one page (= one token)",
-        what);
     const auto shape = t.logical_shape();
-    TT_FATAL(shape.rank() == 2, "combine_fabric2d: {} must be rank 2 (tokens x token elements)", what);
     TT_FATAL(
-        shape[-1] * sizeof(uint32_t) == token_size_bytes,
-        "combine_fabric2d: {} row is {} B but token_size_bytes is {}",
+        shape[-1] == static_cast<int32_t>(num_routed_experts),
+        "combine_fabric2d: {} last dim is {} but num_routed_experts is {}",
         what,
-        shape[-1] * sizeof(uint32_t),
-        token_size_bytes);
-    // A sharded mesh tensor's logical shape is its PER-DEVICE shard, so rows are directly the tokens one
-    // device holds. Extra rows are harmless (the tail simply goes untouched), too few is not.
+        shape[-1],
+        num_routed_experts);
     TT_FATAL(
-        shape[0] >= min_tokens,
-        "combine_fabric2d: {} holds {} tokens per device but the movements need at least {}",
+        shape[-2] == static_cast<int32_t>(rows),
+        "combine_fabric2d: {} second-to-last dim is {}, expected {}. expert_offsets must be REPLICATED "
+        "along the dispatch-group axis (each chip needs every origin chip's run boundaries, not just its "
+        "own); the counts and region offsets are already identical across that axis, so they arrive with a "
+        "single row.",
         what,
-        shape[0],
-        min_tokens);
+        shape[-2],
+        rows);
 }
 
 }  // namespace
@@ -55,7 +59,6 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.device != nullptr, "combine_fabric2d requires a mesh device in attributes");
     TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
-    TT_FATAL(args.tokens_per_movement >= 1, "tokens_per_movement must be >= 1 (got {})", args.tokens_per_movement);
     TT_FATAL(
         args.num_l1_slots >= 2,
         "num_l1_slots must be >= 2 for the reader and producer to overlap (got {})",
@@ -63,104 +66,115 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.fwd_bump_every >= 1, "fwd_bump_every must be >= 1 (got {})", args.fwd_bump_every);
     TT_FATAL(args.assignment_order <= 1, "assignment_order must be 0 or 1 (got {})", args.assignment_order);
     TT_FATAL(
-        args.token_size_bytes % sizeof(uint32_t) == 0,
-        "combine_fabric2d: token_size_bytes {} must be a multiple of 4",
-        args.token_size_bytes);
-    TT_FATAL(!args.movements.empty(), "combine_fabric2d: no movements given, so the op would do nothing");
+        !args.init_zeros,
+        "combine_fabric2d: init_zeros=true is not implemented. Output slots with no expert contribution are "
+        "left as allocated, exactly as the production op leaves them with init_zeros=false.");
+    TT_FATAL(
+        !args.output_mem_config.is_sharded(),
+        "combine_fabric2d: output memory config must be interleaved, not sharded");
 
-    const auto mesh_dims = args.device->shape().dims();
-    // ---- MOVEMENT-SEMANTICS-DEPENDENT BLOCK ------------------------------------------------------
-    // Everything from here to the end of this function reads `in_base_token` / `out_base_token` /
-    // `tokens_per_movement` as "a contiguous run of tokens". Rewrite it as one piece if the descriptor's
-    // addressing changes; the PROPERTIES it enforces should survive any such change:
-    //   * a coordinate of the wrong rank can never name a device;
-    //   * no output token is claimed twice on the same destination — last writer wins, and which one that
-    //     is depends on packet timing, so an overlapping list is a nondeterministic answer, not an answer;
-    //   * every source device's input coverage is gap-free from token 0 — a hole means the caller's plan
-    //     silently drops data it believes it asked to move.
-    // Input OVERLAP is deliberately allowed: reads are idempotent, so several movements may legitimately
-    // source the same tokens. Only gaps are an error.
-    // The remaining checks (dst actually reachable, regions in range) need the placement or the buffers,
-    // so they live in the program factory — which re-checks range against the real page count.
-    std::map<std::vector<uint32_t>, std::set<uint32_t>> claimed_out_tokens;
-    std::map<std::vector<uint32_t>, std::set<uint32_t>> claimed_in_tokens;
-    for (const auto& m : args.movements) {
-        TT_FATAL(
-            m.src.size() == mesh_dims && m.dst.size() == mesh_dims,
-            "combine_fabric2d: movement src {} / dst {} must both have {} coordinate(s) for this {} mesh",
-            movement_coord_str(m.src),
-            movement_coord_str(m.dst),
-            mesh_dims,
-            args.device->shape());
-        TT_FATAL(
-            m.src != m.dst,
-            "combine_fabric2d: movement src and dst are both {}; a device does not send to itself",
-            movement_coord_str(m.src));
-        auto& claimed = claimed_out_tokens[m.dst];
-        auto& sourced = claimed_in_tokens[m.src];
-        for (uint32_t t = 0; t < args.tokens_per_movement; t++) {
-            const auto [_, fresh] = claimed.insert(m.out_base_token + t);
-            TT_FATAL(
-                fresh,
-                "combine_fabric2d: two movements both write output token {} of device {} (this one is src {} "
-                "out_base_token {}). Overlapping destination ranges make the result depend on packet timing.",
-                m.out_base_token + t,
-                movement_coord_str(m.dst),
-                movement_coord_str(m.src),
-                m.out_base_token);
-            sourced.insert(m.in_base_token + t);
-        }
-    }
+    const uint32_t extent = args.device->shape()[static_cast<int32_t>(args.axis)];
+    TT_FATAL(
+        args.axis < args.device->shape().dims(),
+        "combine_fabric2d: axis {} is out of range for a {} mesh",
+        args.axis,
+        args.device->shape());
+    TT_FATAL(
+        args.dispatch_group_size == extent,
+        "combine_fabric2d: dispatch_group_size {} must equal the mesh extent {} along axis {} — the op rings "
+        "the dispatch group over that axis's cables",
+        args.dispatch_group_size,
+        extent,
+        args.axis);
+    TT_FATAL(
+        extent >= 3,
+        "combine_fabric2d: axis {} extent {} needs 3+ chips for two distinct neighbours",
+        args.axis,
+        extent);
+    TT_FATAL(
+        extent % 2 == 0,
+        "combine_fabric2d: axis {} extent {} must be even (the opposite chip is split between the two directions)",
+        args.axis,
+        extent);
+    TT_FATAL(
+        args.experts_per_chip >= 1, "combine_fabric2d: experts_per_chip must be >= 1 (got {})", args.experts_per_chip);
+    TT_FATAL(
+        args.num_experts_per_tok >= 1,
+        "combine_fabric2d: num_experts_per_tok must be >= 1 (got {})",
+        args.num_experts_per_tok);
+    TT_FATAL(
+        args.seq_len_per_chip >= 1, "combine_fabric2d: seq_len_per_chip must be >= 1 (got {})", args.seq_len_per_chip);
 
-    // Input coverage: each source device's claimed tokens must be exactly [0, N). A set whose size equals
-    // its largest element + 1 is gap-free, and starting at 0 pins the base — together that rules out both
-    // a hole in the middle and an off-by-one at the front.
-    for (const auto& [src, sourced] : claimed_in_tokens) {
-        const uint32_t lowest = *sourced.begin();
-        const uint32_t highest = *sourced.rbegin();
-        TT_FATAL(
-            lowest == 0,
-            "combine_fabric2d: device {} sources input tokens starting at {}, not 0 — tokens [0, {}) are "
-            "never moved by any movement",
-            movement_coord_str(src),
-            lowest,
-            lowest);
-        TT_FATAL(
-            sourced.size() == static_cast<size_t>(highest) + 1,
-            "combine_fabric2d: device {} sources {} distinct input tokens but its highest is {}, so its "
-            "coverage of [0, {}] has {} hole(s) — some input the caller staged is never moved",
-            movement_coord_str(src),
-            sourced.size(),
-            highest,
-            highest,
-            highest + 1 - sourced.size());
-    }
+    // ---- Token data. Page = one token, so the last dim is the embedding and the rest is the flat slot
+    // index. BFLOAT16 only: the fp8 and TILE paths both need the untilize stage this op does not have.
+    const auto& buf = tensor_args.dispatched_buffer;
+    validate_dram_row_major(buf, "dispatched_buffer");
+    TT_FATAL(
+        buf.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "combine_fabric2d: dispatched_buffer must be BFLOAT16, got {}. The BFLOAT8_B/TILE path needs an "
+        "untilize stage this op does not have.",
+        buf.dtype());
+    const auto buf_shape = buf.logical_shape();
+    TT_FATAL(buf_shape.rank() >= 2, "combine_fabric2d: dispatched_buffer must be rank 2 or more");
 
-    // Smallest region each buffer must cover, given where the movements point.
-    uint32_t min_in = 0;
-    uint32_t min_out = 0;
-    for (const auto& m : args.movements) {
-        min_in = std::max(min_in, m.in_base_token + args.tokens_per_movement);
-        min_out = std::max(min_out, m.out_base_token + args.tokens_per_movement);
-    }
-    validate_region(tensor_args.input, min_in, args.token_size_bytes, "input");
-    validate_region(tensor_args.output, min_out, args.token_size_bytes, "output");
-    // ---- END movement-semantics-dependent block --------------------------------------------------
+    const auto& meta = tensor_args.dispatched_metadata;
+    validate_dram_row_major(meta, "dispatched_metadata");
+    TT_FATAL(
+        meta.dtype() == tt::tt_metal::DataType::INT32,
+        "combine_fabric2d: dispatched_metadata must be INT32, got {}",
+        meta.dtype());
+    const auto meta_shape = meta.logical_shape();
+    TT_FATAL(
+        meta_shape[-1] == 3,
+        "combine_fabric2d: dispatched_metadata last dim is {}, expected 3 (linearized_coord, token_idx, "
+        "topk_idx). The fp8 scale tail is not supported.",
+        meta_shape[-1]);
+    TT_FATAL(
+        meta_shape[-2] == buf_shape[-2],
+        "combine_fabric2d: dispatched_metadata holds {} slots but dispatched_buffer holds {}; they index the "
+        "same flat buffer so the two must match",
+        meta_shape[-2],
+        buf_shape[-2]);
+
+    // ---- Control tensors. num_routed_experts comes from the counts' width, exactly as production derives it.
+    const uint32_t num_routed_experts = static_cast<uint32_t>(tensor_args.expert_token_counts.logical_shape()[-1]);
+    TT_FATAL(
+        num_routed_experts % args.experts_per_chip == 0,
+        "combine_fabric2d: num_routed_experts {} must be divisible by experts_per_chip {}",
+        num_routed_experts,
+        args.experts_per_chip);
+    const uint32_t experts_per_group = args.experts_per_chip * args.dispatch_group_size;
+    TT_FATAL(
+        num_routed_experts % experts_per_group == 0,
+        "combine_fabric2d: num_routed_experts {} must be divisible by experts_per_chip x dispatch_group_size "
+        "= {}",
+        num_routed_experts,
+        experts_per_group);
+    validate_control_tensor(tensor_args.expert_token_counts, 1, num_routed_experts, "expert_token_counts");
+    validate_control_tensor(tensor_args.expert_region_offsets, 1, num_routed_experts, "expert_region_offsets");
+    validate_control_tensor(tensor_args.expert_offsets, args.dispatch_group_size, num_routed_experts, "expert_offsets");
 }
 
 void CombineFabric2dDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t&, const tensor_args_t&) {}
 
 CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    // The output region is caller-owned (so a test can zero it before the run and read it back after),
-    // so the op has nothing to size or allocate — it writes into the tensor it was handed.
-    return tensor_args.output.tensor_spec();
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Same shape the production op produces, so the same test can read it back the same way:
+    // one page per (token, top-k slot), the embedding along the last dim.
+    const uint32_t emb_dim = static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
+    const ttnn::Shape output_shape({1, 1, args.seq_len_per_chip, args.num_experts_per_tok, emb_dim});
+    return ttnn::TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            args.output_mem_config));
 }
 
 CombineFabric2dDeviceOperation::tensor_return_value_t CombineFabric2dDeviceOperation::create_output_tensors(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return tensor_args.output;
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.dispatched_buffer.device());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
@@ -168,34 +182,47 @@ CombineFabric2dDeviceOperation::tensor_return_value_t CombineFabric2dDeviceOpera
 namespace ttnn::prim {
 ttnn::Tensor combine_fabric2d(
     ttnn::MeshDevice* device,
-    const ttnn::Tensor& input,
-    const ttnn::Tensor& output,
-    const std::vector<ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dMovement>&
-        movements,
-    uint32_t num_links,
-    uint32_t tokens_per_movement,
-    uint32_t token_size_bytes,
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& dispatched_metadata,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& expert_region_offsets,
+    const ttnn::Tensor& expert_offsets,
+    uint32_t dispatch_group_size,
+    uint32_t experts_per_chip,
+    uint32_t num_experts_per_tok,
+    uint32_t seq_len_per_chip,
     uint32_t axis,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    bool init_zeros,
     uint32_t num_l1_slots,
     uint32_t fwd_bump_every,
     uint32_t assignment_order,
-    uint32_t stall_telemetry,
-    tt::tt_fabric::Topology topology) {
+    uint32_t stall_telemetry) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .device = device,
-            .num_links = num_links,
-            .tokens_per_movement = tokens_per_movement,
-            .token_size_bytes = token_size_bytes,
+            .dispatch_group_size = dispatch_group_size,
+            .experts_per_chip = experts_per_chip,
+            .num_experts_per_tok = num_experts_per_tok,
+            .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
+            .num_links = num_links,
+            .topology = topology,
+            .output_mem_config = memory_config,
+            .init_zeros = init_zeros,
             .num_l1_slots = num_l1_slots,
             .fwd_bump_every = fwd_bump_every,
             .assignment_order = assignment_order,
-            .stall_telemetry = stall_telemetry,
-            .topology = topology,
-            .movements = movements},
-        OperationType::tensor_args_t{.input = input, .output = output});
+            .stall_telemetry = stall_telemetry},
+        OperationType::tensor_args_t{
+            .dispatched_buffer = dispatched_buffer,
+            .dispatched_metadata = dispatched_metadata,
+            .expert_token_counts = expert_token_counts,
+            .expert_region_offsets = expert_region_offsets,
+            .expert_offsets = expert_offsets});
 }
 }  // namespace ttnn::prim

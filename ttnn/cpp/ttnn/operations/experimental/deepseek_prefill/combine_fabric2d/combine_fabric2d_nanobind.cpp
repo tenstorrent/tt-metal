@@ -14,81 +14,56 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::detail {
 void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
-    // One requested data movement. Bound as a named type rather than a bare tuple because it IS the op's
-    // contract: the caller states what moves where, and everything about how the op achieves it (core
-    // count, cable choice, which producer serves which movement) stays on the op's side of this line.
-    nb::class_<CombineFabric2dMovement>(mod, "CombineFabric2dMovement")
-        .def(
-            "__init__",
-            [](CombineFabric2dMovement* self,
-               const std::vector<uint32_t>& src,
-               uint32_t in_base_token,
-               const std::vector<uint32_t>& dst,
-               uint32_t out_base_token) {
-                new (self) CombineFabric2dMovement{src, in_base_token, dst, out_base_token};
-            },
-            nb::arg("src"),
-            nb::arg("in_base_token"),
-            nb::arg("dst"),
-            nb::arg("out_base_token"),
-            R"doc(
-            Copy `tokens_per_movement` tokens starting at `in_base_token` of device `src`'s input region
-            to `tokens_per_movement` tokens starting at `out_base_token` of device `dst`'s output region,
-            1:1 and in order. `src` and `dst` are mesh coordinates; the bases are in TOKENS (= pages), not
-            bytes. `dst` must be a chip `src` has a fabric cable to.
-            )doc")
-        .def_rw("src", &CombineFabric2dMovement::src)
-        .def_rw("in_base_token", &CombineFabric2dMovement::in_base_token)
-        .def_rw("dst", &CombineFabric2dMovement::dst)
-        .def_rw("out_base_token", &CombineFabric2dMovement::out_base_token)
-        .def("__repr__", [](const CombineFabric2dMovement& m) {
-            std::string s = "CombineFabric2dMovement(src=(";
-            for (size_t i = 0; i < m.src.size(); i++) {
-                s += (i ? "," : "") + std::to_string(m.src[i]);
-            }
-            s += "), in_base_token=" + std::to_string(m.in_base_token) + ", dst=(";
-            for (size_t i = 0; i < m.dst.size(); i++) {
-                s += (i ? "," : "") + std::to_string(m.dst[i]);
-            }
-            return s + "), out_base_token=" + std::to_string(m.out_base_token) + ")";
-        });
-
     ttnn::bind_function<"combine_fabric2d", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
-        Isolated FABRIC_2D transfer experiment op: chip-local DRAM -> eth -> neighbour chip's DRAM.
+        MoE prefill combine over an explicitly-forwarded FABRIC_2D: expert-processed tokens go back to
+        the chips they came from, chip-local DRAM -> eth -> destination chip's DRAM.
 
-        The caller supplies two region tensors and a list of `CombineFabric2dMovement` descriptors
-        saying what moves where. The op places one producer kernel per fabric eth core (`num_links`
-        toward each neighbour along mesh `axis`, both directions, so 2 * num_links per device) plus a
-        reader kernel beside it on the same core, and gives each pair one of that device's movements
-        whose `dst` its cable reaches. The reader streams that movement's tokens out of local DRAM into
-        an L1 ring over NOC_0 while the producer drains the ring to the peer chip's DRAM over NOC_1, one
-        fabric packet per token. The token count is the caller's and is not bounded by L1. There is no
-        receiver kernel and no application-level credit loop; the EDM sender-slot backpressure is the
-        only throttle across the fabric.
+        Called exactly like `ttnn.experimental.deepseek_prefill.combine`, plus one extra tensor and this
+        op's tuning knobs. The work is described entirely by control tensors the caller has already
+        staged in DRAM; the op discovers it on device.
 
-        `input` and `output` are caller-owned interleaved uint32 ROW_MAJOR DRAM mesh tensors with one
-        row per token. Every device needs exactly one movement per fabric cable it has; the op rejects
-        a list that does not cover them, that names an unreachable `dst`, or whose output ranges
-        overlap on a destination. Which of the equally-valid producers serves a given movement, and
-        `num_l1_slots` (the ring depth), are internal details: results do not depend on either.
-        Returns `output`.
+            dispatched_buffer     the tokens, one per page. A chip's page range for one expert holds
+                                  that expert's tokens grouped by the chip they ORIGINATED on.
+            dispatched_metadata   3 int32 per token: (linearized_coord, token_idx, topk_idx). The
+                                  token's destination slot is page token_idx * num_experts_per_tok +
+                                  topk_idx of the origin chip's output.
+            expert_token_counts   tokens per expert over all origin chips; closes the last run.
+            expert_region_offsets where each expert's region starts in dispatched_buffer.
+            expert_offsets        the one tensor the production op does not take: where each ORIGIN
+                                  chip's run starts inside each expert's region. Must be REPLICATED
+                                  along the dispatch-group axis, since every chip needs every origin
+                                  chip's boundaries for the experts it hosts.
+
+        The op owns everything about HOW: which cores run, which cable each drives, how a destination
+        more than one hop away is reached (it forwards through the intervening chips' DRAM itself
+        rather than asking the fabric to), and how the work splits across producers. Allocates and
+        returns the combined output, (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim) BFLOAT16
+        ROW_MAJOR per device — the same shape the production op returns.
+
+        BFLOAT16 ROW_MAJOR input only, and `init_zeros` must be false.
         )doc",
         &combine_fabric2d,
         nb::arg("device"),
-        nb::arg("input"),
-        nb::arg("output"),
-        nb::arg("movements"),
-        nb::arg("num_links") = 2,
-        nb::arg("tokens_per_movement") = 100,
-        nb::arg("token_size_bytes") = 14336,
+        nb::arg("dispatched_buffer"),
+        nb::arg("dispatched_metadata"),
+        nb::arg("expert_token_counts"),
+        nb::arg("expert_region_offsets"),
+        nb::arg("expert_offsets"),
+        nb::arg("dispatch_group_size"),
+        nb::arg("experts_per_chip"),
+        nb::arg("num_experts_per_tok"),
+        nb::arg("seq_len_per_chip"),
         nb::arg("axis") = 0,
+        nb::arg("num_links") = 2,
+        nb::arg("topology") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("init_zeros") = false,
         nb::arg("num_l1_slots") = 8,
         nb::arg("fwd_bump_every") = 32,
         nb::arg("assignment_order") = 1,
-        nb::arg("stall_telemetry") = 0,
-        nb::arg("topology") = nb::none());
+        nb::arg("stall_telemetry") = 0);
 
     // Telemetry readback. Returns {"clock_mhz": int, "workers": [ {...}, ... ]} — plain Python data so
     // callers can format it however they like. The caller does NOT need to know where the worker cores

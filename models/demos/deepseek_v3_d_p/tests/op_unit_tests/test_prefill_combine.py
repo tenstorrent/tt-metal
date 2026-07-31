@@ -68,10 +68,16 @@ def run_combine(
     dispatched_buffer_layout,
     use_fp8_output,
     num_links=2,
+    combine_impl="production",
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
-    num_experts_per_tok) shape axis."""
+    num_experts_per_tok) shape axis.
+
+    `combine_impl` picks which implementation moves the data: "production" for
+    ttnn.experimental.deepseek_prefill.combine, "fabric2d" for combine_fabric2d. Everything else —
+    input generation, the dispatch that produces the buffer and metadata, the torch reference and the
+    validation — is shared, which is the point: the two are then measured on the same work."""
     torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
@@ -227,30 +233,87 @@ def run_combine(
     if use_fp8_output:
         torch_output = torch_output.to(torch.float8_e4m3fn).to(torch.bfloat16)
 
-    # Run ttnn combine
-    tt_combine = TtCombineModule(
-        mesh_device=mesh_device,
-        dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=num_dispatch_groups,
-        experts_per_chip=experts_per_chip,
-        num_experts_per_tok=num_experts_per_tok,
-        seq_len_per_chip=seq_len_per_chip,
-        cluster_axis=sp_axis,
-        num_links=num_links,
-        topology=topology,
-        init_zeros=False,
-        fp8_output=use_fp8_output,
-    )
+    # Run ttnn combine. Both implementations consume exactly the tensors staged above; combine_fabric2d
+    # additionally takes expert_offsets, which says where each ORIGIN chip's run starts inside an expert's
+    # region. Production rediscovers that per token from the metadata, so it does not need it — see the
+    # phase-10 plan for why we do.
+    if combine_impl == "fabric2d":
+        # REPLICATED along the dispatch-group axis, unlike every other EP tensor here: dim 1 is indexed by
+        # the token's ORIGIN chip, and a chip needs every origin's boundaries for the experts it hosts, not
+        # just its own row. Sharding it the usual way would hand each chip the wrong slice.
+        tt_expert_offsets = ttnn.from_torch(
+            expert_offsets,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 0)),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.int32,
+        )
+        signpost(f"combine_fabric2d start seq={seq_len_per_chip} experts_per_chip={experts_per_chip}")
+        tt_output = ttnn.experimental.deepseek_prefill.combine_fabric2d(
+            mesh_device,
+            tt_dispatched_buffer,
+            tt_dispatched_metadata,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+            tt_expert_offsets,
+            dispatch_group_size=dispatch_group_size,
+            experts_per_chip=experts_per_chip,
+            num_experts_per_tok=num_experts_per_tok,
+            seq_len_per_chip=seq_len_per_chip,
+            axis=sp_axis,
+            num_links=num_links,
+            topology=topology,
+            fwd_bump_every=CMBF2D_FWD_BUMP,
+            assignment_order=CMBF2D_ORDER,
+            stall_telemetry=CMBF2D_STALL,
+        )
+    else:
+        tt_combine = TtCombineModule(
+            mesh_device=mesh_device,
+            dispatch_group_size=dispatch_group_size,
+            num_dispatch_groups=num_dispatch_groups,
+            experts_per_chip=experts_per_chip,
+            num_experts_per_tok=num_experts_per_tok,
+            seq_len_per_chip=seq_len_per_chip,
+            cluster_axis=sp_axis,
+            num_links=num_links,
+            topology=topology,
+            init_zeros=False,
+            fp8_output=use_fp8_output,
+        )
 
-    tt_output = tt_combine(
-        tt_dispatched_buffer,
-        tt_dispatched_metadata,
-        tt_expert_token_counts,
-        tt_expert_region_offsets,
-    )
+        tt_output = tt_combine(
+            tt_dispatched_buffer,
+            tt_dispatched_metadata,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+        )
+
+    ttnn.synchronize_device(mesh_device)
+    if combine_impl == "fabric2d":
+        # Bandwidth from the op's own producer telemetry — no profiler run needed. Written to a file rather
+        # than the console: there are 128 producer rows, and a console summary is only a lossy copy.
+        #
+        # The ground truth handed to it is token-hops: how many cable crossings the ROUTING implies, counted
+        # from this test's own indices and dispatch table. A token going k chips around the ring crosses k
+        # cables whatever the op does internally, so this is a floor on the packets the producers must report
+        # between them — independent of how the op splits work, which is the property worth checking.
+        token_hops = _cmbf2d_expected_token_hops(
+            indices, expert_dispatch_table, dispatch_group_size, num_dispatch_groups, num_routed_experts
+        )
+        bwinfo_path = _cmbf2d_bwinfo_path()
+        _dump_combine_fabric2d_bwinfo(
+            mesh_device,
+            num_links,
+            axis=CMBF2D_AXIS,
+            expected_workers=num_devices * 2 * num_links,
+            min_payload_tokens=token_hops,
+            token_size_bytes=emb_dim * 2,
+            path=bwinfo_path,
+        )
+        logger.info(f"combine_fabric2d telemetry -> {bwinfo_path} ({token_hops} token-hops expected)")
 
     if not run_pcc_check:
-        ttnn.synchronize_device(mesh_device)
         logger.debug("Skipping PCC validation (run_pcc_check=False)")
         return
 
@@ -344,6 +407,15 @@ ONLY_PROXY_QB_MESH = _Test_Mesh(
 # V3 is the baseline and runs by default; every other model is gated behind
 # @pytest.mark.extended_model. dispatch_buffer_capacity_factor is ceil(N/2) of the most
 # conservative integer N such that dgs*seq*N >= worst-case dispatch buffer.
+#
+# The perf shape's seq_len_per_chip and capacity factor are env-overridable so the same test can be run
+# at several traffic scales; the defaults are the checked-in shape.
+CMB_PERF_SEQ = int(os.environ.get("CMB_PERF_SEQ", "640"))
+CMB_PERF_CAP = int(os.environ.get("CMB_PERF_CAP", "8"))
+# The perf shape ships with run_pcc_check=False, and it is the only shape that fits an 8x4 mesh (the pcc
+# shape's num_routed_experts // 16 gives experts_per_chip = 0 there). So on this hardware correctness has to
+# be switched on deliberately. Run it at a small CMB_PERF_SEQ: the torch reference walks every token.
+CMB_PERF_PCC = int(os.environ.get("CMB_PERF_PCC", "0"))
 COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, SINGLE_GLX_AND_PROXY_MESHES),
     ("glm_51", GLM51Config, ONLY_PROXY_QB_MESH),
@@ -636,10 +708,6 @@ CMBF2D_BWINFO_PATH = "generated/cmbf2d/bwinfo.txt"
 # invocation (one device open per point) without touching the test body. CMBF2D_TAG, when set, moves
 # the report to bwinfo_<tag>.txt so a sweep's points don't overwrite each other.
 #
-# tokens  tokens one movement copies — the knob that sets the total traffic. Nothing about how the op
-#         buffers them (its L1 ring depth) is visible here.
-CMBF2D_TOKENS = int(os.environ.get("CMBF2D_TOKENS", "100"))
-CMBF2D_TOKEN_BYTES = int(os.environ.get("CMBF2D_TOKEN_BYTES", "14336"))
 CMBF2D_TAG = os.environ.get("CMBF2D_TAG", "")
 # 1 => producer records the fine-grained stall buckets (costs a few percent of the bandwidth
 # it is measuring). Off for headline numbers, on to explain them.
@@ -663,7 +731,7 @@ CMBF2D_CLOCK_TOLERANCE = 0.05
 # to forward alongside it. 14336 + 64 = 14400 = 64 * 225, so a forwarding-buffer page stays DRAM-aligned,
 # and it is comfortably under Blackhole's 15232 B ceiling ((16384 NoC max - 96 header) floored to Bfp8_b
 # tiles, erisc_datamover_builder.hpp:465-476) and 16-byte aligned as the fabric validator requires.
-CMBF2D_PACKET_BYTES = CMBF2D_TOKEN_BYTES + 64
+CMBF2D_PACKET_BYTES = 14336 + 64
 # Raising the fabric payload is a DEVICE-WIDE setting, so CombineFabric2D carries its own mesh config
 # rather than taking one from ALL_MESH_CONFIGS. The op only ever runs on this single config, and this way
 # a bigger packet cannot perturb any other test that shares that list. The id is unchanged, so
@@ -684,155 +752,33 @@ CMBF2D_MESH_CONFIGS = [
 ]
 
 
+def _cmbf2d_expected_token_hops(
+    indices, expert_dispatch_table, dispatch_group_size, num_dispatch_groups, num_routed_experts
+):
+    """Cable crossings the ROUTING implies, from the test's own inputs.
+
+    On the combine leg a token sitting on the chip that hosts its expert has to get back to the chip it came
+    from. Those two are `d` steps apart on the dispatch-group ring, so the token crosses min(d, R-d) cables —
+    a fact about the routing, not about the implementation. Summed over every (token, expert) pair that is not
+    already home, this is the total number of payload packets the producers must put on cables between them.
+
+    Same-chip pairs (d == 0) contribute nothing: they never touch a cable, which is why they are also absent
+    from the producers' counts.
+    """
+    hops = 0
+    for origin in range(dispatch_group_size):
+        rows = expert_dispatch_table[:, :num_routed_experts][:, indices[origin].reshape(-1).long()]
+        for g in range(num_dispatch_groups):
+            for host in rows[g].tolist():
+                if host < 0 or host == origin:
+                    continue
+                d = (host - origin) % dispatch_group_size
+                hops += min(d, dispatch_group_size - d)
+    return hops
+
+
 def _cmbf2d_bwinfo_path():
     return f"generated/cmbf2d/bwinfo_{CMBF2D_TAG}.txt" if CMBF2D_TAG else CMBF2D_BWINFO_PATH
-
-
-def _cmbf2d_slots_per_device(mesh_device, axis, num_links):
-    """How many `tokens`-sized slots each device's input and output region is cut into.
-
-    Every device sends to every OTHER device on `axis`, once per link: (axis_extent - 1) * num_links. The
-    two regions are the same size because the traffic pattern is ring-symmetric — a device sends
-    num_links * tokens to each of the other axis_extent-1 devices, and receives exactly that much from
-    each of them.
-    """
-    return (tuple(mesh_device.shape)[axis] - 1) * num_links
-
-
-def _cmbf2d_plan_movements(mesh_device, axis, num_links, tokens):
-    """Every data movement in the run: every device sends `tokens` tokens to EVERY other device on
-    `axis`, once per link.
-
-    Slot scheme. Both regions are cut into `(axis_extent - 1) * num_links` slots of `tokens` tokens each,
-    and a slot is named by the pair (ring offset `delta`, `link`):
-
-        slot(delta, link) = (delta - 1) * num_links + link,   delta in 1 .. axis_extent-1
-
-    Chip C's INPUT slot (delta, link) goes to chip C+delta's OUTPUT slot (delta, link). That one rule
-    makes both sides collision-free with no ordering convention to remember:
-      * input  — each (delta, link) is used exactly once per source chip;
-      * output — chip D's slot (delta, link) can only be written by chip D-delta, so exactly one
-                 movement claims it.
-
-    So every slot on every chip is both read once and written once. The op's validation re-derives that
-    property from the list alone (no destination claimed twice, input coverage gap-free from 0) rather
-    than trusting this docstring.
-
-    NOTE this says nothing about HOW the traffic gets there. Destinations more than one hop away are the
-    op's problem, not the test's: the descriptor names a chip, and the op decides the route.
-    """
-    mesh_shape = tuple(mesh_device.shape)
-    extent = mesh_shape[axis]
-    assert extent >= 3, f"axis {axis} extent {extent}: need 3+ for two distinct neighbours"
-
-    def _at_offset(coord, delta):
-        nbr = list(coord)
-        nbr[axis] = (nbr[axis] + delta) % extent
-        return nbr
-
-    movements = []
-    for coord in itertools.product(*(range(n) for n in mesh_shape)):
-        for delta in range(1, extent):
-            for link in range(num_links):
-                slot = (delta - 1) * num_links + link
-                movements.append(
-                    ttnn._ttnn.operations.experimental.CombineFabric2dMovement(
-                        src=list(coord),
-                        in_base_token=slot * tokens,
-                        dst=_at_offset(coord, delta),
-                        out_base_token=slot * tokens,
-                    )
-                )
-    return movements
-
-
-def _cmbf2d_make_regions(mesh_device, axis, tokens, token_size_bytes, num_links):
-    """The op's two DRAM regions, sized for one slot per (destination, link) per device: random input,
-    zeroed output (so an unwritten token fails the check instead of passing on leftover garbage).
-
-    Returns `(host_input, dev_input, dev_output)`. The host tensor is retained deliberately: it, and not
-    a readback of `dev_input`, is the reference the accuracy check compares against — see
-    `_cmbf2d_check_accuracy`.
-
-    Sharded with the explicit 2D form (tensor dim0 -> mesh axis 0, dim1 -> mesh axis 1) so "which device
-    holds which block" needs no ordering convention.
-    """
-    rows, cols = tuple(mesh_device.shape)
-    slots = _cmbf2d_slots_per_device(mesh_device, axis, num_links)
-    shape = (rows * slots * tokens, cols * token_size_bytes // 4)
-    gen = torch.Generator().manual_seed(0xF2D5)
-    # Capped at 2**31 - 1 so the int32 -> uint32 (device) -> int32 (readback) round-trip is value-exact
-    # and the host reference can be compared against the readback without a bitcast.
-    host_input = torch.randint(1, 2**31 - 1, shape, dtype=torch.int32, generator=gen)
-
-    def _to_device(host):
-        return ttnn.from_torch(
-            host,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, (rows, cols), dims=(0, 1)),
-        )
-
-    return (
-        host_input,
-        _to_device(host_input),
-        _to_device(torch.zeros(shape, dtype=torch.int32)),
-    )
-
-
-def _cmbf2d_check_accuracy(mesh_device, host_input, dev_output, movements, tokens):
-    """True if every movement's destination region on the device equals its source region on the HOST,
-    token for token.
-
-    The expected values come from `host_input` — the tensor the input region was uploaded from — and
-    never from a readback of the device input. That matters: the op is handed the input tensor and could
-    in principle write to it, and a reference the op can influence is not a reference. Comparing device
-    input against device output would, for instance, be passed by an op that zeroed the input region and
-    moved nothing at all, because the output region starts zeroed; likewise by anything that aliases the
-    two regions in its address arithmetic.
-
-    Only the output region is read back, which also halves this check's PCIe traffic.
-    """
-    rows, cols = tuple(mesh_device.shape)
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, (rows, cols), dims=(0, 1))
-    host_out = ttnn.to_torch(dev_output, mesh_composer=composer).to(torch.int32)
-    # A sharded mesh tensor's shape is its per-device shard, i.e. one device's region; `host_input` and
-    # `host_out` are both the reassembled whole, so a device's block starts at coord * shard_extent.
-    dev_rows, elems = tuple(dev_output.shape)
-
-    for m in movements:
-        sr, sc = m.src
-        dr, dc = m.dst
-        src_row0 = sr * dev_rows + m.in_base_token
-        dst_row0 = dr * dev_rows + m.out_base_token
-        src = host_input[src_row0 : src_row0 + tokens, sc * elems : (sc + 1) * elems]
-        got = host_out[dst_row0 : dst_row0 + tokens, dc * elems : (dc + 1) * elems]
-        if not torch.equal(src, got):
-            return False
-
-    return True
-
-
-def _cmbf2d_producer_token_budget(mesh_device, axis, num_links, tokens):
-    """`(allowed_per_producer, mesh_total)` PACKET counts, derived from the op's forwarding scheme.
-
-    A producer's packets are its own tokens PLUS everything it forwards for other chips, because the op does
-    the forwarding itself. So `tokens_sent` equals the traffic crossing its cable — the number comparable to
-    the 25 GB/s line rate — and no derived estimate is needed.
-
-    Since P9.3 the split is balanced: each producer serves H = R/2 destinations (ring distances 1..H-1 in its
-    own direction, plus half of the diametrically-opposite chip, which is equally far either way). So every
-    producer is identical, and puts on its link
-        H*H/2 * tokens   payload tokens   (= H(H-1)/2 full distances + H/2 for the halved one)
-      + H(H-1)/2         sentinels, one per forwarding chunk it writes
-    """
-    extent = tuple(mesh_device.shape)[axis]
-    half = extent // 2
-    per_producer = half * half // 2 * tokens + half * (half - 1) // 2
-    mesh_total = mesh_device.get_num_devices() * num_links * 2 * per_producer
-    return {per_producer}, mesh_total
 
 
 def _dump_combine_fabric2d_bwinfo(
@@ -840,8 +786,8 @@ def _dump_combine_fabric2d_bwinfo(
     num_links,
     axis,
     expected_workers,
-    allowed_tokens,
-    mesh_total_tokens,
+    min_payload_tokens,
+    token_size_bytes,
     path=CMBF2D_BWINFO_PATH,
 ):
     """Read each producer's L1 telemetry record, write the bandwidth report, then assert it is sound.
@@ -849,9 +795,10 @@ def _dump_combine_fabric2d_bwinfo(
     Telemetry is trusted for CYCLE COUNTS ONLY. Everything else a rate depends on — the clock, the
     payload size, how many producers reported at all — is asserted against what the test asked for,
     because a bandwidth figure with an unverified denominator is worse than none: it looks authoritative
-    and is silently wrong. Concretely, payload is CMBF2D_TOKENS * CMBF2D_TOKEN_BYTES, never the record's
-    own tokens_sent * token_size_bytes (those are cross-checked instead), and a clock more than
-    CMBF2D_CLOCK_TOLERANCE off CMBF2D_EXPECTED_CLOCK_MHZ fails the test.
+    and is silently wrong. Per-producer packet counts are data-dependent from phase 10, so what is asserted
+    is their mesh TOTAL against `min_payload_tokens` — the token-hops the caller's own routing implies, which
+    no cable can carry fewer of however the op divides the work. A clock more than CMBF2D_CLOCK_TOLERANCE off
+    CMBF2D_EXPECTED_CLOCK_MHZ also fails the test.
 
     The report is written BEFORE the assertions, so a failing run still leaves the artifact to look at.
 
@@ -877,10 +824,17 @@ def _dump_combine_fabric2d_bwinfo(
     workers = telem["workers"]
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    # Per-producer payload comes from each producer's own token count, but only AFTER that count has been
-    # checked against the test's plan (allowed_tokens / mesh_total_tokens) in the assertions below.
+    # Per-producer payload is that producer's own reported packet count. Since P9.2 that count IS the traffic
+    # crossing its cable (its own tokens plus everything it forwards for other chips), so it is the number
+    # comparable to the 25 GB/s line rate. Phase 10 makes it DATA-DEPENDENT — how much a producer carries
+    # depends on where the router sent things — so it can no longer be checked against a single expected
+    # value. What is still checkable, and implementation-independent, is the mesh total: every token must
+    # cross one cable per hop of its journey, which the caller computes from its own routing (see
+    # min_payload_tokens) without knowing anything about how the op splits the work.
     def payload_of(w):
-        return w["tokens_sent"] * CMBF2D_TOKEN_BYTES
+        return w["tokens_sent"] * token_size_bytes
+
+    total_sent_pkts = sum(w["tokens_sent"] for w in workers if w["valid"])
 
     # Cycles -> us needs a clock. Guarded only so a zero clock cannot produce inf and crash the report
     # before the assertion below gets to explain what went wrong.
@@ -891,7 +845,7 @@ def _dump_combine_fabric2d_bwinfo(
         if not w["valid"]:
             bad.append(w)
             continue
-        if w["tokens_sent"] not in allowed_tokens or w["token_size_bytes"] != CMBF2D_TOKEN_BYTES:
+        if w["token_size_bytes"] != token_size_bytes:
             mismatched.append(w)
         us = (w["t_drained"] - w["t_start"]) / usable_clock
         send_cycles = w["t_last_send"] - w["t_first_send"]
@@ -921,12 +875,13 @@ def _dump_combine_fabric2d_bwinfo(
         f.write(
             f"# CombineFabric2D bandwidth telemetry\n"
             f"# mesh={tuple(mesh_device.shape)} num_links={num_links} axis={axis} "
-            f"tokens={CMBF2D_TOKENS} per movement token={CMBF2D_TOKEN_BYTES}B clock={clock_mhz}MHz "
+            f"token={token_size_bytes}B clock={clock_mhz}MHz "
             f"edm_sender_slots={first.get('edm_slots', 0)} l1_slots={first.get('num_l1_slots', 0)} "
             f"batch={first.get('batch', 0)} fwd_bump_every={CMBF2D_FWD_BUMP} order={CMBF2D_ORDER} stall_telemetry={CMBF2D_STALL}\n"
-            f"# payload per producer = tokens_sent x {CMBF2D_TOKEN_BYTES}B, where tokens_sent is asserted to be\n"
-            f"#   one of {sorted(allowed_tokens)} and to sum to {mesh_total_tokens} across the mesh. Producers are\n"
-            f"#   deliberately unequal: the fabric picks one direction for the opposite chip. Not taken\n"
+            f"# payload per producer = tokens_sent x {token_size_bytes}B. tokens_sent is the producer's OWN count\n"
+            f"#   of packets it put on its cable (own + forwarded + chunk sentinels), and is data-dependent: how\n"
+            f"#   much each carries depends on where the router sent things. Their mesh total is asserted to be at\n"
+            f"#   least {min_payload_tokens} (the token-hops the routing implies). Not taken\n"
             f"#   from telemetry. Telemetry supplies cycle counts only; its tokens_sent / token_size_bytes\n"
             f"#   are asserted to match, and the clock is asserted within "
             f"{CMBF2D_CLOCK_TOLERANCE:.0%} of {CMBF2D_EXPECTED_CLOCK_MHZ} MHz.\n"
@@ -970,8 +925,7 @@ def _dump_combine_fabric2d_bwinfo(
         for w in mismatched:
             f.write(
                 f"# PAYLOAD MISMATCH: dev {w['device_id']} coord {tuple(w['mesh_coord'])} reported "
-                f"{w['tokens_sent']} tokens x {w['token_size_bytes']}B, test allows "
-                f"{sorted(allowed_tokens)} x {CMBF2D_TOKEN_BYTES}B\n"
+                f"{w['tokens_sent']} tokens x {w['token_size_bytes']}B, test expects a {token_size_bytes}B token\n"
             )
         if rows:
             g_min, g_p50, g_max, g_mean = _stats([r["gbps"] for r in rows])
@@ -992,7 +946,7 @@ def _dump_combine_fabric2d_bwinfo(
                 f"#   SLOWEST producer: {slowest_gbps:.2f} GB/s of 25 over {l_max:.2f} us"
                 f"   <-- the transfer is not done until this one is\n"
                 f"#   p50 {s_p50:.2f}   mean {s_mean:.2f} GB/s   (own + forwarded packets, "
-                f"{sorted(allowed_tokens)} per producer, {mesh_total_tokens} mesh-wide)\n"
+                f"{total_sent_pkts} packets mesh-wide, {min_payload_tokens} of them payload token-hops)\n"
             )
             f.write(
                 f"# per-producer GB/s (incl. drain tail): min {g_min:.2f} p50 {g_p50:.2f} max {g_max:.2f} "
@@ -1018,14 +972,13 @@ def _dump_combine_fabric2d_bwinfo(
     assert (
         len(rows) == expected_workers
     ), f"expected {expected_workers} producer records (one per movement), got {len(rows)}; see {path}"
-    total_sent = sum(r["w"]["tokens_sent"] for r in rows)
-    assert total_sent == mesh_total_tokens, (
-        f"producers sent {total_sent} tokens in total but the test's plan moves {mesh_total_tokens}; "
-        f"the op is not covering the movement list. See {path}"
+    assert total_sent_pkts >= min_payload_tokens, (
+        f"producers put {total_sent_pkts} packets on their cables but the caller's routing needs at least "
+        f"{min_payload_tokens} token-hops delivered; the op is not moving everything it was given. See {path}"
     )
     assert not mismatched, (
-        f"{len(mismatched)} producer(s) reported a payload outside the allowed {sorted(allowed_tokens)} x "
-        f"{CMBF2D_TOKEN_BYTES}B; see 'PAYLOAD MISMATCH' in {path}"
+        f"{len(mismatched)} producer(s) reported a token size other than {token_size_bytes}B; see "
+        f"'PAYLOAD MISMATCH' in {path}"
     )
     assert abs(clock_mhz - CMBF2D_EXPECTED_CLOCK_MHZ) <= CMBF2D_CLOCK_TOLERANCE * CMBF2D_EXPECTED_CLOCK_MHZ, (
         f"device clock {clock_mhz} MHz is more than {CMBF2D_CLOCK_TOLERANCE:.0%} off the assumed "
@@ -1036,93 +989,69 @@ def _dump_combine_fabric2d_bwinfo(
 
 
 @pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    combine_shape_params(),
+)
+@pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     CMBF2D_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
-    num_devices = mesh_device.get_num_devices()
-    logger.debug(
-        f"combine_fabric2d: shape={tuple(mesh_device.shape)} num_devices={num_devices} "
-        f"num_links={num_links} topology={topology}"
-    )
+@pytest.mark.parametrize("use_predictable_data", [False], ids=["random"])
+@pytest.mark.parametrize("dispatched_buffer_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
+@pytest.mark.parametrize("use_fp8_output", [False], ids=["bf16_out"])
+def test_combine_fabric2d(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    run_pcc_check,
+    dispatched_buffer_layout,
+    use_fp8_output,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    """combine_fabric2d on exactly the work test_ttnn_combine gives the production op — same inputs, same
+    dispatch, same torch reference, same validation, via the same run_combine body.
+
+    Two things differ, both deliberate and both device-level rather than test-level:
+      * the mesh config (CMBF2D_MESH_CONFIGS): this op needs the fabric to carry token + 64 B routing tail in
+        one packet, which is a DEVICE-WIDE setting, so it cannot share ALL_MESH_CONFIGS without perturbing
+        every other test there. Normalising the two onto one config is a later phase.
+      * the parameter matrix is narrowed to the one combination this op supports (ROW_MAJOR, bf16): fp8 and
+        TILE both need the untilize stage it does not have.
+    """
     ttnn.visualize_mesh_device(mesh_device)
-
-    # The op relies on the fabric carrying token + 64B routing tail in ONE packet. Assert the device came
-    # up that way rather than trusting the config went through.
+    # The op relies on the fabric carrying token + 64 B routing tail in ONE packet. Assert the device came up
+    # that way rather than trusting the config went through.
     fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
-    assert fabric_payload >= CMBF2D_PACKET_BYTES, (
-        f"fabric max payload is {fabric_payload} B but the op needs {CMBF2D_PACKET_BYTES} "
-        f"({CMBF2D_TOKEN_BYTES} token + 64 routing tail)"
+    want_payload = emb_dim * 2 + 64
+    assert fabric_payload >= want_payload, (
+        f"fabric max payload is {fabric_payload} B but the op needs {want_payload} "
+        f"({emb_dim * 2} token + 64 routing tail)"
     )
-    logger.info(f"combine_fabric2d fabric max payload {fabric_payload} B (needs {CMBF2D_PACKET_BYTES})")
+    logger.info(f"combine_fabric2d fabric max payload {fabric_payload} B (needs {want_payload})")
 
-    tokens = CMBF2D_TOKENS
-    token_size_bytes = CMBF2D_TOKEN_BYTES
-    # The op halves the movement to the diametrically-opposite chip between its two producers (that chip
-    # is reachable equally far in either direction), so an odd count would not split evenly.
-    assert tokens % 2 == 0, f"CMBF2D_TOKENS must be even (the +N/2 movement is split in half), got {tokens}"
-
-    # What we want moved, stated up front and independently of how the op will do it.
-    movements = _cmbf2d_plan_movements(mesh_device, CMBF2D_AXIS, num_links, tokens)
-    host_input, dev_input, dev_output = _cmbf2d_make_regions(
-        mesh_device, CMBF2D_AXIS, tokens, token_size_bytes, num_links
-    )
-    slots = _cmbf2d_slots_per_device(mesh_device, CMBF2D_AXIS, num_links)
-    logger.info(
-        f"combine_fabric2d plan: {len(movements)} movements, {slots} slots/device of {tokens} tokens "
-        f"({slots * tokens} tokens per region per device)"
-    )
-
-    signpost(f"combine_fabric2d start num_links={num_links} tokens={tokens}")
-    output = ttnn.experimental.deepseek_prefill.combine_fabric2d(
+    run_combine(
         mesh_device,
-        dev_input,
-        dev_output,
-        movements,
-        num_links=num_links,
-        tokens_per_movement=tokens,
-        token_size_bytes=token_size_bytes,
-        axis=CMBF2D_AXIS,
-        fwd_bump_every=CMBF2D_FWD_BUMP,
-        assignment_order=CMBF2D_ORDER,
-        stall_telemetry=CMBF2D_STALL,
-    )
-    ttnn.synchronize_device(mesh_device)
-    signpost("combine_fabric2d end")
-
-    # The op has to return a tensor — ttnn's device-op framework requires a tensor_return_value_t, there
-    # is no void device op — and this one opts into caller-owned output by returning the very tensor it
-    # was handed (create_output_tensors -> tensor_args.output). Assert that contract rather than assume
-    # it: buffer_address() is the MeshBuffer address, so this is exact and costs no readback. If someone
-    # later switches the op to the usual "allocate a fresh output" pattern, this fires instead of the
-    # test silently validating a tensor we never asked to be written.
-    assert (
-        output.buffer_address() == dev_output.buffer_address()
-    ), "op did not write into the caller-owned output region"
-
-    # Read back dev_output — the region WE allocated, zeroed and named — not the handle the op returned.
-    # Same reasoning as using host_input for the source side: neither side of the comparison should be a
-    # thing the op chose for us.
-    assert _cmbf2d_check_accuracy(mesh_device, host_input, dev_output, movements, tokens)
-
-    # ---- Bandwidth telemetry. Writes the report and asserts it is internally sound (clock, payload,
-    # every producer accounted for) — see _dump_combine_fabric2d_bwinfo. The numbers themselves live in
-    # the file, not in the console: there are 128 producer rows here, and a console summary is only ever
-    # a lossy copy of what the file already says.
-    #
-    # One telemetry record per PRODUCER CORE, not per movement: a device has 2 * num_links producers (one
-    # per link per direction) and each now serves several movements, so these two counts diverged the
-    # moment destinations went beyond the immediate neighbours.
-    _cmbf2d_allowed, _cmbf2d_total = _cmbf2d_producer_token_budget(mesh_device, CMBF2D_AXIS, num_links, tokens)
-    bwinfo_path = _cmbf2d_bwinfo_path()
-    _dump_combine_fabric2d_bwinfo(
-        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
         num_links,
-        axis=CMBF2D_AXIS,
-        expected_workers=num_devices * 2 * num_links,
-        allowed_tokens=_cmbf2d_allowed,
-        mesh_total_tokens=_cmbf2d_total,
-        path=bwinfo_path,
+        topology,
+        use_predictable_data,
+        run_pcc_check or CMB_PERF_PCC,
+        dispatched_buffer_layout,
+        use_fp8_output,
+        is_ci_env,
+        is_ci_v2_env,
+        combine_impl="fabric2d",
     )
-    logger.info(f"combine_fabric2d telemetry -> {bwinfo_path}")

@@ -16,23 +16,29 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// `input` and `output` are caller-owned interleaved uint32 ROW_MAJOR DRAM mesh tensors, one row per
-// token. `movements` says what moves where — one descriptor per fabric cable per device, i.e.
-// 2 * num_links * num_devices in total. Returns the same output tensor it was handed.
+// Same call as ttnn::experimental::deepseek_prefill::combine, plus `expert_offsets` and this op's tuning
+// knobs. Allocates and returns the combined output: (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim)
+// BFLOAT16 ROW_MAJOR per device. See CombineFabric2dParams for what each tensor carries.
 ttnn::Tensor combine_fabric2d(
     ttnn::MeshDevice& device,
-    const ttnn::Tensor& input,
-    const ttnn::Tensor& output,
-    const std::vector<CombineFabric2dMovement>& movements,
-    uint32_t num_links = 2,
-    uint32_t tokens_per_movement = 100,
-    uint32_t token_size_bytes = 14336,
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& dispatched_metadata,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& expert_region_offsets,
+    const ttnn::Tensor& expert_offsets,
+    uint32_t dispatch_group_size,
+    uint32_t experts_per_chip,
+    uint32_t num_experts_per_tok,
+    uint32_t seq_len_per_chip,
     uint32_t axis = 0,
+    uint32_t num_links = 2,
+    std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    bool init_zeros = false,
     uint32_t num_l1_slots = 8,
     uint32_t fwd_bump_every = 32,
     uint32_t assignment_order = 1,
-    uint32_t stall_telemetry = 0,
-    std::optional<tt::tt_fabric::Topology> topology = std::nullopt);
+    uint32_t stall_telemetry = 0);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
 
