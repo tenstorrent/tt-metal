@@ -29,13 +29,13 @@ from loguru import logger
 import ttnn
 
 from models.demos.gemma4.tt.attention.operations import (
-    apply_allreduce,
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
     concat_heads,
     split_qkv_heads_prefill,
 )
+from models.experimental.diffusion_gemma.tt.ccl import apply_allreduce
 
 TILE_SIZE = 32
 

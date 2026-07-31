@@ -54,13 +54,13 @@ import ttnn
 from models.experimental.diffusion_gemma.tt.expert_operations import shared_mlp_forward
 
 from models.demos.gemma4.tt.attention.operations import (
-    apply_allreduce,
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
     concat_heads,
     split_qkv_heads_prefill,
 )
+from models.experimental.diffusion_gemma.tt.ccl import apply_allreduce
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     _chunked_norm_forward,

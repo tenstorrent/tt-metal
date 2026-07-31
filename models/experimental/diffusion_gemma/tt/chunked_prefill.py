@@ -80,7 +80,6 @@ import torch
 import ttnn
 import models.demos.gemma4.tt.attention as _gemma4_attn
 from models.demos.gemma4.tt.attention.operations import (
-    apply_allreduce,
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
@@ -89,6 +88,7 @@ from models.demos.gemma4.tt.attention.operations import (
     effective_block_size,
     split_qkv_heads_prefill,
 )
+from models.experimental.diffusion_gemma.tt.ccl import apply_allreduce
 
 
 # ── per-sliding-layer rolling K/V window buffer (threaded across chunks) ──────

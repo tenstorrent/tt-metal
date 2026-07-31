@@ -46,7 +46,7 @@ def shared_mlp_forward(mlp, hidden_states):
     output = ttnn.linear(activated, mlp.down_proj)
     activated.deallocate(True)
     if mlp.mesh_config is not None and mlp.mesh_config.tp > 1:
-        from models.demos.gemma4.tt.ccl import ccl_allreduce
+        from models.experimental.diffusion_gemma.tt.ccl import ccl_allreduce
 
         output = ccl_allreduce(output, mlp.mesh_config, mlp.ccl_manager)
     return output

@@ -79,7 +79,7 @@ def create_tt_model_dg(mesh_device, **kwargs):
     from loguru import logger
 
     from models.demos.gemma4.config import MeshConfig, ModeConfig
-    from models.demos.gemma4.tt.ccl import CCLManager
+    from models.experimental.diffusion_gemma.tt.ccl import CCLManager
     from models.demos.gemma4.tt.model import Gemma4Model
     from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
     from models.demos.gemma4.tt.precision import KNOWN_MODULES, Gemma4Precision

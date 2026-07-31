@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import ttnn
 from models.demos.gemma4.tt.attention.operations import (
-    apply_allreduce,
     apply_output_projection,
     apply_qkv_projection,
     apply_rope,
@@ -23,11 +22,12 @@ from models.demos.gemma4.tt.attention.operations import (
     effective_block_size,
     split_qkv_heads_decode,
 )
+from models.experimental.diffusion_gemma.tt.ccl import apply_allreduce
 from models.demos.gemma4.tt.attention.weights import AttentionWeights
 from models.demos.gemma4.tt.experts.decode import _build_sparse_matmul_config
 from models.experimental.diffusion_gemma.tt.expert_operations import apply_geglu, shared_mlp_forward
 from models.demos.gemma4.tt.experts.weights import ExpertWeights
-from models.demos.gemma4.tt.ccl import ccl_allreduce
+from models.experimental.diffusion_gemma.tt.ccl import ccl_allreduce
 
 
 def _decode_rms_norm_forward(norm, x):

@@ -35,7 +35,7 @@ from dataclasses import dataclass
 import os
 
 import ttnn
-from models.demos.gemma4.tt.ccl import ccl_allreduce
+from models.experimental.diffusion_gemma.tt.ccl import ccl_allreduce
 from models.experimental.diffusion_gemma.tt.expert_operations import apply_geglu
 
 TILE = 32
