@@ -21,9 +21,11 @@ WHAT RUNS WHERE. Blocks 1-3 all run on device. Three host steps remain, each del
     and these tables are large-valued, the same reasoning as the codec's semantic gather.
   * Block 2's semantic argmax and FSQ quantise (see ttnn_voxtral_flow's docstring)
 
-FIDELITY, measured per block against the fp32 CPU reference:
-    Block 1 prefill  PCC 0.969   (bf16 weight floor; see ttnn_voxtral_backbone's precision notes)
-    Block 1 decode   PCC 0.981
+FIDELITY, measured per block against the fp32 CPU reference. Block 1 figures are for the DEFAULT
+backbone (ours, `ttnn_voxtral_gpt`) at BFP8 weights, on real prompts -- never random ones, which
+are a pessimistic proxy and cost a lot of time once (STATUS.md trap #12):
+    Block 1 prefill  PCC 0.999881  (last position -- the only one Block 2 consumes)
+    Block 1 decode   PCC 0.99986
     Block 2 velocity PCC 0.9999989, semantic codes EXACT, 73/74 frame codes exact on synthetic h
     Block 3          real speech PCC 0.999984, worst sample 1.16% of peak
 The end-to-end question is not any of those PCCs -- it is how many of the 37 INTEGER codes per
@@ -31,6 +33,7 @@ frame differ from the reference, because that is what changes the audio. `compar
 measures exactly that, and attributes any excess over Block 2's own 1-in-74 to Block 1.
 """
 
+import os
 import time
 
 import torch
@@ -38,23 +41,42 @@ import ttnn
 
 from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as backbone
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT_CKPT, END_AUDIO_ID
-from models.experimental.voxtral_tts.tt.ttnn_voxtral_backbone import TtVoxtralBackbone
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import CFG_ALPHA, TtVoxtralFlow
 
 FRAME_RATE = 12.5
 
+# Which Block 1 to run. "gpt" is ours (tt/ttnn_voxtral_gpt.py); "tt_transformers" is the older
+# wrapper, kept runnable so any regression can be bisected against it in one command:
+#   VOXTRAL_BACKBONE=tt_transformers HF_MODEL=<dir> python .../generate_quality_set.py
+# See STATUS.md's Block 1 section for the measurements that decided the default.
+BACKBONE_IMPL = os.environ.get("VOXTRAL_BACKBONE", "gpt")
+
 
 class TtVoxtralPipeline:
     """All three blocks on device. generate(embeds) -> frames; decode(frames) -> waveform."""
 
-    def __init__(self, device, hf_dir=None, ckpt_path=DEFAULT_CKPT, max_seq_len=1024):
+    def __init__(self, device, hf_dir=None, ckpt_path=DEFAULT_CKPT, max_seq_len=1024,
+                 backbone_impl=None):
         self.device = device
-        self.backbone = TtVoxtralBackbone(device, hf_dir=hf_dir, max_seq_len=max_seq_len)
+        # embed_frame is a host gather, so it needs the backbone's audio embedding table. Load it
+        # BEFORE the backbone and hand the same dict over: our Block 1 would otherwise load its own
+        # ~13 GB fp32 copy of the same file.
+        self.wb = backbone.load_backbone_state(ckpt_path)
+        self.backbone_impl = backbone_impl or BACKBONE_IMPL
+        if self.backbone_impl == "gpt":
+            from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT
+
+            self.backbone = TtVoxtralGPT(device, state=self.wb, max_seq_len=max_seq_len)
+        elif self.backbone_impl == "tt_transformers":
+            from models.experimental.voxtral_tts.tt.ttnn_voxtral_backbone import TtVoxtralBackbone
+
+            self.backbone = TtVoxtralBackbone(device, hf_dir=hf_dir, max_seq_len=max_seq_len)
+        else:
+            raise ValueError(f"unknown backbone {self.backbone_impl!r}; "
+                             f"expected 'gpt' or 'tt_transformers'")
         self.flow = TtVoxtralFlow(device, ckpt_path=ckpt_path)
         self.codec = TtVoxtralCodecDecoder(device, ckpt_path=ckpt_path)
-        # embed_frame is a host gather, so it needs the backbone's audio embedding table.
-        self.wb = backbone.load_backbone_state(ckpt_path)
 
     @torch.no_grad()
     def generate(self, embeds, max_frames=150, cfg_alpha=CFG_ALPHA, seed=0, verbose=True):
@@ -62,10 +84,10 @@ class TtVoxtralPipeline:
         if seed is not None:
             torch.manual_seed(seed)
         t0 = time.perf_counter()
-        # prefill returns ALL positions; only the last one conditions the first frame, matching the
-        # reference's IncrementalBackbone.prefill which returns x[:, -1:].
-        h_all = self.backbone.prefill(embeds)
-        h = h_all[:, -1:]                     # [1,1,3072]
+        # Only the last position conditions the first frame, matching the reference's
+        # IncrementalBackbone.prefill which returns x[:, -1:]. Both backbones expose this as
+        # prefill_last so the loop below does not care which one is running.
+        h = self.backbone.prefill_last(embeds)   # [1,1,3072]
         t_prefill = time.perf_counter() - t0
         if verbose:
             print(f"[pipeline] prefill P={embeds.shape[1]} in {t_prefill:.2f}s")
@@ -120,7 +142,7 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
 
     torch.manual_seed(seed)
     h_ref = ref_dec.prefill(embeds)
-    h_dev = pipe.backbone.prefill(embeds)[:, -1:]
+    h_dev = pipe.backbone.prefill_last(embeds)
 
     sem_bad = ac_bad = total_ac = 0
     print(f"  {'frame':>6} {'sem ref/dev':>14} {'acoustic diffs':>15} {'max |delta|':>12}")
