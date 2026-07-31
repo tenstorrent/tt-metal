@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include <cmath>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim {
 
@@ -81,7 +82,7 @@ tt::tt_metal::TensorSpec EmaDeviceOperation::compute_output_specs(
     const auto& old_spec = tensor_args.input.tensor_spec();
     return tt::tt_metal::TensorSpec(
         old_spec.logical_shape(),
-        TensorLayout(
+        tensor_layout_with_custom_alignment(
             old_spec.tensor_layout().get_data_type(),
             old_spec.tensor_layout().get_page_config(),
             operation_attributes.output_mem_config,

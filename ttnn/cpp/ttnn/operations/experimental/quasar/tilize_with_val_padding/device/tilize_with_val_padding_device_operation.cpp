@@ -8,6 +8,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -192,7 +193,7 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
                           // factory, the output has the same shard spec as the input.
         return tt::tt_metal::TensorSpec(
             input_shape,
-            TensorLayout::fromPaddedShape(
+            tensor_layout_from_padded_shape(
                 operation_attributes.output_dtype,
                 PageConfig(Layout::TILE),
                 mem_config,
@@ -202,7 +203,7 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
 
     return tt::tt_metal::TensorSpec(
         input_shape,
-        TensorLayout::fromPaddedShape(
+        tensor_layout_from_padded_shape(
             operation_attributes.output_dtype,
             PageConfig(Layout::TILE),
             operation_attributes.output_mem_config,

@@ -26,92 +26,6 @@ size_t round_up(size_t value, size_t multiple) {
     return ((value + multiple - 1) / multiple) * multiple;
 };
 
-std::tuple<bool, bool> get_inner_hw_overpadded(
-    const tt::tt_metal::Shape& logical_shape,
-    const tt::tt_metal::Shape& legacy_padded_shape,
-    const PageConfig& page_config) {
-    if (page_config.get_layout() == Layout::TILE) {
-        const auto& tile = page_config.get_tile();
-        const uint32_t min_padded_h = round_up(logical_shape[-2], tile.get_height());
-        const uint32_t min_padded_w = round_up(logical_shape[-1], tile.get_width());
-        return {legacy_padded_shape[-2] > min_padded_h, legacy_padded_shape[-1] > min_padded_w};
-    }
-    // Always true for non-tile layouts; alignment is the standard padding mechanism for row-major tensors
-    return {true, true};
-}
-
-Alignment legacyShapeToAlignment(
-    const tt::tt_metal::Shape& logical_shape,
-    const tt::tt_metal::Shape& legacy_padded_shape,
-    const PageConfig& page_config,
-    const MemoryConfig& memory_config) {
-    if (logical_shape == legacy_padded_shape) {
-        return Alignment{};
-    }
-
-    const int padded_rank = legacy_padded_shape.rank();
-    bool alignment_can_be_2D = true;
-    for (int i = -3; i >= -padded_rank; i--) {
-        alignment_can_be_2D &= logical_shape[i] == legacy_padded_shape[i];
-    }
-
-    // 2D SHARDED
-    if (memory_config.shard_spec().has_value()) {
-        TT_FATAL(
-            alignment_can_be_2D,
-            "Tensor with shape {} ({}) cannot be sharded because alignment will have rank greater than 2!",
-            logical_shape,
-            legacy_padded_shape);
-        if (page_config.get_layout() == Layout::ROW_MAJOR) {
-            const auto& shard_spec = memory_config.shard_spec().value();
-            return Alignment{shard_spec.shape[1]};
-        }
-        return Alignment{};
-    }
-
-    const auto [height_overpadded, width_overpadded] =
-        get_inner_hw_overpadded(logical_shape, legacy_padded_shape, page_config);
-    // INTERLEAVED with only height/width padding
-    if (alignment_can_be_2D) {
-        ttsl::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
-        const auto alignment_size = values.size();
-        if (alignment_size >= 1) {
-            values[alignment_size - 1] =
-                width_overpadded ? legacy_padded_shape[-1] : page_config.get_tile().get_width();
-        }
-        if (alignment_size == 2) {
-            values[alignment_size - 2] =
-                height_overpadded ? legacy_padded_shape[-2] : page_config.get_tile().get_height();
-        }
-        Alignment result(std::move(values));
-        return result;
-    }
-
-    // INTERLEAVED with (deprecated) non-height/width padding
-    // NOTE: Rank > 2 is guaranteed in this case
-    ttsl::SmallVector<uint32_t> values(padded_rank);
-
-    // When the inner dimensions are not over-padded beyond the logical H/W, use the tile width and height
-    // for the innermost alignment; otherwise use the legacy padded H/W.
-    values[padded_rank - 1] = width_overpadded ? legacy_padded_shape[-1] : page_config.get_tile().get_width();
-    values[padded_rank - 2] = height_overpadded ? legacy_padded_shape[-2] : page_config.get_tile().get_height();
-
-    uint32_t cumulative_padded_volume = legacy_padded_shape[-2];
-    for (int dim = padded_rank - 3; dim >= 0; dim--) {
-        cumulative_padded_volume *= legacy_padded_shape[dim];
-        values[dim] = cumulative_padded_volume;
-    }
-
-    for (auto& value : values) {
-        if (value == 0) {
-            value = 1;
-        }
-    }
-
-    Alignment result(std::move(values));
-    return result;
-}
-
 void validate_alignment(const TensorLayoutImpl& tensor_layout) {
     const auto& alignment = tensor_layout.get_alignment();
     const auto& memory_config = tensor_layout.get_memory_config();
@@ -156,9 +70,8 @@ bool can_shard_align(const MemoryConfig& memory_config, const Layout& layout, co
 // TensorLayoutImpl: the internal layout-computation API, reachable from within tt_metal via impl().
 // ------------------------------------------------------------------------------------------------
 
-TensorLayoutImpl::TensorLayoutImpl(
-    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
-    dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {
+TensorLayoutImpl::TensorLayoutImpl(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config) :
+    dtype_(dtype), page_config_(page_config), memory_config_(memory_config) {
     initialize_alignment();
     CMAKE_UNIQUE_NAMESPACE::validate_alignment(*this);
 
@@ -167,6 +80,14 @@ TensorLayoutImpl::TensorLayoutImpl(
             CMAKE_UNIQUE_NAMESPACE::get_shard_align_error(memory_config_, get_layout(), get_tile());
         TT_FATAL(!shard_align_error.has_value(), "{}", shard_align_error);
     }
+}
+
+void TensorLayoutImpl::set_custom_alignment(const Alignment& alignment) {
+    // initialize_alignment() merges alignment_ into the Alignment derived from page_config_ / dtype_ /
+    // memory_config_, so overwriting alignment_ first yields the same result as constructing with **alignment**.
+    alignment_ = alignment;
+    initialize_alignment();
+    CMAKE_UNIQUE_NAMESPACE::validate_alignment(*this);
 }
 
 void TensorLayoutImpl::initialize_alignment() {
@@ -429,9 +350,8 @@ tt::tt_metal::Shape TensorLayoutImpl::compute_padded_shape(const tt::tt_metal::S
 // TensorLayout: public facade forwarding to TensorLayoutImpl.
 // ------------------------------------------------------------------------------------------------
 
-TensorLayout::TensorLayout(
-    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
-    impl_(std::make_unique<TensorLayoutImpl>(dtype, page_config, memory_config, alignment)) {}
+TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config) :
+    impl_(std::make_unique<TensorLayoutImpl>(dtype, page_config, memory_config)) {}
 
 TensorLayout::~TensorLayout() = default;
 
@@ -457,19 +377,6 @@ TensorLayoutImpl& TensorLayout::impl() {
 const TensorLayoutImpl& TensorLayout::impl() const {
     TT_FATAL(impl_ != nullptr, "TensorLayout is in a moved-from state.");
     return *impl_;
-}
-
-TensorLayout TensorLayout::fromPaddedShape(
-    DataType dtype,
-    const PageConfig& page_config,
-    const MemoryConfig& memory_config,
-    const tt::tt_metal::Shape& logical_shape,
-    const tt::tt_metal::Shape& padded_shape) {
-    return TensorLayout(
-        dtype,
-        page_config,
-        memory_config,
-        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
 }
 
 Layout TensorLayout::get_layout() const { return impl().get_layout(); }

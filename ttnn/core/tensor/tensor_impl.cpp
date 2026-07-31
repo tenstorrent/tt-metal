@@ -39,6 +39,7 @@
 
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::tensor_impl {
 
@@ -424,7 +425,7 @@ tt::tt_metal::HostTensor view(
 
     auto new_spec = tt::tt_metal::TensorSpec(
         new_logical_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::tensor_layout_from_padded_shape(
             tensor.dtype(),
             tensor.tensor_spec().page_config(),
             output_memory_config,

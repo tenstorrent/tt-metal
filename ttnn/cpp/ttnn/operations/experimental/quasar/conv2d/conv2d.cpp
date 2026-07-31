@@ -40,6 +40,7 @@
 #include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/experimental/quasar/to_device/to_device.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::conv {
 // get_conv_padded_input_shape_and_mem_config has external linkage but is not declared in
@@ -61,8 +62,8 @@ namespace ttnn::operations::experimental::quasar::detail {
 
 // Shared conv host infrastructure (conv2d_utils.hpp, prepare_conv2d_weights.hpp) is reused from the
 // original conv namespaces; bring it into scope so this impl's bare references resolve unchanged.
-using namespace ttnn::operations::conv;          // conv2d_utils helpers (get_conv_configs, determine_*, ...)
-using namespace ttnn::operations::conv::conv2d;  // prepare_conv2d_weights helpers, get_conv2d_slice_attr
+using namespace ttnn::operations::conv;                  // conv2d_utils helpers (get_conv_configs, determine_*, ...)
+using namespace ttnn::operations::conv::conv2d;          // prepare_conv2d_weights helpers, get_conv2d_slice_attr
 using ttnn::operations::sliding_window::ParallelConfig;  // return/locals of shard_or_reshard fork
 
 using ttnn::operations::experimental::quasar::Conv2dResult;
@@ -234,7 +235,7 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
                 Tensor resharded_input_tensor = ttnn::create_device_tensor(
                     tt::tt_metal::TensorSpec(
                         input_tensor.logical_shape(),
-                        tt::tt_metal::TensorLayout(
+                        tt::tt_metal::tensor_layout_with_custom_alignment(
                             input_tensor.dtype(),
                             tt::tt_metal::PageConfig(input_tensor.layout()),
                             input_tensor_sharded_memory_config_to_layout,

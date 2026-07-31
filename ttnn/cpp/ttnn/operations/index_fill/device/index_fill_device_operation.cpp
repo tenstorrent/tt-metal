@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::index_fill {
 
@@ -62,12 +63,8 @@ void IndexFillOperation::validate(
     TT_FATAL(index.buffer() != nullptr, "Index fill: Index tensor must be allocated in buffer on device");
     TT_FATAL(index.logical_shape().rank() == 1, "Index fill: Index tensor must be 1D");
     TT_FATAL(
-        index.dtype() == DataType::UINT32,
-        "Index fill: Index tensor must have UINT32 dtype; got {}",
-        index.dtype());
-    TT_FATAL(
-        index.device() == input.device(),
-        "Index fill: Index tensor must be on the same device as input");
+        index.dtype() == DataType::UINT32, "Index fill: Index tensor must have UINT32 dtype; got {}", index.dtype());
+    TT_FATAL(index.device() == input.device(), "Index fill: Index tensor must be on the same device as input");
 
     TT_FATAL(dim < input.logical_shape().rank() && dim >= 0, "Index fill: Invalid dimension");
 
@@ -100,7 +97,7 @@ IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs
     const auto& old_spec = tensor_args.input.tensor_spec();
     return tt::tt_metal::TensorSpec(
         old_spec.logical_shape(),
-        tt::tt_metal::TensorLayout(
+        tt::tt_metal::tensor_layout_with_custom_alignment(
             old_spec.tensor_layout().get_data_type(),
             old_spec.tensor_layout().get_page_config(),
             operation_attributes.memory_config,

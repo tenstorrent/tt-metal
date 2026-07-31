@@ -22,6 +22,7 @@
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "common_tensor_test_utils.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -99,7 +100,7 @@ TEST_P(EmptyTensorTest, Combinations) {
         GTEST_SKIP() << "Skipping test with ROW_MAJOR layout and BFLOAT8_B dtype!";
     }
 
-    auto tensor_layout = TensorLayout::fromPaddedShape(
+    auto tensor_layout = tensor_layout_from_padded_shape(
         dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
 
     auto tensor = MeshTensor::allocate_on_device(

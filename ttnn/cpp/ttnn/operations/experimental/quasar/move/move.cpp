@@ -13,6 +13,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -51,7 +52,7 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     if (mem_config) {
         output_tensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_spec.logical_shape(),
-            TensorLayout(
+            tensor_layout_with_custom_alignment(
                 output_tensor_spec.tensor_layout().get_data_type(),
                 output_tensor_spec.tensor_layout().get_page_config(),
                 *mem_config,
@@ -146,7 +147,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
         auto output_mem_config = MemoryConfig(mem_config->memory_layout(), mem_config->buffer_type(), shard_spec);
         output_tensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_spec.logical_shape(),
-            TensorLayout(
+            tensor_layout_with_custom_alignment(
                 output_tensor_spec.tensor_layout().get_data_type(),
                 output_tensor_spec.tensor_layout().get_page_config(),
                 output_mem_config,

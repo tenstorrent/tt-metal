@@ -10,6 +10,7 @@
 
 #include "layout/page_config_impl.hpp"
 #include "layout/tensor_layout_impl.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace tt::tt_metal {
 
@@ -262,14 +263,14 @@ TensorSpec TensorSpec::sharded(
 void TensorSpec::populate_sharding_specs() {
     if (memory_config().created_with_nd_shard_spec()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
-            tensor_layout_ = TensorLayout(
+            tensor_layout_ = tensor_layout_with_custom_alignment(
                 tensor_layout_.get_data_type(),
                 tensor_layout_.get_page_config(),
                 *upd_mem_config,
                 tensor_layout_.get_alignment());
         }
     } else if (memory_config().shard_spec()) {
-        tensor_layout_ = TensorLayout(
+        tensor_layout_ = tensor_layout_with_custom_alignment(
             tensor_layout_.get_data_type(),
             tensor_layout_.get_page_config(),
             populate_nd_shard_spec_from_legacy(),

@@ -18,6 +18,7 @@
 #include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_width_only_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_multicore_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 namespace ttnn::prim {
@@ -215,7 +216,7 @@ tt::tt_metal::TensorSpec PadDeviceOperation::compute_output_specs(
     const auto& input_tensor = tensor_args.input;
     return tt::tt_metal::TensorSpec(
         operation_attributes.output_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,

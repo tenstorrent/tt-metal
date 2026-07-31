@@ -10,6 +10,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim {
 
@@ -198,7 +199,7 @@ tt::tt_metal::TensorSpec BcastDeviceOperation::compute_output_specs(
             shard_spec);
         return tt::tt_metal::TensorSpec(
             input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tensor_layout_from_padded_shape(
                 input_tensor.dtype(),
                 PageConfig(Layout::TILE),
                 mem_config,
@@ -208,7 +209,7 @@ tt::tt_metal::TensorSpec BcastDeviceOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(Layout::TILE),
             operation_attributes.output_mem_config,

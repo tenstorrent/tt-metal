@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
 
@@ -437,7 +438,7 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
 
                 return tt::tt_metal::TensorSpec(
                     output_shape,
-                    TensorLayout::fromPaddedShape(
+                    tensor_layout_from_padded_shape(
                         operation_attributes.dtype.value_or(input_tensor.dtype()),
                         PageConfig(Layout::TILE),
                         mem_config,

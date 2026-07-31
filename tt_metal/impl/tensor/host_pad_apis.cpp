@@ -19,6 +19,7 @@
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 #include "tensor_impl.hpp"
 
@@ -49,7 +50,7 @@ HostTensor pad_bfloat8_b(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tensor_layout_from_padded_shape(
                 DataType::FLOAT32,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -65,7 +66,7 @@ HostTensor pad_bfloat8_b(
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
     TensorSpec output_spec(
         float_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tensor_layout_from_padded_shape(
             DataType::BFLOAT8_B,
             tensor.tensor_spec().page_config(),
             MemoryConfig{},
@@ -93,7 +94,7 @@ HostTensor unpad_bfloat8_b(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tensor_layout_from_padded_shape(
                 DataType::FLOAT32,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -111,7 +112,7 @@ HostTensor unpad_bfloat8_b(
         std::move(output_uint32_buffer),
         TensorSpec(
             float_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tensor_layout_from_padded_shape(
                 DataType::BFLOAT8_B,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -138,7 +139,7 @@ HostTensor pad_bfloat4_b(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tensor_layout_from_padded_shape(
                 DataType::FLOAT32,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -154,7 +155,7 @@ HostTensor pad_bfloat4_b(
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
     TensorSpec output_spec(
         float_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tensor_layout_from_padded_shape(
             DataType::BFLOAT4_B,
             tensor.tensor_spec().page_config(),
             MemoryConfig{},
@@ -181,7 +182,7 @@ HostTensor unpad_bfloat4_b(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tensor_layout_from_padded_shape(
                 DataType::FLOAT32,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -199,7 +200,7 @@ HostTensor unpad_bfloat4_b(
         std::move(output_uint32_buffer),
         TensorSpec(
             float_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tensor_layout_from_padded_shape(
                 DataType::BFLOAT4_B,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -299,7 +300,7 @@ HostTensor pad_impl(
         std::move(transformed_buffer),
         TensorSpec(
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tensor_layout_from_padded_shape(
                 tensor.dtype(),
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},

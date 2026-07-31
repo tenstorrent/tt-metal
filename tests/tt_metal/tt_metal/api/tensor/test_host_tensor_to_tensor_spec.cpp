@@ -27,6 +27,7 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tile.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -134,7 +135,8 @@ TensorSpec make_tile_spec(
     const Tile& tile = Tile({32, 32}),
     const MemoryConfig& memory_config = MemoryConfig{},
     const Alignment& alignment = {}) {
-    return TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    return TensorSpec(
+        shape, tensor_layout_with_custom_alignment(dtype, PageConfig(Layout::TILE, tile), memory_config, alignment));
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -148,8 +150,10 @@ TEST(HostTensorToTensorSpec, EarlyOutExactSpecMatch) {
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto alignment = Alignment({32, 32});
     auto tile = Tile({16, 16});
-    auto spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = HostTensor::from_vector<float>(data, spec);
 
     auto result = to_tensor_spec<float>(source, spec);
@@ -172,14 +176,18 @@ TEST(HostTensorToTensorSpec, PerCoreOnlyMismatchFullRewrite) {
         ShardSpec{CoreRangeSet({CoreRange({0, 0}, {0, 0})}), {32, 32}, ShardOrientation::ROW_MAJOR}};
 
     auto src_spec = TensorSpec(
-        shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, Alignment({32, 32})));
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, Alignment({32, 32})));
     auto source = host_tensor_from_vector_with_pad_value<float>(data, src_spec, /*pad_value=*/99.f);
     EXPECT_FALSE(experimental::per_core_allocation::is_per_core_allocation(source.tensor_spec().memory_config()));
 
     auto dest_memory = memory_config;
     experimental::per_core_allocation::set_per_core_allocation(dest_memory, true);
     auto dest_spec = TensorSpec(
-        shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), dest_memory, Alignment({32, 32})));
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), dest_memory, Alignment({32, 32})));
 
     // Spec equality ignores per_core, but exact-spec predicate must not early-out.
     EXPECT_TRUE(source.tensor_spec() == dest_spec);
@@ -245,8 +253,10 @@ TEST(HostTensorToTensorSpec, CustomTileAndAlignment) {
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
     auto src_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
-    auto dest_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto dest_spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
 
     auto source = HostTensor::from_vector<float>(data, src_spec);
     auto result = to_tensor_spec<float>(source, dest_spec);
@@ -267,10 +277,14 @@ TEST(HostTensorToTensorSpec, Float32ToBfloat16PreservesMetadata) {
     auto alignment = Alignment({32, 32});
     auto tile = Tile({16, 16});
 
-    auto src_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
-    auto dest_spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto src_spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto dest_spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::BFLOAT16, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = HostTensor::from_vector<float>(data, src_spec);
 
     auto result = to_tensor_spec<float>(source, dest_spec);
@@ -323,10 +337,14 @@ TEST(HostTensorToTensorSpec, Float32TileToBfp8ValueCheck) {
     const auto tile = Tile({16, 16});
     const auto& [floats, packed_golden] = CMAKE_UNIQUE_NAMESPACE::generate_float_to_bfp8_dataset(shape, tile);
 
-    auto src_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
-    auto dest_spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto src_spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto dest_spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(floats, src_spec);
 
     auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/0.f);
@@ -346,10 +364,14 @@ TEST(HostTensorToTensorSpec, Float32TileToBfp4ValueCheck) {
     const auto tile = Tile({16, 16});
     const auto& [floats, packed_golden] = CMAKE_UNIQUE_NAMESPACE::generate_float_to_bfp4_dataset(shape, tile);
 
-    auto src_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
-    auto dest_spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT4_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto src_spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto dest_spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::BFLOAT4_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(floats, src_spec);
 
     auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/0.f);
@@ -369,8 +391,10 @@ TEST(HostTensorToTensorSpec, Bfp8TileToFloat32RowMajorValueCheck) {
     const auto tile = Tile({16, 16});
     const auto& [packed, unpacked_golden] = CMAKE_UNIQUE_NAMESPACE::generate_bfp8_dataset(shape, tile);
 
-    auto src_spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto src_spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto dest_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
     auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(packed, src_spec);
 
@@ -394,8 +418,10 @@ TEST(HostTensorToTensorSpec, Bfp4TileToFloat32RowMajorValueCheck) {
     const auto tile = Tile({16, 16});
     const auto& [packed, unpacked_golden] = CMAKE_UNIQUE_NAMESPACE::generate_bfp4_dataset(shape, tile);
 
-    auto src_spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT4_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto src_spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::BFLOAT4_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto dest_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
     auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(packed, src_spec);
 
@@ -418,10 +444,14 @@ TEST(HostTensorToTensorSpec, RowMajorToBfp8ChangesLayoutAndPreservesTile) {
     auto alignment = Alignment({32, 32});
     auto tile = Tile({16, 16});
 
-    auto src_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
-    auto dest_spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto src_spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+    auto dest_spec = TensorSpec(
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = HostTensor::from_vector<float>(data, src_spec);
 
     auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/0.f);
@@ -548,7 +578,9 @@ TEST(HostTensorToTensorSpec, EqualPaddedDifferentPackingRoundTrip) {
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto rm_spec = TensorSpec(
-        shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, Alignment({16, 16})));
+        shape,
+        tensor_layout_with_custom_alignment(
+            DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, Alignment({16, 16})));
     auto tile_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, Tile({16, 16})), memory_config));
 

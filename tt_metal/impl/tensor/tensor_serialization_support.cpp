@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/tensor_serialization_support.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace tt::tt_metal {
 
 TensorLayout restore_tensor_layout_from_serialized(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) {
-    return TensorLayout(dtype, page_config, memory_config, alignment);
+    return tensor_layout_with_custom_alignment(dtype, page_config, memory_config, alignment);
 }
 
 MemoryConfig create_memory_config_with_prepopulated_shard_specs(

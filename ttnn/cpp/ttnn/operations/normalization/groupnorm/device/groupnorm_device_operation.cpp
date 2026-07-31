@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/normalization/groupnorm/groupnorm_grid_utils.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -204,8 +205,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             negative_mask.value().storage_type() == StorageType::DEVICE,
             "Negative mask must be on device, got storage type: {}",
             negative_mask.value().storage_type());
-        TT_FATAL(
-            negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
+        TT_FATAL(negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
         TT_FATAL(
             a.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
         TT_FATAL(
@@ -292,7 +292,7 @@ tt::tt_metal::TensorSpec GroupNormDeviceOperation::compute_output_specs(
             auto mem_config = args.output_mem_config;
             return tt::tt_metal::TensorSpec(
                 input_tensor.logical_shape(),
-                TensorLayout::fromPaddedShape(
+                tensor_layout_from_padded_shape(
                     program_config.out_data_format,
                     PageConfig(program_config.output_layout),
                     mem_config,
@@ -339,9 +339,9 @@ Tensor group_norm(
             negative_mask.value().storage_type() == StorageType::DEVICE,
             "Negative mask must be on device, got storage type: {}",
             negative_mask.value().storage_type());
+        TT_FATAL(negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
         TT_FATAL(
-            negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
-        TT_FATAL(input.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
+            input.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
     }
     using OperationType = GroupNormDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{

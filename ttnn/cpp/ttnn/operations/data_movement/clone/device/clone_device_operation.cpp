@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::data_movement::clone {
 void CloneOperation::validate_inputs(
@@ -53,7 +54,7 @@ CloneOperation::spec_return_value_t CloneOperation::compute_output_specs(
     const auto& input = tensor_args.input;
     return tt::tt_metal::TensorSpec(
         input.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::tensor_layout_from_padded_shape(
             operation_attributes.dtype,
             tt::tt_metal::PageConfig(input.layout()),
             operation_attributes.memory_config,
@@ -90,7 +91,8 @@ ttnn::Tensor clone(
         OperationType::operation_attributes_t{
             dtype.value_or(input.dtype()),
             memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
+            init_device_compute_kernel_config(
+                input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
         },
         OperationType::tensor_args_t{input});
 }
