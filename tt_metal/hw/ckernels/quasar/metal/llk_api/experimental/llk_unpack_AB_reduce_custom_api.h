@@ -5,19 +5,26 @@
 #pragma once
 #include <cstdint>
 #include "llk_unpack_common_api.h"
-#include "experimental/llk_unpack_AB_reduce_custom.h"
+#include "experimental/llk_unpack_AB_reduce_runtime_custom.h"
 
 /*************************************************************************
  * LLK UNPACK AB REDUCE CUSTOM - Specialized reduce_max_row unpack (Quasar)
  *
- * Quasar bakes the SrcA buffer descriptor into the unpack MOP (unlike WH/BH, which bind the operand at
- * execute). block_ct_dim is a compile-time template here, so it is available at execute -- the MOP is
- * therefore programmed at EXECUTE (when the operand, hence buffer descriptor, is known), and init only
- * enables the UNPACKER0 transpose. This keeps the init call operand-free and portable with WH/BH.
+ * Compile-time-block_ct_dim entry points for the arch-agnostic Compute API (reduce_custom.h) / SDPA.
+ *
+ * WHY THEY FORWARD TO THE RUNTIME LIB: Quasar has NO separate compile-time LLK lib (no `lltt`;
+ * `ckernel_template` takes runtime loop bounds), so these wrappers pass the template block_ct_dim as a
+ * runtime argument to the single runtime lib. The template exists purely for Compute-API call-shape
+ * parity.
+ *
+ * Quasar bakes the SrcA buffer descriptor into the unpack MOP, and it is only known once the operand is
+ * bound (at execute). block_ct_dim is a template here, so it is available at execute -- so the MOP is
+ * programmed at EXECUTE, and init only enables the UNPACKER0 transpose. This keeps the init call
+ * operand-free and portable with WH/BH.
  *************************************************************************/
 
 /**
- * @brief Initializes the block reduce_max_row unpacker (compile-time block_ct_dim). Enables transpose.
+ * @brief Initializes the block reduce_max_row unpacker (compile-time block_ct_dim). Enables transpose only.
  *
  * @tparam block_ct_dim  Number of tiles in the width dimension processed as one block.
  * @tparam is_fp32_dest_acc_en  32-bit DEST accumulation mode.
@@ -27,7 +34,8 @@
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape) {
-    _llk_unpack_AB_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape);
+    (void)tensor_shape;  // the MOP (which uses the shape + buffer descriptor) is programmed at execute
+    _llk_unpack_AB_reduce_block_max_row_cfg_(true);
 }
 
 /**
@@ -49,6 +57,10 @@ inline void llk_unpack_AB_reduce_block_max_row(
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
+    // Program the SrcA MOP now that the operand (hence buffer descriptor) is known.
+    _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
+        block_ct_dim, operandA_id, operandB_id, tensor_shape, respect_trigger);
+
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
     const std::uint32_t l1_tile_index_a =
@@ -56,12 +68,18 @@ inline void llk_unpack_AB_reduce_block_max_row(
     const std::uint32_t l1_tile_index_b = local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx;
 
     WAYPOINT("URBW");
-    _llk_unpack_AB_reduce_block_max_row_<block_ct_dim, respect_trigger>(
-        l1_tile_index_a, l1_tile_index_b, operandA_id, operandB_id, tensor_shape);
+    _llk_unpack_AB_reduce_block_max_row_runtime_(
+        block_ct_dim,
+        l1_tile_index_a,
+        l1_tile_index_b,
+        operandB_id,
+        tensor_shape,
+        respect_trigger,
+        false /*overlap_first_half*/);
     WAYPOINT("URBD");
 }
 
 template <bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row_uninit() {
-    _llk_unpack_AB_reduce_block_max_row_uninit_<respect_trigger>();
+    _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(respect_trigger, false /*overlap_first_half*/);
 }
