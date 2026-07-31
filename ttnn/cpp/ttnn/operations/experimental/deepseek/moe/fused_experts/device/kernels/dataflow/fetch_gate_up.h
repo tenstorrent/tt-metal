@@ -17,11 +17,11 @@
 // Shared dataflow helpers for the fused-experts pipeline (used by every DM kernel).
 //
 // PER-EXPERT PIPELINE (run by the reader on every core, in lock-step across the chip):
-//   1. gate_up matmul + SwiGLU produces, on each of the 32 SwiGLU cores, a 2-tile
+//   1. gate_up matmul + SwiGLU produces, on each of the I/64 SwiGLU cores, a 2-tile
 //      (64-column) slice of the activation act[1, I] (its I-columns [idx*64, idx*64+64)).
 //   2. GATHER: each SwiGLU core's writer copies its 2 act tiles into core {0,0}'s cb_act
 //      at tile offset idx*2 (a single NoC write to the leader) and bumps the leader's
-//      gather semaphore. After all 32 chunks land, {0,0}'s cb_act holds the full act[1, I]
+//      gather semaphore. After all chunks land, {0,0}'s cb_act holds the full act[1, I]
 //      (i_tiles == I/32 tiles, in K order).
 //   3. BROADCAST: {0,0} multicasts its full cb_act to every other core's cb_act (same L1
 //      address) and sets the broadcast semaphore. Now every core has the full activation.
@@ -30,9 +30,19 @@
 //      slice of the output row[1, H]; the compute kernel scales it by the expert's routing
 //      weight and accumulates across experts into the single [1, 1, H] DRAM output.
 //
-// cb_act is single-buffered, so experts are processed one at a time: the leader only
-// broadcasts expert e once every core has finished consuming expert e-1's activation
-// (tracked by the actfree semaphore the writers bump after the down output is written).
+// DRAM BANDWIDTH OPTIMIZATION (see tech_reports/Saturating_DRAM_bandwidth):
+// The weight fetch is the DRAM-bound path of this op. Each expert's per-core weight slice
+// is one NoC read. Two techniques from the saturating-DRAM-bandwidth work apply here:
+//   1. Sharded tensors in DRAM: the gate_up and down weights are ND-sharded so each core
+//      reads only its own partition from its assigned bank (no round-robin interleaved
+//      access that would cause NoC congestion) -- already in place.
+//   2. Double-buffered weight CBs: the per-expert weight slice is double-buffered so the
+//      reader can hold one expert's slice ready in L1 while compute consumes the previous
+//      expert's, overlapping data movement with computation (the tech report's
+//      "In0 and in1 shards are also double buffered, to overlap the data movement with
+//      computation"). The gate_up weight CB is now sized for two slots (it previously held
+//      a single slice), and the down weight CB was already double-buffered; both reuse the
+//      same CB index across the two phases (gate_up is dead during the down phase).
 
 // The activation row is delivered into every core's cb_input L1 region by the input
 // broadcaster's multicast (receivers) or by a direct DRAM read (the broadcaster itself).
@@ -51,19 +61,25 @@ inline void publish_input(uint32_t cb_input_id, uint32_t k_tiles) {
 constexpr uint32_t kOutTilesPerCore = 2;
 constexpr uint32_t kGateUpShardTileCols = 2 * kOutTilesPerCore;  // gate 2 | up 2
 
-// Read this core's gate_up slice for the i-th selected ("hit") expert into cb_weights.
-template <typename GateUpArgs>
-inline void fetch_gate_up_one(
+// Read this core's weight slice for the i-th selected ("hit") expert into a double-buffered
+// weight CB. The CB's reserve_back/push_back provide compute-side flow control: with two
+// slots the reader can hold one expert's data ready while compute consumes the previous
+// expert's, decoupling the reader from compute (see tech_reports/Saturating_DRAM_bandwidth --
+// "double buffered, to overlap the data movement with computation").
+//
+// `cb_weights_id` must be a CB with total_size >= 2 * slice_tiles * page_size.
+// `ct_w_addr_base` is the compile-time-args offset of the per-expert weight base addresses.
+template <typename WeightArgs>
+inline void fetch_weight_one(
     const Noc& noc,
     uint32_t cb_bcast_id,
     uint32_t cb_weights_id,
     uint32_t i,
-    uint32_t k_tiles,
+    uint32_t slice_tiles,
     uint32_t tile_bytes,
     uint32_t shard_id,
-    const GateUpArgs& gate_up_args,
+    const WeightArgs& weight_args,
     uint32_t ct_w_addr_base) {
-    const uint32_t slice_tiles = k_tiles * kGateUpShardTileCols;
     const uint32_t slice_bytes = slice_tiles * tile_bytes;
 
     CircularBuffer cb_bcast(cb_bcast_id);
@@ -72,7 +88,7 @@ inline void fetch_gate_up_one(
     // Weight base addresses live in the compile-time args (in expert-id order); index the
     // resident kernel_compile_time_args array by the runtime-selected expert id directly.
     const uint32_t w_addr = kernel_compile_time_args[ct_w_addr_base + expert];
-    const auto w = TensorAccessor(gate_up_args, w_addr);
+    const auto w = TensorAccessor(weight_args, w_addr);
 
     CircularBuffer cb_weights(cb_weights_id);
     cb_weights.reserve_back(slice_tiles);
@@ -80,41 +96,6 @@ inline void fetch_gate_up_one(
     noc.async_read(w_shard, cb_weights, slice_bytes, {.shard_id = shard_id}, {.offset_bytes = 0});
     noc.async_read_barrier();
     cb_weights.push_back(slice_tiles);
-}
-
-// Read this core's down weight slice for the i-th selected expert into cb_down_w.
-//
-// down weights are [I, H] per expert, DRAM ND-sharded into [I, H/64] column blocks (one
-// per core). Core idx owns the H output columns [idx*64, idx*64+64) -> its 2 output tiles,
-// and needs the full I (K) dim, so its shard is [down_k_tiles, 2] tiles == down_slice_tiles.
-// Shard id == col_start_tile / 2 == idx. Read in one NoC read.
-template <typename DownArgs>
-inline void fetch_down_one(
-    const Noc& noc,
-    uint32_t cb_bcast_id,
-    uint32_t cb_down_w_id,
-    uint32_t i,
-    uint32_t down_slice_tiles,
-    uint32_t down_tile_bytes,
-    uint32_t shard_id,
-    const DownArgs& down_args,
-    uint32_t ct_down_addr_base) {
-    const uint32_t slice_bytes = down_slice_tiles * down_tile_bytes;
-
-    CircularBuffer cb_bcast(cb_bcast_id);
-    CoreLocalMem<volatile uint32_t> ids(cb_bcast.get_write_ptr());
-    const uint32_t expert = ids[i];
-    // Weight base addresses live in the compile-time args (in expert-id order); index the
-    // resident kernel_compile_time_args array by the runtime-selected expert id directly.
-    const uint32_t w_addr = kernel_compile_time_args[ct_down_addr_base + expert];
-    const auto w = TensorAccessor(down_args, w_addr);
-
-    CircularBuffer cb_down_w(cb_down_w_id);
-    cb_down_w.reserve_back(down_slice_tiles);
-    ShardView w_shard(w);
-    noc.async_read(w_shard, cb_down_w, slice_bytes, {.shard_id = shard_id}, {.offset_bytes = 0});
-    noc.async_read_barrier();
-    cb_down_w.push_back(down_slice_tiles);
 }
 
 // Leader ({0,0}) side of the SINGLE activation gather + broadcast for ALL experts.
@@ -254,15 +235,18 @@ inline void run_reader_loop(
     // weighted accumulation. The bcast buffer (ids + scalars) is already resident on every core.
     build_routing_scalars(cb_bcast_id, cb_rscalar_id, num_active, weight_base);
 
-    // ---- Phase 1: gate_up weights for all experts (throttled by cb_weights double-buffer). ----
+    // ---- Phase 1: gate_up weights for all experts (SwiGLU cores only). ----
+    // cb_weights is double-buffered, so the reader can hold one expert's slice ready while
+    // compute consumes the previous expert's -- overlapping data movement with computation.
     if (swiglu_core) {
+        const uint32_t gate_up_slice_tiles = k_tiles * kGateUpShardTileCols;
         for (uint32_t e = 0; e < num_active; ++e) {
-            fetch_gate_up_one(
+            fetch_weight_one(
                 noc,
                 cb_bcast_id,
                 cb_weights_id,
                 e,
-                k_tiles,
+                gate_up_slice_tiles,
                 gate_up_tile_bytes,
                 shard_id,
                 gate_up_args,
@@ -290,9 +274,11 @@ inline void run_reader_loop(
         receiver_recv_act_all(cb_act_id, act_total_tiles, sem_bcast_id);
     }
 
-    // ---- Phase 2: down weights for all experts (throttled by cb_down_w double-buffer). ----
+    // ---- Phase 2: down weights for all experts (all cores). ----
+    // cb_down_w reuses the (now-dead) cb_weights CB, which is double-buffered and at least
+    // as large as the down slice, so the same reader/compute overlap applies.
     for (uint32_t e = 0; e < num_active; ++e) {
-        fetch_down_one(
+        fetch_weight_one(
             noc,
             cb_bcast_id,
             cb_down_w_id,
