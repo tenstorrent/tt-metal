@@ -170,6 +170,39 @@ def test_s3_full_depth_rung_is_never_called_inert(tmp_path, monkeypatch):
     assert _M._knob_is_inert(seq, _M._work_signal(seq), 64, tmp_path) is False
 
 
+def test_s3_the_real_measured_gemma3_numbers(tmp_path):
+    """MEASURED ON DEVICE, not a fixture. gemma-3-12b built twice through the real pipeline:
+
+        TT_PERF_LAYERS unset -> built_layers=48  work_signal=12461
+        TT_PERF_LAYERS=2     -> built_layers=48  work_signal=12461
+
+    Identical, because build_pipeline takes no depth argument and reads no env, so the cap is
+    dropped. These are those two numbers.
+    """
+    assert _M._knob_is_inert(["op"] * 12461, 12461, 2, tmp_path) is True
+    # what the same model would have produced had the cap reached the builder (2 of 48 layers)
+    assert _M._knob_is_inert(["op"] * 519, 12461, 2, tmp_path) is False
+
+
+def test_s3_undeclared_depth_only_judges_the_shallowest_rung(tmp_path):
+    """_declared_depth returns None for gemma3, so "the cap was ignored" and "this rung IS the whole
+    model" are indistinguishable at depth. A 4-layer model probed at rung 4 legitimately does
+    full-model work; calling that an inert knob would be a false positive."""
+    seq = ["op"] * 12461
+    assert _M._knob_is_inert(seq, 12461, 2, tmp_path) is True
+    for deep_rung in (4, 8, 16):
+        assert _M._knob_is_inert(seq, 12461, deep_rung, tmp_path) is False, f"judged rung {deep_rung} blind"
+
+
+def test_s3_declared_depth_judges_every_rung_below_it(tmp_path, monkeypatch):
+    """With the depth known there is no ambiguity: any rung below it must shrink the work."""
+    monkeypatch.setattr(_M, "_declared_depth", lambda *a, **k: 48)
+    seq = ["op"] * 12461
+    for rung in (2, 4, 8, 16):
+        assert _M._knob_is_inert(seq, 12461, rung, tmp_path) is True
+    assert _M._knob_is_inert(seq, 12461, 48, tmp_path) is False
+
+
 def test_s3_unknown_signal_is_not_a_verdict(tmp_path):
     assert _M._knob_is_inert(["op"] * 10, None, 2, tmp_path) is False
     assert _M._knob_is_inert([], 5000, 2, tmp_path) is False

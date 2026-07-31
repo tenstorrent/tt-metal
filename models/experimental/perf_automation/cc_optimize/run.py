@@ -855,6 +855,7 @@ _ENV_READ_RE = re.compile(
 )
 
 
+_SHALLOWEST_RUNG = 2
 _SKIP_DIRS = {"__pycache__", ".git", "build", ".pytest_cache", "node_modules", ".venv"}
 
 
@@ -1232,7 +1233,12 @@ def _knob_is_inert(seq_at_depth, full_signal, depth, model_root) -> bool:
     if not full_signal or not seq_at_depth:
         return False
     declared = _declared_depth(model_root)
-    if declared is not None and depth >= declared:
+    if declared is None:
+        # An UNDECLARED depth means we cannot tell "the cap was ignored" from "this rung IS the whole
+        # model" -- a 4-layer model probed at rung 4 legitimately does full-model work. Only the
+        # shallowest rung is safe to judge: a model with <= 2 blocks has nothing to slice anyway.
+        return depth <= _SHALLOWEST_RUNG and _work_signal(seq_at_depth) == full_signal
+    if depth >= declared:
         return False
     return _work_signal(seq_at_depth) == full_signal
 
