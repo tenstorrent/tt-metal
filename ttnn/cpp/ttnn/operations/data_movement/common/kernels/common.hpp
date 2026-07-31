@@ -99,6 +99,21 @@ FORCE_INLINE noc_traits_t<UnicastEndpoint>::dst_args_type self_l1_dst_args(Noc n
 // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). When the copy is not deferred (!copy_async), drain
 // the last written word (blocking load + memory clobber) so the copy is processed before the caller
 // publishes / NoC-reads the destination -- the counterpart of the NoC path's completion barrier.
+//
+// TODO(ARCH_QUASAR): this CPU-copy fallback is NOT fully cache-coherent on Quasar. Quasar's data path is
+// Core -> L1 D$ -> L2 -> TL1, and invalidate_l1_cache() is a no-op there (risc_common.h), so:
+//   (a) SOURCE read: if the source was just NoC-written into a reused CB, the RISC's cached line can be
+//       stale; a correct read needs invalidate_l2_cache_range(src, bytes) before the memmove.
+//   (b) DEST publish: the CPU stores land in L1 D$/L2, not TL1. The drain below only reads back the dirty
+//       L1D line (a LOCAL ordering barrier) -- unlike WH/BH load_blocking it does NOT publish to TL1, so a
+//       later NoC / other-agent read of the destination can see stale data. A correct publish needs
+//       flush_l2_cache_range(dst, bytes) after the memmove; the copy_async=true path skips even the drain.
+// This is a PRE-EXISTING gap that was previously unreachable on Quasar (this header didn't compile for
+// Quasar DM); it is a fallback path (tt_memmove only calls it on overlapping self-copy or the misaligned
+// fallback), it is off the resnet critical path, and it does not manifest on the emulator (flat memory,
+// no cache hierarchy modeled). Deferred to a follow-up (needs HW validation), tracked in issue #51763;
+// the flush/invalidate primitives + the ARCH_QUASAR&&COMPILE_FOR_DM pattern already exist (see the #50329
+// tilize-padding fix).
 template <bool copy_async>
 FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     invalidate_l1_cache();
@@ -113,7 +128,10 @@ FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t sr
             volatile tt_l1_ptr uint32_t* drain_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>((dst_l1_addr + bytes - 1) & ~uint32_t{3});
 #if defined(ARCH_QUASAR)
-            (void)*drain_ptr;  // Quasar has no ckernel::load_blocking; a volatile load is a blocking read.
+            // Quasar has no ckernel::load_blocking. This volatile load is a LOCAL ordering barrier only
+            // (reads back the dirty L1D line); it does NOT flush L2->TL1 for cross-agent visibility -- see
+            // the TODO(ARCH_QUASAR) coherency note above.
+            (void)*drain_ptr;
 #else
             (void)ckernel::load_blocking(drain_ptr);
 #endif
