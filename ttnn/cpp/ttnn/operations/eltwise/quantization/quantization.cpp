@@ -215,6 +215,13 @@ Tensor quantize(
         if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
             check_zero_point_tensor_args(input_a, zero_point_p, axis.value(), rank, /*is_per_channel=*/true);
         }
+    } else {
+        if (const Tensor* scale_p = std::get_if<Tensor>(&scale)) {
+            check_per_tensor_scale(*scale_p);
+        }
+        if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
+            check_per_tensor_zero_point(*zero_point_p);
+        }
     }
 
     // Reshaping the per-channel vectors is all that separates a per-channel call from a per-tensor
@@ -222,10 +229,8 @@ Tensor quantize(
     // of the QUANT LLK exactly like a scalar-tensor scale does, with binary_ng broadcasting it, so
     // a per-channel call with a scalar zero-point gets the same single fused pass instead of the
     // slower divide+add composite.
-    const std::variant<Tensor, float> scale_arg =
-        reshape_per_channel_arg(scale, input_shape, axis, DataType::FLOAT32);
-    const std::variant<Tensor, int32_t> zero_point_arg =
-        reshape_per_channel_arg(zero_point, input_shape, axis, a_dtype);
+    const auto scale_arg = reshape_per_channel_arg(scale, input_shape, axis, DataType::FLOAT32);
+    const auto zero_point_arg = reshape_per_channel_arg(zero_point, input_shape, axis, a_dtype);
 
     return std::visit(
         ttsl::overloaded{
@@ -248,9 +253,6 @@ Tensor quantize(
                     std::nullopt);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
-                if (!is_per_channel) {
-                    check_per_tensor_scale(scale);
-                }
                 const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
                     operations::unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
 
@@ -268,9 +270,6 @@ Tensor quantize(
                     std::nullopt);
             },
             [&](const float scale, const Tensor& zero_point) {
-                if (!is_per_channel) {
-                    check_per_tensor_zero_point(zero_point);
-                }
                 const Tensor input_scaled =
                     ttnn::divide(input_a, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);
                 return ttnn::typecast(
@@ -286,10 +285,6 @@ Tensor quantize(
                     c_dtype);
             },
             [&](const Tensor& scale, const Tensor& zero_point) {
-                if (!is_per_channel) {
-                    check_per_tensor_scale(scale);
-                    check_per_tensor_zero_point(zero_point);
-                }
                 const Tensor input_scaled = ttnn::divide(
                     input_a,
                     scale.dtype() == a_dtype ? scale : ttnn::typecast(scale, a_dtype),
@@ -497,6 +492,13 @@ Tensor dequantize(
         if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
             check_zero_point_tensor_args(input_tensor, zero_point_p, axis.value(), rank, /*is_per_channel=*/true);
         }
+    } else {
+        if (const Tensor* scale_p = std::get_if<Tensor>(&scale)) {
+            check_per_tensor_scale(*scale_p);
+        }
+        if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
+            check_per_tensor_zero_point(*zero_point_p);
+        }
     }
 
     // Reshaping the per-channel vectors is all that separates a per-channel call from a per-tensor
@@ -505,10 +507,8 @@ Tensor dequantize(
     // so a per-channel call with a scalar zero-point gets the same single fused pass instead of the
     // slower subtract+multiply composite. The scale is reshaped as f32 rather than as the input's
     // dtype, which is integral here.
-    const std::variant<Tensor, float> scale_arg =
-        reshape_per_channel_arg(scale, input_shape, axis, DataType::FLOAT32);
-    const std::variant<Tensor, int32_t> zero_point_arg =
-        reshape_per_channel_arg(zero_point, input_shape, axis, DataType::INT32);
+    const auto scale_arg = reshape_per_channel_arg(scale, input_shape, axis, DataType::FLOAT32);
+    const auto zero_point_arg = reshape_per_channel_arg(zero_point, input_shape, axis, DataType::INT32);
 
     // The tensor-zero-point composites below subtract the zero-point straight off the input, but
     // BinaryOpType::SUB has no UINT8 entry in dtype_sets::arithmetic_fpu, so a uint8 input has to
@@ -537,9 +537,6 @@ Tensor dequantize(
                     std::nullopt);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
-                if (!is_per_channel) {
-                    check_per_tensor_scale(scale);
-                }
                 const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
                     operations::unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
                 return ttnn::prim::binary_ng(
@@ -560,9 +557,6 @@ Tensor dequantize(
             // operand to bf16 before the multiply instead would round three times: the shifted
             // input, the scale, and the bf16 product.
             [&](const float scale, const Tensor& zero_point) {
-                if (!is_per_channel) {
-                    check_per_tensor_zero_point(zero_point);
-                }
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
                         input_for_shift, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
@@ -571,10 +565,6 @@ Tensor dequantize(
                     input_shifted, scale, c_dtype, memory_config, optional_output_tensor, none, none, none);
             },
             [&](const Tensor& scale, const Tensor& zero_point) {
-                if (!is_per_channel) {
-                    check_per_tensor_scale(scale);
-                    check_per_tensor_zero_point(zero_point);
-                }
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
                         input_for_shift, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
