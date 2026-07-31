@@ -337,6 +337,7 @@ def create_program_descriptor(
         WRUN,
         SEM_GO,
         SEM_DATA,
+        x_page,
         x_stick_slice,
         max(counts_page, dram_align),
         max(idx_page, dram_align),

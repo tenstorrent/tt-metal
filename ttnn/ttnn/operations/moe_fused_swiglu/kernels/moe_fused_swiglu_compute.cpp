@@ -228,6 +228,11 @@ void kernel_main() {
             {},
             HnSteps{hn_last});
         out_interm_buf.push_back(out_block_tiles);
+        // matmul_block leaves packer L1 accumulation ENABLED after its last K-block, and neither
+        // the eltwise chain (L1Accumulation::Disabled is a compile-time no-op) nor a
+        // packer_l1_acc=false matmul resets it. Without this the copy below — and the next
+        // M-block's gate matmul — would ACCUMULATE onto stale L1 instead of overwriting.
+        pack_reconfig_l1_acc(0);
 
         // The one genuine dtype boundary: bf16 accumulation -> bfp8 output tiles.
         copy<input(cb_out_interm), output(cb_out_tiles)>(EltwiseShape::tiles(out_block_tiles));

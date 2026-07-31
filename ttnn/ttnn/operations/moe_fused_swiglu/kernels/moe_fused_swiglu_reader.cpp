@@ -60,28 +60,32 @@ constexpr uint32_t NUM_BANKS = get_compile_time_arg_val(11);
 constexpr uint32_t WRUN = get_compile_time_arg_val(12);  // max bank-contiguous tiles per transaction
 constexpr uint32_t SEM_GO = get_compile_time_arg_val(13);
 constexpr uint32_t SEM_DATA = get_compile_time_arg_val(14);
+// X_PAGE is the ACTIVATION TENSOR's own page (bf16: one full emb stick; bfp8: one tile) — it is
+// what TensorAccessor needs to place a page in a bank. X_SLICE is the cb_x_in page stride, i.e.
+// only this row-group's KR_PAD-tile slice of a stick. The two are NOT the same number.
 constexpr uint32_t X_PAGE = get_compile_time_arg_val(15);
-constexpr uint32_t COUNTS_PAGE = get_compile_time_arg_val(16);
-constexpr uint32_t IDX_PAGE = get_compile_time_arg_val(17);
-constexpr uint32_t BFP4_TILE = get_compile_time_arg_val(18);
-constexpr uint32_t BFP8_TILE = get_compile_time_arg_val(19);
-constexpr uint32_t MAX_CHILDREN = get_compile_time_arg_val(20);
-constexpr uint32_t REMAP = get_compile_time_arg_val(21);  // 1 = bank-run remap of the N axis
-constexpr uint32_t MAILBOX_MAGIC = get_compile_time_arg_val(22);
+constexpr uint32_t X_SLICE = get_compile_time_arg_val(16);
+constexpr uint32_t COUNTS_PAGE = get_compile_time_arg_val(17);
+constexpr uint32_t IDX_PAGE = get_compile_time_arg_val(18);
+constexpr uint32_t BFP4_TILE = get_compile_time_arg_val(19);
+constexpr uint32_t BFP8_TILE = get_compile_time_arg_val(20);
+constexpr uint32_t MAX_CHILDREN = get_compile_time_arg_val(21);
+constexpr uint32_t REMAP = get_compile_time_arg_val(22);  // 1 = bank-run remap of the N axis
+constexpr uint32_t MAILBOX_MAGIC = get_compile_time_arg_val(23);
 
-constexpr uint32_t cb_x_in = get_compile_time_arg_val(23);
-constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(24);
-constexpr uint32_t cb_x_stage = get_compile_time_arg_val(25);
-constexpr uint32_t cb_w_gate = get_compile_time_arg_val(26);
-constexpr uint32_t cb_w_down = get_compile_time_arg_val(27);
-constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(28);
-constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(29);
-constexpr uint32_t cb_h = get_compile_time_arg_val(30);
-constexpr uint32_t cb_h_local = get_compile_time_arg_val(31);
-constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(32);
-constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(33);
+constexpr uint32_t cb_x_in = get_compile_time_arg_val(24);
+constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(25);
+constexpr uint32_t cb_x_stage = get_compile_time_arg_val(26);
+constexpr uint32_t cb_w_gate = get_compile_time_arg_val(27);
+constexpr uint32_t cb_w_down = get_compile_time_arg_val(28);
+constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(29);
+constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(30);
+constexpr uint32_t cb_h = get_compile_time_arg_val(31);
+constexpr uint32_t cb_h_local = get_compile_time_arg_val(32);
+constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(33);
+constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(34);
 
-constexpr uint32_t CT_XMCAST = 34;
+constexpr uint32_t CT_XMCAST = 35;
 constexpr uint32_t CT_HMCAST = CT_XMCAST + 5;
 
 constexpr uint32_t TILE_H = 32;
@@ -244,7 +248,7 @@ void kernel_main() {
                     for (uint32_t s = 0; s < TILE_H; ++s) {
                         noc_async_read(
                             x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
-                            wp + s * X_PAGE,
+                            wp + s * X_SLICE,
                             kr * BF16_TILE_ROW_BYTES);
                     }
                     noc_async_read_barrier();
