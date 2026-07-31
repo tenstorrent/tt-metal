@@ -15,15 +15,29 @@ dispatches per factory. The block-interleaved factory and its three kernels
 (`reader_unary_pad_multicore_both_dims.cpp`, `writer_unary_interleaved_start_id_wh.cpp`,
 `tilize_wh.cpp`) are untouched.
 
-**Verification status — read this before merging.** The port was **not compiled or run**: the
-`clang-20` toolchain the build requires is not present in this shell (`/usr/bin/clang++-20` does not
-exist here; a sibling checkout's `build.ninja` references it, so builds in this workspace happen inside
-a container). `./build_metal.sh --build-tests` fails at CMake configure with *"CMAKE_C_COMPILER:
-clang-20 ... not found in the PATH"* before touching any source. The invoker stated they would run the
-build and tests. In place of a build, every new API use was checked against the declaring headers and
-the spec validator (`tt_metal/impl/metal2_host_api/program_spec.cpp`); the specific invariants verified
-are listed under [Successes](#successes). Pytest commands are in
-[Test set](#test-set--not-yet-run-by-the-porter).
+**Verification status.** The porter could not build locally — the `clang-20` toolchain is not present
+in the porter's shell (`/usr/bin/clang++-20` does not exist there; a sibling checkout's `build.ninja`
+references it, so builds in this workspace happen inside a container), so
+`./build_metal.sh --build-tests` fails at CMake configure before touching any source. In place of a
+build, every new API use was checked against the declaring headers and the spec validator
+(`tt_metal/impl/metal2_host_api/program_spec.cpp`); the invariants verified are listed under
+[Successes](#successes).
+
+**CI on PR #51743 (head `905a7c611fd8`) has since supplied the missing verification:**
+
+| check | result |
+|---|---|
+| `build-artifact / 🛠️ Build Release ubuntu 22.04` | **success** — the port compiles |
+| `ttnn-sanity-tests / ttnn data movement group [sim_wormhole_b0]` | **success** |
+| `ttnn-sanity-tests / ttnn data movement group [sim_blackhole]` | **success** |
+| `ttnn-sanity-tests / ttnn misc ops group` (both sims) | **success** |
+| `runtime-sim-sanity-tests / runtime_sim_cpp_unit_tests [sim_wormhole_b0]` | failure — **pre-existing** |
+| `runtime-sim-sanity-tests / runtime_sim_cpp_unit_tests [sim_blackhole]` | failure — **pre-existing** |
+
+Both failing jobs fail identically on the PR's **base** commit (`4eec3db426fc`, i.e. `main`), so they
+are not caused by this port: these are `tt_metal` runtime C++ unit tests on the simulator, which do not
+exercise a TTNN op. Verified via the check-runs API on the base SHA. The full pytest set is still worth
+running on silicon — commands in [Test set](#test-set).
 
 ## Provenance
 
@@ -78,9 +92,20 @@ are listed under [Successes](#successes). Pytest commands are in
    `tilize_with_val_padding_multi_core_default_program_factory.cpp:267`.
    **This op is one of the "existing uses" blocking that deprecation's removal.** Removing the field
    requires either a per-node-length vararg contract or an op-side refactor that pads every core's
-   stream to a common length (a functional change, out of scope for a port). Flagging so the API team
-   can count this op before scheduling removal. (The build does not warn — the root
-   `CMakeLists.txt:207` sets `-Wno-deprecated-declarations` globally.)
+   stream to a common length. Flagging so the API team can count this op before scheduling removal.
+   (The build does not warn — the root `CMakeLists.txt:207` sets `-Wno-deprecated-declarations`
+   globally.)
+
+   **Decision, after PR review raised it (review comment 3692311016):** keep the per-node field in
+   this PR; do the padding refactor separately. Two reasons. (a) Padding every core's stream to the
+   maximum length grows the dispatched RTA payload on every core but the largest. The kernel's reads
+   are bounded by `n_block_reps`, so *results* are unchanged, but the dispatch is no longer
+   byte-identical to legacy — and this PR's contract is that nothing observable changes. (b) The only
+   evidence offered that padding is the established pattern is a file under
+   `experimental/quasar/`, which a production port may not take construct choices from: that tree
+   holds deliberately hacky shortcut ports, so it cannot support the claim. Whoever does the refactor
+   should own it as a small standalone change with its own before/after dispatch-size check, at which
+   point this op stops blocking the removal.
 
 2. **Three shared kernels had to be forked because their only existing Metal 2.0 versions are in
    `experimental/quasar/`.** *Owner: the shared-kernel owners (eltwise/unary, data_movement/sharded,
@@ -253,16 +278,47 @@ ported it will need its own two forks in `eltwise/unary/` and `data_movement/til
   cosmetically stale.
 - **Test coverage note:** there are **no C++ gtests** for this op (`grep` over `tests/` for
   `TilizeWithValPadding` is empty), so the pytest set below is the entire no-regression baseline. The
-  sharded factory's only direct coverage is a *single* test —
-  `test_sharded.py::test_sharded_tilize_with_val_padding` — which is thin for the factory carrying the
-  port's most novel construct (borrowed-memory DFBs). Worth widening in a follow-up.
+  sharded factory's pre-existing direct coverage was a *single* one-shot test —
+  `test_sharded.py::test_sharded_tilize_with_val_padding` — thin for the factory carrying the port's
+  most novel construct (borrowed-memory DFBs).
+  **Addressed in review:** `test_tilize_with_val_padding.py::test_tilize_with_val_padding_program_cache_addr_change`
+  now covers the program-cache-hit path across all three ported factories, re-allocating the input and
+  output on each of four iterations so every dispatch sees different buffer addresses. It asserts both
+  numerical correctness and that iterations 2-4 add no program-cache entries. This is the regression
+  that a stale borrowed-DFB or tensor-binding address would break; the modelled shape is the existing
+  `test_tilize.py::test_tilize_program_cache_addr_change`. The sharded config skips Blackhole for the
+  same reason the pre-existing sharded test does (LLK tilize issue #14609).
 
-## Test set — not yet run by the porter
+## Review round — PR #51743
+
+Seven review comments, all from the Copilot automated reviewer (no human review comments at the time
+of writing). Disposition of each:
+
+| comment | severity | disposition |
+|---|---|---|
+| Avoid the deprecated per-node vararg schema | 🟡 | **Not changed.** Rationale in [Handoff points](#handoff-points) item 1 — padding changes the dispatch payload, and the suggestion's only cited precedent is in `experimental/quasar/`, which a production port may not model. Registered as a handoff so the API team can schedule the refactor. |
+| Exercise borrowed DFBs on a program-cache hit | 🟡 | **Fixed.** Added `test_tilize_with_val_padding_program_cache_addr_change` — four iterations with fresh allocations each time, across all three ported factories. Details in [Open items](#other). This was a real gap; the porter's own report had already flagged the sharded coverage as thin. |
+| Remove `METAL2_PREPORT_AUDIT.md` | 🟡 | **Deferred by design.** The PR description states the Markdown files are included to aid review and will be removed before merge. Removing them mid-review defeats that purpose; they come out in one commit at merge time. |
+| Remove `METAL2_PORT_REPORT.md` | 🟡 | Same as above. |
+| Remove `METAL2_PORT_PLAN.md` | 🟡 | Same as above. |
+| Remove `METAL2_PORT_BRIEF.md` | 🟡 | Same as above. |
+| Remove the leftover debug include | 🟢 | **Fixed.** Dropped the commented-out `api/debug/dprint.h` from `tilize_metal2.cpp`. It was carried over from the legacy original (`tilize.cpp:10`); the fork is a new file and does not need the scaffolding. Note this is now a one-line cosmetic divergence from the original the fork is meant to stay in sync with. |
+
+## Test set
 
 Discovered by sweeping `tests/` for the op name and filtering to this op (`tilize` /
 `untilize_with_unpadding` / `tilize_hpadding_matmul` hits that do *not* reach
 `tilize_with_val_padding` were excluded). **Please confirm this set is complete before treating a green
-run as a no-regression signal.**
+run as a no-regression signal.** Not run by the porter (no local toolchain — see
+[Outcome](#outcome)); the CI runs listed there cover the build plus the sim data-movement group.
+
+Program-cache regression added during review (covers all three ported factories, both the
+borrowed-DFB and tensor-binding address paths):
+
+```bash
+pytest tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py \
+       -k test_tilize_with_val_padding_program_cache_addr_change -x -v
+```
 
 Primary (the no-regression baseline):
 
@@ -273,7 +329,7 @@ pytest tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_paddi
        tests/ttnn/unit_tests/base_functionality/test_tilize_untilize_2D.py -x -v
 ```
 
-Sharded factory (the only direct coverage of the borrowed-DFB path — run this one specifically):
+Sharded factory (the pre-existing direct coverage of the sharded path — run this one specifically):
 
 ```bash
 pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py \

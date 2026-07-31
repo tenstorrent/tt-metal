@@ -814,3 +814,93 @@ def test_tilize_with_val_padding_fp8_unaligned_row_width(device):
     assert torch.all(
         torch_output[..., 63:] == pad_value
     ), f"Expected pad_value={pad_value} in padding column, got unique values: {torch_output[..., 63:].unique()}"
+
+
+@pytest.mark.parametrize(
+    "config",
+    ["sharded_width_l1", "interleaved_dram_multicore", "single_core"],
+)
+def test_tilize_with_val_padding_program_cache_addr_change(device, config):
+    """Program-cache hit path: re-running the op on freshly allocated inputs (so every
+    iteration sits at a DIFFERENT buffer address) must hit the same cached program and stay
+    correct.
+
+    This covers the two ways a tensor address reaches the device in this op, both of which are
+    re-resolved on every cache hit rather than baked into the program:
+      - sharded_width_l1 selects the sharded factory, where the input and output shards back
+        borrowed-memory dataflow buffers (their L1 addresses are reattached per dispatch);
+      - the two interleaved configs select the multicore-default and single-core factories,
+        where the addresses ride typed tensor bindings.
+    A stale address on the second dispatch corrupts results silently, which a single-shot test
+    cannot catch."""
+    torch.manual_seed(0)
+    pad_value = 3.5
+
+    if config == "sharded_width_l1":
+        if is_blackhole():
+            pytest.skip("BH LLK Issue with tilize, #14609")
+        tensor_shape = (50, 256)
+        output_padded_shape = [64, 256]
+        num_cores = 4
+        shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))}),
+            [tensor_shape[0], tensor_shape[1] // num_cores],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        in_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+        # The op derives the output shard spec itself (height becomes the padded height), so pass
+        # the layout only -- supplying a stale shard shape here would fight that.
+        out_mem_cfg = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1
+        )
+        use_multicore = True
+    elif config == "interleaved_dram_multicore":
+        tensor_shape = (1, 1, 100, 128)
+        output_padded_shape = [1, 1, 128, 128]
+        in_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        out_mem_cfg = in_mem_cfg
+        use_multicore = True
+    else:  # single_core
+        tensor_shape = (1, 1, 50, 64)
+        output_padded_shape = [1, 1, 64, 64]
+        in_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        out_mem_cfg = in_mem_cfg
+        use_multicore = False
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    keep_alive = []  # retain prior tensors so each iteration allocates at a NEW address
+    entries = None
+    for i in range(4):
+        torch_input = (torch.rand(tensor_shape) * 200 - 100).to(torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem_cfg
+        )
+        tt_output = ttnn.tilize_with_val_padding(
+            tt_input,
+            ttnn.Shape(output_padded_shape),
+            pad_value,
+            memory_config=out_mem_cfg,
+            use_multicore=use_multicore,
+        )
+        keep_alive += [tt_input, tt_output]
+
+        readback = tt_output
+        if tt_output.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            readback = ttnn.sharded_to_interleaved(
+                tt_output, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+            )
+
+        torch_golden = pytorch_tilize_with_val_padding(torch_input, output_padded_shape, pad_value)
+        assert_equal(torch_golden, readback.cpu().to_torch_with_padded_shape())
+
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries >= 1, "the first invocation should have populated the program cache"
+        else:
+            # Not an exact count: the sharded config also runs from_torch / sharded_to_interleaved,
+            # which cache programs of their own. What matters is that iteration 2+ adds none.
+            assert (
+                device.num_program_cache_entries() == entries
+            ), "tilize_with_val_padding must reuse the cached program on a hit"
