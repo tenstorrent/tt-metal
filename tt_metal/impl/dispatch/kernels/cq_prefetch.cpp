@@ -296,6 +296,21 @@ static uint32_t downstream_data_ptr_s = dispatch_s_buffer_base;
 static uint32_t ringbuffer_wp = scratch_db_base;
 static uint32_t ringbuffer_offset = 0;
 
+// Whether every interleaved bank carries the same base offset, for DRAM and for L1. That is what lets the relay_paged
+// read loop fold the offset into the row address and stop reprogramming the source address per read. The bank tables
+// are fixed once firmware init has written them, so this is scanned once in kernel_main rather than per command.
+static bool dram_bank_offsets_uniform = false;
+static bool l1_bank_offsets_uniform = false;
+
+template <bool is_dram>
+FORCE_INLINE bool bank_offsets_uniform() {
+    if constexpr (is_dram) {
+        return dram_bank_offsets_uniform;
+    } else {
+        return l1_bank_offsets_uniform;
+    }
+}
+
 // Runtime args
 static uint32_t my_dev_id;
 static uint32_t to_dev_id;
@@ -1091,9 +1106,10 @@ class InterleavedBankWalker {
 public:
     static constexpr uint32_t num_banks = is_dram ? NUM_DRAM_BANKS : NUM_L1_BANKS;
 
-    // Whether all banks share one base offset, which is the precondition for the fold_offset ctor argument. The
-    // table is fixed once firmware init writes it, so this only depends on the arch and its harvesting.
-    static FORCE_INLINE bool offsets_uniform() {
+    // Whether all banks share one base offset, which is the precondition for the fold_offset ctor argument. Scanned
+    // once from kernel_main into bank_offsets_uniform<is_dram>(), not per command -- the table is fixed once firmware
+    // init writes it, so this only depends on the arch and its harvesting.
+    static bool scan_offsets_uniform() {
         const uint32_t first = interleaved_addr_gen::get_bank_offset<is_dram>(0);
         for (uint32_t bank = 1; bank < num_banks; bank++) {
             if (interleaved_addr_gen::get_bank_offset<is_dram>(bank) != first) {
@@ -1385,10 +1401,10 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
             noc_index, 0, 0, 0, page_size);
     }
 
-    // Folding the shared bank offset into the row address is only worth a separate loop when there is at least one
-    // full row of pages to spread the saved address writes over.
-    const bool folded_offset = single_packet && pages >= InterleavedBankWalker<is_dram>::num_banks &&
-                               InterleavedBankWalker<is_dram>::offsets_uniform();
+    // Fold the shared bank offset into the row address whenever the banks have one. No lower bound on the page count:
+    // the read loop saves an address write on every page after the first of each contiguous run, and a command too
+    // short to finish a row is still one run.
+    const bool folded_offset = single_packet && bank_offsets_uniform<is_dram>();
     InterleavedBankWalker<is_dram> walker(page_id, base_addr, page_size, folded_offset);
 
     uint32_t amt_read = read_pages_into_scratch(
@@ -3091,6 +3107,9 @@ void kernel_main() {
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
+
+    dram_bank_offsets_uniform = InterleavedBankWalker<true>::scan_offsets_uniform();
+    l1_bank_offsets_uniform = InterleavedBankWalker<false>::scan_offsets_uniform();
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
