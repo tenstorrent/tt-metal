@@ -216,6 +216,11 @@ class TtVoxtralBackbone:
         self.pos = T
         return ttnn.to_torch(out).float().reshape(1, Tp, BACKBONE_DIM)[:, :T]
 
+    def prefill_last(self, embeds):
+        """[1,P,3072] -> hidden of the LAST position [1,1,3072]. Same name as `ttnn_voxtral_gpt`'s,
+        so the pipeline can run either backbone without branching."""
+        return self.prefill(embeds)[:, -1:]
+
     # ----------------------------------------------------------------------------------
     # Decode: one frame at a time, against the KV cache prefill built
     # ----------------------------------------------------------------------------------
