@@ -1198,6 +1198,154 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCD2HSocketEgress) {
     set_niu_mode(0);  // restore NOC2AXI -- NIU_CFG_0 persists across programs
 }
 
+// Ingest + DMA on one DRISC. Reads land in L1 via the NIU and leave it via the DMA engine, so every
+// byte crosses L1 twice -- unavoidable, since a DRISC in stream mode cannot land NoC traffic in GDDR.
+// Whether that double-crossing costs anything is the question the DRAM-buffer design hinges on.
+//
+// Three modes over identical batching and buffer layout, so any difference is the interaction and not
+// a change in access pattern:
+//   read only   the NoC leg alone, at this batch's depth
+//   dma only    the DMA leg alone, moving whatever is already in L1
+//   both        the real drainer leg
+TEST_F(DramKernelDRISCScatterFixture, DRISCCombinedReadAndDma) {
+    constexpr uint32_t kBytesPerCore = 1280 * 8;  // 10240, a whole core
+    constexpr uint32_t kGddrRingBytes = 16u << 20;
+    constexpr uint32_t kRepeats = 3;
+
+    const std::vector<uint32_t> coords = worker_coords();
+    const uint32_t num_cores = static_cast<uint32_t>(coords.size());
+    const uint32_t buf_base = drisc_l1_base_;
+
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const uint32_t num_banks = soc_desc.get_dram_compute_grid_size().x;
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+
+    // Interleaved with one page per bank gives every bank the same bank-relative base, so the DRISC's
+    // DMA writes into its own channel at that address.
+    auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
+        .device = device_,
+        .size = static_cast<uint64_t>(num_banks) * kGddrRingBytes,
+        .page_size = kGddrRingBytes,
+        .buffer_type = BufferType::DRAM,
+    });
+    const uint32_t gddr_addr = dram_buffer->address();
+
+    prime_worker_l1(kBytesPerCore);
+    const std::vector<CoreCoord> drisc = free_drisc_cores(1);
+    const CoreCoord drisc_virtual = device_->virtual_core_from_logical_core(drisc[0], CoreType::DRAM);
+    log_info(
+        LogTest,
+        "combined read+DMA: {} cores x {} B, GDDR ring {} MB at 0x{:x} ({} banks), DRISC L1 {} B",
+        num_cores,
+        kBytesPerCore,
+        kGddrRingBytes >> 20,
+        gddr_addr,
+        num_banks,
+        drisc_l1_unreserved_size_);
+
+    auto run = [&](uint32_t do_read, uint32_t do_dma, uint32_t cores_per_batch, uint32_t num_buffers) {
+        const uint32_t batch_bytes = cores_per_batch * kBytesPerCore;
+        const uint32_t res_l1 = buf_base + num_buffers * batch_bytes;
+        TT_FATAL(
+            (res_l1 - drisc_l1_base_) + 64 <= drisc_l1_unreserved_size_,
+            "{} buffers x {} B do not fit {} B of DRISC L1",
+            num_buffers,
+            batch_bytes,
+            drisc_l1_unreserved_size_);
+        constexpr uint64_t kTargetBytes = 512ull << 20;
+        const uint32_t iters = std::clamp<uint32_t>(
+            static_cast<uint32_t>(kTargetBytes / (static_cast<uint64_t>(num_cores) * kBytesPerCore)), 8u, 100000u);
+
+        Program program = CreateProgram();
+        auto kid = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_read_dma_combined.cpp",
+            drisc[0],
+            DramConfig{
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    cores_per_batch, kBytesPerCore, buf_base, res_l1, do_read, do_dma, kGddrRingBytes, num_buffers}});
+        std::vector<uint32_t> rtas = {num_cores, iters, tensix_l1_base_, gddr_addr, 0u};
+        rtas.insert(rtas.end(), coords.begin(), coords.end());
+        SetRuntimeArgs(program, kid, drisc[0], rtas);
+        run_workload(std::move(program));
+
+        // The kernel restores NOC2AXI on exit, so reaching DRISC L1 from the host needs the tagged NoC
+        // address -- a plain address in this range is forwarded to GDDR instead.
+        // The kernel restores NOC2AXI on exit, so reaching DRISC L1 from the host needs the tagged NoC
+        // address -- a plain address in this range is forwarded to GDDR instead.
+        std::vector<uint32_t> out(9);
+        MetalContext::instance().get_cluster().read_core(
+            out.data(),
+            out.size() * sizeof(uint32_t),
+            tt_cxy_pair(mesh_device_->build_id(), drisc_virtual),
+            drisc_l1_noc_addr_ + (res_l1 - drisc_l1_base_));
+        const uint64_t cycles = (static_cast<uint64_t>(out[1]) << 32) | out[0];
+        const uint64_t visits = out[3];
+        const uint64_t total_bytes = visits * kBytesPerCore;
+        if (do_read) {
+            EXPECT_NE(out[2], 0u) << "checksum zero -- NoC reads never landed";
+        }
+        const uint64_t batches = visits / out[8];
+        const double ns = 1e9 / clk_hz;
+        log_info(
+            LogTest,
+            "      per batch of {} cores ({} B): total {:>7.1f} ns = dma-wait {:>6.1f} + read-issue {:>6.1f} "
+            "+ read-wait {:>6.1f} + dma-issue {:>6.1f} + loop {:>5.1f}",
+            out[8],
+            out[8] * kBytesPerCore,
+            static_cast<double>(cycles) / batches * ns,
+            static_cast<double>(out[4]) / batches * ns,
+            static_cast<double>(out[5]) / batches * ns,
+            static_cast<double>(out[6]) / batches * ns,
+            static_cast<double>(out[7]) / batches * ns,
+            static_cast<double>(cycles - out[4] - out[5] - out[6] - out[7]) / batches * ns);
+        return std::tuple<double, double, double>{
+            compute_bw_gbs(total_bytes, cycles, clk_hz),
+            100.0 * static_cast<double>(out[6]) / static_cast<double>(cycles),
+            100.0 * static_cast<double>(out[4] + out[7]) / static_cast<double>(cycles)};
+    };
+
+    struct Cfg {
+        const char* label;
+        uint32_t do_read;
+        uint32_t do_dma;
+        uint32_t cores;
+        uint32_t bufs;
+    };
+    for (auto c : std::vector<Cfg>{
+             {"read only   2buf x 4", 1u, 0u, 4u, 2u},
+             {"read only   1buf x 8", 1u, 0u, 8u, 1u},
+             {"dma only    2buf x 4", 0u, 1u, 4u, 2u},
+             {"read+DMA    2buf x 4", 1u, 1u, 4u, 2u},
+             {"read+DMA    1buf x 8", 1u, 1u, 8u, 1u},
+             {"read+DMA    1buf x 4", 1u, 1u, 4u, 1u},
+             {"read+DMA    2buf x 2", 1u, 1u, 2u, 2u},
+             {"read+DMA    2buf x 3", 1u, 1u, 3u, 2u}}) {
+        std::vector<double> bw;
+        std::string detail;
+        double rd_pct = 0.0;
+        double dm_pct = 0.0;
+        for (uint32_t rep = 0; rep < kRepeats; rep++) {
+            auto [b, r, d] = run(c.do_read, c.do_dma, c.cores, c.bufs);
+            bw.push_back(b);
+            rd_pct = r;
+            dm_pct = d;
+            detail += fmt::format(" {:>6.2f}", b);
+        }
+        std::sort(bw.begin(), bw.end());
+        log_info(
+            LogTest,
+            "{} | median {:>6.2f} GB/s | spread {:>4.2f}x | read phase {:>5.1f}% dma phase {:>5.1f}% |{}",
+            c.label,
+            bw[bw.size() / 2],
+            bw.back() / bw.front(),
+            rd_pct,
+            dm_pct,
+            detail);
+    }
+}
+
 // Tuning the host side of D2H egress. The baseline test showed the DRISC idle ~80% of the time
 // waiting in socket_reserve_pages, so 16.55 GB/s was the host consumption rate, not the device's
 // (which runs at the ~86 GB/s NoC port limit). Every knob here is host-side:

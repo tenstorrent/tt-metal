@@ -240,6 +240,81 @@ read+push drainer can spend on ingest), but do not expect throughput from it.
 wait). That is not the 86.3 GB/s NoC port the reads hit -- it is ~90% of a **PCIe Gen5 x16** link's
 64 GB/s. Egress is PCIe-bound, and no device-side software change will move it.
 
+## Egress alternative: DMA to a GDDR buffer (leg A)
+
+The DRISC can write its own bank's GDDR at 64 GB/s, which beats the PCIe path, needs no host in the
+loop during the run, and turns a 3.98 GB DRAM view into the buffer. The catch is that **a DRISC
+cannot land NoC traffic directly in GDDR**: in stream mode (required to initiate reads at all) NoC
+traffic terminates at L1, and DRAM is reachable only through the L1 + DMA path. So every byte crosses
+L1 twice — written by the NIU, read by the DMA engine. That is structurally what killed the X280,
+whose LIM ran at 2.5 GB/s and was crossed twice for ~1.2 GB/s.
+
+**It does not reproduce here. Combining the two legs costs ~10%, not half.**
+
+### Standalone DRISC <-> GDDR DMA
+
+From the pre-existing `DramKernelDRISCWriteToDRAM` / `ReadFromDRAM` tests:
+
+```
+Write BW: 447.89 GB/s (7 banks x 1 endpoint)   ->  64.0 GB/s per DRISC
+Write BW: 458.73 GB/s (7 banks x 2 endpoints)  ->  +2.4% for twice the DRISCs
+```
+
+**One DRISC saturates its channel's DMA path.** A second DRISC on the same bank adds nothing.
+
+### Flow
+
+```
+per batch:
+  dma_async_write_barrier(cur)        wait for the prior DMA out of buffer[cur]
+  N x noc.async_read -> buffer[cur]   one 10,240 B whole-core read each, all outstanding
+  noc.async_read_barrier()            wait for the batch to land in L1
+  dma_async_write(cur, buffer[cur] -> GDDR ring)
+  cur ^= 1                            ping-pong the buffer and the DMA TX stream
+```
+
+### Where the time goes
+
+Per batch, in ns. `kDoRead`/`kDoDma` compile out either leg, so the same batching and buffer layout is
+measured three ways and the difference is attributable to the interaction, not to a changed access
+pattern. All configurations repeated 3x at spread 1.00x.
+
+| config | GB/s | dma-wait | read-issue | read-wait | dma-issue | loop | total |
+|---|---|---|---|---|---|---|---|
+| read only 2buf x 4 | 48.26 | 21.5 | 160.7 | 607.6 | 21.5 | 37.5 | 848.8 |
+| read only 1buf x 8 | 62.08 | 22.2 | 280.7 | 964.0 | 21.5 | 31.4 | 1319.7 |
+| dma only 2buf x 4 | 63.97 | 492.3 | 25.2 | 22.2 | 63.7 | 36.9 | 640.3 |
+| **read+DMA 2buf x 4** | **43.18** | 33.4 | 160.0 | 648.7 | 65.2 | 41.3 | 948.6 |
+| read+DMA 1buf x 8 | 33.41 | **1123.0** | 278.5 | 956.3 | 60.8 | 33.2 | 2451.8 |
+| read+DMA 1buf x 4 | 29.41 | 540.4 | 157.0 | 600.7 | 61.5 | 33.1 | 1392.8 |
+| read+DMA 2buf x 3 | 38.58 | 35.5 | 135.6 | 514.3 | 68.9 | 41.9 | 796.2 |
+| read+DMA 2buf x 2 | 30.81 | 34.8 | 94.1 | 423.0 | 71.1 | 41.7 | 664.7 |
+
+`dma only` reproduces the standalone test to 0.05% (63.97 vs 64.0) on a completely separate code path,
+which is the cross-check that the DMA leg is being driven correctly.
+
+At the winning configuration the DMA is essentially free: **dma-wait is 33 ns** because the DMA moves
+40,960 B in 640 ns while the reads take 849 ns, so it has always finished before the buffer is needed
+again. Adding DMA to the read-only case costs 99.8 ns/batch, landing as +41 ns of read-wait (the NIU
+stream slows while the DMA engine pulls from L1), +44 ns of dma-issue and +12 ns of dma-wait.
+
+### Why 4 cores per batch and not 8
+
+Deeper reads are genuinely better — **1buf x 8 reads at 62.08 GB/s versus 48.26 at depth 4, +29%** —
+but combined it loses, 33.41 vs 43.18. With one buffer the 80 KB DMA is fully exposed and `dma-wait`
+goes to 1123 ns, almost exactly the 81,920 B / 64 GB/s = 1280 ns transfer. With two buffers that same
+transfer hides behind the next batch's reads and costs 33 ns.
+
+The measured trade: 1buf x 8 buys +356 ns/batch of read throughput and pays +1090 ns/batch of exposed
+DMA. `1buf x 4` isolates it — same read depth as the winner, no overlap, 32% slower.
+
+Going shallower loses too (2buf x 3, 2buf x 2), since `dma-wait` is already near zero at 2buf x 4.
+
+**2 buffers x 4 cores is the optimum of the eight configurations, and the two constraints meet exactly
+at the L1 budget:** read depth is as large as the remaining L1 allows once a second buffer is reserved
+to hide the DMA. Getting both deep reads and hidden DMA needs more than 86 KB — 2 buffers x 8 cores
+would want 160 KB.
+
 ## What it means: the zone budget
 
 A zone is 2 markers = 4 words = 16 B, and a lane's ring is 512 words, so **128 zones per lane**
@@ -248,10 +323,11 @@ back-to-back on one lane:
 
 | limited by | rate | min zone duration |
 |---|---|---|
-| ingest, whole-core sweep @ 18.29 us | 67.4 GB/s | **143 ns** |
-| egress, untuned host consumer | 16.85 GB/s | 580 ns |
-| egress, tuned host consumer | 25.36 GB/s | **387 ns** |
-| egress, zero-copy (measured via discard) | 57.60 GB/s | **167 ns** |
+| ingest alone, whole-core sweep @ 18.29 us | 67.4 GB/s | **143 ns** |
+| leg A: ingest + DMA to GDDR, one DRISC | 43.18 GB/s | **222 ns** |
+| egress to host, untuned consumer | 16.85 GB/s | 580 ns |
+| egress to host, tuned consumer | 25.36 GB/s | **387 ns** |
+| egress to host, zero-copy (measured via discard) | 57.60 GB/s | **167 ns** |
 
 Host tuning closed a third of the gap. **Zero-copy consumption would bring egress to 167 ns against
 ingest's 143 ns -- the two sides finally comparable**, and the drainer viable at ~150-170 ns zones.
@@ -273,7 +349,10 @@ Until then egress binds by ~2.7x.
 6. **On egress, tune the host, not the device.** 80 KB pages and 8 pages per host read are worth +50%
    together. Host ack batching and device notify batching are both worth nothing. The device write
    path is already at ~90% of the PCIe link.
-7. **Consume the FIFO in place.** The `memcpy` in `D2HSocket::read()` is the single largest remaining
+7. **If the trace goes to DRAM, ping-pong two buffers.** One DRISC doing ingest + DMA runs at
+   43.18 GB/s, ~10% below reads alone, and the DMA hides completely behind the reads as long as a
+   second batch buffer exists. A single deeper buffer trades that away and loses 23%.
+8. **Consume the FIFO in place.** The `memcpy` in `D2HSocket::read()` is the single largest remaining
    cost anywhere in the pipeline -- 2.3x -- and it penalises the producer as well as the consumer,
    because the host's PCIe reads contend with the device's PCIe writes.
 
@@ -293,6 +372,14 @@ Until then egress binds by ~2.7x.
 - **`socket_api.h` works on a DRISC** given the one-line
   `CBInterface cb_interface[NUM_CIRCULAR_BUFFERS]` shim (no CB infrastructure on DRAM cores) — the
   same shim the shipping `tensor_prefetcher.cpp` uses.
+- **Host access to DRISC L1 changes with NIU mode.** In NOC2AXI the host must use the tagged
+  `drisc_l1_noc_addr_`; a plain address in that range is forwarded to GDDR and returns stale data. In
+  stream mode inbound traffic terminates at L1 and plain addresses are correct. Kernels that restore
+  NOC2AXI on exit therefore need tagged readback; the egress test needs plain, because it leaves the
+  NIU in stream mode. Same core, opposite convention.
+- **Do not pipe a long device test through `head`.** Closing the pipe early SIGPIPEs the test binary
+  mid-run and can leave the card wedged (`Read 0xffffffff over PCIe ID 0`). Redirect to a file and
+  grep the file. Recovery is `tt-smi -r`.
 - **No device Tracy zones on DRISC.** `kernel_profiler.hpp` does not gate on `COMPILE_FOR_DRISC`, so
   `DeviceZoneScopedN` compiles to nothing. Use the watcher ring buffer + `get_timestamp_32b()` idiom.
 
