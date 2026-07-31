@@ -320,16 +320,6 @@ def test_sort_datatypes(shape, dim, descending, torch_value_dtype, ttnn_value_dt
     ],
 )
 def test_sort_uint16_index_correctness(n, hi, descending, device):
-    """
-    Regression test for GH #46331: UINT16 sort keys > 256 produced wrong indices.
-
-    Root cause: the sort TopK SFPU LLK compared UINT16 values in bf16 mode
-    (8-bit mantissa, exact only up to 256).  The fix enables fp32_dest_acc_en
-    for UINT16 inputs so the hardware unpack converts each UINT16 integer to an
-    exact FLOAT32 (all 0..65535 are representable in 24-bit mantissa) before the
-    SFPU comparison.  Indices are widened to UINT32 because fp32_dest_acc_en
-    forces 32-bit index writes in the LLK.
-    """
     torch.manual_seed(0)
     shape = [1, n]
 
@@ -364,9 +354,10 @@ def test_sort_uint16_index_correctness(n, hi, descending, device):
 @pytest.mark.parametrize(
     "n, hi, descending",
     [
-        # Wt > SORT_WT_THRESHOLD (64) forces the MultiCore factory:
-        #   Wt = ceil(n / 32) after padding.  n=2048 → Wt=64 (still SingleCore).
-        #   n=2080 → Wt=65 → MultiCore.  n=8192 → Wt=256 → MultiCore.
+        # pre_sort_transform_tensor pads the last dim to the next power of two
+        # (>= 2*TILE_WIDTH = 64), so Wt = next_pow2(n_tile_aligned) / TILE_WIDTH.
+        # Anything with Wt > SORT_WT_THRESHOLD (64) routes to the MultiCore
+        # factory: n=2080 -> pad 4096 -> Wt=128; n=4096 -> Wt=128; n=8192 -> Wt=256.
         # Use hi <= 65535 so all values fit in UINT16.
         (2080, 2079, False),
         (2080, 2079, True),
@@ -377,7 +368,6 @@ def test_sort_uint16_index_correctness(n, hi, descending, device):
 def test_sort_uint16_index_correctness_multicore(n, hi, descending, device):
     """
     Regression test for UINT16 sort keys with Wt > SORT_WT_THRESHOLD.
-
     Selects the MultiCore factory (SortProgramFactorySingleRowMultiCore) whose
     reader/writer kernels now perform an element-wise UInt16↔Float32 conversion
     so the SFPU compares keys in fp32_dest_acc_en mode (exact for 0..65535).
@@ -407,17 +397,18 @@ def test_sort_uint16_index_correctness_multicore(n, hi, descending, device):
 @pytest.mark.parametrize(
     "n, hi, descending",
     [
-        # ROW_MAJOR UINT16 sort:
-        #   Wt = ceil(n / 32) after W-padding.  n <= 2048 (Wt <= 64) routes to
-        #   SingleCore; n > 2048 (Wt > 64) routes to MultiCore, which now also
-        #   does the UInt16↔Float32 conversion in its ROW_MAJOR reader/writer.
-        (64, 63, False),  # Wt = 2, SingleCore RM
-        (551, 550, False),  # Wt = 18, SingleCore RM
+        # ROW_MAJOR UINT16 sort — pre_sort_transform_tensor pads the last dim
+        # to the next power of two (>= 64), so Wt = next_pow2(n) / TILE_WIDTH.
+        # UINT16 + ROW_MAJOR uses SORT_WT_THRESHOLD_UINT16_ROW_MAJOR = 32 so
+        # Wt <= 32 (n <= 1024) routes to SingleCore RM and everything above
+        # (including the Wt = 64 boundary that used to OOM in SingleCore) routes
+        # to MultiCore RM, whose reader/writer now also do UInt16<->Float32.
+        (64, 63, False),  # pad 64  -> Wt=2, SingleCore RM
+        (551, 550, False),  # pad 1024 -> Wt=32, SingleCore RM (upper SingleCore bound)
         (551, 550, True),
-        # Wt = 64 SingleCore RM UINT16 hits L1 OOM (~2 MB CBs) — pre-existing
-        # SingleCore limit, unrelated to the new MultiCore RM path.  Skip here.
-        (2080, 2079, False),  # Wt = 65, MultiCore RM (new path)
-        (4096, 4095, False),  # Wt = 128, MultiCore RM
+        (2048, 2047, False),  # pad 2048 -> Wt=64, MultiCore RM (first width the new threshold reroutes)
+        (2080, 2079, False),  # pad 4096 -> Wt=128, MultiCore RM
+        (4096, 4095, False),  # pad 4096 -> Wt=128, MultiCore RM
         (4096, 4095, True),
     ],
 )
