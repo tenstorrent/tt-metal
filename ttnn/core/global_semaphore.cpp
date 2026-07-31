@@ -12,13 +12,13 @@ namespace ttnn::global_semaphore {
 
 GlobalSemaphore create_global_semaphore(
     IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    tt::tt_metal::AllocationContextGuard guard("ttnn.create_global_semaphore");
+    auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_semaphore");
     return CreateGlobalSemaphore(device, cores, initial_value, buffer_type);
 }
 
 GlobalSemaphore create_global_semaphore(
     MeshDevice* mesh_device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    tt::tt_metal::AllocationContextGuard guard("ttnn.create_global_semaphore");
+    auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_semaphore");
     return CreateGlobalSemaphore(mesh_device, cores, initial_value, buffer_type);
 }
 

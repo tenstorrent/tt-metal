@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -43,5 +44,12 @@ public:
 private:
     bool active_;
 };
+
+inline std::optional<AllocationContextGuard> make_allocation_context_guard(std::string_view ctx) {
+    if (!trace_allocation_tracking_enabled()) {
+        return std::nullopt;
+    }
+    return std::optional<AllocationContextGuard>{std::in_place, ctx};
+}
 
 }  // namespace tt::tt_metal

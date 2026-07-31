@@ -59,7 +59,7 @@ ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, std::optiona
 void deallocate(Tensor& tensor, bool force) { tensor.deallocate(force); }
 
 Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
-    tt::tt_metal::AllocationContextGuard guard("ttnn.reallocate");
+    auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.reallocate");
     return ttnn::move(input_tensor, memory_config);
 }
 
