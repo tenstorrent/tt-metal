@@ -50,16 +50,28 @@ FRAME_RATE = 12.5
 # ours (tt/ttnn_voxtral_gpt.py), selected with VOXTRAL_BACKBONE=gpt.
 #
 # Ours is better on every per-block metric -- prefill last-position PCC 0.999874 vs 0.999564,
-# decode 0.99984 vs 0.981, 33.6 ms/step vs 48 -- and it holds up end to end on 13 of 14 scored
-# fixture cases at 0.0% WER, including the 125-word paragraph. It is NOT the default because of
-# two open failures that the per-block numbers do not see:
-#   * case 4 ("Hello.", the shortest prompt at P=74) collapses into a repetition loop -- 157 frames
-#     of "you know you know ..." where the current build says "Hello." in 9. Other short prompts
-#     are fine (case 13 P=79, case 12 P=100), so this is not simply prompt length.
-#   * case 3 reproducibly hangs in BLOCK 3's decode, at bucket 512 -- the identical shape case 2
-#     decoded successfully moments earlier in the same process. Block 1 alone runs 1400 steps
-#     clean, and Block 3 alone handles every length from 465 to 640 in 0.1 s, so neither is at
-#     fault in isolation and the interaction is not yet understood.
+# decode 0.99984 vs 0.981, 33.6 ms/step vs 48 -- and on the full 15-case fixture it scores 14 of
+# 15 natural-text cases at 0.0% WER against the current build's 1.17%, with BOTH 125-word
+# paragraphs at 0.0% (465 and 482 frames, natural stop), 15/15 natural [END_AUDIO], and the voice
+# identity control passing. It is NOT the default because of two open failures:
+#
+#   * CASE 4 COLLAPSES INTO A REPETITION LOOP. "Hello." (P=74, the shortest prompt) emits 157
+#     frames of "you know you know ..." where the current build says "Hello." in 9. That one case
+#     IS the 87.39% headline; the other 340 natural words are perfect. Not simply prompt length --
+#     case 13 (P=79) and case 12 (P=100) both match baseline within 2 frames.
+#
+#   * A CUMULATIVE HANG in Block 3's decode. Every part works alone, checked with REAL data and
+#     not just at the right shapes:
+#         frames valid?                reference CPU codec decodes them in 2.2 s
+#         device codec, real frames    3.04 s cold / 0.10 s warm, in any order, fresh process
+#         Block 1 alone                1400 consecutive steps, no hang, no memory growth
+#         cases 2,3 alone              BOTH complete, case 3 at RTF 1.12
+#         cases 0,1,2,3                hangs in case 3's decode, reproducibly
+#     So it needs cases 0 and 1 to run FIRST -- it is accumulation, not shape, not content, and
+#     not either block in isolation. Those two decode at bucket 128 and cases 2/3 at 512, so the
+#     next probe is device memory across a multi-bucket sequence. Note the hang wedges the card:
+#     recovery needs a tt-smi board reset, which is why this is disqualifying for a default.
+#
 # STATUS.md's rule for this swap is that the working pipeline is the thing to beat, so it stays
 # default until both are closed. Flip this line, not a caller, when they are.
 BACKBONE_IMPL = os.environ.get("VOXTRAL_BACKBONE", "tt_transformers")
