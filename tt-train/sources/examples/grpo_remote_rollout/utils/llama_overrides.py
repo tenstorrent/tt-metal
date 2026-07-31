@@ -7,7 +7,6 @@ import ttml
 
 from ttml.models import WeightTyingType
 from ttml.models.llama.gqattn import GroupedQueryAttention
-from ttml.models.llama.transformer import LlamaBlock
 from ttml.models.llama import Llama
 from ttml.modules import RunMode
 
@@ -80,21 +79,6 @@ class GroupedQueryAttentionCompositeKV(GroupedQueryAttention):
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
         out = self.out_linear(attention)
         return out
-
-
-class LlamaBlockCompositeKV(LlamaBlock):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # preserve existing config values
-        self.attention = GroupedQueryAttentionCompositeKV(
-            embedding_size=self.attention.embedding_size,
-            num_heads=self.attention.num_heads,
-            num_groups=self.attention.num_groups,
-            dropout=self.attention.dropout_prob,
-            rope_params=self.attention.rope_params,
-            bias_linears=False,  # match your model config if needed
-        )
 
 
 class LlamaCompositeKV(Llama):
