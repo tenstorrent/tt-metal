@@ -136,7 +136,7 @@
     # not seeded with hexgrad/Kokoro-82M, so the kokoro pipeline's hf_hub_download of
     # the checkpoint + voice packs would fail (OSError: Read-only file system). Kokoro
     # is small and public — let it download to the writable default cache each run.
-    TT_LOGGER_LEVEL=Error python models/experimental/kokoro/demo/ttnn_kokoro_full_demo.py --pcc-check
+    TT_LOGGER_LEVEL=Error pytest -s "models/experimental/kokoro/demo/test_demo.py::test_demo[default]" --timeout=1200
   skus:
     bh_p150:
       timeout: 20

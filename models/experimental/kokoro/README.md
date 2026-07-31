@@ -80,7 +80,8 @@ models/experimental/kokoro/
 ├── README.md
 ├── m_source_rng.py                  # deterministic SineGen/source RNG upload helpers
 ├── demo/
-│   └── ttnn_kokoro_full_demo.py     # full TT demo: text → 24 kHz WAV (trace + mel-PCC vs reference)
+│   ├── demo.py                      # full TT demo: text → 24 kHz WAV (trace + mel-PCC vs reference)
+│   └── test_demo.py                 # pytest matrix driving demo.py's run_demo (CI entrypoint)
 ├── reference/                       # CPU-only PyTorch reference (parity target)
 │   ├── model.py                     #   KModel — full reference forward
 │   ├── istftnet.py                  #   prosody predictor, decoder/generator, SineGen, source, STFT
@@ -321,25 +322,71 @@ pytest -s \
 
 ## Demo
 
+The demo has two entrypoints over one code path: `demo/test_demo.py` (pytest — what CI runs) and
+`demo/demo.py` (CLI). Both call `run_demo()` in `demo/demo.py`, which owns the device lifecycle and
+returns a results dict (`generations` / `statistics` / `model_params`).
+
 ```bash
 export PYTHONPATH=$(pwd)
 source python_env/bin/activate
 
-# Full TTNN pipeline (default: trace on, on-device SineGen + STFT, PCC check on)
-python models/experimental/kokoro/demo/ttnn_kokoro_full_demo.py \
+# pytest — the CI case (default config: trace on, on-device SineGen + STFT, PCC check on)
+pytest -s "models/experimental/kokoro/demo/test_demo.py::test_demo[default]" --timeout=1200
+
+# pytest — full config matrix (default, l1_activations, config_e, disable_complex, no_trace);
+# each case asserts audio + perf statistics + a mel-PCC floor, plus 3 host-only guard tests
+pytest -s models/experimental/kokoro/demo/test_demo.py --timeout=3600
+```
+
+```bash
+# CLI — full TTNN pipeline (default: trace on, on-device SineGen + STFT, PCC check on)
+python models/experimental/kokoro/demo/demo.py \
   --text "Hello from Tenstorrent." --voice af_heart --output out_ttnn.wav
 
-# Recommended production parity (both CPU fallbacks — config E)
-python models/experimental/kokoro/demo/ttnn_kokoro_full_demo.py \
-  --text "Hello from Tenstorrent." --voice af_heart \
+# CLI — recommended production parity (both CPU fallbacks — config E). Needs --no-trace: see
+# "Trace compatibility" below.
+python models/experimental/kokoro/demo/demo.py \
+  --text "Hello from Tenstorrent." --voice af_heart --no-trace \
   --torch-stft-fallback --torch-phase-fallback --output out_ttnn_config_e.wav
 ```
 
 **Example input:** `--text "Hello from Tenstorrent." --voice af_heart --lang-code a`
 **Expected output:** a 24 kHz `.wav` (`out_ttnn.wav`); with `--pcc-check` (default on) the demo also
 runs the reference `KModel` on CPU, prints per-chunk and mean/min **mel-PCC** vs the TT audio, and
-writes the reference audio to `out_ttnn_ref.wav` for A/B validation. On short text the mel PCC lands
-in the ~0.97–0.99 band (matching the quality table).
+writes the reference audio to `out_ttnn_ref.wav` for A/B validation.
+
+**Interpreting the demo's mel PCC.** It is *frame-aligned*, and the demo runs free (no teacher-forced
+durations), so any drift between the on-device `pred_dur` sum and the reference's shifts every
+subsequent frame. On `"Hello from Tenstorrent Kokoro full TTNN."` the device predicts 262 frames
+against the reference's 266, and that 4-frame shift alone puts mel PCC at **~0.83** — traced *and*
+eager, so it is a prosody-duration effect, not a vocoder regression. The ~0.97–0.99 band in the
+[quality table](#quality--pcc-validation-blackhole) is measured on duration-matched audio by
+`tests/test_tt_kmodel_mel_pcc.py`, which is where the strict > 0.95 spectral gate belongs; the demo's
+own gates (in `demo/test_demo.py`) are floors that catch gross breakage — silence, garbage, wrong voice.
+
+### Trace compatibility
+
+`--trace` (on by default) captures a **pure device graph**, so any config that does host work inside
+the decoder cannot be traced. `run_demo` rejects these combinations up front rather than letting them
+abort mid-capture with an opaque `TT_FATAL ... Reads/Writes are not supported during trace capture`:
+
+| config | why it can't be traced | run it as |
+|--------|------------------------|-----------|
+| `--torch-phase-fallback` | `ttnn.to_torch` inside the SineGen phase chain (a device→host read) | add `--no-trace` |
+| `--torch-stft-fallback` | float32 `torch.stft` / dense iSTFT runs on the host | add `--no-trace` |
+| `--disable-complex` | the chunked CustomSTFT iSTFT branch round-trips every `conv_transpose2d` chunk through torch | add `--no-trace` |
+
+Long input is traced per distinct aligned length, so it needs a trace region well above the 200 MB
+default — raise `--trace-region-size` (the trace e2e test uses 1.2 GB) or the run aborts with
+`get_trace_buffers_size() <= trace_region_size`.
+
+**Multi-chunk input is not currently runnable.** Upstream `KPipeline` packs sentences greedily up to
+the 510-phoneme cap rather than per sentence, so a second chunk requires > 510 phonemes of input — and
+at that scale (2×476-phoneme chunks) the generator's harmonic-source `ttnn.concat` needs a 1,695,872 B
+CB page against 1,461,376 B of per-core L1 and fails with *"op cannot fit on this device"*. That is
+also far outside the [optimized range](#sequence-length-support) of 20–150 phonemes. The demo's
+per-chunk loop is written for it, but the model's length ceiling has to rise before multi-chunk text
+can be demoed or gated.
 
 **Parameters:**
 
@@ -354,6 +401,11 @@ in the ~0.97–0.99 band (matching the quality table).
 | `--pcc-check` / `--no-pcc-check` | on | run reference `KModel`, report mel PCC, save `*_ref.wav` |
 | `--checkpoint` | auto | path to `kokoro-v1_0.pth` |
 | `--trace-region-size` | 200 MB | DRAM trace region when tracing |
+| `--seed` | `0` | torch RNG seed for the source-noise path |
+
+Every flag maps 1:1 to a `run_demo()` keyword argument (`--torch-stft-fallback` →
+`torch_stft_fallback=True`, `--no-trace` → `trace=False`, `--output` → `output_path=`), which is how
+`test_demo.py` parametrizes its config matrix.
 
 ## Notable implementation details
 
