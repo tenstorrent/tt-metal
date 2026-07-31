@@ -51,6 +51,8 @@ def test_baseline_ms_reads_the_keyed_file_not_the_global(monkeypatch, tmp_path):
     """THE REGRESSION: a stale unkeyed file must not supply this run's anchor."""
     run = _run_mod()
     monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(run.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setenv("PERF_MCP_MODEL_NAME", "llama3_1_8b_p150")
     monkeypatch.setenv("PERF_MCP_TASK", "main")
@@ -62,6 +64,8 @@ def test_baseline_ms_reads_the_keyed_file_not_the_global(monkeypatch, tmp_path):
 def test_baseline_ms_is_none_when_this_run_has_no_baseline(monkeypatch, tmp_path):
     """No keyed file must mean NO anchor, never a fallback to someone else's number."""
     run = _run_mod()
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(run.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setenv("PERF_MCP_MODEL_NAME", "never_profiled")
     monkeypatch.setenv("PERF_MCP_TASK", "main")

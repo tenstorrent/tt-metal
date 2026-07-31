@@ -87,6 +87,8 @@ def test_reset_clears_1cq_baseline(tmp_path, monkeypatch):
     )
     run = _u.module_from_spec(spec)
     spec.loader.exec_module(run)
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(run.tempfile, "gettempdir", lambda: str(tmp_path))
     # the scoreboard is keyed by (model, task) now -- an unkeyed global file let any process on
     # the box overwrite a live run's AFTER number
@@ -105,6 +107,8 @@ def test_read_fullpipe_best_1cq(tmp_path, monkeypatch):
     )
     run = _u.module_from_spec(spec)
     spec.loader.exec_module(run)
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(run.tempfile, "gettempdir", lambda: str(tmp_path))
     assert run._read_fullpipe_best_1cq() == (None, "")  # now returns (ms, mode): the mode decides
     # whether the AFTER number is even comparable to the BEFORE bookend

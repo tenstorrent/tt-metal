@@ -12,6 +12,8 @@ reap = perf_mcp._reap_measurement_dir
 
 
 def test_reaps_our_measurement_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
     d = tmp_path / "perf_mcp_abc123"
     (d / "tracy_out" / ".logs").mkdir(parents=True)
@@ -21,6 +23,8 @@ def test_reaps_our_measurement_dir(tmp_path, monkeypatch):
 
 
 def test_refuses_non_perf_mcp_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
     d = tmp_path / "something_important"
     d.mkdir()
@@ -29,6 +33,8 @@ def test_refuses_non_perf_mcp_dir(tmp_path, monkeypatch):
 
 
 def test_refuses_perf_mcp_dir_outside_tempdir(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path / "realtmp"))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path / "realtmp"))
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "realtmp"))
     (tmp_path / "realtmp").mkdir()
     d = tmp_path / "elsewhere" / "perf_mcp_abc"
@@ -38,6 +44,8 @@ def test_refuses_perf_mcp_dir_outside_tempdir(tmp_path, monkeypatch):
 
 
 def test_idempotent_on_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
     d = tmp_path / "perf_mcp_gone"
     assert reap(d) is True

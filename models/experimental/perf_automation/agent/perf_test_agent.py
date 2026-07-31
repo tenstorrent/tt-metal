@@ -20,6 +20,16 @@ import os
 import sys
 from pathlib import Path
 
+# ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py.
+import importlib.util as _ilu_ts
+
+_ts_spec = _ilu_ts.spec_from_file_location(
+    "_tmpstate", str(Path(__file__).resolve().parent.parent / "cc_optimize" / "tmpstate.py")
+)
+_tmpstate = _ilu_ts.module_from_spec(_ts_spec)
+_ts_spec.loader.exec_module(_tmpstate)
+state_dir = _tmpstate.state_dir
+
 
 def _component_run_timeout() -> int:
     """Budget for one perf-test build run on device, scaled from observed build cost (BUG 4).
@@ -175,7 +185,7 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
         env.pop(_k, None)
 
     overall_timeout = int(os.environ.get("PERF_TEST_AGENT_TIMEOUT_S", "") or max(3600, _component_run_timeout() * 8))
-    log_path = Path(tempfile.gettempdir()) / f"perftest_{task}.agent.log"
+    log_path = state_dir() / f"perftest_{task}.agent.log"
     cmd = [
         resolve_claude_bin(),
         "-p",

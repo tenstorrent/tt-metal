@@ -24,6 +24,16 @@ import time
 import sys
 from pathlib import Path
 
+# ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py. Loaded by path
+# because cc_optimize is not a package: these modules run both as scripts and as plain imports.
+import importlib.util as _ilu_ts
+
+_ts_spec = _ilu_ts.spec_from_file_location("_tmpstate", str(Path(__file__).resolve().parent / "tmpstate.py"))
+_tmpstate = _ilu_ts.module_from_spec(_ts_spec)
+_ts_spec.loader.exec_module(_tmpstate)
+state_dir = _tmpstate.state_dir
+
+
 PERF_DIR = "models/experimental/perf_automation"
 CC_DIR = PERF_DIR + "/cc_optimize"
 DEFAULT_MAX_ROUNDS = 3
@@ -268,6 +278,15 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
     }
     if pipe.get("case"):
         env["PERF_MCP_PERF_CASE"] = pipe["case"]
+    # THE STATE DIRECTORY MUST CROSS THE PROCESS BOUNDARY. This env dict is explicit -- the server does
+    # NOT inherit os.environ -- so a redirect set here would apply to the orchestrator only. The
+    # orchestrator READS what the server WRITES (summary.py reads the 1cq full-pipeline baseline that
+    # perf_mcp writes; the ledger is shared the same way), so a one-sided redirect points them at two
+    # different directories and the report silently finds nothing. Unset on both sides they agree via
+    # gettempdir(), which is why this is latent rather than broken -- forward it so it stays that way.
+    for _k in ("PERF_MCP_STATE_DIR", "PERF_MCP_LEDGER_DIR"):
+        if os.environ.get(_k):
+            env[_k] = os.environ[_k]
     # TELL THE SERVER WHERE THE RUN IS. perf_mcp is a SEPARATE PROCESS and resolves its model dir as
     # `PERF_MCP_MODEL_ROOT or manifest.config.model_root or "."` -- and nothing ever set that
     # variable, so it landed on "." (the server's own cwd), which has no relationship to the run.
@@ -352,7 +371,7 @@ def _reset_fullpipe_baselines() -> None:
     trace+1cq end to end) and the one every compute win is banked against; an old higher-rank
     entry left behind would veto every candidate for the whole run without ever being overwritten."""
     try:
-        (Path(tempfile.gettempdir()) / _fullpipe_1cq_name()).unlink()
+        (state_dir() / _fullpipe_1cq_name()).unlink()
     except Exception:
         pass
 
@@ -376,7 +395,7 @@ def _read_fullpipe_best_1cq():
     llama3_1_8b_p150, a regression that is not one. Return the mode so the caller can refuse.
     """
     try:
-        p = Path(tempfile.gettempdir()) / _fullpipe_1cq_name()
+        p = state_dir() / _fullpipe_1cq_name()
         d = json.loads(p.read_text())
         ms = float(d.get("full_pipeline_ms") or 0.0)
         mode = str(d.get("mode") or d.get("method") or "")
@@ -784,7 +803,9 @@ def _model_root_from_node(repo_root: Path, node):
     return root if root.is_dir() else None
 
 
-_KNOB_CACHE_FILE = Path(tempfile.gettempdir()) / "perf_mcp_knob_cache.json"
+def _knob_cache_file():
+    """Resolved per call: a module constant freezes the path at import, before any redirect."""
+    return state_dir() / "perf_mcp_knob_cache.json"
 
 
 def _knob_key(model_root) -> str:
@@ -811,7 +832,7 @@ def _knob_fingerprint(model_root) -> str:
 
 def _knob_cache_get(model_root):
     try:
-        entry = json.loads(_KNOB_CACHE_FILE.read_text()).get(_knob_key(model_root))
+        entry = json.loads(_knob_cache_file().read_text()).get(_knob_key(model_root))
         if entry and entry.get("fp") == _knob_fingerprint(model_root):
             return dict(entry["env"])
     except Exception:  # noqa: BLE001
@@ -821,9 +842,9 @@ def _knob_cache_get(model_root):
 
 def _knob_cache_put(model_root, env) -> None:
     try:
-        data = json.loads(_KNOB_CACHE_FILE.read_text()) if _KNOB_CACHE_FILE.is_file() else {}
+        data = json.loads(_knob_cache_file().read_text()) if _knob_cache_file().is_file() else {}
         data[_knob_key(model_root)] = {"env": dict(env), "fp": _knob_fingerprint(model_root)}
-        _KNOB_CACHE_FILE.write_text(json.dumps(data))
+        _knob_cache_file().write_text(json.dumps(data))
     except Exception:  # noqa: BLE001
         pass
 
@@ -1496,7 +1517,9 @@ def _git_last_error() -> str:
 # chip-index -> its board's PCI-resettable local chip, snapshotted while healthy. RESET PATH ONLY --
 # nothing about mesh-open / parallelism / scorecard reads any of this; it exists solely to pick
 # `tt-smi -r` targets so a whole n300 board resets (never half a board, never a non-PCIe remote chip).
-_BOARD_MAP_FILE = Path(tempfile.gettempdir()) / "perf_mcp_board_topology.json"
+def _board_map_file():
+    """Resolved per call: a module constant freezes the path at import, before any redirect."""
+    return state_dir() / "perf_mcp_board_topology.json"
 
 
 def _read_board_topology() -> dict | None:
@@ -1511,7 +1534,7 @@ def _capture_board_topology() -> None:
     m = _read_board_topology()
     if m:
         try:
-            _BOARD_MAP_FILE.write_text(json.dumps(m))
+            _board_map_file().write_text(json.dumps(m))
         except Exception:  # noqa: BLE001
             pass
 
@@ -2415,9 +2438,9 @@ def _baseline_name() -> str:
 
 def _baseline_ms() -> float | None:
     try:
-        import tempfile
+        pass
 
-        d = json.loads((Path(tempfile.gettempdir()) / _baseline_name()).read_text())
+        d = json.loads((state_dir() / _baseline_name()).read_text())
         return float(d["device_ms"]) if d.get("device_ms") is not None else None
     except Exception:  # noqa: BLE001
         return None
@@ -2582,9 +2605,9 @@ def _emit_summary(
     _cur_ms = _lc if _lc is not None else _baseline_ms()
     _throughput = None
     try:
-        import tempfile as _tf
+        pass
 
-        _tp = Path(_tf.gettempdir()) / ("perf_mcp_throughput_%s_%s.json" % (model_name, task))
+        _tp = state_dir() / ("perf_mcp_throughput_%s_%s.json" % (model_name, task))
         if _tp.exists():
             _throughput = json.loads(_tp.read_text())
             # The roofline floor sums per-op floors over the PROFILED window, so it is only

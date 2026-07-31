@@ -44,8 +44,17 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
+
+# ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py.
+import importlib.util as _ilu_ts
+
+_ts_spec = _ilu_ts.spec_from_file_location(
+    "_tmpstate", str(Path(__file__).resolve().parent.parent / "cc_optimize" / "tmpstate.py")
+)
+_tmpstate = _ilu_ts.module_from_spec(_ts_spec)
+_ts_spec.loader.exec_module(_tmpstate)
+state_dir = _tmpstate.state_dir
 
 
 class _Unknown:
@@ -86,12 +95,14 @@ def normalise(token) -> str:
     return " ".join(s.split())
 
 
-_CACHE_PATH = Path(tempfile.gettempdir()) / "perf_integrity_resolve_cache.json"
+def _cache_path():
+    """Resolved per call: a module constant freezes the path at import, before any redirect."""
+    return state_dir() / "perf_integrity_resolve_cache.json"
 
 
 def _cache_get(key: str):
     try:
-        return json.loads(_CACHE_PATH.read_text()).get(key)
+        return json.loads(_cache_path().read_text()).get(key)
     except Exception:  # noqa: BLE001
         return None
 
@@ -99,12 +110,12 @@ def _cache_get(key: str):
 def _cache_put(key: str, val: str) -> None:
     try:
         cur = {}
-        if _CACHE_PATH.exists():
-            cur = json.loads(_CACHE_PATH.read_text())
+        if _cache_path().exists():
+            cur = json.loads(_cache_path().read_text())
         cur[key] = val
-        tmp = _CACHE_PATH.with_suffix(".tmp")
+        tmp = _cache_path().with_suffix(".tmp")
         tmp.write_text(json.dumps(cur))
-        tmp.replace(_CACHE_PATH)
+        tmp.replace(_cache_path())
     except Exception:  # noqa: BLE001
         pass
 

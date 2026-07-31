@@ -28,6 +28,37 @@ def _no_live_agent_calls(monkeypatch):
 
 
 @_pytest.fixture(autouse=True)
+def _private_temp_state(tmp_path_factory, monkeypatch):
+    """No test may touch the tool's REAL temp state.
+
+    The ledger was only one of these files. perf_automation keeps ~20 more durable artifacts beside
+    it -- baselines, gate verdicts, the knob cache, board topology, throughput, profile caches -- and
+    every one is built inline as ``Path(tempfile.gettempdir()) / "perf_mcp_...json"`` at 24 separate
+    call sites. None is truncated on startup, so whatever a test leaves is what the next REAL run
+    reads. Proven, not theorised: a sentinel planted in perf_mcp_baseline_model_main.json was
+    clobbered by this suite with test data (wall_ms 20.15, device_ms 0.3651) -- a value shaped exactly
+    like the degenerate baselines we spend runs chasing.
+
+    Redirecting ``tempfile.tempdir`` covers all 24 sites at once, because every one of them resolves
+    through gettempdir(), which returns this global when set. Per-site edits would touch production
+    code paths (including a containment check that legitimately means the real temp dir) for no extra
+    safety here.
+
+    The factory's own basetemp is created BEFORE the patch, so pytest's tmp_path machinery is
+    unaffected by the redirect.
+    """
+    import tempfile as _tempfile
+
+    box = tmp_path_factory.mktemp("tmpstate")
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(box))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(box))
+    # Belt and braces: anything still reaching gettempdir() directly (the containment check in
+    # _reap_measurement_dir deliberately does) lands in the box too.
+    monkeypatch.setattr(_tempfile, "tempdir", str(box))
+    yield
+
+
+@_pytest.fixture(autouse=True)
 def _private_measurement_ledger(tmp_path_factory, monkeypatch):
     """Every test gets its OWN ledger.
 

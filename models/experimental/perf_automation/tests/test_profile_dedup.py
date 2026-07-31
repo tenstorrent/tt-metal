@@ -24,7 +24,7 @@ def _wire(monkeypatch, tmp_path, model_root):
         return [{"device_ms": float(calls["n"])}]
 
     monkeypatch.setattr(m, "_MODEL_ROOT", model_root)
-    monkeypatch.setattr(m, "_PROFILE_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(m, "_profile_cache_dir", lambda _v=tmp_path / "cache": _v)
     monkeypatch.setattr(m, "measure_runs", fake_measure_runs)
     monkeypatch.setattr(
         m, "_Ctx", lambda: types.SimpleNamespace(run=types.SimpleNamespace(dir="/tmp", profiles_dir="/tmp"))
@@ -54,7 +54,7 @@ def test_fingerprint_empty_when_no_source(tmp_path, monkeypatch):
 
 
 def test_cache_roundtrip(tmp_path, monkeypatch):
-    monkeypatch.setattr(m, "_PROFILE_CACHE_DIR", tmp_path / "c")
+    monkeypatch.setattr(m, "_profile_cache_dir", lambda _v=tmp_path / "c": _v)
     assert m._profile_cache_get("fp") is None
     m._profile_cache_put("fp", {"device_ms": 5.0})
     assert m._profile_cache_get("fp") == {"device_ms": 5.0}

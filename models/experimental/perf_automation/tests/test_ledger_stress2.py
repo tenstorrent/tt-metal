@@ -30,6 +30,8 @@ def _mod():
 
 def _at(m, tmp_path, monkeypatch):
     monkeypatch.delenv("PERF_MCP_LEDGER", raising=False)
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(m.tempfile, "gettempdir", lambda: str(tmp_path))
     return m
 
@@ -84,6 +86,8 @@ def test_an_unwritable_directory_is_survived(tmp_path, monkeypatch):
     monkeypatch.delenv("PERF_MCP_LEDGER", raising=False)
     ro = tmp_path / "ro"
     ro.mkdir()
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(ro))
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(ro))
     monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(ro))
     monkeypatch.setattr(m.tempfile, "gettempdir", lambda: str(ro))
     ro.chmod(0o500)

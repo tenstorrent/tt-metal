@@ -94,6 +94,8 @@ def test_a_missing_reading_is_not_measured_never_a_substitute(tmp_path, monkeypa
 def test_two_models_never_share_a_ledger(tmp_path, monkeypatch):
     m = _mod()
     monkeypatch.delenv("PERF_MCP_LEDGER", raising=False)
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(m.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setenv("PERF_MCP_TASK", "main")
     a = m.ledger_path("model_a")
@@ -201,6 +203,8 @@ def test_the_reader_finds_what_the_writer_wrote_without_any_env(tmp_path, monkey
     monkeypatch.delenv("PERF_MCP_MODEL_NAME", raising=False)
     monkeypatch.delenv("PERF_MCP_MODEL_ROOT", raising=False)
     m = _mod()
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(m.tempfile, "gettempdir", lambda: str(tmp_path))
 
     m.record(m.KIND_EAGER, m.PHASE_BEFORE, 2464.18, depth="16", mode="eager", model="llama3_1_8b_p150")
@@ -209,6 +213,8 @@ def test_the_reader_finds_what_the_writer_wrote_without_any_env(tmp_path, monkey
     sm = ilu.module_from_spec(spec)
     sys.modules["summary_key_ut"] = sm
     spec.loader.exec_module(sm)
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setattr(sm._ledger().tempfile, "gettempdir", lambda: str(tmp_path))
 
     m.record(m.KIND_EAGER, m.PHASE_AFTER, 648.17, depth="16", mode="eager", model="llama3_1_8b_p150")

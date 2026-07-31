@@ -39,7 +39,7 @@ def test_read_topology_n300_local_only(monkeypatch):
 
 def test_board_reset_targets_union_whole_boards(tmp_path, monkeypatch):
     dr = run._dr()
-    monkeypatch.setattr(dr, "BOARD_MAP_FILE", tmp_path / "absent.json")
+    monkeypatch.setattr(dr, "board_map_file", lambda _v=tmp_path / "absent.json": _v)
     monkeypatch.setattr(dr, "read_board_topology", lambda: {"0": [0, 1], "1": [0, 1], "2": [2, 3], "3": [2, 3]})
     assert run._board_reset_targets([0]) == "0,1"
     assert run._board_reset_targets([2]) == "2,3"
@@ -49,7 +49,7 @@ def test_board_reset_targets_union_whole_boards(tmp_path, monkeypatch):
 def test_board_reset_targets_legacy_int_cache(tmp_path, monkeypatch):
     f = tmp_path / "m.json"
     f.write_text('{"0": 0, "1": 0}')
-    monkeypatch.setattr(run._dr(), "BOARD_MAP_FILE", f)
+    monkeypatch.setattr(run._dr(), "board_map_file", lambda _v=f: _v)
     assert run._board_reset_targets([0, 1]) == "0"
 
 

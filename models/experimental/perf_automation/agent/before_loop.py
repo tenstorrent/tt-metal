@@ -34,6 +34,17 @@ from .probes import PerfRunFailed
 from .run import Run
 from .tracy_tool import profile_model, stack_report
 
+# ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py.
+import importlib.util as _ilu_ts
+
+_ts_spec = _ilu_ts.spec_from_file_location(
+    "_tmpstate", str(Path(__file__).resolve().parent.parent / "cc_optimize" / "tmpstate.py")
+)
+_tmpstate = _ilu_ts.module_from_spec(_ts_spec)
+_ts_spec.loader.exec_module(_tmpstate)
+state_dir = _tmpstate.state_dir
+
+
 PKG_ROOT = Path(__file__).parent.parent
 DEFAULT_PLAYBOOK = PKG_ROOT / "GUIDELINES"
 DEFAULT_RUNS_ROOT = PKG_ROOT / "runs"
@@ -724,12 +735,12 @@ def before_loop(
     # number it was holding. The line just below already keys the /tmp baseline copy this way.
     _record_baseline_anchor(profile, model=Path(model_root).name)
     try:
-        import tempfile as _tf
+        pass
 
         _bl_model = os.environ.get("PERF_MCP_MODEL_NAME") or Path(model_root).name or "model"
         _bl_task = os.environ.get("PERF_MCP_TASK", "main")
         _bl_name = "perf_mcp_baseline_%s_%s.json" % (_bl_model, _bl_task)
-        (Path(_tf.gettempdir()) / _bl_name).write_text(json.dumps(profile))
+        (state_dir() / _bl_name).write_text(json.dumps(profile))
     except Exception:  # noqa: BLE001
         pass
     _bk = {b.get("id"): int(b.get("count", 0)) for b in (profile.get("buckets") or [])}

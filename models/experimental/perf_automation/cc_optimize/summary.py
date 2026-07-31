@@ -15,8 +15,17 @@ import os
 import sys
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
+
+# ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py. Loaded by path
+# because cc_optimize is not a package: these modules run both as scripts and as plain imports.
+import importlib.util as _ilu_ts
+
+_ts_spec = _ilu_ts.spec_from_file_location("_tmpstate", str(Path(__file__).resolve().parent / "tmpstate.py"))
+_tmpstate = _ilu_ts.module_from_spec(_ts_spec)
+_ts_spec.loader.exec_module(_tmpstate)
+state_dir = _tmpstate.state_dir
+
 
 _LEVEL_COLS = ("grid", "fidelity", "dtype", "shard", "host", "tt-lang", "cpp")
 _ALL_COLS = _LEVEL_COLS + ("other",)  # "other" holds unclassifiable levers; rendered only when used
@@ -76,7 +85,10 @@ def module_optimize_block(
     return head + body
 
 
-_LEVEL_ALIAS_CACHE = Path(tempfile.gettempdir()) / "perf_mcp_lever_alias_cache.json"
+def _level_alias_cache():
+    """Resolved per call: a module constant freezes the path at import, before any redirect."""
+    return state_dir() / "perf_mcp_lever_alias_cache.json"
+
 
 _LEVEL_SEMANTICS = (
     "grid = core-grid occupancy / spreading work across cores; "
@@ -115,7 +127,7 @@ def _level_of(kind: str) -> str:
 
 def _alias_cache() -> dict:
     try:
-        return json.loads(_LEVEL_ALIAS_CACHE.read_text())
+        return json.loads(_level_alias_cache().read_text())
     except Exception:  # noqa: BLE001
         return {}
 
@@ -124,7 +136,7 @@ def _alias_cache_put(key: str, col: str) -> None:
     try:
         c = _alias_cache()
         c[key] = col
-        _LEVEL_ALIAS_CACHE.write_text(json.dumps(c))
+        _level_alias_cache().write_text(json.dumps(c))
     except Exception:  # noqa: BLE001
         pass
 
@@ -816,11 +828,8 @@ def render_summary(
     _tok_ms, _tok_depth = None, ""
     try:
         import json as _j
-        import tempfile as _tf
 
-        _gp = Path(_tf.gettempdir()) / (
-            "perf_mcp_full_pipeline_baseline_1cq_%s_%s.json" % (model or "model", task or "main")
-        )
+        _gp = state_dir() / ("perf_mcp_full_pipeline_baseline_1cq_%s_%s.json" % (model or "model", task or "main"))
         _g = _j.loads(_gp.read_text())
         if str(_g.get("method")) == "trace" and float(_g.get("full_pipeline_ms") or 0) > 0:
             _tok_ms, _tok_depth = float(_g["full_pipeline_ms"]), "all"

@@ -41,6 +41,15 @@ from agent.handlers import remeasure as _rm  # noqa: E402
 from agent.measure import measure_runs  # noqa: E402
 from agent.pcc_runner import run_pcc  # noqa: E402
 
+# ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py. Loaded by path
+# because cc_optimize is not a package: these modules run both as scripts and as plain imports.
+import importlib.util as _ilu_ts
+
+_ts_spec = _ilu_ts.spec_from_file_location("_tmpstate", str(Path(__file__).resolve().parent / "tmpstate.py"))
+_tmpstate = _ilu_ts.module_from_spec(_ts_spec)
+_ts_spec.loader.exec_module(_tmpstate)
+state_dir = _tmpstate.state_dir
+
 try:  # mcp < 2.0
     from mcp.server.fastmcp import FastMCP  # noqa: E402
 except ModuleNotFoundError:  # mcp >= 2.0 renamed FastMCP -> MCPServer
@@ -84,7 +93,7 @@ def _baseline_path():
     first candidate of the new run as a large fake win."""
     model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
     task = os.environ.get("PERF_MCP_TASK", "main")
-    return Path(tempfile.gettempdir()) / ("perf_mcp_baseline_%s_%s.json" % (model, task))
+    return state_dir() / ("perf_mcp_baseline_%s_%s.json" % (model, task))
 
 
 # The tool is trace+1cq end to end; this is the ONLY full-pipeline baseline (no 2-CQ twin).
@@ -96,7 +105,7 @@ def _baseline_path():
 def _fullpipe_baseline_1cq_path():
     model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
     task = os.environ.get("PERF_MCP_TASK", "main")
-    return Path(tempfile.gettempdir()) / ("perf_mcp_full_pipeline_baseline_1cq_%s_%s.json" % (model, task))
+    return state_dir() / ("perf_mcp_full_pipeline_baseline_1cq_%s_%s.json" % (model, task))
 
 
 _FULLPIPE_BASELINE_1CQ_PATH = _fullpipe_baseline_1cq_path()
@@ -380,9 +389,7 @@ def _dram_overflow_msg(new_region: int) -> str:
 # kernel attempt. The log PERSISTS across server restarts so a driver can re-invoke claude -p multiple
 # rounds on the SAME pipeline and the ladder state carries over; the driver clears it (env path or rm)
 # at the START of each pipeline. Override the path per-pipeline via PERF_MCP_KERNEL_LOG.
-_KERNEL_LOG_PATH = Path(
-    os.environ.get("PERF_MCP_KERNEL_LOG") or (Path(tempfile.gettempdir()) / "perf_mcp_kernel_attempts.json")
-)
+_KERNEL_LOG_PATH = Path(os.environ.get("PERF_MCP_KERNEL_LOG") or (state_dir() / "perf_mcp_kernel_attempts.json"))
 _MATERIAL_GAP_MS = float(os.environ.get("PERF_MCP_MATERIAL_GAP_MS", "0.25"))
 _MATERIAL_GAP_ENV_SET = "PERF_MCP_MATERIAL_GAP_MS" in os.environ
 _MATERIAL_GAP_FRAC = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FRAC", "0.03"))
@@ -805,7 +812,7 @@ def _throughput_path():
     the baseline path so a per-module run never reads another module's target."""
     model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
     task = os.environ.get("PERF_MCP_TASK", "main")
-    return Path(tempfile.gettempdir()) / ("perf_mcp_throughput_%s_%s.json" % (model, task))
+    return state_dir() / ("perf_mcp_throughput_%s_%s.json" % (model, task))
 
 
 _MIN_CREDIBLE_DEVICE_MS = float(os.environ.get("PERF_MCP_MIN_CREDIBLE_MS", "1.0") or "1.0")
@@ -1333,7 +1340,9 @@ except Exception:
     pass
 
 
-_STABLE_ARTIFACT_DIR = Path(tempfile.gettempdir()) / "perf_mcp_last_profile"
+def _stable_artifact_dir():
+    """Resolved per call: a module constant freezes the path at import, before any redirect."""
+    return state_dir() / "perf_mcp_last_profile"
 
 
 def _persist_artifacts(prof: dict) -> dict:
@@ -1344,14 +1353,14 @@ def _persist_artifacts(prof: dict) -> dict:
     if not isinstance(arts, dict):
         return prof
     try:
-        _shutil.rmtree(_STABLE_ARTIFACT_DIR, ignore_errors=True)
-        _STABLE_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+        _shutil.rmtree(_stable_artifact_dir(), ignore_errors=True)
+        _stable_artifact_dir().mkdir(parents=True, exist_ok=True)
         repointed = {}
         for key, src in arts.items():
             sp = Path(str(src))
             try:
                 if sp.is_file():
-                    dst = _STABLE_ARTIFACT_DIR / sp.name
+                    dst = _stable_artifact_dir() / sp.name
                     _shutil.copy2(sp, dst)
                     repointed[key] = str(dst)
                 else:
@@ -1396,7 +1405,9 @@ def _detect_partial_capture(profiles_dir) -> str | None:
     return None
 
 
-_PROFILE_CACHE_DIR = Path(tempfile.gettempdir()) / "perf_mcp_profile_cache"
+def _profile_cache_dir():
+    """Resolved per call: a module constant freezes the path at import, before any redirect."""
+    return state_dir() / "perf_mcp_profile_cache"
 
 
 def _win_threshold(base_ms: float, spread_ms=None) -> float:
@@ -1494,7 +1505,7 @@ def _model_source_fingerprint() -> str:
 def _profile_cache_get(fp: str):
     if not fp:
         return None
-    p = _PROFILE_CACHE_DIR / (fp + ".json")
+    p = _profile_cache_dir() / (fp + ".json")
     if not p.is_file():
         return None
     try:
@@ -1507,8 +1518,8 @@ def _profile_cache_put(fp: str, prof: dict) -> None:
     if not fp:
         return
     try:
-        _PROFILE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        (_PROFILE_CACHE_DIR / (fp + ".json")).write_text(json.dumps(prof))
+        _profile_cache_dir().mkdir(parents=True, exist_ok=True)
+        (_profile_cache_dir() / (fp + ".json")).write_text(json.dumps(prof))
     except Exception:
         pass
 
@@ -2234,14 +2245,16 @@ def _run_full_pipeline_ms():
     )
 
 
-_FULLPIPE_GATE_LOG = Path(tempfile.gettempdir()) / "perf_mcp_fullpipe_gate.log"
+def _fullpipe_gate_log():
+    """Resolved per call: a module constant freezes the path at import, before any redirect."""
+    return state_dir() / "perf_mcp_fullpipe_gate.log"
 
 
 def _gate_verdict_path():
     """Where every gate's LAST verdict is recorded, keyed like every other per-run artifact."""
     model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
     task = os.environ.get("PERF_MCP_TASK", "main")
-    return Path(tempfile.gettempdir()) / ("perf_mcp_gate_verdicts_%s_%s.json" % (model, task))
+    return state_dir() / ("perf_mcp_gate_verdicts_%s_%s.json" % (model, task))
 
 
 def record_gate_verdict(gate: str, status: str, **extra) -> None:
@@ -2349,7 +2362,7 @@ def _emit_fullpipe(result: dict) -> dict:
     sys.stderr.write(line + "\n")
     sys.stderr.flush()
     try:
-        with open(_FULLPIPE_GATE_LOG, "a") as _f:
+        with open(_fullpipe_gate_log(), "a") as _f:
             _f.write(line + "\n")
     except Exception:  # noqa: BLE001
         pass
@@ -2867,7 +2880,7 @@ def hitl_gate(
 def _untracked_baseline_path() -> Path:
     model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
     task = os.environ.get("PERF_MCP_TASK", "main")
-    return Path(tempfile.gettempdir()) / ("perf_mcp_untracked_%s_%s.json" % (model, task))
+    return state_dir() / ("perf_mcp_untracked_%s_%s.json" % (model, task))
 
 
 def _write_untracked_baseline() -> None:

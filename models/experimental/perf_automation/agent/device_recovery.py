@@ -33,8 +33,18 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
+
+# ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py.
+import importlib.util as _ilu_ts
+
+_ts_spec = _ilu_ts.spec_from_file_location(
+    "_tmpstate", str(Path(__file__).resolve().parent.parent / "cc_optimize" / "tmpstate.py")
+)
+_tmpstate = _ilu_ts.module_from_spec(_ts_spec)
+_ts_spec.loader.exec_module(_tmpstate)
+state_dir = _tmpstate.state_dir
+
 
 TT_SMI = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
 
@@ -92,7 +102,7 @@ def state_path() -> Path:
     model = os.environ.get("PERF_MCP_MODEL") or os.environ.get("TT_HW_PLANNER_MODEL") or "model"
     task = os.environ.get("PERF_MCP_TASK", "main")
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", "%s_%s" % (model, task))
-    return Path(tempfile.gettempdir()) / ("tt_device_recovery_%s.json" % safe)
+    return state_dir() / ("tt_device_recovery_%s.json" % safe)
 
 
 class Counter:
@@ -135,7 +145,9 @@ CONSEC_CRASH = Counter("consec_crash")
 RESET_FAILS = Counter("reset_fails")
 
 
-BOARD_MAP_FILE = Path(tempfile.gettempdir()) / "perf_mcp_board_topology.json"
+def board_map_file():
+    """Resolved per call: a module constant freezes the path at import, before any redirect."""
+    return state_dir() / "perf_mcp_board_topology.json"
 
 
 def read_board_topology():
@@ -169,7 +181,7 @@ def board_map():
     """The reset map, preferring the copy captured while the board was HEALTHY -- a live read of a
     wedged card returns nothing, which is exactly when the map is needed."""
     try:
-        m = json.loads(BOARD_MAP_FILE.read_text())
+        m = json.loads(board_map_file().read_text())
         if m:
             return m
     except Exception:  # noqa: BLE001
