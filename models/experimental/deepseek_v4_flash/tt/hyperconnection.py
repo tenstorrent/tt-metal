@@ -81,9 +81,8 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         t = b * s
 
         # Flatten streams to [1,1,T,H*D] and unweighted-RMSNorm over H*D.
-        flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d])
         flat_mem_config = width_sharded_l1_config(t, hc * d, self.device)
-        flat = ttnn.to_memory_config(flat, flat_mem_config)
+        flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d], memory_config=flat_mem_config)
         flat = _rms_norm_unweighted(flat, self.norm_eps)
 
         fused_w = self.fn(flat)  # [1,1,T,(2+H)*H]
