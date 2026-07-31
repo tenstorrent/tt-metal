@@ -44,6 +44,62 @@ ttnn::Tensor reduce_scatter_minimal_direct(
     return result.at(0);
 }
 
+bool reduce_scatter_minimal_direct_is_applicable(
+    const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis) {
+    // Each check below is the non-throwing twin of a TT_FATAL in the device op / its geometry helper;
+    // see the header note. Ordered cheapest-first, and every one of them is structural -- nothing here
+    // decides whether direct is worth using.
+    auto* mesh_device = input_tensor.device();
+    if (mesh_device == nullptr || input_tensor.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+        return false;
+    }
+    if (input_tensor.layout() != ttnn::TILE_LAYOUT) {
+        return false;
+    }
+    if (::tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+        return false;  // Fabric_1D only
+    }
+
+    const uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+    if (num_devices < 2) {
+        return false;
+    }
+    // Ring only: a line would need per-destination direction clamping. get_usable_topology demotes a
+    // ring request to linear when the devices along the axis do not actually wrap.
+    if (::ttnn::ccl::get_usable_topology(input_tensor, ttnn::ccl::Topology::Ring, cluster_axis) !=
+        ttnn::ccl::Topology::Ring) {
+        return false;
+    }
+
+    const auto padded_shape = input_tensor.padded_shape();
+    const uint32_t rank = padded_shape.rank();
+    if (rank < 2) {
+        return false;
+    }
+    const int32_t scatter_dim = (dim < 0) ? static_cast<int32_t>(rank) + dim : dim;
+    if (scatter_dim < 0 || scatter_dim >= static_cast<int32_t>(rank)) {
+        return false;
+    }
+    const uint32_t d = static_cast<uint32_t>(scatter_dim);
+
+    // Page-space split, matching reduce_scatter_direct_geometry: the two innermost dims count in tiles.
+    const auto tile = input_tensor.tensor_spec().tile();
+    uint32_t dim_size_pages = padded_shape[d];
+    if (d == rank - 1) {
+        dim_size_pages /= tile.get_width();
+    } else if (d == rank - 2) {
+        dim_size_pages /= tile.get_height();
+        // A tile-padded scatter dim would hand the last device a slice of padding rather than data.
+        if (padded_shape[d] != input_tensor.logical_shape()[d]) {
+            return false;
+        }
+    }
+    if (d == rank - 1 && padded_shape[d] != input_tensor.logical_shape()[d]) {
+        return false;
+    }
+    return dim_size_pages > 0 && dim_size_pages % num_devices == 0;
+}
+
 namespace {
 
 // Both allocators below go through the device op's own compute_output_specs, so a caller-provided

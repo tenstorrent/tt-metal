@@ -38,6 +38,18 @@ ttnn::Tensor reduce_scatter_minimal_direct(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
+// Whether this op can run a given case AT ALL -- structural constraints only (ring topology, TILE
+// layout, a scatter dim that splits into whole pages, 1D fabric). It says nothing about whether direct
+// is the FASTER choice; that policy lives at the ttnn::reduce_scatter dispatch site, which pairs this
+// with a data-volume gate.
+//
+// Mirrors the op's own validation, which stays authoritative: this predicate exists so a dispatcher can
+// ask without risking a TT_FATAL, so anything it lets through must also pass
+// ReduceScatterMinimalDirectDeviceOperation::validate_on_program_cache_miss and
+// reduce_scatter_direct_geometry. Keep the two in sync.
+bool reduce_scatter_minimal_direct_is_applicable(
+    const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis = std::nullopt);
+
 // Allocate the persistent buffer set {output, staging} sized to match a given input.
 std::vector<ttnn::Tensor> reduce_scatter_minimal_direct_create_persistent_buffers(
     const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis = std::nullopt);

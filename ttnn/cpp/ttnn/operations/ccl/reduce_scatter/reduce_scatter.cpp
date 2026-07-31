@@ -14,9 +14,81 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_op_device_operation.hpp"
+
+#include <cstdlib>
 
 namespace ttnn {
 using namespace ttnn::operations::ccl;
+
+namespace {
+
+// --- Direct (one-shot) reduce-scatter dispatch policy ---
+//
+// reduce_scatter_minimal_direct unicasts every destination's slice STRAIGHT to that destination: one
+// fabric traversal instead of the ring's N/2 store-and-forward steps, in exchange for ~2.3x the link
+// traffic (a distance-h contribution crosses h links). So it is a latency play -- it wins while the
+// collective is dominated by fill latency and loses once it is bandwidth-bound, by a margin that grows
+// with size.
+//
+// MEASURED 2026-07-30, blackhole 1x8 ring, bf16/bf8, trace, op-allocated buffers (which is how this
+// dispatch calls it, so the writer's start barrier is compiled in) -- direct/ring ratio by per-device
+// input size: see the threshold below. Past the crossover the ring op wins and keeps pulling away
+// (1.55x at 512K elements, 3.52x at 5M, 3.95x at 25M).
+//
+// TTNN_DISABLE_RS_DIRECT=1 forces the ring op regardless -- an escape hatch while this path is new,
+// since it routes the default ttnn.reduce_scatter onto an experimental op.
+constexpr uint64_t k_direct_rs_max_input_bytes = 0;  // PLACEHOLDER -- set from the crossover sweep
+
+bool direct_reduce_scatter_disabled() {
+    const char* env = std::getenv("TTNN_DISABLE_RS_DIRECT");
+    return env != nullptr && env[0] != '\0' && env[0] != '0';
+}
+
+bool use_direct_reduce_scatter(
+    const ttnn::Tensor& input_tensor,
+    int32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    tt::tt_fabric::Topology topology,
+    const ttnn::MemoryConfig& output_memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    if (direct_reduce_scatter_disabled()) {
+        return false;
+    }
+    if (topology != tt::tt_fabric::Topology::Ring) {
+        return false;
+    }
+    // The direct op has no tuning knobs and no compute-kernel config of its own (it derives
+    // fp32_dest_acc from the dtype). Honour an explicit request for any of them by staying on the ring
+    // op rather than silently dropping it.
+    if (chunks_per_sync.has_value() || num_workers_per_link.has_value() || num_buffers_per_channel.has_value() ||
+        compute_kernel_config.has_value()) {
+        return false;
+    }
+    // Only interleaved has been validated end-to-end; the staging aliasing and the tiled output walk
+    // both assume it.
+    if (input_tensor.memory_config().is_sharded() || output_memory_config.is_sharded()) {
+        return false;
+    }
+    if (optional_output_tensor.has_value() && optional_output_tensor->memory_config().is_sharded()) {
+        return false;
+    }
+    // Structural constraints (ring, TILE, whole-page split, 1D fabric) are the op's own to state.
+    if (!ttnn::experimental::reduce_scatter_minimal_direct_is_applicable(input_tensor, dim, cluster_axis)) {
+        return false;
+    }
+    // Size gate: physical per-device input bytes, so block-float dtypes are counted as they actually
+    // land in DRAM rather than by logical element count.
+    const auto* buffer = input_tensor.buffer();
+    return buffer != nullptr && static_cast<uint64_t>(buffer->size()) <= k_direct_rs_max_input_bytes;
+}
+
+}  // namespace
 
 ttnn::Tensor reduce_scatter(
     const ttnn::Tensor& input_tensor,
@@ -88,6 +160,34 @@ ttnn::Tensor reduce_scatter(
             resolved_compute_kernel_config,
             use_l1_small_for_semaphores);
     }
+    // Small-shape fast path: one fabric hop per contribution instead of the ring's N/2 relay steps.
+    // Gated on topology/layout/size -- see use_direct_reduce_scatter. Called through the prim so the
+    // caller's optional output tensor can be reused without also having to own the staging buffer;
+    // staging stays op-allocated, which is what compiles the writer's start barrier in.
+    if (use_direct_reduce_scatter(
+            input_tensor,
+            dim,
+            cluster_axis,
+            topology_,
+            memory_config_,
+            optional_output_tensor,
+            chunks_per_sync,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            compute_kernel_config)) {
+        return ttnn::prim::reduce_scatter_minimal_direct(
+                   input_tensor,
+                   static_cast<int32_t>(normalized_dim),
+                   memory_config_,
+                   cluster_axis,
+                   num_links_,
+                   optional_output_tensor,
+                   /*persistent_staging_tensor=*/std::nullopt,
+                   subdevice_id,
+                   /*sub_core_grid=*/std::nullopt)
+            .at(0);
+    }
+
     return ttnn::prim::reduce_scatter(
                input_tensor,
                normalized_dim,
