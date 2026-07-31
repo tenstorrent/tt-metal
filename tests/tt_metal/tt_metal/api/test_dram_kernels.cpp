@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <fmt/format.h>
+#include <algorithm>
 #include <cstdint>
+#include <string>
 #include <vector>
 #include <chrono>
 #include <tt-metalium/bfloat16.hpp>
@@ -11,10 +14,12 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/arch.hpp>
 
 #include "device_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
@@ -848,3 +853,584 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<DRISCNocModeParams>& info) {
         return info.param.drisc_noc == NOC::NOC_0 ? "Noc0StreamNoc1Noc2Axi" : "Noc1StreamNoc0Noc2Axi";
     });
+
+// ---------------------------------------------------------------------------------------------
+// DRISC scatter-read microbenchmark -- the DRISC port of the X280 test_x280_rdrbench.
+//
+// Answers the question the X280 bench answered for L2CPU harts: how fast can one DRISC pull
+// profiler-sized markers out of worker-core L1 over the NoC, and does adding a second/fourth
+// DRISC scale or crater (the X280 cratered at 3 harts on shared-L2CPU pressure -- DRISCs on
+// different banks are physically separate cores, so the mechanism behind that cliff is absent).
+//
+// Reads only; no D2H egress. The numbers are an ingest ceiling to size the drainer against.
+// ---------------------------------------------------------------------------------------------
+class DramKernelDRISCScatterFixture : public DramKernelFixture {
+protected:
+    static constexpr uint32_t kMarkerBytes = 8;  // real kernel_profiler 2-word marker
+    static constexpr const char* kBenchKernel = "tests/tt_metal/tt_metal/test_kernels/misc/drisc_rdrbench.cpp";
+
+    // Per-DRISC bytes moved per config -- sets how long each run takes. Raise it for clock calibration,
+    // where the point is to make device time dominate the fixed launch overhead in the host wall clock.
+    uint64_t target_bytes_per_drisc_ = 64ull << 20;
+
+    void SetUp() override {
+        DramKernelFixture::SetUp();
+        if (devices_.empty() || IsSkipped()) {
+            return;
+        }
+        drisc_l1_unreserved_size_ =
+            MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    }
+
+    struct BenchResult {
+        uint64_t max_cycles = 0;   // slowest participating DRISC
+        uint64_t total_bytes = 0;  // summed across DRISCs
+        uint64_t total_visits = 0;
+        uint32_t timer_overhead_cycles = 0;  // cost of one get_timestamp() on the DRISC
+        double wall_s = 0.0;
+    };
+
+    // Virtual coords of the whole worker grid, packed x | y<<16 -- the lane table the kernel walks.
+    std::vector<uint32_t> worker_coords() const {
+        std::vector<uint32_t> coords;
+        const CoreCoord grid = device_->compute_with_storage_grid_size();
+        for (uint32_t y = 0; y < grid.y; y++) {
+            for (uint32_t x = 0; x < grid.x; x++) {
+                const CoreCoord v = device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
+                coords.push_back((v.x & 0xFFFFu) | ((v.y & 0xFFFFu) << 16));
+            }
+        }
+        return coords;
+    }
+
+    // Prime the polled window on every worker so the kernel's checksum can distinguish "read
+    // 35 MB/s of real markers" from "read zeros because the NIU never left NOC2AXI".
+    void prime_worker_l1(uint32_t bytes) const {
+        std::vector<uint32_t> pattern(bytes / sizeof(uint32_t));
+        for (size_t i = 0; i < pattern.size(); i++) {
+            pattern[i] = 0xA5A50000u + static_cast<uint32_t>(i);
+        }
+        const CoreCoord grid = device_->compute_with_storage_grid_size();
+        for (uint32_t y = 0; y < grid.y; y++) {
+            for (uint32_t x = 0; x < grid.x; x++) {
+                const CoreCoord v = device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
+                MetalContext::instance().get_cluster().write_core(
+                    pattern.data(), bytes, tt_cxy_pair(mesh_device_->build_id(), v), tensix_l1_base_);
+            }
+        }
+    }
+
+    // The free (non-endpoint) subchannel of each bank -- the only DRISC safe to flip into stream
+    // mode, since the NOC1 worker endpoint is how Tensix reaches that bank's DRAM.
+    std::vector<CoreCoord> free_drisc_cores(uint32_t count) const {
+        std::vector<CoreCoord> cores;
+        for (uint32_t bank = 0; bank < count; bank++) {
+            cores.push_back(mesh_device_->impl().pick_unused_dram_logical_core(bank));
+        }
+        return cores;
+    }
+
+    // Run one config. The polled grid is partitioned across `drisc_cores` (each DRISC owns a
+    // contiguous slice), which is how a real multi-DRISC drainer would divide the grid.
+    BenchResult run_bench(
+        const std::vector<CoreCoord>& drisc_cores,
+        uint32_t markers_per_read,
+        uint32_t reads_in_flight,
+        uint32_t poll_examine = 0,
+        uint32_t ring_slots = 0) {  // 0 = one distinct slot per outstanding read
+        const std::vector<uint32_t> coords = worker_coords();
+        if (ring_slots == 0) {
+            ring_slots = reads_in_flight;
+        }
+        const uint32_t bytes_per_read = markers_per_read * kMarkerBytes;
+        const uint32_t ring_bytes = ring_slots * bytes_per_read;
+        const uint32_t results_addr = drisc_l1_base_ + ring_bytes;
+
+        TT_FATAL(
+            ring_bytes + 6 * sizeof(uint32_t) <= drisc_l1_unreserved_size_,
+            "ring ({} B) + results overflow DRISC L1 unreserved ({} B)",
+            ring_bytes,
+            drisc_l1_unreserved_size_);
+
+        Program program = CreateProgram();
+        std::vector<uint32_t> iters_per_drisc;
+        const uint32_t num_drisc = drisc_cores.size();
+        for (uint32_t d = 0; d < num_drisc; d++) {
+            const uint32_t begin = (coords.size() * d) / num_drisc;
+            const uint32_t end = (coords.size() * (d + 1)) / num_drisc;
+            const uint32_t slice = end - begin;
+            TT_FATAL(slice > 0, "DRISC {} got an empty slice of {} cores", d, coords.size());
+
+            // Scale iterations so every config runs for roughly the same wall time regardless of
+            // how many bytes a visit moves -- keeps launch overhead a fixed small fraction.
+            const uint64_t bytes_per_iter = static_cast<uint64_t>(slice) * bytes_per_read;
+            const uint32_t iters =
+                std::clamp<uint32_t>(static_cast<uint32_t>(target_bytes_per_drisc_ / bytes_per_iter), 32u, 2000000u);
+            iters_per_drisc.push_back(iters);
+
+            std::vector<uint32_t> rtas = {slice, iters, tensix_l1_base_};
+            rtas.insert(rtas.end(), coords.begin() + begin, coords.begin() + end);
+
+            auto kid = CreateKernel(
+                program,
+                kBenchKernel,
+                drisc_cores[d],
+                DramConfig{
+                    .noc = NOC::NOC_0,
+                    .compile_args = {
+                        markers_per_read, reads_in_flight, drisc_l1_base_, results_addr, poll_examine, ring_slots}});
+            SetRuntimeArgs(program, kid, drisc_cores[d], rtas);
+        }
+
+        const auto t0 = std::chrono::steady_clock::now();
+        run_workload(std::move(program));
+        const auto t1 = std::chrono::steady_clock::now();
+
+        BenchResult result;
+        result.wall_s = std::chrono::duration<double>(t1 - t0).count();
+        for (uint32_t d = 0; d < num_drisc; d++) {
+            const CoreCoord v = device_->virtual_core_from_logical_core(drisc_cores[d], CoreType::DRAM);
+            std::vector<uint32_t> out(6);
+            MetalContext::instance().get_cluster().read_core(
+                out.data(),
+                out.size() * sizeof(uint32_t),
+                tt_cxy_pair(mesh_device_->build_id(), v),
+                drisc_l1_noc_addr_ + ring_bytes);
+            const uint64_t cycles = (static_cast<uint64_t>(out[1]) << 32) | out[0];
+            EXPECT_NE(out[2], 0u) << "checksum zero on DRISC (" << drisc_cores[d].x << "," << drisc_cores[d].y
+                                  << ") -- reads never landed, bandwidth below is meaningless";
+            result.max_cycles = std::max(result.max_cycles, cycles);
+            result.total_visits += out[3];
+            result.total_bytes += static_cast<uint64_t>(out[3]) * bytes_per_read;
+            result.timer_overhead_cycles = std::max(result.timer_overhead_cycles, out[4]);
+        }
+        return result;
+    }
+
+    // Round-robin control-vector poll: how long one DRISC takes to sweep every core's 64-word
+    // (256 B) control vector -- the "is there anything to drain" scan that precedes profstream.c's
+    // adaptive bulk decision. Reports the per-core cost and the full-grid sweep period, both from
+    // the DRISC's own wall clock, plus the measured DRISC clock so those numbers stand on a
+    // device-side measurement rather than on the host's aiclk reading.
+    void log_poll_row(const std::string& label, const BenchResult& r, uint32_t num_cores) const {
+        const uint32_t aiclk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+        // Device cycles per host second: a lower bound on the DRISC clock (host wall includes launch
+        // overhead), converging upward as the run lengthens.
+        const double measured_hz = static_cast<double>(r.max_cycles) / r.wall_s;
+        const double cycles_per_visit = static_cast<double>(r.max_cycles) / static_cast<double>(r.total_visits);
+        const uint64_t sweeps = r.total_visits / num_cores;
+        const double cycles_per_sweep = static_cast<double>(r.max_cycles) / static_cast<double>(sweeps);
+        log_info(
+            LogTest,
+            "{:<34} {:>7.1f} cyc/core {:>7.2f} ns/core | sweep of {} cores: {:>9.0f} cyc {:>7.2f} us "
+            "| timer {} cyc | clk: aiclk {:.3f} GHz vs measured >={:.3f} GHz",
+            label,
+            cycles_per_visit,
+            cycles_per_visit * 1e9 / aiclk_hz,
+            num_cores,
+            cycles_per_sweep,
+            cycles_per_sweep * 1e6 / aiclk_hz,
+            r.timer_overhead_cycles,
+            aiclk_hz / 1e9,
+            measured_hz / 1e9);
+    }
+
+    void log_row(const std::string& label, const BenchResult& r, uint32_t markers_per_read) const {
+        const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+        const double secs = static_cast<double>(r.max_cycles) / clk_hz;
+        const uint64_t markers = r.total_visits * markers_per_read;
+        log_info(
+            LogTest,
+            "{:<28} {:>7.3f} GB/s (dev) {:>7.3f} GB/s (wall) {:>8.2f} ns/marker {:>8.2f} ns/visit  "
+            "[{} visits, {:.0f} MB, {} cycles]",
+            label,
+            compute_bw_gbs(r.total_bytes, r.max_cycles, clk_hz),
+            static_cast<double>(r.total_bytes) / r.wall_s / 1e9,
+            secs * 1e9 / static_cast<double>(markers),
+            secs * 1e9 / static_cast<double>(r.total_visits),
+            r.total_visits,
+            r.total_bytes / 1e6,
+            r.max_cycles);
+    }
+
+    uint32_t drisc_l1_unreserved_size_{};
+};
+
+// Round-robin poll of every core's 64-word (256 B) profiler control vector -- the scan that decides
+// whether to bulk-drain. Two variants per depth: read-only, and read + the adaptive switch's tail-delta
+// arithmetic (profstream.c: full += tails[r] - heads[c*NRISC+r] over 5 RISCs), so the difference isolates
+// what the CPU-side poll work costs on top of the NoC read.
+//
+// All timings come from the DRISC's own wall clock (RISCV_DEBUG_REG_WALL_CLOCK). The kernel also times
+// 1024 back-to-back get_timestamp() calls so the instrument's own cost is on the record: a ~40-cycle
+// per-read cost cannot be timed by bracketing with a timer that costs more, which is why the phases are
+// separated by ablation rather than by in-loop timestamps.
+TEST_F(DramKernelDRISCScatterFixture, DRISCControlVectorPollRoundRobin) {
+    constexpr uint32_t kControlVectorWords = 64;                                    // PROFILER_L1_CONTROL_VECTOR_SIZE
+    constexpr uint32_t kK = kControlVectorWords * sizeof(uint32_t) / kMarkerBytes;  // 32 -> 256 B
+    static_assert(kK * 8 == 256, "control vector read must be 256 B");
+
+    const uint32_t all = static_cast<uint32_t>(worker_coords().size());
+    prime_worker_l1(kControlVectorWords * sizeof(uint32_t));
+    const std::vector<CoreCoord> drisc = free_drisc_cores(1);
+
+    // Long run: device time dominates the fixed launch overhead, so cycles/wall_s converges on the
+    // real DRISC clock instead of under-reporting it.
+    target_bytes_per_drisc_ = 512ull << 20;
+
+    log_info(LogTest, "control-vector poll: 256 B x {} cores, 1 DRISC, B={} means issue-all", all, all);
+    for (uint32_t b : {1u, 8u, 32u, all}) {
+        for (uint32_t examine : {0u, 1u}) {
+            const BenchResult r = run_bench(drisc, kK, b, examine);
+            log_poll_row(fmt::format("B={:<4} {}", b, examine ? "read+tail-deltas" : "read only       "), r, all);
+        }
+    }
+}
+
+// DRISC -> host egress over a real D2H socket. Ingest on this core measured far above anything the
+// host path is likely to absorb, so this is the number that decides whether that headroom is usable.
+//
+// Two ordering constraints drive the shape of this test:
+//   - A DRISC cannot initiate NoC traffic in NOC2AXI mode, and the socket's config write must land in
+//     DRISC L1 before the sender kernel runs. So the NIU is flipped to stream mode by its own program
+//     first, and restored at the end.
+//   - ExternalConfigBuffer::address is uint32_t and cannot carry DRISC L1's 0x2000000000 NoC tag. In
+//     stream mode inbound traffic terminates at L1 and plain local addresses work, which is what makes
+//     the uint32_t field usable. Every host access to DRISC L1 in this test therefore uses the PLAIN
+//     address, not drisc_l1_noc_addr_.
+TEST_F(DramKernelDRISCScatterFixture, DRISCD2HSocketEgress) {
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const CoreCoord drisc_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
+    const CoreCoord drisc_translated = soc_desc.dram_bank_endpoint_coords.at(drisc_logical.x).at(drisc_logical.y);
+    const tt::umd::CoreCoord drisc_phys = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(drisc_translated.x, drisc_translated.y, CoreType::DRAM, CoordSystem::TRANSLATED),
+        CoordSystem::NOC0);
+
+    const uint32_t src_l1 = drisc_l1_base_;
+    const uint32_t cfg_l1 = drisc_l1_base_ + 48 * 1024;
+    const uint32_t res_l1 = drisc_l1_base_ + 56 * 1024;
+    TT_FATAL(
+        distributed::D2HSocket::required_config_buffer_size() <= 8 * 1024,
+        "config buffer no longer fits the 8 KB carved out for it");
+
+    auto set_niu_mode = [&](uint32_t stream) {
+        Program p = CreateProgram();
+        CreateKernel(
+            p,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_niu_mode.cpp",
+            drisc_logical,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+        run_workload(std::move(p));
+    };
+
+    set_niu_mode(1);  // stream mode, left on for the socket
+    log_info(
+        LogTest,
+        "DRISC ({},{}) logical, ({},{}) physical -- NIU in stream mode for socket config",
+        drisc_logical.x,
+        drisc_logical.y,
+        drisc_phys.x,
+        drisc_phys.y);
+
+    for (uint32_t page_size : {2048u, 8192u, 32768u}) {
+        constexpr uint32_t kNumPages = 4000;
+        const uint32_t fifo_size = 32 * page_size;
+        {
+            distributed::D2HSocket socket(
+                devices_[0],
+                distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(drisc_phys.x, drisc_phys.y)),
+                fifo_size,
+                distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = true});
+            socket.set_page_size(page_size);
+
+            std::vector<uint32_t> payload(page_size / sizeof(uint32_t), 0xD2D2D2D2u);
+            const CoreCoord drisc_virtual = device_->virtual_core_from_logical_core(drisc_logical, CoreType::DRAM);
+            MetalContext::instance().get_cluster().write_core(
+                payload.data(), page_size, tt_cxy_pair(mesh_device_->build_id(), drisc_virtual), src_l1);
+
+            Program program = CreateProgram();
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/socket/drisc_d2h_egress.cpp",
+                drisc_logical,
+                DramConfig{
+                    .noc = NOC::NOC_0,
+                    .compile_args = {socket.get_config_buffer_address(), src_l1, page_size, res_l1, kNumPages}});
+
+            distributed::MeshWorkload workload;
+            workload.add_program(device_range_, std::move(program));
+            distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+
+            std::vector<uint32_t> sink(page_size / sizeof(uint32_t));
+            const auto t0 = std::chrono::steady_clock::now();
+            for (uint32_t i = 0; i < kNumPages; i++) {
+                socket.read(sink.data(), 1);
+            }
+            socket.barrier();
+            const auto t1 = std::chrono::steady_clock::now();
+            distributed::Finish(mesh_device_->mesh_command_queue());
+
+            std::vector<uint32_t> out(5);
+            MetalContext::instance().get_cluster().read_core(
+                out.data(),
+                out.size() * sizeof(uint32_t),
+                tt_cxy_pair(mesh_device_->build_id(), drisc_virtual),
+                res_l1);
+            const uint64_t cycles = (static_cast<uint64_t>(out[1]) << 32) | out[0];
+            const uint64_t wait_cycles = (static_cast<uint64_t>(out[3]) << 32) | out[2];
+            const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+            const uint64_t total_bytes = static_cast<uint64_t>(kNumPages) * page_size;
+            const double host_s = std::chrono::duration<double>(t1 - t0).count();
+
+            log_info(
+                LogTest,
+                "page {:>6} B x {} | device {:>6.3f} GB/s ({:>7.1f} ns/page, {:>5.1f}% spent waiting on host) | "
+                "host-observed {:>6.3f} GB/s",
+                page_size,
+                kNumPages,
+                compute_bw_gbs(total_bytes, cycles, clk_hz),
+                static_cast<double>(cycles) * 1e9 / clk_hz / kNumPages,
+                100.0 * static_cast<double>(wait_cycles) / static_cast<double>(cycles),
+                static_cast<double>(total_bytes) / host_s / 1e9);
+        }
+    }
+
+    set_niu_mode(0);  // restore NOC2AXI -- NIU_CFG_0 persists across programs
+}
+
+// Whole-core (10 KB) reads with reads-in-flight pushed past what DRISC L1 can hold, by letting
+// outstanding reads share landing slots. NOC_MAX_TRANSACTION_ID_COUNT is 255 per trid, so the NIU can
+// track far more than the 8 distinct 10 KB buffers that fit in 86 KB -- this separates the hardware
+// depth limit from the buffer limit.
+//
+// Slot-sharing corrupts the landed data and is therefore NOT a usable drainer configuration. It is a
+// transport measurement only: it says whether a bigger buffer (or smaller reads) would buy anything.
+TEST_F(DramKernelDRISCScatterFixture, DRISCWholeCoreDepthBeyondBuffer) {
+    constexpr uint32_t kK = 1280;  // 10 KB, a whole core
+    const uint32_t all = static_cast<uint32_t>(worker_coords().size());
+    const uint32_t max_slots = drisc_l1_unreserved_size_ / (kK * kMarkerBytes);
+
+    prime_worker_l1(kK * kMarkerBytes);
+    const std::vector<CoreCoord> drisc = free_drisc_cores(1);
+    log_info(
+        LogTest,
+        "whole-core 10 KB reads, {} cores, {} distinct slots fit in {} KB of DRISC L1",
+        all,
+        max_slots,
+        drisc_l1_unreserved_size_ / 1024);
+
+    for (uint32_t b : {1u, 4u, 8u, 16u, 32u, 64u, all}) {
+        const uint32_t slots = std::min(b, max_slots);
+        const BenchResult r = run_bench(drisc, kK, b, /*poll_examine=*/0, slots);
+        const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+        const double cyc_per_core = static_cast<double>(r.max_cycles) / static_cast<double>(r.total_visits);
+        log_info(
+            LogTest,
+            "B={:<4} ({:>2} slots{}) {:>7.1f} cyc/core {:>7.2f} ns/core | sweep of {} cores {:>7.2f} us | {:>6.2f} "
+            "GB/s",
+            b,
+            slots,
+            slots < b ? ", SHARED" : "        ",
+            cyc_per_core,
+            cyc_per_core * 1e9 / clk_hz,
+            all,
+            cyc_per_core * all * 1e6 / clk_hz,
+            compute_bw_gbs(r.total_bytes, r.max_cycles, clk_hz));
+    }
+}
+
+// The 8 us kernel-train question, measured on the DRISC: a full adaptive sweep (poll every core,
+// run profstream.c's threshold decision, whole-core bulk read for each core that trips it) against
+// the 8 us budget the X280 sustained.
+//
+// The host sets each core's control-vector tails so a chosen number of cores trip ADAPT_THRESH.
+// That is the knob that matters: at steady state only a small fraction of cores have accumulated
+// 4 rings' worth between sweeps, and the sweep cost is dominated by polling the rest.
+TEST_F(DramKernelDRISCScatterFixture, DRISCAdaptiveDrainSteadyState) {
+    constexpr uint32_t kRingCapWords = 512;  // PROFILER_L1_VECTOR_SIZE
+    constexpr uint32_t kNumRisc = 5;
+    constexpr uint32_t kCvWords = 64;                              // PROFILER_L1_CONTROL_VECTOR_SIZE
+    constexpr uint32_t kPollBytes = kCvWords * sizeof(uint32_t);   // 256
+    constexpr uint32_t kBulkBytes = kNumRisc * kRingCapWords * 4;  // 10240, whole core
+    constexpr uint32_t kThresholdWords = 4 * kRingCapWords;        // ADAPT_THRESH
+    constexpr uint32_t kBulkDepth = 4;
+    constexpr uint32_t kIters = 2000;
+    constexpr double kTrainBudgetUs = 8.0;
+    constexpr const char* kDrainKernel = "tests/tt_metal/tt_metal/test_kernels/misc/drisc_adaptive_drain.cpp";
+
+    const std::vector<uint32_t> coords = worker_coords();
+    const uint32_t num_cores = static_cast<uint32_t>(coords.size());
+    const uint32_t poll_ring = drisc_l1_base_;
+    const uint32_t bulk_ring = poll_ring + num_cores * kPollBytes;
+    const uint32_t results_addr = bulk_ring + kBulkDepth * kBulkBytes;
+    TT_FATAL(
+        (results_addr - drisc_l1_base_) + 7 * sizeof(uint32_t) <= drisc_l1_unreserved_size_,
+        "poll ring {} B + bulk ring {} B exceeds DRISC L1 unreserved {} B",
+        num_cores * kPollBytes,
+        kBulkDepth * kBulkBytes,
+        drisc_l1_unreserved_size_);
+
+    // Ring payload is identical on every core and never changes; only the control vector is rewritten
+    // per configuration, so prime the 10 KB once.
+    prime_worker_l1(kPollBytes + kBulkBytes);
+
+    const std::vector<CoreCoord> drisc = free_drisc_cores(1);
+    const uint32_t aiclk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    log_info(
+        LogTest,
+        "adaptive drain: {} cores, poll {} B, bulk {} B, ADAPT_THRESH {} words, bulk depth {}, budget {} us",
+        num_cores,
+        kPollBytes,
+        kBulkBytes,
+        kThresholdWords,
+        kBulkDepth,
+        kTrainBudgetUs);
+
+    for (uint32_t hot : {0u, 1u, num_cores / 10, num_cores / 2, num_cores}) {
+        // Tails high enough that 5 lanes sum past the threshold, or low enough that they never do.
+        std::vector<uint32_t> cv(kCvWords, 0);
+        for (uint32_t c = 0; c < num_cores; c++) {
+            const uint32_t tail = (c < hot) ? (kThresholdWords / kNumRisc + 1) : 1u;
+            for (uint32_t r = 0; r < kNumRisc; r++) {
+                cv[5 + r] = tail;
+            }
+            cv[0] = 0xA5A50000u + c;  // nonzero, so the kernel's checksum guard still means something
+            const CoreCoord v = device_->virtual_core_from_logical_core(
+                {c % device_->compute_with_storage_grid_size().x, c / device_->compute_with_storage_grid_size().x},
+                CoreType::WORKER);
+            MetalContext::instance().get_cluster().write_core(
+                cv.data(), cv.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), v), tensix_l1_base_);
+        }
+
+        Program program = CreateProgram();
+        auto kid = CreateKernel(
+            program,
+            kDrainKernel,
+            drisc[0],
+            DramConfig{
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    kPollBytes, kBulkBytes, kThresholdWords, poll_ring, bulk_ring, kBulkDepth, results_addr}});
+        std::vector<uint32_t> rtas = {num_cores, kIters, tensix_l1_base_, tensix_l1_base_ + kPollBytes};
+        rtas.insert(rtas.end(), coords.begin(), coords.end());
+        SetRuntimeArgs(program, kid, drisc[0], rtas);
+        run_workload(std::move(program));
+
+        const CoreCoord v = device_->virtual_core_from_logical_core(drisc[0], CoreType::DRAM);
+        std::vector<uint32_t> out(7);
+        MetalContext::instance().get_cluster().read_core(
+            out.data(),
+            out.size() * sizeof(uint32_t),
+            tt_cxy_pair(mesh_device_->build_id(), v),
+            drisc_l1_noc_addr_ + (results_addr - drisc_l1_base_));
+        EXPECT_NE(out[2], 0u) << "checksum zero -- poll reads never landed";
+
+        const uint64_t cycles = (static_cast<uint64_t>(out[1]) << 32) | out[0];
+        const double cyc_per_sweep = static_cast<double>(cycles) / kIters;
+        const double us_per_sweep = cyc_per_sweep * 1e6 / aiclk_hz;
+        const double bulks_per_sweep = static_cast<double>(out[5]) / kIters;
+        const double drained_bytes = bulks_per_sweep * kBulkBytes;
+        log_info(
+            LogTest,
+            "{:>4}/{} cores hot | {:>9.0f} cyc {:>7.2f} us/sweep | {:>6.1f} bulk reads/sweep, {:>7.1f} KB drained "
+            "| {:>5.2f}x the {} us budget | drained {:.1f} GB/s",
+            hot,
+            num_cores,
+            cyc_per_sweep,
+            us_per_sweep,
+            bulks_per_sweep,
+            drained_bytes / 1024.0,
+            us_per_sweep / kTrainBudgetUs,
+            kTrainBudgetUs,
+            drained_bytes / (us_per_sweep * 1e-6) / 1e9);
+    }
+}
+
+// Sweep burst size x reads-in-flight on a single DRISC over the full worker grid.
+// The first pass showed per-visit cost depends on B only, not K (issue-bound, not bandwidth-bound),
+// so this sweep pushes both axes far enough to find where that breaks: K until wire time overtakes
+// the ~29 ns/read issue cost, B until the ~231 ns round-trip is fully hidden.
+// Bursts are not the limit here -- NOC_MAX_BURST_SIZE is 16 KB (256 words x 64 B) -- the B*K landing
+// ring against DRISC L1 UNRESERVED is, so over-budget combinations are skipped and reported.
+TEST_F(DramKernelDRISCScatterFixture, DRISCScatterReadBurstAndDepthSweep) {
+    // B == num_cores means "issue a read to every core, then one single wait" -- the maximum-outstanding
+    // point, where the round-trip is hidden as far as it can be and only issue cost remains.
+    const uint32_t all = static_cast<uint32_t>(worker_coords().size());
+
+    // Reference points from the real profiler geometry (profiler_common.h / dev_msgs.h):
+    //   K=256  = one full (core, RISC) ring          (PROFILER_L1_VECTOR_SIZE 512 words, 2 words/marker)
+    //   K=1280 = a whole core, all 5 RISC rings      (~10 KB, still under NOC_MAX_BURST_SIZE of 16 KB)
+    // Anything above K=256 is not reachable per-lane; it is included to locate the wire-time wall.
+    // B*K*kMarkerBytes is the landing ring, so large K forces small B -- over-budget combos are skipped.
+    const std::vector<std::pair<uint32_t, uint32_t>> configs = {
+        {1, 1},   {1, 8},   {1, 32},  {1, all},                         // pure per-visit cost vs depth
+        {32, 1},  {32, 8},  {32, 16}, {32, 32},  {32, 64},  {32, all},  // the K=32 row, full depth sweep
+        {64, 8},  {64, 16}, {64, 64}, {64, all}, {128, 8},  {128, 16}, {128, 32},
+        {256, 1}, {256, 4}, {256, 8}, {256, 16},                                   // one full RISC ring
+        {512, 1}, {512, 4}, {512, 8}, {1280, 1}, {1280, 2}, {1280, 4}, {1280, 8},  // one whole core per read
+    };
+
+    uint32_t max_k = 0;
+    for (const auto& [k, b] : configs) {
+        max_k = std::max(max_k, k);
+    }
+    prime_worker_l1(max_k * kMarkerBytes);
+
+    const std::vector<CoreCoord> drisc = free_drisc_cores(1);
+    log_info(
+        LogTest,
+        "1 DRISC (bank 0 free subchannel), {} worker cores polled, DRISC L1 unreserved {} KB, B={} means issue-all",
+        all,
+        drisc_l1_unreserved_size_ / 1024,
+        all);
+
+    for (const auto& [k, b] : configs) {
+        const uint32_t ring_bytes = b * k * kMarkerBytes;
+        if (ring_bytes + 4 * sizeof(uint32_t) > drisc_l1_unreserved_size_) {
+            log_info(
+                LogTest,
+                "K={:<5} B={:<4} SKIPPED: {} KB ring exceeds {} KB DRISC L1",
+                k,
+                b,
+                ring_bytes / 1024,
+                drisc_l1_unreserved_size_ / 1024);
+            continue;
+        }
+        const BenchResult r = run_bench(drisc, k, b);
+        log_row(fmt::format("K={:<5}({:>5}B)  B={:<4}", k, k * kMarkerBytes, b), r, k);
+    }
+}
+
+// Poll-floor sweep: hold the burst config and shrink the polled grid. At K=1 the per-visit cost
+// dominates, which is the metric to compare against the X280's ~58 ns/core floor.
+TEST_F(DramKernelDRISCScatterFixture, DRISCScatterReadPollFloor) {
+    constexpr uint32_t kReadsInFlight = 8;
+    prime_worker_l1(32 * kMarkerBytes);  // cover the largest K exercised below
+    const std::vector<CoreCoord> drisc = free_drisc_cores(1);
+
+    for (uint32_t k : {1u, 32u}) {
+        const BenchResult r = run_bench(drisc, k, kReadsInFlight);
+        log_row(fmt::format("full grid  K={:<3} B={}", k, kReadsInFlight), r, k);
+    }
+}
+
+// Multi-DRISC scaling: the X280's hard ceiling was 2 harts (3 cratered to 0.29 GB/s on shared
+// L2CPU pressure). Each DRISC here is a separate core on a separate bank with its own NIU pair,
+// so this is the test of whether that cliff reappears.
+TEST_F(DramKernelDRISCScatterFixture, DRISCScatterReadMultiCoreScaling) {
+    constexpr uint32_t kMarkersPerRead = 32;
+    constexpr uint32_t kReadsInFlight = 8;
+
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const uint32_t num_banks = soc_desc.get_num_dram_views();
+    prime_worker_l1(kMarkersPerRead * kMarkerBytes);
+
+    for (uint32_t n : {1u, 2u, 4u}) {
+        if (n > num_banks) {
+            log_info(LogTest, "skipping {} DRISCs: only {} banks", n, num_banks);
+            continue;
+        }
+        const BenchResult r = run_bench(free_drisc_cores(n), kMarkersPerRead, kReadsInFlight);
+        log_row(fmt::format("{} DRISC(s)  grid partitioned", n), r, kMarkersPerRead);
+    }
+}
