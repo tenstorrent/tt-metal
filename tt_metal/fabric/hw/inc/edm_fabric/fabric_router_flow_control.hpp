@@ -43,22 +43,6 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
     std::array<uint32_t, NUM_SENDER_CHANNELS> completion_counters;
     std::array<uint32_t, NUM_SENDER_CHANNELS> ack_counters;
 
-    // [CREDIT RESYNC] Re-issue the credit DMA without recording a new completion.
-    //
-    // update_sender_side_credits() is fire-and-forget and ships the WHOLE credit block, whose entries are
-    // absolute running totals -- so a single re-push repairs any number of updates lost while the link was
-    // down, with no retransmit bookkeeping, and is a no-op if nothing was lost. It normally only fires when
-    // a new completion occurs, which is why a drop in the retrain window is never repaired: at the tail
-    // there are no further completions to trigger it. The receiver's total is the exact upper bound on what
-    // the sender should hold, so an absolute overwrite cannot over-credit.
-    //
-    // Spins for TXQ availability first: the existing call sites are documented as assuming !eth_txq_is_busy.
-    FORCE_INLINE void resync_credits() const {
-        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
-        }
-        update_sender_side_credits();
-    }
-
 private:
     FORCE_INLINE void update_sender_side_credits() const {
         internal_::eth_send_packet_bytes_unsafe(
@@ -86,11 +70,6 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
         remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_ack_stream_ids[src_id], 1);
     }
 
-    // [CREDIT RESYNC] No-op for the stream-register variant: its credits are remote INCREMENTS to a
-    // stream register with no absolute state to re-push, so there is nothing to resynchronise. Present
-    // only so callers compile under either credit-sender configuration.
-    FORCE_INLINE void resync_credits() const {}
-
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_completed_stream_ids;
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_ack_stream_ids;
 };
@@ -99,6 +78,30 @@ using ReceiverChannelResponseCreditSender = typename std::conditional_t<
     multi_txq_enabled,
     ReceiverChannelCounterBasedResponseCreditSender,
     ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender>;
+
+// [CREDIT RESYNC] Re-push the absolute receiver->sender credit block without recording a new completion.
+//
+// A free function rather than a member: this is issued by ERISC0 from inside the coordinated context
+// switch, where the credit-sender object is not in scope. It needs only the CT address constants, and the
+// block itself lives in L1 shared by both ERISCs on the core.
+//
+// Only meaningful for the counter-based sender, whose block holds absolute running totals -- one push
+// therefore repairs an arbitrary number of lost updates and is a no-op if nothing was lost. The
+// stream-register variant sends remote INCREMENTS with no absolute state, so there is nothing to
+// resynchronise and this compiles away.
+//
+// Spins for TXQ availability first, matching the documented assumption of the normal credit call sites.
+FORCE_INLINE void resync_receiver_to_sender_credits() {
+    if constexpr (multi_txq_enabled) {
+        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+        }
+        internal_::eth_send_packet_bytes_unsafe(
+            receiver_txq_id,
+            local_receiver_credits_base_address,
+            to_senders_credits_base_address,
+            total_number_of_receiver_to_sender_credit_num_bytes);
+    }
+}
 
 template <typename T = void>
 struct init_receiver_channel_response_credit_senders_impl;

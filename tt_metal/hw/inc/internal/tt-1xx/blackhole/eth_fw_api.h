@@ -444,31 +444,6 @@ inline void fabric_reset_retrain_count() {
 #endif
 }
 
-// [CREDIT RESYNC] Retrain edge detector for the RECEIVER (ERISC1).
-//
-// ERISC0's recover_eth_link_if_down() bumps the retrain counter at MEM_AERISC_RETRAIN_COUNT_BASE after it
-// has restored the eth-queue config. ERISC1 shares the core's L1, so it can watch that same word and learn
-// that a retrain just completed -- no new signalling path needed. Returns true exactly once per retrain.
-//
-// The L1 read is amortized 1:1024 to keep it off the hot receiver path; a retrain takes ~26s, so detecting
-// the edge up to 1023 iterations late is irrelevant. The counter is monotonic, so amortizing can delay the
-// edge but never lose it.
-inline bool fabric_retrain_edge_for_receiver() {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
-    static uint32_t last_retrain_count = 0;
-    static uint32_t poll_counter = 0;
-    if ((++poll_counter & 0x3FF) != 0) {
-        return false;
-    }
-    const uint32_t now = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RETRAIN_COUNT_BASE);
-    if (now != last_retrain_count) {
-        last_retrain_count = now;
-        return true;
-    }
-#endif
-    return false;
-}
-
 // Number of post-retrain main-loop iterations to allow before the freeze gate stops the loop.
 // was_retrained is 1 on the retrain edge and ++ each iteration bottom, so it takes values 1..N across
 // the N allowed iterations; the gate freezes once it exceeds N (i.e. at N+1).
@@ -569,6 +544,48 @@ inline void fabric_dbg_set_recv_pipeline(
     // Liveness: advances every receiver step regardless of traffic.
     volatile uint32_t* hb = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_HEARTBEAT_ADDR);
     *hb = *hb + 1;
+#endif
+}
+
+// [RESTORE-WINDOW PROBE] Did the hardware transmit anything between the link coming back up and the
+// eth-queue config being restored?
+//
+// Theory under test: after a retrain the link is live but the config is still the post-retrain (wrong)
+// state -- notably MAC_DA_LO == 0, which addresses TXQ1 traffic to RXQ0 instead of RXQ1. Anything the
+// hardware drains from an already-queued TXQ in that window is therefore misrouted and lost. TXQ1 is
+// the credit path, TXQ0 is data and its MAC is *supposed* to be 0, which would explain why credits go
+// missing across a retrain while bulk data does not.
+//
+// The SOFTWARE TX counter cannot see this: fabric_dbg_inc_tx_pkt_count() fires when ERISC0 issues a
+// send, and ERISC0 is parked inside the coordinated context switch for the whole window. We therefore
+// sample the HARDWARE frame counter, boot_results.eth_live_status.frames_txd.
+//
+// Address: boot_results base 0x7CC00 + eth_status(128) + serdes_results(256) + macpcs_results(128)
+// = 0x7CE00, which is exactly MEM_RETRAIN_COUNT_ADDR (eth_live_status_t.retrain_count, the first
+// field) -- that cross-check pins the base. frames_txd is then +32 bytes past retrain_count,
+// rx_link_up, link_flap_count, link_poll_alive_count and spare[4]. Low 32 bits are enough: we only
+// ever take a difference across a sub-second window.
+constexpr uint32_t MEM_SYSENG_ETH_FRAMES_TXD_LO = 0x7CE20;
+constexpr uint32_t MEM_AERISC_HWTX_AT_LINKUP_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 28;      // word[7]
+constexpr uint32_t MEM_AERISC_HWTX_AFTER_RESTORE_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 60;  // word[15]
+
+inline uint32_t fabric_dbg_read_hw_frames_txd() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_SYSENG_ETH_FRAMES_TXD_LO);
+#else
+    return 0;
+#endif
+}
+
+inline void fabric_dbg_mark_hwtx_at_linkup() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_HWTX_AT_LINKUP_ADDR) = fabric_dbg_read_hw_frames_txd();
+#endif
+}
+
+inline void fabric_dbg_mark_hwtx_after_restore() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_HWTX_AFTER_RESTORE_ADDR) = fabric_dbg_read_hw_frames_txd();
 #endif
 }
 
@@ -860,6 +877,9 @@ static void recover_eth_link_if_down() {
     // "replicating context switch" restore, now WITH the ACCEPT_AHEAD write included.
     if (eth_link_was_down && pcs_link_up()) {
         eth_link_was_down = false;
+        // [RESTORE-WINDOW PROBE] Window OPENS here: link is up, config is still the post-retrain state.
+        // Sampled before the 1s settle, so the probe spans the entire un-restored interval.
+        fabric_dbg_mark_hwtx_at_linkup();
         // [PROBE 5 - RETRAIN] Config the instant the link is back up (retrain succeeded), BEFORE the restore
         // sequence below. Diffing this against PROBE 4 (DROP) shows exactly what the retrain corrupted.
         // [TXRX MODE] probe disabled.
@@ -890,6 +910,10 @@ static void recover_eth_link_if_down() {
         // is hardcoded to 1 above).
         eth_txq_reg_write(0, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, 32);
         eth_txq_reg_write(1, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, 32);
+        // [RESTORE-WINDOW PROBE] Window CLOSES here: config is fully restored. A non-zero delta against
+        // the link-up sample means the hardware drained frames while MAC_DA_LO was still 0, i.e. TXQ1
+        // traffic was addressed to the wrong receive queue.
+        fabric_dbg_mark_hwtx_after_restore();
         // [PROBE 7 - PKTMODE] Config after eth_enable_packet_mode() + ACCEPT_AHEAD restore -- should now match
         // the INIT baseline (PROBE 2) on ALL registers incl. ACCEPT_AHEAD (32/32) if the restore is complete.
         // [TXRX MODE] probe disabled.

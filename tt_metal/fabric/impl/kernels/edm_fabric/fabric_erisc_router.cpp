@@ -1502,19 +1502,39 @@ void run_routing_without_noc_sync_coordinated_as_master(
         // router stateless and is naturally re-entry safe: the handshake's own internal context switches
         // see the (now-up) link produce no new increment, so they can't recursively trigger another
         // handshake.
-        // [HANDSHAKE DISABLED] Post-retrain handshake off (it regresses recovery -> more dead/frozen links,
-        // crowding out the credit-desync tail-stalls we want to capture). Config restore via
-        // run_routing_without_noc_sync() still runs; only the handshake is skipped. Restore the retrain-count
-        // bracket + run_post_retrain_handshake() call to re-enable. INIT handshake CT arg untouched.
+        // [HANDSHAKE DISABLED] Post-retrain handshake off (it regresses recovery -> more dead/frozen links).
+        // Config restore via run_routing_without_noc_sync() still runs; only the handshake is skipped.
+        // Restore run_post_retrain_handshake() below to re-enable. INIT handshake CT arg untouched.
+        const uint32_t retrain_count_before = fabric_get_retrain_count();
         run_routing_without_noc_sync();
-        // const uint32_t retrain_count_before = fabric_get_retrain_count();
-        // run_routing_without_noc_sync();
-        // const uint32_t retrain_count_after = fabric_get_retrain_count();
-        // if (retrain_count_after != retrain_count_before) {
-        //     const auto* routing_table_l1 =
-        //         reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
-        //     run_post_retrain_handshake(routing_table_l1, termination_signal_ptr);
-        // }
+        const uint32_t retrain_count_after = fabric_get_retrain_count();
+        if (retrain_count_after != retrain_count_before) {
+            // [CREDIT RESYNC] A retrain drops the receiver->sender credit block that was in flight, and
+            // nothing re-issues it: the push only fires when a new completion occurs, and at the tail there
+            // are none left. The sender is then permanently short of the credits it needs to retire its
+            // final window, which is what hangs the run.
+            //
+            // OWNERSHIP NOTE: the flow-control completion credits are MANAGED BY ERISC1 -- it owns the
+            // receiver channels and is the only writer of the local credit block. ERISC0 triggering the
+            // re-push would normally be a data race. It is safe here specifically because we are inside the
+            // coordinated context switch: start_as_master() has already forced ERISC1 idle (it acks
+            // RETRAIN_INTENT and spins until RETRAIN_COMPLETE without executing any routing logic), so for
+            // the duration of this block there is NO POSSIBILITY that the completion credits change. ERISC0
+            // is therefore reading a stable, quiescent snapshot, and TXQ1 -- normally ERISC1's -- is idle.
+            // Do not move this call outside the start/finish bracket; outside it, only ERISC1 may push.
+            //
+            // Issued HERE, rather than from ERISC1's main loop, because:
+            //   - the block is quiescent and TXQ1 is idle -- no torn DMA, no contention.
+            //   - this runs BEFORE we return to the main loop, so credits are repaired before ERISC0
+            //     resumes transmitting rather than up to 1024 receiver iterations later.
+            //   - exactly once per retrain, with no cross-ERISC signalling needed.
+            // The block holds absolute running totals, so one push repairs any number of lost updates and
+            // is a no-op if nothing was lost.
+            resync_receiver_to_sender_credits();
+            // run_post_retrain_handshake(
+            //     reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE),
+            //     termination_signal_ptr);
+        }
         coordinated_context_switch_finish_as_master(termination_signal_ptr);
     }
 }

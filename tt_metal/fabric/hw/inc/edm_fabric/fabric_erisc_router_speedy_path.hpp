@@ -296,12 +296,6 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         receiver_channel_pointers.ack_counter.counter,
         (receiver_state.unacked_sends & 0xFFFF) | (receiver_state.has_pending_flush ? (1u << 16) : 0u) |
             (static_cast<uint32_t>(receiver_state.pending_flush_trid) << 17));
-    // [CREDIT RESYNC] A retrain can drop the fire-and-forget credit DMA, stranding the sender's final
-    // window of completions with nothing left to re-trigger the push. Re-issue it once per retrain; the
-    // values are absolute so this repairs an arbitrary number of lost updates and is otherwise a no-op.
-    if (fabric_retrain_edge_for_receiver()) {
-        receiver_channel_response_credit_sender.resync_credits();
-    }
 #endif
 
     if (unwritten_packets) {
