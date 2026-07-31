@@ -9,6 +9,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::moreh::moreh_matmul {
 
@@ -153,7 +154,7 @@ MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_s
     output_shape_wo_padding[output_rank - 1] = w_wo_padding;
     return tt::tt_metal::TensorSpec(
         output_shape_wo_padding,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::tensor_layout_from_padded_shape(
             tensor_args.input.dtype(),
             PageConfig(Layout::TILE),
             operation_attributes.output_memory_config,

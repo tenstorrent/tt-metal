@@ -9,6 +9,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim {
 
@@ -167,7 +168,7 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
                                         // padded_shape due to having a different shard_spec.
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::tensor_layout_from_padded_shape(
             operation_attributes.output_dtype,
             tt::tt_metal::PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,

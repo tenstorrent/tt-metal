@@ -8,6 +8,7 @@
 #include "ttnn/operations/experimental/quasar/halo/device/halo_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include <array>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim::qsr {
 
@@ -91,7 +92,7 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
     padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tensor_layout_from_padded_shape(
             output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, output_shape, padded_output_shape));
 }
 

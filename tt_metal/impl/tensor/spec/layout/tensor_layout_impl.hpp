@@ -13,8 +13,7 @@ namespace tt::tt_metal {
 
 class TensorLayoutImpl {
 public:
-    TensorLayoutImpl(
-        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
+    TensorLayoutImpl(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
 
     TensorLayoutImpl(const TensorLayoutImpl&) = default;
     TensorLayoutImpl(TensorLayoutImpl&&) noexcept = default;
@@ -33,6 +32,10 @@ public:
     const Alignment& get_alignment() const { return alignment_; }
 
     void set_memory_config(MemoryConfig memory_config) { memory_config_ = std::move(memory_config); }
+
+    // Replaces the derived Alignment with **alignment** merged into it, and re-validates.
+    // Only for experimental/tensor_layout_apis_with_custom_alignment.hpp; see the reasoning there.
+    void set_custom_alignment(const Alignment& alignment);
 
     Strides compute_strides(const tt::tt_metal::Shape& shape) const;
 

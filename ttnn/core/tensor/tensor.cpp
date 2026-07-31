@@ -40,6 +40,7 @@
 #include <memory>
 #include <utility>
 #include <atomic>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn {
 
@@ -80,7 +81,7 @@ Tensor::Tensor(
         std::move(buffer),
         TensorSpec(
             logical_shape,
-            tt::tt_metal::TensorLayout::fromPaddedShape(
+            tt::tt_metal::tensor_layout_from_padded_shape(
                 dtype,
                 tt::tt_metal::PageConfig(layout, tile),
                 tt::tt_metal::MemoryConfig{},

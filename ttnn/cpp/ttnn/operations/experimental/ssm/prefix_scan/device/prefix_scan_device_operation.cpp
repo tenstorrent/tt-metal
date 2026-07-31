@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -53,7 +54,7 @@ tt::tt_metal::TensorSpec PrefixScanDeviceOperation::compute_output_specs(
     const auto& a = tensor_args.a;
     return tt::tt_metal::TensorSpec(
         a.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tensor_layout_from_padded_shape(
             args.dtype, PageConfig(Layout::TILE), args.memory_config, a.logical_shape(), a.padded_shape()));
 }
 
