@@ -8,6 +8,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tracy/Tracy.hpp>
 
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
@@ -894,10 +895,14 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 uint32_t mux_core_offset = (link * num_cores_per_link) +
                                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-                std::vector<std::vector<RuntimeArgsData>> reader_runtime_args =
-                    GetRuntimeArgs(program, reader_kernel_id);
-                std::vector<std::vector<RuntimeArgsData>> writer_runtime_args =
-                    GetRuntimeArgs(program, writer_kernel_id);
+                std::vector<std::vector<RuntimeArgsData>> reader_runtime_args = [&] {
+                    ZoneScopedN("TTNN RS copy reader runtime args");
+                    return GetRuntimeArgs(program, reader_kernel_id);
+                }();
+                std::vector<std::vector<RuntimeArgsData>> writer_runtime_args = [&] {
+                    ZoneScopedN("TTNN RS copy writer runtime args");
+                    return GetRuntimeArgs(program, writer_kernel_id);
+                }();
 
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
@@ -1545,10 +1550,14 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 uint32_t mux_core_offset = (link * num_cores_per_link) +
                                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-                std::vector<std::vector<RuntimeArgsData>> reader_runtime_args =
-                    GetRuntimeArgs(program, reader_kernel_id);
-                std::vector<std::vector<RuntimeArgsData>> writer_runtime_args =
-                    GetRuntimeArgs(program, writer_kernel_id);
+                std::vector<std::vector<RuntimeArgsData>> reader_runtime_args = [&] {
+                    ZoneScopedN("TTNN RS copy reader runtime args");
+                    return GetRuntimeArgs(program, reader_kernel_id);
+                }();
+                std::vector<std::vector<RuntimeArgsData>> writer_runtime_args = [&] {
+                    ZoneScopedN("TTNN RS copy writer runtime args");
+                    return GetRuntimeArgs(program, writer_kernel_id);
+                }();
 
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];

@@ -26,6 +26,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tracy/Tracy.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
@@ -2601,16 +2602,22 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     const RingJointSDPAParams& args,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors) {
-    descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
+    {
+        ZoneScopedN("TTNN RingJoint apply descriptor");
+        descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
+    }
 
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
-        TT_FATAL(
-            coord == coordinate_range.end_coord(),
-            "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
-            coord,
-            coordinate_range.end_coord());
-        apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
+    {
+        ZoneScopedN("TTNN RingJoint apply scalar runtime args");
+        for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+            const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
+            TT_FATAL(
+                coord == coordinate_range.end_coord(),
+                "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
+                coord,
+                coordinate_range.end_coord());
+            apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
+        }
     }
 }
 

@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tracy/Tracy.hpp>
 
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
@@ -550,7 +551,10 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     // Default adapter behaviour: patch operand buffer-binding addresses on cache hits.
-    descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output);
+    {
+        ZoneScopedN("TTNN Rotary indexed apply descriptor");
+        descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output);
+    }
     // Reader common runtime arg 2 holds the per-call value the buffer-binding fast path would otherwise
     // leave stale: the metadata tensor's raw DRAM address (metadata path) or kv_actual_global (scalar
     // path). Patch it on every cached program (one per mesh coordinate).
@@ -559,12 +563,15 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
     const uint32_t per_call_arg = tensor_args.metadata.has_value()
                                       ? static_cast<uint32_t>(tensor_args.metadata->buffer()->address())
                                       : args.kv_actual_global;
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& reader_common = GetCommonRuntimeArgs(program, kReaderKernelHandle);
-        TT_FATAL(
-            kPerCallCommonArgIdx < reader_common.size(),
-            "rotary_embedding_indexed reader is missing its per-call common runtime arg");
-        reader_common[kPerCallCommonArgIdx] = per_call_arg;
+    {
+        ZoneScopedN("TTNN Rotary indexed patch scalar runtime args");
+        for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+            auto& reader_common = GetCommonRuntimeArgs(program, kReaderKernelHandle);
+            TT_FATAL(
+                kPerCallCommonArgIdx < reader_common.size(),
+                "rotary_embedding_indexed reader is missing its per-call common runtime arg");
+            reader_common[kPerCallCommonArgIdx] = per_call_arg;
+        }
     }
 }
 

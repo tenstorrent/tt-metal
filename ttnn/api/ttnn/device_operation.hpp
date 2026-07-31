@@ -285,9 +285,11 @@ void handle_mesh_adapter_cache_hit(
         {
             ZoneScopedN("TTNN Op update cached workload");
             if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
+                ZoneScopedN("TTNN Op apply cached descriptor");
                 WorkloadFactory::apply_descriptor(
                     cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
             } else {
+                ZoneScopedN("TTNN Op override runtime arguments");
                 WorkloadFactory::override_runtime_arguments(
                     cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
             }

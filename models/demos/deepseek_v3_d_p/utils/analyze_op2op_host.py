@@ -43,6 +43,26 @@ HOST_STAGES = (
     "TTNN Op profile mesh workload",
 )
 
+DETAIL_ZONES = (
+    # Nested inside "TTNN Op update cached workload"; report separately but do
+    # not add to attributed totals, which would double-count their duration.
+    "TTNN Op apply cached descriptor",
+    "TTNN Op override runtime arguments",
+    "TTNN Override apply per-program runtime args",
+    "TTNN Descriptor collect tensor buffers",
+    "TTNN Descriptor apply resolved bindings",
+    "TTNN Descriptor apply dynamic runtime args",
+    "TTNN Descriptor custom override runtime args",
+    "TTNN Descriptor compute dynamic runtime args",
+    "TTNN Descriptor rebuild runtime args",
+    "TTNN RingJoint apply descriptor",
+    "TTNN RingJoint apply scalar runtime args",
+    "TTNN Rotary indexed apply descriptor",
+    "TTNN Rotary indexed patch scalar runtime args",
+    "TTNN RS copy reader runtime args",
+    "TTNN RS copy writer runtime args",
+)
+
 SUPPORT_ZONES = (
     "CompileProgram",
     "FDMeshCommandQueue::finish",
@@ -101,7 +121,7 @@ def require_signpost(signposts: dict[str, list[int]], name: str) -> int:
 
 def read_host_events(path: Path, start_ns: int, end_ns: int) -> dict[str, list[Event]]:
     """Stream the multi-GB Tracy CSV, retaining only the small zone set we need."""
-    wanted = set(HOST_STAGES) | set(SUPPORT_ZONES)
+    wanted = set(HOST_STAGES) | set(DETAIL_ZONES) | set(SUPPORT_ZONES)
     events: dict[str, list[Event]] = defaultdict(list)
 
     with path.open(encoding="utf-8", errors="replace") as file:
@@ -184,6 +204,21 @@ def print_stage_table(
     return attributed_total, device_op2op_total
 
 
+def print_detail_zones(events: dict[str, list[Event]]) -> None:
+    print("\nNested cached-workload detail (excluded from attribution total)")
+    print(f"{'zone':42} {'count':>7} {'total ms':>11} {'mean us':>11} {'max ms':>10}")
+    print("-" * 86)
+    for zone in DETAIL_ZONES:
+        values = [event.duration_ns for event in events.get(zone, [])]
+        if not values:
+            print(f"{zone:42} {0:7d} {0.0:11.3f} {0.0:11.3f} {0.0:10.3f}")
+            continue
+        print(
+            f"{zone:42} {len(values):7d} {ns_to_ms(sum(values)):11.3f} "
+            f"{statistics.mean(values) / 1e3:11.3f} {ns_to_ms(max(values)):10.3f}"
+        )
+
+
 def print_operation_table(operations: list[DeviceOp], events: dict[str, list[Event]], top: int) -> None:
     grouped: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])
     update_events = events["TTNN Op update cached workload"]
@@ -257,6 +292,7 @@ def main() -> None:
     print(f"Device {args.device_id} operations: {len(operations)}")
 
     attributed_ns, device_op2op_ns = print_stage_table(operations, events)
+    print_detail_zones(events)
     device_kernel_ns = sum(operation.kernel_ns for operation in operations)
     residual_ns = device_op2op_ns - attributed_ns
 

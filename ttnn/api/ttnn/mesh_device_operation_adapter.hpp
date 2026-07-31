@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tracy/Tracy.hpp>
 
 #include <algorithm>
 #include <iterator>
@@ -292,6 +293,7 @@ public:
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
 
+                ZoneScopedN("TTNN Override apply per-program runtime args");
                 mesh_device_operation_utils::apply_override_runtime_arguments(
                     program_factory,
                     program,
@@ -646,14 +648,22 @@ public:
                     // fast path covers cache hits even when the factory only sets
                     // `desc.cbs[i].buffer` and declares no rt-arg buffer bindings.
                     if (!sv.resolved_bindings.empty()) {
-                        auto collected =
-                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
-                        tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
+                        auto collected = [&] {
+                            ZoneScopedN("TTNN Descriptor collect tensor buffers");
+                            return collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
+                        }();
+                        {
+                            ZoneScopedN("TTNN Descriptor apply resolved bindings");
+                            tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
+                        }
                     }
                     // The WorkloadDescriptor variant never rebuilds, so a value a custom hash
                     // excluded would stay frozen at first miss — re-apply declared dynamic args.
-                    apply_dynamic_runtime_args_if_declared(
-                        program, attrs, tensor_args, tensor_return_value, coordinate_range);
+                    {
+                        ZoneScopedN("TTNN Descriptor apply dynamic runtime args");
+                        apply_dynamic_runtime_args_if_declared(
+                            program, attrs, tensor_args, tensor_return_value, coordinate_range);
+                    }
                 } else if constexpr (has_override_runtime_arguments()) {
                     // ProgramDescriptor variant, op owns its cache-hit re-derivation (the descriptor-era
                     // override_runtime_arguments()): re-apply ALL per-dispatch state — every runtime arg
@@ -661,6 +671,7 @@ public:
                     // (address inference) and no get_dynamic; correct by construction for in-place,
                     // mixed-aliasing, and work-set shifts. Prefer the factory's hook; fall back to the
                     // DeviceOperation for direct ops that predate the factory-struct shape.
+                    ZoneScopedN("TTNN Descriptor custom override runtime args");
                     if constexpr (factory_has_override_runtime_arguments()) {
                         DescriptorFactory::override_runtime_arguments(
                             program,
@@ -717,18 +728,29 @@ public:
                                           tensor_return_value,
                                           std::optional<ttnn::MeshCoordinate>{});
                                   }) {
-                        dynamic_args = DeviceOperation::get_dynamic_runtime_args(
-                            attrs,
-                            tensor_args,
-                            tensor_return_value,
-                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                        {
+                            ZoneScopedN("TTNN Descriptor compute dynamic runtime args");
+                            dynamic_args = DeviceOperation::get_dynamic_runtime_args(
+                                attrs,
+                                tensor_args,
+                                tensor_return_value,
+                                std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                        }
                     }
                     if (!sv.resolved_bindings.rt_args.empty() ||
                         (!dynamic_args.empty() && !sv.resolved_bindings.empty())) {
-                        auto collected =
-                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
-                        tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
-                        tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
+                        auto collected = [&] {
+                            ZoneScopedN("TTNN Descriptor collect tensor buffers");
+                            return collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
+                        }();
+                        {
+                            ZoneScopedN("TTNN Descriptor apply resolved bindings");
+                            tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
+                        }
+                        {
+                            ZoneScopedN("TTNN Descriptor apply dynamic runtime args");
+                            tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
+                        }
 #ifdef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
                         // Regression net: assert the fast path reproduced a full rebuild exactly (rt-args
                         // AND CB addresses). Fires loudly at the exact stale arg for any op whose cache-hit
@@ -746,6 +768,7 @@ public:
                         }
 #endif
                     } else {
+                        ZoneScopedN("TTNN Descriptor rebuild runtime args");
                         const ttnn::MeshCoordinate mesh_coord = coordinate_range.start_coord();
                         const std::optional<ttnn::MeshCoordinate> mesh_dispatch_coordinate(mesh_coord);
                         auto desc = invoke_per_coord(attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
