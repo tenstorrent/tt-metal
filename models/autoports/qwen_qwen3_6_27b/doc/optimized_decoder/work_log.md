@@ -132,3 +132,4 @@ The required report and final IR exist. An additional batch-1 capture is in
 - optimized implementation and historical evidence: `c55a8c067c8`
 - residual-chain optimization, evidence remediation, and clean rereview:
   `81438cb467b`
+- final-default watcher evidence: `6cd07e83df5`
