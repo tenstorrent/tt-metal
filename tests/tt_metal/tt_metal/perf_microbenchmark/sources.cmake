@@ -6,6 +6,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     disaggregation/bench_kv_chunk_address_table_serialization.cpp
     dispatch/test_pgm_dispatch.cpp
     dispatch/benchmark_rw_buffer.cpp
+    dispatch/benchmark_profiler_overhead.cpp
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
     ethernet/test_all_ethernet_links.cpp
@@ -31,6 +32,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     9_dram_adjacent_read_remote_l1_write/test_dram_read_l1_write.cpp
     10_dram_read_remote_cb_sync/test_dram_read_remote_cb.cpp
     11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul.cpp
+    op_to_op_latency/test_op_to_op_latency.cpp
 )
 
 set(X86_64_ONLY_TESTS
