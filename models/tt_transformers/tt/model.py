@@ -151,6 +151,9 @@ class Transformer(LightweightModule):
             prefetcher=prefetcher,
         )
 
+        # Device buffers for extract_last_tokens_batched_prefill, keyed by (target_batch, dim). See there.
+        self._batched_last_token_buffers = {}
+
         # Initialize on-device sampling if supported
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
@@ -164,13 +167,24 @@ class Transformer(LightweightModule):
         else:
             self.sampling = None
 
-    def process_logits_after_prefill_trace(self, logits, last_token_idx):
+    def slice_last_token_block(self, x, last_token_idx, out=None):
+        """Slice out the 32-row block of a prefill body output that contains ``last_token_idx``.
+
+        Pass ``out`` to write into a buffer that was allocated before any trace was captured. The slice
+        bounds are host-side arguments, so a single fixed ``[1, 1, 32, dim]`` buffer serves every prompt
+        length and every position, and the op allocates nothing -- which is what lets the norm + LM head
+        that follow be captured as a trace instead of run eagerly. See Generator._prepare_post_prefill_trace.
+        """
         get_last_token = (last_token_idx // 32) * 32
-        logits = ttnn.slice(
-            logits,
+        return ttnn.slice(
+            x,
             (0, 0, get_last_token, 0),
-            (1, 1, get_last_token + 32, logits.shape[-1]),
+            (1, 1, get_last_token + 32, x.shape[-1]),
+            output_tensor=out,
         )
+
+    def process_logits_after_prefill_trace(self, logits, last_token_idx, last_token_buffer=None):
+        logits = self.slice_last_token_block(logits, last_token_idx, out=last_token_buffer)
         logits = self._apply_norm_and_lm_head(logits)
         return logits
 
@@ -236,13 +250,26 @@ class Transformer(LightweightModule):
             padded_combined[:, :, :padded_batch, :] = combined
             combined = padded_combined
 
-        user_tokens = ttnn.from_torch(
-            combined,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-        )
+        # Reuse one device buffer per shape instead of allocating on every batched prefill: this runs after
+        # the trace captures, where a fresh allocation can land inside a live trace's scratch. The first
+        # call still allocates, but that happens during the warmup prefill, before anything is captured.
+        mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
+        key = (int(target_batch), int(combined.shape[-1]))
+        user_tokens = self._batched_last_token_buffers.get(key)
+        if user_tokens is None:
+            user_tokens = ttnn.from_torch(
+                combined,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mapper,
+            )
+            self._batched_last_token_buffers[key] = user_tokens
+        else:
+            host = ttnn.from_torch(
+                combined, device=None, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper
+            )
+            ttnn.copy_host_to_device_tensor(host, user_tokens)
         return user_tokens
 
     def process_logits_after_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
@@ -270,12 +297,7 @@ class Transformer(LightweightModule):
         Returns hidden states (after norm) instead of logits.
         Used for embedding models that need hidden states rather than logits.
         """
-        get_last_token = (last_token_idx // 32) * 32
-        hidden_states = ttnn.slice(
-            hidden_states,
-            (0, 0, get_last_token, 0),
-            (1, 1, get_last_token + 32, hidden_states.shape[-1]),
-        )
+        hidden_states = self.slice_last_token_block(hidden_states, last_token_idx)
         # Apply norm (this is the final layer norm before LM head)
         hidden_states = self.norm(hidden_states, mode="prefill")
         # Convert to row major layout for output (but don't apply LM head)
