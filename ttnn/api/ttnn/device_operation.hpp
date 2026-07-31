@@ -209,14 +209,17 @@ void enqueue_mesh_workload(
 
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
-    TracyOpMeshWorkload(
-        mesh_device,
-        workload,
-        mesh_device_operation_t{},
-        operation_attributes,
-        tensor_args,
-        tensor_return_value,
-        program_cache_hit);
+    {
+        ZoneScopedN("TTNN Op profile mesh workload");
+        TracyOpMeshWorkload(
+            mesh_device,
+            workload,
+            mesh_device_operation_t{},
+            operation_attributes,
+            tensor_args,
+            tensor_return_value,
+            program_cache_hit);
+    }
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
@@ -259,10 +262,13 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     const ProgramCacheKey& program_key) {
-    if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
-        mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
-    } else {
-        mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    {
+        ZoneScopedN("TTNN Op validate cache hit");
+        if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
+            mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+        } else {
+            mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+        }
     }
 
     auto& cached_program_factory = program_cache.get(program_key);
@@ -276,12 +282,15 @@ void handle_mesh_adapter_cache_hit(
         using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
         auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
 
-        if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
-            WorkloadFactory::apply_descriptor(
-                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
-        } else {
-            WorkloadFactory::override_runtime_arguments(
-                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+        {
+            ZoneScopedN("TTNN Op update cached workload");
+            if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
+                WorkloadFactory::apply_descriptor(
+                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+            } else {
+                WorkloadFactory::override_runtime_arguments(
+                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+            }
         }
 
         enqueue_mesh_workload<mesh_device_operation_t>(
@@ -383,15 +392,23 @@ void launch_operation_with_adapter(
 
     auto is_program_cache_enabled = program_cache.is_enabled();
     if (is_program_cache_enabled) {
-        // Use device_operation's compute_program_hash if available
-        program_key.hash =
-            mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
-        program_key.canonical = mesh_device_operation_t::compute_mesh_workload_canonical_key(
-            mesh_device,
-            ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
-            operation_attributes,
-            tensor_args);
-        program_cache_hit = program_cache.contains(program_key);
+        {
+            ZoneScopedN("TTNN Op compute mesh workload hash");
+            program_key.hash =
+                mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
+        }
+        {
+            ZoneScopedN("TTNN Op compute mesh canonical key");
+            program_key.canonical = mesh_device_operation_t::compute_mesh_workload_canonical_key(
+                mesh_device,
+                ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
+                operation_attributes,
+                tensor_args);
+        }
+        {
+            ZoneScopedN("TTNN Op program cache lookup");
+            program_cache_hit = program_cache.contains(program_key);
+        }
         if (!program_cache_hit && !program_cache.cache_misses_allowed()) {
             auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
             TT_THROW("Device operation \"{}\": program cache miss occurred, but cache misses are forbidden", op_name);
@@ -464,7 +481,10 @@ typename device_operation_t::tensor_return_value_t launch(
         }
     }
 
-    auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    auto tensor_return_value = [&] {
+        ZoneScopedN("TTNN Op create output tensors");
+        return device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    }();
 
     ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
 
