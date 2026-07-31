@@ -422,11 +422,55 @@ single-N150. Memory: 3.03B params in the 26 layers + 402M embedding = 3.43B →
 CFG batched to 2B. Implemented in `tt/ttnn_voxtral_flow.py` at fp32/HiFi4: velocity PCC 0.9999989,
 semantic codes exact. Semantic argmax and FSQ quantise stay on host (see that module's docstring).
 
-**Still open:** the 7-step ODE is **untraced**, and it is the clearest remaining perf win. Fixed
-shapes and a fixed step count make it an ideal trace target — upstream's own CUDA-graph version of
-exactly this gave them 47% latency / 2.5x RTF. Block 3's tracing null result does **not** transfer:
-that was a long chain of ~30 us device-bound ops, whereas Block 2's ops are tiny, which is exactly
-the regime where host dispatch becomes exposed. Read trap #1 before writing trace code.
+**Measured and REJECTED — sdpa in the attention interior.** `ttnn.transformer.scaled_dot_product_
+attention` fuses 7 ops into 1 there (2x `repeat_interleave`, transpose, matmul, scale, softmax,
+matmul) and supports GQA natively, so k/v go in unexpanded and the 4x expansion disappears. It
+works and it is faster, but not for free:
+
+| | hand-rolled | sdpa |
+|---|---|---|
+| frame, batch 2 | 145.5 ms | 122.3 ms (**1.19x**) |
+| velocity PCC (worst of 12 seeds) | 0.9999428 | 0.9990333 |
+| acoustic codes differing from reference | 1.16% | **4.28%** |
+| max deviation | 1 FSQ level | **2 FSQ levels** |
+| frames exactly right | 6/12 | 3/12 |
+
+**3.7x more differing codes, and that factor is not a coincidence** — §4.1 measured sdpa's
+mask-independent worst-case penalty in Block 3 at 3.7–10.7x. The same characteristic reproduced here
+at the bottom of that range, which says the penalty travels with the op rather than with the shapes.
+Rejected on sequencing, not on principle: tracing attacks the same dispatch bottleneck for **zero**
+accuracy cost, and bf16 has already spent some of the code-error margin that protects the 0.0% WER
+(0.81% -> 1.16%). Revisit **after** tracing, and gate it on end-to-end WER and long-form frame
+counts rather than on code-diff counts. Note that sdpa's 19% will shrink once tracing removes the
+host-dispatch component the two share. `is_causal` **defaults to True** and must be passed `False`
+here; causal masking would cut position 0 off from the time and LLM tokens, which does not raise --
+it silently produces a velocity conditioned on nothing.
+
+**Tracing: IMPLEMENTED, verified, and worth 0.1% today — but keep it, it is a prerequisite.**
+`_solve()` is a pure device graph and `_trace()` captures it (one trace per batch/n_steps/cfg_alpha).
+Correct: 0/74 codes differ from the reference, repeatable, input refresh verified. The measurement
+that matters, at batch 2:
+
+| | host enqueue | device wait |
+|---|---|---|
+| traced | **0.0 ms** | 139.1 ms |
+| eager | **121.7 ms** | 139.3 ms |
+
+Host dispatch here is real and large — 121.7 ms, and tracing removes all of it. It buys nothing
+because ttnn enqueues asynchronously, so that 121.7 ms is **already hidden behind** 139.3 ms of
+device execution. Max win from *any* tracing approach right now: **0.1%**. This is the same null
+result Block 3 got, and the reason I predicted it would not transfer was **wrong**: I assumed a
+3-token sequence meant tiny ops, but a tile is 32x32, so every matmul does 32 rows of work for 3
+useful tokens against 3072x9216 weights. That is real arithmetic.
+
+**THE TRIGGER CONDITION — do not delete the trace code.** Dispatch sits only 17.6 ms (13%) below the
+device floor. Cut device work by less than that and tracing stays worthless; cut it by more and
+**dispatch becomes the binding constraint at 121.7 ms** and you cannot go faster without the trace.
+If fidelity work halves device time to ~70 ms, the untraced frame would stall at ~122 ms — a 12%
+gain instead of the 50% paid for. `USE_TRACE` is therefore left **False** (it is worth 0.1% and
+forces `trace_region_size` on every caller); flip it the moment device work drops under ~120 ms.
+Upstream's 47%-from-CUDA-graphs figure does not apply to us: their bottleneck was launch overhead,
+ours is arithmetic. Read trap #1 before touching capture code.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
@@ -465,15 +509,13 @@ does the host-side Euler state, which is why the error does not compound. Eviden
 1. Re-read this file and `reference/PROVENANCE.md`. Recreate the two venvs (§2).
 2. Run the 118 tests, then `generate_quality_set.py --cases 0,1` to confirm the device path still
    produces speech before changing anything.
-3. **Trace Block 2's 7-step ODE — the prerequisite is now DONE.** The solve is fully on device as of
-   2026-07-31 (`decode_frame`): `x` is a resident fp32 tensor, the CFG combine and Euler update are
-   device ops, and the time-conditioning tokens are precomputed once. There is no longer any host
-   arithmetic inside the loop, which is what previously made it untraceable. **That refactor bought
-   almost nothing on its own** — bit-identical output, and performance neutral at the pipeline's B=1
-   (157.6 → 157.9 ms/frame, inside noise; ~4% at B=2 where the hoisted projections are bigger). Its
-   value is that the trace is now possible, and that is where the 47% upstream figure comes from.
-   Fixed shapes, fixed step count, tiny ops — the regime where dispatch is exposed. Read trap #1
-   first: a failed trace capture wedges the device.
+3. **Cut Block 2's DEVICE arithmetic — that is where the time is.** 139 of 145 ms per frame at
+   batch 2 is device execution (§6, Block 2). The trunk runs `HiFi4` with `fp32_dest_acc_en`, the
+   most expensive setting available, and every matmul does 32 tile rows of work for 3 useful tokens.
+   Try `HiFi2` and `fp32_dest_acc_en=False` on the trunk while leaving the fp32 solver alone, gated
+   like bf16 was: code diffs first, then WER and long-form frame counts.
+   **Then flip `USE_TRACE = True`** — see the trigger condition in §6. Fidelity alone will stall at
+   the 121.7 ms dispatch wall; the two only pay off together, in that order.
 4. **Then Block 1's decode step** — 48 ms of the 158 ms frame (30%), so it caps at a ~1.4x
    end-to-end win even if it went to zero. Find out where that 48 ms goes (device vs host dispatch)
    before optimizing anything; `tt_transformers` has trace/prefetcher machinery we are not using.

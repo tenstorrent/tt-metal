@@ -95,6 +95,12 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
 # definition time. Pass dtype= or replace the instance.
 DTYPE = ttnn.bfloat16
 
+# Capture the whole n_steps solve as one device trace. OFF because it was measured to be worth
+# NOTHING here -- see STATUS.md's Block 2 section. Requires ttnn.open_device(..., trace_region_size=N),
+# so leaving it on would also break callers that do not pass one. Read at CALL time, not as a default
+# argument, so it can still be flipped for A/B measurement.
+USE_TRACE = False
+
 
 class TtVoxtralFlow:
     """Block 2 on device. __call__(h) -> audio_codes torch [B,37] int64."""
@@ -107,6 +113,7 @@ class TtVoxtralFlow:
         self.semantic_host = w["semantic_codebook_output.weight"].float()  # host: masked argmax
         self._sched = {}                     # (batch, n_steps) -> (time tokens, step widths)
         self._cfgbuf = {}                    # batch -> reused [2B,3072] cond++uncond host buffer
+        self._traces = {}                    # (batch, n_steps, cfg_alpha) -> (tid, x_in, h_in, out)
 
         dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT,
                                        device=device)
@@ -147,7 +154,9 @@ class TtVoxtralFlow:
         # op needs a batch layout this does not have.
         hq = lambda t, n: ttnn.permute(ttnn.reshape(t, [B, 3, n, FM_HEAD_DIM]), (0, 2, 1, 3))
         qh, kh, vh = hq(q, FM_N_HEADS), hq(k, FM_N_KV_HEADS), hq(v, FM_N_KV_HEADS)
-        # GQA: repeat k/v to the query head count. NO mask and NO RoPE -- bidirectional by design.
+        # GQA by hand: repeat k/v to the query head count. NO mask and NO RoPE -- bidirectional by
+        # design. ttnn's sdpa would fuse these 7 ops into 1 and supports GQA natively, but it was
+        # measured and rejected on accuracy -- see STATUS.md's Block 2 section before retrying.
         rep = FM_N_HEADS // FM_N_KV_HEADS
         kr = ttnn.repeat_interleave(kh, rep, dim=1)
         vr = ttnn.repeat_interleave(vh, rep, dim=1)
@@ -240,6 +249,63 @@ class TtVoxtralFlow:
         logits[:, N_AUDIO_SPECIAL + SEMANTIC_CODEBOOK_SIZE:] = -float("inf")
         return logits.argmax(dim=-1, keepdim=True)
 
+    def _solve(self, x, h, B, n_steps, cfg_alpha):
+        """(x0 fp32 [B,1,36], cond++uncond [2B,3072]) -> x fp32 [B,1,36]. PURE DEVICE GRAPH.
+
+        No host arithmetic, no allocation from torch, nothing shape-dependent on the data -- which is
+        what makes it capturable as a trace. Keep it that way: one host op in here silently makes the
+        whole solve untraceable again."""
+        B2 = 2 * B
+        # llm conditioning is constant across the solve, so project it ONCE rather than per step
+        # (it was n_steps identical 3072x3072 matmuls).
+        p2 = ttnn.linear(h, self.proj["llm_projection"], compute_kernel_config=COMPUTE_CONFIG)
+        p1s, dts = self._schedule(B2, n_steps)
+        for i, dt in enumerate(dts):
+            # cond+uncond as ONE 2B forward, matching the reference exactly.
+            x2 = ttnn.concat([x, x], dim=0)
+            p0 = ttnn.linear(ttnn.typecast(x2, self.dtype), self.proj["input_projection"],
+                             compute_kernel_config=COMPUTE_CONFIG)
+            v = ttnn.typecast(self._trunk(p0, p1s[i], p2, B2), ttnn.float32)
+            v_cond = ttnn.slice(v, [0, 0, 0], [B, 1, N_ACOUSTIC_CODEBOOK])
+            v_unc = ttnn.slice(v, [B, 0, 0], [B2, 1, N_ACOUSTIC_CODEBOOK])
+            v_cfg = ttnn.add(ttnn.multiply(v_cond, cfg_alpha),
+                             ttnn.multiply(v_unc, 1.0 - cfg_alpha))
+            x = ttnn.add(x, ttnn.multiply(v_cfg, dt))
+        return x
+
+    def _trace(self, B, n_steps, cfg_alpha):
+        """-> (trace_id, x_in, h_in, out). Captured once per (batch, n_steps, cfg_alpha).
+
+        cfg_alpha and n_steps are baked into the captured graph as constants, hence the key: calling
+        with a different guidance strength captures a second trace rather than silently replaying the
+        first one's alpha.
+
+        The device must be opened with a trace region. Two ordering requirements: the schedule
+        constants and one warm-up solve happen BEFORE capture, so that weight uploads and kernel
+        compilation are not recorded into the trace."""
+        key = (B, n_steps, float(cfg_alpha))
+        if key in self._traces:
+            return self._traces[key]
+
+        B2 = 2 * B
+        x_in = self._up(torch.zeros(B, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32)
+        h_in = self._up(torch.zeros(B2, FM_INPUT_DIM))
+        self._schedule(B2, n_steps)                       # build constants outside the capture
+        self._solve(x_in, h_in, B, n_steps, cfg_alpha)    # compile kernels outside the capture
+        ttnn.synchronize_device(self.device)
+
+        tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+        try:
+            out = self._solve(x_in, h_in, B, n_steps, cfg_alpha)
+        finally:
+            # MUST run even if _solve raises: an exception escaping an open capture leaves the
+            # device wedged for the rest of the process (STATUS.md trap #1).
+            ttnn.end_trace_capture(self.device, tid, cq_id=0)
+        ttnn.synchronize_device(self.device)
+
+        self._traces[key] = (tid, x_in, h_in, out)
+        return self._traces[key]
+
     @torch.no_grad()
     def decode_frame(self, sem_code, llm_hidden, cfg_alpha=CFG_ALPHA,
                      n_steps=N_DECODING_STEPS, x_0=None):
@@ -265,28 +331,25 @@ class TtVoxtralFlow:
         promote the entire trunk to fp32 and forfeit the 1.55x.
         """
         B = sem_code.shape[0]
-        B2 = 2 * B
         should = (sem_code != END_AUDIO_ID).reshape(B)
         x0 = torch.randn(B, N_ACOUSTIC_CODEBOOK) if x_0 is None else x_0
+        h_host = self._cfg_input(B, llm_hidden)
 
-        x = self._up(x0.reshape(B, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32)   # solver state, fp32
-        # llm conditioning is constant across the solve: cond ++ uncond, projected ONCE per frame
-        # rather than once per step (it was n_steps identical 3072x3072 matmuls).
-        p2 = ttnn.linear(self._up(self._cfg_input(B, llm_hidden)),
-                         self.proj["llm_projection"], compute_kernel_config=COMPUTE_CONFIG)
-        p1s, dts = self._schedule(B2, n_steps)
-
-        for i, dt in enumerate(dts):
-            # cond+uncond as ONE 2B forward, matching the reference exactly.
-            x2 = ttnn.concat([x, x], dim=0)
-            p0 = ttnn.linear(ttnn.typecast(x2, self.dtype), self.proj["input_projection"],
-                             compute_kernel_config=COMPUTE_CONFIG)
-            v = ttnn.typecast(self._trunk(p0, p1s[i], p2, B2), ttnn.float32)
-            v_cond = ttnn.slice(v, [0, 0, 0], [B, 1, N_ACOUSTIC_CODEBOOK])
-            v_unc = ttnn.slice(v, [B, 0, 0], [B2, 1, N_ACOUSTIC_CODEBOOK])
-            v_cfg = ttnn.add(ttnn.multiply(v_cond, cfg_alpha),
-                             ttnn.multiply(v_unc, 1.0 - cfg_alpha))
-            x = ttnn.add(x, ttnn.multiply(v_cfg, dt))
+        if USE_TRACE:
+            tid, x_in, h_in, out = self._trace(B, n_steps, cfg_alpha)
+            # Refresh the captured inputs IN PLACE -- the trace holds their addresses, so a fresh
+            # tensor here would be silently ignored and the previous frame's data replayed.
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(x0.reshape(B, 1, N_ACOUSTIC_CODEBOOK).contiguous(),
+                                dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), x_in)
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(h_host.contiguous(), dtype=self.dtype, layout=ttnn.TILE_LAYOUT),
+                h_in)
+            ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
+            x = out
+        else:
+            x = self._solve(self._up(x0.reshape(B, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32),
+                            self._up(h_host), B, n_steps, cfg_alpha)
 
         codes = _fsq_quantize(ttnn.to_torch(x).float().reshape(B, N_ACOUSTIC_CODEBOOK))
         codes[~should] = EMPTY_AUDIO_ID
