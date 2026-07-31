@@ -27,7 +27,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 template <typename T>
-HostTensor from_span_impl(std::span<const T> buffer, TensorSpec spec, T pad_value) {
+HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
     auto buffer_dtype = convert_to_data_type<T>();
     auto buffer_spec = TensorSpec(
         spec.logical_shape(),
@@ -60,7 +60,7 @@ HostTensor host_tensor_from_span_with_pad_value(std::span<const T> buffer, Tenso
         // If the logical shape doesn't match the physical shape, we need to encode the data
         // and write the result to a new buffer. This branch avoids the extra copy that
         // would otherwise occur in the from_vector function call.
-        return CMAKE_UNIQUE_NAMESPACE::from_span_impl(buffer, std::move(spec), pad_value);
+        return CMAKE_UNIQUE_NAMESPACE::from_span_impl(buffer, spec, pad_value);
     }
     return host_tensor_from_vector_with_pad_value(
         std::vector<T>(buffer.begin(), buffer.end()), std::move(spec), pad_value);
