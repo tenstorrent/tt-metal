@@ -224,5 +224,18 @@ PCIe and needed a `tt-smi` reset. Do not run extension experiments alongside a m
 
 `ttnn.sparse_matmul` and the SSM / gated-delta ops are terminal in the tracer, so a model whose time is in
 its experts or its linear attention is largely invisible here — state the share rather than implying
-coverage. Sweeping expert and norm grids **directly**, without the advisor, is a separate and often
+coverage.
+
+**Conversion time this stage must leave alone.** DRAM round trips are the thing worth minimising, and
+`reconcile.py` splits them by who wants them. Only `us_advisor_drops` is yours to screen. Two other pots are
+real cost and out of scope:
+
+- **`us_advisor_agrees`** — the advisor places a conversion here too. Removing it may well win, but the win
+  would be your idea, and booking it against the advisor contaminates the measurement.
+- **`us_not_advisor_comparable`** — `ReshapeView`, `FillPad`, `Copy`. Not placement edges, so the advisor
+  never expresses them. Not small either: six `ReshapeView` kernels ran 8–19 µs each on 110 and 16 cores in
+  one cell, 88.5 µs of a 1355 µs window.
+
+Report both with their µs and hand them to `$optimize`. Eliminating conversions the advisor does not propose
+is a better-paying activity than this stage — it is just a different experiment. Sweeping expert and norm grids **directly**, without the advisor, is a separate and often
 better-paying activity.
