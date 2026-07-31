@@ -65,6 +65,7 @@ const std::vector<DemotedCase>& demoted_cases() {
         {{2, 1, 96, 32}, BufferType::L1, DataType::INT32},
         {{2, 1, 96, 32}, BufferType::L1, DataType::UINT16},
         {{2, 1, 96, 32}, BufferType::L1, DataType::UINT32},
+        {{2, 12, 64, 96}, BufferType::DRAM, DataType::BFLOAT16},
         {{2, 12, 64, 96}, BufferType::L1, DataType::BFLOAT16},
         {{2, 32, 32}, BufferType::DRAM, DataType::INT32},
         {{2, 32, 32}, BufferType::DRAM, DataType::UINT16},
@@ -102,6 +103,7 @@ const std::vector<DemotedCase>& demoted_cases() {
         {{32, 64}, BufferType::L1, DataType::INT32},
         {{32, 64}, BufferType::L1, DataType::UINT16},
         {{32, 64}, BufferType::L1, DataType::UINT32},
+        {{4, 12, 96, 96}, BufferType::DRAM, DataType::BFLOAT16},
         {{4, 12, 96, 96}, BufferType::L1, DataType::BFLOAT16},
         {{4, 224, 160}, BufferType::DRAM, DataType::BFLOAT16},
         {{4, 224, 160}, BufferType::L1, DataType::BFLOAT16},
@@ -146,6 +148,7 @@ const std::vector<DemotedCase>& demoted_cases() {
         {{7, 96, 160}, BufferType::L1, DataType::BFLOAT16},
         {{9, 128, 32}, BufferType::DRAM, DataType::BFLOAT16},
         {{9, 128, 32}, BufferType::L1, DataType::BFLOAT16},
+        {{9, 160, 96}, BufferType::DRAM, DataType::BFLOAT16},
         {{9, 160, 96}, BufferType::L1, DataType::BFLOAT16},
     };
     return cases;
