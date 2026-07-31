@@ -47,7 +47,7 @@ LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safet
 
 # Default DiT-linear quant preset. Empty selects the bf16 baseline (the default); set
 # LTX_QUANT=all_bf8_lofi to opt into the bf8 1080p tier (its perf/VBench floors are calibrated against
-# it), or LTX_QUANT to any other QuantConfig preset. _maybe_apply_quant_config resolves this once and
+# it), or LTX_QUANT to any other QuantConfig preset. _resolve_quant_config resolves this once and
 # threads the tag into the transformer cache name, so a quantized cache stays separate from the baseline.
 LTX_QUANT_DEFAULT = ""
 
@@ -300,11 +300,12 @@ class LTXPipeline:
         self._image_conditioning: bool = bool(image_conditioning)
 
         if self.checkpoint_name is not None:
+            # Resolved before construction so the QuantConfig is baked into the transformer modules
+            # (Parameter.load typecasts DiT-linear weights to the preset dtype as they load), rather
+            # than typecast afterward by a post-load hook.
+            self._resolve_quant_config()
             self._instantiate_modules(extra_transformer_variants or [])
             self._register_coresident_exclusions()
-            # Installed before _prime_caches so Parameter.load typecasts DiT-linear weights to the
-            # preset dtype as they load, and re-typecasts after every dynamic_load reload.
-            self._maybe_apply_quant_config()
             self._prime_caches()
             valid_shape = num_frames > 0 and height > 0 and width > 0
             if (run_warmup or traced) and valid_shape:
@@ -503,6 +504,7 @@ class LTXPipeline:
             # auto-detected from the conditioning-image path or forced by the caller). Pure T2V keeps
             # the fast scalar-AdaLN path — no separate on/off flag.
             image_conditioning=bool(self.vae is not None and self.vae.encoder_blocks and self._image_conditioning),
+            quant_config=getattr(self, "_quant_config", None),
         )
 
     def _instantiate_modules(self, extra_variants: list[tuple[str, list[LoraSpec]]]) -> None:
@@ -608,38 +610,33 @@ class LTXPipeline:
         self._prepare_audio_decoder()
         self._prepare_transformer(0)
 
-    def _maybe_apply_quant_config(self) -> None:
-        """Install a DiT-linear quant preset (LTX_QUANT_DEFAULT unless LTX_QUANT names another).
+    def _resolve_quant_config(self) -> None:
+        """Resolve the DiT-linear quant preset (LTX_QUANT_DEFAULT unless LTX_QUANT names another).
 
-        LTX_QUANT="" selects the bf16 baseline."""
+        LTX_QUANT="" selects the bf16 baseline. Runs before ``_instantiate_modules`` so the resolved
+        ``QuantConfig`` is baked into transformer construction (weights load direct-to-quant)."""
         self._quant_cache_tag = None
+        self._quant_config = None
         preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
         if not preset:
             return
-        from .quant_config import QuantConfig, apply_quant_config
+        from .quant_config import QuantConfig
 
         factory = getattr(QuantConfig, preset, None)
         if factory is None or not callable(factory):
             logger.warning(f"LTX_QUANT='{preset}' is not a QuantConfig preset; running baseline (bf16/HiFi2)")
             return
-        logger.info(f"LTX_QUANT='{preset}': applying DiT-linear quant config")
-        # The hook runs inside load_model before the cache write (and after every cache hit), so the
-        # preset-tagged cache holds the quantized dtype. _quant_cache_tag routes writes/reads to that
-        # dir; it must equal the resolved preset here or a run poisons the wrong-precision cache.
+        logger.info(f"LTX_QUANT='{preset}': building the transformer with the DiT-linear quant config")
+        # _quant_cache_tag routes cache writes/reads to a preset-tagged dir; it must equal the resolved
+        # preset or a run poisons the wrong-precision cache (cached tensorbins carry their dtype).
         self._quant_cache_tag = preset
-        config = factory()
-        # Apply now so the built-but-unloaded modules carry the bf8 Parameter dtype before the load:
-        # the strict tensorbin loader checks on-disk dtype against param.dtype, and the preset cache
-        # holds bf8. The hook re-applies after each dynamic_load reload.
-        for state in self.transformer_states:
-            apply_quant_config(state.model, config)
-        self._transformer_post_load_hook = lambda model: apply_quant_config(model, config)
+        self._quant_config = factory()
 
     def _prepare_transformer(self, idx: int = 0) -> None:
         state = self.transformer_states[idx]
-        # load_model runs the quant hook before the cache write and after every cache-hit reload, so
-        # the preset-tagged cache holds the quantized weights and a reload lands the dtype the module
-        # expects. quant_tag keeps that cache separate from the bf16 baseline.
+        # The transformer is built with the quant config, so a cache miss loads weights direct-to-quant
+        # and the write holds the quantized tensorbins. quant_tag keeps that cache separate from the
+        # bf16 baseline.
         state.checkpoint.load(
             state.model,
             parallel_config=self.parallel_config,
@@ -647,7 +644,6 @@ class LTXPipeline:
             is_fsdp=self.is_fsdp,
             lora_specs=state.lora_specs,
             quant_tag=getattr(self, "_quant_cache_tag", None),
-            post_load_hook=getattr(self, "_transformer_post_load_hook", None),
         )
         self.transformer = state.model
 

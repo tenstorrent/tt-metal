@@ -13,6 +13,9 @@ from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
+# Fidelity per weight dtype. Quantized dtypes (e.g. bfloat8_b) are deliberately absent: callers
+# look up with .get(dtype, HiFi2). This compute_config is a dead default for any op handed an
+# explicit compute_kernel_config (every LTX matmul is), so the fallback only has to construct.
 MATH_FIDELITY = {
     ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
@@ -101,7 +104,7 @@ class Linear(Module):
         """
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
+            math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -171,6 +174,8 @@ class ColParallelLinear(Module):
         fsdp_mesh_axis=None,
         ccl_manager=None,
         chunks=None,
+        activation_dtype=None,
+        pin_blockfloat_output=False,
     ):
         super().__init__()
 
@@ -204,14 +209,14 @@ class ColParallelLinear(Module):
         # the dtype of the gathered tensor. Casting a RowParallel/replicated Linear's input would
         # buy matmul-internal precision only while paying a full typecast pass — and RowParallel's
         # input is the 4x-wide FFN intermediate, so that trade is strictly negative.
-        self.activation_dtype = None
+        self.activation_dtype = activation_dtype
         # Pin a bf8/bf4-fed output back to bf16 (see resolve_output_dtype). Set by the quant config on
         # the linears on its path; off elsewhere so no other model's default output dtype changes.
-        self.pin_blockfloat_output = False
+        self.pin_blockfloat_output = pin_blockfloat_output
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
+            math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -383,7 +388,7 @@ class RowParallelLinear(Module):
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
+            math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

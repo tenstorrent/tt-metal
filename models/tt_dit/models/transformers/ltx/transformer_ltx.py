@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 
 import torch
 from loguru import logger
@@ -21,6 +20,7 @@ from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....pipelines.ltx.quant_config import LTX_QUANT_ACTIVATIONS, LinearQuantConfig, QuantConfig, _make_compute_config
 from ....utils import cache as cache_module
 from ....utils.fuse_loras import LoraSpec, fuse_loras_into
 from ....utils.substate import pop_substate, rename_substate
@@ -120,6 +120,7 @@ class LTXTransformerBlock(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        quant_config: QuantConfig | None = None,
     ) -> None:
         super().__init__()
 
@@ -147,6 +148,19 @@ class LTXTransformerBlock(Module):
             "parallel_config": parallel_config,
             "is_fsdp": is_fsdp,
             "apply_gated_attention": apply_gated_attention,
+            "quant_config": quant_config,
+        }
+
+        # FFN precision, shared by the video and audio ParallelFeedForwards. Default configs (no
+        # quant_config) reproduce the bf16 ctor; activation cast + pin ride LTX_QUANT_ACTIVATIONS.
+        quant_active = quant_config is not None and LTX_QUANT_ACTIVATIONS
+        ffn_ff1_lc = quant_config.ffn_ff1 if quant_config is not None else LinearQuantConfig()
+        ffn_ff2_lc = quant_config.ffn_ff2 if quant_config is not None else LinearQuantConfig()
+        ffn_kwargs = {
+            "ff1_dtype": ffn_ff1_lc.weight_dtype,
+            "ff2_dtype": ffn_ff2_lc.weight_dtype,
+            "activation_dtype": ffn_ff1_lc.activation_dtype if quant_active else None,
+            "pin_blockfloat_output": quant_active,
         }
 
         # FSDP fractures FFN weights across the SP axis (on top of the TP fracture);
@@ -173,6 +187,7 @@ class LTXTransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            **ffn_kwargs,
         )
         self.adaln_coeff = 9 if cross_attention_adaln else 6
         # Outer-param layout (coeff, 1, 1, D): keeps each modulation parameter on the
@@ -213,6 +228,7 @@ class LTXTransformerBlock(Module):
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
                 fsdp_mesh_axis=fsdp_mesh_axis,
+                **ffn_kwargs,
             )
             self.audio_scale_shift_table = Parameter(
                 total_shape=[self.adaln_coeff, 1, 1, audio_dim],
@@ -257,13 +273,18 @@ class LTXTransformerBlock(Module):
                 dtype=ttnn.bfloat16,
             )
 
-        self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        if quant_config is not None:
+            self.ff_compute_kernel_config = _make_compute_config(
+                mesh_device.arch(), quant_config.ffn_ff1.math_fidelity, quant_config.ffn_ff1.fp32_dest_acc
+            )
+        else:
+            self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "ff.net.0.proj", "ffn.ff1")
@@ -553,6 +574,7 @@ class LTXTransformerModel(Module):
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
         image_conditioning: bool = False,
+        quant_config: QuantConfig | None = None,
     ) -> None:
         super().__init__()
 
@@ -698,6 +720,7 @@ class LTXTransformerModel(Module):
                     has_audio=has_audio,
                     apply_gated_attention=apply_gated_attention,
                     cross_attention_adaln=cross_attention_adaln,
+                    quant_config=quant_config,
                 )
             )
 
@@ -1163,10 +1186,13 @@ class LTXTransformerCheckpoint:
         is_fsdp: bool,
         has_audio: bool,
         image_conditioning: bool,
+        quant_config: QuantConfig | None = None,
     ) -> LTXTransformerModel:
         """Construct an ``LTXTransformerModel`` for this checkpoint (weights NOT loaded).
 
         Loading is deferred so the caller can manage the lifecycle (deallocate / reload).
+        ``quant_config`` bakes the preset dtypes into construction, so a cache miss loads
+        weights direct-to-quant and the cache write holds the quantized tensorbins.
         """
         return LTXTransformerModel(
             num_attention_heads=num_attention_heads,
@@ -1183,6 +1209,7 @@ class LTXTransformerCheckpoint:
             apply_gated_attention=self.has_gate,
             cross_attention_adaln=self.cross_attention_adaln,
             image_conditioning=image_conditioning,
+            quant_config=quant_config,
         )
 
     def load(
@@ -1194,7 +1221,6 @@ class LTXTransformerCheckpoint:
         is_fsdp: bool,
         lora_specs: list[LoraSpec],
         quant_tag: str | None = None,
-        post_load_hook: Callable[[Module], None] | None = None,
     ) -> None:
         """Load (or reload) weights for a previously-built transformer."""
         cache_module.load_model(
@@ -1206,5 +1232,4 @@ class LTXTransformerCheckpoint:
             mesh_device=model.mesh_device,
             is_fsdp=is_fsdp,
             get_torch_state_dict=lambda: self.state_dict(lora_specs),
-            post_load_hook=post_load_hook,
         )
