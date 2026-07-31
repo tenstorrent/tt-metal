@@ -160,4 +160,10 @@ CSVs were secured.
   control, and single-card `moe_compute` experiments recorded above.
 - A fresh final reviewer inspected the fully remediated source and artifacts
   and returned `clean-pass` in `stage_clean_review.md`.
-- Local stage checkpoint commit and SHA record follow. Never push.
+
+## Local checkpoint
+
+- Stage implementation, tests, documentation, and evidence:
+  `2e7e734ba3d` (`Add fused North Mini decoder stage`).
+- This SHA-record update is a documentation-only follow-up. Neither commit is
+  pushed.
