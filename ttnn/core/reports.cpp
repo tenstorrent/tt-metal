@@ -44,6 +44,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
     std::vector<BufferInfo> buffer_infos;
     for (auto* device : devices) {
         const auto allocated_buffers = device->allocator()->get_allocated_buffers();
+        buffer_infos.reserve(buffer_infos.size() + allocated_buffers.size());
         // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& buffer : allocated_buffers) {
             auto device_id = device->id();
@@ -113,6 +114,8 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
             auto num_pages = buffer->num_pages();
             auto num_banks = device->allocator()->get_num_banks(buffer->buffer_type());
             auto buffer_type = buffer->buffer_type();
+
+            buffer_page_infos.reserve(buffer_page_infos.size() + num_pages);
 
             if (is_sharded(buffer->buffer_layout())) {
                 const auto& buffer_page_mapping = *buffer->get_buffer_page_mapping();
