@@ -27,6 +27,7 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -49,7 +50,7 @@ DISPATCH_BUFFER_CAPACITY_FACTOR = 8
 
 
 # One entry per model whose chunked-prefill capture we replay; add a model by extending this list.
-_CHUNK_MODELS = [("dsv3", DeepSeekV3Config), ("kimi26", KimiK26Config)]
+_CHUNK_MODELS = [("dsv3", DeepSeekV3Config), ("kimi26", KimiK26Config), ("glm52", GLM52Config)]
 
 
 # One chunk (5120 tokens) spread over the 8-chip dispatch group => seq_len_per_chip 640. Expert

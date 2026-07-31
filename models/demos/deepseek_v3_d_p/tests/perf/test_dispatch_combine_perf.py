@@ -75,10 +75,59 @@ _COMBINE_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
     ("ring", 2, 50, 1): 1_166_319,
 }
 
+# GLM5.2 picks from its own chunked-prefill capture: 4 worst-case in-col shares + 4 nominal (25%).
+_GLM52_CHUNK_PICKS = [
+    (3, 0),  # 47.3% in-col share
+    (8, 0),  # 38.5%
+    (6, 1),  # 37.9%
+    (59, 2),  # 37.5%
+    (14, 2),  # 25.0%
+    (10, 0),  # 25.0%
+    (15, 0),  # 25.0%
+    (55, 3),  # 25.0%
+]
+_DISPATCH_GLM52_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 3, 0): 3_215_681,
+    ("linear", 2, 8, 0): 1_397_709,
+    ("linear", 2, 6, 1): 1_358_103,
+    ("linear", 2, 59, 2): 1_415_496,
+    ("linear", 2, 14, 2): 833_831,
+    ("linear", 2, 10, 0): 798_669,
+    ("linear", 2, 15, 0): 1_134_878,
+    ("linear", 2, 55, 3): 1_083_619,
+    ("ring", 2, 3, 0): 1_996_679,
+    ("ring", 2, 8, 0): 971_199,
+    ("ring", 2, 6, 1): 858_434,
+    ("ring", 2, 59, 2): 810_205,
+    ("ring", 2, 14, 2): 537_239,
+    ("ring", 2, 10, 0): 505_346,
+    ("ring", 2, 15, 0): 614_447,
+    ("ring", 2, 55, 3): 747_346,
+}
+_COMBINE_GLM52_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 3, 0): 2_064_644,
+    ("linear", 2, 8, 0): 1_539_358,
+    ("linear", 2, 6, 1): 1_210_064,
+    ("linear", 2, 59, 2): 1_514_169,
+    ("linear", 2, 14, 2): 885_887,
+    ("linear", 2, 10, 0): 970_758,
+    ("linear", 2, 15, 0): 1_005_250,
+    ("linear", 2, 55, 3): 953_341,
+    ("ring", 2, 3, 0): 1_549_368,
+    ("ring", 2, 8, 0): 1_208_534,
+    ("ring", 2, 6, 1): 1_022_902,
+    ("ring", 2, 59, 2): 1_176_984,
+    ("ring", 2, 14, 2): 685_226,
+    ("ring", 2, 10, 0): 792_624,
+    ("ring", 2, 15, 0): 716_709,
+    ("ring", 2, 55, 3): 830_004,
+}
+
 # model -> (picks, dispatch baselines, combine baselines).
 _MODELS = {
     "dsv3": (_DS_CHUNK_PICKS, _DISPATCH_DS_CHUNK_EXPECTED_NS, _COMBINE_DS_CHUNK_EXPECTED_NS),
     "kimi26": (_KIMI_CHUNK_PICKS, _DISPATCH_KIMI_CHUNK_EXPECTED_NS, _COMBINE_KIMI_CHUNK_EXPECTED_NS),
+    "glm52": (_GLM52_CHUNK_PICKS, _DISPATCH_GLM52_CHUNK_EXPECTED_NS, _COMBINE_GLM52_CHUNK_EXPECTED_NS),
 }
 
 

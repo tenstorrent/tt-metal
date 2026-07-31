@@ -756,6 +756,8 @@ def load_captured_routing(
 
         if model == "kimi26":
             path = CODE_DEBUG_5K_CHUNKED / "expert_routing_kimi26.safetensors"
+        elif model == "glm52":
+            path = CODE_DEBUG_5K_CHUNKED / "expert_routing_glm52.safetensors"
         else:
             path = CODE_DEBUG_5K_CHUNKED / "expert_routing_dsv3.safetensors"
     if not path.exists():
