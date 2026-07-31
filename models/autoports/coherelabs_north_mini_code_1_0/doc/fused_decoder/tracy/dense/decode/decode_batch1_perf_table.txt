@@ -1,0 +1,63 @@
+Script started on 2026-07-31 05:25:45+00:00 [COMMAND="tt-perf-report models/autoports/coherelabs_north_mini_code_1_0/doc/fused_decoder/tracy/dense/decode/reports/decode_batch1/2026_07_31_05_22_19/ops_perf_results_decode_batch1_2026_07_31_05_22_19.csv --start-signpost PERF_DECODE --end-signpost PERF_DECODE_END --no-color --no-summary" <not executed on terminal>]
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE'.
+Using operations until 'PERF_DECODE_END'.
+Detected data from 1 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID   Total %  Bound  OP Code                                 Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+167    8.2 %         LayerNormDeviceOperation                      3        26 μs                    1                                                 BF16, BF16 => BF16
+168   17.0 %   DRAM  MatmulDeviceOperation 32 x 2048 x 5120        3        54 μs          1 μs     80  398 GB/s  77.7 %  12.5 TFLOPs    5.6 %  HiFi2 BF16 x BF16 => BF16
+169    8.3 %         NLPCreateQKVHeadsDecodeDeviceOperation        3        26 μs          1 μs      1                                                       BF16 => BF16
+170    0.7 %         InterleavedToShardedDeviceOperation           3         1 μs          2 μs      1                                                       BF16 => BF16
+171    0.6 %         InterleavedToShardedDeviceOperation           3         1 μs          1 μs      1                                                       BF16 => BF16
+172    1.1 %         RotaryEmbeddingHfDeviceOperation              3         2 μs          2 μs      1                                                 BF16, BF16 => BF16
+173    1.0 %         RotaryEmbeddingHfDeviceOperation              3         2 μs          1 μs      1                                                 BF16, BF16 => BF16
+174    0.3 %         ReshardDeviceOperation                        3         0 μs          1 μs      1                                                       BF16 => BF16
+175    2.1 %         PagedFusedUpdateCacheDeviceOperation          3         5 μs          1 μs      2                                                 BF16, BF16 => BF16
+176    3.0 %         SdpaDecodeDeviceOperation                     3         9 μs          1 μs    110                                                 BF16, BF16 => BF16
+177    0.6 %         InterleavedToShardedDeviceOperation           3         1 μs          1 μs      1                                                       BF16 => BF16
+178    0.6 %         NLPConcatHeadsDecodeDeviceOperation           3         1 μs          1 μs     32                                                       BF16 => BF16
+179   13.3 %   DRAM  MatmulDeviceOperation 32 x 4096 x 2048        3        42 μs          1 μs     32  407 GB/s  79.4 %  12.9 TFLOPs   14.6 %  HiFi2 BF16 x BF16 => BF16
+180    0.7 %         SliceDeviceOperation                          3         2 μs          1 μs     64                                                       BF16 => BF16
+181    0.9 %         TransposeDeviceOperation                      3         2 μs          1 μs    110                                                       BF16 => BF16
+182   19.5 %   DRAM  MatmulDeviceOperation 32 x 2048 x 6144        3        62 μs          1 μs     96  417 GB/s  81.4 %  13.1 TFLOPs    4.9 %  HiFi2 BF16 x BF16 => BF16
+183    0.7 %         SliceDeviceOperation                          3         2 μs          1 μs     96                                                       BF16 => BF16
+184    0.7 %         SliceDeviceOperation                          3         2 μs          1 μs     96                                                       BF16 => BF16
+185    1.4 %         BinaryNgDeviceOperation                       3         4 μs          1 μs    110                                                 BF16, BF16 => BF16
+186   17.6 %   SLOW  MatmulDeviceOperation 32 x 3072 x 2048        3        56 μs          1 μs     64  232 GB/s  45.4 %   7.2 TFLOPs    4.1 %  HiFi2 BF16 x BF16 => BF16
+187    0.9 %         BinaryNgDeviceOperation                       3         2 μs          1 μs    110                                                 BF16, BF16 => BF16
+188    0.9 %         BinaryNgDeviceOperation                       3         2 μs          1 μs    110                                                 BF16, BF16 => BF16
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+     100.0 %         22 device ops, 0 host ops, 0 signposts                302 μs         18 μs         255 GB/s  49.8 %
+
+💡 Advice 💡
+============
+
+Matmul Optimization
+-------------------
+168   17.0 %   DRAM  MatmulDeviceOperation 32 x 2048 x 5120        3        54 μs          1 μs     80  398 GB/s  77.7 %  12.5 TFLOPs    5.6 %  HiFi2 BF16 x BF16 => BF16
+- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+179   13.3 %   DRAM  MatmulDeviceOperation 32 x 4096 x 2048        3        42 μs          1 μs     32  407 GB/s  79.4 %  12.9 TFLOPs   14.6 %  HiFi2 BF16 x BF16 => BF16
+- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+182   19.5 %   DRAM  MatmulDeviceOperation 32 x 2048 x 6144        3        62 μs          1 μs     96  417 GB/s  81.4 %  13.1 TFLOPs    4.9 %  HiFi2 BF16 x BF16 => BF16
+- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+186   17.6 %   SLOW  MatmulDeviceOperation 32 x 3072 x 2048        3        56 μs          1 μs     64  232 GB/s  45.4 %   7.2 TFLOPs    4.1 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+
+Script done on 2026-07-31 05:25:45+00:00 [COMMAND_EXIT_CODE="0"]

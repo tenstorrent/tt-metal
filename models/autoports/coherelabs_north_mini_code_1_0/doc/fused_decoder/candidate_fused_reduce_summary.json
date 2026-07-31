@@ -1,0 +1,38 @@
+{
+  "candidate": "deepseek_moe_fast_reduce_nc_fused score multiplication plus reduction",
+  "serving_decode_batch32": {
+    "pcc": 0.9981931682,
+    "acceptance_pcc": 0.995,
+    "sliding_moe_wall_ms_before": 8.299395,
+    "sliding_moe_wall_ms_after": 8.272819,
+    "sliding_moe_device_us_before": 8257,
+    "sliding_moe_device_us_after": 8248,
+    "full_moe_wall_ms_before": 8.292355,
+    "full_moe_wall_ms_after": 8.279496,
+    "full_moe_device_us_before": 8239,
+    "full_moe_device_us_after": 8234,
+    "decision": "retained for exactly one 32-token tile"
+  },
+  "prefill": {
+    "logical_length_33_pcc": 0.7588860077,
+    "logical_length_128_pcc": 0.4088181766,
+    "acceptance_pcc": 0.995,
+    "logical_length_128_candidate_wall_ms": 9.973846251,
+    "logical_length_128_selected_wall_ms": 10.079501,
+    "logical_length_128_four_tile_wall_ms": 10.410248501,
+    "logical_length_128_four_tile_reference_pcc": 0.9876487399,
+    "logical_length_128_selected_reference_pcc": 0.9876476411,
+    "logical_length_128_functional_reference_pcc": 0.9876476411,
+    "chunk_1024_requested_l1_bytes": 536870912,
+    "chunk_1024_requested_l1_bytes_per_bank": 4882432,
+    "available_l1_bytes_per_bank": 1461504,
+    "decision": "rejected; retain multiply plus fast-reduce lowering for all token counts other than 32"
+  },
+  "artifacts": [
+    "candidate_fused_reduce_decode_layer1_batch32.json",
+    "candidate_fused_reduce_prefill_layer1_batch1.json",
+    "candidate_fused_reduce_prefill_seq128_pcc.json",
+    "candidate_fused_reduce_prefill_tiled.json",
+    "candidate_reduce_comparison.json"
+  ]
+}

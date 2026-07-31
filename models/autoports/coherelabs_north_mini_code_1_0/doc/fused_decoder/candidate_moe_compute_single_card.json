@@ -1,0 +1,25 @@
+{
+  "candidate": "ttnn.experimental.moe_compute compute_only=True",
+  "hardware": "Blackhole p300c 11x10 worker grid, 1x1 mesh",
+  "shape": {
+    "experts_per_device": 128,
+    "tokens_per_device": 32,
+    "selected_experts_k": 8,
+    "hidden_size": 2048,
+    "intermediate_size": 768,
+    "output_height_shard_dim": 4,
+    "output_width_shard_dim": 4,
+    "activation": "SILU",
+    "bias": false
+  },
+  "weight_dtype": "bfloat4_b fixed by the operation's internal W0/W1 circular-buffer contract",
+  "matmul_output_pcc": {
+    "expert_126": 0.992762,
+    "expert_127": 0.990510
+  },
+  "stage_acceptance_pcc": 0.995,
+  "operation_test_threshold_pcc": 0.986,
+  "output_contract": "compute_only returns per-expert matmul output in slot 4 and does not combine routing scores",
+  "command": "python -c \"import ttnn; from tests.ttnn.nightly.unit_tests.operations.experimental.test_moe_compute_single_card import _run_moe_compute_single_card_test; from ttnn.operations.ccl import MoEActivationFunction; mesh=ttnn.open_mesh_device(ttnn.MeshShape(1,1), trace_region_size=500000); _run_moe_compute_single_card_test(mesh,(1,1),128,32,8,768,2048,4,4,ttnn.bfloat16,MoEActivationFunction.SILU,False); ttnn.close_mesh_device(mesh)\"",
+  "decision": "rejected: exact North geometry runs, but BFP4 expert outputs fall below the stage 0.995 PCC bar before the still-required routing-score combine"
+}
