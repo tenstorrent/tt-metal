@@ -263,8 +263,23 @@ def _enclosing_stack(block):
 
 
 def _find_stack(root):
-    """The block stack for `root`, looking down first and then up."""
-    return _largest_repeated_stack(root) or _enclosing_stack(root)
+    """The block stack for `root`, considering BOTH directions and keeping the better one.
+
+    Down-first-then-up is wrong, and the live gemma3 generator proves it: rooted at layers[0] -- the
+    root the wrapper actually gets -- the downward walk finds a 9-element stack of sub-modules INSIDE
+    the block and returns it, so the enclosing 48-block stack is never even looked for. Tagging 9
+    sub-modules as if they were the decoder stack would attribute every op to the wrong depth.
+
+    Rank the two candidates the same way sibling candidates are ranked: block-likeness first, then
+    length.
+    """
+    down = _largest_repeated_stack(root)
+    up = _enclosing_stack(root)
+    if down is None:
+        return up
+    if up is None:
+        return down
+    return up if (_stack_tier(up), len(up)) > (_stack_tier(down), len(down)) else down
 
 
 def _tag_stack(stack) -> bool:

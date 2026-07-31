@@ -145,3 +145,36 @@ def test_depth_is_recovered_for_any_stack_size(n):
     probe = _load_probe()
     _, t = _build(n)
     assert len(probe._find_stack(t.layers[0])) == n
+
+
+def test_an_inner_stack_does_not_beat_the_enclosing_one():
+    """REGRESSION, found on the live gemma3 model and missed by every synthetic case here.
+
+    _find_stack originally returned `down or up`. Rooted at layers[0] -- the root the wrapper
+    actually gets -- the downward walk found a 9-element list of sub-modules INSIDE the block and
+    returned it, so the enclosing 48-block stack was never looked for. On the real generator that
+    printed `block0=9`: nine sub-modules would have been tagged as the decoder stack, attributing
+    every op to the wrong depth. Both directions must be evaluated and the better kept.
+    """
+    probe = _load_probe()
+    LightweightModule = _lw()
+
+    class Leaf(LightweightModule):
+        def forward(self):
+            return None
+
+    class FatBlock(LightweightModule):
+        def __init__(self):
+            self.experts = [Leaf() for _ in range(9)]
+
+        def forward(self):
+            return None
+
+    class Model(LightweightModule):
+        def __init__(self):
+            self.layers = [FatBlock() for _ in range(48)]
+
+    m = Model()
+    inner = probe._largest_repeated_stack(m.layers[0])
+    assert inner is not None and len(inner) == 9, "fixture must reproduce the inner-stack trap"
+    assert len(probe._find_stack(m.layers[0])) == 48, "the inner stack displaced the enclosing one"

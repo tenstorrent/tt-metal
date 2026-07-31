@@ -855,18 +855,31 @@ _ENV_READ_RE = re.compile(
 )
 
 
+_SKIP_DIRS = {"__pycache__", ".git", "build", ".pytest_cache", "node_modules", ".venv"}
+
+
 def _env_reads(model_root: Path) -> list:
     """Every environment variable the model's own sources READ, as (var, file, line).
 
-    Returns LINES, not files. The previous prompt concatenated whole ``tt/*.py`` files in
-    alphabetical order and stopped once it passed 60,000 chars -- appending first and checking
-    after -- so on llama3_1_8b_p150 attention.py (56 KB) and ccl.py (18 KB) consumed the budget and
-    pipeline.py, whose line 70 is the ONLY place TT_PERF_LAYERS is read, was never sent. A prompt
-    built from env-read lines cannot be truncated past the answer, because the answer IS one of the
-    lines, and the whole set is a few hundred bytes even for a large model.
+    Returns LINES, not files. The prompt used to concatenate whole ``tt/*.py`` files in alphabetical
+    order and stop once it passed 60,000 chars -- appending first and checking after -- so on
+    llama3_1_8b_p150 attention.py (56 KB) and ccl.py (18 KB) consumed the budget and pipeline.py,
+    whose line 70 is the ONLY place TT_PERF_LAYERS is read, was never sent. A prompt built from
+    env-read lines cannot be truncated past the answer, because the answer IS one of the lines, and
+    the whole set is a few hundred bytes even for a large model.
+
+    Scans the WHOLE model directory, naming no subfolder. Looking only in ``tt/`` found the knob on
+    llama, whose pipeline.py lives there, and missed it on gemma3, where the only reader is the
+    generated ``tests/e2e/test_main_perf.py`` -- so discovery reported "no knob" for a variable this
+    tool had itself injected two steps earlier. Any folder name is a guess about a layout the next
+    model is free to differ on; a recursive walk of the model's own directory is not.
     """
     out = []
-    for py in sorted((model_root / "tt").glob("*.py")) if (model_root / "tt").is_dir() else []:
+    if model_root is None or not Path(model_root).is_dir():
+        return out
+    for py in sorted(Path(model_root).rglob("*.py")):
+        if _SKIP_DIRS & set(py.parts):
+            continue
         try:
             txt = py.read_text(errors="ignore")
         except Exception:  # noqa: BLE001
@@ -1202,7 +1215,31 @@ def _cov_ladder(model_root, model_id: str = "") -> list:
     return out
 
 
-def _measure_cov(repo_root: Path, mcp_env: dict, devices: str, node, case, full_types, model_root, base_knob=None):
+def _knob_is_inert(seq_at_depth, full_signal, depth, model_root) -> bool:
+    """Did capping to `depth` actually make the model smaller?
+
+    A knob is a NAME the tool exports; whether anything acts on it is a property of the model, not
+    of the name. gemma3 shows the failure: its generated perf test READS TT_PERF_LAYERS but its
+    build_pipeline takes no depth argument and reads no env, so the value is computed and dropped.
+    Every rung then profiles the identical full model, returns the full op set, satisfies the
+    coverage test on the FIRST rung, and the run is labelled "measured" against a window that was
+    never applied -- strictly worse than the honest "unverified-floor" it replaces.
+
+    The existing absent-op-types guard cannot catch this: with the cap ignored, nothing is missing.
+    Work signal can: slicing a model to 2 of N layers must reduce the op count, so an identical
+    signal means the cap did not reach the builder.
+    """
+    if not full_signal or not seq_at_depth:
+        return False
+    declared = _declared_depth(model_root)
+    if declared is not None and depth >= declared:
+        return False
+    return _work_signal(seq_at_depth) == full_signal
+
+
+def _measure_cov(
+    repo_root: Path, mcp_env: dict, devices: str, node, case, full_types, model_root, base_knob=None, full_signal=None
+):
     base = dict(base_knob) if base_knob else (_llm_depth_env(model_root, 2) if model_root is not None else {})
     if not base:
         print("  [optimize/cc] coverage measurement skipped: no depth knob")
@@ -1219,9 +1256,16 @@ def _measure_cov(repo_root: Path, mcp_env: dict, devices: str, node, case, full_
             _set_depth(env, d, key=numkey)  # see _knob_at: cap and FORCE_ALL must move together
         penv = dict(mcp_env)
         penv.update(env)
-        sigs_d, _, _ = _run_op_sigs(repo_root, penv, devices, node, case, d)
+        sigs_d, _, seq_d = _run_op_sigs(repo_root, penv, devices, node, case, d)
         if not sigs_d:
             print(f"  [optimize/cc] coverage measurement inconclusive: depth-{d} probe returned no ops")
+            return None
+        if _knob_is_inert(seq_d, full_signal, d, model_root):
+            print(
+                f"  [optimize/cc] depth knob is INERT: capping to {d} produced the SAME work signal "
+                f"({full_signal}) as the full model, so the cap never reached the builder. Refusing to "
+                f"report a coverage window measured against an uncapped model."
+            )
             return None
         got = set(sigs_d)
         if want <= got:
@@ -1284,21 +1328,35 @@ def _coverage_layers(
         facts["all_ops"] = sorted(sigs)
         facts["full_signal"] = _work_signal(seq)
         facts["full_blocks"] = _blocks_ran(seq)
-        measured = _measure_cov(
-            repo_root, mcp_env, devices, node, case, sigs, _model_root_from_node(repo_root, node), base_knob=depth_knob
-        )
-        if measured is not None:
-            _cov, deep, blk_source = measured
-        elif _signposts_agree(seq):
+        # SIGNPOSTS BEFORE THE LADDER. Both answer the same question -- what depth still contains
+        # every op type -- but at very different prices. Signposts are already paid for: the k=0
+        # probe above emitted them, so reading them costs nothing. The ladder REBUILDS the model at
+        # 2, 4, 8 and 16, up to four extra device probes, each reloading the weights. Running the
+        # expensive one first and the free one only as its fallback was backwards.
+        if _signposts_agree(seq):
             first_block, _ = _first_block_map(seq)
             deepest = max(first_block.values()) if first_block else 0
             deep = sorted(op for op, b in first_block.items() if b >= 16)
             _cov = min(max(deepest + 1, 2), 16)
             blk_source = "signposts"
         else:
-            deep = []
-            _cov = 2
-            blk_source = "unverified-floor"
+            measured = _measure_cov(
+                repo_root,
+                mcp_env,
+                devices,
+                node,
+                case,
+                sigs,
+                _model_root_from_node(repo_root, node),
+                base_knob=depth_knob,
+                full_signal=facts["full_signal"],
+            )
+            if measured is not None:
+                _cov, deep, blk_source = measured
+            else:
+                deep = []
+                _cov = 2
+                blk_source = "unverified-floor"
         facts["deep_ops"] = deep
         tail = f"; {len(deep)} op-type(s) still absent at max depth (present in full model, un-timed)" if deep else ""
         print(f"  [optimize/cc] coverage ({blk_source}): {len(sigs)} distinct op(s) -> TT_PERF_LAYERS={_cov}{tail}")
