@@ -137,6 +137,7 @@ protected:
     void validate_bank_assignments() const;
 
 private:
+    void verify_safe_allocation() const;
     void record_allocation_if_unsafe(Buffer* buffer);
     bool in_corruptible_allocation_scope() const;
 
@@ -145,6 +146,7 @@ private:
     // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
     // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
     bool allocations_unsafe_ = false;
+    bool tracked_allocations_unsafe_ = false;
     bool tracking_enabled_ = false;
     bool traceback_capture_enabled_ = false;
     bool skip_program_cache_ = false;
