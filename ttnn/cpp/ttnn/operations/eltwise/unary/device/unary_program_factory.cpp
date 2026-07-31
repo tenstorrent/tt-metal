@@ -211,7 +211,7 @@ void enumerate_core_rt_args(
 
     std::vector<CoreCoord> cores;
     if (has_sharding) {
-        const CoreRangeSet core_group_1 = grid;
+        const CoreRangeSet& core_group_1 = grid;
         const uint32_t out_shard_height = shard_specs->output_shard_spec.shape[0] / tile_height;
         const uint32_t out_shard_width = shard_specs->output_shard_spec.shape[1] / tile_width;
         auto out_memory_layout = output.memory_config().is_sharded() ? output.memory_config().memory_layout()
@@ -520,13 +520,15 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     // --- Per-core runtime args ---
     // Work split + per-core values come from enumerate_core_rt_args, shared with
     // override_runtime_arguments so the cache-hit patch and the miss path cannot disagree.
+    // Sharded readers/writers take {buffer, units, start_id}; interleaved add the five chunk fields.
+    constexpr uint32_t kShardedDataMovementArgs = 3, kInterleavedDataMovementArgs = 8, kComputeArgs = 3;
     enumerate_core_rt_args(
         operation_attributes, tensor_args, output, [&](const CoreRtArgs& w, const RmChunkConstants& kc) {
             if (w.noop) {
-                const uint32_t n = has_sharding ? 3 : 8;
+                const uint32_t n = has_sharding ? kShardedDataMovementArgs : kInterleavedDataMovementArgs;
                 reader_desc.runtime_args.emplace_back(w.core, KernelDescriptor::CoreRuntimeArgs(n, 0));
                 writer_desc.runtime_args.emplace_back(w.core, KernelDescriptor::CoreRuntimeArgs(n, 0));
-                compute_desc.runtime_args.emplace_back(w.core, KernelDescriptor::CoreRuntimeArgs(3, 0));
+                compute_desc.runtime_args.emplace_back(w.core, KernelDescriptor::CoreRuntimeArgs(kComputeArgs, 0));
                 return;
             }
             if (has_sharding) {

@@ -363,7 +363,10 @@ void MorehAdamWDeviceOperation::override_runtime_arguments(
     auto& param_out = tensor_return_value.at(0).value();
     auto& exp_avg_out = tensor_return_value.at(1).value();
     auto& exp_avg_sq_out = tensor_return_value.at(2).value();
-    const auto& max_exp_avg_sq_out = tensor_return_value.at(3);
+    // create_descriptor drops this output when amsgrad is off; the hit path has to match or it patches
+    // an address the miss path never baked.
+    const std::optional<Tensor> max_exp_avg_sq_out =
+        operation_attributes.amsgrad ? tensor_return_value.at(3) : std::nullopt;
 
     constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1, kComputeKernelIdx = 2;
     constexpr uint32_t kLrIdx = 5, kBeta1ExpIdx = 10, kBeta2ExpIdx = 11, kReaderStepIdx = 12;
