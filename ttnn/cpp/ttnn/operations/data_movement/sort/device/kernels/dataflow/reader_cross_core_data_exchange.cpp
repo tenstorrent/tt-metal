@@ -72,8 +72,11 @@ void kernel_main() {
     noc.async_read_barrier();
 
     // Semaphore setup
-    Semaphore<> sem_exchange(sem::exchange);
-    Semaphore<> sem_barrier(sem::barrier);
+    // NOTE: no explicit <> -- sem::x is a SemaphoreBindingToken carrying the host-chosen scope,
+    // and CTAD adopts it. Spelling Semaphore<> would pin the class default (LOCAL_NONATOMIC) and
+    // contradict the baked scope, which is a static_assert.
+    Semaphore sem_exchange(sem::exchange);
+    Semaphore sem_barrier(sem::barrier);
 
     // ROW_MAJOR per-core slice byte offset within each input/index DRAM row.
     // Each core owns a contiguous strip of `number_of_tiles_per_core` tiles
