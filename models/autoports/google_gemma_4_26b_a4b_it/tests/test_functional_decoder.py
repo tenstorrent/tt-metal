@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import inspect
 import json
 import os
 import platform
+import statistics
 import struct
 import subprocess
 import time
@@ -49,8 +51,11 @@ ARTIFACT_DIR = Path("models/autoports/google_gemma_4_26b_a4b_it/doc/functional_d
 def _evidence_provenance(mesh_device, exact_command: str) -> dict:
     """Bind opt-in evidence to its exact source, test, build, and hardware."""
 
-    decoder_path = Path(decoder_module.__file__).resolve()
+    functional_decoder_path = Path("models/autoports/google_gemma_4_26b_a4b_it/tt/functional_decoder.py").resolve()
+    selected_decoder_path = Path(inspect.getsourcefile(FunctionalDecoder)).resolve()
     test_path = Path(__file__).resolve()
+    wrapper_path_value = os.getenv("GEMMA4_EVIDENCE_WRAPPER_PATH")
+    fused_path_value = os.getenv("GEMMA4_EVIDENCE_FUSED_DECODER_PATH")
     try:
         checkout_git_sha = subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
@@ -69,8 +74,23 @@ def _evidence_provenance(mesh_device, exact_command: str) -> dict:
     except (AttributeError, TypeError):
         arch = os.getenv("ARCH_NAME", "unknown")
     return {
-        "functional_decoder_sha256": hashlib.sha256(decoder_path.read_bytes()).hexdigest(),
-        "test_sha256": hashlib.sha256(test_path.read_bytes()).hexdigest(),
+        "selected_decoder_class": f"{FunctionalDecoder.__module__}.{FunctionalDecoder.__qualname__}",
+        "selected_variant": os.getenv("GEMMA4_EVIDENCE_VARIANT", "functional"),
+        "source_sha256": {
+            "selected_decoder": hashlib.sha256(selected_decoder_path.read_bytes()).hexdigest(),
+            "functional_decoder": hashlib.sha256(functional_decoder_path.read_bytes()).hexdigest(),
+            "functional_test": hashlib.sha256(test_path.read_bytes()).hexdigest(),
+            **(
+                {"fused_decoder": hashlib.sha256(Path(fused_path_value).resolve().read_bytes()).hexdigest()}
+                if fused_path_value
+                else {}
+            ),
+            **(
+                {"wrapper_test": hashlib.sha256(Path(wrapper_path_value).resolve().read_bytes()).hexdigest()}
+                if wrapper_path_value
+                else {}
+            ),
+        },
         "checkout_git_sha": checkout_git_sha,
         "ttnn_extension_path": str(extension_path),
         "ttnn_extension_sha256": hashlib.sha256(extension_path.read_bytes()).hexdigest(),
@@ -1461,14 +1481,32 @@ def test_functional_decoder_perf_profile(mesh_device, device_params, layer_idx, 
     ttnn.synchronize_device(mesh_device)
 
     measured = {}
+    perf_repeats = int(os.getenv("GEMMA4_DECODER_PERF_REPEATS", "1"))
+    if perf_repeats < 1:
+        raise ValueError(f"GEMMA4_DECODER_PERF_REPEATS must be positive, got {perf_repeats}")
     case_id = f"layer{layer_idx}_{layer_type}_seq{seq_len}_batch{batch}"
     if batch == 1:
         signpost(f"PERF_PREFILL_{case_id}", f"cache_shape={cache_shape}")
-        start = time.perf_counter()
-        prefill_output = decoder.prefill_forward(**prefill_args)
-        ttnn.synchronize_device(mesh_device)
-        measured["prefill_host_ms"] = (time.perf_counter() - start) * 1000
+        prefill_samples = []
+        for _ in range(perf_repeats):
+            start = time.perf_counter()
+            prefill_output = decoder.prefill_forward(**prefill_args)
+            ttnn.synchronize_device(mesh_device)
+            prefill_samples.append((time.perf_counter() - start) * 1000)
+        measured["prefill_host_ms"] = statistics.median(prefill_samples)
+        measured["prefill_host_samples_ms"] = prefill_samples
         signpost(f"PERF_PREFILL_{case_id}_END", f"cache_shape={cache_shape}")
+
+    if os.getenv("GEMMA4_DECODER_EAGER_PROFILE") == "1":
+        # With TT_METAL_PROFILER_MID_RUN_DUMP=1, discard setup/prefill samples
+        # before the focused eager-decode range so long prefill graphs cannot
+        # overflow the device profiler buffer and corrupt decode op timings.
+        ttnn.ReadDeviceProfiler(mesh_device)
+        signpost(f"PERF_EAGER_DECODE_{case_id}", f"cache_shape={cache_shape}")
+        decoder.decode_forward(**decode_args)
+        ttnn.synchronize_device(mesh_device)
+        signpost(f"PERF_EAGER_DECODE_{case_id}_END", f"cache_shape={cache_shape}")
+        ttnn.ReadDeviceProfiler(mesh_device)
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     traced_decode_output = decoder.decode_forward(**decode_args)
@@ -1478,10 +1516,14 @@ def test_functional_decoder_perf_profile(mesh_device, device_params, layer_idx, 
     ttnn.synchronize_device(mesh_device)
 
     signpost(f"PERF_DECODE_{case_id}", f"cache_shape={cache_shape}")
-    start = time.perf_counter()
-    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-    ttnn.synchronize_device(mesh_device)
-    measured["decode_trace_host_ms"] = (time.perf_counter() - start) * 1000
+    decode_samples = []
+    for _ in range(perf_repeats):
+        start = time.perf_counter()
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        ttnn.synchronize_device(mesh_device)
+        decode_samples.append((time.perf_counter() - start) * 1000)
+    measured["decode_trace_host_ms"] = statistics.median(decode_samples)
+    measured["decode_trace_host_samples_ms"] = decode_samples
     signpost(f"PERF_DECODE_{case_id}_END", f"cache_shape={cache_shape}")
     ttnn.release_trace(mesh_device, trace_id)
 

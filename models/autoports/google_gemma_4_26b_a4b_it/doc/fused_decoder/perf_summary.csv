@@ -1,0 +1,7 @@
+layer_idx,layer_kind,path,batch,sequence_length,baseline_ms,fused_ms,improvement_percent,repeats
+0,sliding_attention,prefill,1,1024,680.894922,680.574817,0.047012,50
+0,sliding_attention,traced_decode,1,1024,3.023234,2.994960,0.935207,50
+0,sliding_attention,traced_decode,32,1024,68.868126,68.766853,0.147054,50
+5,full_attention,prefill,1,1024,682.049158,681.699678,0.051240,50
+5,full_attention,traced_decode,1,1024,3.199710,3.186425,0.415193,50
+5,full_attention,traced_decode,32,1024,68.661923,68.587883,0.107833,200

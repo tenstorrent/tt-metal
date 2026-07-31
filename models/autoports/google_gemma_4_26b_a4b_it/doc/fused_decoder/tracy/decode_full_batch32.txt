@@ -1,0 +1,21 @@
+Script started on 2026-07-31 11:27:34+00:00 [COMMAND="tt-perf-report models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/source_full_batch32_ops_perf_results.csv --start-signpost PERF_EAGER_DECODE_layer5_full_attention_seq1024_batch32 --end-signpost PERF_EAGER_DECODE_layer5_full_attention_seq1024_batch32_END --no-color --csv models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/decode_full_batch32.csv --summary-file models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/decode_full_batch32_summary" <not executed on terminal>]
+Detected CSV format: v2.1 (with device arch and worker core count)
+No DEVICE ARCH values found. Defaulting to 'wormhole'.
+Using architecture from CSV: wormhole
+No DEVICE ARCH values found. Defaulting to 'wormhole'.
+No non-zero AVAILABLE WORKER CORE COUNT values found. Defaulting to 64 cores.
+Architecture: wormhole, Worker cores: 64
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_EAGER_DECODE_layer5_full_attention_seq1024_batch32'.
+Using operations until 'PERF_EAGER_DECODE_layer5_full_attention_seq1024_batch32_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/decode_full_batch32.csv
+Overall DRAM roofline (modeled ops): 16.9% (49 GB/s)
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingHfDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/decode_full_batch32_summary.csv
+Plotting PNG stacked report to models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/decode_full_batch32_summary.png
+
+Script done on 2026-07-31 11:27:35+00:00 [COMMAND_EXIT_CODE="0"]
