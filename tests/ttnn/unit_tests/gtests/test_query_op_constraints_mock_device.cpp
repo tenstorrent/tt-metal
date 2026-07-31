@@ -28,6 +28,9 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -509,6 +512,84 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
     EXPECT_EQ(verify.response.resource_usage.cb_peak_size_per_core, out.response.resource_usage.cb_peak_size_per_core);
     EXPECT_EQ(
         verify.response.resource_usage.l1_buffers_peak_per_core, out.response.resource_usage.l1_buffers_peak_per_core);
+}
+
+// ============================================================================
+// Metal 2.0 dataflow buffers in the estimation-path capture (#51674)
+//
+// A Metal 2.0 program allocates its per-core L1 scratch as dataflow buffers rather than
+// circular buffers, so `Program::circular_buffers()` is empty for a ported op and the CB
+// side of the resource usage summed to zero. `repeat` is ported (#51068), and row-major
+// input keeps it on the DFB-bearing factory rather than routing through a tilize first.
+// ============================================================================
+
+namespace {
+// Row major so `repeat` stays on the path that builds DataflowBufferSpecs directly,
+// instead of converting layout first and reporting some other op's buffers.
+tt::tt_metal::TensorSpec metal2_repeat_input_spec() {
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), ttnn::L1_MEMORY_CONFIG));
+}
+
+ttnn::graph::ConstraintQueryResponse query_repeat(tt::tt_metal::distributed::MeshDevice* device) {
+    const auto input_spec = metal2_repeat_input_spec();
+    return ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::repeat(std::forward<decltype(args)>(args)...); },
+        device,
+        input_spec,
+        ttsl::SmallVector<uint32_t>{1, 1, 2, 1},
+        input_spec.tensor_layout().get_memory_config());
+}
+}  // namespace
+
+// The regression itself: before dataflow buffers were recorded this reported exactly 0,
+// which is what blocked the tt-mlir uplift.
+TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatReportsNonZeroCbPeak) {
+    auto query = query_repeat(mock_device_.get());
+
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
+    EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0u);
+}
+
+// Recording the buffers is only half the fix — they also have to reach the running total,
+// which is a separate accumulator in extract_resource_usage_per_core.
+TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakContributesToPeakMemory) {
+    auto query = query_repeat(mock_device_.get());
+
+    ASSERT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
+    EXPECT_GE(query.resource_usage.peak_memory_usage_per_core, query.resource_usage.cb_peak_size_per_core);
+}
+
+// Each program run clears the previous run's CB state before capture. If dataflow buffers
+// were recorded but not covered by that reset, the reported peak would climb with every
+// query — a drift that only shows up on the second call.
+TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakIsStableAcrossQueries) {
+    auto first = query_repeat(mock_device_.get());
+    auto second = query_repeat(mock_device_.get());
+
+    ASSERT_EQ(first.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << first.error_message.value_or("none");
+    ASSERT_EQ(second.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << second.error_message.value_or("none");
+    EXPECT_EQ(second.resource_usage.cb_peak_size_per_core, first.resource_usage.cb_peak_size_per_core);
+}
+
+// Guards the other direction: the added dataflow-buffer pass must leave ops that use real
+// circular buffers accounted for exactly as before.
+TEST_F(QueryOpConstraintsMockDevice, LegacyCircularBufferOpStillReportsCbPeak) {
+    const auto input_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); },
+        mock_device_.get(),
+        input_spec,
+        input_spec.tensor_layout().get_memory_config());
+
+    ASSERT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
+    EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0u);
+    EXPECT_GE(query.resource_usage.peak_memory_usage_per_core, query.resource_usage.cb_peak_size_per_core);
 }
 
 // ============================================================================

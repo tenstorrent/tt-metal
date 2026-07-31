@@ -368,6 +368,23 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_
     for (const auto& cb : program->circular_buffers()) {
         track_allocate_cb(cb->core_ranges(), 0, cb->size(), cb->globally_allocated(), device);
     }
+
+    // Metal 2.0 programs allocate their L1 scratch as dataflow buffers instead of circular
+    // buffers, so the loop above sees an empty list for any ported op and cb_peak_size_per_core
+    // comes out as 0. Record them on the same node type: they are the same resource to anyone
+    // reading the trace, and the peak math is a running sum over CB-allocate nodes.
+    //
+    // `borrows_memory` maps onto the globally-allocated flag deliberately. Both mean "these bytes
+    // belong to a buffer that is tracked in its own right", and extract_resource_usage_per_core
+    // skips such nodes so the same L1 is not counted once as the tensor and once as the view.
+    //
+    // addr 0 matches the circular-buffer call above: this path runs before finalization, so no
+    // address is assigned yet, and the estimation-path peak math only reads sizes. A real-run
+    // (RunMode::NORMAL) trace returns above and would need real addresses, since that trace is
+    // rendered positionally rather than summed.
+    for (const auto& dfb : program->dataflow_buffer_footprints()) {
+        track_allocate_cb(dfb.core_ranges, 0, dfb.total_size, dfb.borrows_memory, device);
+    }
 }
 
 template <typename T>
