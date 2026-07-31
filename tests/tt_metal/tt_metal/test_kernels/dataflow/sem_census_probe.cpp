@@ -32,6 +32,11 @@ void kernel_main() {
     const uint32_t report_addr = get_arg(args::report_addr);
     const uint32_t increment_times = get_arg(args::increment_times);
     const uint32_t is_reporter = get_arg(args::is_reporter);
+    // Which kernel-barrier slot THIS kernel rendezvouses on. g_kernel_barrier is node-wide and
+    // wait_threads() releases on the arriving hart's own participant count, so two co-resident
+    // kernels with DIFFERENT thread counts must not share a slot -- they would mix groups and hang
+    // at the barrier. The host hands each kernel its own slot.
+    const uint32_t barrier_idx = get_arg(args::barrier_idx);
 
     // NOTE: a DM_LOCAL_CACHED semaphore's pool slot is seeded by sem::init_dm_cached(), which the
     // build AUTO-INJECTS at kernel entry -- no call is needed here.
@@ -43,7 +48,7 @@ void kernel_main() {
 
     // Barrier across THIS kernel's threads, so the reporter sees all of their increments.
     // (No-op when the kernel is single-threaded.)
-    sync_threads();
+    sync_threads(barrier_idx);
 
     if (is_reporter != 0 && get_my_thread_id() == 0u) {
         volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
