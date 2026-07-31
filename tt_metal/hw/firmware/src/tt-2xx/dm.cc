@@ -120,8 +120,11 @@ volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used
 // This tests whether explicitly preserving the full 5-bit Tensix-only counter selector prevents tc16 updates
 // from leaking onto a DM-visible counter. Pair 0 is intentionally borrowed for this experiment; do not use
 // this with a program whose real DFB remapper configuration also owns pair 0.
+//
+// Toggle vs pack: set this to 0 and enable the #if 0 remapper block in tile_counter_overlay_alias.cpp
+// to program the same identity route from Neo0 pack instead. Do not leave both enabled.
 #ifndef DFB_HACK_REMAP_TC16_IDENTITY
-#define DFB_HACK_REMAP_TC16_IDENTITY 1
+#define DFB_HACK_REMAP_TC16_IDENTITY 0
 #endif
 
 #if DFB_HACK_REMAP_TC16_IDENTITY
