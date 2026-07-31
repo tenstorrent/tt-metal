@@ -58,8 +58,17 @@ Rules:
   changes measured cycles. CI passes it. Match CI when the report will be
   compared with CI numbers, and never mix speed-of-light and normal rows in
   one report.
-- `--enable-perf-counters` adds efficiency-metric columns;
-  `--dump-csv-counters` additionally writes `<module>.counters.csv`.
+- `--enable-perf-counters` produces a different, mutually exclusive kind of
+  report. It compiles with `-DPERF_COUNTERS_COMPILED` (the WC build), which
+  reduces `ZONE_SCOPED` to metadata only: the run emits no wall-clock
+  `mean(<run type>)` columns, only `<RUN_TYPE>_..._pct` efficiency columns.
+  It also writes to the same `<module>.csv` path, overwriting the timing
+  report. Copy the timing report aside first, run counters as a separate
+  sweep, and validate the result as a counter report. `--dump-csv-counters`
+  additionally writes raw counter values to `<module>.counters.csv`.
+- Perf counters are unavailable on Quasar. The build gate keeps the define off
+  there and `counters.h` `#error`s if it ever slips through, so the flag
+  yields no counter columns.
 - SFPU sweep modules need `--mode perf`; the selector defaults to `accuracy`
   and deselects the perf sweep.
 - Do not pass `--coverage`. Instrumentation invalidates perf numbers.
@@ -70,8 +79,11 @@ Rules:
 ## 3. Know where the files come from
 
 - Each worker writes `<module>.<worker>.csv` and `<module>.<worker>.post.csv`
-  into `$ARTEFACTS/temp_perf_data/` when the module-scoped `perf_report`
-  fixture tears down — `gw0`, `gw1`, … under `-n`, otherwise `master`.
+  into `/tmp/tt-llk-build/temp_perf_data/` when the module-scoped
+  `perf_report` fixture tears down. Under GitHub Actions the root is
+  `$RUNNER_TEMP/tt-llk-build` instead. The worker is `gw0`, `gw1`, … under
+  `-n`, otherwise `master`. Look there for partial artifacts after an
+  aborted run.
 - `pytest_sessionfinish` calls `combine_perf_reports()`, which merges the
   per-worker files into `perf_data/<module>/<module>.csv`,
   `<module>.post.csv`, and `<module>.counters.csv`, sorts them, and deletes
@@ -90,9 +102,10 @@ finish, or every selected test was skipped.
 1. **Schema.** A `PerfSchemaError` means one test emits different columns
    across its sweep — usually a parameter that is `None` for some values — or
    two ops share one module. Fix the test; do not work around it.
-2. **Row count.** Expect `variants × markers` rows, with markers `INIT`,
-   `KERNEL`, and `TILE_LOOP`. A short file means an aborted or partly skipped
-   sweep.
+2. **Row count.** Expect `variants × markers` rows: markers `INIT`, `KERNEL`,
+   and `TILE_LOOP` in a timing report, and only `INIT` and `TILE_LOOP` in a
+   counter report, which has no profiler-derived `KERNEL` row. A short file
+   means an aborted or partly skipped sweep.
 3. **Duplicate keys.** `combine_perf_reports()` warns when it collapses rows
    sharing a (sweep, marker) key. Differing metrics on a collapsed key are
    either run-to-run noise or a parameter that changes the kernel without
@@ -104,8 +117,16 @@ finish, or every selected test was skipped.
    `quasar-perf-test`.
 5. **Freshness.** Compare CSV columns with the current test axes. Missing axes
    mean the report predates the test; regenerate instead of analyzing.
-6. **Completeness.** Confirm a `mean(...)` and `TEXT_SIZE(...)` column exists
-   for every requested run type.
+6. **Completeness, by report kind.** A timing report carries a
+   `mean(<run type>)` column for every requested run type, and a
+   `TEXT_SIZE(<run type>)` column only for `L1_TO_L1`, `UNPACK_ISOLATE`,
+   `MATH_ISOLATE`, and `PACK_ISOLATE`. `L1_CONGESTION` is deliberately absent
+   from the code-size map, so a missing `TEXT_SIZE(L1_CONGESTION)` is correct
+   rather than a defect. A counter report has no wall-clock means at all:
+   check its `<RUN_TYPE>_..._pct` columns, expect only the `INIT` and
+   `TILE_LOOP` markers, and note that its `.post.csv` is identical to the raw
+   file because normalization only rescales columns named `mean(...)` and
+   `std(...)`.
 
 Never present metrics from a run whose pytest phase failed.
 
@@ -124,9 +145,11 @@ Report back, and keep alongside the CSV when it is archived:
 ## Refresh and compare
 
 - Copy an existing report elsewhere before rerunning; combined files are
-  overwritten in place.
+  overwritten in place. This applies with full force to a counter run, which
+  replaces the timing report for the same module.
 - Compare like with like: same architecture, same speed-of-light setting, same
-  `loop_factor` and marker.
+  `loop_factor` and marker, and the same report kind. Timing and counter
+  reports measure different things and share no metric columns.
 - Repeat a run before attributing a small delta to a code change.
 
 ## Checklist
@@ -135,8 +158,9 @@ Report back, and keep alongside the CSV when it is archived:
 - [ ] Producer and consumer phases both completed without aborting.
 - [ ] Coverage off; speed-of-light setting deliberate and uniform.
 - [ ] `perf_data/<module>/` holds the raw and `.post.csv` files, plus counters
-      when requested.
+      when requested, and no earlier report was overwritten unintentionally.
 - [ ] Single schema, expected row count, duplicate warnings reviewed.
+- [ ] Column expectations applied for the report kind actually produced.
 - [ ] `TILE_LOOP` metrics inspected for plausibility.
 - [ ] Columns match the current test sweep.
 - [ ] Provenance recorded.
