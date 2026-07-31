@@ -68,10 +68,6 @@ bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& d
     // (shape, dims, dtype) regression example from permute.yaml's perf-demoted ledger. None of
     // these match the "left-out-for-now" fused-WH scope=out condition (all have NC < 6 or
     // dims[-1] != rank-2), so they are genuine in-scope perf demotions, not mis-scoped cases.
-    // A prior round's larger list has since been narrowed: entries whose device-vs-native deficit
-    // was inside measurement noise, or whose deficit traced to the FLOAT32->INT32 CB-format defect
-    // in the blocked-generic factory (now repaired to match permute_rm_program_factory.cpp:169's
-    // native, unmapped dtype), were reversed off this list rather than kept as an exception.
     struct DemotedCase {
         std::initializer_list<uint32_t> shape;
         std::initializer_list<uint32_t> dims;
