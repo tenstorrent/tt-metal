@@ -24,6 +24,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "tests/tt_metal/tt_metal/test_kernels/misc/drisc_drain_frame.h"
+#include "tools/x280_bm/include/prof_packet.h"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -3255,13 +3256,15 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCDrainsRealWorkersToHost) {
         const auto tails_before = read_tails();
 
         // DRISC L1 map
+        const uint32_t data_bytes = kNumRisc * ring_words * sizeof(uint32_t);  // 10240, one core's rings
         const uint32_t poll_ring = drisc_l1_base_;
-        const uint32_t page_buf = poll_ring + num_cores * poll_bytes;
+        const uint32_t stage = poll_ring + num_cores * poll_bytes;
+        const uint32_t page_buf = stage + data_bytes;
         const uint32_t head_scratch = page_buf + kPageBytes;
-        const uint32_t done_addr = head_scratch + 16 * 32;
+        const uint32_t done_addr = head_scratch + 128 * 32;
         const uint32_t results_addr = done_addr + 64;
-        const uint32_t cfg_l1 = drisc_l1_base_ + 48 * 1024;
-        ASSERT_LT(results_addr + 64 - drisc_l1_base_, 48u * 1024u) << "drainer state must stay below the socket config";
+        const uint32_t cfg_l1 = drisc_l1_base_ + 64 * 1024;
+        ASSERT_LT(results_addr + 64 - drisc_l1_base_, 64u * 1024u) << "drainer state must stay below the socket config";
         ASSERT_LE(distributed::D2HSocket::required_config_buffer_size(), 8u * 1024u);
 
         distributed::D2HSocket socket(
@@ -3312,7 +3315,9 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCDrainsRealWorkersToHost) {
                     kPageBytes,
                     socket.get_config_buffer_address(),
                     kQuietStop,
-                    kMaxSweeps}});
+                    kMaxSweeps,
+                    stage,
+                    data_bytes}});
         std::vector<uint32_t> drain_args = {num_cores, cv_src, ring0_src};
         drain_args.insert(drain_args.end(), coords.begin(), coords.end());
         SetRuntimeArgs(program, drain_id, drisc_logical, drain_args);
@@ -3324,6 +3329,10 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCDrainsRealWorkersToHost) {
         // ---- host: consume pages and decode frames while the device runs ----
         std::vector<uint32_t> sink(static_cast<size_t>(kPageWords) * kPagesPerRead);
         std::map<std::pair<uint32_t, uint32_t>, uint64_t> received;  // (core_xy, lane) -> words
+        // Per-lane payload, in arrival order. The drainer walks cores and lanes in a fixed order and the
+        // socket FIFO preserves page order, so appending here reconstructs each lane's marker stream
+        // exactly as the producing RISC wrote it.
+        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> lane_words;
         uint64_t total_received = 0;
         uint64_t frames_seen = 0;
         uint64_t pages_seen = 0;
@@ -3358,6 +3367,9 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCDrainsRealWorkersToHost) {
                             break;
                         }
                         received[{xy, lane}] += n;
+                        auto& lw = lane_words[{xy, lane}];
+                        const uint32_t* payload = pw + i + drisc_drain::FRAME_HEADER_WORDS;
+                        lw.insert(lw.end(), payload, payload + n);
                         total_received += n;
                         frames_seen++;
                         i += drisc_drain::FRAME_HEADER_WORDS + n;
@@ -3457,6 +3469,176 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCDrainsRealWorkersToHost) {
             }
         }
         EXPECT_EQ(lane_mismatches, 0u) << label << ": per-lane word counts do not reconcile";
+
+        // ---------------- zone decode ----------------
+        // Walk each lane's marker stream and rebuild zones. Wire format constants come from
+        // prof_packet.h, the same definitions the device's ppfmt uses -- not a host-side copy.
+        //
+        //   STICKY_TIMER  1 word : low27 = wall-clock HIGH half; applies to every marker after it
+        //   ZONE_START/END/TOTAL  2 words : w0 = type | 16-bit srcloc hash, w1 = wall-clock LOW half
+        //   STICKY_PROG   1 word : low27 = host program id
+        //   DATA/EVENT    2 + size words
+        //
+        // A timestamp is only meaningful once a STICKY_TIMER has been seen, which is why the producer
+        // emits one whenever the high half ticks. Zones nest, so START pushes and END pops.
+        uint64_t zones_closed = 0;
+        uint64_t markers = 0;
+        uint32_t unknown_types = 0;
+        uint32_t truncated = 0;
+        uint32_t unmatched_end = 0;
+        uint32_t hash_mismatch = 0;
+        uint32_t backwards = 0;
+        uint32_t no_timer_hi = 0;
+        uint32_t lanes_short = 0;
+        uint64_t leftover_open = 0;
+        std::map<uint32_t, uint64_t> zone_hist;  // srcloc hash -> closed zone count
+
+        for (const auto& [key, words] : lane_words) {
+            uint32_t timer_hi = 0;
+            bool have_hi = false;
+            std::vector<std::pair<uint32_t, uint64_t>> stack;  // (hash, start ts)
+            uint64_t lane_zones = 0;
+            uint64_t last_ts = 0;
+            size_t i = 0;
+            while (i < words.size()) {
+                const uint32_t w0 = words[i];
+                const uint32_t type = (w0 >> PP_TYPE_SHIFT) & PP_TYPE_MASK;
+                if (type == PP_STICKY_TIMER) {
+                    timer_hi = w0 & PP_LOW27_MASK;
+                    have_hi = true;
+                    i += 1;
+                    continue;
+                }
+                if (type == PP_STICKY_PROG || type == PP_STICKY_META || type == PP_STICKY_SRC) {
+                    i += 1;
+                    continue;
+                }
+                if (type == PP_DATA || type == PP_EVENT) {
+                    const uint32_t sz = (w0 >> PP_DATA_SIZE_SHIFT) & PP_DATA_SIZE_MASK;
+                    i += 2 + sz;
+                    continue;
+                }
+                if (type == PP_ZONE_START || type == PP_ZONE_END || type == PP_ZONE_TOTAL) {
+                    if (i + 1 >= words.size()) {
+                        truncated++;
+                        break;
+                    }
+                    const uint32_t hash = w0 & 0xFFFFu;
+                    const uint64_t ts = (static_cast<uint64_t>(timer_hi) << 32) | words[i + 1];
+                    markers++;
+                    if (!have_hi) {
+                        // Not an error. STICKY_TIMER is emitted only when the wall clock's HIGH half
+                        // CHANGES, so a capture that starts mid-stream legitimately sees markers before
+                        // its first sticky -- their high half was established before we were listening.
+                        // Those timestamps are unanchored (hi = 0) and must be excluded from ordering
+                        // checks; a real consumer either drops them or back-fills from the first sticky.
+                        no_timer_hi++;
+                    }
+                    if (type == PP_ZONE_START) {
+                        stack.emplace_back(hash, ts);
+                    } else if (type == PP_ZONE_END) {
+                        if (stack.empty()) {
+                            unmatched_end++;
+                        } else {
+                            const auto [open_hash, start_ts] = stack.back();
+                            stack.pop_back();
+                            if (open_hash != hash) {
+                                hash_mismatch++;
+                            }
+                            if (have_hi && start_ts != 0 && ts < start_ts) {
+                                backwards++;
+                            }
+                            zones_closed++;
+                            lane_zones++;
+                            zone_hist[hash]++;
+                        }
+                    }
+                    if (have_hi) {
+                        if (ts < last_ts) {
+                            backwards++;
+                        }
+                        last_ts = ts;
+                    }
+                    i += 2;
+                    continue;
+                }
+                unknown_types++;
+                if (unknown_types <= 3) {
+                    // Dump the neighbourhood of the first few desyncs -- the shape of the surrounding
+                    // words says whether we landed mid-marker (a raw timestamp read as a header) or on
+                    // genuinely corrupt data.
+                    std::string ctx;
+                    const size_t lo = i > 6 ? i - 6 : 0;
+                    const size_t hi = std::min(words.size(), i + 7);
+                    for (size_t k = lo; k < hi; k++) {
+                        ctx += fmt::format(
+                            "{}{:08x}(t{})",
+                            k == i ? " >>" : " ",
+                            words[k],
+                            (words[k] >> PP_TYPE_SHIFT) & PP_TYPE_MASK);
+                    }
+                    log_warning(
+                        LogTest,
+                        "[{}] desync xy=0x{:08x} risc={} at word {}/{} (zones so far {}):{}",
+                        label,
+                        key.first,
+                        key.second,
+                        i,
+                        words.size(),
+                        lane_zones,
+                        ctx);
+                }
+                break;
+            }
+            leftover_open += stack.size();
+            // Each lane ran `zones` producer zones; the FW adds its own KERNEL wrapper on top.
+            if (lane_zones < zones) {
+                lanes_short++;
+            }
+        }
+
+        log_info(
+            LogTest,
+            "[{}] decoded {} markers -> {} zones across {} lanes ({} distinct srcloc hashes), "
+            "{} still open at the cut",
+            label,
+            markers,
+            zones_closed,
+            lane_words.size(),
+            zone_hist.size(),
+            leftover_open);
+        {
+            // The producer zone should dominate: `zones` per lane.
+            std::vector<std::pair<uint64_t, uint32_t>> top;
+            for (const auto& [h, n] : zone_hist) {
+                top.emplace_back(n, h);
+            }
+            std::sort(top.rbegin(), top.rend());
+            for (size_t k = 0; k < std::min<size_t>(3, top.size()); k++) {
+                log_info(LogTest, "[{}]   srcloc 0x{:04x}: {} zones", label, top[k].second, top[k].first);
+            }
+        }
+
+        EXPECT_EQ(unknown_types, 0u) << label << ": unknown packet type -- decoder desynced from the stream";
+        EXPECT_EQ(truncated, 0u) << label << ": a marker was split across the end of a lane stream";
+        EXPECT_EQ(unmatched_end, 0u) << label << ": ZONE_END with no matching START";
+        EXPECT_EQ(hash_mismatch, 0u) << label << ": ZONE_END srcloc does not match its START";
+        EXPECT_EQ(backwards, 0u) << label << ": timestamps went backwards";
+        // no_timer_hi is reported, not asserted: see the note at the check itself. It counts markers
+        // captured before this lane's first sticky, which is a property of starting mid-stream.
+        log_info(
+            LogTest,
+            "[{}] {} markers arrived before their lane's first STICKY_TIMER (unanchored, expected "
+            "mid-stream)",
+            label,
+            no_timer_hi);
+        EXPECT_EQ(lanes_short, 0u) << label << ": some lane decoded fewer zones than it ran";
+        EXPECT_GE(zones_closed, static_cast<uint64_t>(lane_words.size()) * zones)
+            << label << ": fewer zones than the producers ran";
+        // A lane can be cut mid-zone at most once -- the drain stops at quiescence, so anything beyond
+        // one dangling START per lane means the stream lost its nesting.
+        EXPECT_LE(leftover_open, static_cast<uint64_t>(lane_words.size()))
+            << label << ": more open zones than lanes -- nesting is broken";
     };
 
     const CoreCoord full_grid = device_->compute_with_storage_grid_size();
