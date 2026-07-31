@@ -1094,29 +1094,28 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    # bh_sc1 exabox: /mnt/models is mounted directly in the job; LTX + Gemma weights live there in
-    # HF hub-cache format (models--Lightricks--LTX-2.3 / models--google--gemma-3-12b-...). Point HF at it.
+    # This cmd runs on the LAUNCHER (runner container: no /mnt/models, no devices). The test is
+    # shipped to the exabox WORKER (galaxy node) by mpirun, which has /mnt/models + the 32 chips;
+    # env set here is forwarded to the ranks via PRTE_MCA_prte_fwd_environment=true. LTX + Gemma
+    # weights live on /mnt/models in HF hub-cache format; HF_TOKEN (job env) covers gated Gemma if a
+    # download is needed. The impl already verifies ttnn import + `test -r /mnt/models` on workers.
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
-    # ---- exabox topology + cache diagnostics (temporary; drop once bh_sc1 launch is settled) ----
-    echo "===== LTX bh_sc1 DIAGNOSTICS ====="
-    id 2>&1; echo "HOME=$HOME TT_METAL_HOME=$TT_METAL_HOME"
-    echo "--- HF/cache/launch env (token redacted) ---"; env | grep -iE "^(HF_|HUGGING|MLPERF|TT_DIT|VBENCH|TORCH_HOME|TT_MESH|TT_VISIBLE|OMPI_|PRTE_)=" | sed -E 's/(TOKEN|token)=.*/\1=<redacted>/'
-    echo "--- /mnt mounts ---"; grep -E " /mnt" /proc/mounts 2>&1 || true
-    echo "--- LTX + Gemma present under /mnt/models HF cache? ---"; ls -ld /mnt/models/huggingface/hub/models--Lightricks--LTX-2.3 /mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized 2>&1
-    echo "--- writability (:ro vs :rw / mlperf-write-access) ---"; d=/mnt/models/huggingface; [ -d "$d" ] && { (touch "$d/.ltx_probe_$$" 2>/dev/null && echo "WRITABLE $d" && rm -f "$d/.ltx_probe_$$") || echo "READ-ONLY $d"; } || echo "ABSENT $d"
-    echo "--- exabox allocation (/etc/ttop) ---"; ls -la /etc/ttop 2>&1
-    echo "--- devices on this host (single galaxy should expose 32) ---"; ls /dev/tenstorrent 2>&1 | tr '\n' ' '; echo
-    echo "--- do LTX / Gemma resolve from the cache offline (no download)? ---"
-    python3 -c "from huggingface_hub import hf_hub_download as d; print('CACHED ltx ->', d('Lightricks/LTX-2.3','ltx-2.3-22b-dev.safetensors',local_files_only=True))" 2>&1 | tail -1 || echo "MISS ltx (not in HF cache)"
-    python3 -c "from huggingface_hub import hf_hub_download as d; print('CACHED gemma ->', d('google/gemma-3-12b-it-qat-q4_0-unquantized','config.json',local_files_only=True))" 2>&1 | tail -1 || echo "MISS gemma (not in HF cache)"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Diagnostics below are observational. The impl runs this step under `bash -eo pipefail` (via
+    # `eval "$CMD"`), so a probe that exits non-zero (ls of not-yet-staged weights, a failed touch)
+    # would abort the whole step before pytest runs. Disable errexit for them; the mpirun pytest is
+    # the last command, so its exit code still becomes the step result.
+    set +e
+    # ---- worker-side diagnostics (temporary; drop once bh_sc1 launch is settled) ----
+    echo "===== LTX bh_sc1 WORKER DIAGNOSTICS ====="
+    mpirun --pernode --tag-output bash -lc 'echo "host=$(hostname) HOME=$HOME"; echo "fwd: HF_HOME=$HF_HOME HF_TOKEN=${HF_TOKEN:+<set>} TT_DIT_CACHE_DIR=$TT_DIT_CACHE_DIR VBENCH_CACHE_DIR=$VBENCH_CACHE_DIR MGD=$TT_MESH_GRAPH_DESC_PATH"; echo "weights:"; ls -ld /mnt/models/huggingface/hub/models--Lightricks--LTX-2.3 /mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized 2>&1; d=/mnt/models/huggingface; if touch "$d/.ltxprobe" 2>/dev/null; then echo "WRITABLE $d"; rm -f "$d/.ltxprobe"; else echo "READ-ONLY-or-absent $d"; fi; echo -n "devices: "; ls /dev/tenstorrent 2>/dev/null | tr "\n" " "; echo; echo -n "MGD on worker: "; ls -l "$TT_MESH_GRAPH_DESC_PATH" 2>&1'
     echo "===== END DIAGNOSTICS ====="
     # Single-rank single-galaxy launch, mirroring the "Flux multihost tests" bh_sc1 leg above. LTX
     # needs the FULL 4x8 (32-chip) galaxy as one ring mesh, so it uses an LTX-specific single-galaxy
     # MGD and all allocated devices (TT_VISIBLE_DEVICES left unset -> use the whole galaxy).
-    export TT_MESH_ID=0
-    export TT_MESH_HOST_RANK=0
-    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     # Pro T2V = one-stage full-guidance on the 22B dev checkpoint (checkpoints + Gemma resolve from
     # the HF hub cache set above; see models/tt_dit/models/LTX2.md).
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
@@ -1134,29 +1133,28 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    # bh_sc1 exabox: /mnt/models is mounted directly in the job; LTX + Gemma weights live there in
-    # HF hub-cache format (models--Lightricks--LTX-2.3 / models--google--gemma-3-12b-...). Point HF at it.
+    # This cmd runs on the LAUNCHER (runner container: no /mnt/models, no devices). The test is
+    # shipped to the exabox WORKER (galaxy node) by mpirun, which has /mnt/models + the 32 chips;
+    # env set here is forwarded to the ranks via PRTE_MCA_prte_fwd_environment=true. LTX + Gemma
+    # weights live on /mnt/models in HF hub-cache format; HF_TOKEN (job env) covers gated Gemma if a
+    # download is needed. The impl already verifies ttnn import + `test -r /mnt/models` on workers.
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
-    # ---- exabox topology + cache diagnostics (temporary; drop once bh_sc1 launch is settled) ----
-    echo "===== LTX bh_sc1 DIAGNOSTICS ====="
-    id 2>&1; echo "HOME=$HOME TT_METAL_HOME=$TT_METAL_HOME"
-    echo "--- HF/cache/launch env (token redacted) ---"; env | grep -iE "^(HF_|HUGGING|MLPERF|TT_DIT|VBENCH|TORCH_HOME|TT_MESH|TT_VISIBLE|OMPI_|PRTE_)=" | sed -E 's/(TOKEN|token)=.*/\1=<redacted>/'
-    echo "--- /mnt mounts ---"; grep -E " /mnt" /proc/mounts 2>&1 || true
-    echo "--- LTX + Gemma present under /mnt/models HF cache? ---"; ls -ld /mnt/models/huggingface/hub/models--Lightricks--LTX-2.3 /mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized 2>&1
-    echo "--- writability (:ro vs :rw / mlperf-write-access) ---"; d=/mnt/models/huggingface; [ -d "$d" ] && { (touch "$d/.ltx_probe_$$" 2>/dev/null && echo "WRITABLE $d" && rm -f "$d/.ltx_probe_$$") || echo "READ-ONLY $d"; } || echo "ABSENT $d"
-    echo "--- exabox allocation (/etc/ttop) ---"; ls -la /etc/ttop 2>&1
-    echo "--- devices on this host (single galaxy should expose 32) ---"; ls /dev/tenstorrent 2>&1 | tr '\n' ' '; echo
-    echo "--- do LTX / Gemma resolve from the cache offline (no download)? ---"
-    python3 -c "from huggingface_hub import hf_hub_download as d; print('CACHED ltx ->', d('Lightricks/LTX-2.3','ltx-2.3-22b-dev.safetensors',local_files_only=True))" 2>&1 | tail -1 || echo "MISS ltx (not in HF cache)"
-    python3 -c "from huggingface_hub import hf_hub_download as d; print('CACHED gemma ->', d('google/gemma-3-12b-it-qat-q4_0-unquantized','config.json',local_files_only=True))" 2>&1 | tail -1 || echo "MISS gemma (not in HF cache)"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Diagnostics below are observational. The impl runs this step under `bash -eo pipefail` (via
+    # `eval "$CMD"`), so a probe that exits non-zero (ls of not-yet-staged weights, a failed touch)
+    # would abort the whole step before pytest runs. Disable errexit for them; the mpirun pytest is
+    # the last command, so its exit code still becomes the step result.
+    set +e
+    # ---- worker-side diagnostics (temporary; drop once bh_sc1 launch is settled) ----
+    echo "===== LTX bh_sc1 WORKER DIAGNOSTICS ====="
+    mpirun --pernode --tag-output bash -lc 'echo "host=$(hostname) HOME=$HOME"; echo "fwd: HF_HOME=$HF_HOME HF_TOKEN=${HF_TOKEN:+<set>} TT_DIT_CACHE_DIR=$TT_DIT_CACHE_DIR VBENCH_CACHE_DIR=$VBENCH_CACHE_DIR MGD=$TT_MESH_GRAPH_DESC_PATH"; echo "weights:"; ls -ld /mnt/models/huggingface/hub/models--Lightricks--LTX-2.3 /mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized 2>&1; d=/mnt/models/huggingface; if touch "$d/.ltxprobe" 2>/dev/null; then echo "WRITABLE $d"; rm -f "$d/.ltxprobe"; else echo "READ-ONLY-or-absent $d"; fi; echo -n "devices: "; ls /dev/tenstorrent 2>/dev/null | tr "\n" " "; echo; echo -n "MGD on worker: "; ls -l "$TT_MESH_GRAPH_DESC_PATH" 2>&1'
     echo "===== END DIAGNOSTICS ====="
     # Single-rank single-galaxy launch, mirroring the "Flux multihost tests" bh_sc1 leg above. LTX
     # needs the FULL 4x8 (32-chip) galaxy as one ring mesh, so it uses an LTX-specific single-galaxy
     # MGD and all allocated devices (TT_VISIBLE_DEVICES left unset -> use the whole galaxy).
-    export TT_MESH_ID=0
-    export TT_MESH_HOST_RANK=0
-    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     # Fast T2V = distilled 2-stage (half-res -> upsample -> full-res) on the distilled-1.1 checkpoint.
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 5700 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"
@@ -1173,29 +1171,28 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    # bh_sc1 exabox: /mnt/models is mounted directly in the job; LTX + Gemma weights live there in
-    # HF hub-cache format (models--Lightricks--LTX-2.3 / models--google--gemma-3-12b-...). Point HF at it.
+    # This cmd runs on the LAUNCHER (runner container: no /mnt/models, no devices). The test is
+    # shipped to the exabox WORKER (galaxy node) by mpirun, which has /mnt/models + the 32 chips;
+    # env set here is forwarded to the ranks via PRTE_MCA_prte_fwd_environment=true. LTX + Gemma
+    # weights live on /mnt/models in HF hub-cache format; HF_TOKEN (job env) covers gated Gemma if a
+    # download is needed. The impl already verifies ttnn import + `test -r /mnt/models` on workers.
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
-    # ---- exabox topology + cache diagnostics (temporary; drop once bh_sc1 launch is settled) ----
-    echo "===== LTX bh_sc1 DIAGNOSTICS ====="
-    id 2>&1; echo "HOME=$HOME TT_METAL_HOME=$TT_METAL_HOME"
-    echo "--- HF/cache/launch env (token redacted) ---"; env | grep -iE "^(HF_|HUGGING|MLPERF|TT_DIT|VBENCH|TORCH_HOME|TT_MESH|TT_VISIBLE|OMPI_|PRTE_)=" | sed -E 's/(TOKEN|token)=.*/\1=<redacted>/'
-    echo "--- /mnt mounts ---"; grep -E " /mnt" /proc/mounts 2>&1 || true
-    echo "--- LTX + Gemma present under /mnt/models HF cache? ---"; ls -ld /mnt/models/huggingface/hub/models--Lightricks--LTX-2.3 /mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized 2>&1
-    echo "--- writability (:ro vs :rw / mlperf-write-access) ---"; d=/mnt/models/huggingface; [ -d "$d" ] && { (touch "$d/.ltx_probe_$$" 2>/dev/null && echo "WRITABLE $d" && rm -f "$d/.ltx_probe_$$") || echo "READ-ONLY $d"; } || echo "ABSENT $d"
-    echo "--- exabox allocation (/etc/ttop) ---"; ls -la /etc/ttop 2>&1
-    echo "--- devices on this host (single galaxy should expose 32) ---"; ls /dev/tenstorrent 2>&1 | tr '\n' ' '; echo
-    echo "--- do LTX / Gemma resolve from the cache offline (no download)? ---"
-    python3 -c "from huggingface_hub import hf_hub_download as d; print('CACHED ltx ->', d('Lightricks/LTX-2.3','ltx-2.3-22b-dev.safetensors',local_files_only=True))" 2>&1 | tail -1 || echo "MISS ltx (not in HF cache)"
-    python3 -c "from huggingface_hub import hf_hub_download as d; print('CACHED gemma ->', d('google/gemma-3-12b-it-qat-q4_0-unquantized','config.json',local_files_only=True))" 2>&1 | tail -1 || echo "MISS gemma (not in HF cache)"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Diagnostics below are observational. The impl runs this step under `bash -eo pipefail` (via
+    # `eval "$CMD"`), so a probe that exits non-zero (ls of not-yet-staged weights, a failed touch)
+    # would abort the whole step before pytest runs. Disable errexit for them; the mpirun pytest is
+    # the last command, so its exit code still becomes the step result.
+    set +e
+    # ---- worker-side diagnostics (temporary; drop once bh_sc1 launch is settled) ----
+    echo "===== LTX bh_sc1 WORKER DIAGNOSTICS ====="
+    mpirun --pernode --tag-output bash -lc 'echo "host=$(hostname) HOME=$HOME"; echo "fwd: HF_HOME=$HF_HOME HF_TOKEN=${HF_TOKEN:+<set>} TT_DIT_CACHE_DIR=$TT_DIT_CACHE_DIR VBENCH_CACHE_DIR=$VBENCH_CACHE_DIR MGD=$TT_MESH_GRAPH_DESC_PATH"; echo "weights:"; ls -ld /mnt/models/huggingface/hub/models--Lightricks--LTX-2.3 /mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized 2>&1; d=/mnt/models/huggingface; if touch "$d/.ltxprobe" 2>/dev/null; then echo "WRITABLE $d"; rm -f "$d/.ltxprobe"; else echo "READ-ONLY-or-absent $d"; fi; echo -n "devices: "; ls /dev/tenstorrent 2>/dev/null | tr "\n" " "; echo; echo -n "MGD on worker: "; ls -l "$TT_MESH_GRAPH_DESC_PATH" 2>&1'
     echo "===== END DIAGNOSTICS ====="
     # Single-rank single-galaxy launch, mirroring the "Flux multihost tests" bh_sc1 leg above. LTX
     # needs the FULL 4x8 (32-chip) galaxy as one ring mesh, so it uses an LTX-specific single-galaxy
     # MGD and all allocated devices (TT_VISIBLE_DEVICES left unset -> use the whole galaxy).
-    export TT_MESH_ID=0
-    export TT_MESH_HOST_RANK=0
-    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     # Pro I2V = two-stage smoke conditioned on a committed in-repo sample image (LTX_I2V_IMAGE);
     # exported before mpirun so PRTE forwards it to the rank. Skips if the image/checkpoints are absent.
     export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
@@ -1214,29 +1211,28 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    # bh_sc1 exabox: /mnt/models is mounted directly in the job; LTX + Gemma weights live there in
-    # HF hub-cache format (models--Lightricks--LTX-2.3 / models--google--gemma-3-12b-...). Point HF at it.
+    # This cmd runs on the LAUNCHER (runner container: no /mnt/models, no devices). The test is
+    # shipped to the exabox WORKER (galaxy node) by mpirun, which has /mnt/models + the 32 chips;
+    # env set here is forwarded to the ranks via PRTE_MCA_prte_fwd_environment=true. LTX + Gemma
+    # weights live on /mnt/models in HF hub-cache format; HF_TOKEN (job env) covers gated Gemma if a
+    # download is needed. The impl already verifies ttnn import + `test -r /mnt/models` on workers.
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
-    # ---- exabox topology + cache diagnostics (temporary; drop once bh_sc1 launch is settled) ----
-    echo "===== LTX bh_sc1 DIAGNOSTICS ====="
-    id 2>&1; echo "HOME=$HOME TT_METAL_HOME=$TT_METAL_HOME"
-    echo "--- HF/cache/launch env (token redacted) ---"; env | grep -iE "^(HF_|HUGGING|MLPERF|TT_DIT|VBENCH|TORCH_HOME|TT_MESH|TT_VISIBLE|OMPI_|PRTE_)=" | sed -E 's/(TOKEN|token)=.*/\1=<redacted>/'
-    echo "--- /mnt mounts ---"; grep -E " /mnt" /proc/mounts 2>&1 || true
-    echo "--- LTX + Gemma present under /mnt/models HF cache? ---"; ls -ld /mnt/models/huggingface/hub/models--Lightricks--LTX-2.3 /mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized 2>&1
-    echo "--- writability (:ro vs :rw / mlperf-write-access) ---"; d=/mnt/models/huggingface; [ -d "$d" ] && { (touch "$d/.ltx_probe_$$" 2>/dev/null && echo "WRITABLE $d" && rm -f "$d/.ltx_probe_$$") || echo "READ-ONLY $d"; } || echo "ABSENT $d"
-    echo "--- exabox allocation (/etc/ttop) ---"; ls -la /etc/ttop 2>&1
-    echo "--- devices on this host (single galaxy should expose 32) ---"; ls /dev/tenstorrent 2>&1 | tr '\n' ' '; echo
-    echo "--- do LTX / Gemma resolve from the cache offline (no download)? ---"
-    python3 -c "from huggingface_hub import hf_hub_download as d; print('CACHED ltx ->', d('Lightricks/LTX-2.3','ltx-2.3-22b-dev.safetensors',local_files_only=True))" 2>&1 | tail -1 || echo "MISS ltx (not in HF cache)"
-    python3 -c "from huggingface_hub import hf_hub_download as d; print('CACHED gemma ->', d('google/gemma-3-12b-it-qat-q4_0-unquantized','config.json',local_files_only=True))" 2>&1 | tail -1 || echo "MISS gemma (not in HF cache)"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Diagnostics below are observational. The impl runs this step under `bash -eo pipefail` (via
+    # `eval "$CMD"`), so a probe that exits non-zero (ls of not-yet-staged weights, a failed touch)
+    # would abort the whole step before pytest runs. Disable errexit for them; the mpirun pytest is
+    # the last command, so its exit code still becomes the step result.
+    set +e
+    # ---- worker-side diagnostics (temporary; drop once bh_sc1 launch is settled) ----
+    echo "===== LTX bh_sc1 WORKER DIAGNOSTICS ====="
+    mpirun --pernode --tag-output bash -lc 'echo "host=$(hostname) HOME=$HOME"; echo "fwd: HF_HOME=$HF_HOME HF_TOKEN=${HF_TOKEN:+<set>} TT_DIT_CACHE_DIR=$TT_DIT_CACHE_DIR VBENCH_CACHE_DIR=$VBENCH_CACHE_DIR MGD=$TT_MESH_GRAPH_DESC_PATH"; echo "weights:"; ls -ld /mnt/models/huggingface/hub/models--Lightricks--LTX-2.3 /mnt/models/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized 2>&1; d=/mnt/models/huggingface; if touch "$d/.ltxprobe" 2>/dev/null; then echo "WRITABLE $d"; rm -f "$d/.ltxprobe"; else echo "READ-ONLY-or-absent $d"; fi; echo -n "devices: "; ls /dev/tenstorrent 2>/dev/null | tr "\n" " "; echo; echo -n "MGD on worker: "; ls -l "$TT_MESH_GRAPH_DESC_PATH" 2>&1'
     echo "===== END DIAGNOSTICS ====="
     # Single-rank single-galaxy launch, mirroring the "Flux multihost tests" bh_sc1 leg above. LTX
     # needs the FULL 4x8 (32-chip) galaxy as one ring mesh, so it uses an LTX-specific single-galaxy
     # MGD and all allocated devices (TT_VISIBLE_DEVICES left unset -> use the whole galaxy).
-    export TT_MESH_ID=0
-    export TT_MESH_HOST_RANK=0
-    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     # Fast I2V = distilled chained t2v->i2v (self-contained: conditions on its own generated frame,
     # no external image needed).
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
