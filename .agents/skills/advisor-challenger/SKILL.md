@@ -396,9 +396,26 @@ this is out of scope here: **report it upstream, do not screen it, and never boo
 ### 7. Ship
 
 Write the winner into `tt/optimized_decoder.py` and **keep every losing knob, default-off**, so rejected
-candidates stay re-measurable. `final.json`: `outcome`, `changed`, `final_ms`, `incumbent_ms`,
-`repeats_ms`, the winning config, the oracle, and `iterations[]`. If nothing won, ship the incumbent
-unchanged and say so with the numbers.
+candidates stay re-measurable. `final.json`: `outcome`, `changed`, `final_ms`, `incumbent_ms`, `repeats_ms`, the winning config, the oracle,
+`iterations[]`, and the stage's **headline metric**, which nothing else computes for you:
+
+```json
+"model_estimate": {
+  "before_us": 62429.0,          // SUM over kinds of reconciliation model_estimate.this_kind_us
+  "after_us":  61265.2,          // the same sum with each kind's measured winner applied
+  "band_us":   1462.3,           // SUM over kinds of uncertainty_per_model_us -- linear, not quadrature
+  "per_kind": {"sliding_attention": {"before_us": 51585.8, "after_us": 50742.1, "layers": 40},
+               "full_attention":    {"before_us": 10843.2, "after_us": 10523.1, "layers": 8}},
+  "method": "per-layer measured delta x layers_of_kind, summed"
+}
+```
+
+Rules for it: **compute `after_us` per kind and then sum** — never scale one cell-wide ratio across kinds,
+because the winners differ by kind and that is the whole reason the per-model number exists (step 6). Sum the
+band **linearly**, not in quadrature: these are repeats of one harness on one device, not independent trials, so
+the conservative sum is the honest one. If `after_us - before_us` is smaller than `band_us`, say so in the same
+breath — that is a result inside its own error bar. If nothing won, `after_us == before_us` and the stage ships
+the incumbent unchanged.
 
 `README.md`: the accounting from step 3, what was screened with its number, what was not and why, and the
 unreachable share.

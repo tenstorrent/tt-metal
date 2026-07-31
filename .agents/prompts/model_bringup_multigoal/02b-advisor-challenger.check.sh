@@ -249,6 +249,16 @@ if not isinstance(fm, (int, float)): crit.append("final_ms missing")
 if not isinstance(im, (int, float)): crit.append("incumbent_ms missing")
 if not f.get("outcome"): crit.append("outcome missing -- state it (no_change / improved)")
 if f.get("changed") is None: crit.append("`changed` missing -- a no-change result must be explicit")
+me = f.get("model_estimate") or {}
+if not all(isinstance(me.get(k), (int, float)) for k in ("before_us", "after_us", "band_us")):
+    crit.append("model_estimate {before_us, after_us, band_us} missing from final.json. That is this stage's "
+                "headline metric and nothing else computes it: sum reconciliation model_estimate.this_kind_us "
+                "over the layer kinds for before_us, apply each kind's measured winner for after_us, and sum "
+                "uncertainty_per_model_us linearly for band_us.")
+elif me["before_us"] > 0 and abs(me["after_us"] - me["before_us"]) < me["band_us"] and f.get("changed"):
+    warn.append(f"a change shipped whose model-level effect ({me['before_us'] - me['after_us']:.1f} us) is "
+                f"inside its own uncertainty band (+/-{me['band_us']:.1f} us). Legitimate -- detection is "
+                "per-layer, not per-model -- but say it plainly rather than quoting the model number alone.")
 if not f.get("oracle"): crit.append("oracle missing -- name the correctness oracle the result passed")
 if f.get("oracle_passed") is not True:
     crit.append("oracle_passed is not true -- a faster decoder that fails its oracle is a regression")
