@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "llk_assert.h"
@@ -26,8 +27,25 @@
 
 namespace ckernel {
 
+// Selects which src register the math thread reads back for a unary broadcast. Every unary bcast
+// entry point (init, execute and reconfigure) must agree on this, on both the Tensix and the Quasar
+// paths, since a disagreement is what deadlocks the unpacker.
+//
+// On the non-32-bit path BroadcastType::NONE is a pass through: llk_unpack_A leaves the tile in SrcA
+// and never raises a SrcB data valid (Tensix only zero-fills SrcB), so math must read SrcA with A2D.
+// Reading SrcB with B2D would copy zeros, wait on a SrcB data valid that never arrives and never
+// clear SrcA's data valid, hanging the unpacker on the next tile. The broadcast modes leave the tile
+// in SrcB, so they need B2D.
+//
+// On the 32-bit path (unpack to dest, used because SrcB is only 19 bits wide) the unpacker writes
+// DEST directly and the math thread runs A2D for every broadcast type; see the
+// enable_unpack_to_dest branches below.
 template <BroadcastType bcast_type>
-ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+constexpr DataCopyType unary_bcast_data_copy_type =
+    (bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
+
+template <BroadcastType bcast_type>
+ALWI void unary_bcast_init(std::uint32_t icb, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
 #ifndef ARCH_QUASAR
@@ -38,24 +56,18 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
 
-    // BroadcastType::NONE is a pass through: llk_unpack_A leaves the tile in SrcA and only
-    // zero-fills SrcB, so the math thread must read SrcA with A2D. Reading SrcB with B2D would
-    // both copy zeros and never clear SrcA's data valid, deadlocking the unpacker. The broadcast
-    // modes leave the tile in SrcB and use B2D. Only the math thread consumes this.
-    [[maybe_unused]] constexpr DataCopyType data_copy_type =
-        (bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
-
     // Will configure A & B in similar way
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
 
     if (enable_unpack_to_dest) {
-        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(
+        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true /*unpack_to_dest*/>(
             false, false /*transpose within 16x16 face*/, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type>(icb)));
     } else {
-        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(
+        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false /*unpack_to_dest*/>(
             false, false /*transpose within 16x16 face*/, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, bcast_type>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<unary_bcast_data_copy_type<bcast_type>, DST_ACCUM_MODE, bcast_type>(
+            icb)));
     }
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
@@ -67,8 +79,8 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
 #else
     UNPACK((llk_unpack_hw_configure(icb)));
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    // 32bit formats require the A2D unpack-to-dest path (SrcB is only 19 bits wide), which is not
-    // implemented for Quasar yet; only the B2D path is supported here.
+    // 32bit formats require the unpack-to-dest path (SrcB is only 19 bits wide), which is not
+    // implemented for Quasar yet; only the non-unpack-to-dest path is supported here.
     const std::uint32_t dst_format = get_operand_dst_format(icb);
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
@@ -78,7 +90,13 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
             false /*acc_to_dest*/,
             EltwiseBinaryReuseDestType::NONE,
             false /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, false /*EN_32BIT_DEST*/, bcast_type>(icb)));
+    // Same SrcA/SrcB selection as the Tensix path above: Quasar's llk_unpack_A<NONE> routes to
+    // _llk_unpack_unary_operand_<UNP_A> and never sets a SrcB data valid, so B2D for NONE would
+    // hang math on a dvalid that never arrives and leave SrcA's dvalid set.
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          unary_bcast_data_copy_type<bcast_type>,
+          false /*EN_32BIT_DEST*/,
+          bcast_type>(icb)));
 #endif
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
@@ -90,7 +108,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
 }
 
 template <BroadcastType bcast_type>
-ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_index) {
+ALWI void unary_bcast(std::uint32_t icb, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
@@ -99,39 +117,45 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
 
-    // Must match the selection made by unary_bcast_init: BroadcastType::NONE keeps the tile in
-    // SrcA and needs A2D; the broadcast modes keep it in SrcB and need B2D. Only the math thread
-    // consumes this.
-    [[maybe_unused]] constexpr DataCopyType data_copy_type =
-        (bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
-
     if (enable_unpack_to_dest) {
-        UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(icb, in_tile_index)));
-        MATH((
-            llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)));
-    } else {
-        UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
-        MATH((llk_math_eltwise_unary_datacopy<data_copy_type, DST_ACCUM_MODE, bcast_type, false>(
+        UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true /*unpack_to_dest*/>(
+            icb, in_tile_index)));
+        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true /*unpack_to_dest*/>(
             dst_tile_index, icb)));
+    } else {
+        UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false /*unpack_to_dest*/>(
+            icb, in_tile_index)));
+        MATH((llk_math_eltwise_unary_datacopy<
+              unary_bcast_data_copy_type<bcast_type>,
+              DST_ACCUM_MODE,
+              bcast_type,
+              false /*unpack_to_dest*/>(dst_tile_index, icb)));
     }
 #endif
 #else
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    // Broadcast mode and B2D vs A2D are fixed in unary_bcast_init; pass logical operand ids through to LLK.
-    // 32bit formats would require the A2D unpack-to-dest path (SrcB is only 19 bits wide), which is not
-    // implemented for Quasar yet; only the B2D path is supported here.
+    // Broadcast mode is fixed in unary_bcast_init; pass logical operand ids through to LLK. The A2D vs
+    // B2D selection must match the one unary_bcast_init programmed, so both derive it from
+    // unary_bcast_data_copy_type.
+    // 32bit formats would require the unpack-to-dest path (SrcB is only 19 bits wide), which is not
+    // implemented for Quasar yet; only the non-unpack-to-dest path is supported here.
     const std::uint32_t dst_format = get_operand_dst_format(icb);
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     LLK_ASSERT(!enable_unpack_to_dest, "32-bit unary broadcast (unpack-to-dest) not supported on Quasar");
-    UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
-    MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, false, bcast_type, false>(dst_tile_index, icb)));
+    UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false /*unpack_to_dest*/>(
+        icb, in_tile_index)));
+    MATH((llk_math_eltwise_unary_datacopy<
+          unary_bcast_data_copy_type<bcast_type>,
+          false /*EN_32BIT_DEST*/,
+          bcast_type,
+          false /*unpack_to_dest*/>(dst_tile_index, icb)));
 #endif
 #endif
 }
 
 template <BroadcastType bcast_type>
-ALWI void unary_bcast_uninit(uint32_t icb) {
+ALWI void unary_bcast_uninit(std::uint32_t icb) {
 #ifndef ARCH_QUASAR
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
@@ -142,7 +166,7 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
     UNPACK((llk_unpack_A_uninit<bcast_type>()));
 
     // Teardown is keyed on unpack_to_dest only; the datacopy uninit carries no DataCopyType, so
-    // the A2D/B2D selection made by unary_bcast_init needs no counterpart here.
+    // unary_bcast_data_copy_type needs no counterpart here.
     if (enable_unpack_to_dest) {
         MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, true>()));
     } else {
@@ -159,12 +183,16 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
 
 #ifndef ARCH_QUASAR
 template <BroadcastType old_bcast_type, BroadcastType new_bcast_type>
-void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, uint32_t new_ocb) {
+void reconfigure_unary_bcast(
+    std::uint32_t old_icb, std::uint32_t new_icb, std::uint32_t old_ocb, std::uint32_t new_ocb) {
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
-    // Pass through uses A2D and potentially direct unpack to dest.
-    constexpr DataCopyType data_copy_type =
-        (new_bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
-    constexpr bool enable_unpack_to_dest = (data_copy_type == DataCopyType::A2D);
+    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide. Keyed on the
+    // new operand's format, the same way unary_bcast_init/unary_bcast decide it, so that a
+    // reconfigure followed by unary_bcast cannot end up with mismatched MOPs.
+    const std::uint32_t new_dst_format = get_operand_dst_format(new_icb);
+    const bool enable_unpack_to_dest = (new_dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (new_dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (new_dst_format == (std::uint32_t)DataFormat::Int32);
     const std::uint32_t new_operand_id = get_operand_id(new_icb);
     const std::uint32_t old_operand_id = get_operand_id(old_icb);
     bool unpacker_src_format_change = unpack_src_format[new_operand_id] != unpack_src_format[old_operand_id];
@@ -177,8 +205,14 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
     }
 
     if (unpacker_src_format_change || unpacker_dst_format_change || bcast_type_change) {
-        UNPACK((llk_unpack_A_init<new_bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
-            false, false /*transpose within 16x16 face*/, new_icb)));
+        if (enable_unpack_to_dest) {
+            UNPACK((llk_unpack_A_init<new_bcast_type, false, EltwiseBinaryReuseDestType::NONE, true /*unpack_to_dest*/>(
+                false, false /*transpose within 16x16 face*/, new_icb)));
+        } else {
+            UNPACK(
+                (llk_unpack_A_init<new_bcast_type, false, EltwiseBinaryReuseDestType::NONE, false /*unpack_to_dest*/>(
+                    false, false /*transpose within 16x16 face*/, new_icb)));
+        }
     }
 
     if (unpacker_dst_format_change) {
@@ -186,7 +220,14 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
     }
 
     if (unpacker_dst_format_change || bcast_type_change) {
-        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, new_bcast_type>(new_icb)));
+        if (enable_unpack_to_dest) {
+            MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, new_bcast_type>(new_icb)));
+        } else {
+            MATH((llk_math_eltwise_unary_datacopy_init<
+                  unary_bcast_data_copy_type<new_bcast_type>,
+                  DST_ACCUM_MODE,
+                  new_bcast_type>(new_icb)));
+        }
     }
 #endif
 
@@ -197,7 +238,8 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
  */
-ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void sub_tiles_bcast_cols(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::COL,
@@ -210,7 +252,8 @@ ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
  */
-ALWI void sub_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void sub_tiles_bcast_scalar(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::SCALAR,
@@ -223,7 +266,8 @@ ALWI void sub_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
 /**
  * Shorthand template instantiation of mul_tiles_bcast.
  */
-ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void mul_tiles_bcast_cols(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::COL,
@@ -237,7 +281,12 @@ ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  * Shorthand template instantiation of mul_tiles_bcast.
  */
 ALWI void mul_tiles_bcast_rows(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst,
+    std::uint32_t bcast_row_idx = 0) {
 #ifdef ARCH_QUASAR
     LLK_ASSERT(bcast_row_idx == 0, "non-default bcast_row_idx not supported on Quasar");
 #endif
@@ -254,7 +303,12 @@ ALWI void mul_tiles_bcast_rows(
  * Please refer to documentation for add_tiles_bcast
  */
 ALWI void add_tiles_bcast_rows(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst,
+    std::uint32_t bcast_row_idx = 0) {
 #ifdef ARCH_QUASAR
     LLK_ASSERT(bcast_row_idx == 0, "non-default bcast_row_idx not supported on Quasar");
 #endif
@@ -271,7 +325,12 @@ ALWI void add_tiles_bcast_rows(
  * Shorthand template instantiation of sub_tiles_bcast.
  */
 ALWI void sub_tiles_bcast_rows(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst,
+    std::uint32_t bcast_row_idx = 0) {
 #ifdef ARCH_QUASAR
     LLK_ASSERT(bcast_row_idx == 0, "non-default bcast_row_idx not supported on Quasar");
 #endif
@@ -287,7 +346,8 @@ ALWI void sub_tiles_bcast_rows(
 /**
  * Please refer to documentation for add_tiles_bcast
  */
-ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void add_tiles_bcast_cols(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::COL,
@@ -300,7 +360,8 @@ ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
 /**
  * Please refer to documentation for add_tiles_bcast
  */
-ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void add_tiles_bcast_scalar(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::SCALAR,
@@ -325,7 +386,7 @@ ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  */
 // clang-format on
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
-void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+void init_bcast(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, ocb, call_line);
     MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>(icb0, icb1)));
 #ifndef ARCH_QUASAR
@@ -356,7 +417,12 @@ Internal helper function for all broadcast ops
 */
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 ALWI void any_tiles_bcast(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst,
+    std::uint32_t bcast_row_idx = 0) {
 #ifdef ARCH_QUASAR
     // bcast_row_idx is only consumed by the ROW broadcast path; it is ignored by the Quasar LLK.
     if constexpr (tBcastDim == BroadcastType::ROW) {
@@ -411,7 +477,12 @@ ALWI void any_tiles_bcast(
 // clang-format on
 template <BroadcastType tBcastDim>
 ALWI void add_tiles_bcast(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst,
+    std::uint32_t bcast_row_idx = 0) {
     any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
@@ -420,7 +491,12 @@ ALWI void add_tiles_bcast(
  */
 template <BroadcastType tBcastDim>
 ALWI void sub_tiles_bcast(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst,
+    std::uint32_t bcast_row_idx = 0) {
     any_tiles_bcast<EltwiseBinaryType::ELWSUB, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
@@ -429,7 +505,12 @@ ALWI void sub_tiles_bcast(
  */
 template <BroadcastType tBcastDim>
 ALWI void mul_tiles_bcast(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst,
+    std::uint32_t bcast_row_idx = 0) {
     any_tiles_bcast<EltwiseBinaryType::ELWMUL, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
@@ -437,7 +518,8 @@ ALWI void mul_tiles_bcast(
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_rows to be executed
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
-ALWI void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void add_bcast_rows_init_short(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW, MathFidelity::LoFi>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
@@ -447,7 +529,8 @@ ALWI void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_tiles_bcast_rows to be
  * executed correctly.
  */
-ALWI void sub_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void sub_bcast_rows_init_short(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::ROW, MathFidelity::LoFi>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -458,7 +541,8 @@ ALWI void sub_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_cols to be executed
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
-ALWI void add_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void add_bcast_cols_init_short(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::COL, MathFidelity::LoFi>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -469,7 +553,8 @@ ALWI void add_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_scalar to be
  * executed correctly.
  */
-ALWI void add_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void add_bcast_scalar_init_short(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::SCALAR, MathFidelity::LoFi>(
         icb0, icb1)));
@@ -481,7 +566,8 @@ ALWI void add_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t cal
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed
  * correctly.
  */
-ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_tiles_bcast_scalar_init_short(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -491,7 +577,8 @@ ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32
 /**
  * Performs a broadcast-multiply of a tile from icb0[itile0] with a scalar encoded as a tile from icb1[itile1].
  */
-ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void mul_tiles_bcast_scalar(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::SCALAR,
@@ -505,7 +592,8 @@ ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed
  * correctly.
  */
-ALWI void mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_bcast_cols_init_short(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -515,7 +603,8 @@ ALWI void mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
 /**
  * Performs a switch-from-another-op tile hw reconfiguration step needed for mul_bcast_rows to be executed correctly.
  */
-ALWI void mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_bcast_rows_init_short(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, MATH_FIDELITY>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -526,7 +615,8 @@ ALWI void mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_bcast_cols to be executed
  * correctly.
  */
-ALWI void sub_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void sub_bcast_cols_init_short(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::COL, MathFidelity::LoFi>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -537,7 +627,8 @@ ALWI void sub_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_tiles_bcast_scalar to be
  * executed correctly.
  */
-ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void sub_tiles_bcast_scalar_init_short(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::SCALAR, MathFidelity::LoFi>(
         icb0, icb1)));
