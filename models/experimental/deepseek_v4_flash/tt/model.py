@@ -1375,6 +1375,58 @@ class DeepSeekV4Model(DeepSeekV4Module):
         streams = None  # carried across layers that chain locally on this submesh
         pkt = None
         out = None
+        # Every position-derived tensor a step needs — the split token/positions, the
+        # RoPE rows, the additive mask, the causal ``cur_pos`` and the compressor
+        # window indices/RoPE — is a pure function of this step's single token and
+        # position, so it is *identical* for every layer this submesh holds. Build them
+        # once from the first packet the submesh sees and reuse across its layers
+        # (deduped by rope family / layer type), rather than regenerating ~15 tiny
+        # eltwise/typecast/slice ops per layer. On a device that owns several layers
+        # this removes the bulk of the per-layer overhead ops (and their fixed per-op
+        # launch cost); the tensors are read-only, so sharing them is exact.
+        step_ctx: dict = {}
+
+        def _build_step_ctx(pkt) -> dict:
+            token = ttnn.typecast(
+                ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 0], [1, 1, 1, 1]), [1, 1]), ttnn.uint32
+            )  # [1,1]
+            sliding_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 1], [1, 1, 1, 2]), [1])
+            compress_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2], [1, 1, 1, 3]), [1])
+            pos_f = ttnn.typecast(
+                ttnn.to_layout(ttnn.reshape(compress_pos, [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32
+            )
+            # One RoPE row triple per family present on this submesh ("main" / "compress").
+            rope = {rt: self._device_rope(inv, sc, pos_f) for rt, (inv, sc) in sm["rope_invfreq"].items()}
+            masks: dict = {}
+            curpos: dict = {}
+            win_rope: dict = {}
+            win_idx: dict = {}
+            for lt, (a, b, cr) in sm["mask_gen"].items():
+                # Bound the KV axis by a position (causal) where the valid set is a
+                # contiguous prefix, else by the additive mask. Sliding layers take
+                # neither here (their ring is bounded inside the attention block).
+                use_causal = causal and lt != "sliding_attention"
+                masks[lt] = None if use_causal else self._device_mask(a, b, cr, pos_f)
+                curpos[lt] = self._device_causal_pos(cr, pos_f) if use_causal else None
+                if lt != "sliding_attention":
+                    # Incremental pooling emits one entry per closure, so generate just
+                    # that entry's RoPE row (the "compress" family already in scope).
+                    ws, wr, win_pos_f = self._device_compressor_indices(cr, pos_f)
+                    inv, sc = sm["rope_invfreq"]["compress"]
+                    cw, sw, _ = self._device_rope(inv, sc, win_pos_f)
+                    win_idx[lt] = (ws, wr)
+                    win_rope[lt] = (cw, sw)
+            return {
+                "token": token,
+                "sliding_pos": sliding_pos,
+                "compress_pos": compress_pos,
+                "rope": rope,
+                "masks": masks,
+                "curpos": curpos,
+                "win_rope": win_rope,
+                "win_idx": win_idx,
+            }
+
         for li in sm["layers"]:
             layer = self.layers[li]
             is_first = li == 0
@@ -1402,39 +1454,23 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 ttnn.experimental.recv_direct_async(sm["pkt_in"], receiver_socket)
                 pkt = sm["pkt_in"]
 
-            # Split the packet -> token, sliding position [1], compress position [1].
-            token = ttnn.typecast(
-                ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 0], [1, 1, 1, 1]), [1, 1]), ttnn.uint32
-            )  # [1,1]
-            sliding_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 1], [1, 1, 1, 2]), [1])
-            compress_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2], [1, 1, 1, 3]), [1])
-
-            # Generate this layer's RoPE rows and additive mask on device from the
-            # absolute position (nothing position-dependent is shipped in the packet).
-            pos_f = ttnn.typecast(
-                ttnn.to_layout(ttnn.reshape(compress_pos, [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32
-            )
+            # Build the shared per-step tensors from the first packet this submesh sees;
+            # every later layer reuses them (same token, same position within a step).
+            if not step_ctx:
+                step_ctx = _build_step_ctx(pkt)
+            token = step_ctx["token"]
+            sliding_pos = step_ctx["sliding_pos"]
+            compress_pos = step_ctx["compress_pos"]
             lt = cfg.layer_types[li]
             rope_type = "main" if lt == "sliding_attention" else "compress"
-            inv_freq, scaling = sm["rope_invfreq"][rope_type]
-            cos, sin, neg_sin = self._device_rope(inv_freq, scaling, pos_f)
-            a, b, cr = sm["mask_gen"][lt]
-            # Bound the KV axis by a position (causal) where this step's valid set is
-            # a contiguous prefix, else by the additive mask. Sliding layers take
-            # neither here: their ring is bounded by the absolute position inside
-            # :meth:`DeepSeekV4Attention.decode_static`.
-            use_causal = causal and lt != "sliding_attention"
-            mask = None if use_causal else self._device_mask(a, b, cr, pos_f)
-            sdpa_cur_pos = self._device_causal_pos(cr, pos_f) if use_causal else None
+            cos, sin, neg_sin = step_ctx["rope"][rope_type]
+            mask = step_ctx["masks"][lt]
+            sdpa_cur_pos = step_ctx["curpos"][lt]
             if lt == "sliding_attention":
                 cos_win = sin_win = win_slot = win_row = None
             else:
-                # Incremental pooling emits one entry per closure, so instead of a
-                # ``max_seq``-wide window table we generate just that entry's RoPE row.
-                # ``rope["win"][cr]`` row w is the "compress" family at ``w * cr``, which
-                # is the same generator (and inv_freq) already in scope for this layer.
-                win_slot, win_row, win_pos_f = self._device_compressor_indices(cr, pos_f)
-                cos_win, sin_win, _ = self._device_rope(inv_freq, scaling, win_pos_f)
+                win_slot, win_row = step_ctx["win_idx"][lt]
+                cos_win, sin_win = step_ctx["win_rope"][lt]
 
             if is_first:
                 inputs_embeds = self.embed_tokens(token)  # [1, 1, D]
