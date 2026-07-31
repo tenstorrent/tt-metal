@@ -95,7 +95,9 @@ def test_lm_head_logits_pcc(mesh_device, vv_config, lm_state):
     ref_logits = _reference_lm_head_logits(lm_state, input_ids, vv_config)  # [1, vocab]
 
     # 2) TT
-    weights = preprocess_lm_weights(lm_state, mesh_device, cfg)
+    from models.experimental.vibevoice.tests.pcc.pcc_helpers import tt_weight_cache
+
+    weights = preprocess_lm_weights(lm_state, mesh_device, cfg, tt_weight_cache("lm"))
     lm_tt = TTVibeVoiceLM(weights, mesh_device)
     kv_cache = create_kv_cache(cfg.num_hidden_layers)
     tt_logits, _ = lm_tt.prefill(input_ids, kv_cache=kv_cache)

@@ -15,10 +15,12 @@ No torch in forward().
 
 import math
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import torch
 import ttnn
+
+from models.experimental.vibevoice.common.weight_cache import WeightCache
 
 
 _COMPUTE_KERNEL_FP32 = ttnn.WormholeComputeKernelConfig(
@@ -99,16 +101,6 @@ class DiffusionHeadWeights:
     norm_eps: float = 1e-5
 
 
-def _as_tile(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
-    return ttnn.as_tensor(
-        t,
-        device=device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-
 def _build_freq_table(frequency_embedding_size: int, max_period: int = 10000) -> torch.Tensor:
     """Precompute frequency table for sin timestep embeddings (host)."""
     half = frequency_embedding_size // 2
@@ -126,6 +118,7 @@ def preprocess_diffusion_head_weights(
     frequency_embedding_size: int = 256,
     norm_eps: float = 1e-5,
     num_layers: int = 4,
+    weight_cache: Optional[WeightCache] = None,
 ) -> DiffusionHeadWeights:
     """Convert host HF diffusion head state dict to device tensors.
 
@@ -137,31 +130,49 @@ def preprocess_diffusion_head_weights(
       final_layer.adaLN_modulation.1.weight, final_layer.linear.weight
     """
 
-    def w(key) -> torch.Tensor:
-        return hf_state[key].to(torch.bfloat16)
+    wc = weight_cache if weight_cache is not None else WeightCache(None, enabled=False)
 
-    def _w_tile(key: str) -> ttnn.Tensor:
+    def _w_tile(key: str, ckey: str) -> ttnn.Tensor:
         # ttnn.linear computes x @ W (no transpose), so store weights transposed [in, out].
-        return _as_tile(w(key).t().unsqueeze(0).unsqueeze(0), device)
+        return wc.as_tensor(
+            ckey,
+            lambda: hf_state[key].to(torch.bfloat16).t().unsqueeze(0).unsqueeze(0),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-    def _norm_tile(w_1d: torch.Tensor) -> ttnn.Tensor:
+    def _norm_tile(key: str, ckey: str) -> ttnn.Tensor:
         # ttnn.rms_norm requires gamma shape [1, 1, dim//32, 32] in ROW_MAJOR
-        dim = w_1d.shape[0]
-        return ttnn.as_tensor(
-            w_1d.view(1, 1, dim // 32, 32),
+        def _mk():
+            t = hf_state[key].to(torch.bfloat16)
+            dim = t.shape[0]
+            return t.view(1, 1, dim // 32, 32)
+
+        return wc.as_tensor(
+            ckey,
+            _mk,
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    noisy_proj_w = _w_tile("noisy_images_proj.weight")
-    cond_proj_w = _w_tile("cond_proj.weight")
-    t_mlp0_w = _w_tile("t_embedder.mlp.0.weight")
-    t_mlp2_w = _w_tile("t_embedder.mlp.2.weight")
+    noisy_proj_w = _w_tile("noisy_images_proj.weight", "noisy_images_proj")
+    cond_proj_w = _w_tile("cond_proj.weight", "cond_proj")
+    t_mlp0_w = _w_tile("t_embedder.mlp.0.weight", "t_mlp0")
+    t_mlp2_w = _w_tile("t_embedder.mlp.2.weight", "t_mlp2")
 
-    freq_table_torch = _build_freq_table(frequency_embedding_size)
-    freq_table_tt = _as_tile(freq_table_torch, device, dtype=ttnn.bfloat16)
+    # freq_table is host-computed (not from the checkpoint) but cached for a uniform load path.
+    freq_table_tt = wc.as_tensor(
+        "freq_table",
+        lambda: _build_freq_table(frequency_embedding_size),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
     layer_adaLN_w = []
     layer_ffn_gate_w = []
@@ -169,14 +180,14 @@ def preprocess_diffusion_head_weights(
     layer_ffn_down_w = []
     layer_norm_w = []
     for i in range(num_layers):
-        layer_adaLN_w.append(_w_tile(f"layers.{i}.adaLN_modulation.1.weight"))
-        layer_norm_w.append(_norm_tile(w(f"layers.{i}.norm.weight")))
-        layer_ffn_gate_w.append(_w_tile(f"layers.{i}.ffn.gate_proj.weight"))
-        layer_ffn_up_w.append(_w_tile(f"layers.{i}.ffn.up_proj.weight"))
-        layer_ffn_down_w.append(_w_tile(f"layers.{i}.ffn.down_proj.weight"))
+        layer_adaLN_w.append(_w_tile(f"layers.{i}.adaLN_modulation.1.weight", f"layers.{i}.adaLN"))
+        layer_norm_w.append(_norm_tile(f"layers.{i}.norm.weight", f"layers.{i}.norm"))
+        layer_ffn_gate_w.append(_w_tile(f"layers.{i}.ffn.gate_proj.weight", f"layers.{i}.ffn_gate"))
+        layer_ffn_up_w.append(_w_tile(f"layers.{i}.ffn.up_proj.weight", f"layers.{i}.ffn_up"))
+        layer_ffn_down_w.append(_w_tile(f"layers.{i}.ffn.down_proj.weight", f"layers.{i}.ffn_down"))
 
-    final_adaLN_w = _w_tile("final_layer.adaLN_modulation.1.weight")
-    final_linear_w = _w_tile("final_layer.linear.weight")
+    final_adaLN_w = _w_tile("final_layer.adaLN_modulation.1.weight", "final_adaLN")
+    final_linear_w = _w_tile("final_layer.linear.weight", "final_linear")
 
     return DiffusionHeadWeights(
         noisy_images_proj_w=noisy_proj_w,

@@ -76,7 +76,9 @@ def test_connector_pcc(mesh_device, loaded_weights, vv_config, connector_name):
     ref_out = _reference_connector_forward(state, x_torch)  # float32
 
     # 2) Preprocess weights → device
-    params = preprocess_connector_parameters(state, mesh_device, eps=1e-6)
+    from models.experimental.vibevoice.tests.pcc.pcc_helpers import tt_weight_cache
+
+    params = preprocess_connector_parameters(state, mesh_device, eps=1e-6, weight_cache=tt_weight_cache(connector_name))
     connector = TTSpeechConnector(params)
 
     # Pad sequence length to TILE_SIZE (32) if needed

@@ -26,6 +26,7 @@ import torch
 import ttnn
 
 from models.common.tensor_utils import get_rot_transformation_mat
+from models.experimental.vibevoice.common.weight_cache import WeightCache
 from models.experimental.vibevoice.tt.vibevoice_config import DecoderConfig
 
 
@@ -210,11 +211,16 @@ class LMWeights:
     config: DecoderConfig
 
 
-def _tile(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
-    """Convert 2D [out, in] weight to TTNN TILE layout, transposed for x@W semantics."""
+def _tile(build, device, wc: WeightCache, key: str, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+    """Convert a 2D [out, in] weight to TTNN TILE layout, transposed for x@W semantics.
+
+    ``build`` is a thunk returning the host torch weight; it is only evaluated on a
+    cache miss (a hit loads the pre-tiled flatbuffer straight to device).
+    """
     # ttnn.linear computes x @ W (no implicit transpose), so store as [in, out]
-    return ttnn.as_tensor(
-        t.to(torch.bfloat16).t().unsqueeze(0).unsqueeze(0),
+    return wc.as_tensor(
+        key,
+        lambda: build().to(torch.bfloat16).t().unsqueeze(0).unsqueeze(0),
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -222,11 +228,20 @@ def _tile(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     )
 
 
-def _norm_weight(t: torch.Tensor, device) -> ttnn.Tensor:
-    """Convert 1D norm weight to [1,1,dim//32,32] ROW_MAJOR for ttnn.rms_norm."""
-    dim = t.shape[0]
-    return ttnn.as_tensor(
-        t.to(torch.bfloat16).view(1, 1, dim // 32, 32),
+def _norm_weight(build, device, wc: WeightCache, key: str) -> ttnn.Tensor:
+    """Convert a 1D norm weight to [1,1,dim//32,32] ROW_MAJOR for ttnn.rms_norm.
+
+    ``build`` is a thunk returning the host torch weight (evaluated only on a miss).
+    """
+
+    def _mk():
+        t = build().to(torch.bfloat16)
+        dim = t.shape[0]
+        return t.view(1, 1, dim // 32, 32)
+
+    return wc.as_tensor(
+        key,
+        _mk,
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -238,6 +253,7 @@ def preprocess_lm_weights(
     state_dict: Dict[str, torch.Tensor],
     device,
     config: DecoderConfig,
+    weight_cache: Optional[WeightCache] = None,
 ) -> LMWeights:
     """Convert remapped LM state dict to device tensors.
 
@@ -248,25 +264,24 @@ def preprocess_lm_weights(
       layers.N.feed_forward.w1.weight, .w2.weight, .w3.weight
       layers.N.attention_norm.weight, .ffn_norm.weight
     """
-    tok_emb_torch = state_dict["tok_embeddings.weight"].to(torch.bfloat16)  # [vocab, hidden]
-    tok_emb_tt = _tile(tok_emb_torch, device)
+    wc = weight_cache if weight_cache is not None else WeightCache(None, enabled=False)
+
+    tok_emb_tt = _tile(lambda: state_dict["tok_embeddings.weight"], device, wc, "tok_embeddings")
     # ROW_MAJOR [vocab, hidden] for ttnn.embedding lookup
-    tok_emb_embed = ttnn.as_tensor(
-        tok_emb_torch,
+    tok_emb_embed = wc.as_tensor(
+        "tok_embeddings_embed",
+        lambda: state_dict["tok_embeddings.weight"].to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    norm_tt = _norm_weight(state_dict["norm.weight"], device)
+    norm_tt = _norm_weight(lambda: state_dict["norm.weight"], device, wc, "norm")
 
     # lm_head — Qwen2 uses tied weights (same as tok_embeddings) but may have separate key
-    if "lm_head.weight" in state_dict:
-        lm_head_w = state_dict["lm_head.weight"].to(torch.bfloat16)
-    else:
-        lm_head_w = tok_emb_torch  # tied weights
-    lm_head_tt = _tile(lm_head_w, device)
+    _lm_head_key = "lm_head.weight" if "lm_head.weight" in state_dict else "tok_embeddings.weight"
+    lm_head_tt = _tile(lambda: state_dict[_lm_head_key], device, wc, "lm_head")
 
     # Adjacent-pair head_dim reorder for the fused RoPE kernel (see _FUSED_ROPE).  Only the ROTATED
     # projections move — wq, wk and their biases — so wv/wo and the residual stream are untouched.
@@ -280,46 +295,67 @@ def preprocess_lm_weights(
     layers: List[LayerWeights] = []
     for i in range(config.num_hidden_layers):
         prefix = f"layers.{i}"
+        lk = f"layers.{i}"  # cache-key prefix (thunks below evaluate immediately, so `prefix` is bound correctly)
 
-        def _w(key: str) -> ttnn.Tensor:
-            return _tile(_rope_perm(key, state_dict[f"{prefix}.{key}.weight"]), device)
+        def _w(key: str, ckey: str) -> ttnn.Tensor:
+            return _tile(lambda: _rope_perm(key, state_dict[f"{prefix}.{key}.weight"]), device, wc, f"{lk}.{ckey}")
 
-        def _b(key: str) -> Optional[ttnn.Tensor]:
-            bias_key = f"{prefix}.{key}.bias"
-            if bias_key in state_dict:
-                b = _rope_perm(key, state_dict[bias_key]).to(torch.bfloat16)
-                return ttnn.as_tensor(
-                    b.view(1, 1, 1, -1),
-                    device=device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            return None
+        def _bias_host(key: str) -> torch.Tensor:
+            return _rope_perm(key, state_dict[f"{prefix}.{key}.bias"]).to(torch.bfloat16).view(1, 1, 1, -1)
+
+        def _b(key: str, ckey: str) -> Optional[ttnn.Tensor]:
+            if f"{prefix}.{key}.bias" not in state_dict:
+                return None
+            return wc.as_tensor(
+                f"{lk}.{ckey}",
+                lambda: _bias_host(key),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # Fuse wk|wv (and biases) on the out dim once at load — decode keeps the fast wq
         # progcfg, while nlp_create_qkv_heads(q, input_kv=kv) drops the runtime concat +
-        # separate K/V matmuls, and is byte-identical.
-        wk_t = _rope_perm("attention.wk", state_dict[f"{prefix}.attention.wk.weight"])
-        wv_t = state_dict[f"{prefix}.attention.wv.weight"]
-        wkv_tt = _tile(torch.cat([wk_t, wv_t], dim=0), device)
-        k_b = _b("attention.wk")
-        v_b = _b("attention.wv")
-        if k_b is not None and v_b is not None:
-            kv_bias = ttnn.concat([k_b, v_b], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # separate K/V matmuls, and is byte-identical.  The fusion is done on host (torch.cat)
+        # so wkv / kv_bias each serialise as a single cached tensor (only wk is RoPE-permuted).
+        wkv_tt = _tile(
+            lambda: torch.cat(
+                [
+                    _rope_perm("attention.wk", state_dict[f"{prefix}.attention.wk.weight"]),
+                    state_dict[f"{prefix}.attention.wv.weight"],
+                ],
+                dim=0,
+            ),
+            device,
+            wc,
+            f"{lk}.wkv",
+        )
+        _has_kv_bias = f"{prefix}.attention.wk.bias" in state_dict and f"{prefix}.attention.wv.bias" in state_dict
+        if _has_kv_bias:
+            kv_bias = wc.as_tensor(
+                f"{lk}.kv_bias",
+                lambda: torch.cat([_bias_host("attention.wk"), _bias_host("attention.wv")], dim=3),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         else:
             kv_bias = None
 
         lw = LayerWeights(
-            wq=_w("attention.wq"),
+            wq=_w("attention.wq", "wq"),
             wkv=wkv_tt,
-            wo=_w("attention.wo"),
-            w1=_w("feed_forward.w1"),
-            w2=_w("feed_forward.w2"),
-            w3=_w("feed_forward.w3"),
-            attn_norm_w=_norm_weight(state_dict[f"{prefix}.attention_norm.weight"], device),
-            ffn_norm_w=_norm_weight(state_dict[f"{prefix}.ffn_norm.weight"], device),
-            q_bias=_b("attention.wq"),
+            wo=_w("attention.wo", "wo"),
+            w1=_w("feed_forward.w1", "w1"),
+            w2=_w("feed_forward.w2", "w2"),
+            w3=_w("feed_forward.w3", "w3"),
+            attn_norm_w=_norm_weight(
+                lambda: state_dict[f"{prefix}.attention_norm.weight"], device, wc, f"{lk}.attn_norm"
+            ),
+            ffn_norm_w=_norm_weight(lambda: state_dict[f"{prefix}.ffn_norm.weight"], device, wc, f"{lk}.ffn_norm"),
+            q_bias=_b("attention.wq", "q_bias"),
             kv_bias=kv_bias,
         )
         layers.append(lw)
