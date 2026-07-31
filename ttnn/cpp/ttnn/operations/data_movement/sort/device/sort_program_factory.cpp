@@ -481,6 +481,7 @@ Tensor build_physical_core_lookup_table_tensor(const SortInputs& tensor_args, st
     // cache miss; the framework keeps the tensor (and its buffer) alive for cache hits
     // and patches its base address into the reader runtime args via BufferBinding.
     std::vector<uint32_t> physical_core_lookup_table_data;
+    physical_core_lookup_table_data.reserve(layout.core_range.num_cores() * 2);
     for (const auto& core_range : layout.core_range.ranges()) {
         for (const auto& core_coord : core_range) {
             const auto physical_core = device->worker_core_from_logical_core(core_coord);

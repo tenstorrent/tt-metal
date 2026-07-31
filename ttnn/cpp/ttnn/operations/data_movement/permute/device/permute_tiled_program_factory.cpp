@@ -209,6 +209,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileInvariant::
     // Constant reader tail shared by every core: output shape, inverse permutation, input strides.
     // The src buffer binding and per-core scalar slots are prepended per core in the loop below.
     std::vector<uint32_t> reader_common_args;
+    reader_common_args.reserve(output_shape_view.size() + inv_perm.size() + input_tile_strides.size());
     reader_common_args.insert(reader_common_args.end(), output_shape_view.begin(), output_shape_view.end());
     reader_common_args.insert(reader_common_args.end(), inv_perm.begin(), inv_perm.end());
     reader_common_args.insert(reader_common_args.end(), input_tile_strides.begin(), input_tile_strides.end());

@@ -35,11 +35,13 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
 
     std::vector<uint32_t> shard_grid_x_map;
+    shard_grid_x_map.reserve(num_cores_x);
     for (uint32_t i = 0; i < num_cores_x; ++i) {
         auto physical_core = device->worker_core_from_logical_core(CoreCoord(i, 0));
         shard_grid_x_map.push_back(physical_core.x);
     }
     std::vector<uint32_t> shard_grid_y_map;
+    shard_grid_y_map.reserve(num_cores_y);
     for (uint32_t i = 0; i < num_cores_y; ++i) {
         auto physical_core = device->worker_core_from_logical_core(CoreCoord(0, i));
         shard_grid_y_map.push_back(physical_core.y);
@@ -61,7 +63,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
         std::vector<uint32_t> writer_runtime_args;
 
-        ret_val[i] = {reader_runtime_args, writer_runtime_args};
+        ret_val[i] = {std::move(reader_runtime_args), std::move(writer_runtime_args)};
 
         for (uint32_t j = 0; j < num_sticks_per_core; ++j) {
             curr_c++;
@@ -102,6 +104,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
     uint32_t height = 0;
     std::vector<CoreCoord> cores;
+    cores.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core;
         if (row_major) {
