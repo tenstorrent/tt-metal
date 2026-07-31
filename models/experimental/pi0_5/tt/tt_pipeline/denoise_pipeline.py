@@ -761,8 +761,13 @@ class TTNNPi05DenoiseStreamedPipeline:
     def replay(self):
         assert self._loop_tids is not None, "call stream_euler(capture=True) first"
         # Single drain: the velocity_wrap socket lands the final x_t on stage0 and the readback
-        # reads stage0, so syncing stage0 ALONE transitively gates the full critical path.
-        self._pipe.replay_loop(self._loop_tids, drain="stage0", drain_mesh=self._stage0_mesh)
+        # reads stage0, so syncing stage0 ALONE transitively gates the full critical path. The
+        # opt-in no-drain mode relies on the immediately following to_torch readback as that same
+        # stage0 barrier, avoiding a redundant host synchronize call.
+        import os as _os
+
+        drain = "none" if _os.environ.get("PI05_D2H_DRAIN_ONLY", "0") == "1" else "stage0"
+        self._pipe.replay_loop(self._loop_tids, drain=drain, drain_mesh=self._stage0_mesh)
         return ttnn.to_torch(self._x_t)[:, : self._ah, :]
 
     def refresh_prefix_kv(self, prefix_kv_cache):

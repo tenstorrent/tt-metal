@@ -43,6 +43,23 @@ _NUM_PATCHES = 256
 _DENOISE_SPLITS_8 = (2, 2, 2, 3, 3, 2, 2, 2)
 
 
+def _prefix_compaction_plan(img_masks, lang_masks, enabled):
+    """Return camera indices and the exact pad mask used by the prefill sequence."""
+    img_present = tuple(bool(m.item()) if m.numel() == 1 else bool(m[0].item()) for m in img_masks)
+    if enabled:
+        camera_indices = tuple(i for i, present in enumerate(img_present) if present)
+        if not camera_indices:
+            raise ValueError("PI05_COMPACT_MASKED_PREFIX requires at least one present camera")
+    else:
+        camera_indices = tuple(range(len(img_masks)))
+
+    pad_segments = [
+        torch.full((_NUM_PATCHES,), img_present[i], dtype=torch.bool) for i in camera_indices
+    ]
+    pad_segments.append(lang_masks[0].to(torch.bool))
+    return img_present, camera_indices, torch.cat(pad_segments, dim=0)
+
+
 class Pi0_5GLX16DecodePipeline:
     """End-to-end sample_actions with TP=8 prefill and streamed 8-chip denoise."""
 
@@ -153,6 +170,7 @@ class Pi0_5GLX16DecodePipeline:
         self._expert_attn_mask_torch = None
         self._position_offset = None
         self._prefix_len = None
+        self._present_cam_indices = tuple(range(self._num_real_cams))
 
     # ──────────── Input / prefix helpers ───────────────────────────────
 
@@ -215,7 +233,16 @@ class Pi0_5GLX16DecodePipeline:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(vision_out)
-        real = ttnn.slice(gathered, [0, 0, 0], [self._num_real_cams, _NUM_PATCHES, self._vlm_hidden])
+        present = self._present_cam_indices
+        if present == tuple(range(len(present))):
+            real = ttnn.slice(gathered, [0, 0, 0], [len(present), _NUM_PATCHES, self._vlm_hidden])
+        else:
+            camera_slices = [
+                ttnn.slice(gathered, [i, 0, 0], [i + 1, _NUM_PATCHES, self._vlm_hidden]) for i in present
+            ]
+            real = ttnn.concat(camera_slices, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for camera_slice in camera_slices:
+                ttnn.deallocate(camera_slice)
         ttnn.deallocate(gathered)
         return real
 
@@ -244,12 +271,10 @@ class Pi0_5GLX16DecodePipeline:
             lang_masks = torch.ones(1, 256, dtype=torch.bool)
         assert len(img_masks) == num_cams, f"need {num_cams} img masks, got {len(img_masks)}"
 
-        pad_segs = []
-        for m in img_masks:
-            real = bool(m.item()) if m.numel() == 1 else bool(m[0].item())
-            pad_segs.append(torch.full((_NUM_PATCHES,), real, dtype=torch.bool))
-        pad_segs.append(lang_masks[0].to(torch.bool))
-        pad_mask = torch.cat(pad_segs, dim=0)
+        compact_prefix = os.environ.get("PI05_COMPACT_MASKED_PREFIX", "0") == "1"
+        img_present, self._present_cam_indices, pad_mask = _prefix_compaction_plan(
+            img_masks, lang_masks, compact_prefix
+        )
         prefix_len = pad_mask.shape[0]
         prefix_padded = ((prefix_len + 31) // 32) * 32
         prefix_real_count = int(pad_mask.sum().item())
@@ -379,14 +404,14 @@ class Pi0_5GLX16DecodePipeline:
         self._expert_attn_mask_torch = expert_mask_4d
         self._position_offset = prefix_real_count
         self._prefix_len = prefix_padded
-        img_present = tuple(bool(m.item()) if m.numel() == 1 else bool(m[0].item()) for m in img_masks)
         lang_real_count = int(lang_masks[0].to(torch.bool).sum().item())
-        self._artifact_mask_key = (img_present, lang_real_count)
+        self._artifact_mask_key = (img_present, lang_real_count, compact_prefix)
 
     def prepare_runtime_masks(self, img_masks, lang_masks) -> None:
         img_present = tuple(bool(m.item()) if m.numel() == 1 else bool(m[0].item()) for m in img_masks)
         lang_real_count = int(lang_masks[0].to(torch.bool).sum().item())
-        key = (img_present, lang_real_count)
+        compact_prefix = os.environ.get("PI05_COMPACT_MASKED_PREFIX", "0") == "1"
+        key = (img_present, lang_real_count, compact_prefix)
         if key != self._artifact_mask_key:
             self._build_upstream_artifacts(img_masks, lang_masks)
 

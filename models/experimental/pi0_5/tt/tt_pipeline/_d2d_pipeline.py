@@ -210,6 +210,8 @@ class Pipeline(StatelessTTNNModule):
     def replay_loop(loop_tids, *, drain="all", drain_mesh=None):
         for m, tid in loop_tids:
             ttnn.execute_trace(m, tid, cq_id=0, blocking=False)
+        if drain == "none":
+            return
         if drain == "stage0":
             ttnn.synchronize_device(drain_mesh if drain_mesh is not None else loop_tids[0][0])
         else:

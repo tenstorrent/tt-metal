@@ -115,6 +115,8 @@ _PROD_ENV_KEYS = (
     "PI0_KV_SOCKET",
     "PI05_PASS_EXPERT_MASK",
     "PI05_FUSED_KV_MASK",
+    "PI05_COMPACT_MASKED_PREFIX",
+    "PI05_D2H_DRAIN_ONLY",
     "PI05_NUM_DENOISE_STEPS",
 )
 
@@ -203,6 +205,12 @@ def test_perf_16_socket_traced_2cq():
             img_masks = [torch.tensor(True) for _ in range(N_CAMS)]
             img_masks[-1] = torch.tensor(False)
             pipe.prepare_runtime_masks(img_masks, torch.ones((1, LANG_LEN), dtype=torch.bool))
+        print(
+            f"[bench] compact={os.environ.get('PI05_COMPACT_MASKED_PREFIX', '0')} "
+            f"present_cameras={pipe._present_cam_indices} prefix_len={pipe._prefix_len} "
+            f"d2h_drain_only={os.environ.get('PI05_D2H_DRAIN_ONLY', '0')}",
+            flush=True,
+        )
 
         pipe.set_num_denoising_steps(cfg.num_denoising_steps)
 
