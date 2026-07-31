@@ -1817,6 +1817,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             uint32_t ref_q_chunks;
         };
         std::vector<McastCandidate> candidates;
+        candidates.reserve(head_segments.size());
         bool all_eligible = true;
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
@@ -1827,7 +1828,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
             // Gather chain participants with their per-head q_chunk_count
             std::vector<uint32_t> chain_core_indices;
+            chain_core_indices.reserve(segments.size());
             std::vector<uint32_t> chain_q_counts;
+            chain_q_counts.reserve(segments.size());
             for (const auto& seg : segments) {
                 if (seg.core_idx < head_chain_configs.size() && head_chain_configs[seg.core_idx].participates &&
                     head_chain_configs[seg.core_idx].batch == (head_id / NH) &&
