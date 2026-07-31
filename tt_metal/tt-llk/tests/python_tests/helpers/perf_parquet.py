@@ -17,11 +17,25 @@ physical schema is the shared wide schema (perf_wide_schema.DB_SCHEMA):
 Needs pyarrow, but no device libraries — builds and validates without hardware.
 """
 
+import re
+from pathlib import Path
+
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .perf_wide_schema import DB_SCHEMA, MANDATORY
+
+_BOOL_MAP = {
+    True: True,
+    False: False,
+    "True": True,
+    "False": False,
+    "true": True,
+    "false": False,
+    1: True,
+    0: False,
+}
 
 _ARROW_TYPES = {
     "int64": pa.int64(),
@@ -52,10 +66,14 @@ def to_table(df, columns=DB_SCHEMA) -> pa.Table:
     """
     schema = arrow_schema(columns)
     aligned = align_to_schema(df, columns)
-    arrays = [
-        pa.array(aligned[field.name], type=field.type, from_pandas=True)
-        for field in schema
-    ]
+    arrays = []
+    for field in schema:
+        col = aligned[field.name]
+        # A "string" column may hold non-strings (a bool unpack_to_dest, an enum
+        # dest_acc); stringify non-null values so Arrow accepts them, keep nulls.
+        if field.type == pa.string():
+            col = col.map(lambda v: v if pd.isna(v) else str(v))
+        arrays.append(pa.array(col, type=field.type, from_pandas=True))
     return pa.Table.from_arrays(arrays, schema=schema)
 
 
@@ -134,3 +152,70 @@ def write_run_batch(test_frames, path, *, compression="zstd", **provenance):
     pq.write_table(
         build_run_batch(test_frames, **provenance), path, compression=compression
     )
+
+
+# ── CSV -> Parquet conversion (also the historical-migration path, Milestone 3) ─
+
+
+def _test_name_from_csv(path) -> str:
+    """perf_fast_untilize[.post|.counters].csv -> perf_fast_untilize."""
+    name = Path(path).name
+    return re.sub(r"\.(?:post|counters)?\.?csv$", "", name).rstrip(".")
+
+
+def _coerce_frame_to_schema(df, schema_by_name):
+    """Coerce each known column to its declared type. A value that does not fit
+    (e.g. value_bits "2.0f" in an int column) becomes NULL and is reported, so a
+    dirty CSV converts instead of crashing. Returns (coerced_df, report)."""
+    out = df.copy()
+    report = {}
+    for col in out.columns:
+        spec = schema_by_name.get(col)
+        if spec is None:
+            continue  # unknown column; align_to_schema drops it
+        before = out[col]
+        if spec.dtype in ("int64", "float64"):
+            after = pd.to_numeric(before, errors="coerce")
+        elif spec.dtype == "bool":
+            after = before.map(_BOOL_MAP)
+        else:
+            continue  # string: cast happens at Arrow conversion
+        bad = before.notna() & after.isna()
+        if bad.any():
+            report[col] = {
+                "type": spec.dtype,
+                "bad": int(bad.sum()),
+                "example": before[bad].iloc[0],
+            }
+        out[col] = after
+    return out, report
+
+
+def convert_csvs_to_parquet(csv_paths, out_path, *, compression="zstd", **provenance):
+    """Convert a run's per-test CSVs into one typed Parquet batch.
+
+    Reads each CSV, coerces its columns to the schema types, and reuses
+    build_run_batch to align + stamp provenance + compact. Returns diagnostics:
+    per test, columns dropped (not in the schema) and values coerced to NULL.
+    """
+    schema_by_name = {c.name: c for c in DB_SCHEMA}
+    frames = {}
+    diagnostics = {"unknown_columns": {}, "coerced_values": {}}
+    for path in csv_paths:
+        name = _test_name_from_csv(path)
+        df = pd.read_csv(path)
+        unknown = sorted(set(df.columns) - set(schema_by_name))
+        if unknown:
+            diagnostics["unknown_columns"][name] = unknown
+        coerced, report = _coerce_frame_to_schema(df, schema_by_name)
+        if report:
+            diagnostics["coerced_values"].setdefault(name, {}).update(report)
+        # Same test can appear across arch dirs / shards: accumulate its rows.
+        if name in frames:
+            frames[name] = pd.concat([frames[name], coerced], ignore_index=True)
+        else:
+            frames[name] = coerced
+
+    table = build_run_batch(frames, **provenance)
+    pq.write_table(table, out_path, compression=compression)
+    return diagnostics
