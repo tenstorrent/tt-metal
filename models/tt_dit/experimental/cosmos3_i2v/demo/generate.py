@@ -224,8 +224,16 @@ def open_mesh(mesh_shape: tuple[int, int]):
     """Open a mesh device with FABRIC_1D config; caller closes via close_mesh()."""
     import ttnn
 
+    # Ring-topology trunk collectives (TT_COSMOS3_CCL_RING) need the fabric itself in
+    # ring mode; FABRIC_1D is a line and rejects a ring op's wraparound hop. FABRIC_1D_RING
+    # also serves the Linear collectives (VAE), so it is safe as the single run-wide config.
+    _fabric = (
+        ttnn.FabricConfig.FABRIC_1D_RING
+        if os.environ.get("TT_COSMOS3_CCL_RING") in ("1", "true", "True")
+        else ttnn.FabricConfig.FABRIC_1D
+    )
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D,
+        _fabric,
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,

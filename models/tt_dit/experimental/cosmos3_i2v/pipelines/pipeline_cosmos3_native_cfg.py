@@ -118,8 +118,14 @@ def _build_second_trunk(
     )
     if num_links is None:
         num_links = 2 if ttnn.device.is_blackhole() else (4 if mesh_shape == (4, 8) else 1)
+    # TT_COSMOS3_CCL_RING routes the trunk RowParallel RS / ColParallel AG over Ring
+    # (prerequisite for fused matmul+reduce-scatter). Requires the mesh opened with
+    # FABRIC_1D_RING (see demo/generate.py open_mesh).
+    _ccl_topology = (
+        ttnn.Topology.Ring if os.environ.get("TT_COSMOS3_CCL_RING") in ("1", "true", "True") else ttnn.Topology.Linear
+    )
     ccl_manager = (
-        CCLManager(mesh_device=submesh, num_links=num_links, topology=ttnn.Topology.Linear)
+        CCLManager(mesh_device=submesh, num_links=num_links, topology=_ccl_topology)
         if tp_factor > 1 or sp_factor > 1
         else None
     )
