@@ -5,16 +5,51 @@
 """Typed Parquet output for LLK performance reports (Milestone 2).
 
 Publishes a run's per-test reports as one immutable, typed Parquet batch whose
-physical schema is the shared wide schema (perf_wide_schema.DB_SCHEMA):
+physical schema is the shared wide schema (perf_wide_schema.DB_SCHEMA).
 
-  - stamp_provenance adds the run-context columns CI knows (commit, arch, ...).
-  - build_run_batch aligns every per-test frame to the schema (columns a test
-    did not emit become NULL), stamps provenance, and compacts them into ONE
-    run-level table. One file per run, not per test.
-  - align_to_schema / to_table fill missing columns with NULL and cast each
-    column to its declared Arrow type (nullable-int safe).
+Data flow
+---------
+Two entry points both produce {test_name: DataFrame}, then hand it to one
+shared core (build_run_batch):
 
-Needs pyarrow, but no device libraries — builds and validates without hardware.
+  A) live run   -->  {test_name: DataFrame}              (already in memory)
+
+  B) CSV files  -->  convert_csvs_to_parquet(paths, out, **prov)
+                       for each csv:
+                         _test_name_from_csv      name from filename
+                         pd.read_csv              read the text table
+                         cols not in schema    -> diagnostics: DROPPED
+                         _coerce_frame_to_schema
+                           text -> int / float / bool
+                           won't parse         -> NULL, diagnostics: COERCED
+                     -->  {test_name: cleaned DataFrame}
+
+                                   |  (both paths)
+                                   v
+  build_run_batch(frames, **provenance)                        <-- CORE
+      1  stamp_provenance      add test_name + run-context columns
+      2  pd.concat             stack every test's rows into one frame
+      3  to_table              enforce the schema (align + cast; below)
+      4  validate_batch        mandatory columns must not be NULL
+                                   |
+                                   v
+  to_table(df)
+      align_to_schema          missing cols -> NULL, drop extras, order
+      arrow_schema             column types, via _ARROW_TYPES
+      pa.array per column      cast to type; string cols stringify values
+                                   |
+                                   v
+  pq.write_table(..., zstd)     -->     one immutable  run.parquet
+
+Entry points:
+  write_run_batch          = build_run_batch + write        (frames in memory)
+  convert_csvs_to_parquet  = read + coerce + build + write  (csv files on disk)
+
+Notes:
+  * One file per RUN, not per test: build_run_batch compacts every test's rows.
+  * A test emits only its own columns; align_to_schema fills the rest with NULL.
+  * Provenance (commit/arch/run_id/...) is added by CI here, not by the test.
+  * No device libraries (pandas + pyarrow only): builds and tests hardware-free.
 """
 
 import re
