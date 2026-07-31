@@ -143,7 +143,10 @@ class TPAttention:
         self._qg_deint = self._fused_qkv
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
         # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
-        self._fuse_agmm = self._fused_qkv
+        # BH-only: all_gather_matmul_prefill's grid assumes BH's taller (9-10 row) compute grid; WH
+        # tops out at 8 rows, so this fusion is unvalidated there. Must match layer.py's
+        # _fuse_norm_agmm gate. Falls back to the unfused AG + matmul path on WH.
+        self._fuse_agmm = self._fused_qkv and tpc.is_blackhole()
         # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
         self._use_nlp_decode_heads = True
         self.k_caches = None
@@ -243,7 +246,9 @@ class TPAttention:
                     weight,
                     compute_kernel_config=self.compute_cfg,
                     program_config=pc,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    # L1 while it fits; DRAM once the [seq,dim] output would crowd out this matmul's
+                    # own circular buffers on WH (see tp_common.prefill_out_memory_config).
+                    memory_config=tpc.prefill_out_memory_config(x.shape[-2], weight.shape[-1]),
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
