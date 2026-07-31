@@ -740,10 +740,10 @@ Follow these steps to complete the exercise:
 
 #. Modify the compute kernel to use the intermediate buffer to reload and update partial results.
 
-   * When you call ``mm_init``, one of the arguments is the output circular buffer index.
+   * When you call ``compute_kernel_hw_startup``, one of the arguments is the output circular buffer index.
      Given that matrix multiplication results will be written into either the output or intermediate
-     buffers, you can use either of the two circular buffer indices in a call to ``mm_init``.
-     This is because ``mm_init`` uses the output circular buffer index only to determine output data
+     buffers, you can use either of the two circular buffer indices in that call.
+     This is because ``compute_kernel_hw_startup`` uses the output circular buffer index only to determine output data
      format related parameters, which are the same for both the output and intermediate CBs.
    * An efficient way to accumulate partial results is to use the destination register array.
      Recall that the ``matmul_tiles`` function adds to the existing values in the destination register
@@ -760,14 +760,13 @@ Follow these steps to complete the exercise:
      - Before calling this function, you need to call ``copy_tile_to_dst_init_short(in_cb_id)``
        to set up the Tensix Engine for the copy operation.
      - Since the compute kernel code will alternate between copying data and multiplying tiles,
-       after the copy operation completes, we need to call ``mm_init_short(in0_cb_id, in1_cb_id)``
+       after the copy operation completes, we need to call ``matmul_init(in0_cb_id, in1_cb_id)``
        to set up the Tensix Engine for multiplication again.
-       Observe that we are calling ``_short`` versions of the initialization functions
-       (both ``mm_init_short`` and ``copy_tile_to_dst_init_short``), which are faster
-       than the "full" versions. The first call to ``mm_init`` performs more initialization
-       steps that are no longer needed in subsequent calls, and these operations are common to
-       both the copy and multiplication operations, which is why the ``_short`` versions are
-       sufficient for later calls.
+       Observe that ``matmul_init`` and ``copy_tile_to_dst_init_short`` are lightweight, per-operation
+       re-initializations. The one-time ``compute_kernel_hw_startup`` call at the start of the kernel
+       performs the heavier hardware configuration that is common to both the copy and multiplication
+       operations and is not repeated, which is why these lighter calls are sufficient when switching
+       between the two operations later.
      - For optimal performance, **make sure to call these initialization functions only when required**.
    * Remember that an efficient way to initialize all the tiles in the destination register array
      to ``0`` is to call ``tile_regs_acquire``.

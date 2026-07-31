@@ -1067,8 +1067,8 @@ TEST_F(MeshDeviceFixture, DFBReentryNumEntriesViolatesTxnDivisorFails) {
             ::testing::HasSubstr("num_entries override 3 is not divisible by")));
 }
 
-// An entry_size override that pushes the TRISC ring extent past the uint16 L1-aligned-unit limit is
-// rejected by the ring-extent re-validation.
+// Ring extent past Tensix unreserved L1 is rejected. entry_size stays within the TRISC uint16
+// L1-unit field so this hits the L1 check rather than the entry_size width check.
 TEST_F(MeshDeviceFixture, DFBReentryEntrySizeRingExtentFails) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB ring-extent check requires Quasar";
@@ -1079,12 +1079,31 @@ TEST_F(MeshDeviceFixture, DFBReentryEntrySizeRingExtentFails) {
     program.impl().finalize_dataflow_buffer_configs();
 
     auto params = MakeMinimalRunArgs(node);
-    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 64u * 1024u * 1024u});
+    // 64 KiB * 128 entries = 8 MiB ring > Quasar unreserved L1 (~4 MiB).
+    params.dfb_run_overrides.push_back(
+        {.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 64u * 1024u, .num_entries = 128u});
 
     EXPECT_THAT(
         [&] { experimental::SetProgramRunArgs(program, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("exceeds uint16_t; reduce capacity, stride, or entry_size")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds Tensix unreserved L1 size")));
+}
+
+// TRISC stores entry_size in uint16 L1 units; 1 MiB is 65536 units and must fail before init truncates.
+TEST_F(MeshDeviceFixture, DFBReentryEntrySizeExceedsUint16Fails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB TRISC entry_size check requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 1024u * 1024u});
+
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("TRISC entry_size")));
 }
 
 // capacity (num_entries / max(producers, consumers)) is stored as uint16_t (the tile-counter register
@@ -1540,6 +1559,40 @@ CONFIG_TC_TEST_2_0(DMTest1xDFB2Sx4BConfig, DM, DM, 2, 4, STRIDED, ALL, 4, 2)
 // Group 2 M2: B2 (txn-id allocator) + B4 (cached threshold) + B10 (divisibility)
 // =====================================================================================
 
+// Host-only: DFB pool is [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], allocated top-down in ascending blocks.
+TEST(TxnIdAllocatorTest, AllocatesTopDownFromDfbPool) {
+    using tt::tt_metal::experimental::dfb::detail::TxnIdAllocator;
+    TxnIdAllocator alloc;
+
+    auto first = alloc.allocate(2);
+    ASSERT_EQ(first.size(), 2u);
+    EXPECT_EQ(first[0], static_cast<uint8_t>(HW_TXN_ID_MAX - 1));
+    EXPECT_EQ(first[1], HW_TXN_ID_MAX);
+
+    auto second = alloc.allocate(3);
+    ASSERT_EQ(second.size(), 3u);
+    EXPECT_EQ(second[0], static_cast<uint8_t>(HW_TXN_ID_MAX - 4));
+    EXPECT_EQ(second[1], static_cast<uint8_t>(HW_TXN_ID_MAX - 3));
+    EXPECT_EQ(second[2], static_cast<uint8_t>(HW_TXN_ID_MAX - 2));
+
+    // Drain the rest of the pool, then the next allocate must fail.
+    const uint8_t used = 5;
+    const uint8_t leftover = static_cast<uint8_t>(NUM_DFB_POOL_TXN_IDS - used);
+    auto rest = alloc.allocate(leftover);
+    ASSERT_EQ(rest.size(), leftover);
+    EXPECT_EQ(rest.front(), DFB_TXN_ID_BASE);
+    EXPECT_EQ(rest.back(), static_cast<uint8_t>(DFB_TXN_ID_BASE + leftover - 1));
+
+    EXPECT_THAT(
+        [&]() { alloc.allocate(1); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("TxnIdAllocator exhausted")));
+
+    alloc.reset();
+    auto after_reset = alloc.allocate(1);
+    ASSERT_EQ(after_reset.size(), 1u);
+    EXPECT_EQ(after_reset[0], HW_TXN_ID_MAX);
+}
+
 // B2: For num_entries in {16, 15, 7}, producer_txn_descriptor.num_txn_ids should
 // land on {2, 3, 1} (divisibility-based selection).
 TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
@@ -1575,14 +1628,24 @@ TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
         auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
         ASSERT_EQ(dfbs.size(), 1u);
         EXPECT_EQ(dfbs[0]->producer_txn_descriptor.num_txn_ids, c.expected_num_txn_ids);
-        // Txn id 0 is reserved for untagged NoC traffic; DFB assignment starts at 1.
+        // DFB ids come from the runtime pool [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], never 0 or the user pool.
+        auto expect_in_dfb_pool = [](uint8_t txn_id, const char* side, int index) {
+            EXPECT_NE(txn_id, 0) << side << " txn_ids[" << index << "] must not be 0 (NOC_V2_TRID_STATIC)";
+            EXPECT_GE(txn_id, DFB_TXN_ID_BASE)
+                << side << " txn_ids[" << index << "]=" << static_cast<int>(txn_id) << " collides with user pool [0, "
+                << static_cast<int>(USER_TXN_ID_MAX) << "]";
+            EXPECT_LE(txn_id, HW_TXN_ID_MAX)
+                << side << " txn_ids[" << index << "]=" << static_cast<int>(txn_id) << " exceeds HW max";
+        };
         for (uint8_t i = 0; i < dfbs[0]->producer_txn_descriptor.num_txn_ids; ++i) {
-            EXPECT_NE(dfbs[0]->producer_txn_descriptor.txn_ids[i], 0)
-                << "producer txn_ids[" << static_cast<int>(i) << "] must not be 0";
+            expect_in_dfb_pool(dfbs[0]->producer_txn_descriptor.txn_ids[i], "producer", i);
         }
         for (uint8_t i = 0; i < dfbs[0]->consumer_txn_descriptor.num_txn_ids; ++i) {
-            EXPECT_NE(dfbs[0]->consumer_txn_descriptor.txn_ids[i], 0)
-                << "consumer txn_ids[" << static_cast<int>(i) << "] must not be 0";
+            expect_in_dfb_pool(dfbs[0]->consumer_txn_descriptor.txn_ids[i], "consumer", i);
+        }
+        // First DFB on a program draws from the top of the pool.
+        if (c.expected_num_txn_ids > 0) {
+            EXPECT_EQ(dfbs[0]->producer_txn_descriptor.txn_ids[c.expected_num_txn_ids - 1], HW_TXN_ID_MAX);
         }
     }
 }

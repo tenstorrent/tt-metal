@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <utility>
 #include <tt-metalium/math.hpp>
@@ -40,7 +41,79 @@ Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_f
 }
 
 tt::tt_metal::TensorSpec Conv2dDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // OPTION B — PROGRAM A (tilize-only). When TT_METAL_QSR_CONV_SPLIT_PROGRAM is set on the height-sharded
+    // path, the conv op runs only gather+tilize and OUTPUTS the tilized activations (Program B / matmul is
+    // chained at the host level later). The output tensor is the per-core tilized activation shard:
+    // [per_core_out_matrix_height_ntile*32 rows, FULL_K*32 cols], height-sharded TILE, where FULL_K = the whole
+    // im2col contraction dim = in_ch*kh*kw/32 = act_block_w_ntiles * filter_h (act_block_w_ntiles is only ONE
+    // window row = in_ch*kw/32; on Quasar full_inner_dim does NOT collapse K into act_block_w). This matches the
+    // prepared weights' K-height [full_K, N] so Program B's plain matmul works, and matches the OUT DFB the
+    // factory sizes for the split path (num_entries = M * full_K tiles).
+    // Tilize-only detection MUST match the factory's split_program_tilize_only gate, which keys on the INPUT
+    // activation's layout (a.memory_config().memory_layout() == HEIGHT_SHARDED, conv2d_op_sharded_program_
+    // factory.cpp:331), NOT the op's OUTPUT memory_config. In the DRAM-sliced path the per-slice op's output
+    // config is interleaved (the slice is slice_written to DRAM), so gating on args.memory_config here
+    // mis-detected tilize-only and sized the output as the conv result [M,N] while the factory tilized
+    // [M,full_K] -> the borrowed-OUT reserve_back(M*full_K) exceeded its M*N capacity (RBFAIL #48552). Key on
+    // the INPUT, and emit the tilized-activation output as HEIGHT_SHARDED L1 on the input's grid (the tilized
+    // act lives on the same cores as the gather, and feeds Program B's matmul).
+    // [#48552 Stage2] Block-sharded convs ALSO run the tilize-only Program A and must emit the tilized
+    // activation [M, full_K], NOT the normal conv result [M, N] (else Program B's matmul sees a_width = N =
+    // 256 instead of full_K = 2304). The tilized activation needs FULL K per core (the matmul contracts full K
+    // in one block), which means it stays HEIGHT_SHARDED [M, full_K] even for block-sharded convs -- the
+    // block-sharding N-split lives only in Program B's weights [K, N/cols]. So emit the SAME height-sharded
+    // tilized output regardless of the input's height/block layout.
+    // [#48552 Stage2 REVERTED] Block-sharded convs process K in >1 block (in0_num_blocks_w=2 -> K/Cin split &
+    // reduced across grid columns), so they CANNOT use the single-K-block split (which dodges the Quasar matmul
+    // K-accumulate). The factory's split_program_tilize_only correctly refuses them; emitting the [M,full_K]
+    // tilized shape here for block-sharded created a spec-vs-fused-Program-A mismatch -> TILE_COUNTERS. Keep
+    // this HEIGHT_SHARDED-only; block-sharded falls back to the fused conv.
+    const auto& in_mem = tensor_args.a.memory_config();
+    if (((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) ||
+         (std::getenv("TT_METAL_QSR_CONV_UNPACK_TILIZE") != nullptr)) &&
+        in_mem.is_sharded() && in_mem.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        const uint32_t m_ntiles = args.parallelization_config.per_core_out_matrix_height_ntile;
+        // FULL im2col K, in tiles = the PREPARED weights' K-height (b.padded_shape()[2] / TILE_HEIGHT). This is
+        // EXACTLY what the factory uses for full_k_ntiles (weight_matrix_height / TILE_HEIGHT), so the output
+        // tensor width and the factory OUT DFB always agree, on every arch and channel alignment. The old
+        // `act_block_w_ntiles * filter_h` over-counted 4x on WH/BH (there act_block_w is ALREADY the full K),
+        // sizing this tilized-activation output 4x too wide; and sliding_window_config.channels is 0 here.
+        const uint32_t k_ntiles = tensor_args.b.padded_shape()[2] / tt::constants::TILE_HEIGHT;
+        const uint32_t num_cores_nhw = args.parallelization_config.num_cores_nhw;
+        const uint32_t padded_w = num_cores_nhw * m_ntiles * tt::constants::TILE_HEIGHT;
+        const uint32_t padded_c = k_ntiles * tt::constants::TILE_WIDTH;
+        ttnn::Shape tilized_shape({1, 1, padded_w, padded_c});
+        // QSR OUT headroom REMOVED (red herring; see the fused branch below): the borrowed-output exact-fill it
+        // guarded against doesn't actually stall (DFB reserve waits for free >= n; the last block has free == n),
+        // and the +1 shard row broke the strict emulator sharded readback. Shard = exact M x full_K.
+        std::array<uint32_t, 2> shard_shape = {
+            m_ntiles * tt::constants::TILE_HEIGHT, k_ntiles * tt::constants::TILE_WIDTH};
+        // [#48552 Stage2] For a BLOCK_SHARDED conv, Program B's 2D matmul requires in0 (this tilized activation)
+        // on a SINGLE COLUMN of the grid (matmul_device_operation.cpp:1572 start.x==end.x); it then mcasts in0
+        // across the N-split columns. in0 needs FULL K per core regardless, so place it HEIGHT_SHARDED on
+        // column 0 with num_cores_nhw rows (= the M split), NOT the full 2D grid. Height-sharded convs keep
+        // their existing grid.
+        tt::tt_metal::CoreRangeSet shard_grid;
+        if (in_mem.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+            const auto bbox = in_mem.shard_spec().value().grid.bounding_box();
+            shard_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(
+                bbox.start_coord, CoreCoord(bbox.start_coord.x, bbox.start_coord.y + num_cores_nhw - 1)));
+        } else {
+            shard_grid = in_mem.shard_spec().value().grid;
+        }
+        auto shard_spec = tt::tt_metal::ShardSpec{shard_grid, shard_shape, in_mem.shard_spec().value().orientation};
+        auto mem_config =
+            tt::tt_metal::MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
+        return tt::tt_metal::TensorSpec(
+            tilized_shape,
+            tt::tt_metal::TensorLayout(
+                args.dtype,
+                tt::tt_metal::PageConfig(Layout::TILE),
+                mem_config,
+                tt::tt_metal::Alignment({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH})));
+    }
+
     const auto& input_tensor_a_shape = args.input_tensor_shape;
     uint32_t batch_size = input_tensor_a_shape[0];
 
@@ -59,6 +132,13 @@ tt::tt_metal::TensorSpec Conv2dDeviceOperation::compute_output_specs(
 
     auto output_layout = args.untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (args.memory_config.is_sharded()) {
+        // QSR OUT headroom REMOVED (was a red herring): it added +1 tile-row per-core to the borrowed OUT shard
+        // to dodge a presumed borrowed-output exact-fill stall. But the DFB credit math shows no such stall —
+        // reserve_back waits for free >= n and the LAST block sees free == n (free = capacity - posted), so it
+        // passes; WH/BH's identically-structured conv OUT needs no headroom for the same reason. The real stalls
+        // were the DEST-dvalid race (fixed via set_up_dest_dvalid_per_thread) and the trailing unpacker pop. The
+        // +1 shard row also broke the strict emulator sharded readback (per-core pad doesn't tile the logical
+        // output when per_core_M is small -> tile_read_bytes 80 vs 81; masked on craq-sim). Shard = exact.
         std::array<uint32_t, 2> shard_shape = {
             args.parallelization_config.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT,
             args.parallelization_config.per_core_out_matrix_width_ntile * tt::constants::TILE_WIDTH};
@@ -106,7 +186,11 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
             "Untilize output requires BFLOAT16 or FLOAT32 data type but got {}",
             args.dtype);
     }
-    if (args.memory_config.is_sharded()) {
+    // OPTION B / Program A (TT_METAL_QSR_CONV_SPLIT_PROGRAM): the op output is the tilized activation
+    // (width = act_block_w_ntiles = K), NOT the conv output (width = per_core_out_matrix_width_ntile = N),
+    // so the N-width / out_subblock checks below do not apply. Skip them for the split-program path.
+    if (args.memory_config.is_sharded() && std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") == nullptr &&
+        std::getenv("TT_METAL_QSR_CONV_UNPACK_TILIZE") == nullptr) {
         uint32_t per_core_out_matrix_width_ntiles = args.parallelization_config.per_core_out_matrix_width_ntile;
         uint32_t out_width_ntiles =
             compute_output_specs(args, tensor_args).padded_shape()[-1] / tt::constants::TILE_WIDTH;

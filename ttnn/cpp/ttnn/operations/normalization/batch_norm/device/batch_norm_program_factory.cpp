@@ -362,6 +362,9 @@ tt::tt_metal::ProgramDescriptor BatchNormOperation::BatchNormFactory::create_des
               bias_tensor_cb}) {
             unpack_to_dest_mode[cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
+        if (needs_output_typecast) {
+            unpack_to_dest_mode[output_tensor_cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
     }
 
     std::vector<uint32_t> compute_kernel_args = {
