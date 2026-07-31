@@ -301,6 +301,31 @@ def _repoint_canonical_demo(demo_dir, demo_files) -> Optional[list]:
         return None
 
 
+def _trace_cleared_fallback(fallback, demo_dir, *, trace_is_engaged):
+    """Reconcile the probe-derived fallback list against the G6 trace verdict.
+
+    A passed trace-capture gate (trace+1cq engaged) is proof the traced pipeline ran on device:
+    a host fallback would break capture. The probe (build_final_categorization -> _stub_body_is_native)
+    can false-flag a graduated, on-device module — e.g. one that stages an input via `.to()`->from_torch,
+    which the runtime native-probe miscounts as a torch op. So when the trace gate engaged, any fallback
+    entry that is actually graduated on disk (a `.last_good_native`/`.last_good_sharded` snapshot exists)
+    is a probe false-positive. Uses reliable signals only — trace-engaged + snapshot existence — never the
+    body-native scan that produced the false flag. Returns (kept, cleared)."""
+    from pathlib import Path
+
+    from ..bringup_loop import _safe_id
+
+    if not fallback or not trace_is_engaged:
+        return list(fallback or []), []
+    stubs = Path(demo_dir) / "_stubs"
+    kept, cleared = [], []
+    for m in fallback:
+        base = str(stubs / (_safe_id(m) + ".py"))
+        graduated = Path(base + ".last_good_native").is_file() or Path(base + ".last_good_sharded").is_file()
+        (cleared if graduated else kept).append(m)
+    return kept, cleared
+
+
 def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
     """Consolidated end-of-emit-e2e report: the on-device vs CPU-fallback split, and
     per task/demo the real-input demo + full-model e2e PCC test + trace perf test
@@ -333,6 +358,15 @@ def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
             )
         except Exception:
             fallback = []
+
+        _trace_cleared = []
+        try:
+            from ..trace_gate import read_trace_caps, trace_engaged
+
+            _eng = trace_engaged(read_trace_caps(demo_dir))
+            fallback, _trace_cleared = _trace_cleared_fallback(fallback, demo_dir, trace_is_engaged=_eng)
+        except Exception:
+            pass
 
         demo_files = sorted((demo_dir / "demo").glob("demo_*.py")) if (demo_dir / "demo").is_dir() else []
         if str(verdict).upper() == "PASS":
@@ -388,6 +422,11 @@ def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
         for ln in split_lines:
             print(ln)
         print(f"    CPU-fallback modules: {', '.join(fallback) if fallback else '(none — fully on device)'}")
+        if _trace_cleared:
+            print(
+                f"    trace-validated on device (G6): {', '.join(_trace_cleared)} "
+                "— probe-flagged but proven on-device by trace+1cq capture"
+            )
         print("  " + "-" * 74)
         print(f"    {'task':<12} {'e2e PCC':<9} {'demo (real I/O)':<26} trace perf test")
         for task, dfp, pcc, pcc_test, perf_test in rows:
@@ -423,6 +462,11 @@ def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
             "- CPU-fallback modules: "
             + (", ".join(f"`{m}`" for m in fallback) if fallback else "(none — fully on device)")
         )
+        if _trace_cleared:
+            md.append(
+                "- Trace-validated on device (G6, probe false-positive cleared): "
+                + ", ".join(f"`{m}`" for m in _trace_cleared)
+            )
         md += [
             "",
             "## Per task / demo",
