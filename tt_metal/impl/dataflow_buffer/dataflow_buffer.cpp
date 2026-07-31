@@ -65,12 +65,13 @@ std::vector<uint8_t> serialize_dm0_isr_txn_hw_pool_for_core(
         return {};
     }
 
+    const uint32_t all_mask = producer_txn_id_mask | consumer_txn_id_mask;
     std::vector<uint8_t> pool(hw_bytes, 0);
     auto write_threshold = [&](uint8_t txn_id, uint8_t threshold) {
         dfb_dm0_isr_txn_threshold_t entry = {};
         entry.threshold = threshold;
         std::memcpy(
-            pool.data() + static_cast<uint32_t>(txn_id) * sizeof(dfb_dm0_isr_txn_threshold_t),
+            pool.data() + dm0_isr_txn_slot_index(all_mask, txn_id) * sizeof(dfb_dm0_isr_txn_threshold_t),
             &entry,
             sizeof(entry));
     };
@@ -99,6 +100,7 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
         return {};
     }
 
+    const uint32_t all_mask = producer_txn_id_mask | consumer_txn_id_mask;
     std::vector<uint8_t> pool(pool_bytes, 0);
     for (const auto& dfb : dfbs_on_core) {
         auto it = dfb->core_lookup_.find(core);
@@ -143,11 +145,17 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
 
         for (uint8_t i = 0; i < dfb->producer_txn_descriptor.num_txn_ids; i++) {
             const uint8_t txn_id = dfb->producer_txn_descriptor.txn_ids[i];
-            std::memcpy(pool.data() + static_cast<uint32_t>(txn_id) * 32u, &prod_desc, sizeof(prod_desc));
+            std::memcpy(
+                pool.data() + dm0_isr_txn_slot_index(all_mask, txn_id) * sizeof(dfb_dm0_txn_descriptor_image_t),
+                &prod_desc,
+                sizeof(prod_desc));
         }
         for (uint8_t i = 0; i < dfb->consumer_txn_descriptor.num_txn_ids; i++) {
             const uint8_t txn_id = dfb->consumer_txn_descriptor.txn_ids[i];
-            std::memcpy(pool.data() + static_cast<uint32_t>(txn_id) * 32u, &cons_desc, sizeof(cons_desc));
+            std::memcpy(
+                pool.data() + dm0_isr_txn_slot_index(all_mask, txn_id) * sizeof(dfb_dm0_txn_descriptor_image_t),
+                &cons_desc,
+                sizeof(cons_desc));
         }
     }
     return pool;
@@ -304,6 +312,16 @@ void verify_dfb_hart_blobs(
             blob_off <= config_bytes.size(),
             "hart_blob_offset[{}]={} out of range (config size {})",
             hartid, blob_off, config_bytes.size());
+        const uint32_t blob_end = (hartid + 1u < ::dfb::NUM_PARTICIPATING_HARTIDS) ? ghdr->hart_blob_offset[hartid + 1u]
+                                                                                   : ghdr->dfb_signal_region_off;
+        TT_FATAL(
+            blob_off <= blob_end && blob_end <= config_bytes.size(),
+            "hart {} blob [{}, {}) is not an ascending in-range extent (config size {}); DM init derives "
+            "its invalidate range from consecutive hart_blob_offset entries",
+            hartid,
+            blob_off,
+            blob_end,
+            config_bytes.size());
 
         if (num_entries == 0) {
             TT_FATAL(
@@ -342,6 +360,14 @@ void verify_dfb_hart_blobs(
                 hartid, e, entry->logical_dfb_id, ghdr->participation_mask[hartid]);
             cursor += entry_sz;
         }
+        TT_FATAL(
+            blob_off + cursor <= blob_end,
+            "hart {} entries span {} bytes but its blob extent is [{}, {}); DM init would invalidate less "
+            "than it walks",
+            hartid,
+            cursor,
+            blob_off,
+            blob_end);
     }
 }
 

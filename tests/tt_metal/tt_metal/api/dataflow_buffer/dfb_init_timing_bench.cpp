@@ -650,6 +650,8 @@ void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
 //
 // Remapper: 12 entries (all 1-to-4), 48 set_clientR_slot writes.
 //
+// TxnId budget: 12 DFBs × 2 txn IDs = 24, exactly filling the DFB pool [8,31].
+//
 // Drains the full 16-entry ring per DFB (num_entries=16, 1 producer / 4 ALL consumers):
 //   reader: 16 implicit reads per DFB per DM (single producer)
 //   compute: 16 copy_tile+pop_front per Neo per DFB across all 12 DFBs
@@ -777,11 +779,10 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
 // Remapper:  16 × 1-to-2 entries — exhausts all 16 one-to-many remapper slots.
 //            32 set_clientR_slot writes.
 //
-// Implicit sync is enabled to exercise ISR setup. num_entries=1 is required to
-// stay within the 32-slot TxnIdAllocator budget: with num_entries=1 the
-// compute_optimal_txn_id_count function returns 1 (no n≥2 divides 1), so each
-// DFB consumes exactly 1 txn ID. Any even num_entries would return n=2 (budget
-// exhausted at DFB 17).
+// The DFB transaction-id pool is [8,31], so at most 24 DFBs can use one ID each.
+// To retain the full 32-DFB / 64-TC / 16-remapper topology, producer implicit
+// sync is disabled on 8 DFBs (two on each of DM2-DM5). The other 24 DFBs use
+// one ID each because num_entries=1 is not divisible by any n in [2,4].
 //
 // Cases 6/7 use entry_size=2048 (not 1024): num_entries=1 cannot use the Cases 2–5
 // workaround where a default 2048 B unpack over-reads into the next ring slot.
@@ -791,11 +792,11 @@ void run_benchmark_case_seven(DfbInitTimingBenchContext& ctx) {
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
     constexpr uint32_t ENTRY_SIZE  = 2048;
-    // num_entries=1 is intentional: compute_optimal_txn_id_count iterates n=2..32
+    // num_entries=1 is intentional: compute_optimal_txn_id_count iterates n=2..4
     // looking for num_entries % (n * num_producers * num_tcs_per_risc) == 0.
     // With num_entries=1 no n≥2 divides 1, so the function returns 1 txn ID per DFB.
-    // 32 DFBs × 1 txn ID = 32, fitting exactly in the 32-slot TxnIdAllocator budget.
-    // Any even num_entries (e.g. 4) would return n=2, exhausting the budget at DFB 17.
+    // Producer implicit sync is enabled on 24 DFBs and disabled on 8, exactly
+    // filling the 24-ID DFB pool.
     constexpr uint32_t NUM_ENTRIES = 1;
 
     // risc_mask bit positions
@@ -816,29 +817,29 @@ void run_benchmark_case_seven(DfbInitTimingBenchContext& ctx) {
     // 1Sx1S DFBs (IDs 0–15): STRIDED producer, STRIDED consumer, no remapper.
     // TC is shared on the Neo consumer's tensix.
     // -----------------------------------------------------------------------
-    auto make_1sx1s = [&](uint16_t producer_dm, uint16_t consumer_neo) {
+    auto make_1sx1s = [&](uint16_t producer_dm, uint16_t consumer_neo, bool producer_implicit_sync = true) {
         return experimental::dfb::DataflowBufferConfig{
-            .entry_size          = ENTRY_SIZE,
-            .num_entries         = NUM_ENTRIES,
-            .producer_risc_mask  = producer_dm,
-            .num_producers       = 1,
-            .pap                 = dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask  = consumer_neo,
-            .num_consumers       = 1,
-            .cap                 = dfb::AccessPattern::STRIDED,
-            .enable_producer_implicit_sync = true,
+            .entry_size = ENTRY_SIZE,
+            .num_entries = NUM_ENTRIES,
+            .producer_risc_mask = producer_dm,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = consumer_neo,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::STRIDED,
+            .enable_producer_implicit_sync = producer_implicit_sync,
             .enable_consumer_implicit_sync = true,
-            .data_format         = kDfbBenchDataFormat,
+            .data_format = kDfbBenchDataFormat,
         };
     };
 
     // DFBs 0–3: DM4 → Neo0
     for (int i = 0; i < 4; i++) {
-        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM4, NEO0));
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM4, NEO0, i >= 2));
     }
     // DFBs 4–7: DM5 → Neo1
     for (int i = 0; i < 4; i++) {
-        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM5, NEO1));
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM5, NEO1, i >= 2));
     }
     // DFBs 8–11: DM4 → Neo2
     for (int i = 0; i < 4; i++) {
@@ -853,29 +854,29 @@ void run_benchmark_case_seven(DfbInitTimingBenchContext& ctx) {
     // 1Sx2A DFBs (IDs 16–31): STRIDED producer, ALL consumer, remapper 1-to-2.
     // 1 prod TC on DM's tensix + 1 cons TC on each Neo consumer's tensix.
     // -----------------------------------------------------------------------
-    auto make_1sx2a = [&](uint16_t producer_dm, uint16_t consumer_neos) {
+    auto make_1sx2a = [&](uint16_t producer_dm, uint16_t consumer_neos, bool producer_implicit_sync = true) {
         return experimental::dfb::DataflowBufferConfig{
-            .entry_size          = ENTRY_SIZE,
-            .num_entries         = NUM_ENTRIES,
-            .producer_risc_mask  = producer_dm,
-            .num_producers       = 1,
-            .pap                 = dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask  = consumer_neos,
-            .num_consumers       = 2,
-            .cap                 = dfb::AccessPattern::ALL,
-            .enable_producer_implicit_sync = true,
+            .entry_size = ENTRY_SIZE,
+            .num_entries = NUM_ENTRIES,
+            .producer_risc_mask = producer_dm,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = consumer_neos,
+            .num_consumers = 2,
+            .cap = dfb::AccessPattern::ALL,
+            .enable_producer_implicit_sync = producer_implicit_sync,
             .enable_consumer_implicit_sync = true,
-            .data_format         = kDfbBenchDataFormat,
+            .data_format = kDfbBenchDataFormat,
         };
     };
 
     // DFBs 16–19: DM2 (t2) → {Neo0 (t0), Neo2 (t2)}
     for (int i = 0; i < 4; i++) {
-        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM2, NEO0 | NEO2));
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM2, NEO0 | NEO2, i >= 2));
     }
     // DFBs 20–23: DM3 (t3) → {Neo0 (t0), Neo2 (t2)}
     for (int i = 0; i < 4; i++) {
-        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM3, NEO0 | NEO2));
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM3, NEO0 | NEO2, i >= 2));
     }
     // DFBs 24–27: DM4 (t0) → {Neo1 (t1), Neo3 (t3)}
     for (int i = 0; i < 4; i++) {
@@ -945,8 +946,8 @@ void run_benchmark_case_seven(DfbInitTimingBenchContext& ctx) {
 //
 // Remapper: 16 × 1-to-2 (all 16 one-to-many slots) + 8 × 1-to-1 (8 of 48 one-to-one slots)
 //           = 24 total remapper entries, 16×2 + 8×1 = 40 set_clientR_slot writes.
-// TxnId budget: 24 DFBs × 1 txn ID = 24 ≤ 32 (num_entries=1 required; 16 entries would
-// need 2 txn IDs/DFB and exceed the 32-slot budget).
+// TxnId budget: 24 DFBs × 1 txn ID = 24, exactly filling the DFB pool [8,31].
+// num_entries=1 is required; 16 entries would need 2 txn IDs per DFB.
 //
 // Traffic per DFB (num_entries=1): DM issues 1 implicit read + finish; Neo drains via
 // copy_tile. entry_size=2048 matches default 32×32 Float16_b JIT unpack (see Case Seven comment).
@@ -955,7 +956,7 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
     constexpr uint32_t ENTRY_SIZE  = 2048;
-    // num_entries=1: ensures each DFB consumes exactly 1 TxnId (24 DFBs × 1 = 24 ≤ 32 budget)
+    // num_entries=1: each DFB consumes exactly 1 TxnId (24 DFBs × 1 = the 24-ID pool)
     // while keeping implicit sync enabled to exercise ISR setup.
     constexpr uint32_t NUM_ENTRIES = 1;
 

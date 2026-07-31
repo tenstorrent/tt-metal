@@ -43,6 +43,15 @@ FORCE_INLINE uint16_t dfb_read_hart_blob_offset(uintptr_t config_cached, uint8_t
         static_cast<uintptr_t>(hart_u8) * sizeof(uint16_t)));
 }
 
+// End of hart h's init blob. The host emits one blob per hart, contiguously and in ascending
+// hart order (non-participating harts get a 4B stub), so the next hart's offset is this blob's
+// end and the signal region bounds the last hart.
+FORCE_INLINE uint32_t dfb_read_hart_blob_end(uintptr_t config_cached, uint8_t hart_u8, uint32_t signal_region_off) {
+    return (static_cast<uint32_t>(hart_u8) + 1u < static_cast<uint32_t>(::dfb::NUM_PARTICIPATING_HARTIDS))
+               ? static_cast<uint32_t>(dfb_read_hart_blob_offset(config_cached, hart_u8 + 1u))
+               : signal_region_off;
+}
+
 FORCE_INLINE uint32_t dfb_read_blob_u32(uintptr_t blob_addr, uint32_t byte_off) {
     return *dfb_l1_uncached_u32_ptr(blob_addr + byte_off);
 }
@@ -320,6 +329,12 @@ FORCE_INLINE void dfb_ensure_ready(uintptr_t config_cached, uint8_t dfb_id) {
     WAYPOINT("DFD");
 }
 
+// Slot index into dfb_signal[]: d * MAX_PRODUCERS_PER_DFB + producer_bit.
+FORCE_INLINE constexpr uint32_t dfb_signal_slot_index(uint32_t logical_dfb_id, uint32_t producer_signal_bit) {
+    constexpr uint32_t k_slot_stride = static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB);
+    return logical_dfb_id * k_slot_stride + producer_signal_bit;
+}
+
 // Publish producer readiness: write byte 1 into this producer's unique slot in dfb_signal.
 // producer_signal_bit == 0xFF means consumer (no signal slot) → no-op.
 // dfb_signal_base must be the uncached alias of (config_base + dfb_signal_region_off),
@@ -330,10 +345,8 @@ FORCE_INLINE void dfb_publish_producer_ready(
     if (producer_signal_bit == 0xFFu) {
         return;
     }
-    constexpr uint32_t k_slot_stride = static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB);
     asm volatile("" ::: "memory");  // compiler barrier only; no hardware fence needed
-    dfb_signal_base[static_cast<uint32_t>(logical_dfb_id) * k_slot_stride +
-                    static_cast<uint32_t>(producer_signal_bit)] = 1u;
+    dfb_signal_base[dfb_signal_slot_index(logical_dfb_id, producer_signal_bit)] = 1u;
     WAYPOINT("PPR");
 }
 
@@ -399,13 +412,16 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
     const dfb_dm0_isr_txn_threshold_t* txn_threshold_table =
         reinterpret_cast<const dfb_dm0_isr_txn_threshold_t*>(pools_base);
 
+    const uint32_t all_mask = producer_txn_id_mask | consumer_txn_id_mask;
+
     const uint32_t t_before_desc_copy = rdcycle();
     if (pool_bytes != 0) {
-        const uint32_t all_mask = producer_txn_id_mask | consumer_txn_id_mask;
+        // Pools are dense (slot per used id, ascending), so walking set bits also walks slots in order.
+        uint32_t slot = 0;
         uint32_t pending_desc = all_mask;
         while (pending_desc) {
             const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending_desc));
-            const uint32_t* s = reinterpret_cast<const uint32_t*>(pool_base + txn_id * 32u);
+            const uint32_t* s = reinterpret_cast<const uint32_t*>(pool_base + (slot++) * 32u);
             volatile uint32_t* d = reinterpret_cast<volatile uint32_t*>(&g_txn_dfb_descriptor[txn_id]);
             d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3];
             d[4] = s[4]; d[5] = s[5]; d[6] = s[6]; d[7] = s[7];
@@ -419,34 +435,27 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
     uint32_t hw_reg_write_cycles = 0;
     const uint32_t t_before_cmdbuf = t_after_desc_copy;
 
-    uint32_t pending = producer_txn_id_mask;
+    // One walk over all_mask keeps the dense slot a running counter; role comes from the masks.
+    uint32_t threshold_slot = 0;
+    uint32_t pending = all_mask;
     while (pending) {
         const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
+        const uint32_t txn_bit = 1u << txn_id;
         const uint32_t t_slot_start = rdcycle();
-        const uint32_t threshold = txn_threshold_table[txn_id].threshold;
+        const uint32_t threshold = txn_threshold_table[threshold_slot++].threshold;
         const uint32_t t_after_l1 = rdcycle();
         total_l1_read += t_after_l1 - t_slot_start;
         const uint32_t t_wr_start = rdcycle();
-        CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, txn_id);
-        asm volatile("nop");
-        SET_TILES_TO_PROCESS_THRES_TR_ACK(txn_id, threshold);
-        hw_reg_write_cycles += rdcycle() - t_wr_start;
-        const uint32_t t_after_rocc = rdcycle();
-        total_rocc_issue += t_after_rocc - t_after_l1;
-        pending &= (pending - 1u);
-    }
-
-    pending = consumer_txn_id_mask;
-    while (pending) {
-        const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
-        const uint32_t t_slot_start = rdcycle();
-        const uint32_t threshold = txn_threshold_table[txn_id].threshold;
-        const uint32_t t_after_l1 = rdcycle();
-        total_l1_read += t_after_l1 - t_slot_start;
-        const uint32_t t_wr_start = rdcycle();
-        CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, txn_id);
-        asm volatile("nop");
-        SET_TILES_TO_PROCESS_THRES_WR_SENT(txn_id, threshold);
+        if (producer_txn_id_mask & txn_bit) {
+            CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, txn_id);
+            asm volatile("nop");
+            SET_TILES_TO_PROCESS_THRES_TR_ACK(txn_id, threshold);
+        }
+        if (consumer_txn_id_mask & txn_bit) {
+            CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, txn_id);
+            asm volatile("nop");
+            SET_TILES_TO_PROCESS_THRES_WR_SENT(txn_id, threshold);
+        }
         hw_reg_write_cycles += rdcycle() - t_wr_start;
         const uint32_t t_after_rocc = rdcycle();
         total_rocc_issue += t_after_rocc - t_after_l1;
@@ -676,29 +685,29 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     // Sequential init blob walk: no pointer-table lookups, no per-DFB indirection.
     // Entry count = popcount(participation_mask[hart_u8]); blob starts at init entries.
     // Each entry header is loaded as packed u32 words; TC arrays are read as u32 pairs.
-    // Entry stride uses a small LUT for num_tcs 0..6; DM invalidates L2 over the blob
-    // once, then walks with cached TL1 pointers.
+    // DM invalidates L2 over the blob once, then walks with cached TL1 pointers.
     // -----------------------------------------------------------------------
 
-    // Entry byte sizes for num_tcs 0..6: 28B header + (num_tcs*9 + 3)&~3.
-    static constexpr uint8_t k_entry_byte_size_lut[7] = {28, 40, 48, 56, 64, 76, 84};
-
-    const uint8_t num_init = dfb_hart_participation_count(participation_mask);
+    // Widen walk counters to uint32_t so RV64 codegen avoids zext.b/zext.w on every
+    // increment / compare. Blob fields stay uint8_t; only locals are widened.
+    const uint32_t num_init = dfb_hart_participation_count(participation_mask);
 
     // DM: invalidate L2 over this hart's init blob so subsequent reads go through
     // L1 D$ + L2. Global header fields and the signal region stay on the uncached
-    // alias (cross-hart visibility without cache management). Upper bound is
-    // num_init × max entry size (6 TCs → 84B); discards stale lines so the first
-    // cached read fetches host-written TL1 bytes.
+    // alias (cross-hart visibility without cache management). The range is the blob's
+    // exact extent: bounding it by num_init × the largest entry size (6 TCs → 84B)
+    // overshoots more than 2x for the common 1-2 TC entry and spills into the
+    // neighbouring harts' blobs, discarding lines those harts are concurrently walking.
 #ifndef COMPILE_FOR_TRISC
     if (num_init > 0) {
         const uintptr_t blob_start = reinterpret_cast<uintptr_t>(p);
-        const uintptr_t blob_end = blob_start + static_cast<uintptr_t>(num_init) * k_entry_byte_size_lut[6];
+        const uintptr_t blob_end =
+            config_cached + dfb_read_hart_blob_end(config_cached, hart_u8, dfb_signal_region_off);
         invalidate_l2_cache_range(blob_start, blob_end - blob_start);
     }
 #endif
 
-    for (uint8_t i = 0; i < num_init; i++) {
+    for (uint32_t i = 0; i < num_init; i++) {
         const uintptr_t e_addr = reinterpret_cast<uintptr_t>(p);
 
         const uint32_t t_hdr_start = rdcycle();
@@ -709,12 +718,10 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #endif
         total_entry_hdr += rdcycle() - t_hdr_start;
 
-        const uint8_t num_tcs = eh.num_tcs;
+        const uint32_t num_tcs = eh.num_tcs;
 
-        // Advance to the next entry using the LUT when num_tcs is in range.
-        const uint32_t entry_bytes = (num_tcs < 7u)
-            ? k_entry_byte_size_lut[num_tcs]
-            : dfb_hart_init_entry_byte_size(num_tcs);
+        // Advance to the next entry: 28B header + ((num_tcs*9 + 3) & ~3).
+        const uint32_t entry_bytes = dfb_hart_init_entry_byte_size(num_tcs);
         p = reinterpret_cast<const volatile uint8_t*>(e_addr + entry_bytes);
 
         // AoP TC tail starts right after the 28B header: pairs first, ptc bytes after all pairs.
@@ -734,7 +741,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
         // --- Common scalar fields ---
 #if defined(COMPILE_FOR_TRISC)
-        iface.num_tcs_to_rr = num_tcs;
+        iface.num_tcs_to_rr = static_cast<uint8_t>(num_tcs);
         iface.tc_idx = 0;
 #endif
 
@@ -781,7 +788,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         const uint32_t ptc_w1 = (num_tcs > 4u) ? *reinterpret_cast<const uint32_t*>(ptc_base_addr + 4u) : 0u;
 #endif
         const uint32_t t_slots_start = rdcycle();
-        for (uint8_t t = 0; t < num_tcs; t++, pairs++) {
+        for (uint32_t t = 0; t < num_tcs; t++, pairs++) {
             // Host pre-shifts TRISC TC addresses to tile units at serialization; DM blobs keep byte addresses.
             const uint32_t base      = pairs->base_addr;
             const uint32_t limit     = pairs->limit;
@@ -829,7 +836,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             }
 
             const uint32_t tc_hw_start = rdcycle();
-            for (uint8_t t = 0; t < num_tcs; t++) {
+            for (uint32_t t = 0; t < num_tcs; t++) {
                 const uint8_t packed_ptc = iface.tc_slots[t].packed_tile_counter;
                 const uint8_t tc_id = dfb::get_counter_id(packed_ptc);
 #ifndef COMPILE_FOR_TRISC
@@ -848,7 +855,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #ifndef COMPILE_FOR_TRISC
             asm volatile("fence w, w" ::: "memory");
 #endif
-            for (uint8_t t = 0; t < num_tcs; t++) {
+            for (uint32_t t = 0; t < num_tcs; t++) {
                 const uint8_t packed_ptc = iface.tc_slots[t].packed_tile_counter;
                 const uint8_t tc_id = dfb::get_counter_id(packed_ptc);
 #ifndef COMPILE_FOR_TRISC

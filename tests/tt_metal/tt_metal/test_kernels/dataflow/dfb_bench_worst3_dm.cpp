@@ -30,13 +30,16 @@
 //   t3: 4(1Sx1S Neo3) + 4(DM3 prod 20-23) + 4(Neo3 cons DM4) + 4(Neo3 cons DM5) = 16
 // Remapper: 16 × 1-to-2 entries (all 16 one-to-many slots), 32 set_clientR_slot writes.
 //
-// Threshold table (all DFBs, num_entries=1, num_producers=1):
+// Producer implicit sync is enabled for 24 DFBs and disabled for IDs
+// 0, 1, 4, 5, 16, 17, 20, and 21 so the benchmark fits the 24-ID DFB pool.
+//
+// Threshold table (implicit-sync DFBs, num_entries=1, num_producers=1):
 //   num_txn_ids   = 1  (no n≥2 divides 1; falls back to 1)
 //   hw_threshold  = 1  (1 / 1 = 1 total read per txn ID)
 //   per_txn       = 1  (each DM issues exactly 1 read to fire the ISR)
 //   tiles_to_post = 1
 //
-// Each DM issues 1 read per DFB → ISR fires → posts 1 credit to consumer TC.
+// Each implicit-sync DM issues 1 read per DFB → ISR fires → posts 1 credit to consumer TC.
 //
 // Source: DRAM bank 0 offset 0 (data content irrelevant; ISR timing is the goal).
 

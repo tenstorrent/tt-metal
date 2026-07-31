@@ -11,9 +11,9 @@
 //   user / kernel : [0, USER_TXN_ID_MAX]
 //   DFB / runtime : [DFB_TXN_ID_BASE, HW_TXN_ID_MAX]  (allocated top-down)
 constexpr uint8_t HW_TXN_ID_MAX = 31;
-constexpr uint8_t USER_TXN_ID_MAX = 15;
-constexpr uint8_t DFB_TXN_ID_BASE = USER_TXN_ID_MAX + 1;                       // 16
-constexpr uint8_t NUM_DFB_POOL_TXN_IDS = HW_TXN_ID_MAX - DFB_TXN_ID_BASE + 1;  // 16
+constexpr uint8_t USER_TXN_ID_MAX = 7;
+constexpr uint8_t DFB_TXN_ID_BASE = USER_TXN_ID_MAX + 1;                       // 8
+constexpr uint8_t NUM_DFB_POOL_TXN_IDS = HW_TXN_ID_MAX - DFB_TXN_ID_BASE + 1;  // 24
 static_assert(USER_TXN_ID_MAX >= 1);
 static_assert(DFB_TXN_ID_BASE > USER_TXN_ID_MAX);
 
@@ -94,8 +94,9 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     [dfb_config_base + dm0_isr_blob_offset]:
       DM0 ISR blob — core-wide, read by DM0:
         [dfb_dm0_isr_blob_core_header_t(8B): precomputed producer/consumer txn IE masks]
-        [txn_threshold_pool: dfb_dm0_isr_txn_threshold_t indexed by txn_id, span 0..max_txn_id]
-        [txn_desc_pool: dfb_dm0_txn_descriptor_image_t indexed by txn_id, contiguous after txn_hw_pool]
+        [txn_threshold_pool: dfb_dm0_isr_txn_threshold_t, one slot per used txn id (see
+                             dm0_isr_txn_slot_index), ascending id order]
+        [txn_desc_pool: dfb_dm0_txn_descriptor_image_t, same dense slot order, contiguous after txn_hw_pool]
         ...
 
     [dfb_config_base + ghdr->hart_blob_offset[h]]:
@@ -240,9 +241,9 @@ inline uint8_t dfb_read_init_entry_producer_signal_bit(const uint8_t* entry_byte
 
 // Returns total serialized bytes for one dfb_hart_init_entry_t with num_tcs TC slots.
 // num_tcs pairs (8B each) + num_tcs ptc bytes, rounded up to 4B.
-// = (num_tcs * 9 + 3) & ~3.
-inline uint32_t dfb_hart_init_entry_byte_size(uint8_t num_tcs) {
-    const uint32_t tc_bytes = static_cast<uint32_t>(num_tcs) * 9u;
+// = sizeof(header) + ((num_tcs * 9 + 3) & ~3).
+inline constexpr uint32_t dfb_hart_init_entry_byte_size(uint32_t num_tcs) {
+    const uint32_t tc_bytes = num_tcs * 9u;
     return static_cast<uint32_t>(sizeof(dfb_hart_init_entry_t)) + ((tc_bytes + 3u) & ~3u);
 }
 
@@ -293,7 +294,7 @@ struct dfb_dm0_isr_blob_core_header_t {
 };
 
 // CMDBUF threshold for one txn id (role/path implied by producer/consumer masks in core_hdr).
-// 4B stride so the DM0 ISR blob + following hart blobs stay 4B-aligned (pool is indexed by txn_id).
+// 4B stride so the DM0 ISR blob + following hart blobs stay 4B-aligned.
 struct dfb_dm0_isr_txn_threshold_t {
     uint8_t threshold;
     uint8_t _pad[3];
@@ -339,21 +340,25 @@ static_assert(sizeof(dfb_dm0_isr_blob_core_header_t) == 8, "dfb_dm0_isr_blob_cor
 static_assert(sizeof(dfb_dm0_txn_descriptor_image_t) == 32, "dfb_dm0_txn_descriptor_image_t must be 32 bytes");
 static_assert(sizeof(dfb_dm0_isr_txn_threshold_t) == 4, "dfb_dm0_isr_txn_threshold_t must be 4 bytes");
 
-// Span covers txn ids 0 .. highest set bit in (producer_mask | consumer_mask).
-inline uint32_t dm0_isr_txn_slot_span(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
-    const uint32_t all_mask = producer_txn_id_mask | consumer_txn_id_mask;
-    if (all_mask == 0) {
-        return 0;
-    }
-    return 32u - static_cast<uint32_t>(__builtin_clz(all_mask));
+// Both pools hold one slot per txn id actually in use, in ascending id order, so their size
+// depends on how many ids a core uses and not on where those ids sit in [0, HW_TXN_ID_MAX].
+// DFB ids are allocated from the top of the pool, so indexing by raw txn id would make even a
+// single-DFB core emit (and invalidate) a full 32-slot table.
+inline uint32_t dm0_isr_txn_slot_count(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
+    return static_cast<uint32_t>(__builtin_popcount(producer_txn_id_mask | consumer_txn_id_mask));
+}
+
+// Dense slot for txn_id: how many used ids precede it. txn_id must be set in all_mask.
+inline uint32_t dm0_isr_txn_slot_index(uint32_t all_mask, uint32_t txn_id) {
+    return static_cast<uint32_t>(__builtin_popcount(all_mask & ((1u << txn_id) - 1u)));
 }
 
 inline uint32_t dm0_isr_txn_hw_pool_byte_size(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
-    return dm0_isr_txn_slot_span(producer_txn_id_mask, consumer_txn_id_mask) * sizeof(dfb_dm0_isr_txn_threshold_t);
+    return dm0_isr_txn_slot_count(producer_txn_id_mask, consumer_txn_id_mask) * sizeof(dfb_dm0_isr_txn_threshold_t);
 }
 
 inline uint32_t dm0_isr_txn_desc_pool_byte_size(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
-    return dm0_isr_txn_slot_span(producer_txn_id_mask, consumer_txn_id_mask) * sizeof(dfb_dm0_txn_descriptor_image_t);
+    return dm0_isr_txn_slot_count(producer_txn_id_mask, consumer_txn_id_mask) * sizeof(dfb_dm0_txn_descriptor_image_t);
 }
 
 inline uint32_t dm0_isr_blob_byte_size(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {

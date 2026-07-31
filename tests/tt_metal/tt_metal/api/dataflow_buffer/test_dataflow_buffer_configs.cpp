@@ -424,11 +424,16 @@ TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
 
     const auto* txn_threshold_table =
         reinterpret_cast<const dfb_dm0_isr_txn_threshold_t*>(buf.data() + txn_hw_off);
+    const uint32_t all_mask = expected_prod_mask | expected_cons_mask;
+    // Pools hold one slot per used txn id, so the threshold for an id lives at its dense slot.
+    EXPECT_EQ(
+        txn_hw_bytes,
+        dm0_isr_txn_slot_count(expected_prod_mask, expected_cons_mask) * sizeof(dfb_dm0_isr_txn_threshold_t));
     uint32_t pending = expected_prod_mask;
     while (pending) {
         const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
         EXPECT_EQ(
-            txn_threshold_table[txn_id].threshold,
+            txn_threshold_table[dm0_isr_txn_slot_index(all_mask, txn_id)].threshold,
             dfbs[0]->producer_txn_descriptor.num_entries_to_process_threshold);
         pending &= (pending - 1u);
     }
@@ -436,7 +441,7 @@ TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     while (pending) {
         const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
         EXPECT_EQ(
-            txn_threshold_table[txn_id].threshold,
+            txn_threshold_table[dm0_isr_txn_slot_index(all_mask, txn_id)].threshold,
             dfbs[0]->consumer_txn_descriptor.num_entries_to_process_threshold);
         pending &= (pending - 1u);
     }
