@@ -353,6 +353,7 @@ jobs:
       # rather than job-wide so the cluster-validation loop above is unaffected.
       - name: 🧯 Enable tt-triage on hang
         if: ${{ inputs.hang-detection-timeout != 0 }}
+        timeout-minutes: 5
         run: |
           mkdir -p "$TRIAGE_OUTPUT_DIR"
 
@@ -366,6 +367,18 @@ jobs:
             echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1"
             echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1"
           } >> $GITHUB_ENV
+
+          # Confirm per host that the hook actually reaches the ranks (env forwarding is done by
+          # ttop via PRTE_MCA_prte_fwd_environment, not by this workflow) and that triage can run
+          # there. Diagnostics only — never fails the leg.
+          export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="$TRIAGE_CMD"
+          mpirun --bind-to none --pernode --tag-output bash -lc '
+            ok=1
+            [ -n "$TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" ] || { echo "triage hook not forwarded to this rank"; ok=0; }
+            [ -w "${TRIAGE_OUTPUT_DIR:-/nonexistent}" ] || { echo "TRIAGE_OUTPUT_DIR not writable here: ${TRIAGE_OUTPUT_DIR:-<unset>}"; ok=0; }
+            /opt/venv/bin/python3 -c "import ttexalens" 2>/dev/null || { echo "ttexalens missing from /opt/venv"; ok=0; }
+            [ "$ok" = 1 ] && echo "triage armed"
+          ' || echo "::warning::Could not verify triage arming on all hosts; a hang here may not produce triage output"
 
           echo "Triage fires after ${{ inputs.hang-detection-timeout }}s without dispatch progress"
 
