@@ -1072,6 +1072,42 @@ uint32_t process_relay_paged_cmd_large(
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
+// Issues the reads that fill one scratch buffer with whole pages, advancing page_id past them and returning the
+// number of bytes read.
+//
+// noc_async_read reprograms the transaction length on every read, and ahead of that has to test the length against
+// NOC_MAX_BURST_SIZE to decide whether the transfer needs splitting across packets. A page that fits in a single
+// packet needs neither: every page in the command is the same size, so the caller programs the length once and each
+// read then writes only the addresses. That removes one of the five (Wormhole) or six (Blackhole) command buffer
+// register writes each page costs, which is the whole per-page issue cost at the page sizes where this loop, rather
+// than DRAM, is the bottleneck.
+//
+// single_packet asserts both halves of that: pages fit in one packet, and the caller has programmed the length.
+template <bool single_packet, typename AddrGen>
+FORCE_INLINE uint32_t read_pages_into_scratch(
+    const AddrGen& addr_gen, uint32_t& page_id, uint32_t scratch_read_addr, uint32_t amt_to_read, uint32_t page_size) {
+    uint32_t amt_read = 0;
+    while (amt_to_read >= page_size) {
+        uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
+        if constexpr (single_packet) {
+            // Keep the reads visible to watcher and to noc tracing, both of which noc_async_read would have done.
+            // Both compile out of a release build.
+            RECORD_NOC_EVENT_WITH_ADDR(
+                NocEventType::READ, scratch_read_addr, noc_addr, page_size, -1, false, noc_index);
+            DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_index, noc_addr, scratch_read_addr, page_size);
+            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                noc_index, noc_addr, scratch_read_addr, 0);
+        } else {
+            noc_async_read(noc_addr, scratch_read_addr, page_size);
+        }
+        scratch_read_addr += page_size;
+        page_id++;
+        amt_to_read -= page_size;
+        amt_read += page_size;
+    }
+    return amt_read;
+}
+
 // This fn prefetches data from DRAM memory and writes data to the dispatch core.
 // Reading from DRAM has the following characteristics:
 //  - latency is moderately high ~400 cycles on WH
@@ -1132,15 +1168,18 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     uint64_t read_wlength = (uint64_t)pages * page_size;
     uint32_t scratch_read_addr = scratch_db_base;
     uint32_t amt_to_read = (scratch_db_buf_size > read_wlength) ? read_wlength : scratch_db_buf_size;
-    uint32_t amt_read = 0;
-    while (amt_to_read >= page_size) {
-        uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-        noc_async_read(noc_addr, scratch_read_addr, page_size);
-        scratch_read_addr += page_size;
-        page_id++;
-        amt_to_read -= page_size;
-        amt_read += page_size;
+
+    // Every page in this command is the same size, so when a page fits in one packet the transaction length is
+    // programmed here and left alone for the rest of the command: the only NoC state the reads below share the
+    // command buffer with is their own, since the writes to the dispatcher go out on a different one.
+    const bool single_packet = page_size <= NOC_MAX_BURST_SIZE;
+    if (single_packet) {
+        noc_async_read_one_packet_set_state(addr_gen.get_noc_addr(page_id), page_size);
     }
+
+    uint32_t amt_read =
+        single_packet ? read_pages_into_scratch<true>(addr_gen, page_id, scratch_read_addr, amt_to_read, page_size)
+                      : read_pages_into_scratch<false>(addr_gen, page_id, scratch_read_addr, amt_to_read, page_size);
     // The fences are to prevent any compiler reordering of instructions around the division. The latency of the
     // division is hidden by the latency of the noc_async_read_barrier().
     std::atomic_signal_fence(std::memory_order_acq_rel);
@@ -1188,15 +1227,10 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
 
             uint32_t amt_to_write = amt_read;
             amt_to_read = (scratch_db_buf_size > read_length) ? read_length : scratch_db_buf_size;
-            amt_read = 0;
-            while (amt_to_read >= page_size) {
-                uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-                noc_async_read(noc_addr, scratch_read_addr, page_size);
-                scratch_read_addr += page_size;
-                page_id++;
-                amt_to_read -= page_size;
-                amt_read += page_size;
-            }
+            amt_read =
+                single_packet
+                    ? read_pages_into_scratch<true>(addr_gen, page_id, scratch_read_addr, amt_to_read, page_size)
+                    : read_pages_into_scratch<false>(addr_gen, page_id, scratch_read_addr, amt_to_read, page_size);
 
             // Third step - write from DB
             uint32_t npages =
