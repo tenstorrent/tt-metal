@@ -1130,18 +1130,34 @@ public:
         }
     }
 
+    // Pages between the current one and the end of its row, inclusive. A run of that many pages shares one folded
+    // local address, so a caller that reads them together knows its run length before it starts.
+    FORCE_INLINE uint32_t pages_until_row_end() const { return num_banks - bank_; }
+
     // Steps to the next page. Returns whether the row advanced, i.e. whether a folded local address changed.
     FORCE_INLINE bool advance() {
-        ++bank_;
-#if ASSERT_ENABLED
-        page_id_++;
-#endif
+        step();
         if (bank_ == num_banks) {
-            bank_ = 0;
-            row_addr_ += page_size_;
+            wrap_row();
             return true;
         }
         return false;
+    }
+
+    // Steps to the next page without testing for the end of the row. For callers that bounded their run by
+    // pages_until_row_end() and so already know the row cannot end under them; they finish with wrap_row() if the run
+    // reached the end.
+    FORCE_INLINE void advance_within_row() {
+        step();
+        ASSERT(bank_ <= num_banks);
+    }
+
+    // Moves to the first page of the next row, from a bank index that advance_within_row() left at the end of this
+    // one.
+    FORCE_INLINE void wrap_row() {
+        ASSERT(bank_ == num_banks);
+        bank_ = 0;
+        row_addr_ += page_size_;
     }
 
 #if ASSERT_ENABLED
@@ -1154,6 +1170,13 @@ public:
 #endif
 
 private:
+    FORCE_INLINE void step() {
+        ++bank_;
+#if ASSERT_ENABLED
+        page_id_++;
+#endif
+    }
+
     uint32_t bank_ = 0;
     uint32_t row_addr_ = 0;
     uint32_t page_size_ = 0;
@@ -1161,6 +1184,28 @@ private:
     uint32_t page_id_ = 0;
 #endif
 };
+
+// The cross-check against the accessor the walk replaces. Wrapped rather than left to ASSERT, whose disabled form
+// still has to parse its expression, and matches() and the page id it needs only exist in an assert-enabled build.
+template <bool folded, bool is_dram, typename AddrGen>
+FORCE_INLINE void assert_walker_matches(
+    [[maybe_unused]] const InterleavedBankWalker<is_dram>& walker, [[maybe_unused]] const AddrGen& addr_gen) {
+#if ASSERT_ENABLED
+    ASSERT(walker.template matches<folded>(addr_gen));
+#endif
+}
+
+// Issues one page read. flags says which of the address registers this read still has to program.
+template <enum CQNocFlags flags>
+FORCE_INLINE void issue_page_read(uint32_t coord, uint32_t local_addr, uint32_t dst_addr, uint32_t page_size) {
+    // Keep the reads visible to watcher and to noc tracing, both of which noc_async_read would have done. Both
+    // compile out of a release build.
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::READ, dst_addr, get_noc_addr_helper(coord, local_addr), page_size, -1, false, noc_index);
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_index, get_noc_addr_helper(coord, local_addr), dst_addr, page_size);
+    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, flags, CQ_NOC_SEND, CQ_NOC_WAIT>(
+        noc_index, coord, local_addr, dst_addr, 0);
+}
 
 // Issues the reads that fill one scratch buffer with whole pages, advancing the walker past them and returning the
 // number of bytes read.
@@ -1170,8 +1215,10 @@ private:
 // packet needs neither: every page in the command is the same size, so the caller programs the length once and each
 // read then writes only the addresses. single_packet asserts both halves of that.
 //
-// folded_offset additionally drops the local address from all but the first read of each row, leaving only the
-// coordinate and the destination. It requires the walker to have been built with fold_offset set.
+// folded_offset additionally drops the local address from all but the first read of a row, leaving only the
+// coordinate and the destination. It requires the walker to have been built with fold_offset set. The pages sharing
+// an address are consecutive, and how many of them there are is known before the run starts, so they are read by a
+// loop that counts them rather than one that re-tests every page for the row having changed.
 template <bool single_packet, bool folded_offset, bool is_dram, typename AddrGen>
 FORCE_INLINE uint32_t read_pages_into_scratch(
     [[maybe_unused]] const AddrGen& addr_gen,
@@ -1180,46 +1227,65 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
     uint32_t amt_to_read,
     uint32_t page_size) {
     uint32_t amt_read = 0;
-    // The first read of a chunk always programs the address: the walker may have started mid-row, and a chunk
-    // boundary is not a row boundary.
-    bool row_changed = true;
-    while (amt_to_read >= page_size) {
-#if ASSERT_ENABLED
-        // Guarded rather than left to ASSERT, whose disabled form still has to parse the expression -- matches() and
-        // the page id it needs only exist in an assert-enabled build.
-        ASSERT(walker.template matches<folded_offset>(addr_gen));
-#endif
-        const uint32_t coord = walker.coord();
-        const uint32_t local_addr = walker.template local_addr<folded_offset>();
-        if constexpr (single_packet) {
-            // Keep the reads visible to watcher and to noc tracing, both of which noc_async_read would have done.
-            // Both compile out of a release build.
-            RECORD_NOC_EVENT_WITH_ADDR(
-                NocEventType::READ,
-                scratch_read_addr,
-                get_noc_addr_helper(coord, local_addr),
-                page_size,
-                -1,
-                false,
-                noc_index);
-            DEBUG_SANITIZE_NOC_READ_TRANSACTION(
-                noc_index, get_noc_addr_helper(coord, local_addr), scratch_read_addr, page_size);
-            if constexpr (folded_offset) {
-                if (row_changed) {
-                    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
-                        noc_index, coord, local_addr, scratch_read_addr, 0);
-                } else {
-                    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
-                        noc_index, coord, local_addr, scratch_read_addr, 0);
-                }
-            } else {
-                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
-                    noc_index, coord, local_addr, scratch_read_addr, 0);
+
+    if constexpr (folded_offset) {
+        // Runs that finish a row. The first run is however much of the current row is left, since a chunk boundary is
+        // not a row boundary; every run after it starts at bank 0 and so is a whole row.
+        uint32_t run_pages = walker.pages_until_row_end();
+        uint32_t run_bytes = run_pages * page_size;
+        while (run_bytes <= amt_to_read) {
+            const uint32_t local_addr = walker.template local_addr<true>();
+            assert_walker_matches<true>(walker, addr_gen);
+            issue_page_read<CQ_NOC_SNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+            walker.advance_within_row();
+            scratch_read_addr += page_size;
+            for (uint32_t left = run_pages - 1; left != 0; left--) {
+                assert_walker_matches<true>(walker, addr_gen);
+                issue_page_read<CQ_NOC_sNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+                walker.advance_within_row();
+                scratch_read_addr += page_size;
             }
+            walker.wrap_row();
+            amt_to_read -= run_bytes;
+            amt_read += run_bytes;
+            run_pages = InterleavedBankWalker<is_dram>::num_banks;
+            run_bytes = run_pages * page_size;
+        }
+
+        // What is left is short of finishing the row, so it is still all one address and still needs it programmed
+        // only once. It cannot reach the end of the row, so the walker needs no wrap.
+        if (amt_to_read >= page_size) {
+            const uint32_t local_addr = walker.template local_addr<true>();
+            assert_walker_matches<true>(walker, addr_gen);
+            issue_page_read<CQ_NOC_SNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+            walker.advance_within_row();
+            scratch_read_addr += page_size;
+            amt_to_read -= page_size;
+            amt_read += page_size;
+            while (amt_to_read >= page_size) {
+                assert_walker_matches<true>(walker, addr_gen);
+                issue_page_read<CQ_NOC_sNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+                walker.advance_within_row();
+                scratch_read_addr += page_size;
+                amt_to_read -= page_size;
+                amt_read += page_size;
+            }
+        }
+        return amt_read;
+    }
+
+    // Banks whose base offsets differ put consecutive pages at different addresses, so every read programs one. Same
+    // for the multi-packet case, which has to reprogram the length as well and so goes back through noc_async_read.
+    while (amt_to_read >= page_size) {
+        assert_walker_matches<false>(walker, addr_gen);
+        const uint32_t coord = walker.coord();
+        const uint32_t local_addr = walker.template local_addr<false>();
+        if constexpr (single_packet) {
+            issue_page_read<CQ_NOC_SNDl>(coord, local_addr, scratch_read_addr, page_size);
         } else {
             noc_async_read(get_noc_addr_helper(coord, local_addr), scratch_read_addr, page_size);
         }
-        row_changed = walker.advance();
+        walker.advance();
         scratch_read_addr += page_size;
         amt_to_read -= page_size;
         amt_read += page_size;
