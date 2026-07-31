@@ -11,6 +11,7 @@
 #include "api/tensor/noc_traits.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     Noc noc;
@@ -367,7 +368,8 @@ void kernel_main() {
                 }
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
-                    if (not_first_block && k_block_iter == max_defer_write_k_block) {
+                    // Deferred-write path only (guarded by defer_write, which is false on the fused RS path).
+                    if (defer_write && not_first_block && k_block_iter == max_defer_write_k_block) {
                         noc.async_write_barrier();
                         srs_fuse_signaler.signal_op_per_core(mm_progress_counters_base);
                     }
@@ -424,8 +426,16 @@ void kernel_main() {
              * If this isn't the last output block, defer writing until the defer_k_write_block iteration
              * of the next output block.
              */
+#ifdef SRS_FUSE_OP_SIGNALER
+            // Fused RS path: write each block promptly (no core-y defer stagger — the L1-sharded output has
+            // no DRAM write banks to spread). This lets the per-core progress counter the RS reader polls
+            // tick at compute-completion instead of at the global max_defer_write_k_block barrier ~a block
+            // later, which was delaying the reader by a full block.
+            defer_write = false;
+#else
             defer_write = !is_last_block;
             defer_write = defer_write && !is_injector_core;
+#endif
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
@@ -481,7 +491,11 @@ void kernel_main() {
                     }
 #endif  // FUSE_SWIGLU
 #ifdef SRS_FUSE_OP_SIGNALER
-                    if (is_last_block) {
+                    // Signal this core's per-core progress counter right after its prompt block write, at
+                    // compute-completion (every block, not just is_last_block). The reader waits per core, so
+                    // no global "all cores done writing" barrier is needed.
+                    {
+                        DeviceZoneScopedN("MM-SIGNAL");  // when the output writer bumps this block's reader counter
                         noc.async_write_barrier();
                         srs_fuse_signaler.signal_op_per_core(mm_progress_counters_base);
                     }
