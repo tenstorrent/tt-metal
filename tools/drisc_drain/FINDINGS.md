@@ -678,6 +678,29 @@ Until then egress binds by ~2.7x.
 
 ## Gotchas
 
+**`cmake --install` is BROKEN in this tree, and the test silently uses a stale library.**
+`build_Release/test/tt_metal/unit_tests_api` resolves `libtt_metal.so` from the INSTALLED path
+`/localdev/$USER/tt-metal/lib/`, not from `build_Release/`. `cmake --install` currently aborts with
+`file RPATH_CHANGE could not write new RPATH` on a vendored benchmark target, before it ever reaches
+libtt_metal.so -- so that installed copy stays frozen at whatever date it was last written.
+
+`ninja` then reports success, the test binary relinks, and **nothing warns you** that every change to
+`mesh_device.cpp` / `profiler.cpp` / anything else in the library is absent from the run. This cost a
+false verification here: a run that appeared to confirm a new env-var gate was in fact executing a
+library from two days earlier that had never heard of it.
+
+Until the install is fixed, run with:
+
+```
+export LD_LIBRARY_PATH=/localdev/$USER/tt-metal/build_Release/tt_metal:$LD_LIBRARY_PATH
+```
+
+and confirm with `ldd <binary> | grep libtt_metal`. Kernel changes are exempt -- they are JIT-compiled
+from source at runtime -- which is exactly why this hid for so long: the DRISC drainer edits took
+effect immediately while the host-library edits did not.
+
+
+
 - **Use the free subchannel.** `pick_unused_dram_logical_core(bank)` returns the non-endpoint
   subchannel — the only one safe to flip into stream mode. The other usable one is the bank's NOC1
   worker endpoint, which Tensix uses to reach that bank's DRAM. Its logical coord is in the

@@ -1,3 +1,34 @@
+/* ============================================================================
+ * DEAD -- DO NOT RUN. Superseded by the DRISC drainer (2026-07-31).
+ *
+ * This firmware reads the profiler control vector at offsets that NO LONGER
+ * EXIST:
+ *
+ *   - ring TAILS read at control word 5 -- they live at 24
+ *     (SPSC_RING_TAIL_0 = PROFILER_SPSC_MAX_RISC, which moved 5 -> 24)
+ *   - ring DATA read at ctrl base + 128 B -- it lives at + 256
+ *     (PROFILER_L1_CONTROL_BUFFER_SIZE; the control vector is 64 words, not 32)
+ *
+ * The failure mode is the dangerous one, not a crash: control word 5 is a HEAD
+ * slot, which reads 0 forever. So tail always equals head, the drain quietly
+ * stops, and every producing RISC blocks forever on a full ring.
+ *
+ * Both literals are self-consistent for the OLD 32-word control vector, so
+ * nothing looks wrong reading this file on its own. That is precisely why it
+ * is marked here rather than left to be rediscovered on silicon.
+ *
+ * profzone.c is the only X280 reader that survived: it takes both offsets from
+ * the host through the boot nonce (SPSC_RING_TAIL_0 and
+ * PROFILER_L1_CONTROL_BUFFER_SIZE), so it tracks the layout automatically.
+ *
+ * The X280 path as a whole is disabled -- see init_perf_debug_profiler() in
+ * tt_metal/distributed/mesh_device.cpp. The focus is the DRISC drainer; see
+ * tools/drisc_drain/FINDINGS.md.
+ *
+ * To revive this file: take the offsets from kernel_profiler::SpscControlBuffer
+ * (or the boot nonce, as profzone.c does) instead of hardcoding them.
+ * ============================================================================
+ */
 /*
  * profcons.c - X280 TRUE CONSUMER for the SPSC kernel profiler (FAST variant).
  *

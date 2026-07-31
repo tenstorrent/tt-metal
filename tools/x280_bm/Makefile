@@ -27,7 +27,13 @@ BUILD := build
 LD_SCRIPT := ld/x280-lim.ld
 
 .PHONY: all clean disasm symbols toolchain
-all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin $(BUILD)/gridilp.bin $(BUILD)/d2hbw.bin $(BUILD)/profrelay.bin $(BUILD)/profcons.bin $(BUILD)/profcons_split.bin $(BUILD)/eccscrub.bin $(BUILD)/rdrbench.bin
+# DEAD, deliberately NOT in `all`: profstream, profcons, profcons_split, profll.
+# They read the profiler control vector at offsets that no longer exist (tails at word 5, now 24;
+# rings at +128 B, now +256) and drain nothing while producers block forever. Their rules are kept so
+# they can still be built explicitly or revived -- see the banner at the top of each source. profzone
+# is the only X280 reader that tracks the layout, via the boot nonce. The X280 path as a whole is
+# disabled in init_perf_debug_profiler(); the focus is the DRISC drainer (tools/drisc_drain/).
+all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin $(BUILD)/gridilp.bin $(BUILD)/d2hbw.bin $(BUILD)/profrelay.bin $(BUILD)/eccscrub.bin $(BUILD)/rdrbench.bin
 
 $(BUILD)/rdrbench.o: src/rdrbench.c include/noc.h | $(BUILD) toolchain
 	$(CC) $(VEC_CFLAGS) -c -o $@ $<
