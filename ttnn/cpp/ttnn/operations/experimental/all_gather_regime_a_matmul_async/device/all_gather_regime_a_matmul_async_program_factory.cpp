@@ -324,7 +324,7 @@ struct FusedGatherContext {
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
 // 4 KiB fabric packet, and one channel per direction is enough while a single ring does the forwarding.
-constexpr uint8_t kMuxNumChannels = 1;
+constexpr uint8_t kMuxNumChannels = 8;  // one logical channel per master-ring core
 constexpr uint8_t kMuxBuffersPerChannel = 8;
 constexpr size_t kMuxChannelBufferBytes = 4096;  // 4 KiB packet
 
@@ -430,8 +430,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     }
 
     // Resolve config=None via the auto-selector (deterministic in the tile dims, program-cache-safe).
+    // K for PLANNING is always the GLOBAL K, taken from in1 (which is full-K on every device). With the
+    // fused gather in0 only carries this rank's [M, K/tp] shard, so planning off in0 would size the whole
+    // matmul to a fraction of the real K. in1 is the authority; validate has already checked
+    // in1.K == in0.K * tp.
     const uint32_t Mt_r = (static_cast<uint32_t>(in0.logical_shape()[-2]) + 31u) / 32u;
-    const uint32_t Kt_r = (static_cast<uint32_t>(in0.logical_shape()[-1]) + 31u) / 32u;
+    const uint32_t Kt_r = (static_cast<uint32_t>(in1.logical_shape()[-2]) + 31u) / 32u;
     const uint32_t Nt_r = (static_cast<uint32_t>(in1.logical_shape()[-1]) + 31u) / 32u;
     const RegimeAMatmulConfig cfg = operation_attributes.config.value_or(auto_select_config(Mt_r, Kt_r, Nt_r));
 
@@ -731,9 +735,6 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     }
     FusedGatherContext fused_gather =
         build_fused_gather_context(program, operation_attributes, mesh_coordinate, in0, master_ring_cores, device);
-    // Consumed by the writer runtime args once the kernel side lands (tasks 8/9). Referenced here so the
-    // context is materialised (and its muxes added to the program) on the tp>1 path.
-    (void)fused_gather;
 
     // ---- Circular buffers (spec §5) on all cores ----
     mkcb(program, all_cores, 0, cb.cb0_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in0 k-slice resident
@@ -827,7 +828,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         geo.N_bpc,             // 11 N_bpc
         redfree_sem,           // 12
         use_reduce};           // 13
-    TensorAccessorArgs(*in0.buffer()).append_to(wct);
+    // in0 ACCESSOR: on the fused path the matmul reads the GATHERED activation out of the staging buffer,
+    // not the local shard. The staging buffer is [M, K_global] so the existing (m*Kt + k) addressing and the
+    // geo.in0_stride_k row stride are already correct for it -- the matmul body needs no change at all, the
+    // accessor just points somewhere else.
+    const Tensor& in0_for_matmul = (operation_attributes.tp > 1) ? *tensor_args.gather_staging_buffer : in0;
+    TensorAccessorArgs(*in0_for_matmul.buffer()).append_to(wct);
     TensorAccessorArgs(*out.buffer()).append_to(wct);
     // Fused-operand accessors, in the order the writer kernel expects: bias, then residual/gate.
     if (has_bias) {
@@ -907,7 +913,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             .defines = cdefs});
 
     // ---- Runtime args ----
-    const uint32_t in0_addr = in0.buffer()->address();
+    const uint32_t in0_addr = in0_for_matmul.buffer()->address();  // staging buffer when tp>1
     const uint32_t in1_addr = in1.buffer()->address();
     const uint32_t out_addr = out.buffer()->address();
 
@@ -1003,6 +1009,49 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(Pk);               // 22 cycle size
             wa.push_back(rs_T);             // 23 sub-block tiles (kernel derives the chunk sizes)
         }
+
+        // ---- PHASE 1 fused fabric all-gather args (appended last; only on the MASTER ring) ----
+        // Emitted for the 8 cores of ring group p == 0 -- the only fabric clients. Every other core reads
+        // the staged shards but never sends, so it needs no mux connection and gets none of these.
+        //
+        // Layout: [rank, tp, k_shard_tiles, stage_addr, chunk_ready_sem_id, has_fwd, has_bwd]
+        //         then, per present direction, the mux client-connection block appended by
+        //         append_client_connection_rt_args (opaque to us -- the kernel hands it to FabricMuxV2Sender).
+        if (fused_gather.enabled) {
+            // EVERY core gets the common block at the same index (`fused_rt_base`, a compile-time arg), so
+            // the kernel can locate it without knowing which optional fusion args preceded it. The first
+            // word says whether this core is a fabric client; only master-ring cores get the mux block.
+            const bool is_master_ring = (i % preaders_pf) == 0u;
+            const uint32_t k_shard_tiles = geo.Kt / fused_gather.tp;  // this rank's K tiles
+            wa.push_back(is_master_ring ? 1u : 0u);
+            wa.push_back(fused_gather.rank);
+            wa.push_back(fused_gather.tp);
+            wa.push_back(k_shard_tiles);
+            wa.push_back(tensor_args.gather_staging_buffer->buffer()->address());
+            wa.push_back(fused_gather.chunk_ready_sem_id);
+            wa.push_back(fused_gather.mux_cfg_fwd ? 1u : 0u);
+            wa.push_back(fused_gather.mux_cfg_bwd ? 1u : 0u);
+            if (is_master_ring) {
+                if (fused_gather.mux_cfg_fwd) {
+                    const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
+                    const auto tc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
+                    fused_gather.mux_cfg_fwd->append_client_connection_rt_args(
+                        *fused_gather.mux_virtual_core_fwd,
+                        fused_gather.next_channel_fwd++,
+                        tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{fc, tc},
+                        wa);
+                }
+                if (fused_gather.mux_cfg_bwd) {
+                    const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
+                    const auto tc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
+                    fused_gather.mux_cfg_bwd->append_client_connection_rt_args(
+                        *fused_gather.mux_virtual_core_bwd,
+                        fused_gather.next_channel_bwd++,
+                        tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{fc, tc},
+                        wa);
+                }
+            }
+        }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         // compute runtime args: fixed rectangular block over the schedule capacities. N_end spans ALL
@@ -1059,13 +1108,15 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_mesh_workload(
 
 void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const AllGatherRegimeAMatmulAsyncParams& /*operation_attributes*/,
+    const AllGatherRegimeAMatmulAsyncParams& operation_attributes,
     const AllGatherRegimeAMatmulAsyncInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     for (auto& [_range, program] : cached_workload.workload.get_programs()) {
         auto& sv = cached_workload.shared_variables.at(_range);
 
-        const uint32_t in0_addr = tensor_args.input_tensor.buffer()->address();
+        // Must track the SAME tensor create_at bound: the staging buffer on the fused path.
+        const uint32_t in0_addr = (operation_attributes.tp > 1) ? tensor_args.gather_staging_buffer->buffer()->address()
+                                                                : tensor_args.input_tensor.buffer()->address();
         const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
         const uint32_t out_addr = tensor_return_value[0].buffer()->address();
 
