@@ -32,7 +32,35 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+
+
+# TODO(routed_expert_ffn / unified_routed_expert_ffn): the routed-expert
+# ops and their TtRoutedExpert wrapper were removed. This shim keeps the module
+# importable (so the unrelated gate / dispatch / combine / reduce paths in this
+# file still load) and fails loudly only if the routed-expert path is exercised.
+# Restore the real import when the ops are recreated.
+class TtRoutedExpert:  # noqa: N801 - placeholder
+    _UNAVAILABLE = (
+        "TtRoutedExpert is unavailable: routed_expert_ffn and "
+        "unified_routed_expert_ffn are not available in this build."
+    )
+
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
+
+    @staticmethod
+    def check_cache_complete(*args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
+
+    @staticmethod
+    def build_ttnn_cache(*args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
+
+    @staticmethod
+    def shard_expert_token_counts(*args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
+
+
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -199,7 +227,6 @@ class TtMoe(LightweightModule):
         shared_expert_weights: dict = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
-        routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
@@ -268,7 +295,6 @@ class TtMoe(LightweightModule):
                 (K3: latent_moe_use_norm=True).
             rms_norm_eps: eps for that latent norm. Passed explicitly because
                 TtDistributedRmsNorm defaults to 1e-6 while K3's config says 1e-5.
-            routed_expert_activation: GLU activation the fused routed-expert kernel runs.
                 Defaults to SiLU (DeepSeek / K2.6 / GLM). Kimi-K3 passes SituGlu. Routed only:
                 the shared expert and the dense FFN have no SiTU kernel and stay on SiLU.
         """
@@ -486,7 +512,8 @@ class TtMoe(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
-            activation=routed_expert_activation,
+            # TODO: RoutedExpertActivation went with the op
+            activation=None,
         )
 
         # Initialize shared expert (col axis: axis 1)

@@ -26,9 +26,62 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.minimax_m3.tt.moe.tt_reduce import TtMiniMaxReduce
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
+
+
+# TODO(routed_expert_ffn / unified_routed_expert_ffn): the routed-expert
+# ops and their TtRoutedExpert wrapper were removed. This shim keeps the module
+# importable (so the unrelated gate / dispatch / combine / reduce paths in this
+# file still load) and fails loudly only if the routed-expert path is exercised.
+# Restore the real import when the ops are recreated.
+class TtRoutedExpert:  # noqa: N801 - placeholder
+    _UNAVAILABLE = (
+        "TtRoutedExpert is unavailable: routed_expert_ffn and "
+        "unified_routed_expert_ffn are not available in this build."
+    )
+
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
+
+    @staticmethod
+    def check_cache_complete(*args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
+
+    @staticmethod
+    def build_ttnn_cache(*args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
+
+    @staticmethod
+    def shard_expert_token_counts(*args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
+
+
+# TODO(routed_expert_ffn / unified_routed_expert_ffn): the routed-expert
+# ops and their TtRoutedExpert wrapper were removed. This shim keeps the module
+# importable (so the unrelated gate / dispatch / combine / reduce paths in this
+# file still load) and fails loudly only if the routed-expert path is exercised.
+# Restore the real import when the ops are recreated.
+class TtRoutedExpert:  # noqa: N801 - placeholder
+    _UNAVAILABLE = (
+        "TtRoutedExpert is unavailable: routed_expert_ffn and "
+        "unified_routed_expert_ffn are not available in this build."
+    )
+
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
+
+    @staticmethod
+    def check_cache_complete(*args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
+
+    @staticmethod
+    def build_ttnn_cache(*args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
+
+    @staticmethod
+    def shard_expert_token_counts(*args, **kwargs):
+        raise NotImplementedError(TtRoutedExpert._UNAVAILABLE)
 
 
 class TtMiniMaxMoE(LightweightModule):
@@ -160,7 +213,8 @@ class TtMiniMaxMoE(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
-            activation=ttnn.RoutedExpertActivation.SwiGluOai,
+            # TODO: RoutedExpertActivation went with the op
+            activation=None,
         )
         # M3's own reduce module (tt/moe/tt_reduce.py), not DeepSeek's: same shared post_combine_reduce
         # kernel, but the closing collective goes through the caller's reduce_scatter_fn — M3 passes
