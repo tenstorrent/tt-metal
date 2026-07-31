@@ -426,7 +426,7 @@ class RowParallelLinear(Module):
 
     def forward(
         self,
-        x: ttnn.Tensor,
+        x: ttnn.Tensor | list[ttnn.Tensor],
         *,
         compute_kernel_config=None,
         use_persistent_buffer: bool = True,
@@ -435,6 +435,7 @@ class RowParallelLinear(Module):
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
+        x may be a 2-element list [prefix, suffix] for fused concat over K (concat-free).
         Return output fractured on columns.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
@@ -447,11 +448,19 @@ class RowParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        if isinstance(x, (list, tuple)):
+            assert len(x) == 2, f"RowParallelLinear.forward: list x must be [prefix, suffix], got {len(x)}"
+            x, x_second = x
+            K = weight.padded_shape[-2]
+        else:
+            x_second = None
+            K = x.padded_shape[-1]
+
+        M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
-            input_tensor=x,
+            input_tensor=[x, x_second] if x_second is not None else x,
             weight_tensor=weight,
             bias_tensor=self.bias.data if self.bias is not None else None,
             config=matmul_config,
@@ -475,7 +484,7 @@ class RowParallelLinear(Module):
 
     def forward_fused_addcmul(
         self,
-        x: ttnn.Tensor,
+        x: ttnn.Tensor | list[ttnn.Tensor],
         addcmul_a: ttnn.Tensor,
         addcmul_b: ttnn.Tensor,
         scalar: float = 1.0,
@@ -486,6 +495,9 @@ class RowParallelLinear(Module):
         """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
 
         Computes: output = addcmul_a + scalar * rs_result * addcmul_b
+
+        ``x`` may be a single tensor or a 2-element list ``[prefix, suffix]`` for fused concat over K.
+        The weight must be per-segment tile-padded (see ``prepare_weight_for_concatenated_input``).
 
         Both addcmul_a and addcmul_b must already be at their per-TP-device slice size
         [D/tp]. The RS kernel fuses the addcmul at the final ring write, eliminating
@@ -500,14 +512,29 @@ class RowParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        # x: single tensor, or [prefix, suffix] virtually concatenated over K (concat-free).
+        if isinstance(x, (list, tuple)):
+            assert len(x) == 2, f"forward_fused_addcmul: list x must be exactly [prefix, suffix], got {len(x)}"
+            x, x_second = x
+        else:
+            x_second = None
+
+        # For fused concat the matmul K spans both halves = the weight's K; x is only the prefix half.
+        K = weight.padded_shape[-2] if x_second is not None else x.padded_shape[-1]
+        M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
 
         needs_reshape = len(x.shape) <= 3
         if needs_reshape:
             x = ttnn.unsqueeze(x, 0)
+            if x_second is not None:
+                x_second = ttnn.unsqueeze(x_second, 0)
+        pre_rs_shape = tuple(list(x.shape)[:-1] + [N])
+        _, rs_output_buffer = self.ccl_manager.get_rs_ping_pong_buffer(
+            pre_rs_shape, 3, self.mesh_axis, return_intermediate=False
+        )
         _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
-            input_tensor=x,
+            input_tensor=[x, x_second] if x_second is not None else x,
             weight_tensor=weight,
             dim=3,
             multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
