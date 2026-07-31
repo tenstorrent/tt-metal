@@ -249,7 +249,8 @@ pytest -q models/autoports/coherelabs_north_mini_code_1_0/tests/test_optimized_d
 - [x] Ran exact-final stress and watcher-clean suites (21/21 each).
 - [x] Obtained independent `$stage-review` clean-pass after final4 artifact
   reconciliation.
-- [ ] Commit stage-owned changes locally and record SHAs; never push.
+- [x] Committed stage-owned implementation and evidence locally; never
+  pushed.
 
 N/A: LM head, CCL/multidevice, full-model generation, vLLM, and batch 32.
 
@@ -268,4 +269,9 @@ addressed:
 The final fresh xhigh rereview returned `clean-pass` with no required work.
 It independently checked the real BFP4 rejection, matched L1 chain,
 larger-K prefill sweep, context/correctness/watcher evidence, and final4
-profiler bundle. Local commits are pending. No push will be made.
+profiler bundle.
+
+Local stage implementation/evidence commit:
+`36e38ca877824a280e8aa4fe09762f4b2e454ce5`. The documentation-only SHA
+record closeout follows this commit and is reported in the final handoff. No
+push was made.
