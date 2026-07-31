@@ -34,7 +34,9 @@ const char* to_string(EdgeCapability capability);
 // were the same statement. They no longer are: an express chord gives the port a genuine intramesh
 // routing direction. Naming the role rather than the port keeps that distinction structural: a
 // chip has one extra port, so it can hold exactly one role -- the mutual exclusion between
-// "intermesh Z" and "express chord" is unrepresentable rather than asserted.
+// "intermesh Z" and "express chord" is unrepresentable on a chip. The mapping factories assert the
+// matching half of it: a Z-facing router's own capability must agree with the chip's role, since
+// the two arrive as independent parameters.
 enum class ZPortRole : uint8_t {
     NONE,                // no extra port on this chip
     INTERMESH_BOUNDARY,  // crosses a mesh boundary; carries no intramesh routing direction

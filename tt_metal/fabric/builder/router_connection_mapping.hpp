@@ -254,6 +254,15 @@ private:
     static uint32_t mesh_router_vc0_sender_count(ZPortRole z_role, bool express_routing_enabled);
     static uint32_t mesh_router_vc1_sender_count(ZPortRole z_role, bool express_routing_enabled);
 
+    // The chip-level cross-check both factories run first: a Z-facing router's own edge capability
+    // and the chip's extra-port role are two spellings of one fact and must agree -- a Z-facing
+    // intermesh edge means role INTERMESH_BOUNDARY, a same-mesh Z edge (an express chord) means
+    // role EXPRESS_CHORD, and express capability never sits on a cardinal facing. Anything else is
+    // an impossible chip, which the independent parameters would otherwise make representable
+    // again.
+    static void validate_facing_role_consistency(
+        RoutingDirection facing, EdgeCapability edge_capability, ZPortRole z_role);
+
     // Maps (VC, sender_channel) → list of downstream targets
     std::map<ReceiverChannelKey, std::vector<ConnectionTarget>> receiver_to_targets_;
 

@@ -330,7 +330,8 @@ TEST_F(RouterConnectionMappingTest, ExpressChord_RequiresExpressEnabledAnd2D) {
 
 TEST_F(RouterConnectionMappingTest, CardinalCapabilityOnZFacingIsAConfigurationError) {
     // Direction letter and capability disagree: a same-mesh Z edge is an express chord and must
-    // carry INTRAMESH_EXPRESS; an ordinary cardinal-capability Z edge cannot exist.
+    // carry INTRAMESH_EXPRESS; an ordinary cardinal-capability Z edge cannot exist. Both factories
+    // reject it -- the shape derivation used to silently produce mesh-like counts for it.
     EXPECT_ANY_THROW(RouterConnectionMapping::for_router(
         Topology::Mesh,
         RoutingDirection::Z,
@@ -339,6 +340,84 @@ TEST_F(RouterConnectionMappingTest, CardinalCapabilityOnZFacingIsAConfigurationE
         /*express_routing_enabled=*/false,
         /*enable_vc1=*/true,
         /*enable_mesh_pass_through=*/false));
+    EXPECT_ANY_THROW(RouterConnectionMapping::router_vc_shape(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        ZPortRole::NONE,
+        /*express_routing_enabled=*/false,
+        nullptr));
+}
+
+// ============================================================================
+// Role/capability cross-check: the two spellings of the chip's extra port must agree
+// ============================================================================
+
+TEST_F(RouterConnectionMappingTest, BoundaryFacingRequiresBoundaryRole) {
+    // A Z-facing intermesh edge means the chip's extra port IS the boundary. Role NONE claims the
+    // port is absent and EXPRESS_CHORD claims it is a same-mesh chord -- both impossible chips,
+    // and both factories must refuse to build them.
+    for (auto role : {ZPortRole::NONE, ZPortRole::EXPRESS_CHORD}) {
+        SCOPED_TRACE(static_cast<int>(role));
+        EXPECT_ANY_THROW(RouterConnectionMapping::for_router(
+            Topology::Mesh,
+            RoutingDirection::Z,
+            EdgeCapability::INTERMESH,
+            role,
+            /*express_routing_enabled=*/false,
+            /*enable_vc1=*/true,
+            /*enable_mesh_pass_through=*/false));
+        EXPECT_ANY_THROW(RouterConnectionMapping::router_vc_shape(
+            Topology::Mesh,
+            RoutingDirection::Z,
+            EdgeCapability::INTERMESH,
+            role,
+            /*express_routing_enabled=*/false,
+            nullptr));
+    }
+}
+
+TEST_F(RouterConnectionMappingTest, ChordFacingRequiresChordRole) {
+    // The mirror image: a same-mesh Z edge is this chip's express chord, so the role cannot claim
+    // the port is absent or is the boundary.
+    for (auto role : {ZPortRole::NONE, ZPortRole::INTERMESH_BOUNDARY}) {
+        SCOPED_TRACE(static_cast<int>(role));
+        EXPECT_ANY_THROW(RouterConnectionMapping::for_router(
+            Topology::Torus,
+            RoutingDirection::Z,
+            EdgeCapability::INTRAMESH_EXPRESS,
+            role,
+            /*express_routing_enabled=*/true,
+            /*enable_vc1=*/false,
+            /*enable_mesh_pass_through=*/false));
+        EXPECT_ANY_THROW(RouterConnectionMapping::router_vc_shape(
+            Topology::Torus,
+            RoutingDirection::Z,
+            EdgeCapability::INTRAMESH_EXPRESS,
+            role,
+            /*express_routing_enabled=*/true,
+            nullptr));
+    }
+}
+
+TEST_F(RouterConnectionMappingTest, CardinalFacingRejectsExpressCapability) {
+    // An express chord lives on the chip's extra port; a cardinal-facing router cannot carry it,
+    // no matter what the chip's role says.
+    EXPECT_ANY_THROW(RouterConnectionMapping::for_router(
+        Topology::Torus,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_EXPRESS,
+        ZPortRole::EXPRESS_CHORD,
+        /*express_routing_enabled=*/true,
+        /*enable_vc1=*/false,
+        /*enable_mesh_pass_through=*/false));
+    EXPECT_ANY_THROW(RouterConnectionMapping::router_vc_shape(
+        Topology::Torus,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_EXPRESS,
+        ZPortRole::EXPRESS_CHORD,
+        /*express_routing_enabled=*/true,
+        nullptr));
 }
 
 // ============================================================================

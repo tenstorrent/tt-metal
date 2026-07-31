@@ -75,6 +75,40 @@ ZPortRole z_role_of(const RouterConnectionMapping::PerDirectionCapabilities& cap
 
 }  // namespace
 
+void RouterConnectionMapping::validate_facing_role_consistency(
+    RoutingDirection facing, EdgeCapability edge_capability, ZPortRole z_role) {
+    if (facing != RoutingDirection::Z) {
+        // The chord lives on the chip's extra port; a cardinal-facing router can never carry it.
+        TT_FATAL(
+            edge_capability != EdgeCapability::INTRAMESH_EXPRESS,
+            "Router facing {} carries INTRAMESH_EXPRESS, but an express chord lives on the chip's "
+            "extra (Z-facing) port",
+            static_cast<int>(facing));
+        return;
+    }
+    switch (edge_capability) {
+        case EdgeCapability::INTERMESH:
+            TT_FATAL(
+                z_role == ZPortRole::INTERMESH_BOUNDARY,
+                "A Z-facing intermesh edge means the chip's extra port is the boundary: role must be "
+                "INTERMESH_BOUNDARY, got {}",
+                to_string(z_role));
+            break;
+        case EdgeCapability::INTRAMESH_EXPRESS:
+            TT_FATAL(
+                z_role == ZPortRole::EXPRESS_CHORD,
+                "A same-mesh Z edge is this chip's express chord: role must be EXPRESS_CHORD, got {}",
+                to_string(z_role));
+            break;
+        case EdgeCapability::INTRAMESH_CARDINAL:
+            TT_FATAL(
+                false,
+                "A same-mesh Z edge is an express chord and must carry INTRAMESH_EXPRESS capability; "
+                "an ordinary cardinal-capability Z edge cannot exist");
+            break;
+    }
+}
+
 RouterConnectionMapping::PerDirectionCapabilities RouterConnectionMapping::canonical_express_endpoint_capabilities() {
     PerDirectionCapabilities caps;
     for (size_t i = 0; i < caps.size() - 1; ++i) {
@@ -227,6 +261,8 @@ RouterConnectionMapping::RouterVcShape RouterConnectionMapping::router_vc_shape(
     ZPortRole z_role,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config) {
+    validate_facing_role_consistency(facing, edge_capability, z_role);
+
     const bool z_boundary = (facing == RoutingDirection::Z && edge_capability == EdgeCapability::INTERMESH);
     const bool requires_vc1 = vc_config && vc_config->requires_vc1;
     const bool requires_vc2 = vc_config && vc_config->requires_vc2;
@@ -291,6 +327,8 @@ RouterConnectionMapping RouterConnectionMapping::for_router(
     bool enable_mesh_pass_through) {
     RouterConnectionMapping mapping;
 
+    validate_facing_role_consistency(facing, edge_capability, z_role);
+
     // A port with no routing direction gets the boundary template: the full non-self set on VC1,
     // typed from-boundary. Its VC0 senders are fed by the mesh routers' boundary targets on their
     // own maps, so there is no VC0 arm here -- traffic arriving on its VC0 receiver crosses over
@@ -313,14 +351,9 @@ RouterConnectionMapping RouterConnectionMapping::for_router(
         return mapping;
     }
 
-    // A Z-facing router with a routing direction is an express chord; anything else is a
-    // direction/capability contradiction.
+    // A Z-facing router reaching this point is the express chord: the cross-check above has
+    // already rejected every other capability, and its role has been verified EXPRESS_CHORD.
     if (facing == RoutingDirection::Z) {
-        TT_FATAL(
-            edge_capability == EdgeCapability::INTRAMESH_EXPRESS,
-            "A same-mesh Z edge is an express chord and must carry INTRAMESH_EXPRESS capability, got {}. "
-            "An ordinary cardinal-capability Z edge cannot exist.",
-            to_string(edge_capability));
         TT_FATAL(
             express_routing_enabled && is_2D_topology(topology),
             "An express (Z) chord requires 2D Mesh/Torus routing with express routing enabled");
