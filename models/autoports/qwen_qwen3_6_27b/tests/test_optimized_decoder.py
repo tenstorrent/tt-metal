@@ -19,8 +19,11 @@ def test_optimized_runtime_is_independent_and_packed_by_default():
     assert POLICIES["default"].attention_weight_dtype == ttnn.bfloat8_b
     assert POLICIES["default"].mlp_gate_up_dtype == ttnn.bfloat4_b
     assert POLICIES["default"].cache_dtype == ttnn.bfloat8_b
+    assert POLICIES["default"].residual_sharded_chain
+    assert not POLICIES["default"].large_prefill_2d
     assert "qkv_proj" in inspect.getsource(OptimizedDecoder._full_attention_projections)
     assert "mlp_gate_up" in inspect.getsource(OptimizedDecoder._mlp)
+    assert "residual_sharded_chain" in inspect.getsource(OptimizedDecoder.decode_forward)
 
 
 def test_optimized_runtime_has_no_host_or_functional_fallback():

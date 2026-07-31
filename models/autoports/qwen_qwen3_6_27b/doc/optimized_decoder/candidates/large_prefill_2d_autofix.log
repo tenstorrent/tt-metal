@@ -1,0 +1,36 @@
+Qwen3.6-27B large-prefill 2D multicast autofix sweep, 2026-07-31
+Device: Blackhole p300c, one 1x1 mesh; fallback exceptions enabled by runner.
+
+Candidate:
+  QWEN_OPT_CANDIDATE=large_prefill_2d
+  explicit MatmulMultiCoreReuseMultiCastProgramConfig for packed QKV, O,
+  packed gate/up, and down; per_core_M derived separately from tiled B1/B32 M.
+
+Adaptation sequence:
+1. grid x=10, K block=16:
+   full B1 QKV rejected, circular buffers 1,835,776 > 1,572,864 bytes.
+2. exact-divisor x=8; QKV/O K block=8, gate/up K block=8, down K block=17:
+   QKV passed; gate/up rejected at 1,676,032 > 1,572,864 bytes.
+3. gate/up K block reduced to 4:
+   full B1 passed at PCC 0.999991614, 3.879834 ms versus retained 3.110356 ms.
+4. B32 M corrected to batch * ceil(sequence/32) tiles. With grid y=10:
+   full rejected at 2,118,400 > 1,572,864 bytes.
+5. QKV/O K block reduced to 4 and gate/up to 2:
+   full B32 reached gate/up but rejected at 2,431,744 > 1,572,864 bytes.
+   An 8x11 grid retry was also rejected because the device grid is 11x10.
+
+Commands:
+  QWEN_OPT_CANDIDATE=large_prefill_2d python models/autoports/qwen_qwen3_6_27b/tests/optimized_full_attention_synthetic_pcc.py --mode prefill --sequence 33 --batch 1
+  QWEN_OPT_CANDIDATE=large_prefill_2d python models/autoports/qwen_qwen3_6_27b/tests/optimized_full_attention_synthetic_pcc.py --mode prefill --sequence 33 --batch 32
+  QWEN_OPT_CANDIDATE=large_prefill_2d python models/autoports/qwen_qwen3_6_27b/tests/optimized_linear_attention_synthetic_pcc.py --mode prefill --sequence 5 --batch 1
+  QWEN_OPT_CANDIDATE=large_prefill_2d python models/autoports/qwen_qwen3_6_27b/tests/optimized_linear_attention_synthetic_pcc.py --mode prefill --sequence 5 --batch 32
+
+Final reduced-config results:
+  full B1: PCC 0.9999916144940625, 3.879834 ms; reject versus 3.110356 ms.
+  full B32: hard L1 blocker above; reject.
+  linear B1: PCC 0.9999974193247061, 11.737458 ms; reject versus best 11.005 ms.
+  linear B32: circular buffers 1,917,696 > 1,572,864 bytes; reject.
+
+Decision:
+  Retain TTNN automatic prefill program selection. This is based on multiple
+  legal/adapted attempts at both required batches, not the first TTNN error.

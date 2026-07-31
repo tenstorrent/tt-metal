@@ -1,0 +1,54 @@
+Qwen3.6 optimized-decoder candidate matrix
+Recovered 2026-07-31 from the original stage session:
+/home/mvasiljevic/.codex/sessions/2026/07/29/rollout-2026-07-29T14-01-20-019fae2e-0aa3-7f32-9be1-aa6035428d9a.jsonl
+Original function-call output id: call_K51zkNqUCluLNy5cmqSQ4HHS
+Source checkpoint: ba942aefbd9, reapplied as c55a8c067c8
+
+Commands:
+QWEN_OPT_CANDIDATE=<candidate> python models/autoports/qwen_qwen3_6_27b/tests/optimized_traced_synthetic_pcc.py --kind full --batch <1|32>
+QWEN_OPT_CANDIDATE=<candidate> python models/autoports/qwen_qwen3_6_27b/tests/optimized_full_attention_real_pcc.py
+QWEN_OPT_CANDIDATE=default python models/autoports/qwen_qwen3_6_27b/tests/optimized_{full,linear}_attention_synthetic_pcc.py --mode prefill --sequence <33|5> --batch <1|32>
+
+All successful traced candidates:
+FALLBACK_AUDIT throw_exception_on_fallback=True
+
+candidate=default batch=1 pcc_step1=0.9990026170563894 pcc_step2=0.9995803962132329 median_ms=1.218025
+candidate=default batch=32 pcc_step1=0.9995843611507138 pcc_step2=0.99981487790306 median_ms=1.518185
+candidate=default_hifi2 batch=1 pcc_step1=0.9990106046169596 pcc_step2=0.9995830833549173 median_ms=1.482759 decision=reject_slower
+candidate=default_hifi2 batch=32 pcc_step1=0.999574028112501 pcc_step2=0.9998139077224485 median_ms=1.781919 decision=reject_slower
+candidate=bfp4_attention batch=1 pcc_step1=0.9990060415361336 pcc_step2=0.9995817770522558 median_ms=1.182525
+candidate=bfp4_attention batch=32 pcc_step1=0.9995824356562375 pcc_step2=0.9998146166687046 median_ms=1.479032
+candidate=bfp4_attention real_weight_full_pcc=0.9877991407605222 decision=reject_below_0.995
+candidate=default real_weight_full_pcc=0.998368503310745 decision=keep
+candidate=default real_weight_linear_pcc=0.9993100129972042 decision=keep
+candidate=bfp4_down batch=1 pcc_step1=0.9990017379294626 pcc_step2=0.9995801146932317 median_ms=1.215069
+candidate=bfp4_down batch=32 pcc_step1=0.999584108878532 pcc_step2=0.9998144765593893 median_ms=1.512133 decision=reject_no_material_win
+candidate=bf16_cache batch=1 pcc_step1=0.9990005275173821 pcc_step2=0.9995807527787745 median_ms=1.219647
+candidate=bf16_cache batch=32 pcc_step1=0.9995855943662719 pcc_step2=0.9998144631579496 median_ms=1.528256 decision=reject_slower_and_larger
+candidate=packed_interleaved batch=1 pcc_step1=0.9990026170563894 pcc_step2=0.9995803962132329 median_ms=1.500703
+candidate=packed_interleaved batch=32 pcc_step1=0.9995849715086325 pcc_step2=0.9998149359205835 median_ms=1.913390 decision=reject_slower
+candidate=split_default batch=1 pcc_step1=0.9990026170563894 pcc_step2=0.9995803962132329 median_ms=1.593329
+candidate=split_default batch=32 pcc_step1=0.9995849715086325 pcc_step2=0.9998149359205835 median_ms=2.015014 decision=reject_slower
+candidate=ds_gateup_iw2 batch=1 pcc_step1=0.9990026170563894 pcc_step2=0.9995803962132329 median_ms=1.218645
+candidate=ds_gateup_iw2 batch=32 pcc_step1=0.9995849624020411 pcc_step2=0.9998149297182797 median_ms=1.517895 decision=reject_tie_keep_advisor_1d
+candidate=geometry_down_iw17_n2 batch=1 pcc_step1=0.9990026170563894 pcc_step2=0.9995803962132329 median_ms=1.222703
+candidate=geometry_down_iw17_n2 batch=32 pcc_step1=0.9995843611507138 pcc_step2=0.99981487790306 median_ms=1.518668 decision=reject_slower
+
+Exact geometry blockers:
+candidate=ds_gateup_iw10 batch=1 result=L1_OOM requested=2780928 max=1572864
+candidate=ds_gateup_iw5 batch=1 result=L1_OOM requested=1585408 max=1572864
+candidate=geometry_o_iw24_n2 batch=1 result=L1_OOM requested=1819392 max=1572864
+candidate=geometry_qkv_iw10_n7 batch=1 result=L1_OOM requested=2094848 max=1572864
+
+Final prefill:
+kind=full batch=1 sequence=33 pcc=0.9999916144940625 median_ms=2.846730
+kind=full batch=32 sequence=33 pcc=0.9999910890179949 median_ms=49.689426
+kind=linear batch=1 sequence=5 pcc=0.9999974193247061 median_ms=11.005473
+kind=linear batch=32 sequence=5 pcc=0.9999970097942934 median_ms=294.716440
+
+Final linear traced decode:
+kind=linear batch=1 pcc_step1=0.9999867967865151 pcc_step2=0.9999872342177963 median_ms=2.290700
+kind=linear batch=32 pcc_step1=0.999967587243771 pcc_step2=0.9999904528425421 median_ms=20.605927
+
+Final paged cache:
+FULL_ATTENTION_PREFILL_DECODE_CACHE_PCC 0.9999939169080448

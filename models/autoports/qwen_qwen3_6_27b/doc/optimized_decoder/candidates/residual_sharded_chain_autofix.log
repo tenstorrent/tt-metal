@@ -1,0 +1,27 @@
+Qwen3.6-27B residual-sharded chain sweep, 2026-07-31
+Device: Blackhole p300c, one 1x1 mesh; fallback exceptions enabled by runner.
+
+Candidate path:
+  DRAM input -> 8-core width-sharded [32,640] -> sharded input RMSNorm ->
+  QKV/SDPA/O -> O 80-core output reshard to 8-core -> sharded residual add ->
+  sharded post-attention RMSNorm -> L1-interleaved packed gate/up boundary.
+  The final residual is returned to DRAM for the public layer-output contract.
+
+Commands:
+  QWEN_OPT_CANDIDATE=residual_sharded_probe python models/autoports/qwen_qwen3_6_27b/tests/optimized_traced_synthetic_pcc.py --kind full --batch 1
+  QWEN_OPT_CANDIDATE=residual_sharded_probe python models/autoports/qwen_qwen3_6_27b/tests/optimized_traced_synthetic_pcc.py --kind full --batch 32
+
+Candidate:
+  B1 PCC step1/2 0.9990083187016804 / 0.9995831014290688;
+  median 1.069400 ms versus previous best 1.218025 ms.
+  B32 PCC step1/2 0.9995925177725852 / 0.9998241902139611;
+  median 1.364074 ms versus previous best 1.518185 ms.
+
+Promoted default rerun:
+  B1 median 1.066906 ms; same PCC values.
+  B32 median 1.368461 ms; same PCC values.
+
+Decision:
+  Keep. It improves the primary B1 target by 12.4% and B32 by 9.9%, removes
+  DRAM boundaries around both norms and the first residual add, and exposes
+  the exact remaining packed-gate/up L1-interleaved consumer boundary.

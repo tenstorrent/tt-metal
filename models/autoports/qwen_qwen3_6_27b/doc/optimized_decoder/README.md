@@ -1,6 +1,6 @@
 # Qwen3.6-27B optimized decoder
 
-Status: optimized-decoder complete; independent rereview `clean-pass`.
+Status: optimized-decoder complete; fresh independent rereview clean-pass.
 
 ## Result
 
@@ -11,26 +11,29 @@ BFP8 paged KV, LoFi compute, and advisor-seeded decode configurations.
 
 | Path | Functional | Final optimized | Change |
 |---|---:|---:|---:|
-| full decode batch 1, traced | 2.4741 ms | 1.2180 ms | -50.8% |
-| full decode batch 32, traced | 2.6707 ms | 1.5182 ms | -43.2% |
+| full decode batch 1, traced | 2.4741 ms | 1.0669 ms | -56.9% |
+| full decode batch 32, traced | 2.6707 ms | 1.3685 ms | -48.8% |
 | linear decode batch 1, traced | 3.1645 ms | 2.2907 ms | -27.6% |
 | linear decode batch 32, traced | 21.5003 ms | 20.6059 ms | -4.2% |
 | full prefill batch 1, seq 33 | 3.730 ms | 2.847 ms | -23.7% |
-| full prefill batch 32, seq 33 | not previously recorded | 49.689 ms | new evidence |
+| full prefill batch 32, seq 33 | 72.456 ms | 49.799 ms | -31.3% |
 | linear prefill batch 1, seq 5 | 11.629 ms | 11.005 ms | -5.4% |
-| linear prefill batch 32, seq 5 | not previously recorded | 294.716 ms | new evidence |
+| linear prefill batch 32, seq 5 | 316.627 ms | 294.747 ms | -6.9% |
 
 Headline numbers are uninstrumented host trace-replay or warmed-forward wall
-times from saved `candidates/default*.log` runs. Tracy console timing is
-instrumented and is not mixed into this table.
+times from saved `candidates/default*.log` runs. The B32 prefill baselines and
+fresh reproduced optimized values are recorded in
+`fresh_verification_20260731.md`; complete functional control streams are
+`candidates/functional_{full,linear}_prefill_b32_raw.log`. Tracy console timing
+is instrumented and is not mixed into this table.
 
 ## Correctness
 
 | Gate | Result |
 |---|---|
 | full prefill seq 33 PCC, batch 1/32 | 0.999991614 / 0.999991089 |
-| full traced decode PCC, batch 1 step 1/2 | 0.999002617 / 0.999580396 |
-| full traced decode PCC, batch 32 step 1/2 | 0.999584361 / 0.999814878 |
+| full traced decode PCC, batch 1 step 1/2 | 0.999008319 / 0.999583101 |
+| full traced decode PCC, batch 32 step 1/2 | 0.999592518 / 0.999824190 |
 | linear prefill seq 5 PCC, batch 1/32 | 0.999997419 / 0.999997010 |
 | linear traced decode PCC, batch 1 step 1/2 | 0.999986797 / 0.999987234 |
 | linear traced decode PCC, batch 32 step 1/2 | 0.999967587 / 0.999990453 |
@@ -57,6 +60,7 @@ host fallback.
 | separate Q/K/V same-input matmuls | packed QKV | kept; split is 1.593/2.015 ms versus 1.218/1.518 |
 | separate gate/up same-input matmuls | packed gate/up | kept in the same split control |
 | dense DRAM-interleaved decode | L1 activation chain plus DRAM-sharded QKV/O/down | kept; packed interleaved is 1.501/1.913 ms |
+| DRAM residual boundaries around attention/add/norm | 8-core width-sharded residual chain | kept; 1.218/1.518 becomes 1.067/1.368 ms |
 | one weight layout for both phases | persistent phase-specific copies | kept; interleaved prefill plus sharded decode |
 | manual attention decomposition | paged/chunked TTNN SDPA | kept |
 | BF16 weights/cache | group BFP8/BFP4 and BFP8 KV | kept at real/synthetic PCC bars |
@@ -73,8 +77,12 @@ Batch-1 corroboration is under `shard_advise_batch1/`. Both captures contain 17
 ops and zero spills. Applied: width-sharded dense inputs; DRAM-sharded packed
 QKV (`in0_block_w=4`, `per_core_N=5`), O (`12`, `2`), and down (`4`, `2`);
 packed gate/up 110-core 1D multicast (`2`, subblock `1x5`, `per_core_N=10`).
-Whole-residual norm sharding was rejected because composite token mixers require
-interleaved boundaries; the measured partial chain wins.
+The final full-attention decode now carries the residual through 8-core
+width-sharded input RMSNorm, attention output reshard, residual add, and
+post-attention RMSNorm. The packed gate/up 1D program is the next material
+boundary and requires L1 interleaved input. Measuring this longest compatible
+chain improved both required batches, so it replaced the former DRAM-boundary
+path.
 
 ## Precision and geometry matrix
 
@@ -82,7 +90,7 @@ All full-decode rows are saved under `candidates/` and use both batches.
 
 | Candidate (dtype/fidelity) | Batch 1 / 32 | Decision |
 |---|---:|---|
-| final BFP8 attention/down, BFP4 gate/up, LoFi | 1.218 / 1.518 ms | kept; real full PCC 0.998369 |
+| final precision plus residual-sharded chain | 1.067 / 1.368 ms | kept; real full PCC 0.998369 |
 | packed interleaved, same precision | 1.501 / 1.913 ms | reject |
 | split projections, same precision | 1.593 / 2.015 ms | reject |
 | HiFi2, same dtypes | 1.483 / 1.782 ms | reject |
@@ -91,6 +99,16 @@ All full-decode rows are saved under `candidates/` and use both batches.
 | BF16 KV | 1.220 / 1.528 ms | reject; slower and doubles cache |
 | DRAM-sharded gate/up `in0_block_w=2` | 1.219 / 1.518 ms | tie; retain advisor 1D |
 | down `in0_block_w=17`, `per_core_N=2` | 1.223 / 1.519 ms | reject; slower |
+
+Large-prefill 2D multicast was also adapted beyond the first API failure.
+Exact-divisor QKV/O/gate-up/down configs were tried after reducing K blocks for
+L1. At batch 1 the legal full path was slower (3.880 versus 3.110 ms), and the
+linear path did not beat the best retained run (11.737 versus 11.005 ms).
+At batch 32, further reduced configs still required 2,431,744 bytes for the
+packed gate/up circular buffers versus the 1,572,864-byte device limit; the
+linear trial likewise required 1,917,696 bytes. The default automatic prefill
+program selection is therefore retained. Commands and adaptations are saved in
+`candidates/large_prefill_2d_autofix.log`.
 
 Larger precision-locked blocks have exact hardware evidence: gate/up widths 10
 and 5 need 2,780,928 and 1,585,408 L1 bytes; QKV width 10 with `per_core_N=7`
@@ -101,11 +119,13 @@ different QKV core count/per-core-N, and both kept precision groups.
 ## Profiler conclusions
 
 The post-fix final profile verifies BFP8/LoFi/DRAM-sharded QKV, O, and down plus
-BFP4/LoFi packed gate/up. Full decode reaches 48.2% modeled DRAM roofline
+BFP4/LoFi packed gate/up and the residual-sharded chain. The prior full decode
+reaches 48.2% modeled DRAM roofline
 (247 GB/s); linear decode reaches 37.4% (191 GB/s). Full/linear prefill reach
 27.5%/12.1%. Filtered CSVs, text, summaries, and PNGs are under
-`tracy/final_*`. Instrumented profiler-console wall times are expected to differ
-from uninstrumented headline timings.
+`tracy/final_*`; the promoted chain profile is under
+`tracy/final_residual_chain_b1`. Instrumented profiler-console wall times are
+expected to differ from uninstrumented headline timings.
 
 ## Context and scope
 

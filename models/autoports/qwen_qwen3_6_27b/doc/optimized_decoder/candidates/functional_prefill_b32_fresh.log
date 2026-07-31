@@ -1,0 +1,26 @@
+Qwen3.6-27B fresh functional batch-32 prefill controls, 2026-07-31
+
+Command:
+  TTNN_CONFIG_OVERRIDES='{"throw_exception_on_fallback": true}' python models/autoports/qwen_qwen3_6_27b/tests/full_attention_decode_smoke.py --batch 32 --mode prefill --sequence 33 --full-layer --iterations 5 --max-context 64
+Config:
+  throw_exception_on_fallback=true
+Console result:
+  PERF_PREFILL
+  PERF_PREFILL_END
+  FULL_PREFILL_SMOKE_OK (1, 32, 33, 5120) warmed_ms=72.432438
+  Closing devices in cluster completed.
+
+Command:
+  TTNN_CONFIG_OVERRIDES='{"throw_exception_on_fallback": true}' python models/autoports/qwen_qwen3_6_27b/tests/linear_attention_decode_smoke.py --batch 32 --mode prefill --sequence 5 --full-layer --iterations 5
+Config:
+  throw_exception_on_fallback=true
+Console result:
+  PERF_PREFILL
+  PERF_PREFILL_END
+  LINEAR_PREFILL_SMOKE_OK (1, 32, 5, 5120) warmed_ms=316.623863
+  Closing devices in cluster completed.
+
+Both intentionally non-aligned shapes use the same functional layer-smoke
+harnesses as the retained baselines. The runners perform one warmup and one
+signposted measurement; `--iterations 5` is accepted for CLI parity but decode
+only, so no claim of five prefill samples is made.

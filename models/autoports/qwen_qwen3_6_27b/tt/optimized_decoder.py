@@ -54,6 +54,8 @@ class OptimizationPolicy:
     o_per_core_n: int = 2
     down_in0_block_w: int = 4
     down_per_core_n: int = 2
+    large_prefill_2d: bool = False
+    residual_sharded_chain: bool = False
 
 
 POLICIES = {
@@ -74,6 +76,7 @@ POLICIES = {
         attention_fidelity=ttnn.MathFidelity.LoFi,
         mlp_fidelity=ttnn.MathFidelity.LoFi,
         advisor_seed=True,
+        residual_sharded_chain=True,
     ),
     "bfp8_hifi2": OptimizationPolicy(
         attention_weight_dtype=ttnn.bfloat8_b,
@@ -219,6 +222,26 @@ POLICIES = {
         advisor_seed=True,
         down_in0_block_w=17,
         down_per_core_n=2,
+    ),
+    "large_prefill_2d": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat8_b,
+        mlp_gate_up_dtype=ttnn.bfloat4_b,
+        mlp_down_dtype=ttnn.bfloat8_b,
+        cache_dtype=ttnn.bfloat8_b,
+        attention_fidelity=ttnn.MathFidelity.LoFi,
+        mlp_fidelity=ttnn.MathFidelity.LoFi,
+        advisor_seed=True,
+        large_prefill_2d=True,
+    ),
+    "residual_sharded_probe": OptimizationPolicy(
+        attention_weight_dtype=ttnn.bfloat8_b,
+        mlp_gate_up_dtype=ttnn.bfloat4_b,
+        mlp_down_dtype=ttnn.bfloat8_b,
+        cache_dtype=ttnn.bfloat8_b,
+        attention_fidelity=ttnn.MathFidelity.LoFi,
+        mlp_fidelity=ttnn.MathFidelity.LoFi,
+        advisor_seed=True,
+        residual_sharded_chain=True,
     ),
 }
 
@@ -384,6 +407,7 @@ class OptimizedDecoder(LightweightModule):
         self.o_decode_program_config = None
         self.gate_up_decode_program_config = None
         self.down_decode_program_config = None
+        self.residual_decode_program_config = None
         self.advisor_input_memcfg = {}
         self.advisor_output_memcfg = {}
         if policy.advisor_seed:
@@ -451,6 +475,45 @@ class OptimizedDecoder(LightweightModule):
                 per_core_M=1,
                 per_core_N=policy.down_per_core_n,
             )
+            if policy.residual_sharded_chain:
+                self.residual_decode_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=[8, 1],
+                    subblock_w=4,
+                    block_h=1,
+                    block_w=self.hidden_size // (8 * 32),
+                    inplace=False,
+                )
+
+    def _prefill_program_config(self, role: str, hidden_states):
+        """Return a shape-derived 2D multicast seed for prefill candidates.
+
+        TTNN flattens the leading dimensions into M for this matmul family.
+        The per-core M block is derived at runtime and remains valid for
+        non-aligned logical sequence lengths through ceiling padding.
+        """
+        if not self.policy.large_prefill_2d:
+            return None
+        batch_planes = math.prod(int(hidden_states.shape[index]) for index in range(len(hidden_states.shape) - 2))
+        m_tiles = batch_planes * math.ceil(int(hidden_states.shape[-2]) / 32)
+        role_config = {
+            # (grid_x, K block tiles, N block tiles, output subblock width)
+            "qkv": (8, 4, 56, 7),
+            "o": (8, 4, 20, 5),
+            "gate_up": (8, 2, 136, 1),
+            "down": (8, 17, 20, 5),
+        }
+        grid_x, in0_block_w, per_core_n, out_subblock_w = role_config[role]
+        grid_y = min(10, m_tiles)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            per_core_M=math.ceil(m_tiles / grid_y),
+            per_core_N=per_core_n,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
 
     @classmethod
     def from_state_dict(
@@ -771,6 +834,17 @@ class OptimizedDecoder(LightweightModule):
         )
 
     def _rms_norm(self, hidden_states, name):
+        if self.policy.residual_sharded_chain and hidden_states.shape[1] == 1 and hidden_states.shape[2] == self.batch:
+            hidden_states = ttnn.to_memory_config(
+                hidden_states,
+                self.advisor_input_memcfg[self.hidden_size],
+            )
+            return ttnn.rms_norm(
+                hidden_states,
+                epsilon=self.eps,
+                weight=self.weights[name],
+                program_config=self.residual_decode_program_config,
+            )
         return ttnn.rms_norm(
             hidden_states,
             epsilon=self.eps,
@@ -801,7 +875,11 @@ class OptimizedDecoder(LightweightModule):
                     else ttnn.DRAM_MEMORY_CONFIG
                 ),
                 compute_kernel_config=self.mlp_compute_kernel_config,
-                program_config=self.gate_up_decode_program_config if is_decode else None,
+                program_config=(
+                    self.gate_up_decode_program_config
+                    if is_decode
+                    else self._prefill_program_config("gate_up", hidden_states)
+                ),
             )
             if is_decode and self.policy.advisor_seed:
                 gate_up = ttnn.to_memory_config(gate_up, ttnn.L1_MEMORY_CONFIG)
@@ -836,7 +914,9 @@ class OptimizedDecoder(LightweightModule):
                 else ttnn.DRAM_MEMORY_CONFIG
             ),
             compute_kernel_config=self.mlp_compute_kernel_config,
-            program_config=self.down_decode_program_config if is_decode else None,
+            program_config=(
+                self.down_decode_program_config if is_decode else self._prefill_program_config("down", hidden_states)
+            ),
         )
         if is_decode and self.policy.advisor_seed:
             output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
@@ -861,7 +941,9 @@ class OptimizedDecoder(LightweightModule):
                     else ttnn.DRAM_MEMORY_CONFIG
                 ),
                 compute_kernel_config=self.attention_compute_kernel_config,
-                program_config=self.qkv_decode_program_config if is_decode else None,
+                program_config=(
+                    self.qkv_decode_program_config if is_decode else self._prefill_program_config("qkv", hidden_states)
+                ),
             )
             if is_decode and self.policy.advisor_seed:
                 qkv = ttnn.to_memory_config(qkv, ttnn.L1_MEMORY_CONFIG)
@@ -1213,6 +1295,7 @@ class OptimizedDecoder(LightweightModule):
             self.weights["o_proj"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.attention_compute_kernel_config,
+            program_config=self._prefill_program_config("o", attention),
         )
 
     def _per_head_norm_prefill(self, tensor, weight_name):
@@ -1305,7 +1388,12 @@ class OptimizedDecoder(LightweightModule):
             compute_kernel_config=self.attention_compute_kernel_config,
             program_config=self.o_decode_program_config,
         )
-        if self.policy.advisor_seed:
+        if self.policy.residual_sharded_chain:
+            attention = ttnn.to_memory_config(
+                attention,
+                self.advisor_input_memcfg[self.hidden_size],
+            )
+        elif self.policy.advisor_seed:
             attention = ttnn.to_memory_config(attention, ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.reshape(
             attention,
@@ -1367,6 +1455,28 @@ class OptimizedDecoder(LightweightModule):
 
     def decode_forward(self, *, hidden_states, page_table, current_positions):
         """Run one trace-safe decode step using device-resident mutable cache state."""
+        if self.policy.residual_sharded_chain and self.layer_kind == "full_attention":
+            # Carry the residual through both the attention add and following
+            # RMSNorm on one 8-core width-sharded layout.  The packed gate/up
+            # 1D program is the next material consumer and deliberately keeps
+            # its existing L1-interleaved input contract, making that adapted
+            # boundary visible in a profile instead of hiding it in DRAM.
+            residual = ttnn.to_memory_config(
+                hidden_states,
+                self.advisor_input_memcfg[self.hidden_size],
+            )
+            hidden_states = self._rms_norm(residual, "input_norm")
+            hidden_states = self._token_mixer_decode(hidden_states, page_table, current_positions)
+            hidden_states = ttnn.add(
+                residual,
+                hidden_states,
+                memory_config=self.advisor_input_memcfg[self.hidden_size],
+            )
+            residual = hidden_states
+            hidden_states = self._rms_norm(hidden_states, "post_attention_norm")
+            hidden_states = self._mlp(hidden_states)
+            residual = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
+            return ttnn.add(residual, hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         residual = hidden_states
         hidden_states = self._rms_norm(hidden_states, "input_norm")
         hidden_states = self._token_mixer_decode(hidden_states, page_table, current_positions)
