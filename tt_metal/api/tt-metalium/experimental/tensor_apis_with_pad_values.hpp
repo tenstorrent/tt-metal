@@ -31,19 +31,19 @@ namespace tt::tt_metal {
  * Same as HostTensor::from_span, but the padded values are filled with **pad_value**.
  */
 template <typename T>
-HostTensor host_tensor_from_span_with_pad_value(std::span<const T> buffer, const TensorSpec& spec, T pad_value);
+HostTensor host_tensor_from_span_with_pad_value(std::span<const T> buffer, TensorSpec spec, T pad_value);
 
 /**
  * Same as HostTensor::from_vector, but the padded values are filled with **pad_value**.
  */
 template <typename T>
-HostTensor host_tensor_from_vector_with_pad_value(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value);
+HostTensor host_tensor_from_vector_with_pad_value(const std::vector<T>& buffer, TensorSpec spec, T pad_value);
 
 /**
  * Same as HostTensor::from_vector, but the padded values are filled with **pad_value**.
  */
 template <typename T>
-HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value);
+HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, TensorSpec spec, T pad_value);
 
 /**
  * Same as to_tensor_spec, but the padded values are filled with **pad_value**.

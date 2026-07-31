@@ -25,8 +25,10 @@ HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec) {
     return HostTensor(std::move(distributed_buffer), std::move(spec), TensorTopology{});
 }
 
-HostTensor HostTensor::allocate_for_overwrite(const TensorSpec& spec) {
-    return from_buffer(tensor_impl::allocate_host_buffer(spec), spec);
+HostTensor HostTensor::allocate_for_overwrite(TensorSpec spec) {
+    // Sequence allocate before moving spec: argument evaluation order is unspecified.
+    auto buffer = tensor_impl::allocate_host_buffer(spec);
+    return from_buffer(std::move(buffer), std::move(spec));
 }
 
 HostTensor::HostTensor(const HostTensor& other) :

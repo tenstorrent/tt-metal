@@ -103,7 +103,7 @@ public:
      * Allocate a single-shard HostTensor whose contents are unspecified and meant to be overwritten.
      * The buffer occupies the 0x0 shard of the distributed host buffer.
      */
-    static HostTensor allocate_for_overwrite(const TensorSpec& spec);
+    static HostTensor allocate_for_overwrite(TensorSpec spec);
 
     /**
      * Converts a buffer of elements of type `T` to a `Tensor`.
@@ -113,7 +113,7 @@ public:
      * The data in the buffer is copied into a tensor with host storage.
      */
     template <typename T>
-    static HostTensor from_span(std::span<const T> buffer, const TensorSpec& spec);
+    static HostTensor from_span(std::span<const T> buffer, TensorSpec spec);
 
     /**
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
@@ -126,7 +126,7 @@ public:
         std::span<T> buffer, const Shape& shape, MemoryPin pin, const std::optional<Tile>& tile = std::nullopt);
 
     template <typename T>
-    static HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec);
+    static HostTensor from_vector(const std::vector<T>& buffer, TensorSpec spec);
 
     /**
      * From original Tensor:
@@ -134,7 +134,7 @@ public:
      * physical shape matches logical shape, and no type conversion is needed.
      */
     template <typename T>
-    static HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec);
+    static HostTensor from_vector(std::vector<T>&& buffer, TensorSpec spec);
 
     // Getters:
 
