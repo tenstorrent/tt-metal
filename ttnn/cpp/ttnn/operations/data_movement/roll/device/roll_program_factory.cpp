@@ -13,6 +13,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/host_api.hpp>
 
 // Why ROW_MAJOR sharded roll needs a dedicated kernel instead of the slice + concat composite
 // used for interleaved roll:
@@ -565,10 +566,25 @@ void RollDeviceOperation::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Re-derive all per-dispatch state from the single source of truth (create_descriptor) for the
-    // current tensors and re-apply to the cached program -- no rebuild, still a cache hit.
-    auto desc = RollShardedProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+    // compute_program_hash keys on shift/dim/memory_config/dtype/layout but not shape, so the whole
+    // per-core transfer plan can move on a hit. Re-run just the planner -- create_descriptor's own
+    // source of truth -- and write its args into the cached program instead of rebuilding it.
+    const RollPlan plan = compute_roll_plan(operation_attributes, tensor_args, tensor_return_value);
+    for (const auto& [core, args] : plan.per_core_args) {
+        auto& a = tt::tt_metal::GetRuntimeArgs(program, 0, core);
+        for (uint32_t i = 0; i < args.size() && i < a.size(); ++i) {
+            a[i] = args[i];
+        }
+    }
+
+    // L1 mode addresses data through the input/output-backed CBs; DRAM mode carries bank ids in the
+    // args above. CBs are matched positionally, and create_descriptor pushes input then output first.
+    if (!plan.is_dram) {
+        tt::tt_metal::ProgramDescriptor cb_addr_only;
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = plan.input_buffer});
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = plan.output_buffer});
+        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
+    }
 }
 
 }  // namespace ttnn::prim
