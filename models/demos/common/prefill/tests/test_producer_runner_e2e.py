@@ -244,14 +244,24 @@ class _ChildStream:
             for line in proc.stdout:  # text mode, line at a time; ends at child EOF
                 self.lines += 1
                 self.last_output = time.monotonic()
-                try:
-                    if log is not None:
+                # File and stdout fail INDEPENDENTLY on purpose. Sharing one try meant that once
+                # log.write() started failing (a full report volume, say), it raised before every
+                # later print() and silently took the live stream with it -- and the step log is
+                # exactly the view you still have when storage is the thing that broke. Neither may
+                # stop the drain either: the child blocks as soon as the 64K pipe fills.
+                if log is not None:
+                    try:
                         log.write(line)
-                    if _STREAM_LOGS:
+                    except Exception:
+                        with contextlib.suppress(Exception):
+                            log.close()
+                        log = None  # a broken handle is dropped, not retried once per remaining line
+                        with contextlib.suppress(Exception):
+                            print(f"[{self.tag}] file log stopped ({self.log_path}); stream continues", flush=True)
+                if _STREAM_LOGS:
+                    with contextlib.suppress(Exception):
                         # Single write: a streamed line can't tear against the main thread's output.
                         print(f"[{self.tag} {_elapsed()}] {line.rstrip()}\n", end="", flush=True)
-                except Exception:
-                    pass  # never stop draining -- the child blocks as soon as the 64K pipe fills
         except Exception:
             # Same reason: whatever went wrong reading the pipe, keep emptying it so that a child
             # holding the mesh can never wedge on a full pipe. The log/stream just stops here.
@@ -411,17 +421,22 @@ def test_producer_runner_pcc(scenario, tmp_path):
         def _both_running() -> str:
             return f"producer [{scenario}] running | {producer_stream.status()} | {runner_stream.status()}"
 
+        producer = None  # so the finally can tell "never spawned" from "spawned and still alive"
         try:
             producer = _spawn(_PRODUCER_MODULE, env, producer_stream)
             print(f"[e2e {_elapsed()}] producer [{scenario}] launched (pid={producer.pid})", flush=True)
             with _heartbeat(_both_running):
-                try:
-                    returncode = producer.wait(timeout=_PRODUCER_TIMEOUT_S)
-                except subprocess.TimeoutExpired:
-                    producer.kill()  # match subprocess.run(timeout=...): kill, then surface the timeout
-                    producer.wait(timeout=30)
-                    raise
+                returncode = producer.wait(timeout=_PRODUCER_TIMEOUT_S)  # raises TimeoutExpired
         finally:
+            # Reap on EVERY exit where the producer is still alive, not just our own timeout: a
+            # pytest-timeout signal or a Ctrl-C would otherwise leave it running, holding the transport
+            # into the next scenario. subprocess.run() guaranteed this (bare `except: kill`) and the
+            # rewrite has to as well. Kill BEFORE draining -- with a live pipe the pump is still blocked
+            # in its read, so finish() would burn its whole join timeout before we got here.
+            if producer is not None and producer.poll() is None:
+                producer.kill()
+                with contextlib.suppress(Exception):
+                    producer.wait(timeout=30)
             producer_stream.finish()
             if not _STREAM_LOGS:  # otherwise it was already streamed live, line by line
                 _emit_log_group(f"producer log [{scenario}]", prod_log)

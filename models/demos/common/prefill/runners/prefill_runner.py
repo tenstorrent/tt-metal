@@ -1067,6 +1067,18 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # is OFF. One level deeper it was an elif of `if is_first_rank:`, so reaching it needed
         # _migration_enabled AND a non-first rank: unreachable in single-rank, and the runner then
         # entered the request loop having never published the table/device map its consumer waits on.
+        # Single-rank only, and loudly so. Dedenting it out of `if _migration_enabled:` also took it
+        # out of the pre-#48826 `if single_rank:` wrapper, so with num_ranks>1 every rank would build
+        # a table covering only ITS layer slice and publish over the same paths -- and co-located
+        # ranks would race serialize_device_map's `<path>.tmp` -> os.replace as well. Only the real
+        # migration path merges stages (deliver_device_map_and_gather_stage_layout), and that needs
+        # the worker. Same guard #48826 removed for PREFILL_ENABLE_MIGRATION, kept for the mock path.
+        if not single_rank:
+            raise ValueError(
+                f"PREFILL_MOCK_MIGRATION=1 is unsupported for num_ranks={num_ranks} (each rank would "
+                "publish a table covering only its own layer slice; a merged mock table is not "
+                "implemented); run single-rank or unset PREFILL_MOCK_MIGRATION."
+            )
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         runtime.build_kv_chunk_table(kv_caches, path=table_path)
         # Also publish the fabric_node -> ASIC unique_id device map so the producer can resolve chips
