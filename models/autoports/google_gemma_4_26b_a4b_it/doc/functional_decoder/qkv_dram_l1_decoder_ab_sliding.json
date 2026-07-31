@@ -1,0 +1,39 @@
+{
+  "batch": 32,
+  "cross_variant_pcc": 1.0,
+  "cross_variant_pcc_threshold": 0.9999,
+  "current_position": 32,
+  "decoder_source_sha256": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
+  "failures": [],
+  "hf_pcc_threshold": 0.995,
+  "kernel_dram_fix_commit": "7aa26e4b1f274867bcea5ff6ea99295f961d89b1",
+  "kernel_dram_fix_verified_ancestor_by_source_review": true,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "qkv_width": 8192,
+  "test_source_sha256": "2545f31c2c31196e7e8f5653a4681aa20f0307bce36cf94f4bd0f4e329dd1d49",
+  "variants": {
+    "production_dram_reader": {
+      "eager_vs_replay_pcc": 1.0,
+      "expected_promotion_bypass_hits": 0,
+      "hf_pcc": 0.9992826009529862,
+      "median_trace_latency_ms": 68.1971030026034,
+      "p95_trace_latency_ms": 68.22450400068192,
+      "promotion_bypass_hits": 0,
+      "repeat_pcc": 1.0,
+      "trace_replays": 20
+    },
+    "removed_promotion_probe": {
+      "eager_vs_replay_pcc": 1.0,
+      "expected_promotion_bypass_hits": 0,
+      "hf_pcc": 0.9992826009529862,
+      "median_trace_latency_ms": 68.17829699866707,
+      "p95_trace_latency_ms": 68.2107789980364,
+      "promotion_bypass_hits": 0,
+      "repeat_pcc": 1.0,
+      "trace_replays": 20
+    }
+  },
+  "whole_qkv_l1_bytes_removed": 524288
+}

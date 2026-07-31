@@ -1,0 +1,16 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_PREFILL_layer5_full_attention_seq1024_batch1'.
+Using operations until 'PERF_PREFILL_layer5_full_attention_seq1024_batch1_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/full_b1_prefill_perf_report.csv
+Overall DRAM roofline (modeled ops): 8.0% (41 GB/s)
+Warning: Unclassified operation 'RotaryEmbeddingHfDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PagedFillCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'FastReduceNCDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/full_b1_prefill_summary.csv.csv
+Plotting PNG stacked report to models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/full_b1_prefill_summary.csv.png

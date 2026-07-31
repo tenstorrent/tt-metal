@@ -1,0 +1,35 @@
+{
+  "acceptance_threshold": 0.995,
+  "final_policy": {
+    "explicit_hifi4_fp32_dest_accumulation": [
+      "all RMS-normalization operations",
+      "sparse expert gate projection",
+      "full-attention chunked prefill SDPA"
+    ],
+    "framework_default": [
+      "QKV and output projections",
+      "dense MLP projections",
+      "router projection and softmax",
+      "non-chunked prefill, sliding chunked prefill, and decode SDPA",
+      "sparse expert up and down projections"
+    ]
+  },
+  "layer0_sliding_decode_pcc": {
+    "framework_defaults_except_sparse_gate": 0.9932753905660446,
+    "head_norms_and_sparse_gate": 0.9945117397156593,
+    "head_norms_sparse_gate_and_decode_sdpa": 0.9944118543996648,
+    "all_rms_norms_and_sparse_gate": 0.9996549633044108
+  },
+  "layer5_full_decode_pcc": {
+    "framework_defaults_except_sparse_gate": 0.9907230489671434,
+    "head_norms_and_sparse_gate": 0.999855606589797,
+    "all_rms_norms_and_sparse_gate": 0.9998612386959206
+  },
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "full_chunked_prefill_sdpa": {
+    "default_compute_config_pcc_at_position_32768": 0.9757387867878874,
+    "threshold": 0.995
+  },
+  "real_weights": true,
+  "sequence_length": 32
+}
