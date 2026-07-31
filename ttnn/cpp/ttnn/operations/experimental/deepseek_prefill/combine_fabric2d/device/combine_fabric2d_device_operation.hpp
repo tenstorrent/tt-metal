@@ -38,6 +38,7 @@ ttnn::Tensor combine_fabric2d(
     uint32_t token_size_bytes,
     uint32_t axis,
     uint32_t num_l1_slots,
+    uint32_t fwd_bump_every,
     uint32_t stall_telemetry,
     tt::tt_fabric::Topology topology);
 }  // namespace ttnn::prim

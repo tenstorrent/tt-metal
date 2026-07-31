@@ -24,8 +24,8 @@ mkdir -p generated/cmbf2d
 
 run_point() {
     local tag="$1"
-    echo "=== [$(date +%H:%M:%S)] point ${tag}: tokens=${CMBF2D_TOKENS:-100} token=${CMBF2D_TOKEN_BYTES:-14336} stall=${CMBF2D_STALL:-0}"
-    CMBF2D_TAG="$tag" scripts/run_safe_pytest.sh "$TEST" -k "$FILTER" -s \
+    echo "=== [$(date +%H:%M:%S)] point ${tag}: tokens=${CMBF2D_TOKENS:-100} token=${CMBF2D_TOKEN_BYTES:-14336} bump=${CMBF2D_FWD_BUMP:-8} stall=${CMBF2D_STALL:-0}"
+    CMBF2D_TAG="$tag" CMBF2D_FWD_BUMP="${CMBF2D_FWD_BUMP:-8}" scripts/run_safe_pytest.sh "$TEST" -k "$FILTER" -s \
         >"generated/cmbf2d/run_${tag}.log" 2>&1
     local rc=$?
     local bw="generated/cmbf2d/bwinfo_${tag}.txt"
@@ -33,7 +33,7 @@ run_point() {
         # The file's own summary lines. Accuracy is not among them: the test asserts it, so rc=0
         # already means it passed.
         local summary send shares nvalid
-        summary=$(grep "per-producer GB/s" "$bw")
+        summary=$(grep "SLOWEST producer" "$bw")
         send=$(grep "per-producer sGB/s" "$bw")
         shares=$(grep "mean send-window shares" "$bw")
         nvalid=$(grep -c "^ *[0-9]" "$bw")
@@ -59,11 +59,16 @@ case "$AXIS" in
             CMBF2D_TOKEN_BYTES="$n" run_point "tokb${n}"
         done
         ;;
+    bump)
+        for n in "$@"; do
+            CMBF2D_FWD_BUMP="$n" run_point "bump${n}"
+        done
+        ;;
     label)
         run_point "$1"
         ;;
     *)
-        echo "usage: $0 {tokens|token|label} <values...>"
+        echo "usage: $0 {tokens|token|bump|label} <values...>"
         exit 3
         ;;
 esac
