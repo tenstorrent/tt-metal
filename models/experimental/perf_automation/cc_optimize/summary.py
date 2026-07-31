@@ -920,8 +920,8 @@ def render_summary(
     # --- Per-attempt detail: gain of EVERY optimization tried (#5a) ---
     if attempts:
         lines.append("")
-        lines.append("Per-attempt detail (every optimization tried — win OR fail — with gain vs baseline and WHY):")
-        ah = f"{'op':<34} {'lever':>12} {'ms':>9} {'gain vs base':>13}  {'result':<10} why tried / why it won or failed"
+        lines.append("Per-attempt detail:")
+        ah = f"{'op':<34} {'lever':>12} {'Eager (device_ms)':>18} {'1CQ Δ vs current':>16}  {'result':<10} why tried / why it won or failed"
         lines.append(ah)
         lines.append("-" * min(len(ah), 120))
         for _i, a in enumerate(attempts):
@@ -931,19 +931,20 @@ def render_summary(
             lever = _disp_level(a.get("kernel_kind") or "?")
             ms = a.get("measured_ms")
             ms_s = f"{ms:.2f}" if isinstance(ms, (int, float)) else "—"
-            if hdr_base and isinstance(ms, (int, float)):
-                gain_s = f"{hdr_base - ms:+.2f} ms"
+            _fp, _fb = a.get("fullpipe_ms"), a.get("fullpipe_best_ms")
+            if isinstance(_fp, (int, float)) and isinstance(_fb, (int, float)):
+                gain_s = f"{_fp - _fb:+.2f} ms"
             else:
                 gain_s = "—"
             res = "✓ win" if _i in _wins else ("· wedged" if a.get("wedged") else "· no gain")
             note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
-            lines.append(f"{sig:<34} {lever:>12} {ms_s:>9} {gain_s:>13}  {res:<10} {note}")
+            lines.append(f"{sig:<34} {lever:>12} {ms_s:>18} {gain_s:>16}  {res:<10} {note}")
 
     # --- Code changes: the actual source diff for EVERY attempt tried (win or fail) ---
     if any(isinstance(a, dict) and (a.get("diff") or "").strip() for a in attempts):
         lines.append("")
-        lines.append("Code changes — every attempt (win or fail):")
-        lines.append("=" * 43)
+        lines.append("Code changes:")
+        lines.append("=" * len("Code changes:"))
         for i, a in enumerate(attempts, 1):
             if not isinstance(a, dict):
                 continue
@@ -953,8 +954,8 @@ def render_summary(
             sig = _op_label(a.get("op_signature", "?"))
             lever = _disp_level(a.get("kernel_kind") or "?")
             res = "win" if (i - 1) in _wins else ("wedged" if a.get("wedged") else "no gain")
-            ms = a.get("measured_ms")
-            gain = f"  {hdr_base - ms:+.2f} ms" if (hdr_base and isinstance(ms, (int, float))) else ""
+            _fp, _fb = a.get("fullpipe_ms"), a.get("fullpipe_best_ms")
+            gain = f"  {_fp - _fb:+.2f} ms" if isinstance(_fp, (int, float)) and isinstance(_fb, (int, float)) else ""
             lines.append("")
             lines.append(f"[#{i}] {sig} · {lever} · {res}{gain}")
             for dl in d.splitlines():
