@@ -111,7 +111,9 @@ uploads fresh device seeds when both the requested and cached seed are `None`.
 
 ## vLLM Decode Update Contract
 
-The paired vLLM TT plugin sends four boolean commands on every decode:
+Refactored vLLM model adapters advertise
+`decode_input_update_contract = 1`. The vLLM TT plugin sends these adapters
+four boolean commands on every decode:
 
 - `reload_inputs`: copy every forward trace input.
 - `reload_page_table`: copy only page-table inputs while preserving
@@ -121,10 +123,14 @@ The paired vLLM TT plugin sends four boolean commands on every decode:
 
 Generators execute these commands without adding page-table comparisons,
 sampling-mode checks, or model-specific forced reloads. The corresponding
-vLLM and tt-metal revisions are deployed as a pinned pair; there is no
-per-model contract version or old-vLLM compatibility path. Direct non-vLLM
-callers, including demos and warmup code, must also provide all four commands.
-Any demo-side decision to retain traced inputs is made at the call site.
+vLLM plugin falls back to the legacy `reset_batch` interface for adapters that
+do not advertise the contract, preserving their existing reload and overlap
+behavior. vLLM warns that correctness is not guaranteed on that compatibility
+path. This lets vLLM land first and adapters opt in as they are refactored. The
+marker is negotiation metadata on vLLM-facing adapters only; all refactored
+generator APIs require direct callers, including demos and warmup code, to
+provide all four commands. No model-side fallback heuristics are restored. Any
+demo-side decision to retain traced inputs is made at the call site.
 
 `model_capabilities["supports_async_decode"]` is separate from contract
 versioning. It certifies that a vLLM wrapper supports split async readback and

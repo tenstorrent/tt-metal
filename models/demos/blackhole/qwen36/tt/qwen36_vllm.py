@@ -48,9 +48,7 @@ class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
 class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
 
-    # Decode bucketing keeps several traces live and refreshes the selected
-    # bucket's inputs before replay, so their I/O buffers may safely overlap.
-    _tt_allow_decode_trace_buffer_reuse = True
+    decode_input_update_contract = 1
 
     # supports_async_decode=False: async decode assumes on-device token/position continuity, which
     # corrupts Qwen's GDN scan. supports_sample_on_device=True: on-device sampling is decode-only.
