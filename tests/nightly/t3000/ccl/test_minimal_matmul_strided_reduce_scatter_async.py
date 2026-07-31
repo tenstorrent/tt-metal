@@ -82,6 +82,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     allowed_pcc=0.99,
     addcmul_scalar=None,
     broadcast_gate=True,
+    virtual_concat=False,
+    virtual_concat_ka=None,
 ):
     torch.manual_seed(0)
 
@@ -120,6 +122,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     logger.info(f"RS output shape per device: [1, 1, {M}, {N // num_devices}]")
 
     input_tensor_mesh_list = []
+    input_b_tensor_mesh_list = []  # virtual-concat second in0 source (when virtual_concat)
     weight_tensor_mesh_list = []
     torch_mm_output_per_device_list = []  # list of lists, [iter][device]
     torch_rs_output_list = []
@@ -155,12 +158,29 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
+    # For non-aligned virtual concat: compute per-device padded K and build zero-padded weight.
+    if virtual_concat and virtual_concat_ka is not None:
+        ka_p = ((virtual_concat_ka + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+        kb = K - virtual_concat_ka
+        kb_p = ((kb + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+        K_weight = ka_p + kb_p  # padded K used for device weight
+    else:
+        K_weight = K
+
     for i in range(num_iters):
         torch_input = torch.randn(input_shape, dtype=torch.float32)
-        torch_weight_global = torch.randn(weight_shape_global, dtype=torch.float32)
+        torch_weight_ref = torch.randn(weight_shape_global, dtype=torch.float32)  # logical weight for golden
 
-        # Golden: per-device MM outputs (each device has different weights)
-        torch_weight_chunks = torch.chunk(torch_weight_global, num_devices, dim=0)  # each [1, 1, K, N]
+        if virtual_concat and virtual_concat_ka is not None:
+            # Build per-segment tile-padded weight: zero rows fill each segment's tile gap.
+            torch_weight_global = torch.zeros(num_devices, 1, K_weight, N, dtype=torch.float32)
+            torch_weight_global[:, :, :virtual_concat_ka, :] = torch_weight_ref[:, :, :virtual_concat_ka, :]
+            torch_weight_global[:, :, ka_p : ka_p + kb, :] = torch_weight_ref[:, :, virtual_concat_ka:, :]
+        else:
+            torch_weight_global = torch_weight_ref
+
+        # Golden: per-device MM outputs using logical (unpaddded) weights
+        torch_weight_chunks = torch.chunk(torch_weight_ref, num_devices, dim=0)  # each [1, 1, K, N]
         mm_outputs = []
         for d in range(num_devices):
             mm_out_d = torch.matmul(torch_input, torch_weight_chunks[d])
@@ -196,6 +216,31 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             memory_config=mem_config_input,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
         )
+
+        # Virtual concat: split the (full) activation on K into two replicated buffers fed as a
+        # [prefix, suffix] list. Split at 1/4 : 3/4 (asymmetric, so prefix/suffix widths differ — this
+        # catches width-confusion bugs; at K=3072 it is exactly the FLUX.2 attn(768) + mlp(2304) split).
+        # The golden uses the full torch_input, so a correct virtual concat must match it exactly.
+        if virtual_concat:
+            ka = virtual_concat_ka if virtual_concat_ka is not None else max(1, (K // TILE_SIZE) // 4) * TILE_SIZE
+            input_a_mesh = ttnn.from_torch(
+                torch_input[..., :ka],
+                device=mesh_device,
+                layout=layout,
+                dtype=input_dtype,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            input_b_mesh = ttnn.from_torch(
+                torch_input[..., ka:],
+                device=mesh_device,
+                layout=layout,
+                dtype=input_dtype,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            input_tensor_mesh = input_a_mesh
+            input_b_tensor_mesh_list.append(input_b_mesh)
 
         input_tensor_mesh_list.append(input_tensor_mesh)
         weight_tensor_mesh_list.append(weight_tensor_mesh)
@@ -234,12 +279,19 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 
     def run_op(i):
         if rs_mode == "fused":
+            # input_tensor accepts a single tensor, or [prefix, suffix] to virtually concatenate in0's K
+            # (concat-free); the baseline (virtual_concat=False) passes a single tensor.
+            mm_input = (
+                [input_tensor_mesh_list[i], input_b_tensor_mesh_list[i]]
+                if virtual_concat
+                else input_tensor_mesh_list[i]
+            )
             # Fused path: matmul and strided reduce-scatter run concurrently
             (
                 tt_mm_out,
                 tt_rs_out,
             ) = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
-                input_tensor_mesh_list[i],
+                mm_input,
                 weight_tensor_mesh_list[i],
                 dim,
                 ccl_semaphore_handles[i],
@@ -691,6 +743,52 @@ def test_minimal_matmul_strided_reduce_scatter_addcmul(mesh_device, broadcast_ga
         cluster_axis=1,
         addcmul_scalar=1.0,
         broadcast_gate=broadcast_gate,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True, ids=["1x8"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+@pytest.mark.skip(reason="run manually")
+@skip_for_blackhole("t3000 tests are wormhole_b0 only")
+def test_minimal_matmul_strided_reduce_scatter_virtual_concat_non_aligned(mesh_device, topology):
+    """MMRS virtual concat with non-tile-aligned Ka and Kb (t3000/WH).
+
+    K=32 per device (logical), Ka=11 (non-aligned prefix), Kb=21 (non-aligned suffix).
+    Weight is per-segment tile-padded: prefix rows [0..11) real, zeros to tile 32,
+    suffix rows [32..53) real, zeros to tile 64.  K_padded=64 (2 tiles), mm_block_k=64.
+    """
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    run_minimal_matmul_strided_reduce_scatter_impl(
+        mesh_device,
+        M=128,
+        K=32,  # logical per-device K: Ka=11 + Kb=21
+        N=512,
+        dim=3,
+        num_links=1,
+        input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mem_config_input=mem_config,
+        mem_config_mm=mem_config,
+        mem_config_rs=mem_config,
+        topology=topology,
+        mm_block_m=128,
+        mm_block_k=64,  # K_padded=64=2t, 2 divides 2
+        mm_block_n=64,
+        subblock_h=1,
+        subblock_w=1,
+        mm_core_grid=ttnn.CoreCoord(8, 2),
+        chunk_width_in_mm_blocks=1,
+        rs_mode="fused",
+        cluster_axis=1,
+        virtual_concat=True,
+        virtual_concat_ka=11,  # Ka=11: non-tile-aligned prefix (padded to 32)
     )
 
 
