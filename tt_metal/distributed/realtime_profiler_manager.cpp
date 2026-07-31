@@ -1195,6 +1195,7 @@ void RealtimeProfilerManager::shutdown() {
     // has retired, so read_index == write_index means every entry has landed in the host ring. Poll for that
     // equality rather than waiting out kShutdownKernelExitGrace: draining takes microseconds, and shutdown()
     // runs on every close_device, where suites with a function-scoped `device` fixture pay it per test.
+    const auto deadline = std::chrono::steady_clock::now() + kShutdownKernelExitGrace;
     for (auto& dev_state : devices_) {
         if (dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
             continue;
@@ -1204,7 +1205,6 @@ void RealtimeProfilerManager::shutdown() {
             offsetof(RtProfilerRingBuffer, read_index) ==
                 offsetof(RtProfilerRingBuffer, write_index) + sizeof(uint32_t),
             "write_index and read_index must be adjacent to be read in one shot");
-        const auto deadline = std::chrono::steady_clock::now() + kShutdownKernelExitGrace;
         bool drained = false;
         while (true) {
             std::vector<uint32_t> indices(2, 0);
