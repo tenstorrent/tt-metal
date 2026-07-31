@@ -29,3 +29,35 @@ The manual model calls `ttnn.all_reduce`/`all_gather` even at TP=1 (no `tp==1` s
 1. `pytest tests/pcc/test_mo_e_sharded.py test_image3_decoder_layer_sharded.py test_top_k_gate_sharded.py` on the 4x8 mesh (default EP-off) — confirm the merge didn't regress.
 2. `HUNYUAN_EP_FULLMESH=1 pytest tests/pcc/test_mo_e_sharded.py` — verify EP=32 + shard-shared PCC (expect ~0.999) + `tests/e2e/test_image3_prefill_perf.py` for the +70% t/s/u. If good, flip the default ON.
 3. Apply + verify deferred follow-up #1 (on-device head), then #2 (gen-perf harness).
+
+---
+
+## 2026-07-31 — VERIFICATION UNBLOCKED (fabric recovered)
+
+The inter-chip fabric on `bh-glx-exp-b04u14` RECOVERED (was wedged: Device 0/1 eth
+ch4/5). Confirmed by probe: full `MeshShape(8,4)` opens under FABRIC_1D/2D/2D_TORUS_XY
+and `all_reduce` moves data correctly on BOTH axes, including cluster_axis=1 which
+crosses the historically-dead Device 0<->1 link (got 4.0/expect 4). Sub-meshes still
+never bring fabric up here — only the full 32-chip mesh does.
+
+**Tier-1 single-chip fix landed (commit `09f00b6f00`)** — 3 guards make the mesh model
+run fabric-free at 1 device (`_is_mesh_device` requires >1 dev; `_mesh_reduce` no-ops
+off-mesh; `HY3_SINGLE_CHIP=1` opens a plain device). Behavior-identical for real
+multi-chip.
+
+**All PCC gates GREEN (TT_HY3_PCC=0.95, one 6U Blackhole Galaxy):**
+
+| path | test | PCC |
+|---|---|---|
+| single-chip (fabric-free) | test_mo_e | 0.9996 |
+| single-chip | test_image3_decoder_layer | 0.99999 |
+| single-chip | test_top_k_gate | 1.0 |
+| multi-chip TP=8 (EP off, default) | test_mo_e_sharded | 0.9940 |
+| multi-chip TP=8 | test_image3_decoder_layer_sharded | 0.99999 |
+| multi-chip TP=8 | test_top_k_gate_sharded | 1.0 |
+| multi-chip EP=32+shard-shared (HUNYUAN_EP_FULLMESH=1) | test_mo_e_sharded | 0.9940 |
+| multi-chip EP=32+shard-shared | test_image3_decoder_layer_sharded | 0.99999 |
+
+The EP=32/shard-shared opt-ins are now PCC-verified (were UNVERIFIED). Still gated OFF
+by default — flipping the default should be gated on a perf (device_ms) comparison, not
+just PCC. Remaining deferred: the pipeline lm_head/argmax splice + gen-perf harness.
