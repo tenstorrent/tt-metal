@@ -198,7 +198,10 @@ this: same issue load, reads moved to the other port, and it costs **0.31–0.55
 while being neutral (0.98×) on a single core, where routing is irrelevant. Reads want NoC 0: its
 dimension-ordered east→south routing *disperses* column-localized DRAM traffic, whereas NoC 1's
 north→west *concentrates* it onto the DRAM columns. Writes are the mirror image, which is exactly why
-the reader/writer default pairing is NoC 0 / NoC 1.
+the reader/writer default pairing is NoC 0 / NoC 1. This reproduces the effect `noc_placement`
+measures directly (reads on NoC 0 / writes on NoC 1 being 2.5–4.8× faster than the reverse for spread
+placements) — here it arrives as a side effect of the operand split, since a RISC and its port move
+together.
 
 Splitting the operands puts **half the read traffic on the worse route**. At a bf16 tile page that
 costs more than the second engine gains — hence the 0.63× at 11 cores. At 88 cores DRAM saturation

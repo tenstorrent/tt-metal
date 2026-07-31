@@ -31,6 +31,11 @@ streams, BRISC does nothing during the whole read phase. In a read-heavy phase �
 produced anything for the writer to drain — that second data-movement processor is free capacity
 sitting idle, and everything queues behind one of them.
 
+Taking that capacity is **not free**, and the cost is not obvious: one RISC is one NoC, so handing an
+operand to BRISC also moves it onto NoC 1, which is the *worse* route for DRAM reads. Whether the
+extra engine outweighs that is a measured question with a sign that changes —
+see [*Where this wins and where it does NOT*](#where-this-wins-and-where-it-does-not--core-count--transaction-size).
+
 ## What this isolates — and how
 
 - **Concept:** how many data-movement RISC-Vs fetch two independent operand streams (1 vs 2), and how
@@ -154,39 +159,63 @@ contiguous reads you are closer to the byte side and should expect less.
 
 ## Where this wins and where it does NOT — core count × transaction size
 
-The single-core numbers above are only half the story. Two forces compete, and their balance decides
-the sign. Full tables in [`report.md`](report.md).
+The single-core numbers above do **not** generalize. `two_riscv` vs baseline, payload-ablated,
+`block=8`, per-core work held constant (32 tiles/operand/core) — full tables in
+[`report.md`](report.md):
 
-**Force 1 — issue-rate relief** (what the split buys). Grows as transactions shrink, because cost per
-command is fixed.
+| cores | grid | 2048 B (bf16 tile) | 1024 B | 512 B | 256 B |
+|---|---|---|---|---|---|
+| 1 | 1×1 | 1.32× | 1.58× | 1.73× | **1.85×** |
+| 11 | 11×1 | **0.63× ← regression** | 0.79× | 1.19× | 1.56× |
+| 88 | 11×8 | 1.08× | 1.14× | **1.49×** | **1.74×** |
 
-**Force 2 — the NoC-1 read-route penalty** (what the split costs). Reads want NoC 0: its
-dimension-ordered east→south routing *disperses* column-localized DRAM traffic, whereas NoC 1's
-north→west *concentrates* it onto the DRAM columns (writes are the mirror, which is why the
-reader-NoC0 / writer-NoC1 default exists). Splitting moves **half the read traffic onto the worse
-route**. Measured in isolation with a diagnostic variant that keeps a single-RISC issue load but puts
-*all* reads on NoC 1: **0.98×** on one core (routing irrelevant) but **0.31×** at 11 cores.
+Two forces compete, and their balance sets the sign.
 
-Net effect, `two_riscv` vs baseline, payload-ablated, `block=8`:
+**Force 1 — issue-rate relief** (what the split buys). Cost per NoC command is roughly fixed, so this
+grows as transactions shrink: 1.32× → 1.85× down the single-core row.
 
-| cores | 2048 B (bf16 tile) | 1024 B | 512 B | 256 B |
-|---|---|---|---|---|
-| 1 | 1.32× | 1.58× | 1.73× | **1.85×** |
-| 11 | **0.63×** ← regression | 0.79× | 1.19× | 1.56× |
-| 88 (11×8) | 1.08× | 1.14× | **1.49×** | **1.74×** |
+**Force 2 — the NoC-1 read-route penalty** (what the split costs). **Reads want NoC 0.** The two NoCs
+are dimension-ordered in opposite directions — NoC 0 east→south, NoC 1 north→west — so NoC 0
+*disperses* column-localized DRAM read traffic while NoC 1 *concentrates* it onto the DRAM columns.
+Writes are the mirror image, which is exactly why the reader-NoC0 / writer-NoC1 default pairing
+exists. [`noc_placement`](../noc_placement/README.md) isolates and measures this directly: reads on
+NoC 0 / writes on NoC 1 is **2.5–4.8× faster** than the reverse for spread core placements.
 
-Also measured: aggregate DRAM read bandwidth plateaus at **~400–440 GB/s from 22 cores up**, while
-per-core bandwidth collapses 37 → 4.6 GB/s. At high core counts the read is DRAM-bound, so there is
-little issue-rate headroom left to reclaim — which is why the 2048 B column flattens to ~1.1×.
+**That is what the regression is.** Giving operand B to BRISC necessarily puts it on NoC 1 (one RISC
+is one NoC), so the split moves **half the read traffic onto the worse route** — and buying a second
+issue engine does not pay for it at a 2 KB tile page.
 
-**The rule:** this is a **small-transaction** optimization, not a "more cores" one.
+Measured here in isolation by the `one_riscv_brisc` diagnostic, which keeps the baseline's
+single-RISC issue load but puts *all* reads on NoC 1:
 
-- **Use it** when reads are command-limited: many small transactions. Block-float weight pages land
-  exactly here (a bfp4 tile page is 576 B, bfp8 1088 B), and at ~512 B the split wins at **every**
-  core count tested — 1.19× at 11 cores, 1.49× at 88.
-- **Don't** use it for large, tile-sized reads spread over a moderate core count. At bf16 2048 B on 11
-  cores it is a **0.63× regression**: you pay the NoC-1 read-route penalty and get nothing for it.
-- On a **single core** it always wins, and routing is irrelevant.
+| cores | all reads on NoC 1, vs all on NoC 0 |
+|---|---|
+| 1 | 0.98× — routing is irrelevant on one core |
+| 11 | **0.31×** |
+| 22 | 0.37× |
+| 44 | 0.47× |
+| 88 | 0.55× |
+
+Consistent with `noc_placement`, and it explains the shape of the first table: the penalty is absent
+at one core, worst at 11, and shrinks as the grid grows.
+
+**Why 88 cores recovers to ~1.1×:** DRAM saturates. Aggregate read bandwidth plateaus at **~400–440
+GB/s from 22 cores up** while per-core bandwidth collapses 37 → 4.6 GB/s. Once the read is
+DRAM-bound, neither force has much left to express, so both the win and the penalty flatten out.
+
+**Why small transactions flip the sign:** they push both forces the same way — issue cost rises
+*and* the NoC-1 penalty fades (0.31× → 0.95× at 11 cores, because per-command cost starts to dominate
+routing). By ~512 B the split is a win at every core count tested.
+
+**The rule: this is a small-transaction optimization, not a "more cores" one.**
+
+- **Use it** when reads are command-limited — many small transactions. Block-float weight pages sit
+  exactly there (a bfp4 tile page is 576 B, bfp8 1088 B), and at ~512 B the split wins at **every**
+  core count tested: 1.19× at 11 cores, 1.49× at 88, 1.85× on one core.
+- **Don't** use it for large, tile-sized reads spread over a moderate core count — at bf16 2048 B on
+  11 cores it is a **0.63× regression**, because you pay the NoC-1 read-route penalty for nothing.
+- On a **single core** it always wins, and routing does not matter.
+- If you are already DRAM-bandwidth-bound, expect little either way.
 
 ## Gist — how to apply it
 

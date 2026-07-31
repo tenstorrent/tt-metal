@@ -13,8 +13,13 @@ other. Written the natural way, ONE reader fetches both in series and BRISC does
 whole read phase — so every read queues behind a single data-movement processor.
 
 The trick isolated here: give one operand to each data-movement RISC so both issue concurrently.
-It costs nothing while BRISC has no output to drain — the read-heavy phase before compute has
-produced anything to write.
+BRISC is free to take it during the read-heavy phase, before compute has produced anything to write.
+
+It is NOT free, though: one RISC is one NoC, so handing an operand to BRISC also moves it onto
+NoC 1 — and NoC 1 is the worse route for DRAM reads at spread core placements (NoC 0's east->south
+routing disperses column-localized DRAM traffic; NoC 1's north->west concentrates it). Whether the
+extra issue engine outweighs that depends on transaction size and core count: at a bf16 tile page on
+a mid-size grid it does not, and the split is a REGRESSION. See README.md for the measured matrix.
 
   one_riscv     (BASELINE)  NCRISC reads A and B, both on NoC 0. BRISC idle.
   two_riscv                 NCRISC reads A on NoC 0; BRISC reads B on NoC 1. Each RISC OWNS its own
