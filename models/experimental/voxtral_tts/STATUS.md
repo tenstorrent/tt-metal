@@ -473,8 +473,21 @@ up, each a hard TT_FATAL, found one at a time:
    fails with "No core coordinate found at location: (8, 0, TENSIX, LOGICAL)". So the activation
    shards over at most 8 cores here (3072/8 = 384, tile-aligned), not 12;
 3. the OUTPUT memory config must be sharded as well.
-Plus model_config.py:716 warns a per_core_N mismatch against the DRAM shard width gives **silently
-bad PCC**, so any attempt needs the integer-code gate wired in from the start.
+4. **`M` must be exactly ONE tile** — `TT_FATAL(M == 1, "currently only support in0 tensor height of
+   tile height")`, matmul_device_operation.cpp:1245. Our folded trunk qualifies (6 rows in one tile);
+   anything taller does not, so `M=64` is categorically unsupported.
+
+With all four satisfied at `M=32`, it still fails to build: **circular buffers grow to 1,678,528 B
+against L1's 1,499,136 B**, ~175 KB over. With only 8 compute cores and N=9216, `per_core_N` is 36
+tiles and the streaming buffers plus the output shard do not fit. Shrinking `per_core_N` means more
+cores — `K/cores` must stay tile-aligned so cores must divide 96, and 48 would give `per_core_N=6` —
+but the weight shard lives on the **DRAM** grid (12 banks, y=1) while the activation lives on a
+**Tensix** grid, so the two grids cannot both be 48, and that is exactly the `per_core_N` vs DRAM
+shard width mismatch model_config.py:716 warns gives **silently bad PCC**.
+
+So this needs a deliberate design pass reconciling three grids (DRAM banks, compute cores,
+`per_core_N`) under an L1 budget, with the integer-code gate wired in from the first run. Not a
+drop-in.
 
 **The ceiling is modest.** After the batch fold, a plain interleaved matmul at this shape already
 runs at **192 GB/s, ~66% of peak**, so perfect sharding is worth at most ~1.5x on the matmuls, and
