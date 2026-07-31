@@ -168,6 +168,12 @@ private:
     // Base (local DRISC L1) of this prefetcher's per-CQ signal slots; uniform
     // across all sender cores. Carved at the front of the kernel working region.
     uint32_t cq_signal_l1_addr_ = 0;
+    // Distance between consecutive signal slots. The slots hold one uint32 each but are
+    // spaced a full L1 alignment apart: each is the destination of its own dispatcher
+    // write, and a dispatch write only lands on an L1-aligned address. Packed 4 bytes
+    // apart, every slot but the first would be misaligned and its write would go nowhere,
+    // leaving the kernel spinning on a WAIT_CQ that is never satisfied.
+    uint32_t cq_signal_slot_stride_ = 0;
     // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
     // pre-increments cq_signal_counter_[cq.id()] and uses it for both the dispatcher
     // write and the WAIT_CQ request value.

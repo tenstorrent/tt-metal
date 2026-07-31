@@ -493,6 +493,7 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
                 kRemoteCBId,
                 socket_page_size,
                 cq_signal_l1_addr_,
+                cq_signal_slot_stride_,
             };
 
             KernelHandle kernel_id = CreateKernel(
@@ -543,10 +544,12 @@ void TensorPrefetcherManager::start() {
     const uint32_t socket_config_bytes = align_up(sizeof(receiver_socket_md), pcie_alignment_for_layout);
     const uint32_t socket_data_bytes = socket_fifo_size_for_layout + pcie_alignment_for_layout;
     const uint32_t kernel_region_base = static_cast<uint32_t>(arena.kernel_working_region_base());
-    // Per-CQ signal slots at the front of the region: a small uint32 counter per
-    // command queue, written by the dispatcher for WaitForCqOnTensorPrefetcher
-    // and polled by the kernel's WAIT_CQ handler.
-    const uint32_t cq_signal_bytes = align_up(kNumCqSignalSlots * sizeof(uint32_t), l1_alignment);
+    // Per-CQ signal slots at the front of the region: a uint32 counter per command
+    // queue, written by the dispatcher for WaitForCqOnTensorPrefetcher and polled by
+    // the kernel's WAIT_CQ handler. One L1 alignment apiece rather than packed — see
+    // cq_signal_slot_stride_.
+    cq_signal_slot_stride_ = l1_alignment;
+    const uint32_t cq_signal_bytes = kNumCqSignalSlots * cq_signal_slot_stride_;
     cq_signal_l1_addr_ = align_up(kernel_region_base, l1_alignment);
     socket_config_l1_addr_ = align_up(cq_signal_l1_addr_ + cq_signal_bytes, pcie_alignment_for_layout);
     socket_data_l1_addr_ = align_up(socket_config_l1_addr_ + socket_config_bytes, pcie_alignment_for_layout);
@@ -1049,7 +1052,7 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
                                             .hal()
                                             .get_l1_noc_offset(HalProgrammableCoreType::DRAM);
     const uint64_t slot_addr = static_cast<uint64_t>(cq_signal_l1_addr_) +
-                               static_cast<uint64_t>(cq_id) * sizeof(uint32_t) + dram_l1_noc_offset;
+                               static_cast<uint64_t>(cq_id) * cq_signal_slot_stride_ + dram_l1_noc_offset;
 
     std::vector<DeviceMemoryAddress> targets;
     targets.reserve(target_devices.size() * num_senders_);
