@@ -441,6 +441,19 @@ trunk as `[1, B*3, 3072]` and only splits the batch out for attention. **Worth 2
 prompts including a 458-frame clip. This is what the "13% of DRAM peak" figure actually was: a single
 matmul reaches 66% of peak, and CFG batching was throwing half of it away.
 
+**Corollary — ~26 of 32 tile rows are still free, and that is throughput for nothing.** `[1,32,K]`
+costs the same as `[1,6,K]` (0.294 vs 0.293 ms), and the fold uses only 6. Nothing in a single
+utterance can use the rest: the Euler steps are sequential and frames are autoregressive. But
+CONCURRENT REQUESTS fit exactly — 5 simultaneous utterances fold to 30 rows at essentially the same
+per-frame cost, i.e. ~5x throughput free. Latency per stream would not improve; only throughput.
+
+Running the two CFG branches as separate passes instead of folding was measured and is strictly
+worse: 2 passes cost 0.586 ms against 0.293 folded, exactly 2x. Passing the SAME weight tensor to
+both costs the same as two different weights (0.586 vs 0.587), which shows there is no cross-op
+weight reuse -- every `ttnn.linear` streams its weights from DRAM independently. There is also no
+parallelism to win on one device: a single matmul already spans the core grid and both branches want
+the same bytes from the same DRAM. On two devices it would be a different question.
+
 It also makes bfp8 weights unnecessary: bf16 **with** the fold (61.3 ms) beats bfp8 **without** it
 (98.3 ms). `WEIGHT_DTYPE` stays `None`; bfp8 remains measured and available but costs accuracy for
 less than the free fix delivers.
