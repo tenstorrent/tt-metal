@@ -119,6 +119,14 @@ def _record_baseline_anchor(profile: dict, model: str = "", task: str = "") -> N
         )
         led = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(led)
+        # The SAME predicate perf_mcp guards its anchor with -- loaded by path for the same reason
+        # the ledger is (the package pulls in device deps that must not load at import time).
+        _pm_spec = _ilu.spec_from_file_location(
+            "_cc_perf_mcp_credible", str(Path(__file__).resolve().parent.parent / "cc_optimize" / "perf_mcp.py")
+        )
+        _pm = _ilu.module_from_spec(_pm_spec)
+        _pm_spec.loader.exec_module(_pm)
+        _is_credible_profile = _pm._is_credible_profile
         ms = (profile or {}).get("device_ms")
         # Stamp the depth this was profiled at; an unstamped number is how a 2-layer reading once
         # anchored a 16-layer run.
@@ -127,6 +135,19 @@ def _record_baseline_anchor(profile: dict, model: str = "", task: str = "") -> N
         task = task or os.environ.get("PERF_MCP_TASK", "main")
         seen = led.first(led.KIND_EAGER, led.PHASE_BEFORE, model=model, task=task)
         phase = led.PHASE_AFTER if seen else led.PHASE_BEFORE
+        # NEVER PIN A CAPTURE THE RUN IS ABOUT TO REJECT. This anchor is written ~12 lines before the
+        # degeneracy guard below (`device_ms <= 0 or _struct_ops == 0` -> "refusing to optimize
+        # against it"), and anchors are WRITE-ONCE -- so a partial capture claims the BEFORE slot and
+        # the good measurement from the retry lands as an AFTER, unable to displace it. gemma-3-12b-it
+        # on 2026-07-31 pinned device_ms=0.1004 (0 structural ops) this way, and every eager
+        # "gain vs baseline" for that run was then computed against 0.1 ms.
+        #
+        # perf_mcp._ledger_record has always had this guard; _record_baseline_anchor was written by
+        # copying that function and dropping it. Reuse the SAME predicate rather than restating it,
+        # so the two cannot drift. AFTER readings are unaffected: they are not anchors, and refusing
+        # them would silently discard real measurements.
+        if phase == led.PHASE_BEFORE and not _is_credible_profile(profile):
+            return
         led.record(led.KIND_EAGER, phase, ms, depth=depth, mode="eager", source="before_loop", model=model, task=task)
         _tr = led.trace_ms_from_profile(profile)
         if _tr:
