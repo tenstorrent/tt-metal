@@ -20,6 +20,42 @@
 using namespace tt::tt_fabric;
 namespace builder_config = tt::tt_fabric::builder_config;
 
+namespace {
+
+// Connection groupings that used to be type-driven, now read off directions: boundary traffic is
+// identified by the Z direction (toward/from the boundary); everything else is cardinal.
+std::vector<RouterConnectionRecord> get_cardinal_connections(const std::shared_ptr<ConnectionRegistry>& registry) {
+    std::vector<RouterConnectionRecord> out;
+    for (const auto& c : registry->get_all_connections()) {
+        if (c.dest_direction != RoutingDirection::Z) {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+std::vector<RouterConnectionRecord> get_zward_connections(const std::shared_ptr<ConnectionRegistry>& registry) {
+    std::vector<RouterConnectionRecord> out;
+    for (const auto& c : registry->get_all_connections()) {
+        if (c.dest_direction == RoutingDirection::Z) {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+std::vector<RouterConnectionRecord> get_fromz_connections(const std::shared_ptr<ConnectionRegistry>& registry) {
+    std::vector<RouterConnectionRecord> out;
+    for (const auto& c : registry->get_all_connections()) {
+        if (c.source_direction == RoutingDirection::Z) {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
 class ZRouterIntegrationTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -39,8 +75,7 @@ protected:
         RoutingDirection dst_dir,
         uint8_t dst_chan,
         uint32_t dst_vc,
-        uint32_t dst_receiver,
-        ConnectionType type) {
+        uint32_t dst_receiver) {
         registry_->record_connection(RouterConnectionRecord{
             .source_node = src_node,
             .source_direction = src_dir,
@@ -52,7 +87,6 @@ protected:
             .dest_eth_chan = dst_chan,
             .dest_vc = dst_vc,
             .dest_sender_channel = dst_receiver,
-            .connection_type = type
         });
     }
 };
@@ -73,29 +107,39 @@ TEST_F(ZRouterIntegrationTest, FullDevice_4Mesh1Z_BidirectionalConnectivity) {
     // MESH_TO_Z: All 4 mesh routers → Z router VC0 (multi-target receiver)
     for (size_t i = 0; i < 4; ++i) {
         record_connection(
-            device0, mesh_dirs[i], static_cast<uint8_t>(i),
-            0, builder_config::num_sender_channels_2d_mesh,  // VC0, MESH_TO_Z channel
-            device0, RoutingDirection::Z, 4,
-            0, 0,  // Z VC0 receiver 0 (SAME for all - multi-target)
-            ConnectionType::MESH_TO_Z);
+            device0,
+            mesh_dirs[i],
+            static_cast<uint8_t>(i),
+            0,
+            builder_config::num_sender_channels_2d_mesh,  // VC0, MESH_TO_Z channel
+            device0,
+            RoutingDirection::Z,
+            4,
+            0,
+            0);  //  Z VC0 receiver 0 (SAME for all - multi-target)
     }
 
     // Z_TO_MESH: Z router VC1 senders 0-3 → 4 mesh routers (one-to-one)
     for (size_t i = 0; i < 4; ++i) {
         record_connection(
-            device0, RoutingDirection::Z, 4,
-            1, static_cast<uint32_t>(i),  // Z VC1 sender i
-            device0, mesh_dirs[i], static_cast<uint8_t>(i),
-            1, 0,  // mesh VC1 receiver
-            ConnectionType::Z_TO_MESH);
+            device0,
+            RoutingDirection::Z,
+            4,
+            1,
+            static_cast<uint32_t>(i),  // Z VC1 sender i
+            device0,
+            mesh_dirs[i],
+            static_cast<uint8_t>(i),
+            1,
+            0);  //  mesh VC1 receiver
     }
 
     // Validate total connections
     EXPECT_EQ(registry_->size(), 8) << "Should have 8 total connections (4 MESH_TO_Z + 4 Z_TO_MESH)";
 
     // Validate by type
-    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
-    auto z_to_mesh = registry_->get_connections_by_type(ConnectionType::Z_TO_MESH);
+    auto mesh_to_z = get_zward_connections(registry_);
+    auto z_to_mesh = get_fromz_connections(registry_);
 
     EXPECT_EQ(mesh_to_z.size(), 4) << "Should have 4 MESH_TO_Z connections";
     EXPECT_EQ(z_to_mesh.size(), 4) << "Should have 4 Z_TO_MESH connections";
@@ -135,7 +179,13 @@ TEST_F(ZRouterIntegrationTest, FullDevice_4Mesh1Z_BidirectionalConnectivity) {
 
 TEST_F(ZRouterIntegrationTest, ConnectionMapping_ZRouter_AllDirections) {
     // Test that Z router connection mapping specifies all 4 directions
-    auto mapping = RouterConnectionMapping::for_z_router();
+    auto mapping = RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
+        ZPortRole::INTERMESH_BOUNDARY,
+        /*express_routing_enabled=*/false,
+        /*enable_vc1=*/true);
 
     // Z router VC1 receiver channel 0 should have 4 targets for N/E/S/W
     std::vector<RoutingDirection> expected_dirs = {
@@ -151,22 +201,30 @@ TEST_F(ZRouterIntegrationTest, ConnectionMapping_ZRouter_AllDirections) {
             return t.target_direction == expected_dir;
         });
         ASSERT_NE(it, targets.end()) << "Missing direction: " << static_cast<int>(expected_dir);
-        EXPECT_EQ(it->type, ConnectionType::Z_TO_MESH);
+        EXPECT_TRUE(it->target_direction.has_value());
+        EXPECT_NE(it->target_direction.value(), RoutingDirection::Z);
         EXPECT_EQ(it->target_vc, 1) << "Should target mesh VC1";
     }
 }
 
 TEST_F(ZRouterIntegrationTest, ConnectionMapping_MeshWithZ_HasMeshToZTarget) {
     // Test that mesh routers with Z have MESH_TO_Z connection
-    auto mapping = RouterConnectionMapping::for_mesh_router(
-        Topology::Mesh, RoutingDirection::N, true);  // has_z = true
+    auto mapping = RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        (true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
+        false,
+        false,
+        false);  // has_z = true
 
     // Receiver channel 0 should have MESH_TO_Z target among its targets
     auto targets = mapping.get_downstream_targets(0, 0);
     ASSERT_EQ(targets.size(), 4) << "Receiver channel 0 should have 4 targets";
 
-    auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(),
-        [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+    auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(), [](const ConnectionTarget& t) {
+        return t.target_direction == RoutingDirection::Z;
+    });
     ASSERT_NE(mesh_to_z_it, targets.end()) << "Should have MESH_TO_Z target";
 
     EXPECT_EQ(mesh_to_z_it->target_vc, 0) << "Should target Z VC0";
@@ -187,26 +245,36 @@ TEST_F(ZRouterIntegrationTest, EdgeDevice_2Mesh1Z_MinimalConfiguration) {
     // MESH_TO_Z: 2 mesh routers → Z router
     for (size_t i = 0; i < 2; ++i) {
         record_connection(
-            device0, mesh_dirs[i], static_cast<uint8_t>(i),
-            0, builder_config::num_sender_channels_2d_mesh,
-            device0, RoutingDirection::Z, 4,
-            0, 0,
-            ConnectionType::MESH_TO_Z);
+            device0,
+            mesh_dirs[i],
+            static_cast<uint8_t>(i),
+            0,
+            builder_config::num_sender_channels_2d_mesh,
+            device0,
+            RoutingDirection::Z,
+            4,
+            0,
+            0);
     }
 
     // Z_TO_MESH: Z router → 2 mesh routers (only N and E)
     for (size_t i = 0; i < 2; ++i) {
         record_connection(
-            device0, RoutingDirection::Z, 4,
-            1, static_cast<uint32_t>(i),  // Z uses senders 0 (N) and 1 (E)
-            device0, mesh_dirs[i], static_cast<uint8_t>(i),
-            1, 0,
-            ConnectionType::Z_TO_MESH);
+            device0,
+            RoutingDirection::Z,
+            4,
+            1,
+            static_cast<uint32_t>(i),  // Z uses senders 0 (N) and 1 (E)
+            device0,
+            mesh_dirs[i],
+            static_cast<uint8_t>(i),
+            1,
+            0);
     }
 
     EXPECT_EQ(registry_->size(), 4) << "Should have 4 total connections (2 each direction)";
-    EXPECT_EQ(registry_->get_connections_by_type(ConnectionType::MESH_TO_Z).size(), 2);
-    EXPECT_EQ(registry_->get_connections_by_type(ConnectionType::Z_TO_MESH).size(), 2);
+    EXPECT_EQ(get_zward_connections(registry_).size(), 2);
+    EXPECT_EQ(get_fromz_connections(registry_).size(), 2);
 }
 
 TEST_F(ZRouterIntegrationTest, EdgeDevice_3Mesh1Z_PartialConfiguration) {
@@ -220,26 +288,36 @@ TEST_F(ZRouterIntegrationTest, EdgeDevice_3Mesh1Z_PartialConfiguration) {
     // MESH_TO_Z: 3 mesh routers → Z router
     for (size_t i = 0; i < 3; ++i) {
         record_connection(
-            device0, mesh_dirs[i], static_cast<uint8_t>(i),
-            0, builder_config::num_sender_channels_2d_mesh,
-            device0, RoutingDirection::Z, 4,
-            0, 0,
-            ConnectionType::MESH_TO_Z);
+            device0,
+            mesh_dirs[i],
+            static_cast<uint8_t>(i),
+            0,
+            builder_config::num_sender_channels_2d_mesh,
+            device0,
+            RoutingDirection::Z,
+            4,
+            0,
+            0);
     }
 
     // Z_TO_MESH: Z router → 3 mesh routers
     for (size_t i = 0; i < 3; ++i) {
         record_connection(
-            device0, RoutingDirection::Z, 4,
-            1, static_cast<uint32_t>(i),
-            device0, mesh_dirs[i], static_cast<uint8_t>(i),
-            1, 0,
-            ConnectionType::Z_TO_MESH);
+            device0,
+            RoutingDirection::Z,
+            4,
+            1,
+            static_cast<uint32_t>(i),
+            device0,
+            mesh_dirs[i],
+            static_cast<uint8_t>(i),
+            1,
+            0);
     }
 
     EXPECT_EQ(registry_->size(), 6) << "Should have 6 total connections (3 each direction)";
-    EXPECT_EQ(registry_->get_connections_by_type(ConnectionType::MESH_TO_Z).size(), 3);
-    EXPECT_EQ(registry_->get_connections_by_type(ConnectionType::Z_TO_MESH).size(), 3);
+    EXPECT_EQ(get_zward_connections(registry_).size(), 3);
+    EXPECT_EQ(get_fromz_connections(registry_).size(), 3);
 }
 
 TEST_F(ZRouterIntegrationTest, VariableMeshCount_AllConfigurations) {
@@ -266,7 +344,6 @@ TEST_F(ZRouterIntegrationTest, VariableMeshCount_AllConfigurations) {
                 .dest_eth_chan = 4,
                 .dest_vc = 0,
                 .dest_sender_channel = 0,
-                .connection_type = ConnectionType::MESH_TO_Z
             });
 
             // Z_TO_MESH
@@ -281,14 +358,13 @@ TEST_F(ZRouterIntegrationTest, VariableMeshCount_AllConfigurations) {
                 .dest_eth_chan = static_cast<uint8_t>(i),
                 .dest_vc = 1,
                 .dest_sender_channel = 0,
-                .connection_type = ConnectionType::Z_TO_MESH
             });
         }
 
         EXPECT_EQ(local_registry->size(), num_mesh * 2)
             << "With " << num_mesh << " mesh routers, should have " << (num_mesh * 2) << " connections";
-        EXPECT_EQ(local_registry->get_connections_by_type(ConnectionType::MESH_TO_Z).size(), num_mesh);
-        EXPECT_EQ(local_registry->get_connections_by_type(ConnectionType::Z_TO_MESH).size(), num_mesh);
+        EXPECT_EQ(get_zward_connections(local_registry).size(), num_mesh);
+        EXPECT_EQ(get_fromz_connections(local_registry).size(), num_mesh);
     }
 }
 
@@ -362,36 +438,32 @@ TEST_F(ZRouterIntegrationTest, NoZRouter_NoMeshToZConnections) {
     FabricNodeId device0(MeshId{0}, 0);
 
     // Only INTRA_MESH connections
-    record_connection(
-        device0, RoutingDirection::N, 0,
-        0, 1,
-        device0, RoutingDirection::S, 2,
-        0, 1,
-        ConnectionType::INTRA_MESH);
+    record_connection(device0, RoutingDirection::N, 0, 0, 1, device0, RoutingDirection::S, 2, 0, 1);
 
-    record_connection(
-        device0, RoutingDirection::E, 1,
-        0, 1,
-        device0, RoutingDirection::W, 3,
-        0, 1,
-        ConnectionType::INTRA_MESH);
+    record_connection(device0, RoutingDirection::E, 1, 0, 1, device0, RoutingDirection::W, 3, 0, 1);
 
     EXPECT_EQ(registry_->size(), 2);
-    EXPECT_EQ(registry_->get_connections_by_type(ConnectionType::MESH_TO_Z).size(), 0);
-    EXPECT_EQ(registry_->get_connections_by_type(ConnectionType::Z_TO_MESH).size(), 0);
-    EXPECT_EQ(registry_->get_connections_by_type(ConnectionType::INTRA_MESH).size(), 2);
+    EXPECT_EQ(get_zward_connections(registry_).size(), 0);
+    EXPECT_EQ(get_fromz_connections(registry_).size(), 0);
+    EXPECT_EQ(get_cardinal_connections(registry_).size(), 2);
 }
 
 TEST_F(ZRouterIntegrationTest, ConnectionMapping_MeshWithoutZ_NoMeshToZ) {
     // Mesh router without Z should not have MESH_TO_Z target
-    auto mapping = RouterConnectionMapping::for_mesh_router(
-        Topology::Mesh, RoutingDirection::N, false);  // has_z = false
+    auto mapping = RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        ZPortRole::NONE,
+        false,
+        false,
+        false);  // has_z = false
 
     // Check all sender channels - none should have MESH_TO_Z
     for (uint32_t ch = 0; ch < 5; ++ch) {
         auto targets = mapping.get_downstream_targets(0, ch);
         for (const auto& target : targets) {
-            EXPECT_NE(target.type, ConnectionType::MESH_TO_Z)
+            EXPECT_NE(target.target_direction, RoutingDirection::Z)
                 << "Mesh router without Z should not have MESH_TO_Z connections";
         }
     }
@@ -401,7 +473,13 @@ TEST_F(ZRouterIntegrationTest, ConnectionMapping_ZRouter_VC0_CannotBeDownstreamT
     // Validate that Z router connection mapping never specifies Z VC0 as a downstream target
     // Z VC0 senders don't forward anywhere, so no router should target them
 
-    auto z_mapping = RouterConnectionMapping::for_z_router();
+    auto z_mapping = RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
+        ZPortRole::INTERMESH_BOUNDARY,
+        /*express_routing_enabled=*/false,
+        /*enable_vc1=*/true);
 
     // Check all Z router sender channels (VC0 and VC1)
     constexpr uint32_t num_z_router_sender_channels_per_vc = 4;
@@ -412,7 +490,7 @@ TEST_F(ZRouterIntegrationTest, ConnectionMapping_ZRouter_VC0_CannotBeDownstreamT
             // For each target, verify it's not pointing to a Z router VC0
             for (const auto& target : targets) {
                 // Z_TO_MESH should target mesh VC1, not Z VC0
-                if (target.type == ConnectionType::Z_TO_MESH) {
+                if (target.target_direction != RoutingDirection::Z) {
                     EXPECT_EQ(target.target_vc, 1) << "Z_TO_MESH should target mesh VC1, not VC0";
                     EXPECT_TRUE(target.target_direction.has_value());
                     EXPECT_NE(target.target_direction.value(), RoutingDirection::Z)
@@ -423,14 +501,21 @@ TEST_F(ZRouterIntegrationTest, ConnectionMapping_ZRouter_VC0_CannotBeDownstreamT
     }
 
     // Also check mesh router mappings - they should target Z VC0 receiver, not sender
-    auto mesh_mapping = RouterConnectionMapping::for_mesh_router(
-        Topology::Mesh, RoutingDirection::N, true);  // has_z = true
+    auto mesh_mapping = RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        (true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
+        false,
+        false,
+        false);  // has_z = true
 
     auto mesh_targets = mesh_mapping.get_downstream_targets(0, 0);
     ASSERT_EQ(mesh_targets.size(), 4);  // 3 INTRA_MESH + 1 MESH_TO_Z
 
-    auto mesh_to_z_it = std::find_if(mesh_targets.begin(), mesh_targets.end(),
-        [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+    auto mesh_to_z_it = std::find_if(mesh_targets.begin(), mesh_targets.end(), [](const ConnectionTarget& t) {
+        return t.target_direction == RoutingDirection::Z;
+    });
     ASSERT_NE(mesh_to_z_it, mesh_targets.end());
 
     EXPECT_EQ(mesh_to_z_it->target_vc, 0) << "MESH_TO_Z should target Z VC0 (receiver)";
@@ -442,7 +527,13 @@ TEST_F(ZRouterIntegrationTest, ConnectionMapping_ZRouter_VC0_CannotBeDownstreamT
 
 TEST_F(ZRouterIntegrationTest, ZRouter_VC0_NoOutgoingConnections) {
     // Z router VC0 should have no outgoing connections (reserved for future use)
-    auto mapping = RouterConnectionMapping::for_z_router();
+    auto mapping = RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
+        ZPortRole::INTERMESH_BOUNDARY,
+        /*express_routing_enabled=*/false,
+        /*enable_vc1=*/true);
 
     // Check all VC0 sender channels - none should have downstream targets
     for (uint32_t ch = 0; ch < 4; ++ch) {
@@ -462,16 +553,20 @@ TEST_F(ZRouterIntegrationTest, ZRouter_VC0_NoDownstreamReceiverConnections) {
 
     // Valid: MESH_TO_Z targets Z VC0 receiver (not sender)
     record_connection(
-        device0, RoutingDirection::N, 0,
-        0, builder_config::num_sender_channels_2d_mesh,  // mesh VC0 MESH_TO_Z channel
-        device0, RoutingDirection::Z, 4,
-        0, 0,  // Z VC0 receiver 0 (CORRECT)
-        ConnectionType::MESH_TO_Z);
-
+        device0,
+        RoutingDirection::N,
+        0,
+        0,
+        builder_config::num_sender_channels_2d_mesh,  // mesh VC0 MESH_TO_Z channel
+        device0,
+        RoutingDirection::Z,
+        4,
+        0,
+        0);  //  Z VC0 receiver 0 (CORRECT)
     EXPECT_EQ(registry_->size(), 1);
 
     // Verify the connection targets the receiver, not a sender
-    auto connections = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    auto connections = get_zward_connections(registry_);
     ASSERT_EQ(connections.size(), 1);
 
     const auto& conn = connections[0];
@@ -492,14 +587,19 @@ TEST_F(ZRouterIntegrationTest, MultiTargetReceiver_SingleZReceiverChannel) {
 
     for (size_t i = 0; i < 4; ++i) {
         record_connection(
-            device0, mesh_dirs[i], static_cast<uint8_t>(i),
-            0, builder_config::num_sender_channels_2d_mesh,
-            device0, RoutingDirection::Z, 4,
-            0, 0,  // All target same receiver
-            ConnectionType::MESH_TO_Z);
+            device0,
+            mesh_dirs[i],
+            static_cast<uint8_t>(i),
+            0,
+            builder_config::num_sender_channels_2d_mesh,
+            device0,
+            RoutingDirection::Z,
+            4,
+            0,
+            0);  //  All target same receiver
     }
 
-    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    auto mesh_to_z = get_zward_connections(registry_);
     ASSERT_EQ(mesh_to_z.size(), 4);
 
     // All should target same receiver
@@ -520,8 +620,8 @@ TEST_F(ZRouterIntegrationTest, AllTopologies_MeshMappingWorks) {
     };
 
     for (auto topology : topologies) {
-        auto mapping = RouterConnectionMapping::for_mesh_router(
-            topology, RoutingDirection::N, false);
+        auto mapping = RouterConnectionMapping::for_router(
+            topology, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, ZPortRole::NONE, false, false, false);
 
         // Should be able to create mapping without errors
         EXPECT_NO_THROW({
@@ -532,15 +632,22 @@ TEST_F(ZRouterIntegrationTest, AllTopologies_MeshMappingWorks) {
 
 TEST_F(ZRouterIntegrationTest, LinearTopology_NoMeshToZ) {
     // Linear topology with Z should still work (though unusual configuration)
-    auto mapping = RouterConnectionMapping::for_mesh_router(
-        Topology::Linear, RoutingDirection::N, true);  // has_z = true
+    auto mapping = RouterConnectionMapping::for_router(
+        Topology::Linear,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        (true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
+        false,
+        false,
+        false);  // has_z = true
 
     // Linear receiver channel 0 should have 2 targets (1 INTRA_MESH + 1 MESH_TO_Z)
     auto targets = mapping.get_downstream_targets(0, 0);
     ASSERT_EQ(targets.size(), 2);
 
-    auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(),
-        [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+    auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(), [](const ConnectionTarget& t) {
+        return t.target_direction == RoutingDirection::Z;
+    });
     ASSERT_NE(mesh_to_z_it, targets.end());
 }
 
@@ -565,18 +672,23 @@ TEST_F(ZRouterIntegrationTest, ZRouter_VC1_ExceedsMaxMeshRouters) {
 
     for (size_t i = 0; i < 5; ++i) {
         record_connection(
-            device0, invalid_dirs[i], static_cast<uint8_t>(i % 4),
-            0, builder_config::num_sender_channels_2d_mesh,
-            device0, RoutingDirection::Z, 4,
-            0, 0,  // All target same receiver (multi-target)
-            ConnectionType::MESH_TO_Z);
+            device0,
+            invalid_dirs[i],
+            static_cast<uint8_t>(i % 4),
+            0,
+            builder_config::num_sender_channels_2d_mesh,
+            device0,
+            RoutingDirection::Z,
+            4,
+            0,
+            0);  //  All target same receiver (multi-target)
     }
 
     // Should have 5 connections recorded
     EXPECT_EQ(registry_->size(), 5);
 
     // But this is invalid - Z router VC1 receiver can only accept 4 unique directions
-    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    auto mesh_to_z = get_zward_connections(registry_);
     EXPECT_EQ(mesh_to_z.size(), 5);
 
     // TODO: Add validation in ConnectionRegistry or builder to detect duplicate directions
@@ -587,8 +699,8 @@ TEST_F(ZRouterIntegrationTest, ZRouter_VC1_ExceedsMaxMeshRouters) {
 TEST_F(ZRouterIntegrationTest, MeshRouter_ConnectToNonExistentVC) {
     // Negative test: Mesh router should not be able to connect to non-existent VC
 
-    auto mapping = RouterConnectionMapping::for_mesh_router(
-        Topology::Mesh, RoutingDirection::N, false);
+    auto mapping = RouterConnectionMapping::for_router(
+        Topology::Mesh, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, ZPortRole::NONE, false, false, false);
 
     // Try to query VC2 (doesn't exist)
     auto targets = mapping.get_downstream_targets(2, 0);
@@ -600,8 +712,8 @@ TEST_F(ZRouterIntegrationTest, MeshRouter_ConnectToNonExistentVC) {
 TEST_F(ZRouterIntegrationTest, MeshRouter_ConnectToNonExistentSenderChannel) {
     // Negative test: Mesh router should not be able to connect to non-existent sender channel
 
-    auto mapping = RouterConnectionMapping::for_mesh_router(
-        Topology::Mesh, RoutingDirection::N, false);
+    auto mapping = RouterConnectionMapping::for_router(
+        Topology::Mesh, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, ZPortRole::NONE, false, false, false);
 
     // Mesh VC0 has 4 sender channels (0-3), try to query channel 10
     auto targets = mapping.get_downstream_targets(0, 10);
@@ -613,7 +725,13 @@ TEST_F(ZRouterIntegrationTest, MeshRouter_ConnectToNonExistentSenderChannel) {
 TEST_F(ZRouterIntegrationTest, ZRouter_QueryInvalidVC) {
     // Negative test: Z router has 2 VCs (0-1), querying VC2+ should return empty
 
-    auto mapping = RouterConnectionMapping::for_z_router();
+    auto mapping = RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
+        ZPortRole::INTERMESH_BOUNDARY,
+        /*express_routing_enabled=*/false,
+        /*enable_vc1=*/true);
 
     // Try to query VC2 (doesn't exist)
     auto targets = mapping.get_downstream_targets(2, 0);

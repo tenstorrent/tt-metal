@@ -104,7 +104,8 @@ static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
 // widening needs no new flow-control resource.
 static constexpr std::size_t num_downstream_edms_2d_vc0_express = 4;
 static constexpr std::size_t num_downstream_edms_2d_vc1 = 3;  // XY intermesh: 3 mesh directions
-static constexpr std::size_t num_downstream_edms_2d_vc1_with_z = 4;  // Z intermesh: 3 mesh + Z
+static constexpr std::size_t num_downstream_edms_2d_vc1_wide =
+    4;  // widest VC1 fanout: 3 mesh + Z (Z-intermesh boundary or express)
 static constexpr std::size_t num_downstream_edms_1d = num_downstream_edms_vc0;
 static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_2d_vc1;
 static constexpr std::size_t max_downstream_edms = 8;

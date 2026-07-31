@@ -53,13 +53,6 @@ public:
     void configure_connection(
         FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) override;
 
-    /**
-     * Configure local connections between routers on the same device (e.g., mesh↔Z)
-     *
-     * @param local_routers Map of direction → router builder for all routers on this device
-     */
-    void configure_local_connections(const std::map<RoutingDirection, FabricRouterBuilder*>& local_routers) override;
-
     void configure_for_dispatch() override;
 
     void compile_ancillary_kernels(tt::tt_metal::Program& program) override;
@@ -123,14 +116,11 @@ private:
 
     /**
      * Generic helper to establish connections from this router to a downstream router.
-     * Iterates through all VCs and sender channels, applying the provided connection type filter.
+     * Iterates through all VCs and sender channels, establishing every direction-matching target.
      *
      * @param downstream_router The target router to connect to
-     * @param connection_type_filter Function that returns true for connection types to establish
      */
-    void establish_connections_to_router(
-        ComputeMeshRouterBuilder& downstream_router,
-        const std::function<bool(ConnectionType)>& connection_type_filter);
+    void establish_connections_to_router(ComputeMeshRouterBuilder& downstream_router);
 
     /**
      * Compute which sender channels are traffic injection channels for a specific VC.

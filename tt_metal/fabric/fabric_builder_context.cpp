@@ -64,7 +64,7 @@ void FabricBuilderContext::compute_max_channel_counts() {
         RoutingDirection::N,
         EdgeCapability::INTRAMESH_CARDINAL,
         needs_vc_config ? &intermesh_vc_config_ : nullptr,
-        false,
+        ZPortRole::NONE,
         any_mesh_uses_express);
 
     // If Z-facing intermesh boundary routers exist in this fabric, enumerate both families they
@@ -85,14 +85,14 @@ void FabricBuilderContext::compute_max_channel_counts() {
             RoutingDirection::Z,
             EdgeCapability::INTERMESH,
             &intermesh_vc_config_,
-            true);
+            ZPortRole::INTERMESH_BOUNDARY);
         possible_mappings.emplace_back(
             topology,
             false,  // no tensix
             RoutingDirection::N,
             EdgeCapability::INTRAMESH_CARDINAL,
             needs_vc_config ? &intermesh_vc_config_ : nullptr,
-            true,  // has_intermesh_z_edge: mesh routers on boundary chips carry the from-Z slot
+            ZPortRole::INTERMESH_BOUNDARY,  // mesh routers on boundary chips carry the from-Z slot
             any_mesh_uses_express);
     }
 

@@ -31,6 +31,9 @@ namespace {
 //   1D:                            2 sender, 1 receiver
 std::pair<uint32_t, uint32_t> get_expected_channels(
     Topology topology, const std::string& direction, bool has_vc1) {
+    // TODO: this infers the boundary family from a direction string. It should read the edge's
+    // capability (or the port's role) instead, once the report input carries it -- a same-mesh
+    // express chord is Z-facing too but is not the boundary family.
     if (direction == "Z") {
         // Z-facing intermesh boundary routers always have both VCs. Counts come from the boundary
         // family's derived accessors: boundary VC0 (worker + every non-self producer) plus

@@ -28,6 +28,35 @@ enum class EdgeCapability : uint8_t {
 
 const char* to_string(EdgeCapability capability);
 
+// What the extra (non-grid) ethernet port on this chip is used for.
+//
+// Historically this port had exactly one role, so "has a Z port" and "has an intermesh boundary"
+// were the same statement. They no longer are: an express chord gives the port a genuine intramesh
+// routing direction. Naming the role rather than the port keeps that distinction structural: a
+// chip has one extra port, so it can hold exactly one role -- the mutual exclusion between
+// "intermesh Z" and "express chord" is unrepresentable rather than asserted.
+enum class ZPortRole : uint8_t {
+    NONE,                // no extra port on this chip
+    INTERMESH_BOUNDARY,  // crosses a mesh boundary; carries no intramesh routing direction
+    EXPRESS_CHORD,       // a same-mesh Y-axis express chord; an ordinary routing direction
+};
+
+const char* to_string(ZPortRole role);
+
+// The role of this chip's extra port, from the neighbor graph. Pure structure: a same-mesh Z edge
+// reports EXPRESS_CHORD, and its validity (validated express intent) is enforced separately at
+// capability classification, which fails the configuration for a same-mesh Z without it.
+ZPortRole z_port_role(const ControlPlane& control_plane, FabricNodeId node);
+
+// Does this router's own port carry an intramesh routing direction, i.e. participate in ordinary
+// dimension-ordered forwarding?
+//
+// Cardinal ports always do; that is what makes them cardinal. The extra port does exactly when it
+// carries an express chord (a Y-axis resource, like N/S). An extra port crossing a mesh boundary
+// does not -- it has no place in the turn matrix, and that, not the letter Z, is the whole reason
+// a separate boundary template ever existed.
+bool carries_routing_direction(RoutingDirection facing, EdgeCapability capability);
+
 // Classify one edge from `local` toward `remote` leaving through `direction`.
 //
 // Fails the configuration for a same-mesh Z edge on a mesh where express routing was not
@@ -39,16 +68,6 @@ EdgeCapability classify_fabric_edge(
 // Same classification, resolving express enablement from the ControlPlane.
 EdgeCapability classify_fabric_edge(
     const ControlPlane& control_plane, FabricNodeId local, FabricNodeId remote, RoutingDirection direction);
-
-// Does this node terminate a Z edge that crosses a mesh boundary?
-//
-// This is the precise gate for the intermesh Z router shape (its VC1 sender fan and the MESH_TO_Z
-// connection). It is deliberately narrower than "any active Z channel", which is also true for a
-// same-mesh express chord and would wrongly hand that chord the intermesh template.
-bool has_intermesh_z_edge(const ControlPlane& control_plane, FabricNodeId local);
-
-// Does this node terminate a same-mesh express chord?
-bool has_intramesh_express_edge(const ControlPlane& control_plane, FabricNodeId local);
 
 // Which axis a direction belongs to: N/S/Z are Y, E/W are X (builder contract section 4.2.1).
 bool is_y_axis_direction(RoutingDirection direction);

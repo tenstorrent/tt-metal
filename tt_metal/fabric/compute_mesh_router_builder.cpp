@@ -186,7 +186,7 @@ RouterChannelCounts compute_router_channel_counts(
         direction,
         edge_capability,
         &intermesh_config,
-        has_intermesh_z_edge(control_plane, fabric_node_id),
+        z_port_role(control_plane, fabric_node_id),
         control_plane.express_routing_enabled(fabric_node_id.mesh_id));
 
     RouterChannelCounts counts;
@@ -283,7 +283,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // same path the counts pass uses, so the two cannot classify the edge differently.
     const auto edge_capability = capability_in_direction(control_plane, local_node, location.direction)
                                      .value_or(EdgeCapability::INTRAMESH_CARDINAL);
-    const bool has_intermesh_z = has_intermesh_z_edge(control_plane, local_node);
+    // What this chip's extra port is for: an intermesh boundary (has_z for the channel/connection
+    // mappings), an express chord, or nothing. One query with one answer.
+    const auto z_role = z_port_role(control_plane, local_node);
 
     // Create channel mapping EARLY (needed for computing injection flags). The Z-related channel
     // shapes exist to reach an intermesh Z router, so they are gated on that rather than on the
@@ -295,7 +297,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         location.direction,
         edge_capability,
         &intermesh_config,
-        has_intermesh_z,
+        z_role,
         control_plane.express_routing_enabled(local_node.mesh_id));
 
     // Create connection mapping (Phase 3): one direction-parameterized generator for every router.
@@ -313,15 +315,14 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // emitted when this chip actually terminates the chord: on a chip whose only Z edge crosses
     // a mesh boundary, a Z target would resolve to the intermesh Z router and leak same-mesh
     // traffic onto the boundary link.
-    RouterConnectionMapping connection_mapping = RouterConnectionMapping::for_mesh_router(
+    RouterConnectionMapping connection_mapping = RouterConnectionMapping::for_router(
         topology,
         location.direction,
-        has_intermesh_z,
-        enable_vc1,
-        enable_mesh_pass_through,
-        control_plane.express_routing_enabled(local_node.mesh_id),
         edge_capability,
-        has_intramesh_express_edge(control_plane, local_node));
+        z_role,
+        control_plane.express_routing_enabled(local_node.mesh_id),
+        enable_vc1,
+        enable_mesh_pass_through);
 
     // Compute injection channel flags at router level BEFORE creating builders
     // Injection semantics are per-VC, so compute for each VC and flatten into router-level vector
@@ -491,19 +492,12 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
 uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
     const bool is_2D_routing, const eth_chan_directions downstream_direction, uint32_t vc) const {
-    if (!is_2D_routing) {
-        return 1;  // 1D: sender channel 1 for forwarding
-    }
-
-    // Which slot on the downstream router this router (as producer) feeds. Derived from the
-    // canonical direction<->slot bijection in fabric_builder_helpers -- the same relation that
-    // get_sender_channel_direction inverts when the injection-flag derivation names a slot's
-    // producer, so placement and naming cannot drift apart.
-    //
-    // VC0: sender channels 1-4 correspond to the four upstream neighbors (channel 0 is the worker)
-    // VC1: sender channels 0-3 (no local worker channel)
-    const size_t compact = builder::direction_compact_index(this->get_eth_direction(), downstream_direction);
-    return (vc == 0) ? static_cast<uint32_t>(1 + compact) : static_cast<uint32_t>(compact);
+    // Which slot on the downstream router this router (as producer) feeds. Delegates to the one
+    // placement rule in fabric_builder_helpers -- the same relation that get_sender_channel_direction
+    // inverts when the injection-flag derivation names a slot's producer, so placement and naming
+    // cannot drift apart.
+    return builder::get_downstream_sender_channel_for_vc(
+        is_2D_routing, vc, this->get_eth_direction(), downstream_direction);
 }
 
 eth_chan_directions ComputeMeshRouterBuilder::get_eth_direction() const { return erisc_builder_->get_direction(); }
@@ -529,7 +523,7 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
     // fed by one upstream producer, and the channel index identifies which ingress that is.
     const auto egress = control_plane.eth_direction_to_routing_direction(direction);
     const auto queries = make_protected_ring_queries(control_plane, local_node);
-    const bool has_express_chord = has_intramesh_express_edge(control_plane, local_node);
+    const auto z_role = z_port_role(control_plane, local_node);
 
     // VC2 stays out of the derivation: the optional existing VC2 behavior is separate from the
     // express design, and its sender is not a fixed-direction producer slot that the table below
@@ -564,15 +558,16 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
             continue;  // no neighbour that way, so nothing is wired into this slot
         }
 
-        // Classify only producers the connection map actually wired. The sender-channel direction
-        // table is static and names an ingress for every slot, but under express wiring some slots
-        // carry no producer: an intramesh X ingress is dimension-order-unwired from every intramesh
-        // Y egress, and nothing is wired into a Z egress on a chord-less chip. Skipping those slots
-        // here is what keeps the derivation's dimension-order failure meaningful -- a DOR-forbidden
-        // turn that still reaches classify_producer_effect genuinely signals a disagreement between
-        // the maps and this derivation, not a correctly unwired slot.
-        if (!RouterConnectionMapping::is_express_producer_wired(
-                ingress, *ingress_capability, egress, has_express_chord)) {
+        // Classify only producers the connection map actually wired, using the same turn-matrix
+        // primitive the map is built from. The sender-channel direction table is static and names
+        // an ingress for every slot, but under express wiring some slots carry no producer: an
+        // intramesh X ingress is dimension-order-unwired from every intramesh Y egress, and
+        // nothing is wired into a Z egress on a chip with no extra port. Skipping those slots here
+        // is what keeps the derivation's dimension-order failure meaningful -- a DOR-forbidden
+        // turn that still reaches classify_producer_effect genuinely signals a disagreement
+        // between the maps and this derivation, not a correctly unwired slot.
+        if (!RouterConnectionMapping::wires_into(
+                ingress, *ingress_capability, egress, z_role, /*express_routing_enabled=*/true, vc)) {
             continue;
         }
 
@@ -710,10 +705,12 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
     tensix_builder.append_relay_router_noc_xy(erisc_builder_->get_noc_x(), erisc_builder_->get_noc_y());
 }
 
-void ComputeMeshRouterBuilder::establish_connections_to_router(
-    ComputeMeshRouterBuilder& downstream_router, const std::function<bool(ConnectionType)>& connection_type_filter) {
+void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouterBuilder& downstream_router) {
     // Establish VC connections between this router and the specified downstream router
-    // This function does NOT iterate through targets - it connects to the single downstream_router passed in
+    // This function does NOT iterate through targets - it connects to the single downstream_router passed in.
+    // Every direction-matching target is established: there is no longer a type-based filter --
+    // the boundary turns (MESH_TO_Z / Z_TO_MESH) are wired through the same path as every other
+    // local turn, which is what made the second establishment pass redundant.
     uint32_t num_vcs = channel_mapping_.get_num_virtual_channels();
 
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
@@ -732,15 +729,6 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
             vc,
             targets.size());
         for (const auto& target : targets) {
-            if (!connection_type_filter(target.type)) {
-                // Skip connection if it's not allowed by the connection_type_filter
-                log_debug(
-                    LogMetal,
-                    "Skipping VC{} connection type({}) not allowed by connection_type_filter",
-                    vc,
-                    static_cast<int>(target.type));
-                continue;
-            }
             // Only apply direction filtering for 2D routing or when there are multiple targets
             // For 1D routing with a single target, skip direction check to avoid false negatives
             bool should_check_direction = is_2D_routing || targets.size() > 1;
@@ -797,8 +785,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                     .dest_direction = downstream_router.location_.direction,
                     .dest_eth_chan = downstream_router.location_.eth_chan,
                     .dest_vc = vc,
-                    .dest_sender_channel = absolute_channel_id,
-                    .connection_type = connection_mapping_.get_downstream_targets(vc, 0).at(0).type};
+                    .dest_sender_channel = absolute_channel_id};
                 connection_registry_->record_connection(record);
             }
 
@@ -842,12 +829,11 @@ void ComputeMeshRouterBuilder::configure_connection(
         !erisc_builder_->build_in_worker_connection_mode,
         "Tried to connect router to downstream in worker connection mode");
 
-    // Establish INTRA_MESH connections between the two routers (bidirectional)
-    // Z routers follow inter-mesh conventions: VC0 and VC1 both use INTRA_MESH for local routing
-    auto intra_mesh_filter = [](ConnectionType type) { return type == ConnectionType::INTRA_MESH; };
-
-    establish_connections_to_router(peer_compute, intra_mesh_filter);
-    peer_compute.establish_connections_to_router(*this, intra_mesh_filter);
+    // Establish every direction-matching connection between the two routers (bidirectional).
+    // There is no type filter anymore: the boundary turns (MESH_TO_Z / Z_TO_MESH) are established
+    // here like every other local turn, so this is the single establishment pass for all of them.
+    establish_connections_to_router(peer_compute);
+    peer_compute.establish_connections_to_router(*this);
 
     // Configure NOC VC based on link index (must be same for both routers)
     auto edm_noc_vc = tt::tt_fabric::FabricEriscDatamoverConfig::DEFAULT_NOC_VC +
@@ -862,53 +848,6 @@ void ComputeMeshRouterBuilder::configure_connection(
         .num_links = num_links,
     };
     core_placement::apply_core_placement_optimizations(cctx, *erisc_builder_, *peer_compute.erisc_builder_, link_idx);
-}
-
-void ComputeMeshRouterBuilder::configure_local_connections(
-    const std::map<RoutingDirection, FabricRouterBuilder*>& local_routers) {
-    // Establish local connections (MESH_TO_Z or Z_TO_MESH) to routers on same device
-    // We need to look up target routers by direction from the map
-    auto local_connection_filter = [](ConnectionType type) {
-        return type == ConnectionType::MESH_TO_Z || type == ConnectionType::Z_TO_MESH;
-    };
-
-    // Track which target routers we've already connected to (to avoid redundant calls)
-    std::set<RoutingDirection> connected_targets;
-
-    // Iterate through all VCs to find local connection targets
-    uint32_t num_vcs = channel_mapping_.get_num_virtual_channels();
-
-    for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        // Each VC has only 1 receiver channel (index 0)
-        constexpr uint32_t receiver_channel = 0;
-        auto targets = connection_mapping_.get_downstream_targets(vc, receiver_channel);
-
-        for (const auto& target : targets) {
-            // Only handle local connections
-            if (!local_connection_filter(target.type)) {
-                continue;
-            }
-
-            // Check if target direction exists (handles 2-4 router configs)
-            TT_FATAL(target.target_direction.has_value(), "Local connection target must have direction specified");
-
-            auto target_dir = target.target_direction.value();
-            if (!local_routers.contains(target_dir)) {
-                // Target router doesn't exist (e.g., edge device with only 2-3 mesh routers)
-                // This is expected for Z routers on edge devices
-                continue;
-            }
-
-            // Establish connections to this target router (if not already done)
-            if (!connected_targets.contains(target_dir)) {
-                auto* local_router = local_routers.at(target_dir);
-                auto* local_compute_router = dynamic_cast<ComputeMeshRouterBuilder*>(local_router);
-                TT_FATAL(local_compute_router != nullptr, "Local router must be a ComputeMeshRouterBuilder");
-                establish_connections_to_router(*local_compute_router, local_connection_filter);
-                connected_targets.insert(target_dir);
-            }
-        }
-    }
 }
 
 void ComputeMeshRouterBuilder::configure_for_dispatch() {

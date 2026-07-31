@@ -43,18 +43,6 @@ std::vector<RouterConnectionRecord> ConnectionRegistry::get_connections_to_dest(
     return result;
 }
 
-std::vector<RouterConnectionRecord> ConnectionRegistry::get_connections_by_type(ConnectionType type) const {
-    std::vector<RouterConnectionRecord> result;
-    std::copy_if(
-        connections_.begin(),
-        connections_.end(),
-        std::back_inserter(result),
-        [&](const RouterConnectionRecord& record) {
-            return record.connection_type == type;
-        });
-    return result;
-}
-
 std::vector<RouterConnectionRecord> ConnectionRegistry::get_connections_by_source_node(FabricNodeId source_node) const {
     std::vector<RouterConnectionRecord> result;
     std::copy_if(

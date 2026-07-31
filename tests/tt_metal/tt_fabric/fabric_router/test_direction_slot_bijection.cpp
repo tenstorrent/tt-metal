@@ -103,5 +103,40 @@ TEST(DirectionSlotBijectionTest, ReceiverDownstreamIndexIsTheSameRelation) {
     }
 }
 
+TEST(DirectionSlotBijectionTest, DownstreamSenderChannelVcOffsetsArePinned) {
+    // get_downstream_sender_channel_for_vc is the placement production uses, so nothing else pins
+    // its VC0 +1 (worker) / VC1 +0 offset. A hardcoded table pins it directly.
+    using D = eth_chan_directions;
+    struct Row {
+        eth_chan_directions producer;
+        eth_chan_directions facing;
+        uint32_t vc0_slot;
+        uint32_t vc1_slot;
+    };
+    constexpr Row rows[] = {
+        {D::NORTH, D::Z, 3, 2},      // boundary feed: compact of N among non-Z = 2
+        {D::Z, D::NORTH, 4, 3},      // from-boundary slot: compact of Z among non-N = 3
+        {D::SOUTH, D::NORTH, 3, 2},  // opposite-Y transit
+        {D::EAST, D::NORTH, 1, 0},   // cross turn, first compact slot
+        {D::NORTH, D::SOUTH, 3, 2},  // opposite of the above
+        {D::WEST, D::EAST, 1, 0},    // X transit
+    };
+    for (const auto& row : rows) {
+        EXPECT_EQ(
+            builder::get_downstream_sender_channel_for_vc(/*is_2d_routing=*/true, 0, row.producer, row.facing),
+            row.vc0_slot)
+            << "producer " << static_cast<int>(row.producer) << " -> facing " << static_cast<int>(row.facing)
+            << " (VC0)";
+        EXPECT_EQ(
+            builder::get_downstream_sender_channel_for_vc(/*is_2d_routing=*/true, 1, row.producer, row.facing),
+            row.vc1_slot)
+            << "producer " << static_cast<int>(row.producer) << " -> facing " << static_cast<int>(row.facing)
+            << " (VC1)";
+    }
+
+    // 1D is always the single forwarding channel, regardless of the pair.
+    EXPECT_EQ(builder::get_downstream_sender_channel_for_vc(/*is_2d_routing=*/false, 0, D::NORTH, D::Z), 1u);
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric

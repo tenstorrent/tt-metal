@@ -10,7 +10,6 @@
 #include <optional>
 #include <vector>
 
-#include "tt_metal/fabric/builder/connection_registry.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -25,26 +24,20 @@ struct IntermeshVCConfig;
  * @brief Represents a single downstream connection target for a receiver channel
  *
  * This struct defines where a receiver channel should connect to, including:
- * - The connection type (INTRA_MESH, MESH_TO_Z, Z_TO_MESH)
  * - The target virtual channel (VC)
- * - The target sender channel index
  * - Optional target direction (for local connections)
+ *
+ * Targets carry no connection type and no channel index: a local turn is identified by its
+ * direction and VC, the slot a producer is placed into is computed at establishment time from the
+ * direction<->slot bijection (get_downstream_sender_channel_for_vc), and the boundary turn to an
+ * intermesh edge is identified by the edge's capability, not a type label.
  */
 struct ConnectionTarget {
-    ConnectionType type;
     uint32_t target_vc;
-    uint32_t target_sender_channel;
-    std::optional<RoutingDirection> target_direction;  // Used for MESH_TO_Z and Z_TO_MESH
+    std::optional<RoutingDirection> target_direction;  // The downstream direction this target reaches
 
-    ConnectionTarget(
-        ConnectionType type_,
-        uint32_t target_vc_,
-        uint32_t target_sender_channel_,
-        std::optional<RoutingDirection> target_direction_ = std::nullopt)
-        : type(type_),
-          target_vc(target_vc_),
-          target_sender_channel(target_sender_channel_),
-          target_direction(target_direction_) {}
+    ConnectionTarget(uint32_t target_vc_, std::optional<RoutingDirection> target_direction_ = std::nullopt) :
+        target_vc(target_vc_), target_direction(target_direction_) {}
 };
 
 /**
@@ -72,8 +65,8 @@ struct ReceiverChannelKey {
  * This class encapsulates the connection logic for routers, mapping each receiver
  * channel to its downstream connection targets. It supports:
  * - Mesh routers with 1D/2D topologies
- * - Mesh routers with MESH_TO_Z connections (when Z router present on device)
- * - Z routers with multi-target VC1 connections
+ * - The Z-facing intermesh boundary's from-boundary VC1 fanout to every mesh direction
+ * - Boundary turns to a chip's intermesh edge (any capability)
  */
 class RouterConnectionMapping {
 public:
@@ -89,77 +82,75 @@ public:
     std::vector<ConnectionTarget> get_downstream_targets(uint32_t vc, uint32_t receiver_channel) const;
 
     /**
-     * @brief Factory method for mesh router connection mapping
+     * @brief The one connection-map factory for every router
      *
-     * Creates a mapping for a standard mesh router based on topology and direction.
+     * Behaviour is keyed on what role the ports have, not which ports they are:
+     * - A port with no routing direction (facing Z, capability INTERMESH) gets the boundary
+     *   template: the full non-self set on VC1, typed from-boundary. Its VC0 senders are fed by
+     *   the mesh routers' boundary targets on their own maps.
+     * - A routing-direction port gets its turn set from the wires_into primitive: 1D is the
+     *   opposite direction; legacy 2D is every non-self cardinal; express adds the express rule
+     *   (an intramesh X ingress unwires from intramesh Y, a landing X ingress does not).
+     * - The chip's extra port enters the set only when it has one: an express chord is an ordinary
+     *   same-VC target; an intermesh boundary is reached through MESH_TO_Z on VC0 (and on VC1 only
+     *   in pass-through mode); nothing exists without the port.
      *
      * @param topology Mesh topology (1D or 2D)
-     * @param direction Router's direction (NORTH, EAST, SOUTH, WEST)
-     * @param has_z Whether this device has a Z router (enables MESH_TO_Z connections)
+     * @param facing This router's own direction
+     * @param edge_capability Capability of this router's own edge
+     * @param z_role What this chip's extra port is used for (chord, boundary, or none)
+     * @param express_routing_enabled Mesh-level: express chords are materialized and validated
      * @param enable_vc1 Whether VC1 (inter-mesh) connections should be created
-     * @param enable_mesh_pass_through EXPERIMENTAL: when set (and has_z), also forwards VC1 traffic to
-     *        the local Z router (MESH_TO_Z on VC1) so inter-mesh traffic can pass through this mesh
-     *        toward a further mesh (A->B->C) instead of sinking here. Reuses VC1; not deadlock-safe.
-     * @param express_routing_enabled When set, build the express transition set instead: cardinal and
-     *        express Z outputs on every carrier VC, with an ordinary X ingress unwired from intramesh
-     *        Y egress so dimension order holds. Non-express wiring is left byte-for-byte as it was.
-     * @param ingress_capability Capability of this router's own edge. Consulted under express
-     *        routing, where an INTERMESH landing on an E/W port stays eligible to begin Y, and for
-     *        a Z-facing router, where it selects the template: INTERMESH yields the from-boundary
-     *        fanout (the Z_ROUTER shape), INTRAMESH_EXPRESS the express chord wiring.
-     * @param has_intramesh_express Whether this chip terminates a same-mesh express chord. Only
-     *        consulted under express routing: a Z output is emitted only when the chord exists. On a
-     *        chip whose only Z edge crosses a mesh boundary, a Z target would resolve to the
-     *        intermesh Z router and leak same-mesh traffic onto the boundary link.
-     * @return Configured RouterConnectionMapping for mesh router
+     * @param enable_mesh_pass_through EXPERIMENTAL: also forwards VC1 traffic to the local
+     *        intermesh Z boundary (MESH_TO_Z on VC1) so inter-mesh traffic can pass through this
+     *        mesh (A->B->C). Reuses VC1; not deadlock-safe.
+     * @return Configured RouterConnectionMapping for the router
      */
-    static RouterConnectionMapping for_mesh_router(
+    static RouterConnectionMapping for_router(
         Topology topology,
-        RoutingDirection direction,
-        bool has_z,
-        bool enable_vc1 = false,
-        bool enable_mesh_pass_through = false,
+        RoutingDirection facing,
+        EdgeCapability edge_capability = EdgeCapability::INTRAMESH_CARDINAL,
+        ZPortRole z_role = ZPortRole::NONE,
         bool express_routing_enabled = false,
-        EdgeCapability ingress_capability = EdgeCapability::INTRAMESH_CARDINAL,
-        bool has_intramesh_express = false);
+        bool enable_vc1 = false,
+        bool enable_mesh_pass_through = false);
 
     /**
-     * @brief Legal outbound directions for one express-routing mesh router
+     * @brief The turn-matrix primitive: does the router facing `producer_direction` wire into the
+     * router facing `egress_direction` on the same chip?
      *
-     * Exposed for regression: the transition set is the whole point of the express wiring, so it is
-     * checked directly rather than only through the assembled mapping.
+     * The one place the wiring rule lives. Turn sets, producer arity, and the injection-flag
+     * derivation are all built from this single relation, so the connection map and the guard
+     * derivation cannot drift apart -- there is no set form of the rule for them to disagree with.
+     *
+     * The rule, per case:
+     * - No U-turn: a router never wires back over its own link.
+     * - Legacy (non-express): every non-self cardinal direction wires in. The extra port exists in
+     *   the set only as the boundary template, when the chip's extra port is INTERMESH_BOUNDARY.
+     * - Express: a Z-facing producer fans out to every non-self direction; an intramesh X producer
+     *   may only continue around the X ring (dimension order); any other producer wires into every
+     *   non-self direction; and the extra port exists in the set only when the chip has one
+     *   (chord or boundary).
+     *
+     * The VC matters exactly once: for a boundary producer (a Z-facing router whose edge is
+     * INTERMESH). Its VC1 receiver fans out to every non-self VC1 sender (wired), while its VC0
+     * receiver crosses over onto downstream VC1 senders and feeds nothing on VC0 (not wired). So
+     * the boundary-producer arm answers `vc == 1`. Every other producer is VC-agnostic on this
+     * question, and for_router may pass any VC when building a turn set, since that arm is
+     * unreachable there (the boundary path early-returns before consulting this primitive).
+     *
+     * Guard classification follows from the answers: a cardinal producer into a boundary egress is
+     * NON_RING (the egress is not a protected ring), and a boundary producer into a protected
+     * cardinal egress on VC1 is ENTER -- the correct landing acquisition. The first arm is not
+     * "NON_RING either way": only the second depends on the VC.
      */
-    static std::vector<RoutingDirection> express_outbound_directions(
-        RoutingDirection direction, EdgeCapability ingress_capability);
-
-    /**
-     * @brief The outbound directions this chip's router actually wires under express routing
-     *
-     * The legal transitions from express_outbound_directions minus any output whose edge does not
-     * exist here: a Z output requires the chip to terminate an intramesh express chord. On a chip
-     * whose only Z edge crosses a mesh boundary, a Z target would resolve to the intermesh Z router
-     * and leak same-mesh traffic onto the boundary link.
-     *
-     * for_mesh_router and the injection-flag derivation both consume this, so the wired producer
-     * set and the connection map cannot drift apart.
-     */
-    static std::vector<RoutingDirection> wired_express_outbound_directions(
-        RoutingDirection direction, EdgeCapability ingress_capability, bool has_intramesh_express);
-
-    /**
-     * @brief Would the router facing `producer_direction` (on the same chip) wire into the router
-     * facing `egress_direction` under express routing?
-     *
-     * True exactly when `egress_direction` is in the producer's wired outbound set. The
-     * injection-flag derivation uses this to classify only producers the connection map actually
-     * wired -- in particular, an intramesh X producer is never wired into an intramesh Y egress
-     * (dimension order), and no producer is wired into a Z egress on a chord-less chip.
-     */
-    static bool is_express_producer_wired(
+    static bool wires_into(
         RoutingDirection producer_direction,
         EdgeCapability producer_capability,
         RoutingDirection egress_direction,
-        bool has_intramesh_express);
+        ZPortRole z_role,
+        bool express_routing_enabled,
+        uint32_t vc);
 
     /**
      * Per-direction capability set of one chip: each direction's edge capability, indexed by
@@ -199,28 +190,6 @@ public:
     static uint32_t express_mesh_vc1_sender_count();
 
     /**
-     * @brief Per-VC sender arity of one 2D mesh-like router, by family
-     *
-     * A router's sender channels are its local worker (VC0 only) plus the producers wired into it
-     * on that VC: the receivers on this chip whose outbound forwards into its senders. These two
-     * functions are the ONLY place that question is answered for the mesh-router family, and they
-     * live next to the wiring rules that produce the answer. builder_config primitives (the
-     * legacy downstream widths) are inputs to these rules, never answers at call sites. The
-     * Z-facing intermesh boundary family is separate and has its own derived accessors in
-     * builder_config (num_sender_channels_intermesh_z_boundary_*).
-     *
-     * VC0: 1 (worker) + wired producers.
-     * VC1: wired producers (no worker).
-     *
-     * @param has_intermesh_z_edge This chip terminates an intermesh Z boundary whose VC1 fanout
-     *        adds a from-Z producer slot (its VC0 receiver forwards nowhere, so VC0 is unaffected).
-     * @param express_routing_enabled This mesh has express chords; counts come from the express
-     *        family max derivation above.
-     */
-    static uint32_t mesh_router_vc0_sender_count(bool has_intermesh_z_edge, bool express_routing_enabled);
-    static uint32_t mesh_router_vc1_sender_count(bool has_intermesh_z_edge, bool express_routing_enabled);
-
-    /**
      * The complete per-VC channel shape of one router: how many sender and receiver channels it
      * has on each VC, where each VC starts in the flat index space, and how many VCs exist.
      * Computed ONCE from the same facts the connection map reads, so the count and every flat base
@@ -249,41 +218,17 @@ public:
      * fixed, and get_all_sender_mappings() already tolerates it.
      *
      * The derivation emits prefix sums for every flat base and enforces the num_max_* ceilings,
-     * turning the capacity comments elsewhere into guarantees at the one construction site.
+     * turning the capacity comments elsewhere into guarantees at the one construction site. The
+     * chip's extra port arrives as its ZPortRole (boundary, chord, or none) -- the same fact the
+     * connection map reads, with one spelling.
      */
     static RouterVcShape router_vc_shape(
         Topology topology,
         RoutingDirection facing,
         EdgeCapability edge_capability,
-        bool has_intermesh_z_edge,
+        ZPortRole z_role,
         bool express_routing_enabled,
         const IntermeshVCConfig* vc_config);
-
-    /**
-     * @brief The Z-facing intermesh boundary template
-     *
-     * The VC1 from-boundary fanout to every mesh direction, constructed without inputs: the
-     * boundary's VC1 receiver landing from the remote mesh fans out to every non-self direction
-     * (all four, since Z has no self among the mesh directions). Reached by for_mesh_router's
-     * capability dispatch for (Z, INTERMESH) and by the for_z_router() alias, so the two cannot
-     * produce different shapes.
-     *
-     * Note: Mapping specifies all 4 directions as intent. FabricBuilder
-     * will skip non-existent directions based on device position (2-4 mesh routers).
-     *
-     * @return Configured RouterConnectionMapping for the Z-facing intermesh boundary router
-     */
-    static RouterConnectionMapping z_intermesh_boundary_fanout();
-
-    /**
-     * @brief Alias for the Z-facing intermesh boundary template
-     *
-     * Equivalent to for_mesh_router(direction == Z, ingress_capability == INTERMESH): both
-     * forward to z_intermesh_boundary_fanout(). Kept for existing callers and tests.
-     *
-     * @return Configured RouterConnectionMapping for the Z-facing intermesh boundary router
-     */
-    static RouterConnectionMapping for_z_router();
 
     /**
      * @brief Check if a receiver channel has any downstream targets
@@ -301,6 +246,14 @@ public:
     std::vector<ReceiverChannelKey> get_all_receiver_keys() const;
 
 private:
+    // Per-VC sender arity of one 2D mesh-like router, by family: the local worker (VC0 only) plus
+    // the producers wired into it on that VC. Called only by router_vc_shape; the answers are
+    // read off the shape, never re-derived at a consumption site. The Z-facing intermesh boundary
+    // family is separate and has its own derived accessors in builder_config
+    // (num_sender_channels_intermesh_z_boundary_*).
+    static uint32_t mesh_router_vc0_sender_count(ZPortRole z_role, bool express_routing_enabled);
+    static uint32_t mesh_router_vc1_sender_count(ZPortRole z_role, bool express_routing_enabled);
+
     // Maps (VC, sender_channel) → list of downstream targets
     std::map<ReceiverChannelKey, std::vector<ConnectionTarget>> receiver_to_targets_;
 
@@ -313,12 +266,6 @@ private:
      * @brief Helper to compute opposite direction for mesh routers
      */
     static RoutingDirection get_opposite_direction(RoutingDirection dir);
-
-    /**
-     * @brief Add the MESH_TO_Z targets that reach a local intermesh Z router
-     */
-    static void add_mesh_to_z_targets(
-        RouterConnectionMapping& mapping, Topology topology, bool enable_vc1, bool enable_mesh_pass_through);
 };
 
 }  // namespace tt::tt_fabric

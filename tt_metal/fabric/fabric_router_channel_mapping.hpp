@@ -79,7 +79,7 @@ public:
         RoutingDirection direction,
         EdgeCapability edge_capability,
         const IntermeshVCConfig* intermesh_config,
-        bool has_intermesh_z_edge = false,
+        ZPortRole z_port_role = ZPortRole::NONE,
         bool express_routing_enabled = false);
 
     /**

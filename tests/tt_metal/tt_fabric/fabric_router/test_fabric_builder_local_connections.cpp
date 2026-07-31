@@ -15,11 +15,11 @@ using namespace tt::tt_fabric;
 /**
  * FabricBuilder Local Connection Tests
  *
- * These tests validate FabricBuilder's establishment of local mesh↔Z connections:
- * 1. Z router detection on a device
- * 2. Local mesh↔Z connection establishment
- * 3. Variable mesh router count handling (2-4 routers)
- * 4. Connection registry validation for full device scenarios
+ * These tests validate the connection-map-driven wiring between a device's mesh routers and its
+ * intermesh boundary router: the boundary's fanout reaches every mesh direction on VC1, mesh
+ * routers reach the boundary on VC0 (and VC1 in pass-through), and everything is recorded in the
+ * connection registry through the same direction-matching establishment the merged production
+ * pass performs. They exercise the full-device and edge-device router counts.
  *
  * Note: These are conceptual tests simulating FabricBuilder connection logic
  * without requiring actual device/UMD initialization.
@@ -75,7 +75,14 @@ protected:
                 dir,
                 EdgeCapability::INTRAMESH_CARDINAL,
                 nullptr),  // No intermesh config for mock
-            .connection_mapping = RouterConnectionMapping::for_mesh_router(Topology::Mesh, dir, has_z)};
+            .connection_mapping = RouterConnectionMapping::for_router(
+                Topology::Mesh,
+                dir,
+                EdgeCapability::INTRAMESH_CARDINAL,
+                (has_z) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
+                false,
+                false,
+                false)};
     }
 
     MockRouter create_mock_z_router(uint32_t router_id) {
@@ -89,10 +96,23 @@ protected:
                 RoutingDirection::Z,
                 EdgeCapability::INTERMESH,
                 &intermesh_config),  // Z routers require intermesh config
-            .connection_mapping = RouterConnectionMapping::for_z_router()};
+            .connection_mapping = RouterConnectionMapping::for_router(
+                Topology::Mesh,
+                RoutingDirection::Z,
+                EdgeCapability::INTERMESH,
+                ZPortRole::INTERMESH_BOUNDARY,
+                /*express_routing_enabled=*/false,
+                /*enable_vc1=*/true)};
     }
 
-    // Helper to simulate local connection establishment
+    // Helper to simulate local connection establishment, mirroring the merged production pass
+    // (configure_connection): every direction-matching target in the source router's connection
+    // mapping is recorded, with no type-based filter.
+    //
+    // CONTRACT: `targets` must name exactly the routers present on the mock device -- a target
+    // whose direction is absent from the map is skipped, which is how the edge-device cases below
+    // exercise 2- and 3-router chips. The wiring answer therefore depends on the map's contents,
+    // not on anything the helper discovers.
     void establish_local_connections(MockRouter& source, const std::map<RoutingDirection, MockRouter*>& targets) {
         // Iterate through all sender keys in connection mapping
         auto all_receiver_keys = source.connection_mapping.get_all_receiver_keys();
@@ -101,35 +121,31 @@ protected:
             auto conn_targets = source.connection_mapping.get_downstream_targets(key.vc, key.receiver_channel);
 
             for (const auto& target : conn_targets) {
-                if (target.type == ConnectionType::MESH_TO_Z || target.type == ConnectionType::Z_TO_MESH) {
-                    TT_FATAL(
-                        target.target_direction.has_value(),
-                        "target_direction must have a value for MESH_TO_Z or Z_TO_MESH connections");
-                    auto target_dir = target.target_direction.value();
+                TT_FATAL(
+                    target.target_direction.has_value(), "target_direction must have a value for local connections");
+                const auto target_dir = target.target_direction.value();
 
-                    if (!targets.contains(target_dir)) {
-                        continue;  // Target doesn't exist (edge device)
-                    }
-
-                    auto* dest_router = targets.at(target_dir);
-
-                    // Record connection
-                    RouterConnectionRecord record{
-                        .source_node = source.node_id,
-                        .source_direction = source.direction,
-                        .source_eth_chan = 0,
-                        .source_vc = key.vc,
-                        .source_receiver_channel = key.receiver_channel,
-                        .dest_node = dest_router->node_id,
-                        .dest_direction = dest_router->direction,
-                        .dest_eth_chan = 0,
-                        .dest_vc = target.target_vc,
-                        .dest_sender_channel = 0,
-                        .connection_type = target.type
-                    };
-
-                    registry_->record_connection(record);
+                if (!targets.contains(target_dir)) {
+                    continue;  // Target doesn't exist (edge device)
                 }
+
+                auto* dest_router = targets.at(target_dir);
+
+                // Record connection
+                RouterConnectionRecord record{
+                    .source_node = source.node_id,
+                    .source_direction = source.direction,
+                    .source_eth_chan = 0,
+                    .source_vc = key.vc,
+                    .source_receiver_channel = key.receiver_channel,
+                    .dest_node = dest_router->node_id,
+                    .dest_direction = dest_router->direction,
+                    .dest_eth_chan = 0,
+                    .dest_vc = target.target_vc,
+                    .dest_sender_channel = 0,
+                };
+
+                registry_->record_connection(record);
             }
         }
     }
@@ -217,8 +233,8 @@ TEST_F(FabricBuilderLocalConnectionsTest, FullDevice_4Mesh1Z_AllConnections) {
     // Verify total connections: 4 Z_TO_MESH + 4 MESH_TO_Z = 8
     EXPECT_EQ(registry_->size(), 8);
 
-    auto z_to_mesh = registry_->get_connections_by_type(ConnectionType::Z_TO_MESH);
-    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    auto z_to_mesh = registry_->get_connections_from_source(z_router.node_id, RoutingDirection::Z);
+    auto mesh_to_z = registry_->get_connections_to_dest(z_router.node_id, RoutingDirection::Z);
 
     EXPECT_EQ(z_to_mesh.size(), 4);
     EXPECT_EQ(mesh_to_z.size(), 4);
@@ -234,7 +250,7 @@ TEST_F(FabricBuilderLocalConnectionsTest, FullDevice_4Mesh1Z_AllConnections) {
         // Should have exactly 1 MESH_TO_Z connection
         int mesh_to_z_count = 0;
         for (const auto& conn : mesh_outgoing) {
-            if (conn.connection_type == ConnectionType::MESH_TO_Z) {
+            if (conn.dest_direction == RoutingDirection::Z) {
                 mesh_to_z_count++;
                 EXPECT_EQ(conn.dest_node, z_router.node_id);
             }
@@ -272,8 +288,8 @@ TEST_F(FabricBuilderLocalConnectionsTest, EdgeDevice_2Mesh1Z_Connections) {
     // Verify: 2 Z_TO_MESH + 2 MESH_TO_Z = 4 total
     EXPECT_EQ(registry_->size(), 4);
 
-    auto z_to_mesh = registry_->get_connections_by_type(ConnectionType::Z_TO_MESH);
-    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    auto z_to_mesh = registry_->get_connections_from_source(z_router.node_id, RoutingDirection::Z);
+    auto mesh_to_z = registry_->get_connections_to_dest(z_router.node_id, RoutingDirection::Z);
 
     EXPECT_EQ(z_to_mesh.size(), 2);  // Only N and E
     EXPECT_EQ(mesh_to_z.size(), 2);
@@ -321,8 +337,8 @@ TEST_F(FabricBuilderLocalConnectionsTest, EdgeDevice_3Mesh1Z_Connections) {
     // Verify: 3 Z_TO_MESH + 3 MESH_TO_Z = 6 total
     EXPECT_EQ(registry_->size(), 6);
 
-    auto z_to_mesh = registry_->get_connections_by_type(ConnectionType::Z_TO_MESH);
-    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    auto z_to_mesh = registry_->get_connections_from_source(z_router.node_id, RoutingDirection::Z);
+    auto mesh_to_z = registry_->get_connections_to_dest(z_router.node_id, RoutingDirection::Z);
 
     EXPECT_EQ(z_to_mesh.size(), 3);
     EXPECT_EQ(mesh_to_z.size(), 3);
@@ -348,7 +364,7 @@ TEST_F(FabricBuilderLocalConnectionsTest, VCAssignment_MeshToZ_VC0) {
     // Mesh VC0 → Z VC0
     EXPECT_EQ(connections[0].source_vc, 0);
     EXPECT_EQ(connections[0].dest_vc, 0);
-    EXPECT_EQ(connections[0].connection_type, ConnectionType::MESH_TO_Z);
+    EXPECT_EQ(connections[0].dest_direction, RoutingDirection::Z);
 }
 
 TEST_F(FabricBuilderLocalConnectionsTest, VCAssignment_ZToMesh_VC1) {
@@ -367,7 +383,7 @@ TEST_F(FabricBuilderLocalConnectionsTest, VCAssignment_ZToMesh_VC1) {
     // Z VC1 → Mesh VC1
     EXPECT_EQ(connections[0].source_vc, 1);
     EXPECT_EQ(connections[0].dest_vc, 1);
-    EXPECT_EQ(connections[0].connection_type, ConnectionType::Z_TO_MESH);
+    EXPECT_EQ(connections[0].source_direction, RoutingDirection::Z);
 }
 
 // Negative test: MESH_TO_Z should never use VC1
@@ -385,7 +401,7 @@ TEST_F(FabricBuilderLocalConnectionsTest, VCAssignment_MeshToZ_VC1_Negative) {
 
     // Verify no MESH_TO_Z connections use VC1
     for (const auto& conn : connections) {
-        if (conn.connection_type == ConnectionType::MESH_TO_Z) {
+        if (conn.dest_direction == RoutingDirection::Z) {
             EXPECT_NE(conn.source_vc, 1) << "MESH_TO_Z should never use VC1";
             EXPECT_NE(conn.dest_vc, 1) << "MESH_TO_Z should never target VC1";
         }
@@ -407,7 +423,7 @@ TEST_F(FabricBuilderLocalConnectionsTest, VCAssignment_ZToMesh_VC0_Negative) {
 
     // Verify no Z_TO_MESH connections use VC0
     for (const auto& conn : connections) {
-        if (conn.connection_type == ConnectionType::Z_TO_MESH) {
+        if (conn.source_direction == RoutingDirection::Z) {
             EXPECT_NE(conn.source_vc, 0) << "Z_TO_MESH should never use VC0";
             EXPECT_NE(conn.dest_vc, 0) << "Z_TO_MESH should never target VC0";
         }
@@ -503,8 +519,8 @@ TEST_F(FabricBuilderLocalConnectionsTest, ConnectionOrder_ZFirst) {
 
     EXPECT_EQ(registry_->size(), 2);
 
-    auto z_to_mesh = registry_->get_connections_by_type(ConnectionType::Z_TO_MESH);
-    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    auto z_to_mesh = registry_->get_connections_from_source(z_router.node_id, RoutingDirection::Z);
+    auto mesh_to_z = registry_->get_connections_to_dest(z_router.node_id, RoutingDirection::Z);
 
     EXPECT_EQ(z_to_mesh.size(), 1);
     EXPECT_EQ(mesh_to_z.size(), 1);
@@ -528,8 +544,8 @@ TEST_F(FabricBuilderLocalConnectionsTest, ConnectionOrder_MeshFirst) {
 
     EXPECT_EQ(registry_->size(), 2);
 
-    auto z_to_mesh = registry_->get_connections_by_type(ConnectionType::Z_TO_MESH);
-    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    auto z_to_mesh = registry_->get_connections_from_source(z_router.node_id, RoutingDirection::Z);
+    auto mesh_to_z = registry_->get_connections_to_dest(z_router.node_id, RoutingDirection::Z);
 
     EXPECT_EQ(z_to_mesh.size(), 1);
     EXPECT_EQ(mesh_to_z.size(), 1);

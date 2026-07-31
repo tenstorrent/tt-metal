@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <set>
 
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 
@@ -31,7 +32,7 @@ constexpr bool k_no_pass_through = false;
 std::set<RoutingDirection> target_directions(const RouterConnectionMapping& mapping, uint32_t vc) {
     std::set<RoutingDirection> dirs;
     for (const auto& target : mapping.get_downstream_targets(vc, 0)) {
-        if (target.type == ConnectionType::INTRA_MESH && target.target_direction.has_value()) {
+        if (target.target_direction.has_value()) {
             dirs.insert(*target.target_direction);
         }
     }
@@ -43,15 +44,15 @@ RouterConnectionMapping express_mapping(
     EdgeCapability capability = EdgeCapability::INTRAMESH_CARDINAL,
     bool enable_vc1 = k_vc1,
     bool has_express_chord = true) {
-    return RouterConnectionMapping::for_mesh_router(
+    return RouterConnectionMapping::for_router(
         Topology::Torus,
         direction,
-        k_no_intermesh_z,
-        enable_vc1,
-        k_no_pass_through,
-        k_express,
         capability,
-        has_express_chord);
+        (has_express_chord) ? ZPortRole::EXPRESS_CHORD
+                            : ((k_no_intermesh_z) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE),
+        k_express,
+        enable_vc1,
+        k_no_pass_through);
 }
 
 // --- Legal transition set (builder contract section 4.4 wiring policy) ---
@@ -103,8 +104,8 @@ TEST(ExpressConnectionWiringTest, NoRouterIsWiredBackOverItsOwnLink) {
     for (const auto ingress :
          {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z}) {
         for (const auto capability : {EdgeCapability::INTRAMESH_CARDINAL, EdgeCapability::INTERMESH}) {
-            const auto outbound = RouterConnectionMapping::express_outbound_directions(ingress, capability);
-            EXPECT_EQ(std::count(outbound.begin(), outbound.end(), ingress), 0)
+            EXPECT_FALSE(RouterConnectionMapping::wires_into(
+                ingress, capability, ingress, ZPortRole::EXPRESS_CHORD, /*express_routing_enabled=*/true, /*vc=*/0))
                 << "ingress " << static_cast<int>(ingress) << " is wired back to itself";
         }
     }
@@ -126,9 +127,8 @@ TEST(ExpressConnectionWiringTest, IntrameshTargetsNeverCrossVCs) {
     const auto mapping = express_mapping(RoutingDirection::N);
     for (uint32_t vc : {0u, 1u}) {
         for (const auto& target : mapping.get_downstream_targets(vc, 0)) {
-            if (target.type == ConnectionType::INTRA_MESH) {
-                EXPECT_EQ(target.target_vc, vc);
-            }
+            // Every target -- cardinal or boundary -- stays on its source VC.
+            EXPECT_EQ(target.target_vc, vc);
         }
     }
 }
@@ -140,16 +140,26 @@ TEST(ExpressConnectionWiringTest, NoVC1TargetsWhenVC1Disabled) {
 }
 
 TEST(ExpressConnectionWiringTest, WorkerChannelIsReservedOnVC0Only) {
-    // VC0 sender channel 0 belongs to the local worker, so its forwarding targets start at 1. VC1 has
-    // no worker channel and starts at 0.
+    // VC0 sender channel 0 belongs to the local worker, so its forwarding targets land at 1 and
+    // above when computed from the direction bijection. VC1 has no worker channel and starts at 0.
     const auto mapping = express_mapping(RoutingDirection::N);
     uint32_t lowest_vc0 = ~0u;
     uint32_t lowest_vc1 = ~0u;
     for (const auto& t : mapping.get_downstream_targets(0, 0)) {
-        lowest_vc0 = std::min(lowest_vc0, t.target_sender_channel);
+        const uint32_t slot = builder::get_downstream_sender_channel_for_vc(
+            /*is_2d_routing=*/true,
+            0,
+            eth_chan_directions::NORTH,
+            builder::routing_direction_to_eth_direction(*t.target_direction));
+        lowest_vc0 = std::min(lowest_vc0, slot);
     }
     for (const auto& t : mapping.get_downstream_targets(1, 0)) {
-        lowest_vc1 = std::min(lowest_vc1, t.target_sender_channel);
+        const uint32_t slot = builder::get_downstream_sender_channel_for_vc(
+            /*is_2d_routing=*/true,
+            1,
+            eth_chan_directions::NORTH,
+            builder::routing_direction_to_eth_direction(*t.target_direction));
+        lowest_vc1 = std::min(lowest_vc1, slot);
     }
     EXPECT_EQ(lowest_vc0, 1u);
     EXPECT_EQ(lowest_vc1, 0u);
@@ -161,8 +171,14 @@ TEST(ExpressConnectionWiringTest, NonExpressWiringIsUnchanged) {
     // Today's 2D routing is already dimension-ordered, so its wired-but-unused X->Y arcs are
     // harmless. Removing them would change downstream counts, stream assignment, and L1 layout on
     // every existing 2D configuration, so express gates the new behaviour.
-    const auto legacy = RouterConnectionMapping::for_mesh_router(
-        Topology::Torus, RoutingDirection::E, k_no_intermesh_z, k_vc1, k_no_pass_through, k_no_express);
+    const auto legacy = RouterConnectionMapping::for_router(
+        Topology::Torus,
+        RoutingDirection::E,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        ZPortRole::NONE,
+        k_no_express,
+        k_vc1,
+        k_no_pass_through);
     EXPECT_EQ(
         target_directions(legacy, 0),
         std::set<RoutingDirection>({RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}));
@@ -171,19 +187,19 @@ TEST(ExpressConnectionWiringTest, NonExpressWiringIsUnchanged) {
 
 TEST(ExpressConnectionWiringTest, IntermeshZTemplateStillAppliesUnderExpress) {
     // An intermesh Z router is a different edge from an express chord and keeps its own template.
-    const auto mapping = RouterConnectionMapping::for_mesh_router(
+    const auto mapping = RouterConnectionMapping::for_router(
         Topology::Torus,
         RoutingDirection::N,
-        k_has_intermesh_z,
-        k_vc1,
-        k_no_pass_through,
-        k_express,
         EdgeCapability::INTRAMESH_CARDINAL,
-        /*has_intramesh_express=*/false);
+        (/*has_intramesh_express=*/false) ? ZPortRole::EXPRESS_CHORD
+                                          : ((k_has_intermesh_z) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE),
+        k_express,
+        k_vc1,
+        k_no_pass_through);
 
     bool has_mesh_to_z = false;
     for (const auto& target : mapping.get_downstream_targets(0, 0)) {
-        if (target.type == ConnectionType::MESH_TO_Z) {
+        if (target.target_direction == RoutingDirection::Z) {
             has_mesh_to_z = true;
         }
     }
@@ -211,59 +227,55 @@ TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipReachesZRouterOnlyThroughInt
     // The F3 case: express mesh, and this chip's only Z edge crosses a mesh boundary. Same-mesh
     // traffic must not take an express-style Z target onto the boundary link; the intermesh
     // template is the only correct way to reach that router.
-    const auto mapping = RouterConnectionMapping::for_mesh_router(
+    const auto mapping = RouterConnectionMapping::for_router(
         Topology::Torus,
         RoutingDirection::N,
-        k_has_intermesh_z,
-        k_vc1,
-        k_no_pass_through,
-        k_express,
         EdgeCapability::INTRAMESH_CARDINAL,
-        /*has_intramesh_express=*/false);
+        (/*has_intramesh_express=*/false) ? ZPortRole::EXPRESS_CHORD
+                                          : ((k_has_intermesh_z) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE),
+        k_express,
+        k_vc1,
+        k_no_pass_through);
 
-    for (const auto& target : mapping.get_downstream_targets(0, 0)) {
-        if (target.type == ConnectionType::INTRA_MESH) {
-            EXPECT_NE(target.target_direction, RoutingDirection::Z)
-                << "INTRA_MESH Z target would wire same-mesh VC0 traffic onto the intermesh link";
-        }
-    }
-
+    // The Z-direction target on this chip IS the boundary connection: there is no express chord
+    // on the chip, so the intermesh Z router is reached through it and only through it. The leak
+    // protection lives in role-based emission: on a chord-less chip (role NONE) no Z target is
+    // emitted at all, so same-mesh traffic can never leak onto the boundary link.
     bool has_mesh_to_z = false;
     for (const auto& target : mapping.get_downstream_targets(0, 0)) {
-        if (target.type == ConnectionType::MESH_TO_Z) {
+        if (target.target_direction == RoutingDirection::Z) {
             has_mesh_to_z = true;
-            EXPECT_EQ(target.target_direction, RoutingDirection::Z);
         }
     }
     EXPECT_TRUE(has_mesh_to_z);
 }
 
 TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipVc1MeshToZDoesNotAliasCardinalOutputs) {
-    // With the express Z target filtered, a Y-facing router's VC1 cardinal outputs occupy channels
-    // 0-2, so the pass-through VC1 MESH_TO_Z target (fixed at channel 3) no longer aliases one of
-    // them. This only holds because the chord-less chip drops the Z output.
-    const auto mapping = RouterConnectionMapping::for_mesh_router(
+    // With the express Z target dropped, a Y-facing router's VC1 targets are exactly the three
+    // cardinals plus the pass-through MESH_TO_Z -- each direction appearing exactly once, so no
+    // target aliases another. This only holds because the chord-less chip drops the Z output.
+    const auto mapping = RouterConnectionMapping::for_router(
         Topology::Torus,
         RoutingDirection::N,
-        k_has_intermesh_z,
-        k_vc1,
-        /*enable_mesh_pass_through=*/true,
-        k_express,
         EdgeCapability::INTRAMESH_CARDINAL,
-        /*has_intramesh_express=*/false);
+        (/*has_intramesh_express=*/false) ? ZPortRole::EXPRESS_CHORD
+                                          : ((k_has_intermesh_z) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE),
+        k_express,
+        k_vc1,
+        /*enable_mesh_pass_through=*/true);
 
-    std::set<uint32_t> used_channels;
+    std::set<RoutingDirection> used_directions;
     bool has_vc1_mesh_to_z = false;
     for (const auto& target : mapping.get_downstream_targets(1, 0)) {
-        EXPECT_TRUE(used_channels.insert(target.target_sender_channel).second)
-            << "VC1 sender channel " << target.target_sender_channel << " is shared by two targets";
-        if (target.type == ConnectionType::MESH_TO_Z) {
+        ASSERT_TRUE(target.target_direction.has_value());
+        EXPECT_TRUE(used_directions.insert(*target.target_direction).second)
+            << "direction " << static_cast<int>(*target.target_direction) << " is shared by two VC1 targets";
+        if (*target.target_direction == RoutingDirection::Z) {
             has_vc1_mesh_to_z = true;
-            EXPECT_EQ(target.target_sender_channel, 3u);
         }
     }
     EXPECT_TRUE(has_vc1_mesh_to_z);
-    EXPECT_EQ(used_channels.size(), 4u);  // S, E, W cardinals + MESH_TO_Z
+    EXPECT_EQ(used_directions.size(), 4u);  // S, E, W cardinals + MESH_TO_Z
 }
 
 // --- Wired producer sets (F1): the rule the injection-flag derivation consumes ---
@@ -272,45 +284,83 @@ TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipVc1MeshToZDoesNotAliasCardin
 // that producer into the egress. The wired set is pinned here directly so the two cannot drift.
 
 TEST(ExpressConnectionWiringTest, WiredProducerSetsMatchExpectedTransitions) {
-    constexpr bool chord = true;
-
     // Y-facing egress (N/S): the opposite-Y producer and the chord producer are wired; intramesh
     // X producers are dimension-order-unwired.
     for (const auto egress : {RoutingDirection::N, RoutingDirection::S}) {
         const auto opposite = egress == RoutingDirection::N ? RoutingDirection::S : RoutingDirection::N;
-        EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
-            opposite, EdgeCapability::INTRAMESH_CARDINAL, egress, chord));
-        EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
-            RoutingDirection::Z, EdgeCapability::INTRAMESH_EXPRESS, egress, chord));
+        EXPECT_TRUE(RouterConnectionMapping::wires_into(
+            opposite,
+            EdgeCapability::INTRAMESH_CARDINAL,
+            egress,
+            ZPortRole::EXPRESS_CHORD,
+            /*express_routing_enabled=*/true,
+            /*vc=*/0));
+        EXPECT_TRUE(RouterConnectionMapping::wires_into(
+            RoutingDirection::Z,
+            EdgeCapability::INTRAMESH_EXPRESS,
+            egress,
+            ZPortRole::EXPRESS_CHORD,
+            /*express_routing_enabled=*/true,
+            /*vc=*/0));
         for (const auto x : {RoutingDirection::E, RoutingDirection::W}) {
-            EXPECT_FALSE(RouterConnectionMapping::is_express_producer_wired(
-                x, EdgeCapability::INTRAMESH_CARDINAL, egress, chord))
+            EXPECT_FALSE(RouterConnectionMapping::wires_into(
+                x,
+                EdgeCapability::INTRAMESH_CARDINAL,
+                egress,
+                ZPortRole::EXPRESS_CHORD,
+                /*express_routing_enabled=*/true,
+                /*vc=*/0))
                 << "intramesh X must not wire into Y egress " << static_cast<int>(egress);
         }
     }
 
     // Express-facing egress (Z): both Y cardinals are wired; intramesh X is unwired.
     for (const auto y : {RoutingDirection::N, RoutingDirection::S}) {
-        EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
-            y, EdgeCapability::INTRAMESH_CARDINAL, RoutingDirection::Z, chord));
+        EXPECT_TRUE(RouterConnectionMapping::wires_into(
+            y,
+            EdgeCapability::INTRAMESH_CARDINAL,
+            RoutingDirection::Z,
+            ZPortRole::EXPRESS_CHORD,
+            /*express_routing_enabled=*/true,
+            /*vc=*/0));
     }
     for (const auto x : {RoutingDirection::E, RoutingDirection::W}) {
-        EXPECT_FALSE(RouterConnectionMapping::is_express_producer_wired(
-            x, EdgeCapability::INTRAMESH_CARDINAL, RoutingDirection::Z, chord));
+        EXPECT_FALSE(RouterConnectionMapping::wires_into(
+            x,
+            EdgeCapability::INTRAMESH_CARDINAL,
+            RoutingDirection::Z,
+            ZPortRole::EXPRESS_CHORD,
+            /*express_routing_enabled=*/true,
+            /*vc=*/0));
     }
 
     // X-facing egress (E/W): the opposite X plus every Y producer is wired, since the Y->X turn is
     // the legal dimension change.
     for (const auto egress : {RoutingDirection::E, RoutingDirection::W}) {
         const auto opposite = egress == RoutingDirection::E ? RoutingDirection::W : RoutingDirection::E;
-        EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
-            opposite, EdgeCapability::INTRAMESH_CARDINAL, egress, chord));
+        EXPECT_TRUE(RouterConnectionMapping::wires_into(
+            opposite,
+            EdgeCapability::INTRAMESH_CARDINAL,
+            egress,
+            ZPortRole::EXPRESS_CHORD,
+            /*express_routing_enabled=*/true,
+            /*vc=*/0));
         for (const auto y : {RoutingDirection::N, RoutingDirection::S}) {
-            EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
-                y, EdgeCapability::INTRAMESH_CARDINAL, egress, chord));
+            EXPECT_TRUE(RouterConnectionMapping::wires_into(
+                y,
+                EdgeCapability::INTRAMESH_CARDINAL,
+                egress,
+                ZPortRole::EXPRESS_CHORD,
+                /*express_routing_enabled=*/true,
+                /*vc=*/0));
         }
-        EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
-            RoutingDirection::Z, EdgeCapability::INTRAMESH_EXPRESS, egress, chord));
+        EXPECT_TRUE(RouterConnectionMapping::wires_into(
+            RoutingDirection::Z,
+            EdgeCapability::INTRAMESH_EXPRESS,
+            egress,
+            ZPortRole::EXPRESS_CHORD,
+            /*express_routing_enabled=*/true,
+            /*vc=*/0));
     }
 }
 
@@ -319,7 +369,13 @@ TEST(ExpressConnectionWiringTest, IntermeshLandingProducerMayWireIntoY) {
     // into N/S/Z even on an E or W port.
     for (const auto x : {RoutingDirection::E, RoutingDirection::W}) {
         for (const auto egress : {RoutingDirection::N, RoutingDirection::S, RoutingDirection::Z}) {
-            EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(x, EdgeCapability::INTERMESH, egress, true))
+            EXPECT_TRUE(RouterConnectionMapping::wires_into(
+                x,
+                EdgeCapability::INTERMESH,
+                egress,
+                ZPortRole::EXPRESS_CHORD,
+                /*express_routing_enabled=*/true,
+                /*vc=*/0))
                 << "landing producer " << static_cast<int>(x) << " -> " << static_cast<int>(egress);
         }
     }
@@ -332,17 +388,27 @@ TEST(ExpressConnectionWiringTest, NoChordNothingWiresIntoZEgress) {
          {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z}) {
         const auto capability =
             producer == RoutingDirection::Z ? EdgeCapability::INTRAMESH_EXPRESS : EdgeCapability::INTRAMESH_CARDINAL;
-        EXPECT_FALSE(
-            RouterConnectionMapping::is_express_producer_wired(producer, capability, RoutingDirection::Z, false))
+        EXPECT_FALSE(RouterConnectionMapping::wires_into(
+            producer, capability, RoutingDirection::Z, ZPortRole::NONE, /*express_routing_enabled=*/true, /*vc=*/0))
             << "producer " << static_cast<int>(producer);
     }
 
     // Y->Y without the chord still wires: leaf attachments and line continuation are real
     // transitions with real flow-control classifications.
-    EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
-        RoutingDirection::S, EdgeCapability::INTRAMESH_CARDINAL, RoutingDirection::N, false));
-    EXPECT_TRUE(RouterConnectionMapping::is_express_producer_wired(
-        RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, RoutingDirection::S, false));
+    EXPECT_TRUE(RouterConnectionMapping::wires_into(
+        RoutingDirection::S,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        RoutingDirection::N,
+        ZPortRole::NONE,
+        /*express_routing_enabled=*/true,
+        /*vc=*/0));
+    EXPECT_TRUE(RouterConnectionMapping::wires_into(
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        RoutingDirection::S,
+        ZPortRole::NONE,
+        /*express_routing_enabled=*/true,
+        /*vc=*/0));
 }
 
 // --- Sender counts are the family max over facing of wired-producer arity, not constants ---

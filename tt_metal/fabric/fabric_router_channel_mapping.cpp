@@ -18,21 +18,21 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
     RoutingDirection direction,
     EdgeCapability edge_capability,
     const IntermeshVCConfig* intermesh_config,
-    bool has_intermesh_z_edge,
+    ZPortRole z_port_role,
     bool express_routing_enabled) :
     topology_(topology),
     downstream_is_tensix_builder_(downstream_is_tensix_builder),
     shape_(RouterConnectionMapping::router_vc_shape(
-        topology, direction, edge_capability, has_intermesh_z_edge, express_routing_enabled, intermesh_config)) {
+        topology, direction, edge_capability, z_port_role, express_routing_enabled, intermesh_config)) {
     // Logged here rather than during layout: these are the inputs to the shape derivation, and this
     // is the only point at which they are in scope. None is retained.
     log_debug(
         LogFabric,
-        "FabricRouterChannelMapping: direction={}, capability={}, intermesh_z_edge={}, express={}, senders per VC = "
+        "FabricRouterChannelMapping: direction={}, capability={}, z_port_role={}, express={}, senders per VC = "
         "{}/{}/{}",
         static_cast<int>(direction),
         to_string(edge_capability),
-        has_intermesh_z_edge,
+        to_string(z_port_role),
         express_routing_enabled,
         shape_.sender_counts[0],
         shape_.sender_counts[1],

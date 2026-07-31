@@ -112,7 +112,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
         // For example, if mask=0x5 (binary 101), we pack compact indices 0 and 2 into args[0] and args[1]
 
         // Pack buffer base addresses (dense packed based on mask)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
             if (mask & (1 << compact_idx)) {
                 uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][compact_idx].value_or(0);
                 args_out.push_back(buffer_addr);
@@ -124,14 +124,14 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
         args_out.push_back(this->pack_downstream_noc_y_rt_arg(vc_idx));
 
         // Pack worker registration addresses (dense packed based on mask)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
             if (mask & (1 << compact_idx)) {
                 args_out.push_back(this->downstream_edm_worker_registration_addresses[vc_idx][compact_idx].value_or(0));
             }
         }
 
         // Pack worker location info addresses (dense packed based on mask)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
             if (mask & (1 << compact_idx)) {
                 args_out.push_back(
                     this->downstream_edm_worker_location_info_addresses[vc_idx][compact_idx].value_or(0));
@@ -139,7 +139,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
         }
 
         // Pack buffer index semaphore addresses (dense packed based on mask)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
             if (mask & (1 << compact_idx)) {
                 args_out.push_back(
                     this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][compact_idx].value_or(0));
@@ -217,7 +217,7 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_y_rt_arg
     uint32_t dense_idx = 0;
 
     // Iterate through compact indices in order to match address packing order
-    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
         if (mask & (1 << compact_idx)) {
             // Find the connection with this compact_idx
             for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
@@ -250,7 +250,7 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_x_rt_arg
     uint32_t dense_idx = 0;
 
     // Iterate through compact indices in order to match address packing order
-    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
         if (mask & (1 << compact_idx)) {
             // Find the connection with this compact_idx
             for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {

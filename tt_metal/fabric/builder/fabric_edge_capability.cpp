@@ -9,26 +9,6 @@
 
 namespace tt::tt_fabric {
 
-namespace {
-
-// Walk this node's Z-direction neighbours, reporting whether any of them is in another mesh.
-// get_chip_neighbors covers both intra- and inter-mesh adjacency, so one query answers both.
-bool has_z_edge_crossing_mesh(const ControlPlane& control_plane, FabricNodeId local, bool want_crossing) {
-    const auto neighbors = control_plane.get_chip_neighbors(local, RoutingDirection::Z);
-    for (const auto& [neighbor_mesh, chips] : neighbors) {
-        if (chips.empty()) {
-            continue;
-        }
-        const bool crossing = neighbor_mesh != local.mesh_id;
-        if (crossing == want_crossing) {
-            return true;
-        }
-    }
-    return false;
-}
-
-}  // namespace
-
 const char* to_string(EdgeCapability capability) {
     switch (capability) {
         case EdgeCapability::INTRAMESH_CARDINAL: return "INTRAMESH_CARDINAL";
@@ -36,6 +16,31 @@ const char* to_string(EdgeCapability capability) {
         case EdgeCapability::INTERMESH: return "INTERMESH";
     }
     return "UNKNOWN";
+}
+
+const char* to_string(ZPortRole role) {
+    switch (role) {
+        case ZPortRole::NONE: return "NONE";
+        case ZPortRole::INTERMESH_BOUNDARY: return "INTERMESH_BOUNDARY";
+        case ZPortRole::EXPRESS_CHORD: return "EXPRESS_CHORD";
+    }
+    return "UNKNOWN";
+}
+
+ZPortRole z_port_role(const ControlPlane& control_plane, FabricNodeId node) {
+    // get_chip_neighbors covers both intra- and inter-mesh adjacency, so one query answers both.
+    const auto neighbors = control_plane.get_chip_neighbors(node, RoutingDirection::Z);
+    for (const auto& [neighbor_mesh, chips] : neighbors) {
+        if (chips.empty()) {
+            continue;
+        }
+        return neighbor_mesh != node.mesh_id ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::EXPRESS_CHORD;
+    }
+    return ZPortRole::NONE;
+}
+
+bool carries_routing_direction(RoutingDirection facing, EdgeCapability capability) {
+    return !(facing == RoutingDirection::Z && capability == EdgeCapability::INTERMESH);
 }
 
 EdgeCapability classify_fabric_edge(
@@ -69,14 +74,6 @@ EdgeCapability classify_fabric_edge(
         *local.mesh_id);
 
     return EdgeCapability::INTRAMESH_EXPRESS;
-}
-
-bool has_intermesh_z_edge(const ControlPlane& control_plane, FabricNodeId local) {
-    return has_z_edge_crossing_mesh(control_plane, local, /*want_crossing=*/true);
-}
-
-bool has_intramesh_express_edge(const ControlPlane& control_plane, FabricNodeId local) {
-    return has_z_edge_crossing_mesh(control_plane, local, /*want_crossing=*/false);
 }
 
 bool is_y_axis_direction(RoutingDirection direction) {
