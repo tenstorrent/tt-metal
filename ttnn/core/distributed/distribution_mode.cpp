@@ -31,6 +31,7 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> compute_distribution_to_m
     const tt::tt_metal::distributed::MeshShape& mesh_shape) {
     DistributionMode mode = compute_distribution_mode(std::make_optional(distribution_shape), mesh_shape);
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords;
+    mesh_coords.reserve(distribution_shape.mesh_size());
 
     if (mode == DistributionMode::SUBMESH) {
         // For SUBMESH mode, coordinates map directly (distribution coords match mesh coords)
