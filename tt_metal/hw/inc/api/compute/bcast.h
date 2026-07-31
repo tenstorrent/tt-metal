@@ -38,6 +38,13 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
 
+    // BroadcastType::NONE is a pass through: llk_unpack_A leaves the tile in SrcA and only
+    // zero-fills SrcB, so the math thread must read SrcA with A2D. Reading SrcB with B2D would
+    // both copy zeros and never clear SrcA's data valid, deadlocking the unpacker. The broadcast
+    // modes leave the tile in SrcB and use B2D. Only the math thread consumes this.
+    [[maybe_unused]] constexpr DataCopyType data_copy_type =
+        (bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
+
     // Will configure A & B in similar way
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
 
@@ -48,7 +55,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     } else {
         UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(
             false, false /*transpose within 16x16 face*/, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, bcast_type>(icb)));
     }
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
@@ -92,13 +99,19 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
 
+    // Must match the selection made by unary_bcast_init: BroadcastType::NONE keeps the tile in
+    // SrcA and needs A2D; the broadcast modes keep it in SrcB and need B2D. Only the math thread
+    // consumes this.
+    [[maybe_unused]] constexpr DataCopyType data_copy_type =
+        (bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
+
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(icb, in_tile_index)));
         MATH((
             llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)));
     } else {
         UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type, false>(
+        MATH((llk_math_eltwise_unary_datacopy<data_copy_type, DST_ACCUM_MODE, bcast_type, false>(
             dst_tile_index, icb)));
     }
 #endif
@@ -128,6 +141,8 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
 
     UNPACK((llk_unpack_A_uninit<bcast_type>()));
 
+    // Teardown is keyed on unpack_to_dest only; the datacopy uninit carries no DataCopyType, so
+    // the A2D/B2D selection made by unary_bcast_init needs no counterpart here.
     if (enable_unpack_to_dest) {
         MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, true>()));
     } else {
