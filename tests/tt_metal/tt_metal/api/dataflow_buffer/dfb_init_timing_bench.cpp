@@ -35,7 +35,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
@@ -303,8 +302,7 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
 
     const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementGen2Config{};
 
-    auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES), TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES));
 
     experimental::DataflowBufferSpec dfb_spec = MakeBenchDfbSpec(DFB, ENTRY_SIZE, NUM_ENTRIES);
 
@@ -1284,8 +1282,7 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
 
     const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementGen2Config{};
 
-    auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES), TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES));
 
     experimental::DataflowBufferSpec dfb_spec = MakeBenchDfbSpec(DFB, ENTRY_SIZE, NUM_ENTRIES);
 
