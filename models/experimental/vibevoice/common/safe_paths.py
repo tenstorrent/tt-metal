@@ -26,7 +26,8 @@ out inline instead, so the constraint is visible in the same function as the rea
 — which is also what static analysis can follow, since it does not track sanitization
 across a helper call. See ``load_weights._read_weight_index``,
 ``vibevoice_config.load_vibevoice_model_config``, ``resource_utils.load_script``,
-``ttnn_vibevoice_generator._log_traj``, and the four ``open`` sites in
+``ttnn_vibevoice_generator._log_traj``, ``weight_cache.WeightCache.as_tensor`` (the tiled
+weight-cache load/dump path), and the four ``open`` sites in
 ``reference/processor/vibevoice_processor.py``. Keep the two in step if this logic changes.
 """
 
