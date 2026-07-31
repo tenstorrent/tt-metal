@@ -513,6 +513,74 @@ ever bulk so all 120 are still polled and the state check is pure overhead.
 
 **Not worth the state machine.** The 8-9% poll share was real phase occupancy but not real cost.
 
+## End to end: a DRISC services REAL producers
+
+Every measurement above drained **synthetic** tails the host had written into the control vector. This
+is the first run against the real producer path -- Tensix RISCs emitting zones through the ordinary
+`DeviceZoneScopedN` macro, with a DRISC as the only consumer.
+
+Test: `DramKernelDRISCScatterFixture.DRISCServicesRealProfiledWorkers`, kernels
+`profiler_zone_producer.cpp` (Tensix) and `drisc_service_workers.cpp` (DRISC). 16 producing cores
+(4x4, BRISC only), 2000 zones each. One zone is 4 words and a ring is 512, so each lane is asked to
+push **15.6x its ring capacity**.
+
+**The test cannot pass by accident.** `kernel_profiler.hpp`'s producer BLOCKS on a full ring by design
+("a profiled run REQUIRES the consumer to be draining"). A wrong tail offset, a missing head
+write-back, or a desynced mirror does not produce a bad number -- it hangs.
+
+| metric | value |
+|---|---|
+| words drained | 129,152 (504.5 KB) |
+| sum of final tails | 129,152 -- exact conservation |
+| lanes still behind at exit | 0 of 80 |
+| ring overflows | 0 |
+| **max run observed** | **511 words, against a 512-word ring** |
+| sweeps / core-visits with work | 4,129 / 392 |
+
+**Max run 511 of 512 is the result.** The producers sat right at the ring ceiling for the whole run:
+they really were blocking in `ring_ensure_room`, and the head write-back really is what released them.
+The loop closes.
+
+Words check out: 16 x 2000 x 4 = 128,000 expected, 129,152 seen. The 1,152-word excess is 72 words per
+core of FW wrapper zone and stickies.
+
+Throughput here (46 MB/s) is **not** a bandwidth measurement and should not be compared with anything
+above: 4,096 of the 4,129 sweeps were the post-workload quiet window used to detect completion, so the
+figure is dominated by idle polling. Only ~33 sweeps carried traffic.
+
+### Three things this run settled
+
+1. **Tails are monotonic for the whole FW session.** `init_profiler` seeds `wIndex` from L1 once and
+   explicitly does *not* re-read `TAIL_INDEX` per launch. A drainer must therefore never assume the
+   stream starts at zero -- seed the mirror from the worker's **heads**, which ride free in the 256 B
+   control vector the poll already fetches. (This is also the honest answer to "why head loads?": once,
+   to seed, never per sweep.)
+
+2. **Poll-then-drain is required for correctness, not just convention.** The fused single-read shape
+   (one 10,496 B burst covering control vector + rings) returns the tail and the data from different
+   instants inside the burst, so a fresh tail can pair with stale data and the drainer consumes words
+   the producer has not written. Reading the tail first and the data second makes the data at least as
+   fresh as the tail authorising it. The fused shape can return by pairing the *previous* sweep's tail
+   with the current sweep's data.
+
+3. **A third run mode had to exist.** Producers emit whenever `get_profiler_enabled()` is set, but both
+   pre-existing modes ship a competing consumer: default starts `RealtimeProfilerManager`, and
+   `TT_METAL_PERF_DEBUG_PROFILER=1` boots the X280. Two consumers on one SPSC ring corrupt each other.
+   `TT_METAL_DRISC_PROFILER=1` now disables both the RT manager (`mesh_device.cpp`) and the DRAM
+   profiler's per-program control-buffer reset (`profiler.cpp`), which would otherwise rewind the ring
+   tail mid-drain. Note `TT_METAL_NO_RT_PROFILER` is read **nowhere** in the tree and never disabled
+   anything.
+
+Run it with:
+
+```
+TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_DRISC_PROFILER=1 \
+  ./build_Release/test/tt_metal/unit_tests_api --gtest_filter='*DRISCServicesRealProfiledWorkers*'
+```
+
+Still open: only BRISC produced, so 4 of 5 lanes per core were empty; no host egress (the drained
+bytes are counted and checksummed, not shipped); and no decode of the marker stream.
+
 ## Verdict: the DRAM round-trip does not pay
 
 | approach | GB/s | DRISCs | DRAM traffic |

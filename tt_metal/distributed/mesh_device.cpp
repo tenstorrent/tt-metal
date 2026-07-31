@@ -1533,6 +1533,16 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         log_info(tt::LogMetal, "[perf-debug profiler] enabled -- legacy realtime profiler is disabled for this run.");
         return;
     }
+    // Same exclusion, for the DRISC drainer. It is the successor to the X280 consumer and reads the very
+    // same SPSC rings, so it cannot share them with RealtimeProfilerManager either. This needs its own
+    // variable rather than reusing TT_METAL_PERF_DEBUG_PROFILER, because that one does double duty: it
+    // also BOOTS the X280 (init_perf_debug_profiler), which would just swap one competing consumer for
+    // another. Producers on, no built-in consumer -- the drainer is supplied externally.
+    const char* dd = std::getenv("TT_METAL_DRISC_PROFILER");
+    if (dd != nullptr && *dd != '\0' && *dd != '0') {
+        log_info(tt::LogMetal, "[drisc profiler] enabled -- legacy realtime profiler is disabled for this run.");
+        return;
+    }
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
 }
 
