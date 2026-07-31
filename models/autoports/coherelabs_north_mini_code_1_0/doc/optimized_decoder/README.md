@@ -52,7 +52,9 @@ prefill at logical sequence 128 (20 samples).
 | full no-RoPE MoE, layer 4 | 2.131000 ms | 0.530140 ms | 75.1% faster | 10.067067 ms | 8.090731 ms | 19.6% faster |
 
 The primary batch-1 decode target beats the best correct fused baseline for
-every layer kind. Prefill does not regress.
+every layer kind. A paired 100-sample completion audit also confirms the
+layer-1 matched L1 chain beats the otherwise-identical no-chain policy,
+0.550780 versus 0.561696 ms. Prefill does not regress.
 
 Final Tracy runs were collected separately from watcher. `Profiler wall` is
 the end-to-end harness result from the same two-iteration instrumented run;

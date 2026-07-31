@@ -140,6 +140,13 @@ decode from 0.541365 to 0.530140 ms. Logs are
 `candidate_sparse_l1_chain_decode_layer4.json`, and
 `sparse_l1_chain_real_layer4.log`.
 
+A completion audit rechecked the apparent layer-1 0.543472-ms historical
+point with a paired 100-sample run. The exact final default matched L1 chain
+measured 0.550780 ms versus 0.561696 ms for the same policy without the L1
+chain, a 1.94% win. The historical point was cross-run variance rather than
+a reproducibly stronger configuration. Evidence:
+`layer1_l1_chain_completion_audit.json`.
+
 ## Final performance and profiling
 
 | Layer | Fused decode | Final decode | Fused prefill | Final prefill |
@@ -273,5 +280,6 @@ profiler bundle.
 
 Local stage implementation/evidence commit:
 `36e38ca877824a280e8aa4fe09762f4b2e454ce5`. The documentation-only SHA
-record closeout follows this commit and is reported in the final handoff. No
-push was made.
+record commit is `8445e440f6863d3a0d74ac03704256d41032e34a`.
+The completion-audit evidence commit follows these commits and is reported
+in the final handoff. No push was made.
