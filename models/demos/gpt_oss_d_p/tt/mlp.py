@@ -15,6 +15,8 @@ gate_up_proj_bias, down_proj, down_proj_bias}``.
 
 from pathlib import Path
 
+import torch
+
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.gpt_oss_d_p.tt.moe.router import TtGptOssRouter
@@ -80,15 +82,30 @@ class MLP:
             ep_seq_len_per_chip, E, hf_config.num_experts_per_tok, mesh_device.get_num_devices(), dgs, 2
         )
 
-        # De-interleave gate_up_proj, transpose to HF (out,in), global expert order 0..E-1.
-        # Biases are kept SEPARATE (not attached to the weight dicts) and passed through to
-        # TtRoutedExpert (#49619 merged). None in cache-only mode -> TtRoutedExpert loads tilized
-        # weights from cache.
+        # De-interleave gate_up_proj, transpose to HF (out,in), global expert order 0..E-1. Biases
+        # are kept SEPARATE (not attached to the weight dicts) and passed to TtRoutedExpert (#49619).
+        # TtRoutedExpert persists the tilized WEIGHTS to the TTNN cache but NOT the biases, so a
+        # cache-only build (empty state_dict) has no in-band bias source. Persist them to a small
+        # sidecar on the real-weights build and reload it here; without it a cache-only build would
+        # silently run bias-free and regress accuracy, so fail loud if the sidecar is missing.
         cache_only = not state_dict
+        ep_dir = _ep_cache_dir(tensor_cache_path)
+        bias_sidecar = (ep_dir / "routed_expert_biases.pt") if ep_dir is not None else None
         if cache_only:
-            routed_w, routed_b = None, None
+            routed_w = None
+            if bias_sidecar is not None and bias_sidecar.exists():
+                routed_b = torch.load(bias_sidecar, weights_only=False)  # our own file (list[dict] of biases)
+            else:
+                raise RuntimeError(
+                    "cache-only MLP build (empty state_dict) has no expert-bias source: the TTNN weight "
+                    "cache does not persist biases and no sidecar was found"
+                    + (f" at {bias_sidecar}" if bias_sidecar is not None else " (no tensor_cache_path set)")
+                    + ". Build once with a real state_dict to populate it."
+                )
         else:
             routed_w, routed_b = prepare_routed_expert_weights(experts_state_dict, E, H, I)
+            if bias_sidecar is not None:
+                torch.save(routed_b, bias_sidecar)
 
         self.experts = TtGptOssMoE(
             mesh_device=mesh_device,
@@ -108,7 +125,7 @@ class MLP:
             num_links=ccl_manager.num_links,
             routed_expert_activations_dtype=expert_activation_dtype,
             routed_expert_weights_dtype=expert_weight_dtype,
-            weight_cache_path=_ep_cache_dir(tensor_cache_path),
+            weight_cache_path=ep_dir,
             layer_idx=layer_idx,
             use_expert_bias=True,  # #49619 merged: biased unified_routed_expert_moe kernel is live
         )

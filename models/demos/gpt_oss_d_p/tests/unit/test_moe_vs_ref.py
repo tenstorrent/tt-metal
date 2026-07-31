@@ -123,6 +123,54 @@ def test_router_vs_ref(mesh_device, num_tokens, reset_seeds):
 
 
 # =====================================================================================
+# 1b. Expert weight/bias preparation (pure torch, no device)
+# =====================================================================================
+def test_prepare_routed_expert_weights_deinterleave():
+    """Pure-torch: prepare_routed_expert_weights de-interleaves gate(even)/up(odd) columns, splits the
+    matching biases the same way, transposes every projection to HF (out,in), and emits the #49619
+    bias keys (gate/up/down_proj_bias). Guards the host-side layout math that the galaxy MoE test and
+    the biased FFN test both depend on but neither exercises through prepare()."""
+    from models.demos.gpt_oss_d_p.tt.moe.weights import prepare_routed_expert_weights
+
+    torch.manual_seed(0)
+    E, H, I = 3, 4, 5
+    gate = torch.randn(E, H, I)  # (in=H, out=I)
+    up = torch.randn(E, H, I)
+    gate_up = torch.zeros(E, H, 2 * I)
+    gate_up[..., ::2] = gate  # even columns -> gate
+    gate_up[..., 1::2] = up  # odd columns -> up
+    gate_b = torch.randn(E, I)
+    up_b = torch.randn(E, I)
+    gate_up_b = torch.zeros(E, 2 * I)
+    gate_up_b[..., ::2] = gate_b
+    gate_up_b[..., 1::2] = up_b
+    down = torch.randn(E, I, H)  # (in=I, out=H)
+    down_b = torch.randn(E, H)
+
+    w, b = prepare_routed_expert_weights(
+        {
+            "gate_up_proj": gate_up,
+            "gate_up_proj_bias": gate_up_b,
+            "down_proj": down,
+            "down_proj_bias": down_b,
+        },
+        E,
+        H,
+        I,
+    )
+    assert len(w) == E and len(b) == E
+    for e in range(E):
+        # weights transposed to HF (out, in)
+        assert torch.equal(w[e]["gate_proj"], gate[e].t()), f"gate mismatch expert {e}"
+        assert torch.equal(w[e]["up_proj"], up[e].t()), f"up mismatch expert {e}"
+        assert torch.equal(w[e]["down_proj"], down[e].t()), f"down mismatch expert {e}"
+        # biases split + #49619 key names, kept 1D (not transposed)
+        assert torch.equal(b[e]["gate_proj_bias"], gate_b[e]), f"gate_bias mismatch expert {e}"
+        assert torch.equal(b[e]["up_proj_bias"], up_b[e]), f"up_bias mismatch expert {e}"
+        assert torch.equal(b[e]["down_proj_bias"], down_b[e]), f"down_bias mismatch expert {e}"
+
+
+# =====================================================================================
 # SwiGLU-OAI bias-free torch expert (matches ttnn.RoutedExpertActivation.SwiGluOai without bias)
 # =====================================================================================
 def _swiglu_oai_ffn(x, w, b=None):
@@ -373,23 +421,24 @@ def test_gpt_oss_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     """Full GPT-OSS MoE MLP (router + 128-expert EP routed experts) on (4,8) EP=32 vs a per-row torch
     reference. NEEDS a Blackhole galaxy — auto-skipped on a single card by requires_mesh_topology.
 
-    NOTE: BIAS-FREE on this branch (#49619 not merged), so the torch reference below is also
-    bias-free. Once #49619 lands, add the gate/up/down biases to both the reference FFN and the MLP
-    (set use_expert_bias=True).
+    NOTE: this end-to-end check uses ZERO expert biases (bias-free reference) — it validates the
+    router -> dispatch -> combine -> reduce plumbing at EP=32, not the bias path. #49619 (expert bias)
+    is merged and the biased fused FFN is covered single-card by test_routed_expert_ffn_vs_ref[biased];
+    a non-zero-bias galaxy variant is future work.
 
     DEPENDENCY: the MLP's TP all-gather needs a CCL manager (``.num_links``, ping-pong/barrier
-    semaphores — the object MeshConfig.allgather consumes). gpt_oss_d_p does NOT yet ship one
-    (attention runs at TP=1 with ccl_manager=None), so this test skips until that manager lands.
-    This is the ONLY remaining wiring gap for the full EP MoE; router + routed-expert plumbing are
-    already validated by the two single-card tests above."""
+    semaphores — the object MeshConfig.allgather consumes). CCLManager ships in the runtime PR
+    (tt/ccl.py, one PR up the stack); on this (MoE) branch the import fails, so this galaxy test
+    skips here and runs once the runtime PR lands. Router + routed-expert plumbing are already
+    validated by the single-card tests above."""
     from models.demos.gpt_oss_d_p.tt.config import MeshConfig
     from models.demos.gpt_oss_d_p.tt.mlp import MLP
     from models.demos.gpt_oss_d_p.utils.general_utils import get_default_num_links
 
     try:
-        from models.demos.gpt_oss_d_p.tt.ccl import CCLManager  # not yet implemented in this package
+        from models.demos.gpt_oss_d_p.tt.ccl import CCLManager  # ships in the runtime PR (one PR up the stack)
     except ImportError:
-        pytest.skip("gpt_oss_d_p CCL manager not yet implemented; full EP MoE test is blocked on it.")
+        pytest.skip("gpt_oss_d_p CCLManager ships in the runtime PR; full EP MoE test runs once it lands.")
 
     rows, cols = mesh_device.shape
     assert (rows, cols) == (4, 8), "this test targets the (4,8) galaxy layout (EP=32)"

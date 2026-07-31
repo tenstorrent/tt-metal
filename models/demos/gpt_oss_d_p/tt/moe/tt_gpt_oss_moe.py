@@ -51,7 +51,7 @@ class TtGptOssMoE(LightweightModule):
         emb_dim: int,
         hidden_dim: int,
         routed_expert_weights: list,  # per-expert {gate_proj, up_proj, down_proj}, global id order 0..E-1
-        routed_expert_biases: list = None,  # per-expert {gate_bias, up_bias, down_bias}, same order (#49619)
+        routed_expert_biases: list = None,  # per-expert {gate_proj_bias, up_proj_bias, down_proj_bias} (#49619)
         num_links: int = 2,
         topology=ttnn.Topology.Linear,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
@@ -177,7 +177,6 @@ class TtGptOssMoE(LightweightModule):
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
-            seq_len_per_chip=self.seq_len_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
         )
         indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)

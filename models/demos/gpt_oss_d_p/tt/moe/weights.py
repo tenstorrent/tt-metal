@@ -47,7 +47,7 @@ def prepare_routed_expert_weights(state_dict, num_experts, hidden_size, intermed
           * routed_expert_weights: list[dict] len E, global order 0..E-1, keys
             ``gate_proj``/``up_proj``/``down_proj`` in HF ``(out, in)`` layout.
           * routed_expert_biases: list[dict] len E, global order 0..E-1, keys
-            ``gate_bias``/``up_bias``/``down_bias`` (1D). SEPARATE from the weights (#49619).
+            ``gate_proj_bias``/``up_proj_bias``/``down_proj_bias`` (1D). SEPARATE from the weights (#49619).
     """
     gate_up_proj = state_dict["gate_up_proj"]  # [E, hidden, 2*inter]
     gate_up_proj_bias = state_dict["gate_up_proj_bias"]  # [E, 2*inter]
