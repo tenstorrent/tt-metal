@@ -102,8 +102,37 @@ layer count. The collectives (`moe_reduce`, `combine`, `dispatch`) swing a lot b
 layers, so a 1-sparse-layer run gives you one draw from that distribution rather than a typical value —
 use 6 or 8 layers when the answer depends on them.
 
-Do not scale past ~8 layers: capture volume grows with layers x chunks, and at 60 the intermediate CSV
-reached 129 GB and OOM-killed the run.
+Do not scale past ~8 layers — see below.
+
+## Memory and disk
+
+**This is the one way to break the machine, so it is worth understanding.** Capture volume scales with
+`layers x chunks x 32 devices`. The dangerous step is not the run on the device — it is tracy's
+post-processing, which `tracy-csvexport`s the trace into an intermediate `tracy_ops_times.csv` and then
+loads that file into pandas in one go.
+
+Measured on this box:
+
+| layers | `tracy_ops_times.csv` | post-process peak RSS | ops CSV (kept) | transient disk |
+|---|---|---|---|---|
+| 2 (`LAYER_IDS=0,3`) | ~5 GB | ~30 GiB | 52 MB | ~6 GB |
+| 6 | 14 GB | ~65 GiB | 148 MB | ~16 GB |
+| 8 | 19 GB | ~110 GiB | 215 MB | ~23 GB |
+| **60** | **129 GB** | **388 GiB → OOM** | never produced | ~150 GB |
+
+At 60 layers the post-process ran for ~50 minutes, exhausted 566 GB of RAM, and the OOM killer took out
+the harness mid-chunk — losing the capture *and* the hour spent on it. Everything else on the box
+suffers while that happens.
+
+So:
+
+- **Stay at or below 8 layers.** 6 is the standard run and leaves plenty of headroom.
+- **Watch it if you go higher.** `watch -n5 free -g` during post-processing; if available RAM drops
+  under ~90 GB, kill the `python3 -m tracy` process — it cannot finish and the capture is lost anyway.
+- The long silent stretch at the end of a run *is* the post-process. It is normal: ~6 min at 2 layers,
+  ~10 at 6, ~20 at 8.
+- Budget ~50 GB free disk per run before cleanup, and clean up afterwards (below) — the intermediates
+  are worthless once the ops CSV exists.
 
 ## How it works
 
@@ -162,8 +191,9 @@ rather than random ids.
 
 ## Clean up afterwards
 
-Each run leaves ~25-30 GB of intermediates. The ops CSV is the only thing worth keeping — it is what
-`visualize_zones.py` reads, and it is ~50-215 MB.
+Each run leaves ~6-25 GB of intermediates (see the table above). The ops CSV is the only thing worth
+keeping — it is what `visualize_zones.py` reads, and it is 50-215 MB. Re-rendering an old capture needs
+nothing else.
 
 ```bash
 cd $TT_METAL_HOME
