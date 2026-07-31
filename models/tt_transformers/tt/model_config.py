@@ -1143,7 +1143,9 @@ class ModelArgs:
                 # Single-device greedy can argmax the full logit width on-device (line 602 in
                 # tt_sampling.py: mask + untilize + ttnn.argmax, no all-gather, no 64K topk split).
                 # Enabling it avoids the per-token host round-trip of the full 262k-vocab logits.
-                if self.num_devices == 1:
+                # Multi-device (non-galaxy) greedy can do the same after the split-logit all-gather
+                # (which already runs for host sampling); env-gated (TT_GEMMA3_ODS=1) so default is unchanged.
+                if self.num_devices == 1 or (os.getenv("TT_GEMMA3_ODS", "0") == "1" and not self.is_galaxy):
                     sampling_ag_config["allow_force_argmax"] = True
                 self.model_config["SAMPLING_AG_CONFIG"] = sampling_ag_config
 

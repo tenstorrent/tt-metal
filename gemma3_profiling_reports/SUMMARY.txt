@@ -5,21 +5,24 @@ Scope: gemma3-12b (1 chip & 2 chip) and gemma3-27b (2 chip) only.
 ============================================================================
 END-TO-END TRACED PERF (production path: trace ON, 200 tok, batch-1)
 ============================================================================
-variant      hardware        TTFT(ms)  decode ms/tok   tok/s/user   dev-compute ceiling t/s/u
-gemma3-12b   1x P300 (1chip)   83.49      34.71          28.81            33.4
-gemma3-12b   1x P300 (2chip)   67.74      34.01          29.40            40.8
-gemma3-27b   1x P300 (2chip)  124.12      62.66          15.96            21.8
+variant      hardware        TTFT(ms)  decode ms/tok   tok/s/user   notes
+gemma3-12b   1x P300 (1chip)   83.49      34.71          28.81       ODS already default (single-chip)
+gemma3-12b   1x P300 (2chip)   67.74      34.01          29.40       baseline (host sampling)
+gemma3-12b   1x P300 (2chip)     -          -            37.56       + TT_GEMMA3_ODS=1  (+27.5%)
+gemma3-27b   1x P300 (2chip)  124.12      62.66          15.47*      baseline (host sampling; *15.96 prior run)
+gemma3-27b   1x P300 (2chip)     -          -            17.76       + TT_GEMMA3_ODS=1  (+14.8%)
+
+ODS = on-device force-argmax for greedy decode (env: TT_GEMMA3_ODS=1). Accuracy gate PASS on
+12b 2-chip: 200/200 generated tokens identical host-argmax vs on-device argmax.
 
 Key reads:
-- 12b 2-chip (29.4) is only ~2% faster than 12b 1-chip (28.81): the CCL tax (~79 us/layer:
-  AllGather 52 + ReduceScatter 27) nearly cancels the benefit of splitting the matmuls across
-  2 chips. 2-chip only clearly wins on TTFT (67.7 vs 83.5 ms). For pure decode throughput,
-  1-chip 12b is the efficient point.
-- 12b 1-chip runs at 28.81 vs a 33.4 ceiling -> ~86% of the layer-compute ceiling: decode is
-  matmul/device-bound, NOT dispatch-bound, on the traced single-chip path.
-- 12b 2-chip runs at 29.4 vs a 40.8 ceiling -> ~72%: 2-chip is more CCL/dispatch-bound (idle
-  gaps waiting on the all-reduce + host-attached-chip imbalance).
-- 27b 2-chip runs at 15.96 vs a 21.8 ceiling -> ~73%: matmul 71% of device time + CCL 13% tax.
+- Biggest 2-chip win: removing per-token host logit round-trip via ODS (12b +27.5%, 27b +14.8%).
+  Without ODS, 12b 2-chip (29.4) barely beats 1-chip (28.81) because CCL + host RT cancel TP.
+  With ODS, 12b 2-chip (37.56) clearly beats 1-chip.
+- CCL knob TT_CCL_CHUNKS=1 gave +3.7% on 12b without ODS; absorbed / negligible once ODS is on.
+- Prefetcher parked: gemma3 dims (3840/15360) need ring-aligned padding (+~14% weight DRAM),
+  poor ROI vs ODS.
+- Matmul still ~60-75% of device time after ODS; remaining headroom is matmul BW / imbalance.
 
 ============================================================================
 PER-OP DEVICE TIME  (tracy, 1 decoder layer x10 tokens, us / layer / token; 2-chip = dev0)

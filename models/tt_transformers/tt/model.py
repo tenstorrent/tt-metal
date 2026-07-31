@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 from tqdm import tqdm
 
@@ -160,11 +162,16 @@ class Transformer(LightweightModule):
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
         single_device = list(self.mesh_device.shape) == [1, 1]
         allow_force_argmax = self.args.model_config.get("SAMPLING_AG_CONFIG", {}).get("allow_force_argmax", False)
-        # On a single device, greedy sampling uses a full-width on-device ttnn.argmax (no all-gather,
-        # no 64K topk split), so force-argmax models can sample on device regardless of vocab size.
-        # This avoids the per-token host round-trip of the full logits (a big single-chip decode win).
+        # Greedy sampling uses a full-width on-device ttnn.argmax (no 64K topk split): on a single
+        # device directly, on multi-device after an all-gather of the split logits (that all-gather
+        # already happens for host sampling too). So force-argmax models can sample on device
+        # regardless of vocab size, avoiding the per-token host round-trip of the full logits.
+        # Multi-device is env-gated (TT_GEMMA3_ODS=1) so the default path stays unchanged.
+        allow_force_argmax_multidevice = allow_force_argmax and os.getenv("TT_GEMMA3_ODS", "0") == "1"
         self._supports_on_device_sampling = prefetcher is None and (
-            self.args.vocab_size // sampling_splits <= 64 * 1024 or (single_device and allow_force_argmax)
+            self.args.vocab_size // sampling_splits <= 64 * 1024
+            or (single_device and allow_force_argmax)
+            or allow_force_argmax_multidevice
         )
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(

@@ -4,7 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
+from models.tt_transformers.tt.ccl import _ccl_knob, tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
 from models.tt_transformers.tt.common import Mode
 
 
@@ -120,9 +120,9 @@ class DistributedNorm(LightweightModule):
                 topology=self.args.ccl_topology(),
                 memory_config=x.memory_config(),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
+                chunks_per_sync=_ccl_knob("TT_CCL_CHUNKS", 10),
+                num_workers_per_link=_ccl_knob("TT_CCL_WORKERS", 2),
+                num_buffers_per_channel=_ccl_knob("TT_CCL_BUFFERS", 2),
             )
 
         return x

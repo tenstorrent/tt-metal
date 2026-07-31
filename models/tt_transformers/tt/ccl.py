@@ -2,8 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from models.common.modules.tt_ccl import get_num_links as get_common_num_links
+
+
+def _ccl_knob(name: str, default: int) -> int:
+    """Env-gated CCL pipelining knob (chunks_per_sync / num_workers_per_link / num_buffers_per_channel).
+
+    Latency-bound batch-1 multi-chip decode is sensitive to these. Defaults reproduce the prior
+    hard-coded values exactly, so this is a no-op unless the env var is set.
+    """
+    v = os.getenv(name)
+    return int(v) if v not in (None, "") else default
 
 
 def get_num_links(mesh_device, cluster_axis=None):
@@ -182,9 +194,9 @@ def tt_all_reduce(
             memory_config=memory_config,
             intermediate_memory_config=rs_memory_config,
             topology=topology,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=2,
+            chunks_per_sync=_ccl_knob("TT_CCL_CHUNKS", chunks_per_sync),
+            num_workers_per_link=_ccl_knob("TT_CCL_WORKERS", num_workers_per_link),
+            num_buffers_per_channel=_ccl_knob("TT_CCL_BUFFERS", 2),
             subdevice_id=subdevice_id,
         )
         input_tensor.deallocate(True)
@@ -332,9 +344,9 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=_ccl_knob("TT_CCL_CHUNKS", 10),
+            num_workers_per_link=_ccl_knob("TT_CCL_WORKERS", 2),
+            num_buffers_per_channel=_ccl_knob("TT_CCL_BUFFERS", 2),
             subdevice_id=subdevice_id,
         )
     else:
@@ -348,9 +360,9 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=_ccl_knob("TT_CCL_CHUNKS", 10),
+            num_workers_per_link=_ccl_knob("TT_CCL_WORKERS", 2),
+            num_buffers_per_channel=_ccl_knob("TT_CCL_BUFFERS", 2),
             subdevice_id=subdevice_id,
         )
     input_tensor.deallocate(True)
