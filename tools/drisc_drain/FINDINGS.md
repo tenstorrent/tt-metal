@@ -449,6 +449,70 @@ reserve and the link never saturates.
 
 The zero-copy variant is therefore swept at N=1 only. Recovery is `tt-smi -r`.
 
+## Two-tier adaptive drainer: monitor, then drain at the right granularity
+
+Per sweep: poll every core's 64-word control vector, then per core either take the **whole core in one
+bulk read** (control vector plus all five rings, 10,496 B, one NoC packet) when *any* lane is at or
+above 70% of its ring, or **read only the valid run of each non-empty lane**.
+
+The partial tier exists for egress, not ingest. A read costs ~40 cycles regardless of payload, so
+per-lane reads are not much cheaper to issue -- but they fetch only live markers, and egress is the
+scarce resource. Bulk-reading a near-empty core spends 10 KB of host bandwidth to deliver a few
+hundred bytes. Variable-size items are packed into fixed-size socket pages; an item that does not fit
+flushes the page, so pushed bytes can exceed valid bytes.
+
+Swept by uniform per-lane occupancy so the 358-word threshold crossing is visible. The kernel's page
+count and valid-byte count were checked against an independent host-side model of the same packing.
+
+| per-lane fill | tier | us/sweep | useful GB/s | pad | poll | decide | fetch | push |
+|---|---|---|---|---|---|---|---|---|
+| 8 w (1.6%) | PARTIAL | 56.07 | 0.34 | 0.6% | 10.8% | 18.7% | 0.1% | 0.8% |
+| 64 w (12.5%) | PARTIAL | 59.98 | 2.56 | 0.0% | 10.1% | 17.5% | 1.1% | 6.1% |
+| 256 w (50%) | PARTIAL | 73.62 | 8.35 | 0.0% | 8.2% | 14.2% | 3.7% | 19.9% |
+| 358 w (69.9%) | BULK | 66.31 | 18.99 | 0.0% | 9.1% | 15.8% | 8.6% | 46.5% |
+| 480 w (93.8%) | BULK | 66.34 | 18.99 | 0.0% | 9.1% | 15.8% | 8.6% | 46.5% |
+
+**The partial tier wastes nothing** -- every byte pushed is a live marker. **The bulk tier's useful
+throughput is flat** from 70% to 94% occupancy, because it moves the whole ring regardless of how much
+is in it: at 358 words it transfers 10,496 B to deliver 7,160 B of markers.
+
+**The sparse floor is ~56 us/sweep even at 1.6% occupancy**, where almost nothing moves. Poll is only
+11% of that; the rest is the per-core loop issuing up to five reads each -- 600 tiny reads per sweep,
+each paying the same ~40-cycle issue as a large one. That is the per-lane issue cost, showing up as
+latency rather than bandwidth.
+
+### Page size must be a multiple of the bulk item
+
+A 40,960 B page cannot hold a whole number of 10,496 B whole-core items -- three fit and 9,472 B is
+padding on every page. Making the page **41,984 B (4 x 10,496)** costs nothing and packs exactly:
+
+| page | us/sweep | useful GB/s | pushed | pad |
+|---|---|---|---|---|
+| 40,960 | 78.93 | 15.96 | 20.76 | 23.1% |
+| **41,984** | **66.31** | **18.99** | 18.99 | **0.0%** |
+
+**+19% useful throughput** for a one-constant change. The partial tier is unaffected.
+
+### Hysteresis removes the redundant poll and buys 0.5%
+
+On the bulk tier the poll is redundant: a bulk read re-fetches the same control vector it just polled,
+so every hot core is visited twice. Hysteresis skips the poll for any core that went bulk last sweep
+and re-evaluates its tier from the control vector its bulk read already carried.
+
+| tier | hysteresis | us/sweep | useful | polls/sweep | poll | decide |
+|---|---|---|---|---|---|---|
+| BULK 358 w | off | 66.31 | 18.99 | 120 | 9.1% | 15.8% |
+| BULK 358 w | **on** | 65.99 | 19.09 | **1** | **1.5%** | **5.0%** |
+| PARTIAL 256 w | off | 73.62 | 8.35 | 120 | 8.2% | 14.2% |
+| PARTIAL 256 w | on | 77.04 | 7.97 | 120 | 8.8% | 14.2% |
+
+It works exactly as designed -- polls drop 120x and poll+decide collapses from 24.9% to 6.5% of the
+sweep -- **and throughput moves 0.5%.** Push rises 46.5% -> 48.4% and fetch 8.6% -> 11.1%: the removed
+work was overlapped, not on the critical path. On the partial tier it is a 5% *loss*, since no core is
+ever bulk so all 120 are still polled and the state check is pure overhead.
+
+**Not worth the state machine.** The 8-9% poll share was real phase occupancy but not real cost.
+
 ## Verdict: the DRAM round-trip does not pay
 
 | approach | GB/s | DRISCs | DRAM traffic |
@@ -513,7 +577,11 @@ Until then egress binds by ~2.7x.
 10. **If the trace goes to DRAM, ping-pong two buffers.** One DRISC doing ingest + DMA runs at
    43.18 GB/s, ~10% below reads alone, and the DMA hides completely behind the reads as long as a
    second batch buffer exists. A single deeper buffer trades that away and loses 23%.
-11. **Consume the FIFO in place**, but see 9 -- the payoff shrinks once ingest shares the core. The `memcpy` in `D2HSocket::read()` is the single largest remaining
+11. **Consume the FIFO in place**, but see 9 -- the payoff shrinks once ingest shares the core.
+12. **Size the socket page as a whole multiple of the largest item.** A 40,960 B page against a
+    10,496 B whole-core item pads 23% of every page; 41,984 B packs exactly and is worth +19%.
+13. **Do not bother with poll hysteresis.** It removes the redundant poll completely and buys 0.5%,
+    because the poll was overlapped with egress rather than on the critical path. The `memcpy` in `D2HSocket::read()` is the single largest remaining
    cost anywhere in the pipeline -- 2.3x -- and it penalises the producer as well as the consumer,
    because the host's PCIe reads contend with the device's PCIe writes.
 

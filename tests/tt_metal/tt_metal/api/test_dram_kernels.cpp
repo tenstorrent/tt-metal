@@ -1289,6 +1289,525 @@ TEST_F(DramKernelDRISCScatterFixture, HostPullFromDramProfilerRegion) {
     }
 }
 
+// Fused monitor+drain: no poll phase. One read per core covers the control vector and all five rings
+// (profiler_msg_t is contiguous, 10,496 B, still one NoC packet), so the adaptive decision becomes
+// "should I push what I already have?" rather than "should I read this core?". Dropping the poll ring
+// frees L1 for 8-core batches. Compared directly against the poll-based version at the same hot counts.
+TEST_F(DramKernelDRISCScatterFixture, DRISCFusedDrainToHost) {
+    constexpr uint32_t kRingCapWords = 512;
+    constexpr uint32_t kNumRisc = 5;
+    constexpr uint32_t kCvBytes = 64 * sizeof(uint32_t);           // 256
+    constexpr uint32_t kPageBytes = kNumRisc * kRingCapWords * 4;  // 10240, one core's rings
+    constexpr uint32_t kCoreSpan = kCvBytes + kPageBytes;          // 10496, control vector + rings
+    constexpr uint32_t kCoresPerBatch = 8;                         // 83,968 B of the 86 KB L1
+    constexpr uint32_t kThresholdWords = 4 * kRingCapWords;
+    constexpr uint32_t kNumSweeps = 200;
+    constexpr uint32_t kPagesPerRead = 8;
+
+    const std::vector<uint32_t> coords = worker_coords();
+    const uint32_t num_cores = static_cast<uint32_t>(coords.size());
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const CoreCoord grid = device_->compute_with_storage_grid_size();
+
+    const uint32_t buf = drisc_l1_base_;
+    const uint32_t cfg = buf + kCoresPerBatch * kCoreSpan;
+    const uint32_t res = cfg + 1024;
+    TT_FATAL(
+        (res + 64 - drisc_l1_base_) <= drisc_l1_unreserved_size_,
+        "{} x {} B batch overflows {} B of DRISC L1",
+        kCoresPerBatch,
+        kCoreSpan,
+        drisc_l1_unreserved_size_);
+
+    const CoreCoord d_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
+    const CoreCoord d_virtual = device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
+    const CoreCoord d_tr = soc_desc.dram_bank_endpoint_coords.at(d_logical.x).at(d_logical.y);
+    const tt::umd::CoreCoord d_phys = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(d_tr.x, d_tr.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
+
+    auto set_niu_mode = [&](uint32_t stream) {
+        Program p = CreateProgram();
+        CreateKernel(
+            p,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_niu_mode.cpp",
+            d_logical,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+        run_workload(std::move(p));
+    };
+
+    prime_worker_l1(kCoreSpan);
+    set_niu_mode(1);
+    log_info(
+        LogTest,
+        "fused drain: {} cores, one {} B read per core (cv {} + data {}), {} cores/batch",
+        num_cores,
+        kCoreSpan,
+        kCvBytes,
+        kPageBytes,
+        kCoresPerBatch);
+
+    auto run = [&](uint32_t hot) {
+        std::vector<uint32_t> cv(kCvBytes / sizeof(uint32_t), 0);
+        for (uint32_t c = 0; c < num_cores; c++) {
+            const uint32_t tail = (c < hot) ? (kThresholdWords / kNumRisc + 1) : 1u;
+            for (uint32_t r = 0; r < kNumRisc; r++) {
+                cv[5 + r] = tail;
+            }
+            cv[0] = 0xA5A50000u + c;
+            const CoreCoord v = device_->virtual_core_from_logical_core({c % grid.x, c / grid.x}, CoreType::WORKER);
+            MetalContext::instance().get_cluster().write_core(
+                cv.data(), cv.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), v), tensix_l1_base_);
+        }
+
+        const uint32_t total_pages = hot * kNumSweeps;
+
+        distributed::D2HSocket socket(
+            devices_[0],
+            distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(d_phys.x, d_phys.y)),
+            32 * kPageBytes,
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_is_l2cpu = true});
+        socket.set_page_size(kPageBytes);
+
+        Program program = CreateProgram();
+        auto kid = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/drisc_fused_to_host.cpp",
+            d_logical,
+            DramConfig{
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    kCoresPerBatch,
+                    kCoreSpan,
+                    kCvBytes,
+                    kPageBytes,
+                    kThresholdWords,
+                    buf,
+                    socket.get_config_buffer_address(),
+                    res}});
+        std::vector<uint32_t> rtas = {num_cores, kNumSweeps, tensix_l1_base_};
+        rtas.insert(rtas.end(), coords.begin(), coords.end());
+        SetRuntimeArgs(program, kid, d_logical, rtas);
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range_, std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+
+        std::vector<uint32_t> sink(static_cast<size_t>(kPageBytes) * kPagesPerRead / sizeof(uint32_t));
+        uint32_t left = total_pages;
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto deadline = t0 + std::chrono::seconds(60);
+        while (left > 0) {
+            const uint32_t avail = socket.pages_available();
+            if (avail > 0) {
+                const uint32_t take = std::min(avail, std::min(left, kPagesPerRead));
+                socket.read(sink.data(), take);
+                left -= take;
+            }
+            if (std::chrono::steady_clock::now() > deadline) {
+                log_warning(LogTest, "drain timed out with {} pages left", left);
+                break;
+            }
+        }
+        socket.barrier(20000);
+        distributed::Finish(mesh_device_->mesh_command_queue());
+
+        std::vector<uint32_t> o(11);
+        MetalContext::instance().get_cluster().read_core(
+            o.data(), o.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), d_virtual), res);
+        const uint64_t cyc = (static_cast<uint64_t>(o[1]) << 32) | o[0];
+        const uint64_t rd = (static_cast<uint64_t>(o[5]) << 32) | o[4];
+        const uint64_t dec = (static_cast<uint64_t>(o[7]) << 32) | o[6];
+        const uint64_t psh = (static_cast<uint64_t>(o[9]) << 32) | o[8];
+        EXPECT_EQ(o[2], total_pages) << "pages pushed != expected";
+
+        const double ns = 1e9 / clk_hz;
+        const uint64_t drained = static_cast<uint64_t>(hot) * kPageBytes * kNumSweeps;
+        log_info(
+            LogTest,
+            "  {:>3}/{} hot | {:>7.2f} us/sweep | drained {:>6.2f} GB/s | wbar {:>4.1f}% read {:>5.1f}% "
+            "decide+push {:>5.1f}% (push {:>5.1f}%)",
+            hot,
+            num_cores,
+            static_cast<double>(cyc) / kNumSweeps * ns / 1e3,
+            drained > 0 ? compute_bw_gbs(drained, cyc, clk_hz) : 0.0,
+            100.0 * static_cast<double>(o[3]) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(rd) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(dec) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(psh) / static_cast<double>(cyc));
+    };
+
+    for (uint32_t rep = 0; rep < 2; rep++) {
+        for (uint32_t hot : {0u, 4u, 12u, 60u, 120u}) {
+            run(hot);
+        }
+    }
+
+    set_niu_mode(0);
+}
+
+// Two-tier adaptive drainer: poll the 64-word tails, then per core either take the whole core in one
+// bulk read (if ANY lane is >= 70% full) or read just the valid run of each non-empty lane.
+//
+// Swept by uniform per-lane occupancy so the threshold crossing is visible: below 358 words every core
+// takes the partial path, at or above it every core takes the bulk path. The interesting columns are
+// the useful (valid) drain rate versus the pushed rate -- bulk moves whole rings whether or not they
+// are full, and egress is the scarce resource.
+TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
+    constexpr uint32_t kRingCapWords = 512;
+    constexpr uint32_t kNumRisc = 5;
+    constexpr uint32_t kCvBytes = 256;
+    constexpr uint32_t kRingCapBytes = kRingCapWords * 4;                // 2048
+    constexpr uint32_t kCoreSpan = kCvBytes + kNumRisc * kRingCapBytes;  // 10496
+    constexpr uint32_t kBulkThresholdWords = kRingCapWords * 70 / 100;   // 358 = 70% of a ring
+    constexpr uint32_t kNumSweeps = 100;
+    constexpr uint32_t kPagesPerRead = 8;
+
+    const std::vector<uint32_t> coords = worker_coords();
+    const uint32_t num_cores = static_cast<uint32_t>(coords.size());
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const CoreCoord grid = device_->compute_with_storage_grid_size();
+
+    const uint32_t poll_ring = drisc_l1_base_;
+    const uint32_t page_buf = poll_ring + num_cores * kCvBytes;
+
+    const CoreCoord d_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
+    const CoreCoord d_virtual = device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
+    const CoreCoord d_tr = soc_desc.dram_bank_endpoint_coords.at(d_logical.x).at(d_logical.y);
+    const tt::umd::CoreCoord d_phys = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(d_tr.x, d_tr.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
+
+    auto set_niu_mode = [&](uint32_t stream) {
+        Program p = CreateProgram();
+        CreateKernel(
+            p,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_niu_mode.cpp",
+            d_logical,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+        run_workload(std::move(p));
+    };
+
+    prime_worker_l1(kCoreSpan);
+    set_niu_mode(1);
+    log_info(
+        LogTest,
+        "two-tier drain: {} cores, bulk when any lane >= {} words ({}% of {})",
+        num_cores,
+        kBulkThresholdWords,
+        70,
+        kRingCapWords);
+
+    // 40960 is not a multiple of the 10496 B whole-core item, so the bulk tier pads every page.
+    // 41984 = 4 x 10496 packs exactly.
+    auto run = [&](uint32_t tail_words, uint32_t kPageBytes, uint32_t hysteresis) {
+        const uint32_t cfg = page_buf + kPageBytes;
+        const uint32_t res = cfg + 1024;
+        TT_FATAL(
+            (res + 64 - drisc_l1_base_) <= drisc_l1_unreserved_size_,
+            "poll ring {} B + page {} B overflow {} B",
+            num_cores * kCvBytes,
+            kPageBytes,
+            drisc_l1_unreserved_size_);
+        std::vector<uint32_t> cv(kCvBytes / sizeof(uint32_t), 0);
+        for (uint32_t r = 0; r < kNumRisc; r++) {
+            cv[5 + r] = tail_words;
+        }
+        for (uint32_t c = 0; c < num_cores; c++) {
+            cv[0] = 0xA5A50000u + c;
+            const CoreCoord v = device_->virtual_core_from_logical_core({c % grid.x, c / grid.x}, CoreType::WORKER);
+            MetalContext::instance().get_cluster().write_core(
+                cv.data(), cv.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), v), tensix_l1_base_);
+        }
+
+        // Mirror the kernel's packing exactly so the host knows how many pages to expect.
+        const bool bulk = tail_words >= kBulkThresholdWords;
+        const uint32_t lane_bytes = (tail_words * 4u + 15u) & ~15u;
+        uint64_t fill = 0;
+        uint64_t exp_pages = 0;
+        uint64_t exp_valid = 0;
+        for (uint32_t s = 0; s < kNumSweeps; s++) {
+            for (uint32_t c = 0; c < num_cores; c++) {
+                const uint32_t n_items = bulk ? 1u : kNumRisc;
+                for (uint32_t it = 0; it < n_items; it++) {
+                    const uint32_t bytes = bulk ? kCoreSpan : lane_bytes;
+                    if (bytes == 0) {
+                        continue;
+                    }
+                    if (fill + bytes > kPageBytes) {
+                        exp_pages++;
+                        fill = 0;
+                    }
+                    fill += bytes;
+                    exp_valid += bytes;
+                }
+            }
+        }
+        if (fill > 0) {
+            exp_pages++;
+        }
+
+        distributed::D2HSocket socket(
+            devices_[0],
+            distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(d_phys.x, d_phys.y)),
+            32 * kPageBytes,
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_is_l2cpu = true});
+        socket.set_page_size(kPageBytes);
+
+        Program program = CreateProgram();
+        auto kid = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/drisc_two_tier_to_host.cpp",
+            d_logical,
+            DramConfig{
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    kCvBytes,
+                    kRingCapBytes,
+                    kCoreSpan,
+                    kBulkThresholdWords,
+                    kPageBytes,
+                    poll_ring,
+                    page_buf,
+                    socket.get_config_buffer_address(),
+                    res,
+                    hysteresis}});
+        std::vector<uint32_t> rtas = {num_cores, kNumSweeps, tensix_l1_base_, tensix_l1_base_ + kCvBytes};
+        rtas.insert(rtas.end(), coords.begin(), coords.end());
+        SetRuntimeArgs(program, kid, d_logical, rtas);
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range_, std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+
+        std::vector<uint32_t> sink(static_cast<size_t>(kPageBytes) * kPagesPerRead / sizeof(uint32_t));
+        uint64_t left = exp_pages;
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto deadline = t0 + std::chrono::seconds(90);
+        while (left > 0) {
+            const uint32_t avail = socket.pages_available();
+            if (avail > 0) {
+                const uint32_t take =
+                    static_cast<uint32_t>(std::min<uint64_t>(avail, std::min<uint64_t>(left, kPagesPerRead)));
+                socket.read(sink.data(), take);
+                left -= take;
+            }
+            if (std::chrono::steady_clock::now() > deadline) {
+                log_warning(LogTest, "drain timed out with {} pages left of {}", left, exp_pages);
+                break;
+            }
+        }
+        socket.barrier(20000);
+        distributed::Finish(mesh_device_->mesh_command_queue());
+
+        std::vector<uint32_t> o(15);
+        MetalContext::instance().get_cluster().read_core(
+            o.data(), o.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), d_virtual), res);
+        const uint64_t cyc = (static_cast<uint64_t>(o[1]) << 32) | o[0];
+        const uint64_t valid = (static_cast<uint64_t>(o[6]) << 32) | o[5];
+        const uint64_t poll = (static_cast<uint64_t>(o[8]) << 32) | o[7];
+        const uint64_t fetch = (static_cast<uint64_t>(o[11]) << 32) | o[10];
+        const uint64_t push = (static_cast<uint64_t>(o[13]) << 32) | o[12];
+        EXPECT_EQ(o[2], exp_pages) << "kernel pages != host packing model";
+        EXPECT_EQ(valid, exp_valid) << "kernel valid bytes != host model";
+
+        const uint64_t pushed = static_cast<uint64_t>(o[2]) * kPageBytes;
+        const double ns = 1e9 / clk_hz;
+        log_info(
+            LogTest,
+            "  tail {:>3} w ({:<7}) page {:>5} hyst {} | {:>7.2f} us/sweep | useful {:>6.2f} GB/s | pad {:>4.1f}% "
+            "| polls/sweep {:>4} | poll {:>4.1f}% decide {:>4.1f}% fetch {:>4.1f}% push {:>4.1f}%",
+            tail_words,
+            bulk ? "BULK" : "PARTIAL",
+            kPageBytes,
+            hysteresis,
+            static_cast<double>(cyc) / kNumSweeps * ns / 1e3,
+            compute_bw_gbs(valid, cyc, clk_hz),
+            100.0 * (1.0 - static_cast<double>(valid) / static_cast<double>(pushed)),
+            o[14] / kNumSweeps,
+            100.0 * static_cast<double>(poll) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(o[9]) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(fetch) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(push) / static_cast<double>(cyc));
+    };
+
+    for (uint32_t rep = 0; rep < 2; rep++) {
+        for (uint32_t h : {0u, 1u}) {
+            for (uint32_t t : {8u, 64u, 256u, 358u, 480u}) {
+                run(t, 41984u, h);
+            }
+        }
+    }
+
+    set_niu_mode(0);
+}
+
+// The complete drainer: monitor the 64-word control vector on every core, run profstream.c's adaptive
+// threshold, whole-core-read only the cores that trip it, and push those to the host.
+//
+// The host sets each core's tails so a chosen number trip ADAPT_THRESH. Hot counts are multiples of
+// the page width so every sweep produces whole pages and the host knows exactly how many to expect.
+TEST_F(DramKernelDRISCScatterFixture, DRISCAdaptiveDrainToHost) {
+    constexpr uint32_t kRingCapWords = 512;  // PROFILER_L1_VECTOR_SIZE
+    constexpr uint32_t kNumRisc = 5;
+    constexpr uint32_t kCvWords = 64;                                 // PROFILER_L1_CONTROL_VECTOR_SIZE
+    constexpr uint32_t kPollBytes = kCvWords * sizeof(uint32_t);      // 256
+    constexpr uint32_t kBytesPerCore = kNumRisc * kRingCapWords * 4;  // 10240
+    constexpr uint32_t kCoresPerPage = 4;  // 40960 B page; 8 would not fit beside the poll ring
+    constexpr uint32_t kPageBytes = kCoresPerPage * kBytesPerCore;
+    constexpr uint32_t kThresholdWords = 4 * kRingCapWords;  // ADAPT_THRESH
+    constexpr uint32_t kNumSweeps = 200;
+    constexpr uint32_t kPagesPerRead = 8;
+
+    const std::vector<uint32_t> coords = worker_coords();
+    const uint32_t num_cores = static_cast<uint32_t>(coords.size());
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const CoreCoord grid = device_->compute_with_storage_grid_size();
+
+    const uint32_t poll_ring = drisc_l1_base_;
+    const uint32_t page_buf = poll_ring + num_cores * kPollBytes;
+    const uint32_t cfg = page_buf + kPageBytes;
+    const uint32_t res = cfg + 1024;
+    TT_FATAL(
+        (res + 64 - drisc_l1_base_) <= drisc_l1_unreserved_size_,
+        "poll ring {} B + page {} B overflow {} B of DRISC L1",
+        num_cores * kPollBytes,
+        kPageBytes,
+        drisc_l1_unreserved_size_);
+
+    const CoreCoord d_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
+    const CoreCoord d_virtual = device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
+    const CoreCoord d_tr = soc_desc.dram_bank_endpoint_coords.at(d_logical.x).at(d_logical.y);
+    const tt::umd::CoreCoord d_phys = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(d_tr.x, d_tr.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
+
+    auto set_niu_mode = [&](uint32_t stream) {
+        Program p = CreateProgram();
+        CreateKernel(
+            p,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_niu_mode.cpp",
+            d_logical,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+        run_workload(std::move(p));
+    };
+
+    // Ring payload is the same on every core and never changes; only the control vector is rewritten.
+    prime_worker_l1(kPollBytes + kBytesPerCore);
+    set_niu_mode(1);
+    log_info(
+        LogTest,
+        "adaptive drain to host: {} cores, poll {} B, whole-core {} B, page {} cores, ADAPT_THRESH {} words",
+        num_cores,
+        kPollBytes,
+        kBytesPerCore,
+        kCoresPerPage,
+        kThresholdWords);
+
+    auto run = [&](uint32_t hot) {
+        // Tails high enough that 5 lanes cross the threshold, or low enough that they never do.
+        std::vector<uint32_t> cv(kCvWords, 0);
+        for (uint32_t c = 0; c < num_cores; c++) {
+            const uint32_t tail = (c < hot) ? (kThresholdWords / kNumRisc + 1) : 1u;
+            for (uint32_t r = 0; r < kNumRisc; r++) {
+                cv[5 + r] = tail;
+            }
+            cv[0] = 0xA5A50000u + c;
+            const CoreCoord v = device_->virtual_core_from_logical_core({c % grid.x, c / grid.x}, CoreType::WORKER);
+            MetalContext::instance().get_cluster().write_core(
+                cv.data(), cv.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), v), tensix_l1_base_);
+        }
+
+        const uint32_t pages_per_sweep = hot / kCoresPerPage;
+        const uint32_t total_pages = pages_per_sweep * kNumSweeps;
+
+        distributed::D2HSocket socket(
+            devices_[0],
+            distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(d_phys.x, d_phys.y)),
+            32 * kPageBytes,
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_is_l2cpu = true});
+        socket.set_page_size(kPageBytes);
+
+        Program program = CreateProgram();
+        auto kid = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/drisc_adaptive_to_host.cpp",
+            d_logical,
+            DramConfig{
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    kPollBytes,
+                    kBytesPerCore,
+                    kCoresPerPage,
+                    kThresholdWords,
+                    poll_ring,
+                    page_buf,
+                    socket.get_config_buffer_address(),
+                    res}});
+        std::vector<uint32_t> rtas = {num_cores, kNumSweeps, tensix_l1_base_, tensix_l1_base_ + kPollBytes};
+        rtas.insert(rtas.end(), coords.begin(), coords.end());
+        SetRuntimeArgs(program, kid, d_logical, rtas);
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range_, std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+
+        std::vector<uint32_t> sink(static_cast<size_t>(kPageBytes) * kPagesPerRead / sizeof(uint32_t));
+        uint32_t left = total_pages;
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto deadline = t0 + std::chrono::seconds(60);
+        while (left > 0) {
+            const uint32_t avail = socket.pages_available();
+            if (avail > 0) {
+                const uint32_t take = std::min(avail, std::min(left, kPagesPerRead));
+                socket.read(sink.data(), take);
+                left -= take;
+            }
+            if (std::chrono::steady_clock::now() > deadline) {
+                log_warning(LogTest, "drain timed out with {} pages left", left);
+                break;
+            }
+        }
+        socket.barrier(20000);
+        distributed::Finish(mesh_device_->mesh_command_queue());
+
+        std::vector<uint32_t> o(13);
+        MetalContext::instance().get_cluster().read_core(
+            o.data(), o.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), d_virtual), res);
+        const uint64_t cyc = (static_cast<uint64_t>(o[1]) << 32) | o[0];
+        const uint64_t poll = (static_cast<uint64_t>(o[5]) << 32) | o[4];
+        const uint64_t dec = (static_cast<uint64_t>(o[7]) << 32) | o[6];
+        const uint64_t bulk = (static_cast<uint64_t>(o[9]) << 32) | o[8];
+        const uint64_t push = (static_cast<uint64_t>(o[11]) << 32) | o[10];
+        EXPECT_EQ(o[2], total_pages) << "pages pushed != expected";
+        EXPECT_EQ(o[3], hot * kNumSweeps) << "bulk count != expected";
+
+        const double ns = 1e9 / clk_hz;
+        const double us_sweep = static_cast<double>(cyc) / kNumSweeps * ns / 1e3;
+        const uint64_t drained = static_cast<uint64_t>(hot) * kBytesPerCore * kNumSweeps;
+        log_info(
+            LogTest,
+            "  {:>3}/{} hot | {:>7.2f} us/sweep | drained {:>6.2f} GB/s | poll {:>5.1f}% decide {:>5.1f}% "
+            "bulk {:>5.1f}% push {:>5.1f}%",
+            hot,
+            num_cores,
+            us_sweep,
+            drained > 0 ? compute_bw_gbs(drained, cyc, clk_hz) : 0.0,
+            100.0 * static_cast<double>(poll) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(dec) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(bulk) / static_cast<double>(cyc),
+            100.0 * static_cast<double>(push) / static_cast<double>(cyc));
+    };
+
+    for (uint32_t rep = 0; rep < 2; rep++) {
+        for (uint32_t hot : {0u, 4u, 12u, 60u, 120u}) {
+            run(hot);
+        }
+    }
+
+    set_niu_mode(0);
+}
+
 // Scale the direct drainer: N DRISCs, each owning a slice of the grid and pushing to its own D2H
 // socket. Same shape as the X280 reader fan-out, except each reader here is also its own egress path,
 // so there is no relay and no shared ring.
