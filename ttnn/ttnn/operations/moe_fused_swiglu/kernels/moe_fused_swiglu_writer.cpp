@@ -21,6 +21,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+#include "moe_fused_swiglu_bank_runs.hpp"  // the ONE definition of the bank-run coalescing
+#include "moe_fused_swiglu_common.hpp"     // the ONE definition of the mailbox word layout
+
 constexpr uint32_t EMB_T = get_compile_time_arg_val(0);
 constexpr uint32_t HID_T = get_compile_time_arg_val(1);
 constexpr uint32_t KR_PAD = get_compile_time_arg_val(2);
@@ -49,29 +52,9 @@ constexpr uint32_t TA_BASE = 22;
 constexpr auto wu_args = TensorAccessorArgs<TA_BASE>();
 constexpr auto out_args = TensorAccessorArgs<wu_args.next_compile_time_args_offset()>();
 
-FORCE_INLINE uint32_t remap_n(uint32_t j, uint32_t slots) {
-    if constexpr (REMAP) {
-        return (j / slots) + NUM_BANKS * (j % slots);
-    } else {
-        return j;
-    }
-}
-
-FORCE_INLINE uint32_t run_len(uint32_t j, uint32_t end, uint32_t slots) {
-    if constexpr (REMAP) {
-        uint32_t r = end - j;
-        const uint32_t to_bank_edge = slots - (j % slots);
-        if (to_bank_edge < r) {
-            r = to_bank_edge;
-        }
-        if (WRUN < r) {
-            r = WRUN;
-        }
-        return r;
-    } else {
-        return 1;
-    }
-}
+// Bank-run coalescing (see moe_fused_swiglu_bank_runs.hpp): ONE definition, bound here to this
+// kernel's compile-time knobs — identical to the reader's binding, which is the point.
+using BR = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN>;
 
 void kernel_main() {
     const uint32_t mailbox_addr = get_arg_val<uint32_t>(0);
@@ -92,11 +75,11 @@ void kernel_main() {
 
     // The reader owns the device-resident count read and publishes it to the L1 mailbox.
     volatile tt_l1_ptr uint32_t* mbox = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr);
-    while (mbox[3] != MAILBOX_MAGIC) {
+    while (mbox[moe_fused_swiglu::MBOX_READY] != MAILBOX_MAGIC) {
         invalidate_l1_cache();
     }
-    const uint32_t m_t = mbox[1];
-    const uint32_t m_blocks = mbox[2];
+    const uint32_t m_t = mbox[moe_fused_swiglu::MBOX_M_T];
+    const uint32_t m_blocks = mbox[moe_fused_swiglu::MBOX_M_BLOCKS];
 
     volatile tt_l1_ptr uint32_t* sem_go_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_GO)));
@@ -113,17 +96,8 @@ void kernel_main() {
         {
             const uint32_t wp = get_write_ptr(cb_w_up);
             for (uint32_t k = 0; k < kr; ++k) {
-                const uint32_t kt = kstart + k;
-                uint32_t j = hstart;
-                uint32_t noff = 0;
-                while (j < hstart + hn) {
-                    const uint32_t len = run_len(j, hstart + hn, SLOTS_H);
-                    const uint32_t first = remap_n(j, SLOTS_H);
-                    noc_async_read(
-                        wu_acc.get_noc_addr(kt * HID_T + first), wp + (k * HN_PAD + noff) * BFP4_TILE, len * BFP4_TILE);
-                    j += len;
-                    noff += len;
-                }
+                BR::read(
+                    wu_acc, (kstart + k) * HID_T, hstart, hstart + hn, SLOTS_H, wp + k * HN_PAD * BFP4_TILE, BFP4_TILE);
             }
             noc_async_read_barrier();
         }
@@ -163,18 +137,7 @@ void kernel_main() {
                 if (row >= m_t) {
                     break;  // rows past ceil_tile(count) are never written
                 }
-                uint32_t j = jstart;
-                uint32_t eoff = 0;
-                while (j < jstart + ec) {
-                    const uint32_t len = run_len(j, jstart + ec, SLOTS_E);
-                    const uint32_t first = remap_n(j, SLOTS_E);
-                    noc_async_write(
-                        rp + (t * EC_MAX + eoff) * BFP8_TILE,
-                        out_acc.get_noc_addr(row * EMB_T + first),
-                        len * BFP8_TILE);
-                    j += len;
-                    eoff += len;
-                }
+                BR::write(out_acc, row * EMB_T, jstart, jstart + ec, SLOTS_E, rp + t * EC_MAX * BFP8_TILE, BFP8_TILE);
             }
             noc_async_write_barrier();
         }

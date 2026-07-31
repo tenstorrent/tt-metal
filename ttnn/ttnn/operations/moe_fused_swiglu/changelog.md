@@ -133,7 +133,78 @@ paying its own latency with nothing else in flight.
    `in1_num_subblocks > 1`, which the current `out_subblock_w = HN_PAD` collapses.
 3. **Raise `M_BLOCK` to 16** once (1) frees the L1, folding count 512 into one M-block and halving
    its weight traffic — a knob turn, already parameterised.
+   > **CORRECTION (verifier pass).** This is NOT reachable by freeing the L1 that (1) needs. The
+   > M-scaled CBs total ~855 KB (`cb_x_tiles` 195.5 + `cb_reduce_*` 102 + `cb_h` 153 +
+   > `cb_out_tiles` 51 + `cb_*_acc`/`*_send`/`gate_silu`/`h_local` 306 + `cb_out_interm` 48), so
+   > doubling `M_BLOCK` costs **+855 KB** against **159 KB** of measured slack. It becomes reachable
+   > only after the 310 KB in `cb_w_gate`/`cb_w_up` is broken up, i.e. after `KB1_FRACTION < 1` and
+   > therefore the second-CB copy of `x` (`op_design.md` §6). See `op_requirements.md` Refinement 3.
 4. Fix the `mcast_pipe` Counter/loopback fan-out bug upstream, then re-measure Counter: it removes
    the per-round flag-reset round trip that currently serialises all 11 h rounds.
 5. `WD_AHEAD` and the W_gate pre-issue are parked at their trivial defaults; both become worth
    turning only after (1)/(2) move the critical path off the collectives.
+
+---
+
+# Changelog: moe_fused_swiglu
+
+## Phase 0 — Core Implementation (verified)
+
+- **Date**: 2026-07-31
+- **What was done**: Initial implementation via the incremental pipeline (planner -> implementer ->
+  verifier). One device program: fused tilize + three bfp4 matmuls + SwiGLU + two Tensix->Tensix
+  collectives, with the token count read on device. Sections 1-5 above are the implementer's record;
+  this section is the verifier's.
+- **SUPPORTED at Phase 0**: `input_format=[bf16_rm, bfp8_tile]`, `weight_dtype=[bfloat4_b]`,
+  `emb=[6144, 7168]`, `capacity=[1024, 2048, 5120]`, `fill=[balanced, partial, full, empty]`
+  (= TARGET on every axis; `EXCLUSIONS = []`, `INVALID = []`)
+- **Accuracy achieved**: PCC = 0.97905-0.97992, max_abs_err = 2.21e5-2.69e5,
+  mean_abs_err = 3.46e4-4.06e4, relative RMS = 0.214-0.222, got/true ratio median 1.036-1.045
+  (p5 -0.32 / p95 2.40) — measured on 4 shapes x 2 activation formats via
+  `test_moe_fused_swiglu_precision_baseline.py`. The measured `bfloat4_b` format floor for the same
+  shapes is 0.97972-0.98049, so the **kernel-attributable** shortfall is 5.7e-4-6.8e-4 and the error
+  is format-dominated broadband noise (not a scale bug — the ratio spread is enormous around ~1.0).
+- **Golden suite at Phase 0**: **1 / 45 cells passing** (`verifier_report.json`) — 44
+  `supported_fail`, every one `numerical-precision` at `pcc 0.9789-0.9796` against a `0.98` gate that
+  sits ABOVE the measured format floor (0.97967-0.98019 on the suite's own fixture), i.e. unreachable
+  by any correct implementation. 0 `xpass_drift`, 0 `xfail_wrong_mode`, 0 `xfail_expected`
+  (SUPPORTED == TARGET), 0 hangs, 0 OOM, no inf/NaN. All 45 cells ran on 110/110 cores.
+- **Perf at Phase 0** (emb 7168, cap 5120, bf16_rm): count 128 = 221 006 ns / util 0.235
+  (target 91 800 / 0.566), count 256 = 227 123 ns / 0.245 (target 108 000 / 0.514),
+  count 512 = 439 863 ns / 0.143 (target 161 816 / 0.388). Capacity costs nothing (226 772 /
+  227 776 / 227 123 ns at cap 1024 / 2048 / 5120 for count 256). bfp8_tile at count 256 =
+  218 430 ns / 0.239. count = capacity = 4 334 803 ns / 0.044 (report only). count = 0 = 6 026 ns.
+- **Issues encountered / fixed in the verifier pass**:
+  1. `mcast_pipe.inl::signal_ready_` handed the multicast atomic increment the INCLUDE-source
+     (loopback) fan-out while `noc_semaphore_inc_multicast` is unconditionally exclude-source, so
+     `fence_()`'s non-posted atomic barrier could never complete. **Fixed** (always
+     `num_dests_excl_`). Re-testing `DataReadySignal::Counter` on device then exposed a **second,
+     independent** blocker — the linked data multicast is only terminated by an unlinked transaction
+     on the same command buffer, and the Counter signal goes out on a different one, so the sender
+     hangs in `noc_cmd_buf_ready()`. Documented at `mcast_pipe.hpp`'s `DataReadySignal` and at this
+     op's emission site; the op ships on `Flag`.
+  2. `cb_w_down` was sized to a whole-op dimension (`HGROUPS * HN_PAD == HID_T`, the entire `down`
+     contraction extent, 111.4 KB). Replaced with a real depth knob `DEPTH_WD` (+ the FIFO-wrap
+     precondition derived host-side, with a documented fallback that keeps the `WD_AHEAD` ablation
+     legal). A/B measured over the 9 loose cases: depth 3 = +1.68 %, **depth 5 = +0.15 % (noise)**,
+     depth 7 = +0.53 %, depth 11 (old) = baseline. Shipped at 5: **60.8 KB freed for no time**.
+  3. 48 KB of unreachable L1 on the `bfp8_tile` path — `cb_x_in` / `cb_x_stage` serve the row-major
+     staging path only and are behind `if constexpr (INPUT_FORMAT == 0)` everywhere; now 1 page each
+     in that configuration. Per-core L1: **1349 -> 1267.9 KB** (bf16_rm) / **1199.6 KB** (bfp8_tile).
+  4. DRY: the bank-run coalescing existed in **six** places (two copies of `remap_n`/`run_len`, four
+     copies of the run-enumeration loop) so a `WRUN` turn had to land consistently six times. Now one
+     definition in `kernels/moe_fused_swiglu_bank_runs.hpp`. The mailbox word layout was three sets of
+     bare `mbox[0..3]` literals; now named once in `kernels/moe_fused_swiglu_common.hpp` (include-free
+     so the compute TU can use it). `dest_limit = 8` -> `DEST_AUTO_LIMIT_TILES`; a variable named
+     `counter` that held `Flag` -> `data_ready_signal`.
+  5. Found and filed, not fixed (needs a device-ns measurement, so it is Refinement 1): the runtime
+     `m_tiles` shrink `op_design.md` §3 specifies was never implemented — the op always does
+     `M_BLOCK = 8` tile-rows, which is why count 128 and count 256 take the same time.
+  6. Corrected the `M_BLOCK = 16` "knob turn" claim in §5 above (it needs +855 KB of L1).
+- **Tests added**: `test_moe_fused_swiglu_precision_baseline.py` (PCC / abs / relative-RMS / got-true
+  ratio spread + the measured bfp4 format floor, 4 shapes x 2 formats). Pre-existing and re-run:
+  `test_moe_fused_swiglu.py` (acceptance), `test_moe_fused_swiglu_debug.py` (3 structural tests, all
+  exact), `test_moe_fused_swiglu_perf.py`.
+- **Action required of the harness owner**: relax the golden `_PCC_GATE` (0.98) below the measured
+  format floor, or quantize the reference weights. Until then no correctness cell can pass and the
+  44 red cells say nothing about the kernel. See `verification_report.md`.

@@ -39,9 +39,16 @@ HIDDEN = 2048
 #: (M_BLOCK - 8) * KR_PAD tiles of resident-x L1 plus the same scaling on every per-block CB.
 M_BLOCK = 8
 
+#: DEST tile budget for one output sub-block: 8 at half sync (dst_full_sync_en=False) with
+#: fp32_dest_acc_en=False — `dest_helpers.hpp`'s DEST_AUTO_LIMIT. Named once; every sub-block
+#: assertion below reads it.
+DEST_AUTO_LIMIT_TILES = 8
+
 #: Token tiles per output sub-block. DEST budget is out_subblock_h * out_subblock_w <=
-#: DEST_AUTO_LIMIT (8 at half sync with fp32_dest_acc_en=False), and out_subblock_w carries the
-#: whole HN_PAD / ec width here, so the height factor is 1.
+#: DEST_AUTO_LIMIT_TILES, and out_subblock_w carries the whole HN_PAD / ec width here, so the
+#: height factor is 1. NOTE: that leaves phase 2 at ec (2-3) of 8 DEST tiles — a measured
+#: perf lever (`matmul_output_subblock`: the win tracks sub-block SIZE) that wants a SEPARATE
+#: height knob for the `down` matmul, since HN_PAD=6 pins gate/up at 1. See op_requirements.md.
 OUT_SUBBLOCK_H = 1
 
 #: K tiles per gate/up matmul K-block, expressed as a fraction of the per-row K extent.
@@ -51,7 +58,11 @@ OUT_SUBBLOCK_H = 1
 KB1_FRACTION = 1
 
 #: Buffer depths (per streaming CB).
-DEPTH_W = 2  # weight CBs: overlap the next K-block's DRAM read with compute
+DEPTH_W = 2  # gate/up weight CBs: overlap the next K-block's DRAM read with compute
+#: phase-2 (W_down) weight CB depth, in K-blocks — see the derivation of `depth_wd` below.
+#: Overridable for `/perf-measure` A/B via MOE_SWIGLU_DEPTH_WD; HGROUPS reproduces the
+#: whole-hidden-extent sizing this CB used to have.
+DEPTH_WD = int(os.environ.get("MOE_SWIGLU_DEPTH_WD", 5))
 DEPTH_H = 3  # h all-gather: 3 so a late round's producer is not flow-controlled by itself
 DEPTH_OUT = 2
 DEPTH_XSTAGE = 1  # tilized x staging slots (a core injects <= ceil(M_BLOCK/HGROUPS) rows/block)
@@ -234,6 +245,21 @@ def create_program_descriptor(
         raise RuntimeError(f"moe_fused_swiglu: hidden {hidden} cannot fill {HGROUPS} column groups")
 
     wd_ahead = max(1, min(WD_AHEAD, HGROUPS))
+    # cb_w_down depth, in phase-2 K-blocks. It must hold the block being consumed PLUS the
+    # `wd_ahead` blocks the reader keeps in flight, hence >= wd_ahead + 1; DEPTH_WD raises that for
+    # extra reader/compute slack. Sized by a DEPTH KNOB x ONE K-block — NOT by the whole hidden
+    # extent (`HGROUPS * HN_PAD == HID_T`), which is what it used to be and which put 111 KB of L1
+    # behind a whole-op dimension.
+    #
+    # FIFO-wrap safety: single-block pushes can never straddle the end (the total is a multiple of
+    # one block), but the `wd_ahead`-block BATCH reserve at the top of each M-block starts
+    # ((b * HGROUPS) % depth_wd) blocks in, so it only stays inside the buffer when the depth
+    # divides the per-M-block push count. When it does not (only reachable via the
+    # MOE_SWIGLU_WD_AHEAD ablation), fall back to the whole stream so the knob stays legal at any
+    # value.
+    depth_wd = max(DEPTH_WD, wd_ahead + 1)
+    if wd_ahead > 1 and HGROUPS % depth_wd != 0:
+        depth_wd = HGROUPS
     ec_sizes, ec_starts = _split(EMB_T, num_cores)
     # EC_MAX is the phase-2 N *stride*: every phase-2 CB reserves/pushes in EC_MAX-wide units so
     # its page count is a multiple of the increment (a CB whose total is not a multiple of its
@@ -243,11 +269,10 @@ def create_program_descriptor(
 
     # DEST budget: out_subblock_h * out_subblock_w <= DEST_AUTO_LIMIT. out_subblock_w carries the
     # full HN_PAD (gate/up) and ec (down) widths, so both must fit.
-    dest_limit = 8
-    if OUT_SUBBLOCK_H * HN_PAD > dest_limit or OUT_SUBBLOCK_H * EC_MAX > dest_limit:
+    if OUT_SUBBLOCK_H * HN_PAD > DEST_AUTO_LIMIT_TILES or OUT_SUBBLOCK_H * EC_MAX > DEST_AUTO_LIMIT_TILES:
         raise RuntimeError(
             f"moe_fused_swiglu: out sub-block {OUT_SUBBLOCK_H}x(max {HN_PAD},{EC_MAX}) exceeds the "
-            f"DEST budget of {dest_limit} tiles"
+            f"DEST budget of {DEST_AUTO_LIMIT_TILES} tiles"
         )
     if M_BLOCK % OUT_SUBBLOCK_H != 0:
         raise RuntimeError(f"moe_fused_swiglu: M_BLOCK {M_BLOCK} must be a multiple of {OUT_SUBBLOCK_H}")
@@ -277,16 +302,31 @@ def create_program_descriptor(
 
     # ---- collectives: emit the mcast wire (Mcast1D / Mcast2D own the coord + rect math) ----
     # Reader runs on NOC_0 (ReaderDataMovementConfig -> preferred_noc_for_dram_read).
-    # DataReadySignal: Flag, NOT the Counter op_design.md §4.2/§4.4 asks for. Counter was tried
-    # and HANGS on both families: mcast_pipe.inl:153 hands `inc_multicast` the LOOPBACK
-    # (INCLUDE-source) fan-out while the atomic multicast is EXCLUDE-source, so its atomic
-    # barrier waits forever for an ack from a destination that was never addressed. Both mcasts
-    # here loopback (src cb != dst cb), so both trip it. Flag is correct but forces the sender of
-    # round r+1 to wait for every receiver to reset round r's flag — see the perf notes.
+    #
+    # DataReadySignal: Flag, NOT the Counter op_design.md §4.2/§4.4 asks for. `mcast_pipe`'s
+    # Counter path is UNUSABLE for any sender whose data write is a loopback/linked multicast, for
+    # TWO independent reasons (both re-confirmed on device in the verifier pass; see
+    # `verification_report.md` and the warning now carried at `mcast_pipe.hpp`'s DataReadySignal):
+    #   1. the multicast atomic increment was handed the INCLUDE-source fan-out while
+    #      `noc_semaphore_inc_multicast` is unconditionally EXCLUDE-source, so `fence_()`'s
+    #      non-posted atomic barrier waited for an ack from a destination never addressed.
+    #      FIXED in `mcast_pipe.inl::signal_ready_` (it now always passes `num_dests_excl_`).
+    #   2. STILL OPEN: `send_data_` issues the data multicast with `NOC_CMD_VC_LINKED` and relies
+    #      on the *signal* to terminate the chain — but the Flag signal is a multicast WRITE on the
+    #      same command buffer (terminates it) while the Counter signal is a multicast ATOMIC on
+    #      `write_at_cmd_buf` (a DIFFERENT command buffer), so the link is never released and the
+    #      next write on `NCRISC_WR_CMD_BUF` blocks in `noc_cmd_buf_ready` forever. Observed
+    #      exactly that: round-0's h sender stuck in `noc_async_write_multicast_loopback_src` while
+    #      all 110 readers sat in the h `wait_min`. Fixing it needs the Counter path to send
+    #      UNLINKED plus an acked write barrier before the atomic (data-before-signal ordering) —
+    #      a helper-level change with its own measurement, filed as a perf refinement.
+    # Flag is correct but forces the sender of round r+1 to wait for every receiver to reset round
+    # r's flag, which is part of the measured collective serialisation.
+    #
     # `handshake` is the receiver->sender "my cb slot is free" ack, i.e. the CB flow control, and
     # stays on (MOE_SWIGLU_ABLATE=no_handshake drops it for MEASUREMENT only — not correct).
     handshake = ABLATE != "no_handshake"
-    counter = ttnn._ttnn.mcast_host.McastDataReady.Flag
+    data_ready_signal = ttnn._ttnn.mcast_host.McastDataReady.Flag
     x_mcast = ttnn.Mcast1D(
         device,
         all_cores,
@@ -295,7 +335,7 @@ def create_program_descriptor(
         ttnn.McastConfig(
             noc=ttnn.NOC.NOC_0,
             handshake=handshake,
-            data_ready=counter,
+            data_ready=data_ready_signal,
             rotating_sender=True,
             base_sem_id=SEM_X_BASE,
         ),
@@ -307,7 +347,7 @@ def create_program_descriptor(
         ttnn.McastConfig(
             noc=ttnn.NOC.NOC_0,
             handshake=handshake,
-            data_ready=counter,
+            data_ready=data_ready_signal,
             rotating_sender=True,
             base_sem_id=SEM_H_BASE,
         ),
@@ -327,24 +367,28 @@ def create_program_descriptor(
     n_x_tiles = M_BLOCK * KR_PAD  # ONE slot -> identical mcast landing address on every core
     n_gu_block = M_BLOCK * HN_PAD
     n_w_gu = KR_PAD * HN_PAD  # one gate/up K-block (num_k_blocks == 1)
-    # cb_w_down spans ALL HGROUPS phase-2 K-blocks: the per-M-block pushes then sum to exactly
-    # the CB size (the cb_api wrap rule) whatever wd_ahead is, so wd_ahead stays a free knob.
-    n_w_down = HGROUPS * HN_PAD * EC_MAX
+    n_w_down = depth_wd * HN_PAD * EC_MAX  # DEPTH knob x one phase-2 K-block (see depth_wd above)
     n_out_block = M_BLOCK * EC_MAX
+    # The row-major staging path (read sticks -> fused tilize -> mcast) exists ONLY for the bf16 RM
+    # activation; the bfp8 TILE path lands tiles straight in the resident slot and never touches
+    # either CB (`if constexpr (INPUT_FORMAT == 0)` in the reader and in compute). Give them one
+    # page each in that configuration instead of ~48 KB of L1 that no kernel can reach.
+    n_x_in = XSTICK_ROWS * TILE if x_is_rm else 1
+    n_x_stage = DEPTH_XSTAGE * KR_PAD if x_is_rm else 1
 
     cbs = [
         _cb(
             CB_X_IN,
             all_cores,
-            XSTICK_ROWS * TILE if x_is_rm else KR_PAD,
+            n_x_in,
             x_stick_slice,
             ttnn.bfloat16 if x_is_rm else ttnn.bfloat8_b,
         ),
         _cb(CB_X_TILES, all_cores, n_x_tiles, bfp8_tile, ttnn.bfloat8_b),
-        _cb(CB_X_STAGE, all_cores, DEPTH_XSTAGE * KR_PAD, bfp8_tile, ttnn.bfloat8_b),
+        _cb(CB_X_STAGE, all_cores, n_x_stage, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_W_GATE, all_cores, DEPTH_W * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
         _cb(CB_W_UP, all_cores, DEPTH_W * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
-        _cb(CB_W_DOWN, all_cores, n_w_down, bfp4_tile, ttnn.bfloat4_b),
+        _cb(CB_W_DOWN, all_cores, n_w_down, bfp4_tile, ttnn.bfloat4_b),  # depth_wd K-blocks
         _cb(CB_REDUCE_GATE_IN, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_REDUCE_UP_IN, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_H, all_cores, DEPTH_H * n_gu_block, bfp8_tile, ttnn.bfloat8_b),

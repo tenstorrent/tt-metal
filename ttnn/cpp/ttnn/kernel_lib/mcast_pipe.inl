@@ -150,7 +150,15 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
     bool loopback, uint32_t mcast_dests) {
     const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
-        data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, /*value=*/1, mcast_dests);  // monotone +1
+        // ALWAYS the EXCLUDE-source fan-out, even when the DATA write was a loopback
+        // (INCLUDE-source) multicast: the multicast atomic increment is unconditionally
+        // exclude-source ("the multicast sender cannot be part of the multicast destinations",
+        // dataflow_api.h:noc_semaphore_inc_multicast), so the sender's own cell is never
+        // incremented and must not be counted. Passing the loopback count (`mcast_dests ==
+        // num_dests_incl_`) made the NON-POSTED atomic below wait in fence_()'s
+        // async_atomic_barrier() for one ack from a destination that was never addressed — a
+        // guaranteed hang for every Counter user whose src cb != dst cb.
+        data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, /*value=*/1, num_dests_excl_);  // monotone +1
     } else {
         // set_multicast broadcasts this core's own cell as the source, so re-assert VALID first: a
         // core that also receives on this cell leaves it INVALID after a receive, and a once-only set

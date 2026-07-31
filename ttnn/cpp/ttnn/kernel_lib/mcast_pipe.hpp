@@ -68,6 +68,17 @@ namespace dataflow_kernel_lib {
 //     handshake per round, with the receiver free to reset the flag between rounds.
 //   * Counter: a monotone, reset-free counter. Pick this ONLY for tight multi-phase streaming, where
 //     the sender would otherwise stall each round waiting for the receiver to reset the flag.
+//
+// !! KNOWN BROKEN (measured on Blackhole, 2026-07): the Counter path HANGS whichever fan-out it is
+//    given, because `send_data_()` issues the data multicast with `NOC_CMD_VC_LINKED` and relies on
+//    the *signal* to terminate the linked chain. A linked chain is only released by an UNLINKED
+//    transaction on the SAME command buffer: the Flag signal is a multicast WRITE (same
+//    `NCRISC_WR_CMD_BUF`, terminates it), but the Counter signal is a multicast ATOMIC on
+//    `write_at_cmd_buf` — a different command buffer — so the path stays reserved and the sender's
+//    NEXT write spins in `noc_cmd_buf_ready()` forever. Making Counter usable needs `send_data_` to
+//    send UNLINKED under Counter plus an ACKED write barrier before `signal_ready_` (the linked
+//    chain is what currently enforces data-before-signal ordering); that costs a round trip per
+//    send, so it wants a measurement, not a blind edit. Until then: use Flag.
 // -----------------------------------------------------------------------------
 enum class DataReadySignal { Flag, Counter };
 

@@ -28,6 +28,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
 
+#include "moe_fused_swiglu_common.hpp"  // the ONE definition of the mailbox word layout
+
 using namespace compute_kernel_lib;
 
 constexpr uint32_t M_BLOCK = get_compile_time_arg_val(0);
@@ -88,12 +90,14 @@ void kernel_main() {
     ActivationInitHelper<KernelActivation::SILU>::init();
 
     // Device-resident token count. All three TRISCs spin here independently so the M-block trip
-    // count is thread-uniform (see the file header).
+    // count is thread-uniform (see the file header). The `fence` is exactly what
+    // `invalidate_l1_cache()` compiles to on Blackhole (risc_common.h) — spelled out here because
+    // that helper lives behind a dataflow-only include.
     volatile tt_l1_ptr uint32_t* mbox = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr);
-    while (mbox[3] != MAILBOX_MAGIC) {
+    while (mbox[moe_fused_swiglu::MBOX_READY] != MAILBOX_MAGIC) {
         asm volatile("fence" ::: "memory");
     }
-    const uint32_t m_blocks = mbox[2];
+    const uint32_t m_blocks = mbox[moe_fused_swiglu::MBOX_M_BLOCKS];
 
     CircularBuffer x_buf(cb_x_tiles);
     CircularBuffer wg_buf(cb_w_gate);

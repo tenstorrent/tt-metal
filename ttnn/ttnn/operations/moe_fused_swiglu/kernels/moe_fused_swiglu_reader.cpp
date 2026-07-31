@@ -39,6 +39,9 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
+#include "moe_fused_swiglu_bank_runs.hpp"  // the ONE definition of the bank-run coalescing
+#include "moe_fused_swiglu_common.hpp"     // the ONE definition of the mailbox word layout
+
 using namespace dataflow_kernel_lib;
 
 // ---------------------------------------------------------------------------
@@ -112,41 +115,9 @@ constexpr auto wd_args = TensorAccessorArgs<wg_args.next_compile_time_args_offse
 constexpr auto cnt_args = TensorAccessorArgs<wd_args.next_compile_time_args_offset()>();
 constexpr auto idx_args = TensorAccessorArgs<cnt_args.next_compile_time_args_offset()>();
 
-// ---------------------------------------------------------------------------
-// Bank-contiguous run enumeration over an N-axis linear range.
-//
-// Interleaved page -> bank is `page_id % NUM_BANKS`, with in-bank slot `page_id / NUM_BANKS` at
-// stride aligned_page_size. For every tensor here the row stride (HID_T / EMB_T) is a multiple of
-// NUM_BANKS, so bank(row*stride + n) == n % NUM_BANKS: a stride-NUM_BANKS run of columns at a
-// fixed row is physically contiguous inside ONE bank and reads as ONE transaction. `remap_n`
-// re-indexes the logical N axis so that CONSECUTIVE linear indices walk one bank's slots.
-// ---------------------------------------------------------------------------
-FORCE_INLINE uint32_t remap_n(uint32_t j, uint32_t slots) {
-    if constexpr (REMAP) {
-        return (j / slots) + NUM_BANKS * (j % slots);
-    } else {
-        return j;
-    }
-}
-
-// Length of the maximal bank-contiguous run starting at linear index j inside [j, end).
-FORCE_INLINE uint32_t run_len(uint32_t j, uint32_t end, uint32_t slots) {
-    if constexpr (REMAP) {
-        uint32_t r = end - j;
-        const uint32_t to_bank_edge = slots - (j % slots);
-        if (to_bank_edge < r) {
-            r = to_bank_edge;
-        }
-        if (WRUN < r) {
-            r = WRUN;
-        }
-        return r;
-    } else {
-        return 1;
-    }
-}
-
-constexpr uint32_t N_STRIDE = REMAP ? NUM_BANKS : 1;
+// Bank-run coalescing (see moe_fused_swiglu_bank_runs.hpp): ONE definition, bound here to this
+// kernel's compile-time knobs.
+using BR = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN>;
 
 void kernel_main() {
     const uint32_t mailbox_addr = get_arg_val<uint32_t>(0);
@@ -194,12 +165,15 @@ void kernel_main() {
     const uint32_t m_blocks = (m_t + M_BLOCK - 1) / M_BLOCK;
 
     // Publish {count, M_t, m_blocks} so compute (all three TRISCs) and the writer can read it.
+    // The fence between the payload and the READY stamp is the publish barrier: on Blackhole
+    // `invalidate_l1_cache()` IS `asm("fence")` (risc_common.h), and L1 is write-through, so the
+    // payload words are visible to any other RISC-V that sees MBOX_READY.
     volatile tt_l1_ptr uint32_t* mbox = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr);
-    mbox[0] = count;
-    mbox[1] = m_t;
-    mbox[2] = m_blocks;
+    mbox[moe_fused_swiglu::MBOX_COUNT] = count;
+    mbox[moe_fused_swiglu::MBOX_M_T] = m_t;
+    mbox[moe_fused_swiglu::MBOX_M_BLOCKS] = m_blocks;
     invalidate_l1_cache();
-    mbox[3] = MAILBOX_MAGIC;
+    mbox[moe_fused_swiglu::MBOX_READY] = MAILBOX_MAGIC;
 
     // -----------------------------------------------------------------------
     // Collective pipes. Receivers are constructed before any ack, so their local flag init is
@@ -240,17 +214,8 @@ void kernel_main() {
         cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
         const uint32_t wg_wp = get_write_ptr(cb_w_gate);
         for (uint32_t k = 0; k < kr; ++k) {
-            const uint32_t kt = kstart + k;
-            uint32_t j = hstart;
-            uint32_t noff = 0;
-            while (j < hstart + hn) {
-                const uint32_t len = run_len(j, hstart + hn, SLOTS_H);
-                const uint32_t first = remap_n(j, SLOTS_H);
-                noc_async_read(
-                    wg_acc.get_noc_addr(kt * HID_T + first), wg_wp + (k * HN_PAD + noff) * BFP4_TILE, len * BFP4_TILE);
-                j += len;
-                noff += len;
-            }
+            BR::read(
+                wg_acc, (kstart + k) * HID_T, hstart, hstart + hn, SLOTS_H, wg_wp + k * HN_PAD * BFP4_TILE, BFP4_TILE);
         }
 
         cb_reserve_back(cb_x_tiles, X_SLOT_TILES);
@@ -331,19 +296,16 @@ void kernel_main() {
                     hn_r = HID_T - hbase;
                 }
                 for (uint32_t k = 0; k < hn_r; ++k) {
-                    const uint32_t ht = remap_n(hbase + k, SLOTS_H);
-                    uint32_t j = jstart;
-                    uint32_t eoff = 0;
-                    while (j < jstart + ec) {
-                        const uint32_t len = run_len(j, jstart + ec, SLOTS_E);
-                        const uint32_t first = remap_n(j, SLOTS_E);
-                        noc_async_read(
-                            wd_acc.get_noc_addr(ht * EMB_T + first),
-                            wp + (r * WD_BLOCK_TILES + k * EC_MAX + eoff) * BFP4_TILE,
-                            len * BFP4_TILE);
-                        j += len;
-                        eoff += len;
-                    }
+                    // W_down's K axis is `h`'s hidden axis, which the Hn split remapped too, so the
+                    // row index goes through the same remap as the N axis.
+                    BR::read(
+                        wd_acc,
+                        BR::remap(hbase + k, SLOTS_H) * EMB_T,
+                        jstart,
+                        jstart + ec,
+                        SLOTS_E,
+                        wp + (r * WD_BLOCK_TILES + k * EC_MAX) * BFP4_TILE,
+                        BFP4_TILE);
                 }
             }
         }
@@ -384,19 +346,14 @@ void kernel_main() {
                 cb_reserve_back(cb_w_down, WD_BLOCK_TILES);
                 const uint32_t wp = get_write_ptr(cb_w_down);
                 for (uint32_t k = 0; k < hn_r; ++k) {
-                    const uint32_t ht = remap_n(hbase + k, SLOTS_H);
-                    uint32_t j = jstart;
-                    uint32_t eoff = 0;
-                    while (j < jstart + ec) {
-                        const uint32_t len = run_len(j, jstart + ec, SLOTS_E);
-                        const uint32_t first = remap_n(j, SLOTS_E);
-                        noc_async_read(
-                            wd_acc.get_noc_addr(ht * EMB_T + first),
-                            wp + (k * EC_MAX + eoff) * BFP4_TILE,
-                            len * BFP4_TILE);
-                        j += len;
-                        eoff += len;
-                    }
+                    BR::read(
+                        wd_acc,
+                        BR::remap(hbase + k, SLOTS_H) * EMB_T,
+                        jstart,
+                        jstart + ec,
+                        SLOTS_E,
+                        wp + k * EC_MAX * BFP4_TILE,
+                        BFP4_TILE);
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_w_down, WD_BLOCK_TILES);

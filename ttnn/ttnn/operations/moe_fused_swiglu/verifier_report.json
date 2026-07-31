@@ -1,0 +1,563 @@
+{
+  "summary": {
+    "total": 45,
+    "supported_pass": 1,
+    "supported_fail": 44,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 0,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 0
+  },
+  "by_category": {
+    "supported_fail": [
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n32-emb6144x2048-capacity=1024-emb=6144-fill=balanced-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 1024,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n32-emb6144x2048-capacity=1024-emb=6144-fill=balanced-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 1024,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n255-emb6144x2048-capacity=1024-emb=6144-fill=partial-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 1024,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n255-emb6144x2048-capacity=1024-emb=6144-fill=partial-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 1024,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n1024-emb6144x2048-capacity=1024-emb=6144-fill=full-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 1024,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n1024-emb6144x2048-capacity=1024-emb=6144-fill=full-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 1024,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n64-emb6144x2048-capacity=2048-emb=6144-fill=balanced-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 2048,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n64-emb6144x2048-capacity=2048-emb=6144-fill=balanced-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 2048,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n511-emb6144x2048-capacity=2048-emb=6144-fill=partial-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 2048,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n511-emb6144x2048-capacity=2048-emb=6144-fill=partial-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 2048,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n2048-emb6144x2048-capacity=2048-emb=6144-fill=full-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 2048,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n2048-emb6144x2048-capacity=2048-emb=6144-fill=full-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 2048,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n160-emb6144x2048-capacity=5120-emb=6144-fill=balanced-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 5120,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n160-emb6144x2048-capacity=5120-emb=6144-fill=balanced-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 5120,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n1279-emb6144x2048-capacity=5120-emb=6144-fill=partial-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 5120,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n1279-emb6144x2048-capacity=5120-emb=6144-fill=partial-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 5120,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n5120-emb6144x2048-capacity=5120-emb=6144-fill=full-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 5120,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n5120-emb6144x2048-capacity=5120-emb=6144-fill=full-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 5120,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n32-emb7168x2048-capacity=1024-emb=7168-fill=balanced-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 1024,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n32-emb7168x2048-capacity=1024-emb=7168-fill=balanced-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 1024,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n255-emb7168x2048-capacity=1024-emb=7168-fill=partial-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 1024,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n255-emb7168x2048-capacity=1024-emb=7168-fill=partial-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 1024,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n1024-emb7168x2048-capacity=1024-emb=7168-fill=full-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 1024,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap1024-n1024-emb7168x2048-capacity=1024-emb=7168-fill=full-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 1024,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n64-emb7168x2048-capacity=2048-emb=7168-fill=balanced-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 2048,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n64-emb7168x2048-capacity=2048-emb=7168-fill=balanced-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 2048,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n511-emb7168x2048-capacity=2048-emb=7168-fill=partial-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 2048,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n511-emb7168x2048-capacity=2048-emb=7168-fill=partial-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 2048,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n2048-emb7168x2048-capacity=2048-emb=7168-fill=full-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 2048,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap2048-n2048-emb7168x2048-capacity=2048-emb=7168-fill=full-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 2048,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n160-emb7168x2048-capacity=5120-emb=7168-fill=balanced-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 5120,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n160-emb7168x2048-capacity=5120-emb=7168-fill=balanced-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 5120,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n1279-emb7168x2048-capacity=5120-emb=7168-fill=partial-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 5120,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n1279-emb7168x2048-capacity=5120-emb=7168-fill=partial-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 5120,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n5120-emb7168x2048-capacity=5120-emb=7168-fill=full-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 5120,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op[cap5120-n5120-emb7168x2048-capacity=5120-emb=7168-fill=full-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 5120,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op_loose[cap5120-n128-emb7168x2048-capacity=5120-emb=7168-fill=balanced-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 5120,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op_loose[cap5120-n256-emb7168x2048-capacity=5120-emb=7168-fill=balanced-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 5120,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op_loose[cap5120-n512-emb7168x2048-capacity=5120-emb=7168-fill=partial-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 5120,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op_loose[cap1024-n256-emb7168x2048-capacity=1024-emb=7168-fill=partial-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 1024,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op_loose[cap2048-n256-emb7168x2048-capacity=2048-emb=7168-fill=partial-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 2048,
+          "fill": "partial"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op_loose[cap5120-n256-emb7168x2048-capacity=5120-emb=7168-fill=balanced-input_format=bfp8_tile-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bfp8_tile",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 5120,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op_loose[cap5120-n256-emb6144x2048-capacity=5120-emb=6144-fill=balanced-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 6144,
+          "capacity": 5120,
+          "fill": "balanced"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      },
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op_loose[cap5120-n5120-emb7168x2048-capacity=5120-emb=7168-fill=full-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 5120,
+          "fill": "full"
+        },
+        "status": "failed",
+        "failure_category": "numerical-precision"
+      }
+    ],
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/moe_fused_swiglu/test_golden.py::test_op_loose[cap1024-n0-emb7168x2048-capacity=1024-emb=7168-fill=empty-input_format=bf16_rm-weight_dtype=BFLOAT4_B]",
+        "axes": {
+          "input_format": "bf16_rm",
+          "weight_dtype": "BFLOAT4_B",
+          "emb": 7168,
+          "capacity": 1024,
+          "fill": "empty"
+        },
+        "status": "passed"
+      }
+    ]
+  }
+}
