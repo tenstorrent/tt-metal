@@ -91,6 +91,7 @@ public:
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        objs.reserve(4);
         if (params.is_fw and params.core_type != HalProgrammableCoreType::ACTIVE_ETH) {
             objs.push_back("runtime/hw/lib/wormhole/tmu-crt0.o");
         }
@@ -117,6 +118,7 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        includes.reserve(11);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/common");

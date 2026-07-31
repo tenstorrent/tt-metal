@@ -259,6 +259,7 @@ public:
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        objs.reserve(4);
         std::string_view cpu = params.processor_class == HalProcessorClassType::DM ? "tt-qsr64" : "tt-qsr32";
         std::string_view dir = "runtime/hw/lib/quasar";
         objs.push_back(fmt::format("{}/{}-crt0-tls.o", dir, cpu));
@@ -278,6 +279,7 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        includes.reserve(13);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
