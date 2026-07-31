@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it as tilize_metal2.cpp. Ops whose program
+// factory has been ported to the Metal 2.0 host API bind that file; ops still on the legacy host API
+// bind this one. Keep the two in sync until the last legacy consumer is ported, at which point this
+// copy can be deleted.
+
 #include <cstdint>
 
 #include "api/compute/tilize.h"
