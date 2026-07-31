@@ -224,10 +224,11 @@ class TT_CCL:
     def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
         """Return the persistent full-K output buffer for the fused ring indexer.
 
-        ``local_k`` is the active batch-1 cache shard [1,1,T/sp,D]. The fused op gathers it over
-        ``sp_axis`` into [1,1,T,D] while scoring arriving bands. All MLA layers execute serially and
-        share the same index-cache geometry, so one stable-address scratch buffer per shape/dtype is
-        sufficient for the whole model instead of allocating a full gathered cache per layer.
+        ``local_k`` is the persistent local cache [B,1,T/sp,D]. In indexed mode the fused op gathers
+        only the selected slot over ``sp_axis`` into [1,1,T,D] while scoring arriving bands. All layers
+        execute serially and share the same index-cache geometry, so one stable-address scratch buffer
+        per shape/dtype is sufficient for the whole model instead of allocating a full gathered cache
+        per layer.
         """
         import torch
 

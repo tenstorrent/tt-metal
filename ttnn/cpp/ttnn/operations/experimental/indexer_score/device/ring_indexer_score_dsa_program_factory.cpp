@@ -20,7 +20,7 @@
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"        // RingSDPAFusedOpSignaler
+#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"                // RingSDPAFusedOpSignaler
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"  // host replay for band arrival order
 #include "ttnn/operations/ccl/ccl_common.hpp"     // linearized index / neighbor / fwd-bwd config
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"  // AllGatherFusedOpSignaler
@@ -32,6 +32,8 @@
 #include "kernels/indexer_score_work_split.hpp"
 
 namespace ttnn::operations::experimental::indexer_score::program {
+
+namespace ag_rt = ttnn::ring_attention_all_gather_async_detail;
 
 using tt::tt_metal::CBDescriptor;
 using tt::tt_metal::CBFormatDescriptor;
@@ -57,7 +59,8 @@ constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
 constexpr uint32_t reader_fused_rt_base = reader_kv_len_tiles + 1;                                           // 27
 constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width;                              // 33
-constexpr uint32_t reader_band_perm_base = reader_k_local_addr + 1;                                          // 34
+constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;                                    // 34
+constexpr uint32_t reader_band_perm_base = reader_k_local_batch_offset + 1;                                  // 35
 // Compute RT: schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, then perm.
 constexpr uint32_t compute_band_perm_base = 6 + 4;  // 10
 // Writer RT: out addr, schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, perm.
@@ -66,8 +69,8 @@ constexpr uint32_t writer_band_perm_base = 1 + 6 + 4;  // 11
 // compute/writer read their perm at 10/11). A drift here would silently desync the kernels -> this fails to build.
 static_assert(
     reader_k_batch_offset == 25 && reader_kv_len_tiles == 26 && reader_fused_rt_base == 27 &&
-        reader_k_local_addr == 33 && reader_band_perm_base == 34 && compute_band_perm_base == 10 &&
-        writer_band_perm_base == 11,
+        reader_k_local_addr == 33 && reader_k_local_batch_offset == 34 && reader_band_perm_base == 35 &&
+        compute_band_perm_base == 10 && writer_band_perm_base == 11,
     "indexer_score fused rt_arg slot layout drifted from the kernel-side expectations");
 }  // namespace rt_arg
 
@@ -88,6 +91,20 @@ RingWrites ring_writes_for(uint32_t ring_size, uint32_t ring_index, ttnn::ccl::T
         return {static_cast<uint32_t>(num_targets_backward), static_cast<uint32_t>(num_targets_forward)};
     }
     return {static_cast<uint32_t>(num_targets_forward), static_cast<uint32_t>(num_targets_backward)};
+}
+
+// Block-cyclic caches are slab-major on every SP rank. A global valid prefix can end partway through a
+// global slab, whose valid row count differs by rank, so gather complete touched slabs. This is the smallest
+// uniform per-rank prefix that preserves the fixed-size ring protocol and contains every valid key.
+std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& args, const Tensor& k_local) {
+    if (!args.kv_len.has_value() || !args.block_cyclic.has_value()) {
+        return std::nullopt;
+    }
+    const uint32_t chunk_local = args.block_cyclic->chunk_local;
+    const uint32_t chunk_global = args.block_cyclic->sp * chunk_local;
+    const uint32_t valid_slabs = (*args.kv_len + chunk_global - 1) / chunk_global;
+    const uint32_t valid_local_rows = valid_slabs * chunk_local;
+    return std::min<uint32_t>(valid_local_rows, k_local.logical_shape()[2]) / tt::constants::TILE_HEIGHT;
 }
 
 // One device's fused program: indexer compute (banded schedule, DSA path) + co-scheduled ring_attention AG.
@@ -454,8 +471,13 @@ ProgramDescriptor build_ring_program_descriptor(
             rt.push_back(v);
         }
     };
-    const auto pcache = persistent_cache_args(args, k);  // shared with the classic factory
-    const uint32_t k_batch_page_offset = pcache.k_batch_page_offset;
+    const auto pcache = persistent_cache_args(args, k);  // kv_len derivation shared with the classic factory
+    // Indexed fused mode gathers the selected cache slot into slot 0 of batch-1 k. Keep the gathered and
+    // local offsets independent: remote reads start at zero, own-shard reads select the original k_local slot.
+    const uint32_t k_batch_page_offset = args.cache_batch_idx.has_value() ? 0u : pcache.k_batch_page_offset;
+    const uint32_t local_slot_pages = (k_local.logical_shape()[2] / tt::constants::TILE_HEIGHT) *
+                                      (k_local.logical_shape()[3] / tt::constants::TILE_WIDTH);
+    const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
     const uint32_t kv_len_tiles = pcache.kv_len_tiles;
 
     std::vector<uint32_t> fused_rt;
@@ -531,11 +553,12 @@ ProgramDescriptor build_ring_program_descriptor(
                 q_sender,
                 cols_used - 1);
             // Reader tail (sequential push; slots named in rt_arg, matched positionally by the kernel).
-            reader_rt.push_back(k_batch_page_offset);  // rt_arg::reader_k_batch_offset (25)
-            reader_rt.push_back(kv_len_tiles);         // rt_arg::reader_kv_len_tiles (26)
-            reader_rt.append(fused_rt);                // rt_arg::reader_fused_rt_base (27..32): ring/dir/sems
-            reader_rt.push_back(k_local.buffer());     // rt_arg::reader_k_local_addr (33): local SP shard address
-            reader_rt.append(band_perm);               // rt_arg::reader_band_perm_base (34..): band-visit perm
+            reader_rt.push_back(k_batch_page_offset);        // rt_arg::reader_k_batch_offset (25)
+            reader_rt.push_back(kv_len_tiles);               // rt_arg::reader_kv_len_tiles (26)
+            reader_rt.append(fused_rt);                      // rt_arg::reader_fused_rt_base (27..32): ring/dir/sems
+            reader_rt.push_back(k_local.buffer());           // rt_arg::reader_k_local_addr (33): local SP shard address
+            reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
+            reader_rt.append(band_perm);                     // rt_arg::reader_band_perm_base (35..): band-visit perm
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
             KernelDescriptor::RTArgList compute_rt;
@@ -601,7 +624,9 @@ ProgramDescriptor build_ring_program_descriptor(
             ccl_core_grid_offset,
             // COL_MAJOR so the reserved-column offset lays the workers DOWN the free column ((compute_cols_x,0),
             // (compute_cols_x,1), ...) instead of running off the right grid edge as row-major would.
-            ttnn::ccl::CoreAllocationStrategy::COL_MAJOR);
+            ttnn::ccl::CoreAllocationStrategy::COL_MAJOR,
+            args.cache_batch_idx,
+            gather_valid_height_tiles(args, k_local));
     }
 
     log_debug(
@@ -696,14 +721,47 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     for (auto& [range, program] : cached.workload.get_programs()) {
         const auto desc =
             build_ring_program_descriptor(args, tensors, out, range.start_coord(), /*consumers_only=*/true);
-        // kernel_idx: reader=0, writer=1, compute=2 (AG worker kernels 3.. carry no per-dispatch scalars).
+        // kernel_idx: reader=0, writer=1, compute=2; AG workers are 3..6.
         // Slots are literals (matching the file-local rt_arg static_assert: reader_k_batch_offset==25,
         // reader_kv_len_tiles==26) -- rt_arg is in an anonymous namespace not visible here.
-        patch_scalars(program, desc, 0, {25u, 26u});  // reader: k_batch_page_offset, kv_len_tiles
+        patch_scalars(program, desc, 0, {25u, 26u, 34u});  // gathered offset, kv_len, local selected-slot offset
         // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
         patch_scalars(program, desc, 2, {6u, 7u, 8u, 9u});
         // writer: same four scalars after out-addr(0) + schedule(1..6) (slots [7, perm_base)).
         patch_scalars(program, desc, 1, {7u, 8u, 9u, 10u});
+
+        // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
+        // workers. cache_batch_idx and kv_len are hash-excluded, so update the selected input slot and the
+        // slab-rounded gather extent on every cache hit (same protocol as ring_joint_sdpa).
+        const auto& k_local = *tensors.k_local;
+        const auto& shape = k_local.padded_shape();
+        const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
+        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
+        const uint32_t input_batch_base =
+            ag_rt::input_batch_base_pages(args.cache_batch_idx.value_or(0), shape[1], Ht, Wt);
+        const auto valid_Ht = gather_valid_height_tiles(args, k_local);
+        const uint32_t valid_pages = std::min(valid_Ht.value_or(Ht), Ht) * Wt;
+
+        const auto patch_ag_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {
+            auto& grid_args = GetRuntimeArgs(program, kernel_idx);
+            for (auto& col_args : grid_args) {
+                for (auto& core_args : col_args) {
+                    if (core_args.size() > slot) {
+                        core_args[slot] = value;
+                    }
+                }
+            }
+        };
+        constexpr uint32_t ag_reader_input_base =
+            ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kInputBatchBaseFieldOffset;
+        constexpr uint32_t ag_reader_valid_pages = ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
+        constexpr uint32_t ag_writer_valid_pages = ag_rt::kWriterRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
+        patch_ag_field(/*reader forward=*/3, ag_reader_input_base, input_batch_base);
+        patch_ag_field(/*reader backward=*/5, ag_reader_input_base, input_batch_base);
+        patch_ag_field(/*reader forward=*/3, ag_reader_valid_pages, valid_pages);
+        patch_ag_field(/*reader backward=*/5, ag_reader_valid_pages, valid_pages);
+        patch_ag_field(/*writer forward=*/4, ag_writer_valid_pages, valid_pages);
+        patch_ag_field(/*writer backward=*/6, ag_writer_valid_pages, valid_pages);
     }
 }
 

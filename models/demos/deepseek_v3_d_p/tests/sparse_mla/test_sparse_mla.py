@@ -200,7 +200,7 @@ def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot
     )
 
 
-def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk):
+def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=0):
     """Read the block-cyclic indexer key cache back to a natural-order [S, index_head_dim] tensor in the
     CPU reference's RoPE frame, so it can be PCC'd against SparseMLAReference.index_cache.
 
@@ -213,7 +213,7 @@ def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk):
     cache_sr = ttnn.to_torch(
         tt_index_kv_cache,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.bfloat16)[:, :1]
+    ).to(torch.bfloat16)[cache_batch_idx : cache_batch_idx + 1, :1]
     p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
     nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
     nat[p] = cache_sr[0, 0]
@@ -367,7 +367,7 @@ def run_sparse_mla_determinism_case(
 def run_sparse_mla_chunked_case(
     variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
 ):
-    """Sparse chunked prefill: compare chunked ttMLA against MLACPU sparse chunked truth."""
+    """Sparse chunked prefill on nonzero user slot: compare ttMLA against MLACPU sparse chunked truth."""
     # Anchor mesh (TP>=2) and seq/SP validity are guaranteed by _sparse_cases (no runtime skips).
     #
     # CACHE-QUANTIZATION NOTE: the canonical CPU reference keeps KVPE in BF16. The BF16 device case
@@ -388,6 +388,7 @@ def run_sparse_mla_chunked_case(
 
     mesh_shape = list(mesh_device.shape)
     sp_axis, tp_axis = 0, 1
+    num_users, cache_user_id = 2, 1
     logger.debug(f"[{variant.name}] sparse MLA chunked: initializing KVPE cache mesh_shape={mesh_shape}")
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
@@ -397,9 +398,10 @@ def run_sparse_mla_chunked_case(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
+        num_users=num_users,
     )
 
-    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis)
+    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=num_users)
     logger.debug(f"[{variant.name}] sparse MLA chunked: constructing TT module and indexed RoPE tensors")
     mla_tt = ttMLA(
         config,
@@ -410,6 +412,7 @@ def run_sparse_mla_chunked_case(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_chunked=True,
+        slot_num=num_users,
         layer_num=1,
         sparse_kv_cache_format=cache_format,
     )
@@ -434,7 +437,14 @@ def run_sparse_mla_chunked_case(
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         )
-        out = mla_tt.forward(tt_x, rope_tensors, tt_kvpe_cache, actual_start=s, index_kv_cache=tt_index_kv_cache)
+        out = mla_tt.forward(
+            tt_x,
+            rope_tensors,
+            tt_kvpe_cache,
+            actual_start=s,
+            cache_user_id=cache_user_id,
+            index_kv_cache=tt_index_kv_cache,
+        )
         outs.append(
             ttnn.to_torch(
                 out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
@@ -454,7 +464,9 @@ def run_sparse_mla_chunked_case(
 
     sp = mesh_device.shape[0]
     logger.debug(f"[{variant.name}] sparse MLA chunked: collecting KVPE cache")
-    cache_sr = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)[:, :1]
+    cache_all = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)
+    assert torch.count_nonzero(cache_all[0:1]) == 0, "sparse MLA wrote KVPE into unselected user slot 0"
+    cache_sr = cache_all[cache_user_id : cache_user_id + 1, :1]
     p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
     nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
     nat[p] = cache_sr[0, 0]
@@ -462,7 +474,18 @@ def run_sparse_mla_chunked_case(
     logger.info(f"[{variant.name}] kvpe prefix: {m}")
 
     logger.debug(f"[{variant.name}] sparse MLA chunked: collecting indexer key cache")
-    idx_nat = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk)
+    index_cache_layers = num_full_indexer_layers(config) or 1
+    index_cache_batch_idx = cache_user_id * index_cache_layers
+    index_cache_host = ttnn.to_torch(
+        tt_index_kv_cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    )
+    assert (
+        torch.count_nonzero(index_cache_host[:index_cache_layers]) == 0
+    ), "sparse MLA wrote index keys into unselected user slot 0"
+    idx_nat = _collect_index_cache_natural(
+        tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=index_cache_batch_idx
+    )
     _, idx_pcc = assert_with_pcc(ref_index[0, :seq_len], idx_nat[:seq_len], SPARSE_INDEX_PCC)
     logger.info(f"[{variant.name}] Chunked indexer cache PCC: {idx_pcc}")
 

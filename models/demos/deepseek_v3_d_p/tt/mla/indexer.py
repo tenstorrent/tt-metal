@@ -260,8 +260,8 @@ class TtIndexer:
         # [num_users*layer_num, 1, T, D_idx] — the SAME layout as the MLA KVPE cache — so the flat slot
         # for (user, layer) is cache_user_id*layer_num + cache_layer_idx, where cache_layer_idx is the
         # LOCAL per-rank cache slot passed to forward (mirrors the KVPE cache; NOT self.layer_idx, which is
-        # GLOBAL and diverges from the local slot under pipeline parallelism). Computed in forward, used by
-        # write_k and _gather_index_kbuf.
+        # GLOBAL and diverges from the local slot under pipeline parallelism). Computed in forward and used
+        # by both write_k and the fused ring indexer's in-kernel slot selection.
         self.layer_num = layer_num
         self.tt_ccl = tt_ccl
         self.ccl_num_links = ccl_num_links
@@ -445,25 +445,6 @@ class TtIndexer:
         ttnn.deallocate(nope)
         return out
 
-    def _select_index_kbuf_local(self, index_kbuf: ttnn.Tensor, cache_batch_idx: int) -> ttnn.Tensor:
-        """Return this chip's batch-1 interleaved K shard for the fused ring indexer.
-
-        ``index_kbuf`` is the user-major, block-cyclic ND-sharded cache. Select the active
-        (user, layer) slot before communication so the fused op gathers only [1,1,T/sp,D_idx],
-        never every cache slot. The ring scorer dual-sources this local shard while filling its
-        shared persistent full-K scratch buffer with the remote shards.
-        """
-        cache_i = ttnn.to_memory_config(index_kbuf, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
-        if cache_i.shape[0] > 1:  # user-major slot select BEFORE the gather (single-slot cache → skip)
-            sel = ttnn.slice(
-                cache_i,
-                [cache_batch_idx, 0, 0, 0],
-                [cache_batch_idx + 1, 1, cache_i.shape[2], cache_i.shape[3]],
-            )
-            ttnn.deallocate(cache_i)
-            cache_i = sel
-        return cache_i
-
     def write_k(
         self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, cache_layer_idx=0, index_kbuf=None
     ):
@@ -536,8 +517,8 @@ class TtIndexer:
         only ever calls self._indexer.forward — it never calls write_k directly.)
 
         ``rope_tensors`` (the MLA's block-cyclic indexed cos/sin/trans) and ``cache_user_id`` (per-user slot)
-        drive the per-user block-cyclic key cache + block-cyclic scoring. Scoring currently spans the full
-        preallocated cache width (see the kv_len TODO below)."""
+        drive the per-user block-cyclic key cache + block-cyclic scoring. Scoring and transport are bounded
+        by the written prefix, rounded to complete block-cyclic slabs for the fixed-size ring protocol."""
         a = self.index_args
         if self._is_index_compact:
             cache_layer_idx = self._index_layer_idx
@@ -551,7 +532,7 @@ class TtIndexer:
         # Flat user-major slot into the shared [num_users*_index_cache_layers, 1, T, D_idx] cache — same
         # formula as ttMLA._cache_batch_idx for the KVPE cache (cache_layer_idx is the LOCAL per-rank cache
         # slot, compacted to the full-layer rank above for GLM-5.2 cross-layer reuse). Written by write_k
-        # and sliced by _gather_index_kbuf.
+        # and selected in-kernel by the fused ring indexer.
         cache_batch_idx = cache_user_id * self._index_cache_layers + cache_layer_idx
         self.write_k(
             hidden_states,
@@ -638,15 +619,15 @@ class TtIndexer:
         # top-k below is told the valid length (valid_length=end_pos) so it never reads or ranks that
         # stale tail — which is the future top-k would drop anyway (causally -inf), so the selection is
         # unchanged.
-        k_local = self._select_index_kbuf_local(
-            index_kv_cache, cache_batch_idx
-        )  # [1,1,T/sp,D_idx], batch-1 interleaved
-        k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=k_local, sp_axis=self.sp_axis)
+        # Pass the persistent multi-slot ND-sharded cache directly. The fused gather selects only
+        # cache_batch_idx into the batch-1 scratch and moves only the complete block-cyclic slabs touched
+        # by kv_len; the score reader addresses its own shard directly in the original ND cache.
+        k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=index_kv_cache, sp_axis=self.sp_axis)
         logits = ttnn.experimental.ring_indexer_score_dsa(
             q_dev,
             k_full,
             weights,
-            k_local,
+            index_kv_cache,
             self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
             cluster_axis=self.sp_axis,
             topology=self.sp_ccl_topology,
@@ -654,12 +635,11 @@ class TtIndexer:
             chunk_start_idx=start_pos,
             program_config=cfg,
             seq_subshard_axis=self.tp_axis if tpsp else None,
-            cache_batch_idx=None,
+            cache_batch_idx=cache_batch_idx,
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,
             kv_len=end_pos,
         )
-        ttnn.deallocate(k_local)
         # wq_b replicated -> each chip already holds the COMPLETE head-summed logit, so there is NO
         # partial-logit all-reduce over tp. This is the win: the removed step was a 2-CCL (RS+AG) all-reduce
         # spanning the full end_pos-wide logit (+ a TILE<->ROW_MAJOR round-trip), the indexer's dominant cost.
