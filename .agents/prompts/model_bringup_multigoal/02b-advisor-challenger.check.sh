@@ -122,15 +122,15 @@ if isinstance(traced, dict) and isinstance(shipped, dict):
 td = os.path.join(os.path.dirname(os.environ["CH_RJ"]), "traced_dtypes.json")
 prov = {}
 try: prov = json.load(open(td))
-except Exception: bad.append(f"{kind}: no traced_dtypes.json beside report.json -- run the capture through "
+except Exception: bad.append("no traced_dtypes.json beside report.json -- run the capture through "
                              "scripts/capture_template.py so what was traced is recorded independently")
 ac, pin = str(prov.get("advisor_commit") or ""), str(prov.get("advisor_pin_expected") or "")
 if not ac or ac.startswith("UNKNOWN"):
-    bad.append(f"{kind}: advisor_commit not recorded ({ac or 'absent'}). ttnn-advise does not put its version "
+    bad.append(f"advisor_commit not recorded ({ac or 'absent'}). ttnn-advise does not put its version "
                "in report.json and no corpus cell recorded it anywhere, so advice from two builds is "
                "indistinguishable. Export TTMLIR_ADVISOR_HOME and re-capture.")
 elif pin and not ac.startswith(pin):
-    bad.append(f"{kind}: advisor at {ac[:12]} but the pin is {pin}. SETUP.md pins the commit so runs are "
+    bad.append(f"advisor at {ac[:12]} but the pin is {pin}. SETUP.md pins the commit so runs are "
                "comparable; re-capture at the pin or state the deviation.")
 if not r.get("capture_policy_source"):
     bad.append("capture_policy_source unset: nothing records that the traced decoder was built with the "
