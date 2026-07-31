@@ -14,6 +14,11 @@ from helpers.device_io import read_words_from_device
 from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.logger import logger
 from helpers.perf import PerfReport
+from helpers.perf_schema import (
+    LOOP_FACTOR_COLUMN,
+    MARKER,
+    TEST_NAME_COLUMN,
+)
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
 
@@ -31,6 +36,7 @@ class GlobalConfig:
     profiler_enabled: bool = False
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
+    quasar_use_dvalid: bool = False
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
 
     @property
@@ -77,12 +83,6 @@ class FuserConfig(TestConfig):
 
         if self.global_config.architecture is None:
             self.global_config.architecture = self.CHIP_ARCH
-
-        num_stages = len(self.pipeline)
-
-        for i, operation in enumerate(self.pipeline, start=1):
-            operation.stage_id = i
-            operation.num_stages = num_stages
 
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
@@ -175,12 +175,12 @@ class FuserConfig(TestConfig):
         if self.BUILD_MODE != BuildMode.PRODUCE and all_results:
             results = reduce(
                 lambda left, right: pd.merge(
-                    left, right, on="marker", how="outer", validate="1:1"
+                    left, right, on=MARKER, how="outer", validate="1:1"
                 ),
                 all_results,
             )
-            results["test_name"] = self.global_config.test_name
-            results["loop_factor"] = self.global_config.loop_factor
+            results[TEST_NAME_COLUMN] = self.global_config.test_name
+            results[LOOP_FACTOR_COLUMN] = self.global_config.loop_factor
             perf_report.append(results)
             logger.info("Perf results:\n{}", results)
 

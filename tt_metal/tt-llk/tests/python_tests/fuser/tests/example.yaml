@@ -1,7 +1,7 @@
 # Stress test that chains five fused operations together to exercise as many
 # fuser features as possible: datacopy with fill, tilize with SFPU ops,
 # elwadd with transpose, two matmul stages with SFPU chains, dest accumulation,
-# looping, broadcast scalar, acc_to_dest, SyncFull, and mixed formats.
+# looping, broadcast scalar, acc_to_dest, and mixed formats.
 
 supported_archs: ["wormhole", "blackhole"]
 
@@ -109,7 +109,6 @@ operations:
         operation: "Neg"
         approximation_mode: false
         iterations: 32
-    dest_sync: "SyncFull"
 
     pack:
       - output: "elwadd_output"

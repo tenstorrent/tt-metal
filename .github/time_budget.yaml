@@ -122,14 +122,29 @@ ttnn:
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
   # Sweep budgets: per-SKU caps for the ttnn-run-sweeps and sweep-validation
-  # workflows. Budget planning uses a 30-min figure per job (the verify step
-  # passes --timeout-minutes 30); actual job timeout is 60 min.
+  # workflows.
   sweep:
-    wh_n150: 900        # ~30 jobs × 30 min
-    wh_n300: 900
-    bh_p150b_civ2: 900
-    wh_galaxy: 900      # lead-models + model-traced Galaxy sweeps
-    bh_loudbox: 300
+    # Each ceiling is the TOTAL time budget for a SKU for ONE run — the sum of
+    # every batch's timeout on that SKU — NOT a per-job number. The sweep matrix
+    # is dynamic (modules discovered at runtime, then batched), so per-job
+    # timeouts are built up per op from tests/pipeline_reorg/ttnn_sweep_tests.yaml
+    # (batch.overhead/default/overrides) and the whole-SKU total is enforced here.
+    # verify_time_budget.py sums skus.<sku>.timeout per (team, sku) from that file
+    # against these caps; compute_sweep_matrix.py additionally reports each run's
+    # live batch-timeout sum against the same budget. Seeded from observed
+    # wall-clock with ceiling headroom (Lead run 29559503564: 29 galaxy batches /
+    # ~4h28m total, no job hitting its ceiling; Model-Traced run 30553811243, where
+    # 42 of 119 jobs WERE killed by their ceiling and the model_traced per-op
+    # numbers had to roughly double — see that file's header). SKU names are the
+    # existing logical SKUs in sku_config.yaml. Shared SKUs cover both targets'
+    # entries, so wh_n150_civ2 carries lead + model_traced.
+    wh_galaxy: 640            # lead galaxy (obs ~4h28m total / 29 batches)
+    wh_n150_civ2: 1100        # lead(150) + model_traced(950)
+    wh_n300_civ2: 990         # model_traced
+    wh_llmbox: 920            # model_traced t3k
+    bh_p100a_civ2_viommu: 660 # model_traced
+    bh_p150b_civ2_viommu: 640 # model_traced
+    bh_p300_viommu: 720       # model_traced
   sweep_validation:
     wh_n150: 120
     wh_n300: 120

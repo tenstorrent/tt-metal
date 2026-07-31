@@ -38,8 +38,6 @@ using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::MeshTensor;
 using tt::tt_metal::PageConfig;
-using tt::tt_metal::QueueId;
-using tt::tt_metal::raw_optional;
 using tt::tt_metal::Shape;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
@@ -119,6 +117,7 @@ namespace tt::tt_metal {
 
 using ttnn::DeviceStorage;
 using ttnn::is_cpu_tensor;
+using ttnn::QueueId;
 using ttnn::StorageType;
 using ttnn::Tensor;
 
@@ -160,7 +159,7 @@ Tensor to_layout(const Tensor& input_tensor, Layout target_layout) {
 
 namespace ttnn {
 
-void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
+void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     if (is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {

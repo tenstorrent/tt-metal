@@ -3,36 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    int i{0};
-    const auto num_output_tiles_per_core = get_arg_val<uint32_t>(i++);
-    const auto num_reduced_tiles_along_dim = get_arg_val<uint32_t>(i++);
+    const auto num_output_tiles_per_core = get_arg(args::num_output_tiles_per_core);
+    const auto num_reduced_tiles_along_dim = get_arg(args::num_reduced_tiles_along_dim);
 
-    std::uint8_t input_id{tt::CB::c_in0};
-    const auto cb_x = input_id++;
-    DataflowBuffer dfb_x_obj(cb_x);  // input
-    const auto cb_one = input_id++;
-    DataflowBuffer dfb_one_obj(cb_one);  // one
+    DataflowBuffer dfb_x_obj(dfb::x);      // input
+    DataflowBuffer dfb_one_obj(dfb::one);  // one
 
-    std::uint8_t output_id{tt::CB::c_out0};
-    const auto cb_y = output_id++;
-    DataflowBuffer dfb_y_obj(cb_y);  // output
+    DataflowBuffer dfb_y_obj(dfb::y);  // output
 
-    std::uint8_t intermed_id{tt::CB::c_intermed0};
-    const auto cb_tmp0 = intermed_id++;
-    const auto cb_tmp1 = intermed_id++;
-
-    const auto cb_val = cb_tmp0;
-    DataflowBuffer dfb_val_obj(cb_val);  // f(x)
-    const auto cb_cal = cb_tmp1;
-    DataflowBuffer dfb_cal_obj(cb_cal);  // calculate f(x) over dimensions
+    // Compute-private intermediates: this kernel is their only toucher, so each is self-looped on the
+    // host (bound PRODUCER and CONSUMER under one accessor name) and one object drives both directions.
+    DataflowBuffer dfb_val_obj(dfb::val);  // f(x)
+    DataflowBuffer dfb_cal_obj(dfb::cal);  // calculate f(x) over dimensions
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
+    binary_op_init_common(dfb::x, dfb::x, dfb::y);
 
     dfb_one_obj.wait_front(onetile);  // comes from the reader
 
@@ -44,7 +35,7 @@ void kernel_main() {
             dfb_val_obj.reserve_back(onetile);
 
             copy_tile_init_with_dt(dfb_x_obj);
-            copy_tile(cb_x, 0, dst0);
+            copy_tile(dfb::x, 0, dst0);
 #ifdef IS_ZERO
             unary_ne_tile_init();
             unary_ne_tile(dst0, 0);
@@ -73,7 +64,7 @@ void kernel_main() {
                 dfb_cal_obj.reserve_back(onetile);
 
                 copy_tile_init_with_dt(dfb_val_obj);
-                copy_tile(cb_val, 0, dst0);
+                copy_tile(dfb::val, 0, dst0);
                 tile_regs_commit();
 
                 tile_regs_wait();
@@ -90,13 +81,13 @@ void kernel_main() {
                 dfb_cal_obj.reserve_back(onetile);
 #ifdef IS_ZERO
                 add_tiles_init_with_dt(dfb_val_obj, dfb_cal_obj);
-                add_tiles(cb_val, cb_cal, 0, 0, dst0);
+                add_tiles(dfb::val, dfb::cal, 0, 0, dst0);
 #else
                 copy_tile_init_with_dt(dfb_val_obj);
-                copy_tile(cb_val, 0, dst0);
+                copy_tile(dfb::val, 0, dst0);
 
                 copy_tile_init_with_dt(dfb_cal_obj);
-                copy_tile(cb_cal, 0, dst1);
+                copy_tile(dfb::cal, 0, dst1);
 
                 binary_max_tile_init();
                 binary_max_tile(dst0, dst1, dst0);
@@ -120,7 +111,7 @@ void kernel_main() {
         dfb_y_obj.reserve_back(onetile);
 
         copy_tile_init_with_dt(dfb_cal_obj);
-        copy_tile(cb_cal, 0, dst0);
+        copy_tile(dfb::cal, 0, dst0);
 #ifdef MINUS_INF
         negative_tile_init();
         negative_tile(dst0);

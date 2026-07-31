@@ -7,9 +7,11 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::prim {
 using namespace tt::tt_metal;
+using ttnn::operations::data_movement::per_shard_page_size_bytes;
 
 namespace {
 
@@ -33,17 +35,6 @@ constexpr const char* kReaderRmMulti =
 constexpr const char* kWriterRmMulti =
     "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/"
     "gather_writer_rm_single_row_multi_core.cpp";
-
-// Per-shard page size for noc_async_*_sharded: shard_W * elem_size on B/W, full row otherwise.
-uint32_t per_shard_page_size_bytes(const Tensor& t, uint32_t row_bytes) {
-    const auto& mc = t.memory_config();
-    if (mc.is_sharded() && (mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                            mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)) {
-        const auto& spec = mc.shard_spec().value();
-        return spec.shape[1] * t.element_size();
-    }
-    return row_bytes;
-}
 
 }  // namespace
 
