@@ -457,9 +457,15 @@ class Model:
         except Exception:
             lm_pc = None
         if lm_pc is not None:
-            logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b, program_config=lm_pc)
+            # Emit bf16 logits. The host-side greedy path needs bf16/fp32 for
+            # ttnn.argmax and was typecasting bf8 -> bf16 every token (58 us of
+            # device time, plus a full host dispatch because that op runs OUTSIDE
+            # the captured decode trace). Writing bf16 here costs ~6 MB more
+            # (~0.012 ms at 512 GB/s) and removes both. bf16 is strictly more
+            # precise than bf8, so the greedy argmax result cannot get worse.
+            logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat16, program_config=lm_pc)
         else:
-            logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+            logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat16)
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False
         # TP all-gather is deferred to process_output_prefill / process_output_decode
