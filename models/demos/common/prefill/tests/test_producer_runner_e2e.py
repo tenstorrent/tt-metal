@@ -353,7 +353,8 @@ def _running_runner(tag: str, num_users: int, max_seq_len: int, **extra):
         print(f"[e2e {_elapsed()}] runner [{tag}] ready ({_readiness_gates()}); starting producer", flush=True)
         yield stream
     finally:
-        if proc.poll() is None:
+        died_rc = proc.poll()  # not None => the runner exited on its OWN, before our teardown signal
+        if died_rc is None:
             proc.send_signal(signal.SIGINT)  # graceful; SIGKILL is the hard fallback
             try:
                 proc.wait(timeout=120)
@@ -364,6 +365,12 @@ def _running_runner(tag: str, num_users: int, max_seq_len: int, **extra):
         if not _STREAM_LOGS:  # otherwise it was already streamed live, line by line
             _emit_log_group(f"runner log [{tag}]", log_path)
         _cleanup_ipc()
+        # A runner that died mid-run is a broken run, not a passing one, and nothing else makes the test
+        # red: the producer reads KV that is already in DRAM, PCCs it, and exits 0. Only a NONZERO
+        # self-exit counts, since with PREFILL_SEND_SHUTDOWN=1 the runner is *meant* to drain and exit 0;
+        # and only with no exception in flight, so a real failure from the body is never masked by this.
+        if died_rc not in (None, 0) and sys.exc_info()[0] is None:
+            raise RuntimeError(f"runner [{tag}] died mid-run (rc={died_rc}); results are not trustworthy")
 
 
 def _generate_prompt_trace(out_dir: str, isl: int, prompt_file: str, model: str) -> None:
@@ -420,5 +427,10 @@ def test_producer_runner_pcc(scenario, tmp_path):
                 _emit_log_group(f"producer log [{scenario}]", prod_log)
         assert returncode == 0, (
             f"producer scenario {scenario!r} failed (rc={returncode}; PCC below threshold or error). "
-            f"See the [producer]-tagged output above in this step log. Runner tail:\n{_tail(runner_stream.log_path)}"
+            f"See the [producer]-tagged output above in this step log."
+            # The runner tail is appended ONLY when the live stream is off. pytest renders an assertion
+            # message three times on failure -- the ::error annotation, the FAILURES section, and (via
+            # -rA in pytest.ini) the short test summary -- so with streaming on, a 200-line tail that is
+            # already in the log verbatim would land in it four times over, ~800 lines of pure noise.
+            + ("" if _STREAM_LOGS else f" Runner tail:\n{_tail(runner_stream.log_path)}")
         )
