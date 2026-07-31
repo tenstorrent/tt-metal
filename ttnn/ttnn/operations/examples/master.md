@@ -87,6 +87,16 @@ role. The example shrinks the NoC transaction size only to *create* that bottlen
 effect (up to ~1.7×, Wormhole B0; see [`report.md`](split_reader/report.md)) — transaction size is
 the knob, not the point.
 
+## ⭐⭐ T2 — [`dual_noc_read`](dual_noc_read/README.md)
+**Concept:** a fused kernel needing two *independent* DRAM operands — `A op1 B` then `A op2 C`, where
+B and C could be fetched at the same time — usually has one reader fetch both in series. Give one
+operand to each data-movement RISC-V instead. A second-tensor sibling of `split_reader`.
+**Situation:** two operand streams with no dependency between them, in a read-heavy phase where the
+writer has nothing to drain yet.
+**Measured win:** **up to 1.85×** on the read (small transactions), **1.34×** on a full bf16 op —
+but a **0.68× REGRESSION** for large tile-sized reads spread over a row of cores (BH P150). It is a
+small-transaction optimization, not a more-cores one; read the README before applying it.
+
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
 **Situation:** you wrote a tiled matmul that produces **one output tile per block-matmul** (a `1×1` subblock), so every output tile re-loads both its A and B operand into the SRC registers; you wonder whether a bigger output subblock is worth it.
