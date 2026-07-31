@@ -109,11 +109,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // MOPs cannot be mocked as one simultaneous SrcAB handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                if constexpr (!unpack_to_dest)
+                for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(TILE_CNT);
+                    if constexpr (!unpack_to_dest)
+                    {
+                        // ELWADD is used for Mov2D operation when Dest is in 32bit mode, so we need to set both SrcA and SrcB valid
+                        _perf_unpack_loop_set_valid<true /*set_a*/, is_fp32_dest_acc_en ? true : false /*set_b*/>(tiles_in_block);
+                    }
+                    _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(tiles_in_block);
                 }
-                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(TILE_CNT);
             }
         }
         else
@@ -255,11 +259,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Real unpack emits SrcA and dummy SrcB as two ordered batches.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                if constexpr (!unpack_to_dest)
+                for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(TILE_CNT);
+                    if constexpr (!unpack_to_dest)
+                    {
+                        // ELWADD is used for Mov2D operation when Dest is in 32bit mode, so we need to clear both SrcA and SrcB valid
+                        _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en ? true : false /*clear_b*/>(tiles_in_block);
+                    }
+                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tiles_in_block);
                 }
-                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(TILE_CNT);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -288,14 +296,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR           = params.LOOP_FACTOR;
     const std::uint32_t output_num_blocks     = params.OUTPUT_NUM_BLOCKS;
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const std::uint32_t num_faces       = params.num_faces;
-    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const int DST_INDEX                 = params.DST_INDEX;
-    const Operand& buffer_Res           = params.buffer_Res;
+    const std::uint32_t num_faces             = params.num_faces;
+    const std::uint32_t TEST_FACE_C_DIM       = params.TEST_FACE_C_DIM;
+    const std::uint32_t TEST_FACE_R_DIM       = params.TEST_FACE_R_DIM;
+    const int DST_INDEX                       = params.DST_INDEX;
+    const Operand& buffer_Res                 = params.buffer_Res;
 #endif
     std::uint32_t const buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = output_tiles_in_block;
