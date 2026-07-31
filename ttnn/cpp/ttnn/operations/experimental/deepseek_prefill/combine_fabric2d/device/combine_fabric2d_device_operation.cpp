@@ -60,6 +60,7 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         args.num_l1_slots >= 2,
         "num_l1_slots must be >= 2 for the reader and producer to overlap (got {})",
         args.num_l1_slots);
+    TT_FATAL(args.fwd_bump_every >= 1, "fwd_bump_every must be >= 1 (got {})", args.fwd_bump_every);
     TT_FATAL(
         args.token_size_bytes % sizeof(uint32_t) == 0,
         "combine_fabric2d: token_size_bytes {} must be a multiple of 4",
@@ -175,6 +176,7 @@ ttnn::Tensor combine_fabric2d(
     uint32_t token_size_bytes,
     uint32_t axis,
     uint32_t num_l1_slots,
+    uint32_t fwd_bump_every,
     uint32_t stall_telemetry,
     tt::tt_fabric::Topology topology) {
     using OperationType =
@@ -187,6 +189,7 @@ ttnn::Tensor combine_fabric2d(
             .token_size_bytes = token_size_bytes,
             .axis = axis,
             .num_l1_slots = num_l1_slots,
+            .fwd_bump_every = fwd_bump_every,
             .stall_telemetry = stall_telemetry,
             .topology = topology,
             .movements = movements},

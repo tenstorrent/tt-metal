@@ -29,6 +29,7 @@ ttnn::Tensor combine_fabric2d(
     uint32_t token_size_bytes = 14336,
     uint32_t axis = 0,
     uint32_t num_l1_slots = 8,
+    uint32_t fwd_bump_every = 8,
     uint32_t stall_telemetry = 0,
     std::optional<tt::tt_fabric::Topology> topology = std::nullopt);
 
