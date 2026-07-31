@@ -232,10 +232,16 @@ real cost and out of scope:
 
 - **`us_advisor_agrees`** — the advisor places a conversion here too. Removing it may well win, but the win
   would be your idea, and booking it against the advisor contaminates the measurement.
-- **`us_not_advisor_comparable`** — `ReshapeView`, `FillPad`, `Copy`. Not placement edges, so the advisor
-  never expresses them. Not small either: six `ReshapeView` kernels ran 8–19 µs each on 110 and 16 cores in
-  one cell, 88.5 µs of a 1355 µs window.
+And one pot that is **unresolved, not out of scope**:
 
-Report both with their µs and hand them to `$optimize`. Eliminating conversions the advisor does not propose
-is a better-paying activity than this stage — it is just a different experiment. Sweeping expert and norm grids **directly**, without the advisor, is a separate and often
+- **`us_unresolved`** — `ReshapeView`, `FillPad`, `Copy`. The advisor does not state these as placement
+  edges, but a `ReshapeView` can carry a hidden layout change and act as a real chain boundary despite
+  looking shape-only. Not small: six of them ran 8–19 µs each on 110 and 16 cores, 88.5 µs of a 1355 µs
+  window. The profile cannot decide it — `Input 0 Memory` gives the memory class with no grid and no output
+  column, so even a `Reshard` that regrids 30→40 cores reads as unchanged. **Check the edge in the IR.** If
+  it does change layout it is a boundary like any other; if it does not, it is cost for `$optimize`.
+
+Report `us_advisor_agrees` with its µs and hand it to `$optimize` — eliminating conversions the advisor does
+not propose is a better-paying activity than this stage, just a different experiment. Resolve `us_unresolved`
+rather than skipping it: the stage's bias rule says a suppressed candidate understates the contribution. Sweeping expert and norm grids **directly**, without the advisor, is a separate and often
 better-paying activity.

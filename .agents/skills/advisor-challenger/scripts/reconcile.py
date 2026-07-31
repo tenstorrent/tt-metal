@@ -62,10 +62,12 @@ MOVEMENT_PREFIXES = (("Reshard", "l1_regrid"), ("ShardedToInterleaved", "l1_to_d
                      ("FillPad", "fill_pad"), ("Copy", "copy"))
 
 
-# Only these four are placement/layout decisions the advisor expresses as a to_memory_config edge, so only
-# these can be compared against reshards[]. ReshapeView / FillPad / Copy are real cost -- ReshapeView ran at
-# 8-19 us on 110 cores in this corpus -- but the advisor never places them, so scoring them as "the advisor
-# drops this" is an artifact of the classification, not evidence. Counted, reported, never ranked.
+# Only these four are placement decisions the advisor states as a to_memory_config edge, so only these can be
+# compared against reshards[] and attributed. The rest -- ReshapeView, FillPad, Copy -- are UNRESOLVED, not
+# out of scope: a ReshapeView can carry a hidden layout change and act as a chain boundary despite looking
+# like a shape-only op, and it is not cheap (8-19 us on 110 and 16 cores here, 88.5 us of one 1355 us
+# window). The profile cannot settle it: `Input 0 Memory` gives the memory class with no grid and no output
+# column, so even a Reshard that provably regrids 30->40 cores reads as unchanged. Deciding needs the IR.
 ADVISOR_COMPARABLE = {"l1_regrid", "l1_to_dram", "dram_to_l1", "retilize"}
 
 
@@ -276,7 +278,7 @@ def bsum(rows):
     to $optimize, do not screen it in this stage.
     """
     allb = [r for r in rows if r["bucket"] == "boundary"]
-    b = [r for r in allb if r.get("advisor_comparable") is not False]
+    b = [r for r in allb if r.get("advisor_comparable") != "unresolved"]
     us = lambda pred: round(sum(r["us"] for r in b if pred(r)), 3)
     by_class = {}
     for r in allb:
@@ -290,13 +292,14 @@ def bsum(rows):
         "us_advisor_agrees": us(lambda r: r.get("advised_here") is True),
         "undetermined_ops": sum(1 for r in b if r.get("advised_here") is None),
         "us_undetermined": us(lambda r: r.get("advised_here") is None),
-        "not_advisor_comparable_ops": sum(1 for r in allb if r.get("advisor_comparable") is False),
-        "us_not_advisor_comparable": round(
-            sum(r["us"] for r in allb if r.get("advisor_comparable") is False), 3),
+        "unresolved_ops": sum(1 for r in allb if r.get("advisor_comparable") == "unresolved"),
+        "us_unresolved": round(
+            sum(r["us"] for r in allb if r.get("advisor_comparable") == "unresolved"), 3),
         "by_conversion_class": by_class,
-        "note": "us_advisor_drops is what this stage can attribute to the advisor. us_advisor_agrees is "
-                "real conversion time the advisor endorses: attacking it is a separate activity, and "
-                "crediting it here would contaminate the contribution measurement.",
+        "note": "us_advisor_drops is what this stage can attribute to the advisor. us_advisor_agrees is real "
+                "conversion time the advisor endorses: attacking it is a separate activity and crediting it "
+                "here would contaminate the measurement. us_unresolved needs the IR to classify -- resolve "
+                "it, do not skip it.",
     }
 
 
@@ -385,9 +388,11 @@ def main() -> int:
         hits = reshard_idx.get((prev, nxt))
         r["edge"] = f"{prev} -> {nxt}"
         if r.get("conversion_class") not in ADVISOR_COMPARABLE:
-            r["advisor_comparable"] = False
-            r["reason"] = (f"{r.get('conversion_class')} is not a placement edge the advisor expresses, so "
-                           "it cannot be attributed to the advice. Real cost, but not this stage's candidate")
+            r["advisor_comparable"] = "unresolved"
+            r["reason"] = (
+                f"{r.get('conversion_class')} is not a placement edge the advisor states, and the profile "
+                "cannot show whether it changed layout. It may still be a chain boundary -- check this "
+                "edge's layouts in the IR. Do not drop it: it is unresolved, not out of scope")
         elif prev is None or nxt is None:
             r["advised_here"] = None
             r["reason"] = "boundary on an edge with no paired advised op either side -- undetermined"
@@ -462,7 +467,7 @@ def main() -> int:
     print(f"   boundaries: advisor drops {ab['advisor_drops_ops']} ({ab['us_advisor_drops']:.3f} us, "
           f"in scope) | agrees {ab['advisor_agrees_ops']} ({ab['us_advisor_agrees']:.3f} us, out of scope) "
           f"| undetermined {ab['undetermined_ops']} ({ab['us_undetermined']:.3f} us) "
-          f"| not comparable {ab['not_advisor_comparable_ops']} ({ab['us_not_advisor_comparable']:.3f} us)")
+          f"| UNRESOLVED {ab['unresolved_ops']} ({ab['us_unresolved']:.3f} us, check the IR)")
     print("   " + "  ".join(f"{k} {v['us']:.3f}us/{v['ops']}" for k, v in
                             sorted(ab["by_conversion_class"].items(), key=lambda x: -x[1]["us"])))
     print(f"   {len(chains)} chain(s), ranked by advisor-attributable conversion value:")
