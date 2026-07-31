@@ -1,0 +1,10 @@
+{
+  "checked_at": "2026-07-31T17:58:00+00:00",
+  "ttmlir_advisor_home": "/home/mvasiljevic/tt-mlir",
+  "advisor_executable": "/home/mvasiljevic/tt-mlir/build/bin/ttnn-advise",
+  "advisor_executable_exists": true,
+  "advisor_commit": "618cd4e75dae69d334bb9d8cdeff314816ccf214",
+  "required_pin": "618cd4e75d",
+  "pin_matches": true,
+  "tt_mlir_rebuilt_during_stage": false
+}

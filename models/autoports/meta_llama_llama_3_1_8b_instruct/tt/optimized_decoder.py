@@ -20,6 +20,7 @@ Setup may consume PyTorch state-dict tensors. ``prefill_forward`` and
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -40,6 +41,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
+from models.common.modules.rmsnorm.rmsnorm_1d import _create_sharded_norm_program_config
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim, zeros_like_paged_cache
 from models.common.utility_functions import is_blackhole
 
@@ -220,6 +222,20 @@ def _norm_weight(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_dir_weight_name=(cache_dir, name) if cache_dir is not None else None,
     )
+    advisor_cores = int(os.environ.get("LLAMA31_ADVISOR_RESIDUAL_CORES", "0"))
+    decode_grid = _core_grid_for_tiles(hf_config.hidden_size // TILE_SIZE, target=advisor_cores) if advisor_cores else None
+    decode_memcfg = (
+        _width_sharded_l1_memcfg(
+            hf_config.hidden_size, decode_grid, rows=TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE)
+        )
+        if decode_grid else None
+    )
+    decode_program = (
+        _create_sharded_norm_program_config(
+            hf_config.hidden_size, decode_grid, TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE), TILE_SIZE
+        )
+        if decode_grid else None
+    )
     return RMSNorm1D.from_config(
         RMSNorm1DConfig(
             weight=lazy_weight,
@@ -229,6 +245,8 @@ def _norm_weight(
             decode_in_sharded=True,
             decode_out_sharded=True,
             prefill_distributed=False,
+            decode_memory_config=decode_memcfg,
+            decode_program_config=decode_program,
         )
     )
 
@@ -568,6 +586,17 @@ class OptimizedDecoder(LightweightModule):
             cache_dir=cache_path,
         )
 
+        advisor_residual_cores = int(os.environ.get("LLAMA31_ADVISOR_RESIDUAL_CORES", "0"))
+        advisor_residual_grid = (
+            _core_grid_for_tiles(dim // TILE_SIZE, target=advisor_residual_cores)
+            if advisor_residual_cores else None
+        )
+        advisor_residual_memcfg = (
+            _width_sharded_l1_memcfg(
+                dim, advisor_residual_grid, rows=TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE)
+            )
+            if advisor_residual_grid else None
+        )
         self_attn = Attention1D.from_config(
             Attention1DConfig(
                 wqkv=LazyWeight(
@@ -597,6 +626,7 @@ class OptimizedDecoder(LightweightModule):
                 wqkv_dtype=policy.attention_weight_dtype,
                 wo_dtype=policy.attention_weight_dtype,
                 activation_dtype=policy.activation_dtype,
+                decode_residual_memcfg=advisor_residual_memcfg,
                 scale=head_dim**-0.5,
                 prefill_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
                 prefill_xqkv_prg_config=attention_xqkv_prefill_prg_config,
@@ -622,7 +652,9 @@ class OptimizedDecoder(LightweightModule):
             placements=[ttnn.PlacementShard(-2)],
             mesh_shape_override=ttnn.MeshShape([mesh_device.get_num_devices()]),
         )
-        mlp_decode_grid = _core_grid_for_tiles(dim // TILE_SIZE, target=32)
+        mlp_decode_grid = _core_grid_for_tiles(
+            dim // TILE_SIZE, target=int(os.environ.get("LLAMA31_ADVISOR_RESIDUAL_CORES", "32"))
+        )
         if policy.mlp_math_fidelity == ttnn.MathFidelity.LoFi:
             mlp_compute_kernel_cfg = _compute_kernel_config_lofi()
         elif policy.mlp_math_fidelity == ttnn.MathFidelity.HiFi2:
@@ -722,13 +754,15 @@ class OptimizedDecoder(LightweightModule):
             rot_mats=rot_mats,
             page_table=page_table,
         )
-        hidden_states = ttnn.to_memory_config(hidden_states, self.decode_residual_memcfg)
+        if os.environ.get("LLAMA31_ADVISOR_SKIP_ATTN_OUTPUT_RESHARD", "0") != "1":
+            hidden_states = ttnn.to_memory_config(hidden_states, self.decode_residual_memcfg)
         hidden_states = ttnn.add(residual, hidden_states, memory_config=self.decode_residual_memcfg)
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm.decode_forward(hidden_states)
         hidden_states = self.mlp.decode_forward(hidden_states)
-        hidden_states = ttnn.to_memory_config(hidden_states, self.decode_residual_memcfg)
+        if os.environ.get("LLAMA31_ADVISOR_SKIP_MLP_OUTPUT_RESHARD", "0") != "1":
+            hidden_states = ttnn.to_memory_config(hidden_states, self.decode_residual_memcfg)
         return ttnn.add(residual, hidden_states, memory_config=self.decode_residual_memcfg)
 
     def forward(self, hidden_states: ttnn.Tensor, *, mode: str, **kwargs) -> ttnn.Tensor:

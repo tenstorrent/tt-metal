@@ -1,0 +1,17 @@
+{
+  "shipped_policy": {
+    "weight_dtype": "bfloat8_b",
+    "activation_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "mlp_gate_up_dtype": "bfloat4_b",
+    "mlp_down_dtype": "bfloat4_b"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B",
+    "norm": "BFLOAT16",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/README.md final executed policy and decode perf report summary"
+}

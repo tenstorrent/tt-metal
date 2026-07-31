@@ -1,0 +1,13 @@
+{
+  "layer_kind": "dense",
+  "layer_idx": 0,
+  "capture_batch": 32,
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "captured_at": "2026-07-31T18:05:10+00:00",
+  "incumbent_measured_at": "2026-07-31T18:00:18+00:00",
+  "advisor_commit": "618cd4e75d",
+  "capture_script": "doc/advisor_challenger/capture.py",
+  "template": ".agents/skills/advisor-challenger/scripts/capture_template.py",
+  "layers_in_window": 1
+}

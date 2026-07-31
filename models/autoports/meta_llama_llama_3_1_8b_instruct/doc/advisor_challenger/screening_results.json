@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "layer_kind": "dense",
+  "ranking_source": "reconciliation_dense.json generated without --results",
+  "chains": {
+    "dense:b9": {
+      "verdict": "hard_error",
+      "hard_error": "nlp_concat_heads_decode requires a sharded input",
+      "attempted_knob": "LLAMA31_ADVISOR_SKIP_SDPA_RESHARD=1",
+      "result_source": "measurements/dense_b9.log",
+      "ir_resolution": "final_ir.mlir marks concat-heads validation_unfixable when fed the advisor's DRAM-interleaved SDPA output"
+    },
+    "dense:2": {
+      "verdict": "rejected",
+      "measured_ms": 0.667581669986248,
+      "repeats_ms": [0.66772336140275, 0.6679379567503929, 0.6675614602863789, 0.6675734743475914, 0.667581669986248],
+      "attempted_knob": "LLAMA31_ADVISOR_SKIP_ATTN_OUTPUT_RESHARD=1",
+      "result_source": "measurements/dense_2.json",
+      "oracle_passed": null
+    },
+    "dense:3": {
+      "verdict": "rejected",
+      "measured_ms": 0.6676804274320602,
+      "repeats_ms": [0.6676804274320602, 0.667907502502203, 0.6675337813794613, 0.6676752492785454, 0.6676948815584183],
+      "attempted_knob": "LLAMA31_ADVISOR_SKIP_MLP_OUTPUT_RESHARD=1",
+      "result_source": "measurements/dense_3.json",
+      "oracle_passed": null
+    }
+  },
+  "dram_resident": {
+    "SdpaDecodeDeviceOperation": {
+      "verdict": "agrees_with_shipped_output_ir",
+      "ir_evidence": "final_ir.mlir and the shipped profile both place the SDPA output in DRAM; the reconciliation row only exposes Input 0 memory"
+    },
+    "NLPConcatHeadsDecodeDeviceOperation": {
+      "verdict": "hard_error",
+      "hard_error": "nlp_concat_heads_decode requires a sharded input",
+      "result_source": "measurements/dense_b9.log"
+    }
+  }
+}

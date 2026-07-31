@@ -1,0 +1,93 @@
+{
+  "outcome": "contribution_zero",
+  "changed": false,
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "capture_batch": 32,
+  "incumbent_ms": 0.665045864880085,
+  "final_ms": 0.665045864880085,
+  "repeats_ms": [
+    0.6648224219679832,
+    0.665045864880085,
+    0.665233600884676,
+    0.6654253602027893,
+    0.6647280417382717
+  ],
+  "winning_config": "frozen incumbent; no advisor candidate passed non-overlap",
+  "oracle": {
+    "passed": true,
+    "oracle_weights": "real",
+    "source": "doc/optimized_decoder/README.md incumbent real-HF-layer-0 result",
+    "decode_pcc": 0.9995098207830138,
+    "threshold": 0.995,
+    "note": "No changed candidate shipped, so a new candidate oracle was not required."
+  },
+  "oracle_passed": true,
+  "oracle_weights": "real",
+  "oracle_scope": "unchanged frozen incumbent real-weight decoder oracle",
+  "oracle_reference": "Hugging Face layer 0",
+  "iterations": [
+    {
+      "chains": ["dense:b9"],
+      "trigger": "initial reconciliation rank 1",
+      "knob": "LLAMA31_ADVISOR_SKIP_SDPA_RESHARD=1",
+      "advisor_removes_per_model_us": 49.184,
+      "verdict": "hard_error",
+      "error": "nlp_concat_heads_decode requires a sharded input",
+      "log": "measurements/dense_b9.log",
+      "oracle_passed": false,
+      "oracle_weights": "not_run_hard_error"
+    },
+    {
+      "chains": ["dense:2"],
+      "trigger": "initial reconciliation rank 2",
+      "reranked_from": "reconciliation_dense.json initial frozen ranking; no prior candidate was kept, so the graph did not change",
+      "knob": "LLAMA31_ADVISOR_SKIP_ATTN_OUTPUT_RESHARD=1",
+      "advisor_removes_per_model_us": 23.168,
+      "measured_ms": 0.667581669986248,
+      "repeats_ms": [0.66772336140275, 0.6679379567503929, 0.6675614602863789, 0.6675734743475914, 0.667581669986248],
+      "delta_per_layer_us": 2.535805106163,
+      "delta_per_model_us": 81.145763397216,
+      "verdict": "rejected_slower_every_repeat",
+      "oracle_passed": null,
+      "oracle_weights": "not_run_rejected"
+    },
+    {
+      "chains": ["dense:3"],
+      "trigger": "initial reconciliation rank 3",
+      "reranked_from": "reconciliation_dense.json initial frozen ranking; no prior candidate was kept, so the graph did not change",
+      "knob": "LLAMA31_ADVISOR_SKIP_MLP_OUTPUT_RESHARD=1",
+      "advisor_removes_per_model_us": 22.56,
+      "measured_ms": 0.6676804274320602,
+      "repeats_ms": [0.6676804274320602, 0.667907502502203, 0.6675337813794613, 0.6676752492785454, 0.6676948815584183],
+      "delta_per_layer_us": 2.634562551975,
+      "delta_per_model_us": 84.3060016632,
+      "verdict": "rejected_slower_every_repeat",
+      "oracle_passed": null,
+      "oracle_weights": "not_run_rejected"
+    }
+  ],
+  "rejected_knobs": [
+    "LLAMA31_ADVISOR_SKIP_SDPA_RESHARD (default off)",
+    "LLAMA31_ADVISOR_SKIP_ATTN_OUTPUT_RESHARD (default off)",
+    "LLAMA31_ADVISOR_SKIP_MLP_OUTPUT_RESHARD (default off)",
+    "LLAMA31_ADVISOR_RESIDUAL_CORES (unset by default)"
+  ],
+  "advised_boundaries": {
+    "us_advisor_drops_per_layer": 4.394,
+    "us_advisor_drops_per_model": 140.608,
+    "us_advisor_agrees_per_layer": 1.561,
+    "us_advisor_agrees_per_model": 49.952
+  },
+  "model_estimate": {
+    "before_us": 20747.296,
+    "after_us": 20747.296,
+    "band_us": 22.304,
+    "per_kind": {
+      "dense": {"before_us": 20747.296, "after_us": 20747.296, "layers": 32}
+    },
+    "layer_handoff": {"entry_from_dram": false, "exit_in_l1": true, "screened": false},
+    "method": "per-layer measured delta x layers_of_kind, summed"
+  },
+  "advisor_contribution_us": 0.0
+}

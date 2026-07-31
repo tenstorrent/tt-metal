@@ -1,0 +1,38 @@
+{
+  "label": "profile_incumbent",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    0.6821337342262268,
+    0.6786603294312954,
+    0.6768881343305111,
+    0.6766963563859463,
+    0.6765474937856197
+  ],
+  "median_ms": 0.6768881343305111,
+  "noise_floor_ms": 0.005586240440607071,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one dense decoder layer, traced decode replay, batch 32, measured end to end on the host",
+  "measured_at": "2026-07-31T18:02:09+00:00",
+  "shipped_policy": {
+    "weight_dtype": "bfloat8_b",
+    "activation_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "mlp_gate_up_dtype": "bfloat4_b",
+    "mlp_down_dtype": "bfloat4_b"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT8_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B",
+    "norm": "BFLOAT16",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/README.md final executed policy and decode perf report summary",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}
