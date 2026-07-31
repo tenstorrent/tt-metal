@@ -601,8 +601,7 @@ class PerfConfig(TestConfig):
         return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
 
     @staticmethod
-    def build_report_frame(
-        results,
+    def _build_sweep_frame(
         code_sizes,
         formats_config,
         unpack_to_dest,
@@ -610,20 +609,11 @@ class PerfConfig(TestConfig):
         passed_templates,
         passed_runtimes,
     ):
-        """Assemble the per-test report frame from the computed per-run-type results.
-
-        Pure (no hardware): given the stat/metric frames, the ELF code sizes and
-        the config's parameters, it merges the per-run-type results and cross-joins
-        the sweep columns onto them. This is the seam a hardware-free report test
-        drives with synthetic ``results`` to validate the produced column set.
+        """Single-row frame of the sweep columns (formats, flags, non-None params,
+        code sizes) that are cross-joined onto every per-run-type result. Shared by
+        the main report (build_report_frame) and the separate counter report so
+        both carry an identical set of sweep columns.
         """
-        run_results = reduce(
-            lambda left, right: pd.merge(
-                left, right, on=MARKER, how="outer", validate="1:1"
-            ),
-            results,
-        )
-
         # Setting header fields that are always there
         names = list(FORMAT_HEADERS) if formats_config else []
         values = (
@@ -651,7 +641,40 @@ class PerfConfig(TestConfig):
             names.append(text_size_column(run_type.name))
             values.append(size)
 
-        sweep = pd.DataFrame([values], columns=names)
+        return pd.DataFrame([values], columns=names)
+
+    @staticmethod
+    def build_report_frame(
+        results,
+        code_sizes,
+        formats_config,
+        unpack_to_dest,
+        dest_acc,
+        passed_templates,
+        passed_runtimes,
+    ):
+        """Assemble the per-test report frame from the computed per-run-type results.
+
+        Pure (no hardware): given the stat/metric frames, the ELF code sizes and
+        the config's parameters, it merges the per-run-type results and cross-joins
+        the sweep columns onto them. This is the seam a hardware-free report test
+        drives with synthetic ``results`` to validate the produced column set.
+        """
+        run_results = reduce(
+            lambda left, right: pd.merge(
+                left, right, on=MARKER, how="outer", validate="1:1"
+            ),
+            results,
+        )
+
+        sweep = PerfConfig._build_sweep_frame(
+            code_sizes,
+            formats_config,
+            unpack_to_dest,
+            dest_acc,
+            passed_templates,
+            passed_runtimes,
+        )
         combined = sweep.merge(run_results, how="cross")
 
         text_size_cols = [c for c in combined.columns if c.startswith(TEXT_SIZE_PREFIX)]
@@ -798,6 +821,14 @@ class PerfConfig(TestConfig):
                     left, right, on=MARKER, how="outer", validate="1:1"
                 ),
                 counter_results_list,
+            )
+            sweep = PerfConfig._build_sweep_frame(
+                code_sizes,
+                self.formats_config,
+                self.unpack_to_dest,
+                self.dest_acc,
+                self.passed_templates,
+                self.passed_runtimes,
             )
             counter_combined = sweep.merge(counter_run_results, how="cross")
             PerfConfig.COUNTER_REPORT.append(counter_combined, label=self.test_name)
