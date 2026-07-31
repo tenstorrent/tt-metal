@@ -208,6 +208,11 @@ for c in d.get("chains", []):
                     "below_threshold with its conversion value")
     elif v not in ("below_threshold", "not_measurable") and not isinstance(c.get("measured_ms"), (int, float)):
         crit.append(f"chain {c.get('chain')}: {v} with no measured_ms. A prose rejection is not a result.")
+    if v == "kept" and c.get("oracle_passed") is not True:
+        crit.append(f"chain {c.get('chain')}: kept with no oracle_passed of its own. Some ops compute the "
+                    "WRONG ANSWER under particular shard specs, and a placement change is exactly what "
+                    "triggers that -- so every kept candidate needs its own correctness result, not the "
+                    "final winner's. Record oracle_passed and oracle_pcc per chain.")
     if v in ("kept", "rejected") and not c.get("repeats_ms"):
         warn.append(f"chain {c.get('chain')}: no repeats_ms, so non-overlap cannot be rechecked")
 for r in d.get("material_ops_on_le_2_cores", []):
@@ -298,6 +303,9 @@ if f.get("changed"):
         for n, s in enumerate(sets):
             if not isinstance(s.get("measured_ms"), (int, float)):
                 crit.append(f"measured_sets[{n}]: no measured_ms -- best_set must be MEASURED")
+            if s.get("oracle_passed") is not True and (s.get("set") or ["x"])[0] != "incumbent":
+                crit.append(f"measured_sets[{n}]: no oracle_passed. A set that was measured but never "
+                            "checked for correctness cannot be shipped or compared.")
             if not (s.get("chains") or s.get("set")):
                 crit.append(f"measured_sets[{n}]: neither `chains` nor `set` -- the number is unattributable")
             if not s.get("repeats_ms"):

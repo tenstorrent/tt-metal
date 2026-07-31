@@ -317,8 +317,22 @@ Each chain as one unit, one variable per measurement, against the frozen incumbe
 `repeats_ms` and a verdict, or `below_threshold` with its conversion value. Screen `dram_resident` rows
 too — *"leave this in DRAM"* is advice, and de-sharding an op has won here.
 
-Every kept candidate: its own op-level CSV as `perf_report`, and the incumbent's oracle at the incumbent's own
-PCC bar. **A faster decoder that fails its oracle is a regression with a good number.**
+Every kept candidate: its own op-level CSV as `perf_report`, **and its own correctness result** — the
+incumbent's oracle at the incumbent's own PCC bar, recorded per chain as `oracle_passed` / `oracle_pcc`, not
+inherited from the final winner. **A faster decoder that fails its oracle is a regression with a good number.**
+
+**Why the oracle is load-bearing in a placement stage.** A resharding is arithmetically a no-op, so it is
+tempting to treat correctness as the previous stage's problem. It is not: **some ops compute the wrong answer
+under particular shard specs**, and changing placement is exactly what triggers such a bug. The failure is
+often partial — wrong on edge tiles or on some cores — so it shows up as a PCC that drops materially rather
+than as a crash. If a placement-only candidate moves PCC at all, do not tune the threshold: reject the
+candidate however fast it is, and report the op and the shard spec as a tt-metal bug. That is a real result
+of this stage, not a nuisance.
+
+A **differential** oracle catches this well and cheaply: same weights on both sides, candidate against the
+frozen incumbent. Synthetic weights are adequate — a kernel that computes the wrong answer does so whatever
+the weight distribution — which is why this stage does not need real weights for placement work (step 4's
+`oracle_weights`).
 
 Record **`oracle_weights`: `real` or `synthetic`**, and prefer real for anything you ship. Two traps the
 corpus fell into:
