@@ -362,6 +362,7 @@ std::string generate_tt_kernel_shim_if_present(
     // a silently-unused arg (registered name the kernel never takes).
     std::vector<std::string> cta_names;
     settings.process_named_compile_time_args([&cta_names](const std::unordered_map<std::string, uint32_t>& named) {
+        cta_names.reserve(cta_names.size() + named.size());
         for (const auto& entry : named) {
             cta_names.push_back(entry.first);
         }
