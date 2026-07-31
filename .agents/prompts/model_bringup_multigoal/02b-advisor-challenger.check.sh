@@ -256,6 +256,23 @@ if selfref:
         f"the oracle ({od[:60]}) compares the implementation against itself or against the frozen "
         "incumbent, so it cannot fail for a placement change that keeps tracing working. That is a sanity "
         "check, not a correctness oracle. One corpus cell reported PCC exactly 1.0 this way.")
+# "keep every losing knob default-off" is half code state, which this gate cannot see, and half record,
+# which it can: a rejected candidate that is written down stays re-measurable without another capture.
+try:
+    _rc = [json.load(open(os.path.join(os.environ["CH_D"], n)))
+           for n in sorted(os.listdir(os.environ["CH_D"])) if n.startswith("reconciliation")]
+except Exception:
+    _rc = []
+_rej = {c.get("chain") for d in _rc for c in (d.get("chains") or [])
+        if (c.get("verdict") or "").lower() in ("rejected", "below_threshold")}
+_recorded = set(f.get("rejected_knobs") or [])
+for _s in ((f.get("combination") or {}).get("measured_sets") or []):
+    _recorded |= set(_s.get("chains") or []) | set(_s.get("set") or [])
+_missing = sorted(_rej - _recorded)
+if _missing:
+    warn.append(f"rejected candidates not recorded anywhere in final.json: {', '.join(_missing[:4])}. Keep "
+                "each losing knob in the decoder default-off and name it in rejected_knobs, so it can be "
+                "re-measured without another capture.")
 for k, v in f.items():
     if k.endswith("_passed") and v is False:
         crit.append(f"{k} is false: a correctness check failed and the cell shipped anyway. One corpus cell "
