@@ -3,17 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-perf-debug (X280) profiler test.
+perf-debug profiler test (DRISC drain path).
 
 Runs the ``test_perf_debug_zones`` workload -- which emits 10 differently-named DeviceZoneScopedN zones
 (with increasing durations) on all 5 RISCs of a small core grid -- with the perf-debug profiler enabled
 (``TT_METAL_PERF_DEBUG_PROFILER=1``) under a connected ``tracy-capture``. Verifies:
 
-  * the module boots the X280 drainer at MeshDevice bring-up (log line), and
+  * the module leaves a DRISC drainer resident at MeshDevice bring-up (log line), and
   * the resulting Tracy capture holds device (GPU) zones across many per-core contexts.
 
-Hardware-gated: needs a Blackhole box with a working (ECC-primed) X280 L2CPU + the built firmware. Skips
-cleanly when the workload reports it is not on Blackhole / the X280 did not boot. Device work runs in a
+Hardware-gated: needs a Blackhole box with DRAM programmable cores enabled. Skips cleanly when the
+workload reports it is not on Blackhole / no DRISC was available. Device work runs in a
 subprocess so the pytest parent never takes the PCIe lock (mirrors test_realtime_profiler.py).
 """
 
@@ -98,8 +98,8 @@ def test_perf_debug_zones_capture(gx, gy, iters):
             cap.communicate()
 
     log = proc.stdout + proc.stderr
-    if "not Blackhole" in log or "booted X280 drainer" not in log:
-        pytest.skip("perf-debug profiler did not boot the X280 (not Blackhole / X280 down / FW not built)")
+    if "not Blackhole" in log or "DRISC drainer resident" not in log:
+        pytest.skip("perf-debug profiler did not start the DRISC drainer (not Blackhole / no DRAM programmable cores)")
 
     assert proc.returncode == 0, f"workload failed (rc={proc.returncode}):\n{log[-2000:]}"
     assert "active on 1 device(s)" in log, "perf-debug profiler did not report active"
