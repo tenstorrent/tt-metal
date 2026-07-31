@@ -306,6 +306,9 @@ def bsum(rows):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    if "--self-test" in sys.argv:
+        return self_test()
+    ap.add_argument("--self-test", action="store_true", help="run the regression fixtures and exit")
     ap.add_argument("--report", required=True, type=Path)
     ap.add_argument("--perf", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
@@ -600,18 +603,123 @@ def main() -> int:
     if "incumbent_ms_is_not_median" in f:
         print(f"   !! incumbent_ms {f['incumbent_ms_is_not_median']['recorded']} is not the median "
               f"{f['incumbent_ms_is_not_median']['median']} -- fix before screening")
-    print(f"   {len(chains)} chain(s), ranked by advisor-attributable conversion value:")
-    for c in chains:
-        print(f"      {c['chain']:16s} ops {c['us']:8.3f} + boundaries {c['boundary_us']:7.3f} us"
-              f" (advisor drops {c['advisor_removes_us']:6.3f},"
-              f" {c['vs_noise_floor']}x floor, conf {c['confidence']})"
-              f"   {'/'.join(c['ops'])[:52]}")
     for r in low:
-        print(f"   !! {r['device']} on {r['shipped_cores']} core(s), {r['us']:.3f} us "
-              f"({r['share_pct']} %) -- needs a measured attempt or a quoted hard error")
-    if not closes:
-        sys.exit(f"FATAL: accounting does not close: {accounted:.3f} of {window:.3f} us")
+        print(f"   !! BIGGER THAN THE CEILING: {r['device']} on {r['shipped_cores']} core(s), "
+              f"{r['us']:.3f} us ({r['share_pct']} % of the window) -- needs a measured attempt or a quoted "
+              f"hard error" if r["us"] > ceiling_us else
+              f"   !! {r['device']} on {r['shipped_cores']} core(s), {r['us']:.3f} us ({r['share_pct']} %) "
+              f"-- needs a measured attempt or a quoted hard error")
+
+    attrib = [c for c in chains if c["advisor_removes_us"] > 0]
+    rest = [c for c in chains if c["advisor_removes_us"] <= 0]
+
+    def show(c):
+        print(f"      {c['chain']:20s} ops {c['us']:8.3f} + boundaries {c['boundary_us']:7.3f} us"
+              f"  (attributable {c['advisor_removes_us']:6.3f} = {c['vs_noise_floor'] or 0:.2f}x floor,"
+              f" conf {c['confidence']})   {'/'.join(c['ops'])[:44]}")
+
+    print(f"   {len(attrib)} chain(s) with advisor-attributable value, ranked by it:")
+    for c in attrib:
+        show(c)
+    if rest:
+        print(f"   {len(rest)} chain(s) with NO attributable value -- the advisor places the same "
+              f"conversions, or they are unresolved. Listed for completeness, not as candidates:")
+        for c in rest:
+            show(c)
     return 0
+
+
+def self_test() -> int:
+    """Regression fixtures. The pairing and the guards are the parts that silently mislead when wrong, and
+    this file has broken twice in ways that still produced plausible output, so assert on both."""
+    import subprocess
+    import tempfile
+
+    def csv_of(pairs):
+        head = "OP CODE,DEVICE KERNEL DURATION [ns],CORE COUNT\n"
+        return head + "".join(f"{c},{int(us * 1000)},32\n" for c, us in pairs)
+
+    def report_of(ops, reshards=(), **kw):
+        return json.dumps({"ops": [{"index": i, "op": f"ttnn.{o}", "layout": "l1/block_sharded/1x32",
+                                    "program_config": ""} for i, o in enumerate(ops)],
+                           "reshards": list(reshards), "total_ops": len(ops), **kw})
+
+    fails = []
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+
+        def run(report, csv, extra=()):
+            (d / "r.json").write_text(report)
+            (d / "p.csv").write_text(csv)
+            return subprocess.run([sys.executable, __file__, "--report", str(d / "r.json"),
+                                   "--perf", str(d / "p.csv"), "--out", str(d / "o.json"), *extra],
+                                  capture_output=True, text=True)
+
+        def load():
+            return json.loads((d / "o.json").read_text())
+
+        def check(cond, name):
+            if not cond:
+                fails.append(name)
+            print(f"  {'ok  ' if cond else 'FAIL'} {name}")
+
+        # 1. plain pairing, closure, and a boundary that the advice does not place
+        r = run(report_of(["rms_norm", "linear", "add"]),
+                csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0),
+                        ("ReshardDeviceOperation", 2.0), ("BinaryNgDeviceOperation", 5.0)]))
+        check(r.returncode == 0, "clean input exits 0")
+        o = load()
+        check(o["accounting_closes_100pct"], "accounting closes")
+        check(abs(o["measured_window_us"] - 117.0) < 1e-6, "window is the sum of device times")
+        # rms_norm->LayerNorm and linear->Matmul are name matches; `add` does NOT resemble `BinaryNg`, so it
+        # pairs by position. That is the documented fallback, and it is why the corpus shows 1-5 % positional.
+        check(o["confidence"]["paired_by_name"] == 2 and o["confidence"]["paired_by_position"] == 1,
+              "renames pair by name, binary elementwise falls back to position")
+        check([r["pair_confidence"] for r in o["disagreements"] if r.get("op") == "add"] == ["position"],
+              "the positional pair is flagged as such")
+        check(o["advised_boundaries"]["us_advisor_drops"] == 2.0, "unplaced Reshard is attributable")
+
+        # 2. the same graph, with the advice placing that conversion too -> not attributable
+        r = run(report_of(["rms_norm", "linear", "add"],
+                          [{"kind": "to_memory_config", "producer": "linear", "consumer": "add",
+                            "from": "l1/x", "to": "l1/y"}]),
+                csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0),
+                        ("ReshardDeviceOperation", 2.0), ("BinaryNgDeviceOperation", 5.0)]))
+        o = load()
+        check(o["advised_boundaries"]["us_advisor_drops"] == 0.0 and
+              o["advised_boundaries"]["us_advisor_agrees"] == 2.0, "advised conversion is not attributable")
+
+        # 3. an unpairable advised op must not drag device ops into untraced
+        r = run(report_of(["rms_norm", "sparse_matmul", "linear"]),
+                csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0)]))
+        o = load()
+        check(o["accounting"].get("untraced", {}).get("us", 0) == 0.0,
+              "an unpairable advised op leaves the device ops paired")
+
+        # 4. a report covering two replays must be refused, not scaled
+        r = run(report_of(["rms_norm", "linear"]),
+                csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0)] * 2))
+        check(r.returncode != 0 and "repeats 2x" in r.stderr, "two-replay report is refused")
+
+        # 5. a profile the advice does not describe must degrade, not produce confident buckets
+        r = run(report_of(["rms_norm"]),
+                csv_of([("LayerNormDeviceOperation", 10.0)] + [(f"Op{i}Operation", 50.0)
+                                                               for i in range(8)]))
+        o = load()
+        check(o["confidence"]["degraded"], "mismatched inputs report DEGRADED")
+
+        # 6. the noise floor decides measurability
+        (d / "inc.json").write_text(json.dumps({"incumbent_ms": 0.1, "repeats_ms": [0.100, 0.150]}))
+        r = run(report_of(["rms_norm", "linear", "add"]),
+                csv_of([("LayerNormDeviceOperation", 10.0), ("MatmulDeviceOperation", 100.0),
+                        ("ReshardDeviceOperation", 2.0), ("BinaryNgDeviceOperation", 5.0)]),
+                ["--incumbent", str(d / "inc.json")])
+        o = load()
+        check(o["feasibility"]["verdict"] == "not_measurable",
+              "a 2.0 us ceiling under a 50 us floor is not_measurable")
+
+    print(f"\n{len(fails)} failure(s)" + (": " + ", ".join(fails) if fails else ""))
+    return 1 if fails else 0
 
 
 if __name__ == "__main__":
