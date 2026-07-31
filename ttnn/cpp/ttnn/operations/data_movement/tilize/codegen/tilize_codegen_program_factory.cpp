@@ -267,9 +267,10 @@ ProgramDescriptor build_row(
         cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
     }
 
-    // MEMORY: the batched writer_tilize_interleaved.cpp is correct only for ONE tile-row per
-    // core. A one-tile/core assignment also has nothing to overlap, so batch-4 writer priming
-    // and double-buffering only add fixed per-core setup cost there.
+    // Batched writes measure slower than single writes once a core owns several tile-rows
+    // (native/ported 0.97 -> 0.92 on [4, 12, 96, 96]), so batching stays restricted to the
+    // one-row-per-core case. A one-tile/core assignment has nothing to overlap either, so batch-4
+    // priming and double-buffering are pure per-core setup cost there.
     const bool minimal_work = (num_col_chunks == 1 && chunk_wt == 1 && g.total_ht <= num_cores);
     if (minimal_work) {
         cb_depth = 1;
@@ -278,7 +279,11 @@ ProgramDescriptor build_row(
     const uint32_t write_batch = force_single_write ? 1 : kDefaultWriteBatch;
 
     uint32_t cb_in_depth = cb_depth * chunk_wt;
-    uint32_t cb_out_depth = std::max(cb_depth * chunk_wt, write_batch * 2);
+    // The batched writer holds the previous batch un-popped while waiting on the next, so it needs
+    // 2*write_batch tiles resident at once; compute only ever adds them in tilize_block-sized groups
+    // of chunk_wt. A capacity that is not a whole number of those groups is unreachable, and the
+    // writer and the packer deadlock waiting on each other.
+    uint32_t cb_out_depth = std::max(cb_depth * chunk_wt, align_up(write_batch * 2, chunk_wt));
     if (minimal_work) {
         cb_out_depth = 1;
     }
