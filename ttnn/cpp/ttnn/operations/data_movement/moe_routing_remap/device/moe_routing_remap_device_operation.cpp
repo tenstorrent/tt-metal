@@ -23,6 +23,9 @@ void MoeRoutingRemapDeviceOperation::validate_on_program_cache_miss(
         input_routing_weights_shape.rank() == 2 && input_routing_weights_shape[0] == 1, "expected input shape [1,E]");
     const auto num_cluster_experts = input_routing_weights_shape[1];
 
+    // A zero count reaches the factory as non_zero_per_device == 0, which builds the c_1 index CB
+    // with a zero page size and total size instead of failing here.
+    TT_FATAL(operation_attributes.non_zero_weight_size > 0, "Number of non zero weights must be non-zero");
     TT_FATAL(
         operation_attributes.non_zero_weight_size <= num_cluster_experts,
         "Number of non Zero weights must be less than or equal to weights");

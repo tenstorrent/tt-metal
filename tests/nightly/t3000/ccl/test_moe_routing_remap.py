@@ -240,14 +240,41 @@ def test_moe_routing_remap_rejects_zero_expert_parallel_size(mesh_device, expect
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
-def test_moe_routing_remap_gpt_oss_decode_call_on_2x4(mesh_device):
-    """Covers the corrected gpt_oss decode call pattern on a 2x4 mesh.
+def test_moe_routing_remap_rejects_zero_non_zero_weight_size(mesh_device, expect_error):
+    """Regression for the non_zero_weight_size > 0 guard.
 
-    decode.py previously hardcoded (nnz=4, ep=4, axis=0). On a 2-row mesh that is now
-    rejected by the live mesh-axis check. The fixed caller uses
-    (config.num_experts_per_tok=4, ep=mesh_shape[0]=2, mesh_config.ep_axis=0). This test
-    executes that exact call and checks per-device outputs against the torch reference —
-    catching a revert of either ep or axis without requiring the full GPT-OSS module suite.
+    nnz=0 satisfies both `<= num_cluster_experts` and `0 % eps == 0`, so without an explicit
+    guard it reaches the program factory as non_zero_per_device=0 and builds the c_1 index CB
+    with a zero page size and total size.
+    """
+    routing_weights_torch = _gen_input_routing_weights(non_zero_size=8, num_cluster_experts=32)
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights_torch,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    with expect_error(RuntimeError, "Number of non zero weights must be non-zero"):
+        ttnn.moe_routing_remap(
+            tt_routing_weights,
+            non_zero_weight_size=0,
+            expert_parallel_size=2,
+            cluster_axis=0,
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+def test_moe_routing_remap_gpt_oss_decode_call_on_2x4(mesh_device):
+    """Numeric coverage of the gpt_oss decode argument triple on a 2x4 mesh.
+
+    decode.py previously hardcoded (nnz=4, ep=4, axis=0), which the live mesh-axis check now
+    rejects on a 2-row mesh; the fixed caller produces (nnz=4, ep=2, axis=0). This asserts
+    that triple routes correctly on device. That decode.py actually passes those values is a
+    separate, host-only assertion in
+    models/demos/gpt_oss/tests/unit/test_expert_parallel_config.py.
     """
     mesh_shape = tuple(mesh_device.shape)
     assert mesh_shape == (2, 4)
