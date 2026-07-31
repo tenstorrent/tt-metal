@@ -1700,7 +1700,10 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
             enable_trace=True,
             read_from_device=False,
             sampling_params=None,
-            reset_batch=(step == 0),
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
 
         # vLLM path: refresh persistent per-layer page tables + stash
@@ -1720,7 +1723,10 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
                 enable_trace=True,
                 read_from_device=False,
                 sampling_params=None,
-                reset_batch=(step == 0),
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
         finally:
             # Bridge would do this via context manager — mirror that.
@@ -1984,7 +1990,10 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             enable_trace=True,
             read_from_device=False,
             sampling_params=None,
-            reset_batch=(step == 0),
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
 
         pool.reserve_decode_token(req)
@@ -2000,7 +2009,10 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
                 enable_trace=True,
                 read_from_device=False,
                 sampling_params=None,
-                reset_batch=(step == 0),
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
         finally:
             if hasattr(tt_model_vllm, "_active_page_tables_per_layer"):

@@ -219,11 +219,8 @@ def _inject_missing_kv_shared_attention_weights(state_dict, hf_config, kv_shared
 
 
 class Gemma4Model:
-    # Generator-interface flags. Decode inputs are recomputed on host every
-    # token (host embedding + PLI), so the captured trace's input buffers
-    # have to be refreshed on every replay rather than just on the first
-    # call after a token-shape change.
-    _tt_vllm_always_refresh_decode_trace_inputs = True
+    # The rank-2 decode token input cannot alias ttnn.sampling's rank-4 output.
+    _tt_supports_decode_token_feedback = False
     # NOTE: This is a runtime capability (depends on mesh shape / per-device vocab).
     # It is set during __init__ after the sampling module is constructed.
     _supports_on_device_sampling = False
