@@ -1289,6 +1289,208 @@ TEST_F(DramKernelDRISCScatterFixture, HostPullFromDramProfilerRegion) {
     }
 }
 
+// Scale the direct drainer: N DRISCs, each owning a slice of the grid and pushing to its own D2H
+// socket. Same shape as the X280 reader fan-out, except each reader here is also its own egress path,
+// so there is no relay and no shared ring.
+//
+// The grid is split by whole pages (15 pages of 8 cores), so slices are as even as 15/N allows:
+// N=2 -> 8+7, N=3 -> 5+5+5, N=4 -> 4+4+4+3. The largest slice sets the sweep time.
+//
+// The host drains all N sockets round-robin on one thread. That is a real serialisation, so each N is
+// run twice: with the memcpy consumer (end-to-end truth for a single-threaded host) and with
+// discard_pending_pages (host cost removed, so device-side scaling is visible).
+TEST_F(DramKernelDRISCScatterFixture, DRISCMultiDrainerScaling) {
+    constexpr uint32_t kBytesPerCore = 1280 * 8;  // 10240, whole core
+    constexpr uint32_t kCoresPerPage = 8;         // 81920 B page, the measured-best size
+    constexpr uint32_t kPageBytes = kCoresPerPage * kBytesPerCore;
+    constexpr uint32_t kNumSweeps = 200;
+    constexpr uint32_t kPagesPerRead = 8;
+    constexpr uint32_t kFifoPages = 32;
+
+    const std::vector<uint32_t> coords = worker_coords();
+    const uint32_t num_cores = static_cast<uint32_t>(coords.size());
+    TT_FATAL(num_cores % kCoresPerPage == 0, "{} cores must divide by {}", num_cores, kCoresPerPage);
+    const uint32_t total_pages_per_sweep = num_cores / kCoresPerPage;
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const uint32_t banks = soc_desc.get_dram_compute_grid_size().x;
+
+    const uint32_t buf = drisc_l1_base_;
+    const uint32_t cfg = buf + kPageBytes;
+    const uint32_t res = cfg + 1024;
+    TT_FATAL((res + 64 - drisc_l1_base_) <= drisc_l1_unreserved_size_, "layout overflows DRISC L1");
+
+    auto set_niu_modes = [&](const std::vector<CoreCoord>& cores, uint32_t stream) {
+        Program p = CreateProgram();
+        for (const auto& c : cores) {
+            CreateKernel(
+                p,
+                "tests/tt_metal/tt_metal/test_kernels/misc/drisc_niu_mode.cpp",
+                c,
+                DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
+        }
+        run_workload(std::move(p));
+    };
+
+    prime_worker_l1(kBytesPerCore);
+    log_info(
+        LogTest,
+        "multi-drainer: {} cores, {} pages/sweep of {} B, {} banks available",
+        num_cores,
+        total_pages_per_sweep,
+        kPageBytes,
+        banks);
+
+    auto run = [&](uint32_t n_drisc, bool discard) {
+        std::vector<CoreCoord> logical;
+        std::vector<CoreCoord> virt;
+        std::vector<tt::umd::CoreCoord> phys;
+        for (uint32_t i = 0; i < n_drisc; i++) {
+            const CoreCoord lg = mesh_device_->impl().pick_unused_dram_logical_core(i);
+            logical.push_back(lg);
+            virt.push_back(device_->virtual_core_from_logical_core(lg, CoreType::DRAM));
+            const CoreCoord tr = soc_desc.dram_bank_endpoint_coords.at(lg.x).at(lg.y);
+            phys.push_back(soc_desc.translate_coord_to(
+                tt::umd::CoreCoord(tr.x, tr.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0));
+        }
+        set_niu_modes(logical, 1);
+
+        // Split the sweep into whole pages, as evenly as it divides.
+        std::vector<uint32_t> pages(n_drisc, total_pages_per_sweep / n_drisc);
+        for (uint32_t i = 0; i < total_pages_per_sweep % n_drisc; i++) {
+            pages[i]++;
+        }
+
+        std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;
+        Program program = CreateProgram();
+        uint32_t core_off = 0;
+        for (uint32_t i = 0; i < n_drisc; i++) {
+            sockets.push_back(std::make_unique<distributed::D2HSocket>(
+                devices_[0],
+                distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(phys[i].x, phys[i].y)),
+                kFifoPages * kPageBytes,
+                distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_is_l2cpu = true}));
+            sockets.back()->set_page_size(kPageBytes);
+
+            auto kid = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/socket/drisc_ingest_to_host.cpp",
+                logical[i],
+                DramConfig{
+                    .noc = NOC::NOC_0,
+                    .compile_args = {
+                        kCoresPerPage,
+                        kBytesPerCore,
+                        1u,  // one page buffer -- measured best for the socket path
+                        buf,
+                        sockets.back()->get_config_buffer_address(),
+                        res}});
+            const uint32_t slice_cores = pages[i] * kCoresPerPage;
+            std::vector<uint32_t> rtas = {slice_cores, kNumSweeps, tensix_l1_base_};
+            rtas.insert(rtas.end(), coords.begin() + core_off, coords.begin() + core_off + slice_cores);
+            SetRuntimeArgs(program, kid, logical[i], rtas);
+            core_off += slice_cores;
+        }
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range_, std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+
+        std::vector<uint32_t> sink(static_cast<size_t>(kPageBytes) * kPagesPerRead / sizeof(uint32_t));
+        std::vector<uint32_t> remaining(n_drisc);
+        for (uint32_t i = 0; i < n_drisc; i++) {
+            remaining[i] = pages[i] * kNumSweeps;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto deadline = t0 + std::chrono::seconds(60);
+        bool timed_out = false;
+        for (;;) {
+            uint64_t left = 0;
+            for (uint32_t i = 0; i < n_drisc; i++) {
+                if (remaining[i] == 0) {
+                    continue;
+                }
+                // Check availability first in both modes. Spinning on discard_pending_pages() with
+                // nothing pending issues a notify_sender() PCIe write per call, and at round-robin rate
+                // across several sockets that is enough to wedge the card.
+                const uint32_t avail = sockets[i]->pages_available();
+                if (avail == 0) {
+                    continue;
+                }
+                if (discard) {
+                    const uint32_t d = sockets[i]->discard_pending_pages();
+                    remaining[i] -= std::min(d, remaining[i]);
+                } else {
+                    const uint32_t take = std::min(avail, std::min(remaining[i], kPagesPerRead));
+                    sockets[i]->read(sink.data(), take);
+                    remaining[i] -= take;
+                }
+            }
+            for (uint32_t i = 0; i < n_drisc; i++) {
+                left += remaining[i];
+            }
+            if (left == 0) {
+                break;
+            }
+            if (std::chrono::steady_clock::now() > deadline) {
+                log_warning(LogTest, "drain timed out with {} pages left", left);
+                timed_out = true;
+                break;
+            }
+        }
+        for (auto& s : sockets) {
+            s->barrier(20000);
+        }
+        const auto t1 = std::chrono::steady_clock::now();
+        distributed::Finish(mesh_device_->mesh_command_queue());
+
+        uint64_t max_cyc = 0;
+        double worst_reserve = 0.0;
+        for (uint32_t i = 0; i < n_drisc; i++) {
+            std::vector<uint32_t> o(10);
+            MetalContext::instance().get_cluster().read_core(
+                o.data(), o.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), virt[i]), res);
+            const uint64_t cyc = (static_cast<uint64_t>(o[1]) << 32) | o[0];
+            const uint64_t rsv = (static_cast<uint64_t>(o[7]) << 32) | o[6];
+            max_cyc = std::max(max_cyc, cyc);
+            worst_reserve = std::max(worst_reserve, 100.0 * static_cast<double>(rsv) / static_cast<double>(cyc));
+            EXPECT_EQ(o[2], pages[i] * kNumSweeps) << "DRISC " << i << " did not push all pages";
+        }
+        const uint64_t total_bytes = static_cast<uint64_t>(kNumSweeps) * num_cores * kBytesPerCore;
+        const double host_s = std::chrono::duration<double>(t1 - t0).count();
+
+        std::string split;
+        for (uint32_t i = 0; i < n_drisc; i++) {
+            split += fmt::format("{}{}", i ? "+" : "", pages[i]);
+        }
+        log_info(
+            LogTest,
+            "  {} DRISC ({:<9}) {:<8} | device {:>6.2f} GB/s | host {:>6.2f} GB/s | worst reserve {:>5.1f}%{}",
+            n_drisc,
+            split,
+            discard ? "DISCARD" : "memcpy",
+            compute_bw_gbs(total_bytes, max_cyc, clk_hz),
+            static_cast<double>(total_bytes) / host_s / 1e9,
+            worst_reserve,
+            timed_out ? "  [TIMED OUT]" : "");
+
+        sockets.clear();
+        set_niu_modes(logical, 0);
+    };
+
+    // Warm the host staging allocation once so the first timed run is not paying first-touch faults.
+    run(1, /*discard=*/false);
+    for (uint32_t n : {1u, 2u, 3u, 4u}) {
+        run(n, /*discard=*/false);
+    }
+    // NOTE: the discard (zero-cost consumer) variant is deliberately not swept past one DRISC. With the
+    // host consumer removed, two DRISCs push hard enough to saturate the single PCIe link, and the
+    // host's own small MMIO reads get starved past UMD's 2 ms budget -- reproducibly fatal
+    // ("MMIO per-op timeout: 4B load took 220 ms"), taking the card down with it. The memcpy consumer
+    // throttles the senders and keeps the link out of saturation.
+    run(1, /*discard=*/true);
+}
+
 // The direct alternative to the two-DRISC DRAM pipeline: one DRISC reads whole cores out of worker L1
 // straight into a socket page and pushes it to the host. No DRAM hop, no second core.
 TEST_F(DramKernelDRISCScatterFixture, DRISCIngestStraightToHost) {
