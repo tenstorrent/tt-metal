@@ -254,16 +254,16 @@ class TtPrefillRuntime:
         v = torch.stack([gather(kv.v, c) for c in range(nkv)], dim=0).unsqueeze(0)
         return k, v
 
-    def _kv_diag(self, gL, g_k, dev_k, g_v, dev_v):
+    def _kv_diag(self, gL, g_k, dev_k, g_v, dev_v, out_dir):
         """Bring-up diagnostic (gated by GPT_OSS_KV_DUMP) to localize a per-position K RoPE error.
 
         Dumps golden/device K & V (both Meta space, natural position order, [1, nkv, n_tokens,
-        head_dim]) to /data/mdragula/kv_dump and prints a compact per-SP-block + per-head K PCC so a
-        single galaxy run reveals WHERE K diverges:
+        head_dim]) to ``out_dir`` and prints a compact per-SP-block + per-head K PCC so a single
+        galaxy run reveals WHERE K diverges:
           * uniform low PCC everywhere            => base convention (unlikely; unit test is green)
           * degrades at SP-rank block boundaries  => per-rank global-position offset in the rope
           * scattered specific positions          => block-cyclic cos/sin reorder mismatch
-        Deep per-position analysis lives in /data/mdragula/analyze_kv_dump.py (CPU, re-runnable)."""
+        The dumped .pt tensors are re-loadable for offline per-position analysis on CPU."""
 
         def _pcc(a, b):
             a = a.reshape(-1).float()
@@ -276,7 +276,7 @@ class TtPrefillRuntime:
         sp = self.config.mesh_shape[0]
         n_tokens = dev_k.shape[2]
         chunk_local = self.config.chunk_size // sp  # SP-rank contiguous block width (one-shot)
-        out_dir = Path("/data/mdragula/kv_dump")
+        out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         torch.save(
             {
@@ -334,6 +334,8 @@ class TtPrefillRuntime:
             _dump_set = set(range(first_layer_idx, first_layer_idx + self.config.num_layers))
         else:
             _dump_set = {int(x) for x in _dump_env.split(",") if x.strip()} if _dump_env else set()
+        # Per-layer tensor dumps land next to the golden trace by default; GPT_OSS_KV_DUMP_DIR overrides.
+        _dump_dir = os.environ.get("GPT_OSS_KV_DUMP_DIR") or (Path(trace_dir) / "kv_dump")
         logger.info(f"[kv-pcc] per-layer K / V vs golden ({trace_dir}):")
         min_k, min_v = 1.0, 1.0
         for L in range(self.config.num_layers):
@@ -347,6 +349,6 @@ class TtPrefillRuntime:
             min_k, min_v = min(min_k, pcc_k), min(min_v, pcc_v)
             logger.info(f"  layer {gL:>2}: K={pcc_k:.5f} V={pcc_v:.5f}")
             if gL in _dump_set:
-                self._kv_diag(gL, g_k, dev_k, g_v, dev_v)
+                self._kv_diag(gL, g_k, dev_k, g_v, dev_v, _dump_dir)
         logger.info(f"[kv-pcc] min PCC across {self.config.num_layers} layers: K={min_k:.5f} V={min_v:.5f}")
         return min(min_k, min_v)
