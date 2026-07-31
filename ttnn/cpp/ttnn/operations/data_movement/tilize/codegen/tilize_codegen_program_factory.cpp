@@ -267,20 +267,14 @@ ProgramDescriptor build_row(
         cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
     }
 
-    // writer_tilize_interleaved.cpp tracks only a running tile_id, never a row/col stride (unlike
-    // writer_tilize_block.cpp's explicit (row_tile_id, col_in_row, full_Wt) tracking), so it is
-    // correct only when this core's output tile ids are contiguous. The row path always assigns
-    // each core a full-width span of whole tile-rows (chunk_wt/num_col_chunks together cover all
-    // of Wt, and rows are consecutive raster ids), so contiguity holds regardless of how many
-    // tile-rows a core owns -- multi-row-per-core does NOT require the non-batched writer here
-    // (that hazard is specific to writer_tilize_block.cpp's strided per-core sub-blocks). A
-    // one-tile/core assignment still has nothing to overlap, so batch-4 writer priming and
-    // double-buffering only add fixed per-core setup cost there.
+    // MEMORY: the batched writer_tilize_interleaved.cpp is correct only for ONE tile-row per
+    // core. A one-tile/core assignment also has nothing to overlap, so batch-4 writer priming
+    // and double-buffering only add fixed per-core setup cost there.
     const bool minimal_work = (num_col_chunks == 1 && chunk_wt == 1 && g.total_ht <= num_cores);
     if (minimal_work) {
         cb_depth = 1;
     }
-    const bool force_single_write = attrs.use_low_perf || minimal_work;
+    const bool force_single_write = attrs.use_low_perf || (g.total_ht > num_cores) || minimal_work;
     const uint32_t write_batch = force_single_write ? 1 : kDefaultWriteBatch;
 
     uint32_t cb_in_depth = cb_depth * chunk_wt;
