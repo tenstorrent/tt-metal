@@ -147,6 +147,11 @@ class _TtMoE:
             self.mesh_shape = tuple(int(x) for x in device.shape)
             self.tp_axis = self._pick_tp_axis()
             self.tp = int(self.mesh_shape[self.tp_axis])
+            # EP=32 opt-in (63cfd0eb26): shard routed experts across ALL mesh chips (2/chip)
+            # instead of TP-axis + DP-replicate. Re-expressed onto the merged-2D-matmul MoE.
+            # UNVERIFIED on this form pending the wedged Galaxy fabric -> OFF by default; verify
+            # test_mo_e_sharded on the mesh, then flip the default.
+            self._ep_fullmesh = os.environ.get("HUNYUAN_EP_FULLMESH") == "1"
             self._build_sharded(torch_module)
         else:
             self._build_single(torch_module)
@@ -184,6 +189,19 @@ class _TtMoE:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.device, dims=tuple(dims), mesh_shape=self.mesh_shape),
         )
 
+    def _shard_fullmesh(self, t, *, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+        """EP=32 (63cfd0eb26): shard dim 0 across ALL mesh devices (both axes) so routed
+        experts are disjoint (num_experts/num_devices per chip), vs _shard TP-axis-only + DP
+        replicate. UNVERIFIED on this MoE form pending the mesh."""
+        return ttnn.from_torch(
+            t.to(_host_of(dtype)),
+            dtype=dtype,
+            layout=layout,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+        )
+
     # ------------------------------------------------------------------
     def _build_single(self, torch_module):
         device = self.device
@@ -208,8 +226,18 @@ class _TtMoE:
     # ------------------------------------------------------------------
     def _build_sharded(self, torch_module):
         tp = self.tp
-        assert self.num_experts % tp == 0, f"TP={tp} must divide num_experts={self.num_experts} for expert-parallel MoE"
-        epd = self.num_experts // tp
+        # EP shard degree: TP axis by default; ALL devices if HUNYUAN_EP_FULLMESH (63cfd0eb26).
+        n_shard = int(self.device.get_num_devices()) if getattr(self, "_ep_fullmesh", False) else tp
+        assert self.num_experts % n_shard == 0, f"n_shard={n_shard} must divide num_experts={self.num_experts}"
+        epd = self.num_experts // n_shard
+
+        def _shard0(t, dtype=ttnn.bfloat16):
+            return (
+                self._shard_fullmesh(t, dtype=dtype)
+                if getattr(self, "_ep_fullmesh", False)
+                else self._shard(t, dim=0, dtype=dtype)
+            )
+
         self.experts_per_dev = epd
 
         # Composed graduated gate: HunyuanMoE.gate == HunyuanTopKGate. On a mesh
@@ -243,26 +271,26 @@ class _TtMoE:
                     + [gu_t[d * epd + e][:, I:] for e in range(epd)],  # all ups
                     dim=-1,
                 )
-                for d in range(tp)
+                for d in range(n_shard)
             ],
             dim=0,
         )  # [tp, H, 2*epd*I]
         dn_stack = torch.stack(
-            [torch.cat([dn_t[d * epd + e] for e in range(epd)], dim=0) for d in range(tp)], dim=0
+            [torch.cat([dn_t[d * epd + e] for e in range(epd)], dim=0) for d in range(n_shard)], dim=0
         )  # [tp, epd*I, H]
-        self.exp_gu_cat = self._shard(gu_cat, dim=0, dtype=ttnn.bfloat4_b)  # per TP device [1, H, 2*epd*I]
-        self.exp_down_stack = self._shard(dn_stack, dim=0, dtype=ttnn.bfloat4_b)  # per TP device [1, epd*I, H]
+        self.exp_gu_cat = _shard0(gu_cat, dtype=ttnn.bfloat4_b)  # per TP device [1, H, 2*epd*I]
+        self.exp_down_stack = _shard0(dn_stack, dtype=ttnn.bfloat4_b)  # per TP device [1, epd*I, H]
 
         # per-TP-device selection+expand matrix: picks this device's expert
         # columns out of the replicated router AND repeats each expert's weight
         # across its I-wide down-matmul block, so `router @ sel` directly yields
         # the [1, S, epd*I] per-column router weights the merged down matmul needs
         # (no reshape/broadcast to expand epd -> epd*I).
-        sel = torch.zeros(tp, self.num_experts, epd * I)
-        for d in range(tp):
+        sel = torch.zeros(n_shard, self.num_experts, epd * I)
+        for d in range(n_shard):
             for e in range(epd):
                 sel[d, d * epd + e, e * I : (e + 1) * I] = 1.0
-        self.sel = self._shard(sel, dim=0)
+        self.sel = _shard0(sel)
 
         # shared expert REPLICATED (added once, after the routed all-reduce)
         if self.use_shared:
@@ -279,7 +307,11 @@ class _TtMoE:
         bytes) on every chip before a local reduce; the ring all_reduce moves ~2×
         the shard bytes/chip and drops the separate sum — the exact prefill-MoE
         reduce gpt_oss/gemma4/deepseek use. Same math, same shape."""
-        return ttnn.all_reduce(x, cluster_axis=self.tp_axis, num_links=_ccl_links(), topology=ttnn.Topology.Linear)
+        x = ttnn.all_reduce(x, cluster_axis=self.tp_axis, num_links=_ccl_links(), topology=ttnn.Topology.Linear)
+        if getattr(self, "_ep_fullmesh", False):
+            # EP=32: experts sharded over BOTH mesh axes -> also sum over the DP axis (63cfd0eb26).
+            x = ttnn.all_reduce(x, cluster_axis=(1 - self.tp_axis), num_links=1, topology=ttnn.Topology.Linear)
+        return x
 
     def _swiglu(self, x, gu_w, down_w, inter):
         gu = ttnn.linear(x, gu_w, compute_kernel_config=_mm_cfg(), core_grid=_mm_grid(self.device))
