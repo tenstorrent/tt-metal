@@ -262,7 +262,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
 // For a given collection of MMIO device and remote devices, ensure that channels are unique
 TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
     std::unordered_map<ChipId, std::set<ChipId>> mmio_device_to_device_group;
-    for (unsigned int dev_id = 0; dev_id < num_devices_; dev_id++) {
+    for (unsigned int dev_id = 0; dev_id < this->devices_.size(); dev_id++) {
         ChipId assoc_mmio_dev_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id);
         std::set<ChipId>& device_ids = mmio_device_to_device_group[assoc_mmio_dev_id];
