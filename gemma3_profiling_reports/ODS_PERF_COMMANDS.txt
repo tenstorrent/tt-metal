@@ -1,0 +1,41 @@
+Gemma3 ODS decode — replicate tok/s/user
+batch-1, ISL128/OSL200, performance-batch-1, trace ON
+Look for: Average speed: ... @ X.XX tok/s/user
+
+Setup (once):
+  cd ~/Teja/gemma3_metal/tt-metal
+  source python_env/bin/activate
+  export TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole
+
+
+------------------------------------------------------------------------
+1) gemma3-12b  1-chip   ~29.5 tok/s/u
+   (ODS already default on 1 chip — do not set TT_GEMMA3_ODS)
+------------------------------------------------------------------------
+export TT_VISIBLE_DEVICES=0
+export MESH_DEVICE=P150
+export TT_MESH_GRAPH_DESC_PATH=$PWD/tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
+export HF_MODEL=google/gemma-3-12b-it
+pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-batch-1" -s
+
+
+------------------------------------------------------------------------
+2) gemma3-12b  2-chip   ~37.6 tok/s/u
+------------------------------------------------------------------------
+export TT_VISIBLE_DEVICES=0,1
+export MESH_DEVICE=P300
+export TT_MESH_GRAPH_DESC_PATH=$PWD/tt_metal/fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto
+export HF_MODEL=google/gemma-3-12b-it
+export TT_GEMMA3_ODS=1
+pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-batch-1" -s
+
+
+------------------------------------------------------------------------
+3) gemma3-27b  2-chip   ~17.8 tok/s/u
+------------------------------------------------------------------------
+export TT_VISIBLE_DEVICES=0,1
+export MESH_DEVICE=P300
+export TT_MESH_GRAPH_DESC_PATH=$PWD/tt_metal/fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto
+export HF_MODEL=google/gemma-3-27b-it
+export TT_GEMMA3_ODS=1
+pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-batch-1" -s
