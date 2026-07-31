@@ -194,6 +194,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
     uint32_t N_chunks,
+    const std::vector<uint32_t>& chunk_sizes,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const ttnn::Tensor>& fused_ternary_input_a,
     const std::optional<const ttnn::Tensor>& fused_ternary_input_b,
@@ -685,6 +686,33 @@ all_gather_minimal_matmul_async_factory_helper(
             defines["TERNARY_B_IS_FLOAT32"] = "1";
         }
     }
+    // Per-chunk output tile widths along N, plus their prefix-sum offsets. Passed as defines rather
+    // than compile-time args because the tables are variable length, and every kernel anchors its
+    // TensorAccessor CTA offsets to a fixed `ct_arg_count` -- inserting CTAs here would shift those
+    // by an amount host and kernel would both have to track. Always emitted, so uniform chunks are
+    // simply the case where every width is equal and the kernels keep a single code path.
+    {
+        std::vector<uint32_t> chunk_tile_widths;
+        chunk_tile_widths.reserve(N_chunks);
+        if (chunk_sizes.empty()) {
+            chunk_tile_widths.assign(N_chunks, N_tiles / N_chunks);
+        } else {
+            for (const uint32_t width_elements : chunk_sizes) {
+                chunk_tile_widths.push_back(width_elements / tt::constants::TILE_WIDTH);
+            }
+        }
+        std::string widths_csv;
+        std::string offsets_csv = "0";
+        uint32_t running_offset = 0;
+        for (size_t i = 0; i < chunk_tile_widths.size(); ++i) {
+            widths_csv += (i == 0 ? "" : ",") + std::to_string(chunk_tile_widths[i]);
+            running_offset += chunk_tile_widths[i];
+            offsets_csv += "," + std::to_string(running_offset);
+        }
+        defines["CHUNK_TILE_WIDTHS"] = widths_csv;
+        defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
+    }
+
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
     in0_defines["IS_IN0"] = "1";
@@ -1711,6 +1739,7 @@ all_gather_minimal_matmul_async_factory(
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
     uint32_t N_chunks,
+    const std::vector<uint32_t>& chunk_sizes,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& fused_ternary_input_a,
     const std::optional<const Tensor>& fused_ternary_input_b,
@@ -1750,6 +1779,7 @@ all_gather_minimal_matmul_async_factory(
             num_workers_per_link,
             num_buffers_per_channel,
             N_chunks,
+            chunk_sizes,
             fused_ternary_scalar,
             fused_ternary_input_a,
             fused_ternary_input_b,
@@ -1827,6 +1857,7 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.num_workers_per_link,
         attributes.num_buffers_per_channel,
         attributes.chunks,
+        attributes.chunk_sizes,
         attributes.fused_ternary_scalar,
         tensor_args.fused_ternary_input_a,
         tensor_args.fused_ternary_input_b,

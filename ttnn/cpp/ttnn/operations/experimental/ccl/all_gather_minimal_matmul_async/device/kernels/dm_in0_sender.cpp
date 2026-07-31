@@ -46,6 +46,11 @@ constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(22)
 constexpr bool is_linear = (topology == Topology::Linear);
 constexpr uint32_t N_chunks = get_compile_time_arg_val(23);
 constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(24);
+// Per-chunk output tile widths along N and their prefix-sum offsets, emitted as defines by
+// the program factory (see CHUNK_TILE_WIDTHS/CHUNK_TILE_OFFSETS). Widths may differ per
+// chunk; uniform chunks are just the all-equal case.
+constexpr uint32_t chunk_tile_widths[N_chunks] = {CHUNK_TILE_WIDTHS};
+constexpr uint32_t chunk_tile_offsets[N_chunks + 1] = {CHUNK_TILE_OFFSETS};
 constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(25);
 constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(26);
 
@@ -352,10 +357,12 @@ void kernel_main() {
                                 defer_write_n_tile,
                                 defer_write_n_tile_end);
                         } else {
-                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks>(
                                 noc_obj,
                                 outputs_tuple,
                                 out0_shape,
+                                chunk_tile_widths,
+                                chunk_tile_offsets,
                                 out_read_ptr,
                                 out_tile_size,
                                 defer_write_m_tile,
@@ -679,10 +686,12 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     } else {
-                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks>(
                             noc_obj,
                             outputs_tuple,
                             out0_shape,
+                            chunk_tile_widths,
+                            chunk_tile_offsets,
                             cb_out,
                             out_tile_size,
                             m_tile,
