@@ -13,10 +13,6 @@ disagreement cannot be attributed to either side. ``--hf_dtype float32`` makes
 HF a true reference (weights round-tripped through bf16 so both start from
 identical values), so the residual is attributable to ttml's bf16 accumulation.
 
-Note the loss is a plain mean over all ``max_seq_len`` positions on both sides,
-with target id 0 in the padding. A short prompt against a long window therefore
-measures mostly padding gradients; use ``--prompt_file`` to fill the window.
-
 Usage:
     # Single device:
     python gradients.py --model_path Qwen/Qwen3-0.6B --prompt "Once upon a time" \\
@@ -177,12 +173,7 @@ def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms, tp_size=1)
         # temporaries. These tensors run to hundreds of millions of elements (the
         # tied embed_tokens grad is vocab x hidden), and a float32 reduction over
         # that many terms carries ~1e-3 relative error -- the same size as the
-        # bf16 differences being measured. It also broke CosSim: the dot product
-        # and the two norms were separate float32 reductions whose errors did not
-        # cancel, so cos came out above 1 (Cauchy-Schwarz says it cannot), and
-        # CosDist went negative. Casting the tensors to float64 instead would fix
-        # it too but doubles peak host memory on the big ones; ``sum(dtype=...)``
-        # gets the same answer with float32 temporaries.
+        # bf16 differences being measured.
         abs_diff = (hf_flat - ttml_flat).abs()
         ad_mean = abs_diff.mean(dtype=torch.float64).item()
         ad_max = abs_diff.max().item()

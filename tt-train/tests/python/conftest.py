@@ -5,9 +5,13 @@
 """Pytest configuration for TTML Python tests."""
 
 import os
+import pathlib
 from typing import Optional
 
 import pytest
+
+import ttnn
+import ttml
 
 
 def pytest_configure(config):
@@ -20,8 +24,6 @@ def pytest_configure(config):
 
 def pytest_collection_modifyitems(config, items):
     """Skip device-requiring tests if no device is available."""
-    import pathlib
-
     device_available = (
         any(pathlib.Path("/dev/tenstorrent/").iterdir()) if pathlib.Path("/dev/tenstorrent/").exists() else False
     )
@@ -61,8 +63,6 @@ _MGD_FOR_ARCH_AND_SHAPE = {
 
 
 def _detect_arch() -> Optional[str]:
-    import ttnn
-
     try:
         name = ttnn.get_arch_name().lower()
     except Exception:  # noqa: BLE001
@@ -96,8 +96,6 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
 
 
 def _close_device_mesh_quietly() -> None:
-    import ttml
-
     try:
         ttml.close_device_mesh()
     except Exception:  # noqa: BLE001
@@ -112,8 +110,6 @@ def tp_mesh():
     The parallelism context is initialised here too, since the qwen3 model paths
     resolve their TP size through it.
     """
-    import ttml
-
     dp_expected, tp_expected = TP_MESH_SHAPE
     previous_mgd = _ensure_mgd_path(TP_MESH_SHAPE)
     _close_device_mesh_quietly()

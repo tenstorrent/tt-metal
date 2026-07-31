@@ -168,8 +168,7 @@ def _spanning_ids():
 
     This is load-bearing, not incidental. A row shift only displaces ranks *after* the
     first -- rank 0's offset is 0 whether the stride is right or wrong -- so ids
-    confined to low values cannot detect one. That is precisely how the bug survived
-    on the 1.7B path: English prompts tokenize to low ids, which all land on rank 0.
+    confined to low values cannot detect one.
     """
     stride = tp_padded_vocab_size(VOCAB) // TP_AXIS_SIZE
     per_rank = SEQ // TP_AXIS_SIZE
