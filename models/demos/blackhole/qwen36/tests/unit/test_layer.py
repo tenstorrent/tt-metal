@@ -12,12 +12,15 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 
 from .conftest import DEVICE_PARAMS
 
-pytestmark = [run_for_blackhole(), pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)]
+pytestmark = [
+    run_for_wormhole_b0_or_blackhole(),
+    pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True),
+]
 
 # GDN chunk-seq prefill kernel supports exactly one chunk size (see Qwen36DecoderLayer.forward's
 # chunk_size default / its docstring). Using anything else (e.g. 64) raises a 64≠128 matmul mismatch.

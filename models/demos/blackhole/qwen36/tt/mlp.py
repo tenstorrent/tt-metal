@@ -279,19 +279,30 @@ class Qwen36MLP:
             _gw = getattr(args, "decode_grid_w", 8)
             # TP-selected prefill tuning; absent (single-device 9B) => frozen TP=4 behavior.
             _pt = getattr(args, "prefill_tuning", None)
+            # This elif (inside _forward_tp, so always TP>1) is only reached when the fused AGMM path is
+            # unavailable (see _fused_gu above) — on Blackhole that never happens at TP>1 (fusion is
+            # always on there), so this combination was never tuned for BH's L1 budget and is new,
+            # WH-only territory: the default full-per_core_N output/intermediate CB (both gate AND up
+            # held at once) overflowed WH's smaller, already-at-max-grid L1 by ~28KB (measured). Halve it
+            # (halve_out_block, see tp_common.py) and route the output to DRAM (below) instead of L1 —
+            # blocking alone doesn't help if the final tensor must still fully reside in L1.
             pc_gate = tpc.create_prefill_mlp_matmul_program_config(
-                seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU, max_cols=_gw, tuning=_pt
+                seq,
+                args.dim,
+                w.w1.shape[-1],
+                fused_activation=ttnn.UnaryOpType.SILU,
+                max_cols=_gw,
+                tuning=_pt,
+                halve_out_block=True,
             )
             pc_up = tpc.create_prefill_mlp_matmul_program_config(
-                seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt
+                seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt, halve_out_block=True
             )
-            # L1 output (gate/up outputs; down output via mc_out below): +FPU, avoids the DRAM round-trip
-            # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk.
             w1_out = ttnn.linear(
-                x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=ttnn.L1_MEMORY_CONFIG
+                x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
             w3_out = ttnn.linear(
-                x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=ttnn.L1_MEMORY_CONFIG
+                x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
             _silu_fused = True
         else:
@@ -332,8 +343,14 @@ class Qwen36MLP:
                 tuning=getattr(args, "prefill_tuning", None),
             )
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
-        # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial).
-        mc_w2_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned) else mc
+        # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial) — but only while
+        # the [1,T,dim] output actually fits; see tp_common.prefill_out_memory_config for why WH has to
+        # spill the long-chunk case to DRAM.
+        mc_w2_out = (
+            tpc.prefill_out_memory_config(x.shape[-2], w.w2.shape[-1])
+            if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned)
+            else mc
+        )
         partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
         ttnn.deallocate(hidden)
 

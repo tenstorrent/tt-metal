@@ -189,11 +189,16 @@ class TPGatedDeltaNet:
         self._fuse_ab = self._dram_sharded
         # Fuse prefill norm-allgather + qkvzab in-proj into all_gather_minimal_matmul_async.
         # Requires the folded qkvzab weight; norm's post-AG is disabled in layer.py (GDN, prefill).
-        self._fuse_agmm = self._fuse_ab
+        # BH-only: all_gather_matmul_prefill's grid assumes BH's taller (9-10 row) compute grid; WH
+        # tops out at 8 rows, so this fusion is unvalidated there. Must match layer.py's
+        # _fuse_norm_agmm gate. Falls back to the unfused AG + matmul path on WH.
+        self._fuse_agmm = self._fuse_ab and tpc.is_blackhole()
         # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid). Slight TTFT cost at small ISL
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
-        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
+        # BH-only: matmul_reduce_scatter_prefill's default grid=(8,8)/rs_offset=(0,8) needs rows 8-9,
+        # which don't exist on WH's 8-row grid. Falls back to the unfused matmul + all_reduce path.
+        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1 and tpc.is_blackhole()
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
@@ -207,13 +212,46 @@ class TPGatedDeltaNet:
         self.conv_carry = None  # cross-chunk prefill conv carry [1, K-1, qkv_dim_tp]
         # Native ttnn.conv1d depthwise prefill; L1_FULL slice keeps it trace-safe.
         # Only used when valid_len is None (masked buckets keep the MAC FIR).
-        self._gdn_conv1d = True
+        # Native depthwise ttnn.conv1d vs the MAC FIR fallback. The native path is pinned to L1 by
+        # slice_config=Conv2dL1FullSliceConfig (see _conv1d_prefill) — it deliberately avoids the
+        # DRAM-slicing path because that does host reads a trace capture rejects. On Wormhole that L1
+        # pinning is exactly what breaks: the conv's statically-allocated circular buffers collide with
+        # the L1 tensors already resident ("clash with L1 buffers"; CBs are L1-only, so the conv itself
+        # has to move, not just its inputs). The MAC FIR is the reference implementation — already the
+        # path taken for masked buckets — and runs happily from DRAM. Measured on N300: switching to it
+        # clears every CB clash in the GDN TP suite (11/11). Blackhole keeps the tuned native conv1d.
+        self._gdn_conv1d = tpc.is_blackhole()
         self._conv1d_wprep = None  # prepared depthwise weight (populated on first prefill call)
         # Persistent zero sources for trace-safe reset_state_inplace (alloc before any trace)
         self._zero_conv0 = None
         self._zero_conv_carry = None
         self._zero_rec = None
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
+
+    # Usable L1 (bytes, whole device) left for the recurrent state once the decode kernel's own
+    # allocations are in place. Measured on an 8x8 Wormhole grid at B=32: before requesting the state
+    # the kernel already holds ~864KB of the ~1336KB usable per bank, leaving ~485KB/bank -> ~31MB
+    # across 64 banks. Blackhole has both a larger L1 and (at TP=4) a smaller per-device Nv, and its
+    # batched decode is already validated there, so the split is Wormhole-only.
+    _DECODE_STATE_L1_BUDGET = 31 * (1 << 20)
+
+    def _decode_batch_split(self, B):
+        """Largest batch slice whose fp32 recurrent state fits the decode kernel's spare L1.
+
+        Returns B itself (no splitting, byte-identical to the validated path) whenever the whole
+        batch fits — which is every case on Blackhole, and B<=16 on a Wormhole N300.
+        """
+        if tpc.is_blackhole():
+            return B
+        per_user = self.Nv * self.Dk * self.Dv * 4  # fp32 state, one user
+        max_b = max(1, self._DECODE_STATE_L1_BUDGET // max(1, per_user))
+        if max_b >= B:
+            return B
+        # Prefer an even split into equal power-of-2-friendly slices (B is always a power of 2 here).
+        step = 1
+        while step * 2 <= max_b:
+            step *= 2
+        return step
 
     def reset_state(self):
         def z(shape):
@@ -487,8 +525,17 @@ class TPGatedDeltaNet:
         if carry and self.conv_carry is None:
             self.reset_state()
 
-        # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
-        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=ttnn.L1_MEMORY_CONFIG)
+        # Prefill qkvzab placement. These are [1,T,qkv_dim_tp] and grow with the chunk length — at
+        # T=2048 (qkv_dim_tp=4096, bf16) that is 16MB per tensor, and the FIR keeps several live at
+        # once. Blackhole's larger L1 absorbed this at the chunk sizes it was tuned for; on WH it both
+        # OOMs the allocator at long chunks AND, at short chunks, leaves enough L1 resident that the
+        # downstream conv1d/chunk kernels' statically-allocated circular buffers collide with it
+        # ("clash with L1 buffers" — CBs are L1-only, so only the tensors can move). Measured on WH:
+        # keeping these in DRAM unconditionally clears the OOMs and the 8-core CB clash. Costs a DRAM
+        # round-trip vs the L1 fast path, so it stays Blackhole-only-off: BH keeps its tuned behaviour.
+        _big_prefill = not tpc.is_blackhole()
+        _proj_mc = ttnn.DRAM_MEMORY_CONFIG if _big_prefill else ttnn.L1_MEMORY_CONFIG
+        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_proj_mc)
 
         # FIR conv1d; conv_state = previous chunk's last K-1 inputs (None/zero from scratch)
         _cstate = self.conv_carry if carry else None
@@ -502,8 +549,9 @@ class TPGatedDeltaNet:
                 None,
                 self.K,
                 self.mesh,
-                # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally);
+                # DRAM at long chunks, where the FIR's [1,T,qkv_dim_tp] working set overruns WH L1.
+                memory_config=_proj_mc,
                 conv_state=_cstate,
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,
@@ -595,22 +643,29 @@ class TPGatedDeltaNet:
                     src = ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D))
                     ttnn.copy(src, self.conv_states[j + 1])
             ttnn.deallocate(conv_new_state)
-        # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
+        # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj.
+        # The norm/flatten tensors are [1,Nv,T,Dv] — they scale with the prefill chunk length, so at
+        # long T they are far too big for L1 (fp32 at T=2048, Nv_tp=16, Dv=128 is 16MB EACH, and the
+        # norm + concat_heads outputs are live together). Blackhole's larger L1 absorbed this at the
+        # chunk sizes it was tuned for; on WH it OOMs the allocator mid-prefill. Keep the L1 fast path
+        # for short chunks (unchanged behaviour, incl. all of Blackhole) and spill to DRAM past that.
         _L1 = ttnn.L1_MEMORY_CONFIG
+        _elem = 4 if o.dtype == ttnn.float32 else 2
+        _norm_mc = _L1 if (tpc.is_blackhole() or Nv * T * Dv * _elem <= (8 << 20)) else ttnn.DRAM_MEMORY_CONFIG
         if self._gdn_fuse_out:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
             # TILE-native head->token relayout (transpose + fold), dropping the
             # TILE->ROW_MAJOR->TILE round-trip. o is head-major (1,Nv,T,Dv).
-            n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
+            n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_norm_mc)
             ttnn.deallocate(o)
             n = ttnn.reshape(n, (1, Nv, T, Dv))
             # Fused head->token relayout: [1,Nv,T,Dv] -> [1,1,T,Nv*Dv].
-            n = ttnn.experimental.nlp_concat_heads(n, memory_config=_L1)
+            n = ttnn.experimental.nlp_concat_heads(n, memory_config=_norm_mc)
             out_f = ttnn.reshape(n, (1, T, self.value_dim_tp))
         else:
-            out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
+            out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_norm_mc)
             ttnn.deallocate(o)
-            out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_L1)
+            out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_norm_mc)
             ttnn.deallocate(out_n)
         gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_f)
@@ -1082,18 +1137,60 @@ class TPGatedDeltaNet:
         g = ttnn.reshape(g, (B, 1, Nv))
 
         # fp32 decode step by default (QWEN35_GDN_DECODE_BF16=1 reverts)
+        _hp = os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"
+        # Only the first B users' state participates when the batch is under the allocated max.
         init_state = self.rec_state if B == Bmax else self._slice_along(self.rec_state, 0, 0, B)
-        o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
-            q,
-            k,
-            v,
-            beta,
-            g,
-            scale=self.scale,
-            initial_state=init_state,
-            device=self.mesh,
-            high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
-        )
+        _bstep = self._decode_batch_split(B)
+        if _bstep >= B:
+            o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
+                q,
+                k,
+                v,
+                beta,
+                g,
+                scale=self.scale,
+                initial_state=init_state,
+                device=self.mesh,
+                high_precision=_hp,
+            )
+        else:
+            # Batch-split decode: the recurrence is per-user independent (each user owns its own
+            # [Nv,Dk,Dv] state; nothing crosses the batch dim), so running the batch in slices is
+            # mathematically EXACT — not an approximation. Needed because the kernel makes the state
+            # L1-resident and holds a second same-sized tensor alongside it; see _decode_batch_split.
+            o_parts, rec_parts = [], []
+            for s in range(0, B, _bstep):
+                e = min(s + _bstep, B)
+                q_s = ttnn.slice(q, (s, 0, 0, 0), (e, 1, Nv, self.Dk))
+                k_s = ttnn.slice(k, (s, 0, 0, 0), (e, 1, Nv, self.Dk))
+                v_s = ttnn.slice(v, (s, 0, 0, 0), (e, 1, Nv, Dv))
+                beta_s = ttnn.slice(beta, (s, 0, 0), (e, 1, Nv))
+                g_s = ttnn.slice(g, (s, 0, 0), (e, 1, Nv))
+                rec_s = ttnn.slice(init_state, (s, 0, 0, 0), (e, Nv, self.Dk, Dv))
+                o_s, rec_new_s = recurrent_gated_delta_rule_decode_ttnn(
+                    q_s,
+                    k_s,
+                    v_s,
+                    beta_s,
+                    g_s,
+                    scale=self.scale,
+                    initial_state=rec_s,
+                    device=self.mesh,
+                    high_precision=_hp,
+                )
+                for t in (q_s, k_s, v_s, beta_s, g_s, rec_s):
+                    ttnn.deallocate(t)
+                # The kernel hands back an L1-resident state slice. Spill it to DRAM before the next
+                # slice runs: holding every slice's state in L1 at once would defeat the whole point
+                # of splitting (and collides with the next iteration's circular buffers).
+                rec_dram = ttnn.to_memory_config(rec_new_s, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(rec_new_s)
+                o_parts.append(o_s)
+                rec_parts.append(rec_dram)
+            o = ttnn.concat(o_parts, dim=0)
+            new_rec = ttnn.concat(rec_parts, dim=0)
+            for t in o_parts + rec_parts:
+                ttnn.deallocate(t)
         if init_state is not self.rec_state:
             ttnn.deallocate(init_state)
         if self._stable_state:
