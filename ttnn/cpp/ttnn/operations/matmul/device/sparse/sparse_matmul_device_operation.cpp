@@ -217,6 +217,9 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     // requiring a board reset. The same expression also underflows uint32 in the last-block padded
     // skip count. Reject on the host instead, matching the dense matmul path's
     // validate_matmul_block_and_subblock_configuration.
+    //
+    // Check order matters: every value used as a divisor below is rejected as zero first, so a
+    // malformed program config fails as a TT_FATAL rather than a host divide-by-zero.
     if (operation_attributes.program_config.has_value()) {
         if (const auto* pc = std::get_if<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                 &operation_attributes.program_config.value())) {
@@ -229,7 +232,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 pc->out_block_w % pc->out_subblock_w == 0,
                 "sparse_matmul: out_block_w ({}) must be divisible by out_subblock_w ({}); otherwise "
-                "the mcast_in0 kernel can deadlock",
+                "in1_num_subblocks becomes 0 and the mcast_in0 kernel deadlocks",
                 pc->out_block_w,
                 pc->out_subblock_w);
             TT_FATAL(
