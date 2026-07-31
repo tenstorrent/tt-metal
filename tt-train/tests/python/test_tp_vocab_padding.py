@@ -44,15 +44,39 @@ MISALIGNED_VOCAB = 96
 HIDDEN = 64
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, os.path.join(_REPO_ROOT, "sources", "examples", "qwen3"))
+_QWEN3_EXAMPLE = os.path.abspath(os.path.join(_REPO_ROOT, "sources", "examples", "qwen3"))
+# Force the qwen3 example dir to the front of sys.path so ``import utils`` resolves
+# here even if a sibling example dir is already on the path.
+if _QWEN3_EXAMPLE in sys.path:
+    sys.path.remove(_QWEN3_EXAMPLE)
+sys.path.insert(0, _QWEN3_EXAMPLE)
+
+# The qwen3 example ships a top-level ``utils`` package, and so do sibling example
+# dirs (e.g. examples/grpo, imported by test_grpo_trainer). In a single pytest session
+# another test module may have already imported its own ``utils`` first, caching it in
+# sys.modules and shadowing ours. Evict any cached ``utils*`` so the imports below
+# resolve against _QWEN3_EXAMPLE, then restore the sibling's modules.
+#
+# Everything is imported *here* rather than lazily inside the tests: after the restore
+# below, a runtime ``from utils...`` would resolve against the sibling package again.
+_saved_utils = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "utils" or k.startswith("utils.")}
+try:
+    from ttml.models.qwen3 import Qwen3Config  # noqa: E402
+    from ttml.models.llama import EmbeddingPlacement, Llama, LlamaConfig  # noqa: E402
+    from utils.context_managers import empty_init  # noqa: E402
+    from model_qwen3_distributed import (  # noqa: E402
+        DistributedQwen3ForCausalLM,
+        load_weights_from_hf_distributed,
+        tp_padded_vocab_size,
+    )
+finally:
+    for _k in [k for k in list(sys.modules) if k == "utils" or k.startswith("utils.")]:
+        del sys.modules[_k]
+    sys.modules.update(_saved_utils)
 
 
 def _tied_model(vocab):
     """The real tied-TP model, built the way model_factory builds it (empty_init)."""
-    from ttml.models.qwen3 import Qwen3Config
-    from utils.context_managers import empty_init
-    from model_qwen3_distributed import DistributedQwen3ForCausalLM
-
     cfg = Qwen3Config(
         hidden_size=HIDDEN,
         intermediate_size=128,
@@ -87,8 +111,6 @@ def test_qwen3_padded_vocab_gives_tile_aligned_shards(tp_mesh, vocab):
     Fails under ``lcm(32, tp_size)``: at TP=2 that pads 96 to 96, whose 48-row
     shards are not tile-aligned.
     """
-    from model_qwen3_distributed import tp_padded_vocab_size
-
     _assert_shards_tile_aligned(tp_padded_vocab_size(vocab), vocab, tp_mesh.axis_size("tp"))
 
 
@@ -100,8 +122,6 @@ def test_llama_padded_vocab_gives_tile_aligned_shards(tp_mesh, vocab):
     logical shape stays ``V / tp`` and self-consistent -- but the padding still has to
     honour the tile constraint it claims to.
     """
-    from ttml.models.llama import EmbeddingPlacement, Llama, LlamaConfig
-
     cfg = LlamaConfig(
         hidden_size=HIDDEN,
         num_hidden_layers=1,
@@ -151,8 +171,6 @@ def test_every_rank_reads_its_own_vocab_rows(tp_mesh):
     Writes a row-index ramp through ``load_weights_from_hf_distributed`` and decodes
     which row each probe id actually gathered.
     """
-    from model_qwen3_distributed import load_weights_from_hf_distributed
-
     model, cfg = _tied_model(MISALIGNED_VOCAB)
     emb = model.model.embed_tokens
     stride = emb.num_embeddings_per_partition

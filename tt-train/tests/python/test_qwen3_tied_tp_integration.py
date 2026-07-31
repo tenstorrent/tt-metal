@@ -58,7 +58,59 @@ INTERMEDIATE = 128
 SEQ = 32
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, os.path.join(_REPO_ROOT, "sources", "examples", "qwen3"))
+_QWEN3_EXAMPLE = os.path.abspath(os.path.join(_REPO_ROOT, "sources", "examples", "qwen3"))
+# Force the qwen3 example dir to the front of sys.path so ``import utils`` resolves
+# here even if a sibling example dir is already on the path.
+if _QWEN3_EXAMPLE in sys.path:
+    sys.path.remove(_QWEN3_EXAMPLE)
+sys.path.insert(0, _QWEN3_EXAMPLE)
+
+
+# The qwen3 example ships a top-level ``utils`` package, and so do sibling example
+# dirs (e.g. examples/grpo, imported by test_grpo_trainer). In a single pytest session
+# another test module may have already imported its own ``utils`` first, caching it in
+# sys.modules and shadowing ours (sys.path.insert cannot override an already-imported
+# module). Evict any cached ``utils*`` so the imports below resolve against
+# _QWEN3_EXAMPLE, then restore the sibling's modules so we do not break whichever test
+# imported them.
+#
+# Everything the tests need from the example is imported *here*, not lazily inside the
+# helpers: after the restore below, a runtime ``from utils...`` would resolve against
+# the sibling package again and fail.
+def _qwen3_cached():
+    """Cached modules that belong to the qwen3 example (``utils*`` plus its top-level
+    modules), identified by where they were loaded from."""
+    names = []
+    for name, mod in list(sys.modules.items()):
+        if name == "utils" or name.startswith("utils."):
+            names.append(name)
+        elif (getattr(mod, "__file__", None) or "").startswith(_QWEN3_EXAMPLE + os.sep):
+            names.append(name)
+    return names
+
+
+# Evicting only ``utils*`` is not enough. ``utils.context_managers`` holds the module
+# level ``_empty_init`` flag that ``empty_init()`` toggles and ``make_sharded_weight``
+# reads. If a sibling qwen3 test module already imported ``model_qwen3_distributed``
+# during *its* eviction window, that cached module keeps a reference to *its* copy of
+# ``utils.context_managers`` -- so ``with empty_init()`` here would set one copy's flag
+# while the model checks another's, silently skipping the tile-padded allocation. Evict
+# the example's own modules too so this window is self-consistent.
+_saved_utils = {k: sys.modules.pop(k) for k in _qwen3_cached()}
+try:
+    from ttml.models.qwen3 import Qwen3Config  # noqa: E402
+    from utils.context_managers import empty_init  # noqa: E402
+    from utils.tensor_utils import create_input_tensor_from_torch  # noqa: E402
+    from model_qwen3_distributed import (  # noqa: E402
+        DistributedQwen3ForCausalLM,
+        load_weights_from_hf_distributed,
+        tp_padded_vocab_size,
+    )
+    from generate import create_causal_mask_tensor  # noqa: E402
+finally:
+    for _k in _qwen3_cached():
+        del sys.modules[_k]
+    sys.modules.update(_saved_utils)
 
 
 # ---------------------------------------------------------------------------
@@ -67,8 +119,6 @@ sys.path.insert(0, os.path.join(_REPO_ROOT, "sources", "examples", "qwen3"))
 
 
 def _qwen3_config():
-    from ttml.models.qwen3 import Qwen3Config
-
     return Qwen3Config(
         hidden_size=HIDDEN,
         intermediate_size=INTERMEDIATE,
@@ -121,8 +171,6 @@ def _spanning_ids():
     confined to low values cannot detect one. That is precisely how the bug survived
     on the 1.7B path: English prompts tokenize to low ids, which all land on rank 0.
     """
-    from model_qwen3_distributed import tp_padded_vocab_size
-
     stride = tp_padded_vocab_size(VOCAB) // TP_AXIS_SIZE
     per_rank = SEQ // TP_AXIS_SIZE
     ids = []
@@ -144,10 +192,6 @@ def _gather(tensor, dim):
 
 def _run_leg(tie, state_dict, ids_torch, targets_np, mask):
     """Build one leg under empty_init, load the table, forward, loss, backward."""
-    from utils.context_managers import empty_init
-    from model_qwen3_distributed import DistributedQwen3ForCausalLM, load_weights_from_hf_distributed
-    from utils.tensor_utils import create_input_tensor_from_torch
-
     ctx = ttml.autograd.AutoContext.get_instance()
     device = ctx.get_device()
     cfg = _qwen3_config()
@@ -191,8 +235,6 @@ def legs(tp_mesh):
     """Both legs, built and run once -- each is a model build, HF load, and backward."""
     pytest.importorskip("transformers", reason="needs transformers for reference weight shapes")
     state_dict = _hf_state_dict()
-
-    from generate import create_causal_mask_tensor
 
     ids, stride = _spanning_ids()
     ids_np = ids.reshape(1, 1, 1, SEQ)

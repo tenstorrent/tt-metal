@@ -35,10 +35,29 @@ import pytest
 import ttml
 import ttnn
 
-_QWEN3_EXAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sources", "examples", "qwen3")
-sys.path.insert(0, os.path.abspath(_QWEN3_EXAMPLE))
+_QWEN3_EXAMPLE = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sources", "examples", "qwen3")
+)
+# Force the qwen3 example dir to the front of sys.path so ``import utils`` resolves
+# here even if a sibling example dir is already on the path.
+if _QWEN3_EXAMPLE in sys.path:
+    sys.path.remove(_QWEN3_EXAMPLE)
+sys.path.insert(0, _QWEN3_EXAMPLE)
 
-from generate import _sample_logits_mask, generate_ttml  # noqa: E402
+# The qwen3 example ships a top-level ``utils`` package, and so do sibling example
+# dirs (e.g. examples/grpo, imported by test_grpo_trainer). In a single pytest
+# session another test module may have already imported its own ``utils`` first,
+# caching it in sys.modules and shadowing ours (sys.path.insert cannot override an
+# already-imported module). Temporarily evict any cached ``utils*`` so the imports
+# below resolve against _QWEN3_EXAMPLE, then restore the sibling's modules so we do
+# not break whichever test imported them.
+_saved_utils = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "utils" or k.startswith("utils.")}
+try:
+    from generate import _sample_logits_mask, generate_ttml  # noqa: E402
+finally:
+    for _k in [k for k in list(sys.modules) if k == "utils" or k.startswith("utils.")]:
+        del sys.modules[_k]
+    sys.modules.update(_saved_utils)
 
 VOCAB = 128  # already 32-aligned, so ceil(V/32)*32 == V -> the old formula's blind spot
 LOGITS_WIDTH = 256  # what a 32*tp_size-padded head actually emits (e.g. tp_size=8)
@@ -49,10 +68,23 @@ PROMPT = [1, 2, 3, 4]
 
 @pytest.fixture(scope="module")
 def device():
+    """A device to run on, opening one only if this process has none.
+
+    AutoContext holds at most one device and ``open_device`` raises if one already
+    exists, so a sibling test module that left a device or mesh open would otherwise
+    error every test here. Reuse whatever is open and close only what we opened.
+    """
     ctx = ttml.autograd.AutoContext.get_instance()
-    ctx.open_device()
+    opened_here = True
+    try:
+        ctx.open_device()
+    except RuntimeError:
+        opened_here = False
+
     yield ctx.get_device()
-    ctx.close_device()
+
+    if opened_here:
+        ctx.close_device()
 
 
 class _StubTokenizer:
