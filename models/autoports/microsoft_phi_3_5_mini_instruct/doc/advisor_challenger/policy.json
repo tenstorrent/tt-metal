@@ -1,0 +1,15 @@
+{
+  "shipped_policy": {
+    "precision_config_path": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/selected_precision_config.json",
+    "decode_weight_strategy": "dram_sharded",
+    "decode_batch": 32
+  },
+  "shipped_weight_dtypes": {
+    "attention.qkv": "BFLOAT8_B",
+    "attention.o": "BFLOAT8_B",
+    "mlp.gate_up": "BFLOAT4_B",
+    "mlp.down": "BFLOAT4_B",
+    "norm": "BFLOAT16"
+  },
+  "shipped_policy_source": "doc/datatype_sweep/selected_precision_config.json and doc/optimized_decoder/tracy/dense/decode_perf_report.csv"
+}

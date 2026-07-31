@@ -1,0 +1,33 @@
+{
+  "outcome": "no_change",
+  "changed": false,
+  "changed_precision": false,
+  "incumbent_ms": 1.1009389162063599,
+  "final_ms": 1.1009389162063599,
+  "repeats_ms": [1.1009389162063599, 1.1012198403477669, 1.1004950664937496, 1.1010455340147018, 1.1001279577612877],
+  "winning_config": {"advisor_changes": [], "decode_batch": 32, "policy": "frozen incumbent"},
+  "oracle": "real-weight HF-vs-TTNN decode-batch-32 oracle at PCC >= 0.995",
+  "oracle_scope": "shipped batch-32 decoder prerequisite, one-token decode from empty paged caches for 32 users",
+  "oracle_reference": "Hugging Face Phi3DecoderLayer",
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "oracle_result": {"decode_batch": 32, "decode_pcc": 0.9999834179243755, "threshold": 0.995, "artifact": "oracle_real_batch32.json"},
+  "model_estimate": {
+    "before_us": 32515.68,
+    "after_us": 32515.68,
+    "band_us": 34.944,
+    "per_kind": {"dense": {"before_us": 32515.68, "after_us": 32515.68, "layers": 32}},
+    "method": "per-layer measured delta x layers_of_kind, summed",
+    "contribution_us": 0.0
+  },
+  "combination": {
+    "measured_sets": [{"set": ["incumbent"], "measured_ms": 1.1009389162063599, "repeats_ms": [1.1009389162063599, 1.1012198403477669, 1.1004950664937496, 1.1010455340147018, 1.1001279577612877], "oracle_passed": true, "oracle_weights": "real"}],
+    "best_set": ["incumbent"]
+  },
+  "rejected_knobs": [
+    "PHI35_ADVISOR_ROPE_L1_TAIL (default off; repeat distributions overlap)",
+    "PHI35_ADVISOR_ROPE_FULL_L1 (default off; slower)",
+    "PHI35_ADVISOR_SDPA_L1 (default off; TT_FATAL sharded output unsupported)"
+  ],
+  "iterations": [{"iteration": 1, "trigger": "initial frozen-incumbent advisor challenge", "capture_count_by_layer_kind": {"dense": 1}, "profile": "tracy/incumbent_decode_perf_report.csv", "reconciliation": "reconciliation_dense.json", "result": "no candidate satisfies strict non-overlap"}]
+}

@@ -1,0 +1,58 @@
+{
+  "disagreements": [
+    {
+      "device": "SdpaDecodeDeviceOperation",
+      "verdict": "rejected",
+      "hard_error": "TT_FATAL: Sharded output not supported for GQA (sdpa_decode_device_operation.cpp:405)",
+      "combined_with": ["PHI35_ADVISOR_SDPA_L1"]
+    },
+    {
+      "device": "NLPConcatHeadsDecodeDeviceOperation",
+      "verdict": "rejected",
+      "hard_error": "advisor declares nlp_concat_heads_decode unfixable without sharded input; its direct sharded producer candidate fails in SDPA",
+      "combined_with": ["PHI35_ADVISOR_SDPA_L1"]
+    }
+  ],
+  "results": [
+    {
+      "label": "rope_full_l1",
+      "chains": ["dense:b19", "dense:b34", "dense:6", "dense:11", "dense:5", "dense:2", "dense:10", "dense:1", "dense:4", "dense:3", "dense:12", "dense:13", "dense:7", "dense:8", "dense:9", "dense:b11"],
+      "verdict": "rejected",
+      "measured_ms": 1.1013950780034065,
+      "repeats_ms": [1.1016172729432583, 1.1023088172078133, 1.1011531949043274, 1.101130973547697, 1.1013950780034065],
+      "combined_with": ["all ranked Phi split-half RoPE chains"],
+      "perf_report": "rope_full_l1.json"
+    },
+    {
+      "label": "rope_l1_tail",
+      "chains": [],
+      "verdict": "rejected",
+      "measured_ms": 1.100682895630598,
+      "repeats_ms": [1.1008815094828606, 1.100682895630598, 1.100273933261633, 1.101031992584467, 1.0993904620409012],
+      "combined_with": ["legal L1 multiply/add isolate"],
+      "perf_report": "rope_l1_tail.json"
+    },
+    {
+      "label": "sdpa_l1",
+      "chains": ["dense:b43", "dense:b44", "dense:b49"],
+      "verdict": "rejected",
+      "measured_ms": 1.1009389162063599,
+      "repeats_ms": [1.1009389162063599, 1.1012198403477669, 1.1004950664937496, 1.1010455340147018, 1.1001279577612877],
+      "hard_error": "TT_FATAL: Sharded output not supported for GQA (sdpa_decode_device_operation.cpp:405)",
+      "combined_with": ["SDPA output and nlp_concat input L1 chain"]
+    },
+    {
+      "label": "nlp_concat_chain",
+      "chains": ["dense:b51"],
+      "verdict": "rejected",
+      "measured_ms": 1.1009389162063599,
+      "repeats_ms": [1.1009389162063599, 1.1012198403477669, 1.1004950664937496, 1.1010455340147018, 1.1001279577612877],
+      "hard_error": "advisor unfixable: nlp_concat_heads_decode requires a sharded input; direct upstream sharded output is rejected by SDPA"
+    },
+    {
+      "label": "below_floor",
+      "chains": ["dense:b45"],
+      "verdict": "below_threshold"
+    }
+  ]
+}

@@ -63,6 +63,7 @@ the same batch. The method updates ``kv_cache`` and returns
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Mapping
@@ -164,6 +165,7 @@ class OptimizedDecoder(LightweightModule):
         gate_up_weight_prefill: ttnn.Tensor,
         down_weight_prefill: ttnn.Tensor,
         rope_tables: dict[str, tuple[ttnn.Tensor, ttnn.Tensor]],
+        max_decode_batch_size: int = 1,
     ) -> None:
         super().__init__()
         self.config = config
@@ -181,6 +183,7 @@ class OptimizedDecoder(LightweightModule):
         self.down_weight_prefill = down_weight_prefill
         self.rope_tables = rope_tables
         self.scale = 1.0 / math.sqrt(config.head_dim)
+        self.max_decode_batch_size = max_decode_batch_size
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -201,10 +204,10 @@ class OptimizedDecoder(LightweightModule):
             mesh_device, config.intermediate_size
         )
         self.decode_kv_mem_config = _height_sharded_decode_mem_config(
-            mesh_device, config.num_kv_heads, config.head_dim, max_batch_size=1
+            mesh_device, config.num_kv_heads, config.head_dim, max_batch_size=max_decode_batch_size
         )
         self.decode_q_mem_config = _height_sharded_decode_mem_config(
-            mesh_device, config.num_heads, config.head_dim, max_batch_size=1
+            mesh_device, config.num_heads, config.head_dim, max_batch_size=max_decode_batch_size
         )
         self.decode_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=_sdpa_grid(mesh_device),
@@ -247,6 +250,7 @@ class OptimizedDecoder(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         block_size: int = DEFAULT_BLOCK_SIZE,
         max_position_embeddings: int | None = None,
+        batch: int = 1,
         **_: object,
     ) -> "OptimizedDecoder":
         """Create a decoder from a HF layer state dict.
@@ -340,6 +344,7 @@ class OptimizedDecoder(LightweightModule):
             gate_up_weight_prefill=gate_up_weight_prefill,
             down_weight_prefill=down_weight_prefill,
             rope_tables=rope_tables,
+            max_decode_batch_size=batch,
         )
 
     @staticmethod
@@ -517,8 +522,10 @@ class OptimizedDecoder(LightweightModule):
             raise ValueError(f"hidden width must be {cfg.hidden_size}, got {hidden_states.shape[-1]}")
         if int(hidden_states.shape[-3]) != 1:
             raise ValueError(f"decode hidden_states must have seq_len=1, got shape {hidden_states.shape}")
-        if batch_size != 1:
-            raise ValueError("this optimized decoder currently supports batch_size=1 for decode")
+        if batch_size > self.max_decode_batch_size:
+            raise ValueError(
+                f"decode batch_size={batch_size} exceeds configured maximum {self.max_decode_batch_size}"
+            )
 
         residual = ttnn.to_memory_config(hidden_states, self.decode_hidden_mem_config)
         attn_in = ttnn.rms_norm(
@@ -580,11 +587,16 @@ class OptimizedDecoder(LightweightModule):
             scale=self.scale,
             program_config=self.decode_sdpa_program_config,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=(
+                self.decode_q_mem_config
+                if os.getenv("PHI35_ADVISOR_SDPA_L1", "0") == "1"
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
             **sdpa_kwargs,
         )
         ttnn.deallocate(q)
-        attn_out = ttnn.to_memory_config(attn_out, self.decode_q_mem_config)
+        if os.getenv("PHI35_ADVISOR_SDPA_L1", "0") != "1":
+            attn_out = ttnn.to_memory_config(attn_out, self.decode_q_mem_config)
         attn_cat = ttnn.experimental.nlp_concat_heads_decode(attn_out, num_heads=cfg.num_heads)
         ttnn.deallocate(attn_out)
         attn_cat = ttnn.to_memory_config(attn_cat, self.decode_hidden_mem_config)
@@ -650,7 +662,9 @@ class OptimizedDecoder(LightweightModule):
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=cfg.dtype,
-            memory_config=gate.memory_config(),
+            memory_config=(
+                self.decode_gate_up_mem_config if _is_decode_tensor(hidden_states) else ttnn.DRAM_MEMORY_CONFIG
+            ),
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
@@ -770,10 +784,16 @@ def _build_rope_tables(hf_config, config: Phi35MiniOptimizedDecoderConfig, mesh_
 
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
     rotated = _rotate_half(x)
-    x_cos = ttnn.mul(x, cos, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    rot_sin = ttnn.mul(rotated, sin, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # Advisor-challenger losing experiments remain reproducible but default-off.
+    rope_memory_config = (
+        ttnn.L1_MEMORY_CONFIG
+        if os.getenv("PHI35_ADVISOR_ROPE_L1_TAIL", "0") == "1"
+        else ttnn.DRAM_MEMORY_CONFIG
+    )
+    x_cos = ttnn.mul(x, cos, dtype=ttnn.bfloat16, memory_config=rope_memory_config)
+    rot_sin = ttnn.mul(rotated, sin, dtype=ttnn.bfloat16, memory_config=rope_memory_config)
     ttnn.deallocate(rotated)
-    out = ttnn.add(x_cos, rot_sin, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+    out = ttnn.add(x_cos, rot_sin, memory_config=rope_memory_config, dtype=ttnn.bfloat16)
     ttnn.deallocate(x_cos)
     ttnn.deallocate(rot_sin)
     return out
@@ -784,9 +804,14 @@ def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
     half = shape[-1] // 2
     x1 = ttnn.slice(x, (0, 0, 0, 0), (*shape[:-1], half))
     x2 = ttnn.slice(x, (0, 0, 0, half), (*shape[:-1], shape[-1]))
-    neg_x2 = ttnn.neg(x2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    rotate_memory_config = (
+        ttnn.L1_MEMORY_CONFIG
+        if os.getenv("PHI35_ADVISOR_ROPE_FULL_L1", "0") == "1"
+        else ttnn.DRAM_MEMORY_CONFIG
+    )
+    neg_x2 = ttnn.neg(x2, memory_config=rotate_memory_config)
     ttnn.deallocate(x2)
-    out = ttnn.concat([neg_x2, x1], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.concat([neg_x2, x1], dim=3, memory_config=rotate_memory_config)
     ttnn.deallocate(neg_x2)
     ttnn.deallocate(x1)
     return out
@@ -920,11 +945,18 @@ def _height_sharded_decode_mem_config(
     mesh_device: ttnn.MeshDevice, num_heads: int, head_dim: int, *, max_batch_size: int
 ) -> ttnn.MemoryConfig:
     grid = mesh_device.compute_with_storage_grid_size()
-    shard_grid = ttnn.num_cores_to_corerangeset(max_batch_size, grid, True)
+    grid_x = min(max_batch_size, grid.x)
+    if max_batch_size >= grid_x and max_batch_size % grid_x != 0:
+        grid_x = max(
+            x for x in range(grid_x, 0, -1) if max_batch_size % x == 0 and max_batch_size // x <= grid.y
+        )
+    grid_y = math.ceil(max_batch_size / grid_x)
+    shard_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     padded_heads = math.ceil(num_heads / 32) * 32
-    shard_spec = ttnn.ShardSpec(
-        shard_grid,
-        [padded_heads, head_dim],
-        ttnn.ShardOrientation.ROW_MAJOR,
+    return ttnn.create_sharded_memory_config(
+        shape=(padded_heads, head_dim),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
     )
-    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)

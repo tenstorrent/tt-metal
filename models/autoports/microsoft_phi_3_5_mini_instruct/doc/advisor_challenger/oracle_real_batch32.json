@@ -1,0 +1,10 @@
+{
+  "decode_batch": 32,
+  "oracle_weights": "real",
+  "reference": "Hugging Face Phi3DecoderLayer",
+  "snapshot": "/huggingface/hub/models--microsoft--Phi-3.5-mini-instruct/snapshots/2fe192450127e6a83f7441aef6e3ca586c338b77",
+  "pcc_threshold": 0.995,
+  "pcc": 0.9999834179243755,
+  "passed": true,
+  "message": "Max ATOL Delta: 0.03125, Max RTOL Delta: nan, PCC: 0.9999834179243755"
+}
