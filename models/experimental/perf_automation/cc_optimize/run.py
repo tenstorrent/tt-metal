@@ -455,7 +455,17 @@ def _ledger_fullpipe(ms: float, mode: str, label: str) -> None:
     (model, task) is the BEFORE and survives every rerun."""
     try:
         led = _ledger()
-        seen = led.first(led.KIND_FULLPIPE, led.PHASE_BEFORE)
+        # KEY BOTH THE READ AND THE WRITE. Unkeyed, these used the fallback
+        # perf_measurements_model_main.jsonl while perf_mcp's writers used the model's own ledger --
+        # so `first()` asked "is there a BEFORE yet?" of a DIFFERENT FILE. On gemma-3-12b-it the
+        # genuine before landed in the fallback, the later committed-best found nothing in the real
+        # ledger and claimed the BEFORE slot, and the report printed
+        # "40.13 ms -> (after not measured yet)" -- with 40.13 actually being the OPTIMIZED result.
+        _model = (
+            os.environ.get("PERF_MCP_MODEL_NAME") or Path(os.environ.get("PERF_MCP_MODEL_ROOT", "") or "model").name
+        )
+        _task = os.environ.get("PERF_MCP_TASK", "main")
+        seen = led.first(led.KIND_FULLPIPE, led.PHASE_BEFORE, model=_model, task=_task)
         phase = led.PHASE_AFTER if seen else led.PHASE_BEFORE
         led.record(
             led.KIND_FULLPIPE,
@@ -464,6 +474,8 @@ def _ledger_fullpipe(ms: float, mode: str, label: str) -> None:
             depth="all",
             mode=mode or "unknown",
             source="fullpipe-gate:%s" % (label or ""),
+            model=_model,
+            task=_task,
         )
     except Exception:  # noqa: BLE001
         pass

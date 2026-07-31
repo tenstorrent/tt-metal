@@ -694,7 +694,14 @@ def before_loop(
     # and NO anchor, so the report printed "not measured (no ledger reading)" for a number it had
     # just measured -- and each consumer reached for whichever store it knew about, which is how one
     # profile showed up as three different totals (120.59 / 152.02 / 178.85).
-    _record_baseline_anchor(profile)
+    # KEY IT FROM THE MODEL DIRECTORY, not from PERF_MCP_MODEL_NAME: run.py does not set that
+    # variable until AFTER discover() has taken this baseline, so reading it here yields "" and
+    # ledger_path falls back to the literal "model" -- which is how the gemma-3-12b-it run of
+    # 2026-07-31 wrote its eager anchor (240.86 ms) to perf_measurements_model_main.jsonl while
+    # every other writer used perf_measurements_gemma3_main.jsonl. Two ledgers for one run, so the
+    # write-once BEFORE/AFTER rule was applied per FILE and the report said "not measured" for a
+    # number it was holding. The line just below already keys the /tmp baseline copy this way.
+    _record_baseline_anchor(profile, model=Path(model_root).name)
     try:
         import tempfile as _tf
 

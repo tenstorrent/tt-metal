@@ -190,12 +190,26 @@ def ledger_path(model: str = "", task: str = "") -> Path:
     override = os.environ.get("PERF_MCP_LEDGER")
     if override:
         return Path(override)
+    _keyed = bool(model or os.environ.get("PERF_MCP_MODEL_NAME") or os.environ.get("PERF_MCP_MODEL_ROOT"))
     model = (
         model
         or os.environ.get("PERF_MCP_MODEL_NAME")
         or Path(os.environ.get("PERF_MCP_MODEL_ROOT", "") or "model").name
     )
     task = task or os.environ.get("PERF_MCP_TASK", "main")
+    if not _keyed and os.environ.get("PERF_MCP_STRICT_LEDGER_KEY") == "1":
+        # An UNKEYED call silently produces perf_measurements_model_main.jsonl -- a file that looks
+        # like a real ledger and belongs to no model. That is how ONE gemma-3-12b-it run ended up
+        # with two: the write-once BEFORE/AFTER rule was then applied per FILE, so a committed-best
+        # reading found no BEFORE in the model's own ledger, claimed that slot, and the report
+        # announced the OPTIMIZED number as the baseline. Opt-in (tests/CI) so a new call site that
+        # forgets the key fails loudly here rather than being discovered in a report months later;
+        # production still degrades rather than crashing a long run over a ledger name.
+        raise ValueError(
+            "unkeyed ledger access: pass model=/task= (or set PERF_MCP_MODEL_NAME / "
+            "PERF_MCP_MODEL_ROOT). An unkeyed call writes the shared 'model_main' ledger, which "
+            "splits one run's anchors across two files."
+        )
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", "%s_%s" % (model, task)).strip("_") or "model_main"
     if len(safe) > _MAX_KEY_LEN:
         # A long HF id (org/very-long-name) produced a filename over the 255-byte limit, so EVERY
