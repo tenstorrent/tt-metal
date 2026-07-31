@@ -87,26 +87,26 @@ namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
-    // When ttsim is active, derive cluster type from the simulator soc descriptor even if a mock
-    // cluster descriptor is also configured (tt-run MP sweeps set both).
-    if (rtoptions.get_simulator_enabled()) {
-        auto soc_desc =
-            tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
-        auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
-        if (arch == tt::ARCH::WORMHOLE_B0) {
-            return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
-        }
-        if (arch == tt::ARCH::BLACKHOLE) {
-            return tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE;
-        }
-        if (arch == tt::ARCH::QUASAR) {
-            return tt::tt_metal::ClusterType::SIMULATOR_QUASAR;
-        }
-        return tt::tt_metal::ClusterType::INVALID;
-    }
-
     std::unique_ptr<umd::ClusterDescriptor> temp_cluster_desc = nullptr;
     if (cluster_desc == nullptr) {
+        // Descriptor-less simulator callers have no topology to classify. Preserve the legacy architecture-only
+        // simulator types for that fallback, but prefer a supplied/discovered descriptor below so direct simulation
+        // is classified the same way as silicon (for example, a discovered two-chip N300 remains an N300).
+        if (rtoptions.get_simulator_enabled()) {
+            auto soc_desc =
+                tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
+            auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+            if (arch == tt::ARCH::WORMHOLE_B0) {
+                return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
+            }
+            if (arch == tt::ARCH::BLACKHOLE) {
+                return tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE;
+            }
+            if (arch == tt::ARCH::QUASAR) {
+                return tt::tt_metal::ClusterType::SIMULATOR_QUASAR;
+            }
+            return tt::tt_metal::ClusterType::INVALID;
+        }
         temp_cluster_desc = rtoptions.get_mock_enabled() ? get_mock_cluster_desc(rtoptions)
                                                          : tt::umd::Cluster::create_cluster_descriptor();
         cluster_desc = temp_cluster_desc.get();
