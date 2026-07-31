@@ -691,12 +691,18 @@ class TTBlock1DDevice:
         def _scale(s: Optional[torch.Tensor], key: str) -> Optional[ttnn.Tensor]:
             if s is None:
                 return None
+            # TILE, not ROW_MAJOR: these scales are only ever consumed by ttnn.mul, which needs a
+            # TILE operand.  A ROW_MAJOR [1,1,1,C] constant made every call re-tilize it, and a
+            # 1-tile-tall tilize is single-core (tilize_with_val_padding's multicore split works over
+            # row blocks, and its width-split escape hatch needs >32 width tiles), so C=1024 cost
+            # 40 us of the ~975 us/frame the 72 per-frame scale muls spent re-tilizing constants.
+            # Pure layout change: maxabsdiff 0 vs the ROW_MAJOR operand at every block shape.
             return wc.as_tensor(
                 key,
                 lambda: s.to(tdtype).view(1, 1, 1, s.shape[0]).contiguous(),
                 device=device,
                 dtype=compute_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
