@@ -226,4 +226,49 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
     distributed::trace_allocation_tracker::clear_unsafe_tracked_ids(mesh_device.get(), trace_id);
     distributed::trace_allocation_tracker::mark_allocations_safe(mesh_device.get());
 }
+
+TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerTagsLazyProgramBuffersAtAllocationSite) {
+    if (!trace_allocation_tracking_enabled()) {
+        GTEST_SKIP() << "requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup";
+    }
+
+    auto mesh_device = devices_[0];
+    auto buffers_before = mesh_device->allocator()->get_allocated_buffers();
+    constexpr distributed::MeshTraceId trace_id{0x1235};
+    distributed::trace_allocation_tracker::mark_allocations_unsafe(mesh_device.get(), trace_id);
+
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        CoreCoord{0, 0},
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
+
+    auto unsafe = distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id);
+    auto buffers_after = mesh_device->allocator()->get_allocated_buffers();
+    std::vector<size_t> new_buffer_ids;
+    for (auto* buffer : buffers_after) {
+        if (!buffers_before.contains(buffer)) {
+            new_buffer_ids.push_back(buffer->unique_id());
+        }
+    }
+
+    EXPECT_FALSE(new_buffer_ids.empty());
+    if (trace_allocation_skip_program_cache_enabled()) {
+        for (size_t buffer_id : new_buffer_ids) {
+            EXPECT_FALSE(unsafe.contains(buffer_id));
+        }
+    } else {
+        EXPECT_TRUE(std::any_of(new_buffer_ids.begin(), new_buffer_ids.end(), [&](size_t buffer_id) {
+            auto it = unsafe.find(buffer_id);
+            return it != unsafe.end() && it->second == "program_cache: kernel binaries";
+        }));
+    }
+
+    distributed::trace_allocation_tracker::clear_unsafe_tracked_ids(mesh_device.get(), trace_id);
+    distributed::trace_allocation_tracker::mark_allocations_safe(mesh_device.get());
+}
 }  // namespace tt::tt_metal
