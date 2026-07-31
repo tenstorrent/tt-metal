@@ -866,3 +866,30 @@ def print_tensor_mem_info(tt: ttnn.Tensor):
         logger.info("  layout:", s.layout)
         logger.info("  dtype:", s.dtype)
         logger.info("  memory_config:", s.memory_config())
+
+
+def prepare_weight_for_concatenated_input(
+    weight: torch.Tensor,
+    sizes: Sequence[int],
+    *,
+    device_count: int,
+    tile_pad_segments: bool = True,
+) -> torch.Tensor:
+    """Shard weight by device_count per segment and stack.
+
+    tile_pad_segments=True (fused concat): zero-pad each per-device segment K to a tile boundary
+    so minimal_matmul([prefix, suffix], weight) works for any channel count.
+    tile_pad_segments=False (materialized concat): contiguous stack, for use with ttnn.concat.
+    """
+    segments = weight.split(sizes, dim=1)
+    padded_segments = []
+    for seg in segments:
+        unf = seg.unflatten(1, [device_count, -1])  # [out, device_count, K_seg/dev]
+        if tile_pad_segments:
+            k_per_dev = unf.shape[2]
+            k_padded = ((k_per_dev + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            if k_padded != k_per_dev:
+                pad = torch.zeros(*unf.shape[:2], k_padded - k_per_dev, dtype=unf.dtype)
+                unf = torch.cat([unf, pad], dim=2)
+        padded_segments.append(unf)
+    return torch.cat(padded_segments, dim=2).flatten(1, 2)
