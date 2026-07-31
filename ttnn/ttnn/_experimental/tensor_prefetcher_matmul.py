@@ -20,10 +20,10 @@ per receiver and requires a receiver-contiguous weight.
 
 This is a host-side composition, not a device-level fusion: the prefetch still
 runs on the DRAM-core (DRISC) path off the command queue while the matmul is
-dispatched normally. ``queue_id``/``cq_id`` is named here, rather than left to fall
-through ``**linear_kwargs``, so that it steers both halves: forwarded to only the
-matmul it would leave the prefetch on whatever queue was already current, and a
-capture region would then capture the halves apart.
+dispatched normally. A ``queue_id``/``cq_id`` in ``**linear_kwargs`` still reaches
+``ttnn.linear``, but is read out here as well so that it steers both halves: applied
+to only the matmul it would leave the prefetch on whatever queue was already current,
+and a capture region would then capture the halves apart.
 """
 
 import ttnn
@@ -35,8 +35,6 @@ def prefetch_and_linear(
     *,
     global_cb,
     program_config,
-    queue_id=None,
-    cq_id=None,
     **linear_kwargs,
 ):
     """Queue a DRAM-core prefetch of ``weight`` into ``global_cb``, then run the
@@ -53,13 +51,13 @@ def prefetch_and_linear(
         global_cb: DRAM-sender GlobalCircularBuffer shared by the prefetch and
             the matmul.
         program_config: 1D matmul program config driving the matmul.
-        queue_id: Command queue for both halves -- the prefetch is captured against it
-            (when it is recording a trace) and the matmul dispatches on it. Defaults to
-            the calling thread's current queue, as set by ``ttnn.command_queue(n)``.
-        cq_id: Alias for ``queue_id``, accepted because ttnn operations take either;
-            ``queue_id`` wins if both are given, matching ttnn's own precedence.
         **linear_kwargs: Forwarded to ``ttnn.linear`` (e.g. ``memory_config``,
-            ``compute_kernel_config``, ``dtype``, ``bias``).
+            ``compute_kernel_config``, ``dtype``, ``bias``). A ``queue_id``/``cq_id``
+            here steers both halves -- the prefetch is captured against that queue (when
+            it is recording a trace) and the matmul dispatches on it -- and defaults to
+            the calling thread's current queue, as set by ``ttnn.command_queue(n)``.
+            Either spelling is accepted, as for any ttnn operation; ``queue_id`` wins if
+            both are given, matching ttnn's own precedence.
 
     Returns:
         The ``ttnn.linear`` output tensor.
@@ -80,10 +78,16 @@ def prefetch_and_linear(
         request = (weight, block_count, list(range(block_count)))
     else:
         request = (weight, block_count)
-    # queue_id wins, matching the precedence in ttnn's operation decorator -- which is also
-    # what applies it: both calls below are ttnn operations, so each makes this queue current
-    # for its own duration.
-    cq_id = queue_id if queue_id is not None else cq_id
+    # Read (not popped) out of the kwargs the way ttnn's own operation wrapper resolves it
+    # -- FastOperation.__call__ in ttnn/decorators.py picks on the keyword being present, not
+    # on its value, so an explicit queue_id=None wins over a cq_id rather than falling through
+    # to it. Only the prefetch half needs it named here; the keyword itself stays in
+    # linear_kwargs and reaches ttnn.linear as the caller wrote it.
+    cq_id = None
+    if "queue_id" in linear_kwargs:
+        cq_id = linear_kwargs["queue_id"]
+    elif "cq_id" in linear_kwargs:
+        cq_id = linear_kwargs["cq_id"]
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [request],
@@ -99,6 +103,5 @@ def prefetch_and_linear(
         weight,
         program_config=program_config,
         global_cb=global_cb,
-        cq_id=cq_id,
         **linear_kwargs,
     )

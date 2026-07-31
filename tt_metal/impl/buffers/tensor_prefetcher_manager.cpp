@@ -917,9 +917,15 @@ void TensorPrefetcherManager::queue(
     MeshCommandQueue* trace_capture_cq) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
+    // Only reached with a non-null queue: the null case short-circuits, so the message may
+    // dereference it (TT_FATAL evaluates its arguments only when the condition fails).
     TT_FATAL(
         trace_capture_cq == nullptr || trace_capture_cq->device() == mesh_device_,
-        "QueueTensorPrefetcherRequest command queue belongs to a different mesh device than the prefetcher");
+        "QueueTensorPrefetcherRequest was given trace-capture command queue {} of mesh device {}, but this prefetcher "
+        "was started on mesh device {}. Pass a command queue of the prefetcher's own mesh device.",
+        trace_capture_cq->id(),
+        trace_capture_cq->device()->id(),
+        mesh_device_->id());
     TT_FATAL(
         experimental::sender_core_type(gcb) == experimental::SenderCoreType::Dram,
         "QueueTensorPrefetcherRequest requires a DRAM-sender GlobalCircularBuffer");
@@ -1007,7 +1013,11 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     TT_FATAL(active_, "WaitForCqOnTensorPrefetcher called before StartTensorPrefetcher");
     TT_FATAL(
         cq.device() == mesh_device_,
-        "WaitForCqOnTensorPrefetcher command queue belongs to a different mesh device than the prefetcher");
+        "WaitForCqOnTensorPrefetcher was given command queue {} of mesh device {}, but this prefetcher was started on "
+        "mesh device {}. Fence against a command queue of the prefetcher's own mesh device.",
+        cq.id(),
+        cq.device()->id(),
+        mesh_device_->id());
     const uint32_t cq_id = cq.id();
     TT_FATAL(
         cq_id < cq_signal_counter_.size(),
