@@ -24,43 +24,52 @@
 namespace tt::tt_metal {
 namespace {
 
-// Pack posts to the producer counter; the remapper routes the credit to the consumer counter that unpack
-// waits on and pops. Two counters rather than a self-route, which would land both the native update and the
-// routed copy on one counter and double the credit.
+// Pack and unpack both use TC16 for push / wait / pop. The remapper also routes TC16 -> TC17 as a
+// sacrificial shadow so the HW update copy does not alias into overlay 0-15. TC17 is never waited on,
+// popped, or checked by this test.
 constexpr std::uint32_t kProducerTileCounter = 16;
-constexpr std::uint32_t kConsumerTileCounter = 17;
 constexpr std::uint32_t kMaxSteps = 4;
 
 // Must match the scratch layout in
 // tests/tt_metal/tt_metal/test_kernels/compute/tile_counter_overlay_alias.cpp.
 constexpr std::uint32_t kReadyIdx = 0;
 constexpr std::uint32_t kProducerPostedBaseIdx = 1;
-constexpr std::uint32_t kConsumerAckedBaseIdx = kProducerPostedBaseIdx + kMaxSteps;
-constexpr std::uint32_t kPushesDoneIdx = kConsumerAckedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kProducerAckedBaseIdx = kProducerPostedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kPushesDoneIdx = kProducerAckedBaseIdx + kMaxSteps;
 constexpr std::uint32_t kProducerCapacityIdx = kPushesDoneIdx + 1;
 constexpr std::uint32_t kNumStepsIdx = kProducerCapacityIdx + 1;
-constexpr std::uint32_t kConsumerPostedBaseIdx = kNumStepsIdx + 1;
-constexpr std::uint32_t kProducerAckedBaseIdx = kConsumerPostedBaseIdx + kMaxSteps;
-constexpr std::uint32_t kConsumerCapacityIdx = kProducerAckedBaseIdx + kMaxSteps;
-constexpr std::uint32_t kOverlayBaselineCapIdx = kConsumerCapacityIdx + 1;
-constexpr std::uint32_t kOverlayBaselinePostedIdx = kOverlayBaselineCapIdx + 1;
-constexpr std::uint32_t kOverlayBaselineAckedIdx = kOverlayBaselinePostedIdx + 1;
-constexpr std::uint32_t kOverlayAfterCapCapIdx = kOverlayBaselineAckedIdx + 1;
-constexpr std::uint32_t kOverlayAfterCapPostedIdx = kOverlayAfterCapCapIdx + 1;
-constexpr std::uint32_t kOverlayAfterCapAckedIdx = kOverlayAfterCapPostedIdx + 1;
-constexpr std::uint32_t kOverlayAfterPushPostedBaseIdx = kOverlayAfterCapAckedIdx + 1;
-constexpr std::uint32_t kOverlayAfterPopAckedBaseIdx = kOverlayAfterPushPostedBaseIdx + kMaxSteps;
-constexpr std::uint32_t kOverlayFinalCapIdx = kOverlayAfterPopAckedBaseIdx + kMaxSteps;
-constexpr std::uint32_t kOverlayFinalPostedIdx = kOverlayFinalCapIdx + 1;
-constexpr std::uint32_t kOverlayFinalAckedIdx = kOverlayFinalPostedIdx + 1;
-constexpr std::uint32_t kScratchWords = kOverlayFinalAckedIdx + 1;
+
+constexpr std::uint32_t kOverlay0BaselineCapIdx = kNumStepsIdx + 1;
+constexpr std::uint32_t kOverlay0BaselinePostedIdx = kOverlay0BaselineCapIdx + 1;
+constexpr std::uint32_t kOverlay0BaselineAckedIdx = kOverlay0BaselinePostedIdx + 1;
+constexpr std::uint32_t kOverlay0AfterCapCapIdx = kOverlay0BaselineAckedIdx + 1;
+constexpr std::uint32_t kOverlay0AfterCapPostedIdx = kOverlay0AfterCapCapIdx + 1;
+constexpr std::uint32_t kOverlay0AfterCapAckedIdx = kOverlay0AfterCapPostedIdx + 1;
+constexpr std::uint32_t kOverlay0AfterPushPostedBaseIdx = kOverlay0AfterCapAckedIdx + 1;
+constexpr std::uint32_t kOverlay0AfterPopAckedBaseIdx = kOverlay0AfterPushPostedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kOverlay0FinalCapIdx = kOverlay0AfterPopAckedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kOverlay0FinalPostedIdx = kOverlay0FinalCapIdx + 1;
+constexpr std::uint32_t kOverlay0FinalAckedIdx = kOverlay0FinalPostedIdx + 1;
+
+constexpr std::uint32_t kOverlay1BaselineCapIdx = kOverlay0FinalAckedIdx + 1;
+constexpr std::uint32_t kOverlay1BaselinePostedIdx = kOverlay1BaselineCapIdx + 1;
+constexpr std::uint32_t kOverlay1BaselineAckedIdx = kOverlay1BaselinePostedIdx + 1;
+constexpr std::uint32_t kOverlay1AfterCapCapIdx = kOverlay1BaselineAckedIdx + 1;
+constexpr std::uint32_t kOverlay1AfterCapPostedIdx = kOverlay1AfterCapCapIdx + 1;
+constexpr std::uint32_t kOverlay1AfterCapAckedIdx = kOverlay1AfterCapPostedIdx + 1;
+constexpr std::uint32_t kOverlay1AfterPushPostedBaseIdx = kOverlay1AfterCapAckedIdx + 1;
+constexpr std::uint32_t kOverlay1AfterPopAckedBaseIdx = kOverlay1AfterPushPostedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kOverlay1FinalCapIdx = kOverlay1AfterPopAckedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kOverlay1FinalPostedIdx = kOverlay1FinalCapIdx + 1;
+constexpr std::uint32_t kOverlay1FinalAckedIdx = kOverlay1FinalPostedIdx + 1;
+constexpr std::uint32_t kScratchWords = kOverlay1FinalAckedIdx + 1;
 
 // Distinguishes "kernel wrote 0" from "kernel never wrote this word". Only the two handshake words start at
 // zero, because the kernel polls them.
 constexpr std::uint32_t kUnwritten = 0xFFFFFFFFu;
 
-// Written by unpack when the routed credits never reach the consumer counter, so a dead route reports here
-// instead of parking the kernel in TT_WAIT_TILES.
+// Written by unpack when credits never show up on TC16, so a missing push reports here instead of parking
+// the kernel in TT_WAIT_TILES.
 constexpr std::uint32_t kTimedOut = 0xFFFFFFFEu;
 
 struct CreditCase {
@@ -139,48 +148,61 @@ std::uint32_t count_steps(const CreditCase& credit_case) {
     return num_steps;
 }
 
-void expect_overlay_tc0_untouched(
+void expect_overlay_tc_untouched(
     const std::vector<std::uint32_t>& scratch,
     std::uint32_t num_steps,
     std::uint32_t tc16_capacity,
+    std::uint32_t overlay_tc,
+    std::uint32_t baseline_cap_idx,
+    std::uint32_t baseline_posted_idx,
+    std::uint32_t baseline_acked_idx,
+    std::uint32_t after_cap_cap_idx,
+    std::uint32_t after_cap_posted_idx,
+    std::uint32_t after_cap_acked_idx,
+    std::uint32_t after_push_posted_base_idx,
+    std::uint32_t after_pop_acked_base_idx,
+    std::uint32_t final_cap_idx,
+    std::uint32_t final_posted_idx,
+    std::uint32_t final_acked_idx,
     const char* phase) {
-    const std::uint32_t baseline_cap = scratch[kOverlayBaselineCapIdx];
-    const std::uint32_t baseline_posted = scratch[kOverlayBaselinePostedIdx];
-    const std::uint32_t baseline_acked = scratch[kOverlayBaselineAckedIdx];
+    const std::uint32_t baseline_cap = scratch[baseline_cap_idx];
+    const std::uint32_t baseline_posted = scratch[baseline_posted_idx];
+    const std::uint32_t baseline_acked = scratch[baseline_acked_idx];
 
-    // Host only resets overlay TC0; it does not program capacity. Programming TC16 must not change this
+    // Host resets overlay TC0/TC1 but does not program capacity. Programming TC16 must not change this
     // baseline — a leaked capacity write shows up as after_cap becoming tc16_capacity.
-    EXPECT_EQ(scratch[kOverlayAfterCapCapIdx], baseline_cap)
-        << phase << ": programming TC16 capacity=" << tc16_capacity << " changed overlay TC0 capacity from "
-        << baseline_cap << " to " << scratch[kOverlayAfterCapCapIdx];
+    EXPECT_EQ(scratch[after_cap_cap_idx], baseline_cap)
+        << phase << ": programming TC16 capacity=" << tc16_capacity << " changed overlay TC" << overlay_tc
+        << " capacity from " << baseline_cap << " to " << scratch[after_cap_cap_idx];
     if (baseline_cap != tc16_capacity) {
-        EXPECT_NE(scratch[kOverlayAfterCapCapIdx], tc16_capacity)
-            << phase << ": overlay TC0 capacity was set to the TC16 capacity that was just programmed";
+        EXPECT_NE(scratch[after_cap_cap_idx], tc16_capacity)
+            << phase << ": overlay TC" << overlay_tc << " capacity was set to the TC16 capacity that was just "
+            << "programmed";
     }
-    EXPECT_EQ(scratch[kOverlayAfterCapPostedIdx], baseline_posted)
-        << phase << ": TC16 capacity programming changed overlay TC0 posted";
-    EXPECT_EQ(scratch[kOverlayAfterCapAckedIdx], baseline_acked)
-        << phase << ": TC16 capacity programming changed overlay TC0 acked";
+    EXPECT_EQ(scratch[after_cap_posted_idx], baseline_posted)
+        << phase << ": TC16 capacity programming changed overlay TC" << overlay_tc << " posted";
+    EXPECT_EQ(scratch[after_cap_acked_idx], baseline_acked)
+        << phase << ": TC16 capacity programming changed overlay TC" << overlay_tc << " acked";
 
     for (std::uint32_t step = 0; step < num_steps; step++) {
-        EXPECT_EQ(scratch[kOverlayAfterPushPostedBaseIdx + step], baseline_posted)
-            << phase << ": TC16 push at step " << step << " leaked onto overlay TC0 posted";
-        EXPECT_EQ(scratch[kOverlayAfterPopAckedBaseIdx + step], baseline_acked)
-            << phase << ": TC16 pop at step " << step << " leaked onto overlay TC0 acked";
+        EXPECT_EQ(scratch[after_push_posted_base_idx + step], baseline_posted)
+            << phase << ": TC16 push at step " << step << " leaked onto overlay TC" << overlay_tc << " posted";
+        EXPECT_EQ(scratch[after_pop_acked_base_idx + step], baseline_acked)
+            << phase << ": TC16 pop at step " << step << " leaked onto overlay TC" << overlay_tc << " acked";
     }
     for (std::uint32_t step = num_steps; step < kMaxSteps; step++) {
-        EXPECT_EQ(scratch[kOverlayAfterPushPostedBaseIdx + step], kUnwritten)
-            << phase << ": pack wrote overlay TC0 past its step count";
-        EXPECT_EQ(scratch[kOverlayAfterPopAckedBaseIdx + step], kUnwritten)
-            << phase << ": unpack wrote overlay TC0 past its step count";
+        EXPECT_EQ(scratch[after_push_posted_base_idx + step], kUnwritten)
+            << phase << ": pack wrote overlay TC" << overlay_tc << " past its step count";
+        EXPECT_EQ(scratch[after_pop_acked_base_idx + step], kUnwritten)
+            << phase << ": unpack wrote overlay TC" << overlay_tc << " past its step count";
     }
 
-    EXPECT_EQ(scratch[kOverlayFinalCapIdx], baseline_cap)
-        << phase << ": overlay TC0 capacity changed by the end of the TC16 push/pop series";
-    EXPECT_EQ(scratch[kOverlayFinalPostedIdx], baseline_posted)
-        << phase << ": overlay TC0 posted changed by the end of the TC16 series";
-    EXPECT_EQ(scratch[kOverlayFinalAckedIdx], baseline_acked)
-        << phase << ": overlay TC0 acked changed by the end of the TC16 series";
+    EXPECT_EQ(scratch[final_cap_idx], baseline_cap)
+        << phase << ": overlay TC" << overlay_tc << " capacity changed by the end of the TC16 push/pop series";
+    EXPECT_EQ(scratch[final_posted_idx], baseline_posted)
+        << phase << ": overlay TC" << overlay_tc << " posted changed by the end of the TC16 series";
+    EXPECT_EQ(scratch[final_acked_idx], baseline_acked)
+        << phase << ": overlay TC" << overlay_tc << " acked changed by the end of the TC16 series";
 }
 
 void RunCreditCase(
@@ -197,26 +219,23 @@ void RunCreditCase(
     ASSERT_LE(total_tiles, credit_case.capacity)
         << "pack pushes everything before unpack pops, so sum(steps) must fit in capacity";
 
-    // Reset overlay TC0 only — do not program its capacity. The kernel snapshots TC0 before any TC16 op
-    // and again after TC16 capacity / push / pop; those samples must match, and TC0 capacity must never
+    // Reset overlay TC0 and TC1 — do not program capacity. The kernel snapshots both before any TC16 op
+    // and again after TC16 capacity / push / pop; those samples must match, and neither capacity must
     // become the TC16 capacity that pack programs.
     write_core_register(
         device, logical_core, TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__RESET_REG_ADDR, 1);
+    write_core_register(
+        device, logical_core, TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_1__RESET_REG_ADDR, 1);
     EXPECT_EQ(
         read_core_register(
             device, logical_core, TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__READ_POSTED_REG_ADDR),
         0u)
         << "overlay TC0 posted was not 0 after reset";
-
-    // Routing TC16 -> TC17 could move the aliasing rather than remove it, so snapshot overlay counter 1 (the
-    // index TC17 would shadow) before the run. It is not reset, because it may be in use, so the check is
-    // that it does not change.
-    const std::uint32_t overlay_tc1_capacity_before = read_core_register(
-        device, logical_core, TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_1__BUFFER_CAPACITY_REG_ADDR);
-    const std::uint32_t overlay_tc1_posted_before = read_core_register(
-        device, logical_core, TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_1__READ_POSTED_REG_ADDR);
-    const std::uint32_t overlay_tc1_acked_before = read_core_register(
-        device, logical_core, TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_1__READ_ACKED_REG_ADDR);
+    EXPECT_EQ(
+        read_core_register(
+            device, logical_core, TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_1__READ_POSTED_REG_ADDR),
+        0u)
+        << "overlay TC1 posted was not 0 after reset";
 
     const experimental::NodeCoord node{0, 0};
     const std::uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
@@ -278,7 +297,6 @@ void RunCreditCase(
                 hal.get_neo_tile_counters_tiles_available_offset());
     };
     const std::uint32_t producer_tiles_available = neo_tiles_available(kProducerTileCounter);
-    const std::uint32_t consumer_tiles_available = neo_tiles_available(kConsumerTileCounter);
     // Match the kernel's overlay samples: raw credit counters, not the derived availability views.
     const std::uint32_t overlay_tc0_capacity = read_core_register(
         device, logical_core, TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__BUFFER_CAPACITY_REG_ADDR);
@@ -303,9 +321,9 @@ void RunCreditCase(
             const std::uint32_t step = i - kProducerPostedBaseIdx;
             label = "pack: TC16 posted after push " + std::to_string(credit_case.steps[step]) + ", step " +
                     std::to_string(step);
-        } else if (i >= kConsumerAckedBaseIdx && i < kConsumerAckedBaseIdx + kMaxSteps) {
-            const std::uint32_t step = i - kConsumerAckedBaseIdx;
-            label = "unpack: TC17 acked after pop " + std::to_string(credit_case.steps[step]) + ", step " +
+        } else if (i >= kProducerAckedBaseIdx && i < kProducerAckedBaseIdx + kMaxSteps) {
+            const std::uint32_t step = i - kProducerAckedBaseIdx;
+            label = "unpack: TC16 acked after pop " + std::to_string(credit_case.steps[step]) + ", step " +
                     std::to_string(step);
         } else if (i == kPushesDoneIdx) {
             label = "pack: all pushes issued";
@@ -313,46 +331,61 @@ void RunCreditCase(
             label = "pack: TC16 buf_capacity read back";
         } else if (i == kNumStepsIdx) {
             label = "pack: step count from runtime args";
-        } else if (i >= kConsumerPostedBaseIdx && i < kConsumerPostedBaseIdx + kMaxSteps) {
-            const std::uint32_t step = i - kConsumerPostedBaseIdx;
-            label = "pack: TC17 posted after push " + std::to_string(credit_case.steps[step]) + ", step " +
-                    std::to_string(step) + " (routed credit)";
-        } else if (i >= kProducerAckedBaseIdx && i < kProducerAckedBaseIdx + kMaxSteps) {
-            const std::uint32_t step = i - kProducerAckedBaseIdx;
-            label = "unpack: TC16 acked after pop " + std::to_string(credit_case.steps[step]) + ", step " +
-                    std::to_string(step) + " (reverse route)";
-        } else if (i == kConsumerCapacityIdx) {
-            label = "unpack: TC17 buf_capacity (routed from TC16's write, nothing programs it directly)";
-        } else if (i == kOverlayBaselineCapIdx) {
+        } else if (i == kOverlay0BaselineCapIdx) {
             label = "pack: overlay TC0 capacity before TC16 ops";
-        } else if (i == kOverlayBaselinePostedIdx) {
+        } else if (i == kOverlay0BaselinePostedIdx) {
             label = "pack: overlay TC0 posted before TC16 ops";
-        } else if (i == kOverlayBaselineAckedIdx) {
+        } else if (i == kOverlay0BaselineAckedIdx) {
             label = "pack: overlay TC0 acked before TC16 ops";
-        } else if (i == kOverlayAfterCapCapIdx) {
+        } else if (i == kOverlay0AfterCapCapIdx) {
             label = "pack: overlay TC0 capacity after TC16 capacity programmed";
-        } else if (i == kOverlayAfterCapPostedIdx) {
+        } else if (i == kOverlay0AfterCapPostedIdx) {
             label = "pack: overlay TC0 posted after TC16 capacity programmed";
-        } else if (i == kOverlayAfterCapAckedIdx) {
+        } else if (i == kOverlay0AfterCapAckedIdx) {
             label = "pack: overlay TC0 acked after TC16 capacity programmed";
-        } else if (i >= kOverlayAfterPushPostedBaseIdx && i < kOverlayAfterPushPostedBaseIdx + kMaxSteps) {
-            const std::uint32_t step = i - kOverlayAfterPushPostedBaseIdx;
-            label = "pack: overlay TC0 posted after TC16 push step " + std::to_string(step);
-        } else if (i >= kOverlayAfterPopAckedBaseIdx && i < kOverlayAfterPopAckedBaseIdx + kMaxSteps) {
-            const std::uint32_t step = i - kOverlayAfterPopAckedBaseIdx;
-            label = "unpack: overlay TC0 acked after TC16 pop step " + std::to_string(step);
-        } else if (i == kOverlayFinalCapIdx) {
+        } else if (i >= kOverlay0AfterPushPostedBaseIdx && i < kOverlay0AfterPushPostedBaseIdx + kMaxSteps) {
+            label =
+                "pack: overlay TC0 posted after TC16 push step " + std::to_string(i - kOverlay0AfterPushPostedBaseIdx);
+        } else if (i >= kOverlay0AfterPopAckedBaseIdx && i < kOverlay0AfterPopAckedBaseIdx + kMaxSteps) {
+            label =
+                "unpack: overlay TC0 acked after TC16 pop step " + std::to_string(i - kOverlay0AfterPopAckedBaseIdx);
+        } else if (i == kOverlay0FinalCapIdx) {
             label = "unpack: overlay TC0 capacity after last pop";
-        } else if (i == kOverlayFinalPostedIdx) {
+        } else if (i == kOverlay0FinalPostedIdx) {
             label = "unpack: overlay TC0 posted after last pop";
-        } else if (i == kOverlayFinalAckedIdx) {
+        } else if (i == kOverlay0FinalAckedIdx) {
             label = "unpack: overlay TC0 acked after last pop";
+        } else if (i == kOverlay1BaselineCapIdx) {
+            label = "pack: overlay TC1 capacity before TC16 ops";
+        } else if (i == kOverlay1BaselinePostedIdx) {
+            label = "pack: overlay TC1 posted before TC16 ops";
+        } else if (i == kOverlay1BaselineAckedIdx) {
+            label = "pack: overlay TC1 acked before TC16 ops";
+        } else if (i == kOverlay1AfterCapCapIdx) {
+            label = "pack: overlay TC1 capacity after TC16 capacity programmed";
+        } else if (i == kOverlay1AfterCapPostedIdx) {
+            label = "pack: overlay TC1 posted after TC16 capacity programmed";
+        } else if (i == kOverlay1AfterCapAckedIdx) {
+            label = "pack: overlay TC1 acked after TC16 capacity programmed";
+        } else if (i >= kOverlay1AfterPushPostedBaseIdx && i < kOverlay1AfterPushPostedBaseIdx + kMaxSteps) {
+            label =
+                "pack: overlay TC1 posted after TC16 push step " + std::to_string(i - kOverlay1AfterPushPostedBaseIdx);
+        } else if (i >= kOverlay1AfterPopAckedBaseIdx && i < kOverlay1AfterPopAckedBaseIdx + kMaxSteps) {
+            label =
+                "unpack: overlay TC1 acked after TC16 pop step " + std::to_string(i - kOverlay1AfterPopAckedBaseIdx);
+        } else if (i == kOverlay1FinalCapIdx) {
+            label = "unpack: overlay TC1 capacity after last pop";
+        } else if (i == kOverlay1FinalPostedIdx) {
+            label = "unpack: overlay TC1 posted after last pop";
+        } else if (i == kOverlay1FinalAckedIdx) {
+            label = "unpack: overlay TC1 acked after last pop";
         }
         std::cout << "  scratch[" << i << "] = " << scratch[i] << "  (" << label << ")" << std::endl;
     }
-    std::cout << "  T6 tiles_available: TC16=" << producer_tiles_available << " TC17=" << consumer_tiles_available
+    std::cout << "  T6 tiles_available: TC16=" << producer_tiles_available
               << ", overlay TC0 capacity/posted/acked=" << overlay_tc0_capacity << "/" << overlay_tc0_posted << "/"
-              << overlay_tc0_acked << std::endl;
+              << overlay_tc0_acked << ", overlay TC1 capacity/posted/acked=" << overlay_tc1_capacity << "/"
+              << overlay_tc1_posted << "/" << overlay_tc1_acked << std::endl;
     dump_overlay_counters(device, logical_core, 2);
 
     // Non-fatal so one mismatch still runs the rest of this case (and the remaining credit cases).
@@ -361,44 +394,28 @@ void RunCreditCase(
     EXPECT_EQ(scratch[kNumStepsIdx], num_steps) << "kernel decoded a different step count than the host passed";
     EXPECT_EQ(scratch[kProducerCapacityIdx], credit_case.capacity)
         << "TC16 buf_capacity did not read back as programmed";
-    // No RISC writes TC17's capacity: pack programs TC16 and the route configures the far end, so the same
-    // capacity has to show up on TC17.
-    EXPECT_EQ(scratch[kConsumerCapacityIdx], credit_case.capacity)
-        << "TC17 buf_capacity is not the capacity programmed on TC16; the route did not carry the capacity "
-        << "write to the counter it delivers credits to";
 
-    // Pack issues every push before any pop, so the running push total is the expected occupancy. The route
-    // copies the credit onto TC17 rather than moving it: the push is a native T6 update of TC16, so both
-    // counters must sit at exactly 1x the running total. A 0 means the event went missing on that counter and
-    // a 2x means it was counted twice there, which is the aliasing/duplication this case is looking for.
+    // Pack issues every push before any pop, so the running push total is the expected occupancy on TC16.
     std::uint32_t pushed_so_far = 0;
     for (std::uint32_t step = 0; step < num_steps; step++) {
         pushed_so_far += credit_case.steps[step];
         EXPECT_EQ(scratch[kProducerPostedBaseIdx + step], pushed_so_far)
-            << "TC16 posted is not the running push total at step " << step << "; pack pushed on TC16, so the "
-            << "credit must appear there whether or not the route also delivers a copy to TC17";
-        EXPECT_EQ(scratch[kConsumerPostedBaseIdx + step], pushed_so_far)
-            << "TC17 posted is not the running push total at step " << step << "; the routed copy either did not "
-            << "arrive (0) or was counted twice (2x)";
+            << "TC16 posted is not the running push total at step " << step;
     }
     EXPECT_EQ(pushed_so_far, total_tiles);
 
-    // f.acked is the SPACE_AVAILABLE view, so after each pop the free space on the counter being popped is
-    // the capacity minus whatever is still unconsumed.
-    // Free space is measured against TC17's own capacity, so use what the kernel observed rather than what was
-    // programmed on TC16: if the capacity did not propagate, the assertion above names that as the one failure
-    // instead of every step reporting a mismatch against a capacity TC17 never had.
-    const std::uint32_t consumer_capacity = scratch[kConsumerCapacityIdx];
+    // f.acked is the SPACE_AVAILABLE view on the counter being popped (TC16).
+    const std::uint32_t producer_capacity = scratch[kProducerCapacityIdx];
     std::uint32_t popped_so_far = 0;
     for (std::uint32_t step = 0; step < num_steps; step++) {
         popped_so_far += credit_case.steps[step];
-        EXPECT_NE(scratch[kConsumerAckedBaseIdx + step], kTimedOut)
-            << "unpack timed out at step " << step << ": the routed credits never reached TC17";
-        if (consumer_capacity >= total_tiles) {
-            const std::uint32_t expected_space = consumer_capacity - (total_tiles - popped_so_far);
-            EXPECT_EQ(scratch[kConsumerAckedBaseIdx + step], expected_space)
-                << "TC17 space_available does not match capacity - unconsumed at step " << step << " (each pop "
-                << "freeing 2x means the credit was counted twice)";
+        EXPECT_NE(scratch[kProducerAckedBaseIdx + step], kTimedOut)
+            << "unpack timed out at step " << step << ": credits never showed up on TC16";
+        if (producer_capacity >= total_tiles) {
+            const std::uint32_t expected_space = producer_capacity - (total_tiles - popped_so_far);
+            EXPECT_EQ(scratch[kProducerAckedBaseIdx + step], expected_space)
+                << "TC16 space_available does not match capacity - unconsumed at step " << step
+                << " (each pop freeing 2x means the credit was counted twice)";
         }
     }
     EXPECT_EQ(popped_so_far, total_tiles);
@@ -406,36 +423,69 @@ void RunCreditCase(
     // Unused step slots must stay untouched, which catches a kernel that walks past its step count.
     for (std::uint32_t step = num_steps; step < kMaxSteps; step++) {
         EXPECT_EQ(scratch[kProducerPostedBaseIdx + step], kUnwritten) << "pack pushed past its step count";
-        EXPECT_EQ(scratch[kConsumerAckedBaseIdx + step], kUnwritten) << "unpack popped past its step count";
+        EXPECT_EQ(scratch[kProducerAckedBaseIdx + step], kUnwritten) << "unpack popped past its step count";
     }
 
-    // Equal push/pop drained the counter that was popped. TC16 is not checked here: the pop is a native T6
-    // update of TC17, so whether TC16 also drains depends on the route carrying the ack back, which is one of
-    // the unknowns this case is measuring rather than asserting.
-    EXPECT_EQ(consumer_tiles_available, 0u) << "after equal push/pop, TC17 tiles_available should be 0";
+    EXPECT_EQ(producer_tiles_available, 0u) << "after equal push/pop, TC16 tiles_available should be 0";
 
-    // The kernel samples TC0 through the NEO-local mirror and the host through the overlay interface. Both
-    // name counter 0, so they must agree; a disagreement means the two decoders do not resolve to the same
-    // physical counter, which is itself the aliasing being hunted here.
-    expect_overlay_tc0_untouched(scratch, num_steps, credit_case.capacity, credit_case.name);
-    EXPECT_EQ(overlay_tc0_capacity, scratch[kOverlayBaselineCapIdx])
+    // Kernel samples overlay TC0/TC1 through the NEO-local mirror; host reads the overlay interface. Both
+    // must agree and must stay at the pre-TC16 baseline.
+    expect_overlay_tc_untouched(
+        scratch,
+        num_steps,
+        credit_case.capacity,
+        /*overlay_tc=*/0,
+        kOverlay0BaselineCapIdx,
+        kOverlay0BaselinePostedIdx,
+        kOverlay0BaselineAckedIdx,
+        kOverlay0AfterCapCapIdx,
+        kOverlay0AfterCapPostedIdx,
+        kOverlay0AfterCapAckedIdx,
+        kOverlay0AfterPushPostedBaseIdx,
+        kOverlay0AfterPopAckedBaseIdx,
+        kOverlay0FinalCapIdx,
+        kOverlay0FinalPostedIdx,
+        kOverlay0FinalAckedIdx,
+        credit_case.name);
+    expect_overlay_tc_untouched(
+        scratch,
+        num_steps,
+        credit_case.capacity,
+        /*overlay_tc=*/1,
+        kOverlay1BaselineCapIdx,
+        kOverlay1BaselinePostedIdx,
+        kOverlay1BaselineAckedIdx,
+        kOverlay1AfterCapCapIdx,
+        kOverlay1AfterCapPostedIdx,
+        kOverlay1AfterCapAckedIdx,
+        kOverlay1AfterPushPostedBaseIdx,
+        kOverlay1AfterPopAckedBaseIdx,
+        kOverlay1FinalCapIdx,
+        kOverlay1FinalPostedIdx,
+        kOverlay1FinalAckedIdx,
+        credit_case.name);
+
+    EXPECT_EQ(overlay_tc0_capacity, scratch[kOverlay0BaselineCapIdx])
         << "overlay interface reads a different TC0 capacity than the TRISC mirror (TC16 capacity leaked)";
-    EXPECT_EQ(overlay_tc0_posted, scratch[kOverlayBaselinePostedIdx])
+    EXPECT_EQ(overlay_tc0_posted, scratch[kOverlay0BaselinePostedIdx])
         << "overlay interface reads a different TC0 posted than the TRISC mirror (TC16 push leaked)";
-    EXPECT_EQ(overlay_tc0_acked, scratch[kOverlayBaselineAckedIdx])
+    EXPECT_EQ(overlay_tc0_acked, scratch[kOverlay0BaselineAckedIdx])
         << "overlay interface reads a different TC0 acked than the TRISC mirror (TC16 pop leaked)";
-    if (scratch[kOverlayBaselineCapIdx] != credit_case.capacity) {
+    if (scratch[kOverlay0BaselineCapIdx] != credit_case.capacity) {
         EXPECT_NE(overlay_tc0_capacity, credit_case.capacity)
             << "host readout: overlay TC0 capacity equals the TC16 capacity that was programmed";
     }
 
-    // TC17 is the routed target, so overlay counter 1 is where the aliasing would reappear if the route only
-    // shifted it rather than removing it.
-    EXPECT_EQ(overlay_tc1_capacity, overlay_tc1_capacity_before)
-        << "overlay TC1 capacity changed: the capacity the route put on TC17 aliased down";
-    EXPECT_EQ(overlay_tc1_posted, overlay_tc1_posted_before)
-        << "overlay TC1 posted changed: the credit routed to TC17 aliased down";
-    EXPECT_EQ(overlay_tc1_acked, overlay_tc1_acked_before) << "overlay TC1 acked changed: the ack on TC17 aliased down";
+    EXPECT_EQ(overlay_tc1_capacity, scratch[kOverlay1BaselineCapIdx])
+        << "overlay interface reads a different TC1 capacity than the TRISC mirror (TC16 capacity leaked)";
+    EXPECT_EQ(overlay_tc1_posted, scratch[kOverlay1BaselinePostedIdx])
+        << "overlay interface reads a different TC1 posted than the TRISC mirror (TC16 push leaked)";
+    EXPECT_EQ(overlay_tc1_acked, scratch[kOverlay1BaselineAckedIdx])
+        << "overlay interface reads a different TC1 acked than the TRISC mirror (TC16 pop leaked)";
+    if (scratch[kOverlay1BaselineCapIdx] != credit_case.capacity) {
+        EXPECT_NE(overlay_tc1_capacity, credit_case.capacity)
+            << "host readout: overlay TC1 capacity equals the TC16 capacity that was programmed";
+    }
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixTileCounter16DoesNotAliasOverlayTileCounter0) {

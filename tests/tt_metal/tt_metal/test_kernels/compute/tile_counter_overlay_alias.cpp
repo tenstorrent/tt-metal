@@ -11,13 +11,13 @@
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"  // for pack-side remapper toggle below
 
 namespace {
-// Pack posts to the producer counter and the remapper routes that credit to the consumer counter, which
-// unpack waits on and pops. Two counters instead of a self-route: an identity route lands both the native
-// T6 update and the routed copy on one counter (2x), while routing to a second counter keeps each at 1x and
-// still stops the copy from aliasing down into the overlay's 0-15 range.
+// Pack and unpack both use TC16 for the real credit protocol (push / wait / pop). The remapper also routes
+// TC16 -> TC17 so the HW update copy lands on a sacrificial counter instead of aliasing into overlay 0-15.
+// Neither RISC programs or pops TC17; it exists only as the remapper ClientR target and is not sampled.
 constexpr std::uint32_t kProducerTc = 16;
-constexpr std::uint32_t kConsumerTc = 17;
-constexpr std::uint32_t kOverlayTc = 0;
+constexpr std::uint32_t kRemapShadowTc = 17;
+constexpr std::uint32_t kOverlayTc0 = 0;
+constexpr std::uint32_t kOverlayTc1 = 1;
 constexpr std::uint32_t kMaxSteps = 4;
 
 // A counter register reads back a derived view rather than the credit total that was written:
@@ -27,50 +27,54 @@ constexpr std::uint32_t kMaxSteps = 4;
 // value, so each sample is taken after a bounded series of re-reads.
 constexpr std::uint32_t kSettleReads = 256;
 
-// Bound on the software poll for a routed credit to reach the consumer counter. Without it, a route that
-// never delivers would park unpack in TT_WAIT_TILES and hang the run instead of reporting.
+// Bound on the software poll for credits to show up on TC16 before TT_WAIT_TILES. Without it, a missing
+// push would park unpack in the hardware stall and hang the run instead of reporting.
 constexpr std::uint32_t kCreditWaitSpins = 1u << 16;
 constexpr std::uint32_t kTimedOut = 0xFFFFFFFEu;
 
 // L1 scratch layout (uncached), one writer per word. Must match the host test.
-//   [0]        pack: producer tc16 reset + capacity programmed  (handshake, host-initialized to 0)
-//   [1 .. 4]   pack: producer tc16 posted after each push
-//   [5 .. 8]   unpack: consumer tc17 acked after each pop
+//   [0]        pack: TC16 reset + capacity programmed  (handshake, host-initialized to 0)
+//   [1 .. 4]   pack: TC16 posted after each push
+//   [5 .. 8]   unpack: TC16 acked after each pop
 //   [9]        pack: every push issued                          (handshake, host-initialized to 0)
-//   [10]       pack: producer tc16 buf_capacity read back
+//   [10]       pack: TC16 buf_capacity read back
 //   [11]       pack: step count decoded from runtime args
-// Cross samples: each side also reads the counter it does not drive, so a credit that doubles (both
-// counters advance per event) is distinguishable from one that moves (only the routed target advances).
-//   [12..15]   pack: consumer tc17 posted after each push (remapper delivery)
-//   [16..19]   unpack: producer tc16 acked after each pop
-//   [20]       unpack: consumer tc17 buf_capacity (no RISC programs it; the route should carry tc16's write)
-// TC0 isolation samples (must stay at the pre-TC16 baseline; host does not program TC0 capacity). Read
-// through the NEO-local tile counter mirror, the only tile-counter aperture a TRISC can address:
-//   [21..23]   pack: capacity / posted / acked before any TC16 op
-//   [24..26]   pack: same triple after the capacities are programmed
-//   [27..30]   pack: posted after each push
-//   [31..34]   unpack: acked after each pop
-//   [35..37]   unpack: capacity / posted / acked after the last pop
+// Overlay TC0 / TC1 isolation samples (must stay at the pre-TC16 baseline). Read through the NEO-local
+// tile counter mirror, the only tile-counter aperture a TRISC can address:
+//   TC0: [12..14] baseline, [15..17] after capacity, [18..21] after push posted,
+//         [22..25] after pop acked, [26..28] final
+//   TC1: [29..31] baseline, [32..34] after capacity, [35..38] after push posted,
+//         [39..42] after pop acked, [43..45] final
 constexpr std::uint32_t kReadyIdx = 0;
 constexpr std::uint32_t kProducerPostedBaseIdx = 1;
-constexpr std::uint32_t kConsumerAckedBaseIdx = kProducerPostedBaseIdx + kMaxSteps;
-constexpr std::uint32_t kPushesDoneIdx = kConsumerAckedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kProducerAckedBaseIdx = kProducerPostedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kPushesDoneIdx = kProducerAckedBaseIdx + kMaxSteps;
 constexpr std::uint32_t kProducerCapacityIdx = kPushesDoneIdx + 1;
 constexpr std::uint32_t kNumStepsIdx = kProducerCapacityIdx + 1;
-constexpr std::uint32_t kConsumerPostedBaseIdx = kNumStepsIdx + 1;
-constexpr std::uint32_t kProducerAckedBaseIdx = kConsumerPostedBaseIdx + kMaxSteps;
-constexpr std::uint32_t kConsumerCapacityIdx = kProducerAckedBaseIdx + kMaxSteps;
-constexpr std::uint32_t kOverlayBaselineCapIdx = kConsumerCapacityIdx + 1;
-constexpr std::uint32_t kOverlayBaselinePostedIdx = kOverlayBaselineCapIdx + 1;
-constexpr std::uint32_t kOverlayBaselineAckedIdx = kOverlayBaselinePostedIdx + 1;
-constexpr std::uint32_t kOverlayAfterCapCapIdx = kOverlayBaselineAckedIdx + 1;
-constexpr std::uint32_t kOverlayAfterCapPostedIdx = kOverlayAfterCapCapIdx + 1;
-constexpr std::uint32_t kOverlayAfterCapAckedIdx = kOverlayAfterCapPostedIdx + 1;
-constexpr std::uint32_t kOverlayAfterPushPostedBaseIdx = kOverlayAfterCapAckedIdx + 1;
-constexpr std::uint32_t kOverlayAfterPopAckedBaseIdx = kOverlayAfterPushPostedBaseIdx + kMaxSteps;
-constexpr std::uint32_t kOverlayFinalCapIdx = kOverlayAfterPopAckedBaseIdx + kMaxSteps;
-constexpr std::uint32_t kOverlayFinalPostedIdx = kOverlayFinalCapIdx + 1;
-constexpr std::uint32_t kOverlayFinalAckedIdx = kOverlayFinalPostedIdx + 1;
+
+constexpr std::uint32_t kOverlay0BaselineCapIdx = kNumStepsIdx + 1;
+constexpr std::uint32_t kOverlay0BaselinePostedIdx = kOverlay0BaselineCapIdx + 1;
+constexpr std::uint32_t kOverlay0BaselineAckedIdx = kOverlay0BaselinePostedIdx + 1;
+constexpr std::uint32_t kOverlay0AfterCapCapIdx = kOverlay0BaselineAckedIdx + 1;
+constexpr std::uint32_t kOverlay0AfterCapPostedIdx = kOverlay0AfterCapCapIdx + 1;
+constexpr std::uint32_t kOverlay0AfterCapAckedIdx = kOverlay0AfterCapPostedIdx + 1;
+constexpr std::uint32_t kOverlay0AfterPushPostedBaseIdx = kOverlay0AfterCapAckedIdx + 1;
+constexpr std::uint32_t kOverlay0AfterPopAckedBaseIdx = kOverlay0AfterPushPostedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kOverlay0FinalCapIdx = kOverlay0AfterPopAckedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kOverlay0FinalPostedIdx = kOverlay0FinalCapIdx + 1;
+constexpr std::uint32_t kOverlay0FinalAckedIdx = kOverlay0FinalPostedIdx + 1;
+
+constexpr std::uint32_t kOverlay1BaselineCapIdx = kOverlay0FinalAckedIdx + 1;
+constexpr std::uint32_t kOverlay1BaselinePostedIdx = kOverlay1BaselineCapIdx + 1;
+constexpr std::uint32_t kOverlay1BaselineAckedIdx = kOverlay1BaselinePostedIdx + 1;
+constexpr std::uint32_t kOverlay1AfterCapCapIdx = kOverlay1BaselineAckedIdx + 1;
+constexpr std::uint32_t kOverlay1AfterCapPostedIdx = kOverlay1AfterCapCapIdx + 1;
+constexpr std::uint32_t kOverlay1AfterCapAckedIdx = kOverlay1AfterCapPostedIdx + 1;
+constexpr std::uint32_t kOverlay1AfterPushPostedBaseIdx = kOverlay1AfterCapAckedIdx + 1;
+constexpr std::uint32_t kOverlay1AfterPopAckedBaseIdx = kOverlay1AfterPushPostedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kOverlay1FinalCapIdx = kOverlay1AfterPopAckedBaseIdx + kMaxSteps;
+constexpr std::uint32_t kOverlay1FinalPostedIdx = kOverlay1FinalCapIdx + 1;
+constexpr std::uint32_t kOverlay1FinalAckedIdx = kOverlay1FinalPostedIdx + 1;
 
 volatile std::uint32_t* scratch_ptr(std::uint32_t l1_address, std::uint32_t word_idx) {
     return reinterpret_cast<volatile std::uint32_t*>(
@@ -106,10 +110,14 @@ std::uint32_t settled_capacity(std::uint32_t tc) {
 }
 
 void write_overlay_triple(
-    std::uint32_t l1_address, std::uint32_t cap_idx, std::uint32_t posted_idx, std::uint32_t acked_idx) {
-    *scratch_ptr(l1_address, cap_idx) = settled_capacity(kOverlayTc);
-    *scratch_ptr(l1_address, posted_idx) = settled_posted(kOverlayTc);
-    *scratch_ptr(l1_address, acked_idx) = settled_acked(kOverlayTc);
+    std::uint32_t l1_address,
+    std::uint32_t tc,
+    std::uint32_t cap_idx,
+    std::uint32_t posted_idx,
+    std::uint32_t acked_idx) {
+    *scratch_ptr(l1_address, cap_idx) = settled_capacity(tc);
+    *scratch_ptr(l1_address, posted_idx) = settled_posted(tc);
+    *scratch_ptr(l1_address, acked_idx) = settled_acked(tc);
 }
 }  // namespace
 
@@ -131,12 +139,12 @@ void kernel_main() {
     //
     // Remapper toggle: DM installs its route when DFB_HACK_REMAP_TC16_IDENTITY=1 in dm.cc. To drive the
     // route from pack instead, set that define to 0 and uncomment the block below (do not leave both
-    // enabled). This route is Neo0/tc16 -> Neo0/tc17, not the identity route dm.cc installs.
+    // enabled). This route is Neo0/tc16 -> Neo0/tc17 (sacrificial shadow); pack/unpack still use tc16.
     // #if 0
     constexpr std::uint32_t remap_pair_idx = 48;
     constexpr std::uint32_t neo0_client_id = static_cast<std::uint32_t>(overlay::NEO_0);
     // ClientR packs slot r as id at bit r*8 and cnt_sel at bit r*8+3; only slot 0 is used.
-    constexpr std::uint32_t client_r_val = (neo0_client_id & 0x7) | ((kConsumerTc & 0x1F) << 3);
+    constexpr std::uint32_t client_r_val = (neo0_client_id & 0x7) | ((kRemapShadowTc & 0x1F) << 3);
     // ClientL: id_L[2:0], cnt_sel_L[7:3], valid[11:8], clientl_is_producer[12], clientr_group[13],
     // distribute[14]. Only slot 0 is valid and Neo0 is the producer.
     constexpr std::uint32_t client_l_val =
@@ -154,32 +162,40 @@ void kernel_main() {
     WAYPOINT("RCD");
     // #endif
 
-    write_overlay_triple(l1_address, kOverlayBaselineCapIdx, kOverlayBaselinePostedIdx, kOverlayBaselineAckedIdx);
-
-    // Pack owns the producer counter and nothing else: no RISC programs the consumer counter, so the only
-    // thing that can put credits on it is the remapper route.
+    // Pack owns TC16: reset + capacity. Overlay TC0/TC1 are reset before the baseline so isolation
+    // samples compare a clean counter against itself after TC16 ops.
     ckernel::trisc::tile_counters[kProducerTc].f.reset = 1;
-    ckernel::trisc::tile_counters[kOverlayTc].f.reset = 1;
+    ckernel::trisc::tile_counters[kOverlayTc0].f.reset = 1;
+    ckernel::trisc::tile_counters[kOverlayTc1].f.reset = 1;
+
+    write_overlay_triple(
+        l1_address, kOverlayTc0, kOverlay0BaselineCapIdx, kOverlay0BaselinePostedIdx, kOverlay0BaselineAckedIdx);
+    write_overlay_triple(
+        l1_address, kOverlayTc1, kOverlay1BaselineCapIdx, kOverlay1BaselinePostedIdx, kOverlay1BaselineAckedIdx);
+
     ckernel::trisc::tile_counters[kProducerTc].f.buf_capacity = capacity;
     *scratch_ptr(l1_address, kProducerCapacityIdx) = settled_capacity(kProducerTc);
     *scratch_ptr(l1_address, kNumStepsIdx) = num_steps;
-    write_overlay_triple(l1_address, kOverlayAfterCapCapIdx, kOverlayAfterCapPostedIdx, kOverlayAfterCapAckedIdx);
+    write_overlay_triple(
+        l1_address, kOverlayTc0, kOverlay0AfterCapCapIdx, kOverlay0AfterCapPostedIdx, kOverlay0AfterCapAckedIdx);
+    write_overlay_triple(
+        l1_address, kOverlayTc1, kOverlay1AfterCapCapIdx, kOverlay1AfterCapPostedIdx, kOverlay1AfterCapAckedIdx);
     *scratch_ptr(l1_address, kReadyIdx) = 1;
 
     DPRINT(
-        "AFTER capacity={}: TC{} cap={}; overlay TC0 cap/posted/acked={}/{}/{} (baseline {}/{}/{})\n",
+        "AFTER capacity={}: TC{} cap={}; TC0={}/{}/{} TC1={}/{}/{}\n",
         capacity,
         kProducerTc,
         *scratch_ptr(l1_address, kProducerCapacityIdx),
-        *scratch_ptr(l1_address, kOverlayAfterCapCapIdx),
-        *scratch_ptr(l1_address, kOverlayAfterCapPostedIdx),
-        *scratch_ptr(l1_address, kOverlayAfterCapAckedIdx),
-        *scratch_ptr(l1_address, kOverlayBaselineCapIdx),
-        *scratch_ptr(l1_address, kOverlayBaselinePostedIdx),
-        *scratch_ptr(l1_address, kOverlayBaselineAckedIdx));
+        *scratch_ptr(l1_address, kOverlay0AfterCapCapIdx),
+        *scratch_ptr(l1_address, kOverlay0AfterCapPostedIdx),
+        *scratch_ptr(l1_address, kOverlay0AfterCapAckedIdx),
+        *scratch_ptr(l1_address, kOverlay1AfterCapCapIdx),
+        *scratch_ptr(l1_address, kOverlay1AfterCapPostedIdx),
+        *scratch_ptr(l1_address, kOverlay1AfterCapAckedIdx));
 
     // Every push is issued before unpack is allowed to pop, so the running total of pushed tiles is the
-    // expected value on whichever counter receives the credit; 2x means the event was counted twice.
+    // expected value on TC16; 2x means the event was counted twice.
     for (std::uint32_t step = 0; step < num_steps; step++) {
         const std::uint32_t num_tiles = step_tiles[step];
         WAYPOINT("PW");
@@ -188,19 +204,17 @@ void kernel_main() {
         TT_PUSH_TILES(/*PACK_SEL=*/0x1, num_tiles, kProducerTc);
         WAYPOINT("PPD");
         const std::uint32_t producer_posted = settled_posted(kProducerTc);
-        const std::uint32_t consumer_posted = settled_posted(kConsumerTc);
         *scratch_ptr(l1_address, kProducerPostedBaseIdx + step) = producer_posted;
-        *scratch_ptr(l1_address, kConsumerPostedBaseIdx + step) = consumer_posted;
-        *scratch_ptr(l1_address, kOverlayAfterPushPostedBaseIdx + step) = settled_posted(kOverlayTc);
+        *scratch_ptr(l1_address, kOverlay0AfterPushPostedBaseIdx + step) = settled_posted(kOverlayTc0);
+        *scratch_ptr(l1_address, kOverlay1AfterPushPostedBaseIdx + step) = settled_posted(kOverlayTc1);
         DPRINT(
-            "PACK step{} push={} TC{} posted={} TC{} posted={} overlay_tc0_posted={}\n",
+            "PACK step{} push={} TC{} posted={} overlay_tc0_posted={} overlay_tc1_posted={}\n",
             step,
             num_tiles,
             kProducerTc,
             producer_posted,
-            kConsumerTc,
-            consumer_posted,
-            *scratch_ptr(l1_address, kOverlayAfterPushPostedBaseIdx + step));
+            *scratch_ptr(l1_address, kOverlay0AfterPushPostedBaseIdx + step),
+            *scratch_ptr(l1_address, kOverlay1AfterPushPostedBaseIdx + step));
     }
     *scratch_ptr(l1_address, kPushesDoneIdx) = 1;
 #endif
@@ -211,14 +225,6 @@ void kernel_main() {
     }
     WAYPOINT("URD");
 
-    // No RISC programs the consumer counter: the route is expected to carry pack's TC16 capacity write onto
-    // it, so this samples the capacity only after pack has published that its own write landed. A 0 here says
-    // the route moved credits without the capacity that bounds them.
-    // Re-enable these two lines to program TC17 directly instead of relying on the route to configure it.
-    // ckernel::trisc::tile_counters[kConsumerTc].f.reset = 1;
-    // ckernel::trisc::tile_counters[kConsumerTc].f.buf_capacity = capacity;
-    *scratch_ptr(l1_address, kConsumerCapacityIdx) = settled_capacity(kConsumerTc);
-    DPRINT("UNPACK observed TC{} capacity={}\n", kConsumerTc, *scratch_ptr(l1_address, kConsumerCapacityIdx));
     // Wait for the full push series so the pop arithmetic is a deterministic function of tiles popped.
     while (*scratch_ptr(l1_address, kPushesDoneIdx) == 0) {
     }
@@ -227,49 +233,46 @@ void kernel_main() {
     for (std::uint32_t step = 0; step < num_steps; step++) {
         const std::uint32_t num_tiles = step_tiles[step];
 
-        // Confirm in software that the routed credits arrived before committing to the hardware stall, so a
-        // route that never delivers reports a timeout instead of hanging the run.
+        // Confirm credits on TC16 before the hardware stall so a missing push reports a timeout instead of
+        // hanging.
         std::uint32_t spins = 0;
         WAYPOINT("SW");
-        while (ckernel::trisc::tile_counters[kConsumerTc].f.posted < num_tiles && spins < kCreditWaitSpins) {
+        while (ckernel::trisc::tile_counters[kProducerTc].f.posted < num_tiles && spins < kCreditWaitSpins) {
             spins++;
         }
         WAYPOINT("SD");
         if (spins == kCreditWaitSpins) {
-            *scratch_ptr(l1_address, kConsumerAckedBaseIdx + step) = kTimedOut;
             *scratch_ptr(l1_address, kProducerAckedBaseIdx + step) = kTimedOut;
             DPRINT(
-                "UNPACK step{} timed out waiting for {} tiles on TC{}; TC{} posted={} TC{} posted={}\n",
+                "UNPACK step{} timed out waiting for {} tiles on TC{}; posted={}\n",
                 step,
                 num_tiles,
-                kConsumerTc,
-                kConsumerTc,
-                settled_posted(kConsumerTc),
                 kProducerTc,
                 settled_posted(kProducerTc));
             break;
         }
 
         WAYPOINT("WT");
-        TT_WAIT_TILES(ckernel::p_stall::STALL_UNPACK, num_tiles, kConsumerTc);
+        TT_WAIT_TILES(ckernel::p_stall::STALL_UNPACK, num_tiles, kProducerTc);
         WAYPOINT("WTD");
-        TT_POP_TILES(/*UNPACK_SEL=*/0x3, num_tiles, kConsumerTc);
+        TT_POP_TILES(/*UNPACK_SEL=*/0x3, num_tiles, kProducerTc);
         WAYPOINT("UPD");
-        const std::uint32_t consumer_acked = settled_acked(kConsumerTc);
         const std::uint32_t producer_acked = settled_acked(kProducerTc);
-        *scratch_ptr(l1_address, kConsumerAckedBaseIdx + step) = consumer_acked;
         *scratch_ptr(l1_address, kProducerAckedBaseIdx + step) = producer_acked;
-        *scratch_ptr(l1_address, kOverlayAfterPopAckedBaseIdx + step) = settled_acked(kOverlayTc);
+        *scratch_ptr(l1_address, kOverlay0AfterPopAckedBaseIdx + step) = settled_acked(kOverlayTc0);
+        *scratch_ptr(l1_address, kOverlay1AfterPopAckedBaseIdx + step) = settled_acked(kOverlayTc1);
         DPRINT(
-            "UNPACK step{} pop={} TC{} acked={} TC{} acked={} overlay_tc0_acked={}\n",
+            "UNPACK step{} pop={} TC{} acked={} overlay_tc0_acked={} overlay_tc1_acked={}\n",
             step,
             num_tiles,
-            kConsumerTc,
-            consumer_acked,
             kProducerTc,
             producer_acked,
-            *scratch_ptr(l1_address, kOverlayAfterPopAckedBaseIdx + step));
+            *scratch_ptr(l1_address, kOverlay0AfterPopAckedBaseIdx + step),
+            *scratch_ptr(l1_address, kOverlay1AfterPopAckedBaseIdx + step));
     }
-    write_overlay_triple(l1_address, kOverlayFinalCapIdx, kOverlayFinalPostedIdx, kOverlayFinalAckedIdx);
+    write_overlay_triple(
+        l1_address, kOverlayTc0, kOverlay0FinalCapIdx, kOverlay0FinalPostedIdx, kOverlay0FinalAckedIdx);
+    write_overlay_triple(
+        l1_address, kOverlayTc1, kOverlay1FinalCapIdx, kOverlay1FinalPostedIdx, kOverlay1FinalAckedIdx);
 #endif
 }
