@@ -264,9 +264,14 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
         return KernelSpec{
             .unique_id = std::move(unique_id),
             .source = compute_kernel_file,
+            // opt_level is explicit because the default differs by API: legacy ComputeConfig
+            // defaults to O3, while Metal 2.0's type-agnostic CompilerOptions defaults to O2 for
+            // compute and data movement alike. The legacy compute descriptors set no opt_level, so
+            // they resolved to O3; leaving this unset would silently drop a level.
             .compiler_options =
                 {
                     .defines = compute_defines,
+                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3,
                 },
             .dfb_bindings =
                 {
