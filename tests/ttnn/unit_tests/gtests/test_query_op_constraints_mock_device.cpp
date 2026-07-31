@@ -541,6 +541,22 @@ ttnn::graph::ConstraintQueryResponse query_repeat(tt::tt_metal::distributed::Mes
         ttsl::SmallVector<uint32_t>{1, 1, 2, 1},
         input_spec.tensor_layout().get_memory_config());
 }
+
+// Two repeats inside ONE queried callable, i.e. two programs in a single capture. Params are
+// taken by const& rather than forwarded, since forwarding the same pack twice is unsound.
+ttnn::graph::ConstraintQueryResponse query_two_repeats(tt::tt_metal::distributed::MeshDevice* device) {
+    const auto input_spec = metal2_repeat_input_spec();
+    return ttnn::graph::query_op_constraints(
+        [](const auto& input, const auto& repetition_vector, const auto& memory_config) {
+            // Held to end of scope so the two programs' buffers coexist in the capture.
+            [[maybe_unused]] const auto first = ttnn::repeat(input, repetition_vector, memory_config);
+            return ttnn::repeat(input, repetition_vector, memory_config);
+        },
+        device,
+        input_spec,
+        ttsl::SmallVector<uint32_t>{1, 1, 2, 1},
+        input_spec.tensor_layout().get_memory_config());
+}
 }  // namespace
 
 // The regression itself: before dataflow buffers were recorded this reported exactly 0,
@@ -561,17 +577,24 @@ TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakContributesToPeakMemory)
     EXPECT_GE(query.resource_usage.peak_memory_usage_per_core, query.resource_usage.cb_peak_size_per_core);
 }
 
-// Each program run clears the previous run's CB state before capture. If dataflow buffers
-// were recorded but not covered by that reset, the reported peak would climb with every
-// query — a drift that only shows up on the second call.
-TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakIsStableAcrossQueries) {
-    auto first = query_repeat(mock_device_.get());
-    auto second = query_repeat(mock_device_.get());
+// Each program's CB state is released before the next program in the same capture, so the
+// reported figure is a peak rather than a running sum. If dataflow buffers are recorded but
+// not covered by that per-program reset, two repeats in one capture report roughly double a
+// single repeat.
+//
+// This has to be two programs inside ONE capture: two separate query_op_constraints calls
+// would each begin_capture() and re-zero the counters, so their equality holds whether or not
+// the reset covers DFB nodes.
+TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakDoesNotAccumulateWithinOneCapture) {
+    auto single = query_repeat(mock_device_.get());
+    auto doubled = query_two_repeats(mock_device_.get());
 
-    ASSERT_EQ(first.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << first.error_message.value_or("none");
-    ASSERT_EQ(second.status, ttnn::graph::ExecutionStatus::Success)
-        << "Error: " << second.error_message.value_or("none");
-    EXPECT_EQ(second.resource_usage.cb_peak_size_per_core, first.resource_usage.cb_peak_size_per_core);
+    ASSERT_EQ(single.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << single.error_message.value_or("none");
+    ASSERT_EQ(doubled.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << doubled.error_message.value_or("none");
+    ASSERT_GT(single.resource_usage.cb_peak_size_per_core, 0u);
+    EXPECT_EQ(doubled.resource_usage.cb_peak_size_per_core, single.resource_usage.cb_peak_size_per_core);
 }
 
 // Guards the other direction: the added dataflow-buffer pass must leave ops that use real
