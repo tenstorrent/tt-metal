@@ -497,14 +497,11 @@ def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds
         seq_len=seq_len,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_chunked=True,
         layer_num=1,
         sparse_kv_cache_format=cache_format,
         kv_only=True,
     )
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
-        seq_len, chunk
-    )
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis).get_rope_tensors_indexed(seq_len, chunk)
     hidden = make_hidden(chunk, config.hidden_size, seed)
     shard_dims = [None, None]
     shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2

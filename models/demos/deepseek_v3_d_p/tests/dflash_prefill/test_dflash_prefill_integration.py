@@ -214,7 +214,6 @@ def test_dflash_prefill_integration(
         state_dict=verifier_state_dict,
         num_layers=num_layers,
         seq_len=isl_total,
-        is_balanced=False,  # this test assumes non-balanced (contiguous) SP token sharding
         padding_side=padding_side,
         dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
         num_links=num_links,
