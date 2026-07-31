@@ -104,6 +104,7 @@ class TtVoxtralFlow:
         w = load_flow_state(ckpt_path)
         self.inv_freq = w["time_embedding.inv_freq"]          # host: time_embedding
         self.semantic_host = w["semantic_codebook_output.weight"].float()  # host: masked argmax
+        self._tproj = {}                                     # (batch, n_steps) -> resident tokens
 
         dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT,
                                        device=device)
@@ -160,23 +161,53 @@ class TtVoxtralFlow:
         u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG))
         return ttnn.add(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG))
 
-    def _predict_velocity(self, x_t, llm_h, t_emb):
-        """torch [B,36], [B,3072], [B,64] -> velocity torch [B,36]. Position 0 only."""
-        B = x_t.shape[0]
-        T = lambda t: ttnn.from_torch(t.contiguous(), dtype=self.dtype, layout=ttnn.TILE_LAYOUT,
-                                     device=self.device)
-        p0 = ttnn.linear(T(x_t), self.proj["input_projection"], compute_kernel_config=COMPUTE_CONFIG)
-        p1 = ttnn.linear(T(t_emb), self.proj["time_projection"], compute_kernel_config=COMPUTE_CONFIG)
-        p2 = ttnn.linear(T(llm_h), self.proj["llm_projection"], compute_kernel_config=COMPUTE_CONFIG)
-        # [B,3072] x3 -> [B,3,3072]: the 3-token sequence, in the reference's order.
+    def _up(self, t, dtype=None):
+        return ttnn.from_torch(t.contiguous(), dtype=dtype or self.dtype,
+                               layout=ttnn.TILE_LAYOUT, device=self.device)
+
+    def _trunk(self, p0, p1, p2, B):
+        """three [B,*,3072] projections -> velocity [B,1,36]. The 3-token sequence, reference order.
+
+        B here is the CFG-doubled batch: decode_frame passes 2*batch."""
         seq = ttnn.concat([ttnn.reshape(p, [B, 1, FM_INPUT_DIM]) for p in (p0, p1, p2)], dim=1)
         for w in self.layers:
             seq = self._block(seq, w, B)
         seq = ttnn.rms_norm(seq, weight=self.norm, epsilon=FM_NORM_EPS,
                             compute_kernel_config=COMPUTE_CONFIG)
         pos0 = ttnn.slice(seq, [0, 0, 0], [B, 1, FM_INPUT_DIM])
-        v = ttnn.linear(pos0, self.proj["acoustic_codebook_output"],
-                        compute_kernel_config=COMPUTE_CONFIG)
+        return ttnn.linear(pos0, self.proj["acoustic_codebook_output"],
+                           compute_kernel_config=COMPUTE_CONFIG)
+
+    def _time_projections(self, B, n_steps):
+        """The n_steps time-conditioning tokens, resident on device.
+
+        `ts = linspace(0, 1, n_steps+1)` never changes, so `time_projection(time_embedding(t))` is a
+        CONSTANT per step index -- it does not depend on the prompt, the frame, or x. It used to be
+        recomputed n_steps times per frame (a host sin/cos plus a 3072x3072 matmul each). Built once
+        per (batch, n_steps) and cached."""
+        key = (B, n_steps)
+        if key not in self._tproj:
+            ts = torch.linspace(0, 1, n_steps + 1)
+            self._tproj[key] = [
+                ttnn.linear(self._up(time_embedding(ts[i].view(1, 1).repeat(B, 1), self.inv_freq)),
+                            self.proj["time_projection"], compute_kernel_config=COMPUTE_CONFIG)
+                for i in range(n_steps)
+            ]
+        return self._tproj[key]
+
+    def _predict_velocity(self, x_t, llm_h, t_emb):
+        """torch [B,36], [B,3072], [B,64] -> velocity torch [B,36]. Position 0 only.
+
+        Kept as a torch-in/torch-out entry point for the reference comparison in main(); the Euler
+        solve in decode_frame does NOT go through it, because it keeps everything on device."""
+        B = x_t.shape[0]
+        p0 = ttnn.linear(self._up(x_t), self.proj["input_projection"],
+                         compute_kernel_config=COMPUTE_CONFIG)
+        p1 = ttnn.linear(self._up(t_emb), self.proj["time_projection"],
+                         compute_kernel_config=COMPUTE_CONFIG)
+        p2 = ttnn.linear(self._up(llm_h), self.proj["llm_projection"],
+                         compute_kernel_config=COMPUTE_CONFIG)
+        v = self._trunk(p0, p1, p2, B)
         return ttnn.to_torch(v).float().reshape(B, N_ACOUSTIC_CODEBOOK)
 
     # ----------------------------------------------------------------------------------
@@ -193,24 +224,54 @@ class TtVoxtralFlow:
     @torch.no_grad()
     def decode_frame(self, sem_code, llm_hidden, cfg_alpha=CFG_ALPHA,
                      n_steps=N_DECODING_STEPS, x_0=None):
-        """[B,1], [B,3072] -> acoustic codes [B,36] int64, offset applied."""
+        """[B,1], [B,3072] -> acoustic codes [B,36] int64, offset applied.
+
+        THE WHOLE SOLVE STAYS ON DEVICE. It used to round-trip per step -- upload x/t/h, download
+        the velocity, then do the CFG combine and Euler update in torch -- which cost n_steps host
+        round-trips per frame and, more importantly, made the loop untraceable, since a device trace
+        cannot contain host arithmetic.
+
+        PRECISION IS NOT UNIFORM HERE, deliberately. The velocity network runs at self.dtype (bf16
+        by default) but the solver state does NOT:
+          * `x` is fp32 and stays fp32 for its whole life. It accumulates n_steps increments, so any
+            error in it COMPOUNDS -- unlike a per-step rounding error in the velocity, which does not.
+          * the CFG combine is fp32. `cfg_alpha*v_cond + (1-cfg_alpha)*v_uncond` with alpha=1.2 is a
+            difference of two nearly-equal vectors, and the small difference is the entire point of
+            CFG. Measured on device: the combine is accurate to 2.4e-7 in fp32 but only 7.0e-3 from
+            bf16 inputs -- ~29,000x worse. Doing this in bf16 would be a real quality bug that PCC
+            on the velocity would not reveal.
+        Hence the explicit typecasts: down to self.dtype only to enter the network, straight back up
+        to fp32 on the way out. The cast entering `input_projection` is also load-bearing for SPEED:
+        ttnn allows an fp32 activation against a bf16 weight and returns fp32, which would silently
+        promote the entire trunk to fp32 and forfeit the 1.55x.
+        """
         B = sem_code.shape[0]
+        B2 = 2 * B
         should = (sem_code != END_AUDIO_ID).reshape(B)
-        x = torch.randn(B, N_ACOUSTIC_CODEBOOK) if x_0 is None else x_0.clone()
+        x0 = torch.randn(B, N_ACOUSTIC_CODEBOOK) if x_0 is None else x_0
         ts = torch.linspace(0, 1, n_steps + 1)
-        zero_h = torch.zeros_like(llm_hidden)
+
+        x = self._up(x0.reshape(B, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32)   # solver state, fp32
+        # llm conditioning is constant across the solve: cond ++ uncond, projected ONCE per frame
+        # rather than once per step (it was n_steps identical 3072x3072 matmuls).
+        p2 = ttnn.linear(self._up(torch.cat([llm_hidden, torch.zeros_like(llm_hidden)], 0)),
+                         self.proj["llm_projection"], compute_kernel_config=COMPUTE_CONFIG)
+        p1s = self._time_projections(B2, n_steps)
+
         for i in range(n_steps):
-            t, dt = ts[i], ts[i + 1] - ts[i]
-            t_emb = time_embedding(t.view(1, 1).repeat(B, 1), self.inv_freq)
+            dt = float(ts[i + 1] - ts[i])
             # cond+uncond as ONE 2B forward, matching the reference exactly.
-            v_all = self._predict_velocity(
-                torch.cat([x, x], 0),
-                torch.cat([llm_hidden, zero_h], 0),
-                torch.cat([t_emb, t_emb], 0),
-            )
-            v = cfg_alpha * v_all[:B] + (1 - cfg_alpha) * v_all[B:]
-            x = x + v * dt
-        codes = _fsq_quantize(x)          # host: clamp/scale/round on [B,36]
+            x2 = ttnn.concat([x, x], dim=0)
+            p0 = ttnn.linear(ttnn.typecast(x2, self.dtype), self.proj["input_projection"],
+                             compute_kernel_config=COMPUTE_CONFIG)
+            v = ttnn.typecast(self._trunk(p0, p1s[i], p2, B2), ttnn.float32)
+            v_cond = ttnn.slice(v, [0, 0, 0], [B, 1, N_ACOUSTIC_CODEBOOK])
+            v_unc = ttnn.slice(v, [B, 0, 0], [B2, 1, N_ACOUSTIC_CODEBOOK])
+            v_cfg = ttnn.add(ttnn.multiply(v_cond, cfg_alpha),
+                             ttnn.multiply(v_unc, 1.0 - cfg_alpha))
+            x = ttnn.add(x, ttnn.multiply(v_cfg, dt))
+
+        codes = _fsq_quantize(ttnn.to_torch(x).float().reshape(B, N_ACOUSTIC_CODEBOOK))
         codes[~should] = EMPTY_AUDIO_ID
         return codes + N_AUDIO_SPECIAL
 

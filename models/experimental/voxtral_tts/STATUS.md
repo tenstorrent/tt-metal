@@ -465,17 +465,27 @@ does the host-side Euler state, which is why the error does not compound. Eviden
 1. Re-read this file and `reference/PROVENANCE.md`. Recreate the two venvs (§2).
 2. Run the 118 tests, then `generate_quality_set.py --cases 0,1` to confirm the device path still
    produces speech before changing anything.
-3. **Trace Block 2's 7-step ODE.** Fixed shapes, fixed step count, tiny ops — the regime where
-   dispatch is exposed. Upstream's CUDA-graph version of exactly this was worth 47% latency. Read
-   trap #1 first: a failed trace capture wedges the device.
-4. **Attack Block 1's decode step**, which is essentially the whole frame budget. Start by finding
-   out where the 0.17 s goes (device vs host dispatch) before optimizing anything —
-   `tt_transformers` has its own trace/prefetcher machinery that we are not using.
+3. **Trace Block 2's 7-step ODE — the prerequisite is now DONE.** The solve is fully on device as of
+   2026-07-31 (`decode_frame`): `x` is a resident fp32 tensor, the CFG combine and Euler update are
+   device ops, and the time-conditioning tokens are precomputed once. There is no longer any host
+   arithmetic inside the loop, which is what previously made it untraceable. **That refactor bought
+   almost nothing on its own** — bit-identical output, and performance neutral at the pipeline's B=1
+   (157.6 → 157.9 ms/frame, inside noise; ~4% at B=2 where the hoisted projections are bigger). Its
+   value is that the trace is now possible, and that is where the 47% upstream figure comes from.
+   Fixed shapes, fixed step count, tiny ops — the regime where dispatch is exposed. Read trap #1
+   first: a failed trace capture wedges the device.
+4. **Then Block 1's decode step** — 48 ms of the 158 ms frame (30%), so it caps at a ~1.4x
+   end-to-end win even if it went to zero. Find out where that 48 ms goes (device vs host dispatch)
+   before optimizing anything; `tt_transformers` has trace/prefetcher machinery we are not using.
+   Do **not** repeat the mistake this file made for a while and rank work by parameter count.
 5. Re-run §3.1's harness after each change. Trap #6 is that synthetic gates let the audible path
-   rot; WER is the gate that matters.
+   rot; WER is the gate that matters. For refactors that should be numerically neutral, comparing
+   the WAV bytes against the previous build is faster and stricter than ASR — the device-side Euler
+   change was confirmed bit-identical that way, over a 458-frame clip.
 
 **Deferred and still worth doing:**
-- A **listening pass**. Never done. Everything in §3.1 is objective metrics and ASR.
+- A **listening pass** on fp32 vs bf16 (§3.2). The fp32 clips were judged "sounds ok"; nobody has
+  compared them to the bf16 ones now shipping, and WER cannot see timbre.
 - Block 1 **decode PCC 0.981** vs prefill's 0.9996 — unexplained, harmless so far.
 - **The sdpa compounding probe** — ~1 hour, needs no checkpoint. Block 1 currently does *not* use
   sdpa, so this is a latent perf lever rather than a blocker. Block 1 escapes sdpa's *minor*
