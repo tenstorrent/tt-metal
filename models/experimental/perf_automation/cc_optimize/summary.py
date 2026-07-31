@@ -34,9 +34,42 @@ _HOST_KINDS = {"trace", "structural", "fusion", "fuse", "gather", "sparse", "cac
 _REPORT_NAME = "RUN_REPORT.md"
 
 
+def _runs_root() -> Path:
+    return Path(__file__).resolve().parent.parent / "runs"
+
+
+def report_path(model_root) -> Path:
+    """Where RUN_REPORT.md is written: the RUN directory when there is one.
+
+    The report used to live in the model directory, INSIDE the optimize worktree, where git can see
+    it. The first commit of a run sweeps up whatever is untracked, so the report -- a generated
+    artifact -- landed in commit e952cec6ce beside the lever's source change. Later commits stage
+    only the file a lever touched, so it was never re-committed: permanently "modified, unstaged".
+    Every git_revert after a no-gain attempt then discarded those modifications and restored the
+    committed blob, rewinding a live report from 30 attempts back to the 7 it held when that first
+    commit was made. Observed on gemma-3-12b-it at 2026-07-31 21:47:10, five seconds after a correct
+    render, and it stayed wrong until the next attempt re-rendered it.
+
+    The run directory cannot suffer this: models/experimental/perf_automation/.gitignore ignores
+    `runs/`, nothing under it is tracked, and git does not restore what it cannot see. It is also
+    per-run, so one run's report never overwrites another's, and that .gitignore is committed in the
+    repo, so every worktree inherits the protection with no per-worktree setup to forget.
+
+    Falls back to the model directory when no run directory exists, so callers outside a run (tests,
+    a bare render) behave exactly as before.
+    """
+    latest = _runs_root() / "latest"
+    try:
+        if latest.is_dir():
+            return latest / _REPORT_NAME
+    except OSError:  # noqa: BLE001
+        pass
+    return Path(model_root) / _REPORT_NAME
+
+
 def upsert_report_section(model_root, key: str, block_md: str):
     try:
-        path = Path(model_root) / _REPORT_NAME
+        path = report_path(model_root)
         begin, end = f"<!-- BEGIN {key} -->", f"<!-- END {key} -->"
         block = f"{begin}\n{block_md.strip()}\n{end}"
         existing = path.read_text() if path.exists() else ""

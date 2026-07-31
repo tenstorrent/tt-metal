@@ -2673,8 +2673,11 @@ def _emit_summary(
                 )
             else:
                 _block = mod.optimize_block(_demo, 0, text, when)
-            mod.upsert_report_section(_demo, _key, _block)
-            print(f"  [optimize/cc] report updated: {_demo / 'RUN_REPORT.md'} ({_key} section)")
+            _written = mod.upsert_report_section(_demo, _key, _block)
+            # The RESOLVED path, not an assumed one: the report now lands in the git-ignored run
+            # directory (see summary.report_path), so printing model_root/RUN_REPORT.md would send
+            # a reader to a file that no longer updates -- exactly the confusion this change fixes.
+            print(f"  [optimize/cc] report updated: {_written or (_demo / 'RUN_REPORT.md')} ({_key} section)")
             _prune_legacy_reports(_demo)
         try:
             (md.parent / "summary.md").unlink()
