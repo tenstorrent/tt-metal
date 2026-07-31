@@ -1240,8 +1240,7 @@ def test_all_gather_page_indexing(
             _l1_nd_sharded([1, 1, 8, 64]),
             _l1_nd_sharded([1, 1, 8, 64]),
             marks=pytest.mark.xfail(
-                reason="routes to composite correctly, but composite (all_broadcast/concat) is wrong for a "
-                "row-major input padded on the gather dim. Pre-existing: fails identically with legacy 2D sharding",
+                reason="composite all_broadcast/concat ops are buggy for a row-major input padded on the gather dim",
                 strict=True,
             ),
         ),
