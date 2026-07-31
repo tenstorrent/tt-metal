@@ -48,11 +48,11 @@ constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
 // per K-block feeds both matmuls instead of two.
 constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
 // Writer-only scratch for the device-side `start` (expert_region_offsets)
-// page in direct-write mode. Allocated unconditionally (negligible L1) so
-// the CB-index layout is stable across both write modes.
+// page: the writer adds start[global_id]/TILE tile-rows to every output row.
 constexpr uint32_t CB_START_SCRATCH = tt::CBIndex::c_14;
-// Reader's own `start` scratch, used when read_x_at_offset (x is a shared
-// buffer). Separate from the writer's so the two RISCs don't share one L1 page.
+// Reader's own `start` scratch (x is the shared dispatched buffer, so the
+// reader offsets its x reads by start[global_id] too). Separate from the
+// writer's so the two RISCs don't share one L1 page.
 constexpr uint32_t CB_START_SCRATCH_READER = tt::CBIndex::c_15;
 // Row-major bf16 staging for x when x_is_row_major: the reader fills it with
 // row-major sticks and the compute kernel tilizes it to bf8_b into CB_IN0_X.
@@ -406,17 +406,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto* idx_buffer = t.global_expert_idx_table.buffer();
     auto* out_buffer = tensor_return_value.buffer();
 
-    // Direct-write mode: when expert_region_offsets is supplied, the writer
-    // writes this expert's output straight into the shared output buffer at
-    // start[global_id]/TILE tile-rows (fusing ttnn::insert). Otherwise the
-    // writer targets tile row 0 of a per-expert buffer. The `start` accessor
-    // is appended unconditionally so the writer's CT-arg layout is stable;
-    // when not in direct-write mode it points at out_buffer and is never read.
-    const bool direct_write = t.expert_region_offsets.has_value();
-    auto* start_buffer = direct_write ? t.expert_region_offsets->buffer() : out_buffer;
-    // dst_M_tiles bounds destination writes. Equals M_tiles_full when the
-    // output matches x's shape; is the shared buffer's tile-row count in
-    // direct-write mode.
+    // expert_region_offsets is a mandatory input (validated in the device op):
+    // the writer always writes an expert's output straight into the shared
+    // output buffer at start[global_id]/TILE tile-rows (fusing ttnn::insert),
+    // and the reader always reads x from the same region.
+    auto* start_buffer = t.expert_region_offsets->buffer();
+    // dst_M_tiles bounds destination writes: the shared output buffer's
+    // tile-row count.
     const uint32_t dst_M_tiles = tensor_return_value.padded_shape()[-2] / TILE;
 
     // -------------------------- semaphores --------------------------------
@@ -601,7 +597,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         tt::tt_metal::CircularBufferConfig(start_scratch_bytes, {{CB_START_SCRATCH, tt::DataFormat::UInt32}})
             .set_page_size(CB_START_SCRATCH, start_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, start_cb_cfg);
-    // Reader's `start` scratch (read_x_at_offset). Same sizing; separate CB so
+    // Reader's `start` scratch. Same sizing; separate CB so
     // reader (BRISC) and writer (NCRISC) never share one scratch page.
     tt::tt_metal::CircularBufferConfig start_reader_cb_cfg =
         tt::tt_metal::CircularBufferConfig(start_scratch_bytes, {{CB_START_SCRATCH_READER, tt::DataFormat::UInt32}})
@@ -679,9 +675,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(idx_buffer).append_to(reader_ct_args);
-    // `start` accessor — appended last, matching the reader's accessor stream.
-    // Points at expert_region_offsets in direct/offset mode, else out_buffer
-    // (unread when read_x_at_offset is 0), keeping the CT-arg layout stable.
+    // `start` (= expert_region_offsets) accessor — appended last, matching the
+    // reader's accessor stream. Always read: x is the shared dispatched buffer
+    // and each expert's rows begin at start[global_id].
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_ct_args);
 
     // FUSE_BIAS: after the `start` accessor, append the 3 bias CB ids then the 3
@@ -709,46 +705,40 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
 
     // Writer compile-time args (must match writer's get_compile_time_arg_val order).
     std::vector<uint32_t> writer_ct_args = {
-        CB_ACTIVATED,       // 0
-        CB_OUT,             // 1
-        per_core_M,         // 2
-        per_core_N_gu,      // 3
-        per_core_N_d,       // 4
-        gu_out_subblock_h,  // 5
-        gu_out_subblock_w,  // 6
-        d_out_subblock_h,   // 7
-        d_out_subblock_w,   // 8
-        N_gate_tiles_full,  // 9
-        N_down_tiles_full,  // 10
-        num_chunks,         // 11
-        chunk_M_tiles,      // 12
+        CB_OUT,             // 0
+        per_core_M,         // 1
+        per_core_N_gu,      // 2
+        per_core_N_d,       // 3
+        d_out_subblock_h,   // 4
+        d_out_subblock_w,   // 5
+        N_gate_tiles_full,  // 6
+        N_down_tiles_full,  // 7
+        num_chunks,         // 8
+        chunk_M_tiles,      // 9
         // device-side count read: writer also waits on the reader's push
         // and bounds its cb_out drain loop by effective_chunks so it does
         // not wait forever on chunks compute never pushes.
-        CB_COUNTS_SCRATCH,  // 13
-        CB_IDX_SCRATCH,     // 14
-        experts_per_chip,   // 15
+        CB_COUNTS_SCRATCH,  // 10
+        CB_IDX_SCRATCH,     // 11
+        experts_per_chip,   // 12
         // M_tiles_full: needed for the writer to skip OOB output writes when
         // M_tiles_full doesn't divide chunk_M_tiles. The last chunk runs
         // chunk_M_tiles rows per core, of which only those < M_tiles_full
         // correspond to real output rows in the tensor.
-        M_tiles_full,  // 16
-        // direct_write: 1 -> writer adds start[global_id]/TILE tile-rows and
-        // targets the shared output buffer (fuses ttnn::insert).
-        static_cast<uint32_t>(direct_write),  // 17
-        // dst_M_tiles: tile-row count of the destination buffer (= M_tiles_full
-        // for the per-expert output; the shared buffer's rows in direct mode).
-        dst_M_tiles,       // 18
-        CB_START_SCRATCH,  // 19
+        M_tiles_full,  // 13
+        // dst_M_tiles: tile-row count of the shared destination buffer, which
+        // bounds the writer's destination rows.
+        dst_M_tiles,       // 14
+        CB_START_SCRATCH,  // 15
         // UP_SPLIT up-weight read: CB + dims let the writer replicate the gate
         // read on NoC 1, and writer_split_up gates it (1 = UP_SPLIT).
-        CB_IN1_UP,                            // 20
-        in0_block_w_gu,                       // 21
-        K_gate_tiles,                         // 22
-        static_cast<uint32_t>(up_mode == 2),  // 23 writer_split_up
+        CB_IN1_UP,                            // 16
+        in0_block_w_gu,                       // 17
+        K_gate_tiles,                         // 18
+        static_cast<uint32_t>(up_mode == 2),  // 19 writer_split_up
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
-    // out, then start (direct-write), then up (UP_SPLIT).
+    // out, then start, then up (UP_SPLIT).
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_ct_args);
     // up accessor follows start; used only when the writer handles `up`.
@@ -933,22 +923,19 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t in0_sender_ny = in0_sender_noc.y;
 
         // Reader runtime arg layout (must match unified_routed_expert_ffn_reader.cpp):
-        //   0..5: tensor addrs (x, gate, up, down, counts, idx)
-        //   6: my_mt
-        //   7: my_nt_gu
-        //   8: my_nt_d
-        //   9..18: in1 multicast args
-        //  19..28: in0 multicast args
-        //  29: act_ready_sem_id  30: act_valid_sem_id
-        //  31: up_go_sem_id  32: up_done_sem_id
-        //  33..33+2*GRID_X-1: M-row NoC coord table (GRID_X pairs of x, y)
-        //  33+2*GRID_X: start_addr (expert_region_offsets; read only when
-        //     read_x_at_offset, else points at out_buffer and is unread)
+        //   0..2: tensor addrs (x, counts, idx). The per-expert gate/up/down
+        //     base addresses are passed as the arrays after start_addr below.
+        //   3: my_mt
+        //   4: my_nt_gu
+        //   5: my_nt_d
+        //   6..15: in1 multicast args
+        //  16..25: in0 multicast args
+        //  26: act_ready_sem_id  27: act_valid_sem_id
+        //  28: up_go_sem_id  29: up_done_sem_id
+        //  30..30+2*GRID_X-1: M-row NoC coord table (GRID_X pairs of x, y)
+        //  30+2*GRID_X: start_addr (expert_region_offsets)
         std::vector<uint32_t> reader_args = {
             x_buffer->address(),
-            gate_buffer->address(),
-            up_buffer->address(),
-            down_buffer->address(),
             counts_buffer->address(),
             idx_buffer->address(),
             my_mt,
@@ -1022,20 +1009,19 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
 
         // Writer runtime arg layout (must match unified_routed_expert_ffn_writer.cpp):
         //   0: output_addr  1: my_mt  2: my_nt_d
-        //   3: start_addr (expert_region_offsets in direct-write mode; else
-        //      out_buffer, unused by the kernel)
-        //   4: up_addr  5: my_nt_gu  6: is_up_sender (gy==0)
-        //   7: up_go_sem_id  8: up_done_sem_id  (UP_SPLIT local same-core handshake)
+        //   3: start_addr (expert_region_offsets)
+        //   4: my_nt_gu  5: is_up_sender (gy==0)
+        //   6: up_go_sem_id  7: up_done_sem_id  (UP_SPLIT local same-core handshake)
+        //   8..8+N-1: per-expert `up` base addresses
         std::vector<uint32_t> writer_args = {
             out_buffer->address(),                 // 0
             my_mt,                                 // 1
             my_nt_d,                               // 2
             start_buffer->address(),               // 3
-            up_buffer->address(),                  // 4
-            my_nt_gu,                              // 5
-            static_cast<uint32_t>(is_in1_sender),  // 6 is_up_sender
-            up_go_sem_id,                          // 7
-            up_done_sem_id,                        // 8
+            my_nt_gu,                              // 4
+            static_cast<uint32_t>(is_in1_sender),  // 5 is_up_sender
+            up_go_sem_id,                          // 6
+            up_done_sem_id,                        // 7
         };
         // Per-expert `up` base addresses (UP_SPLIT)
         for (uint32_t e = 0; e < experts_per_chip; ++e) {
@@ -1100,11 +1086,8 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     for (const auto& core : cores) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, reader_id, core);
         reader_args[0] = x_addr;
-        reader_args[1] = t.gate_projs[0].buffer()->address();  // expert-0 (accessor base; loop uses the arrays)
-        reader_args[2] = t.up_projs[0].buffer()->address();
-        reader_args[3] = t.down_projs[0].buffer()->address();
-        reader_args[4] = counts_addr;
-        reader_args[5] = idx_addr;
+        reader_args[1] = counts_addr;
+        reader_args[2] = idx_addr;
         const size_t start_idx = reader_args.size() - weights_len - 1;
         reader_args[start_idx] = start_addr;
         size_t w = start_idx + 1;
@@ -1132,7 +1115,6 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
         writer_args[3] = start_addr;
-        writer_args[4] = t.up_projs[0].buffer()->address();  // expert-0 (index stability)
         // Per-expert `up` addresses occupy the final N slots.
         size_t u = writer_args.size() - N;
         for (uint32_t e = 0; e < N; ++e) {
