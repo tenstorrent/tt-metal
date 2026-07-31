@@ -54,7 +54,27 @@ def _diff_b2_cfg(cx, cy, pn):
 
 
 _DIFF_N4608_B2 = _diff_b2_cfg(8, 9, 2)  # gate / up / head-layer modulation  (K=1536, N=4608)
-_DIFF_N1536_B2 = _diff_b2_cfg(8, 3, 2)  # swiglu down                        (K=4608, N=1536)
+# swiglu down (K=4608, N=1536): the 8x3=24-core / in0_block_w=2 config above ran at 74.4 us =
+# 190 GB/s, less than half the 379 GB/s its same-weight-size sibling (_DIFF_N4608_B2) reaches.
+# Widening the K-streaming granularity to in0_block_w=4 AND spreading N over 48 cores
+# (per_core_N=1, 48*1 == Nt) gives 49.7 us = 285 GB/s (1.50x, 40 calls/frame => -1.0 ms).
+# Neither change alone is enough: 48 cores at in0_block_w=2 is *slower* than the 24-core config
+# (81.8 us).  Measured maxabsdiff==0 vs both auto and the previous config — in0_block_w only sets
+# the K-tile streaming granularity and each core still reduces the full K into an fp32 dest, so
+# the accumulation order (and the bf16 output) is unchanged.  Confirmed end-to-end: a full 93-min
+# 4p_climate_100min render with this and the two LM config changes is BYTE-IDENTICAL to the
+# pre-change render (same sha256 over all 134,163,200 samples, same 42,498 AR tokens).
+_DIFF_N1536_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+    in0_block_w=4,
+    out_subblock_h=1,
+    out_subblock_w=1,
+    per_core_M=2,
+    per_core_N=1,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
 _DIFF_N3072_B2 = _diff_b2_cfg(8, 6, 2)  # final-layer modulation             (K=1536, N=3072)
 # final_linear 1536→64: auto runs this on only 2 cores (~36 µs).  in0_block_w=2 matches auto's
 # K-reduction (maxabsdiff==0 vs auto) and brings it to ~21 µs.  Any other in0_block_w changes the
