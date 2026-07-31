@@ -1,7 +1,7 @@
 ---
 description: |
-  A friendly repository assistant for tt-metal that runs daily to support
-  contributors and maintainers. Can also be triggered on-demand via
+  A friendly repository assistant for tt-metal that runs 4 times a day
+  (every 6 hours) to support contributors and maintainers. Can also be triggered on-demand via
   '/repo-assist <instructions>' to perform specific tasks.
   - Triages open issues: labels, investigates, and comments helpfully
   - Identifies issues that can be fixed and opens pull requests with fixes
@@ -14,7 +14,7 @@ description: |
   Always polite, constructive, and mindful of the project's goals.
 
 on:
-  schedule: daily
+  schedule: every 6h
   workflow_dispatch:
     inputs:
       command:

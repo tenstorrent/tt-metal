@@ -63,6 +63,7 @@ FROM scratch AS gdb-layer
 FROM scratch AS cmake-layer
 FROM scratch AS yq-layer
 FROM scratch AS zstd-layer
+FROM scratch AS curl-layer
 FROM scratch AS sfpi-layer
 FROM scratch AS openmpi-layer
 FROM scratch AS ci-build-venv-layer
@@ -158,10 +159,17 @@ COPY --from=doxygen-layer --link /install/ /usr/local/
 COPY --from=clangbuildanalyzer-layer --link /install/ /usr/local/
 COPY --from=yq-layer --link /install/bin/yq /usr/local/bin/
 COPY --from=mold-layer --link /install/ /usr/local/
+# curl >=8.x - shadows apt's /usr/bin/curl (7.81 on Ubuntu 22.04, permanently
+# stuck below the version where --aws-sigv4 started sending the
+# X-Amz-Content-Sha256 header Garage requires; see MINFRA-1374). /usr/local/bin
+# is ahead of /usr/bin on PATH (see base stage ENV PATH above), so this
+# transparently replaces curl everywhere in the image, not just for Garage.
+COPY --from=curl-layer --link /install/ /usr/local/
 RUN test -x /usr/local/bin/ccache || { echo "ERROR: ccache not found in ccache-layer" >&2; exit 1; } && \
     test -x /usr/local/bin/doxygen || { echo "ERROR: doxygen not found in doxygen-layer" >&2; exit 1; } && \
     test -x /usr/local/bin/yq || { echo "ERROR: yq not found in yq-layer" >&2; exit 1; } && \
-    test -x /usr/local/bin/mold || { echo "ERROR: mold not found in mold-layer" >&2; exit 1; }
+    test -x /usr/local/bin/mold || { echo "ERROR: mold not found in mold-layer" >&2; exit 1; } && \
+    test -x /usr/local/bin/curl || { echo "ERROR: curl not found in curl-layer" >&2; exit 1; }
 
 RUN git config --global --add safe.directory '*'
 
