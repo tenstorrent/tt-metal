@@ -84,6 +84,7 @@ std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
         }
     }
 
+    dm_processors_in_use_per_kernel_group.reserve(kernel_groups.size());
     // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (const KernelGroup* kernel_group : kernel_groups) {
         if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {

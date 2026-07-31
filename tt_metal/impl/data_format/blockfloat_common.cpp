@@ -381,15 +381,24 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     } else {
         num_mantissas_in_dword = 4;
     }
+    const size_t exponents_per_tile = static_cast<size_t>(subtiles_in_tile_row) * subtiles_in_tile_col * subtile_rows;
+    packed_result.reserve(
+        static_cast<size_t>(num_tiles) * (static_cast<size_t>(num_float_in_tile) / num_mantissas_in_dword +
+                                          tt::round_up(exponents_per_tile, l1_alignment) / num_exponents_in_dword));
+    exponents.reserve(num_exponents_in_dword);
+    data.reserve(num_mantissas_in_dword);
+
     int fp32_element_index = 0;
     for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
         std::vector<uint32_t> packed_data;
+        packed_data.reserve(static_cast<size_t>(num_float_in_tile) / num_mantissas_in_dword);
         std::vector<uint8_t> exponents_with_padding;
         exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
         for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
             for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                 for (int i = 0; i < subtile_rows; ++i) {
                     std::vector<uint32_t> single_row;
+                    single_row.reserve(subtile_cols);
                     // populate a single row
                     for (int j = 0; j < subtile_cols; ++j) {
                         int data_index;

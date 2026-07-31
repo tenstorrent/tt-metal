@@ -1141,6 +1141,7 @@ void TensorPrefetcherManager::worker_loop() {
         std::vector<TargetSocket> still_pending = std::move(remaining_target_sockets);
         while (!still_pending.empty()) {
             std::vector<TargetSocket> next_pending;
+            next_pending.reserve(still_pending.size());
             for (const TargetSocket& target : still_pending) {
                 std::vector<uint8_t>& page = req.sender_pages[target.page_index];
                 if (experimental::detail::try_write(*sockets_[target.socket_index], page.data(), 1)) {

@@ -2142,6 +2142,7 @@ static const std::vector<uint32_t>& __emule_fabric_walk(uint32_t src, tt::tt_fab
         return it->second;
     }
     std::vector<uint32_t> walk;
+    walk.reserve(64);
     auto& cp = MetalContext::instance().get_control_plane();
     uint32_t cur = src;
     for (int hop = 0; hop < 64; ++hop) {  // 64 = chip-count backstop (loudbox = 8)
@@ -2512,6 +2513,7 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
                 walk = __emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(dir));
             }
             std::vector<uint32_t> tgts;
+            tgts.reserve(walk.size());
             if (r.kind == emule_route_kind::MCAST_1D) {
                 const uint32_t start = r.a ? r.a : 1, range = r.b ? r.b : 1;
                 for (uint32_t hop = start; hop < start + range && hop - 1 < walk.size(); ++hop) {
@@ -2781,6 +2783,7 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     }
 
     std::vector<DFBAllocInfo> dfb_allocs;
+    dfb_allocs.reserve(dfb_impls.size());
     // Compute bridge sharing: a compute-consumer input DFB and a compute-producer
     // output DFB with matching dimensions share L1 (real HW routes through the
     // register file). Independent compute-consumer inputs (e.g. matmul in0/in1)
@@ -3223,6 +3226,9 @@ static void launch_cores(
     // Empty (no snapshot/verify cost) when ASAN is off. See tt-emule #241 / docs/ASAN.md.
     std::vector<std::unique_ptr<tt::tt_metal::emule::ObjectIntentTracker>> intent_trackers;
     const bool object_intent_active = !defer_run && oob_state.object_intent_strict;
+    if (object_intent_active) {
+        intent_trackers.reserve(core_setups.size());
+    }
 
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
         auto& cs = core_setups[core_idx];
