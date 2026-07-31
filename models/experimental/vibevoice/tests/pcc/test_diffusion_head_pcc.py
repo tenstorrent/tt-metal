@@ -95,6 +95,8 @@ def test_diffusion_head_pcc(mesh_device, loaded_weights, vv_config):
     )  # [B, latent_size]
 
     # 2) TT forward
+    from models.experimental.vibevoice.tests.pcc.pcc_helpers import tt_weight_cache
+
     weights = preprocess_diffusion_head_weights(
         state,
         mesh_device,
@@ -103,6 +105,7 @@ def test_diffusion_head_pcc(mesh_device, loaded_weights, vv_config):
         head_ffn_ratio=cfg.head_ffn_ratio,
         norm_eps=cfg.rms_norm_eps,
         num_layers=cfg.head_layers,
+        weight_cache=tt_weight_cache("diffusion_head"),
     )
     head_tt = TTDiffusionHead(weights)
 
