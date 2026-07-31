@@ -29,9 +29,16 @@ class GPTOSSProgramConfig(ProgramConfig):
     # Top-5 1.0000 unchanged.
     # SAFETY: both keep num_blocks_w_dim = per_core_N/out_block_w = 1, which avoids
     # the PR #51514 wide-subblock corruption (needs osw>1 AND nbwd>1 AND nbid>1).
-    decode_gate_up_cores: tuple[int, int] = (10, 3)
+    # gate+up: 45 cores (9x5), in0_block_w=15, out_subblock_w=4.
+    # Nt=180, so per_core_N = 180/45 = 4 and out_block_w = osw = 4, giving
+    # num_blocks_w_dim = 1. The previous 30-core config had per_core_N=6 with
+    # osw=3, i.e. nbwd=2, and with in0_block_w=15 (nbid=6) it met ALL THREE
+    # PR #51514 wide-subblock corruption conditions at once. This config cannot.
+    # Tracy: 4.142 -> 3.295 ms/tok (-20%), 30 -> 45 cores. Matches the down
+    # projection, which already ran 45 cores at higher efficiency (51.7% vs 43.0%).
+    decode_gate_up_cores: tuple[int, int] = (9, 5)
     decode_gate_up_in0_block_w: int = 15
-    decode_gate_up_subblock_w: int = 3
+    decode_gate_up_subblock_w: int = 4
     decode_down_cores: tuple[int, int] = (9, 5)
     decode_down_in0_block_w: int = 30
     decode_down_subblock_w: int = 2
