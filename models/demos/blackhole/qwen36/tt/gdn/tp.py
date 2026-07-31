@@ -12,6 +12,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.wh_compat import apply as _apply_wh_compat
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
 )
@@ -20,6 +21,8 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
     create_chunk_masks_seq,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
+
+_apply_wh_compat()  # Wormhole GDN L1 adjustments (see tt/wh_compat.py)
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
