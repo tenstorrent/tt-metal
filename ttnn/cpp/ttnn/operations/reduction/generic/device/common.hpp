@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -125,20 +126,23 @@ void validate_rm_preconditions(
     tt::tt_metal::ReduceOpDim dim,
     std::string_view dim_label);
 
-// Build the reader compile-time args vector for the RM path (slots match
-// reader_unary_reduce_rm.cpp). Returns scalar slots followed by TensorAccessorArgs(src).
-std::vector<uint32_t> build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor& src, tt::tt_metal::ReduceOpDim dim);
+// Build the named compile-time args for the RM reader (names match reader_unary_reduce_rm.cpp).
+// Both reduce dims get the full set: the reader's H branch is the only consumer of H_logical, but a
+// compile-time arg costs nothing on the path that ignores it, and emitting it unconditionally is
+// what lets the kernel reference the name from either branch.
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_reader_ct_args(
+    const RmPlan& plan, uint32_t scaler_bits);
 
-// Build the writer compile-time args vector for the RM path (slots match
-// writer_reduce_rm_scalar.cpp). Returns scalar slots followed by TensorAccessorArgs(dst).
-std::vector<uint32_t> build_rm_writer_ct_args(
-    const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim);
+// Build the named compile-time args for the RM writer (names match writer_reduce_rm_scalar.cpp).
+// As above, both dims get the full set even though Wt / W_logical / wt_tiles_per_chunk are read only
+// by the H branch.
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_writer_ct_args(const RmPlan& plan);
 
-// Build the compute compile-time args vector for the RM path (slots match reduce_rm.cpp).
+// Build the named compile-time args for the RM compute kernel (names match reduce_rm.cpp).
 // `Ht_arg` is the per-core ht count (W path) or the global Ht_rm (H path); the helper
 // keeps NC pinned at 1.
-std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits);
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_compute_ct_args(
+    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits);
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const ttnn::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);
