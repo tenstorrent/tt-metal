@@ -4,6 +4,16 @@ Per-zone device-kernel time for one prefill chunk attending an existing KV cache
 "5k attended to 25k / 55k" case — split into the parts we care about: `ring_joint_sdpa` and the dense
 MLP on the dense layers (0-2), and the full MSA + MoE breakdown on the sparse layers (3-59).
 
+## Before the first run
+
+```bash
+cd $TT_METAL_HOME && git checkout vmelnykov/add_minimax_profile
+```
+
+Needs: the tilized weight cache at `$HF_MODEL/tensor_cache_bfp8_MeshShape([8, 4])` (without it the run
+falls back to the ~869 GB bf16 source read), a golden trace to tile tokens from (defaults to
+`$GOLDEN_DIR/longbook_qa_eng_prefill_56320_nopad`), ~50 GB free disk and ~150 GB free RAM.
+
 ## Two commands
 
 **1. Capture.** Prints the CSV path when it finishes.
@@ -99,8 +109,8 @@ reached 129 GB and OOM-killed the run.
 
 | piece | what it does |
 |---|---|
-| [utils/profiler_utils.py](../../utils/profiler_utils.py) | `zone(name)` context manager: emits `M3_ZONE_START/END <name>` Tracy signposts (+ a host Tracy zone). No-op unless `M3_PROFILE_ZONES=1`. |
-| [profile_prefill.py](profile_prefill.py) | warmup → fill cache to N tokens (un-profiled) → run ONE chunk inside a `profiled_chunk` zone, reading the device profiler after every layer. |
+| [utils/profiler_utils.py](../../utils/profiler_utils.py) | `zone(name, level)` context manager: emits `M3_ZONE_START/END <name>` Tracy signposts (+ a host Tracy zone). No-op unless `M3_PROFILE_ZONES=1` and `level <= M3_PROFILE_LEVEL`. |
+| [profile_prefill.py](profile_prefill.py) | warmup → fill cache to N tokens (un-profiled) → run ONE chunk inside a `profiled_chunk` zone, with the profiler drained per layer BEFORE the chunk and flushed once after it. |
 | [parse_zone_perf.py](parse_zone_perf.py) | streams the ops CSV, rebuilds the zone hierarchy from the signpost rows, rolls up ns / ops / bytes / GB/s per zone per device. Also a library. |
 | [visualize_zones.py](visualize_zones.py) | the render step: text table + standalone HTML with the per-layer breakdown, per-chip spread, op-level detail and device-busy accounting. |
 
@@ -124,7 +134,7 @@ Same mechanism deepseek_v3_d_p uses (`forward_layer_{i}_start` in `tt/tt_prefill
   fills `DRAM BW UTIL (%)` / `NOC UTIL (%)` per op).
 - `ops/layer` on a parent zone counts its children's ops too.
 
-## Two gotchas that will bite
+## Gotchas that will bite
 
 **The device profiler buffer.** It holds `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT` programs (default
 **1000**, which the runner raises to 20000) and one M3 chunk enqueues ~72 ops × num_layers. The harness
@@ -149,6 +159,37 @@ shapes and therefore costs are identical, but the attention outputs are garbage,
 reaching the MoE router are unrealistic and the expert load imbalance (`dispatch`, `experts_mm`,
 `combine`) is not representative. Bring-up only. For the same reason the harness uses real tiled tokens
 rather than random ids.
+
+## Clean up afterwards
+
+Each run leaves ~25-30 GB of intermediates. The ops CSV is the only thing worth keeping — it is what
+`visualize_zones.py` reads, and it is ~50-215 MB.
+
+```bash
+cd $TT_METAL_HOME
+rm -rf generated/profiler/.logs/*
+rm -f  generated/profiler/reports/*/profile_log_device.csv
+rm -f  generated/profiler/reports/*/tracy_profile_log_host.tracy
+rm -f  build/profiler/build_wasm/traces/*.tracy
+pkill -f tools/tracy/serve_wasm.py     # tracy leaves a WASM server on :8080
+```
+
+## Reference numbers
+
+A healthy `LEVEL=2 LAYERS=6 CACHE=25600` run, real weights, bf4 experts, measured three times across
+two days:
+
+| | expected |
+|---|---|
+| dense layer | 4.33 - 4.35 ms |
+| sparse layer | 9.9 - 10.3 ms |
+| `attn/ring_joint_sdpa` | 1.952 ms |
+| `attn/sparse_sdpa` | 1.717 ms |
+| firmware multiplier | ~1.35x |
+| 60-layer projection | 860 - 875 ms |
+
+Compute zones land within ~1%. The collectives (`combine`, `dispatch`, `moe_reduce`) move by tens of
+percent between runs — that variance is real cross-chip skew, not a broken capture.
 
 ## The `cache_read/deshard` hypothesis
 
