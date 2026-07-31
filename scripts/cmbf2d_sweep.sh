@@ -24,8 +24,8 @@ mkdir -p generated/cmbf2d
 
 run_point() {
     local tag="$1"
-    echo "=== [$(date +%H:%M:%S)] point ${tag}: tokens=${CMBF2D_TOKENS:-100} token=${CMBF2D_TOKEN_BYTES:-14336} bump=${CMBF2D_FWD_BUMP:-8} stall=${CMBF2D_STALL:-0}"
-    CMBF2D_TAG="$tag" CMBF2D_FWD_BUMP="${CMBF2D_FWD_BUMP:-8}" scripts/run_safe_pytest.sh "$TEST" -k "$FILTER" -s \
+    echo "=== [$(date +%H:%M:%S)] point ${tag}: tokens=${CMBF2D_TOKENS:-100} token=${CMBF2D_TOKEN_BYTES:-14336} bump=${CMBF2D_FWD_BUMP:-32} order=${CMBF2D_ORDER:-1} stall=${CMBF2D_STALL:-0}"
+    CMBF2D_TAG="$tag" CMBF2D_FWD_BUMP="${CMBF2D_FWD_BUMP:-32}" CMBF2D_ORDER="${CMBF2D_ORDER:-1}" scripts/run_safe_pytest.sh "$TEST" -k "$FILTER" -s \
         >"generated/cmbf2d/run_${tag}.log" 2>&1
     local rc=$?
     local bw="generated/cmbf2d/bwinfo_${tag}.txt"
@@ -59,6 +59,11 @@ case "$AXIS" in
             CMBF2D_TOKEN_BYTES="$n" run_point "tokb${n}"
         done
         ;;
+    order)
+        for n in "$@"; do
+            CMBF2D_ORDER="$n" run_point "order${n}"
+        done
+        ;;
     bump)
         for n in "$@"; do
             CMBF2D_FWD_BUMP="$n" run_point "bump${n}"
@@ -68,7 +73,7 @@ case "$AXIS" in
         run_point "$1"
         ;;
     *)
-        echo "usage: $0 {tokens|token|bump|label} <values...>"
+        echo "usage: $0 {tokens|token|bump|order|label} <values...>"
         exit 3
         ;;
 esac

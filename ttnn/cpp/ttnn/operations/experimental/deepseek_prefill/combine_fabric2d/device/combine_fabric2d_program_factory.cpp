@@ -732,6 +732,44 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // The downstream worker continuing in the SAME direction on the SAME plane.
         const CoreCoord fwd_worker = downstream_same_direction_worker(far_coord, step, wp.link_idx);
 
+        // Work schedule: one entry per unit of work, high bit set = "relay forwarding chunk k", clear =
+        // "own assignment k". Forwarding chunks MUST appear in increasing order whatever the ordering, since
+        // the upstream writer fills a quarter's chunks in order and we read them the same way.
+        std::vector<uint32_t> schedule;
+        constexpr uint32_t SCHED_FWD = 0x80000000u;
+        if (args.assignment_order == 0) {
+            // Nearest destination first, then every forwarding chunk.
+            for (uint32_t i = 0; i < m; i++) {
+                schedule.push_back(i);
+            }
+            for (uint32_t c = 0; c < num_incoming_chunks; c++) {
+                schedule.push_back(SCHED_FWD | c);
+            }
+        } else {
+            // Furthest first with forwarding interleaved, so downstream cores get work as early as possible.
+            // After the j-th own assignment (1-based) the cumulative number of forwarding chunks emitted is
+            // the triangular number T(j-2) = (j-2)(j-1)/2 — which for m=4 reproduces exactly
+            //   own3, own2, fwd0, own1, fwd1, fwd2, own0, fwd3, fwd4, fwd5.
+            uint32_t emitted_fwd = 0;
+            for (uint32_t j = 1; j <= m; j++) {
+                schedule.push_back(m - j);  // own assignments furthest -> nearest
+                const uint32_t want = (j >= 2) ? (j - 2) * (j - 1) / 2 : 0;
+                for (; emitted_fwd < want && emitted_fwd < num_incoming_chunks; emitted_fwd++) {
+                    schedule.push_back(SCHED_FWD | emitted_fwd);
+                }
+            }
+            for (; emitted_fwd < num_incoming_chunks; emitted_fwd++) {
+                schedule.push_back(SCHED_FWD | emitted_fwd);
+            }
+        }
+        TT_FATAL(
+            schedule.size() == m + num_incoming_chunks,
+            "combine_fabric2d {}: schedule has {} entries, expected {} own + {} forwarding",
+            coord,
+            schedule.size(),
+            m,
+            num_incoming_chunks);
+
         // ---- Producer (writer RISC, NOC_1): drains the L1 ring to the destination chips' DRAM over fabric.
         tt::tt_metal::KernelDescriptor prod;
         prod.kernel_source =
@@ -807,7 +845,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             fwd_arrived_addr,
             static_cast<uint32_t>(wp.peer_node.chip_id),  // the chip one hop away, across our own cable
             static_cast<uint32_t>(my_assignments.size()),
+            static_cast<uint32_t>(schedule.size()),
         };
+        // Schedule block, then the per-assignment block. The schedule says WHEN each own assignment and each
+        // relayed forwarding chunk is worked on; the assignment block says WHAT each own assignment moves.
+        for (uint32_t e : schedule) {
+            rdr.compile_time_args.push_back(e);
+        }
         // Per-assignment block: [in_base_token, num_tokens, out_base_token, dst_chip_id] x num_assignments.
         // The reader owns routing now, so it needs the destination as well as the source.
         for (const auto& a : my_assignments) {

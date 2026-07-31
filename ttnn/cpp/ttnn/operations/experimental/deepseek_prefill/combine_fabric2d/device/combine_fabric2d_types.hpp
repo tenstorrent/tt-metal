@@ -85,7 +85,13 @@ struct CombineFabric2dParams {
     // sentinel regardless, so this only sets how finely the downstream reader can pipeline WITHIN a chunk:
     // a large value makes it wait for the whole chunk, a small value costs an extra header-only packet per
     // bump. Purely a tuning knob — accuracy holds for any value >= 1. Swept in P9.3.
-    uint32_t fwd_bump_every = 8;
+    uint32_t fwd_bump_every = 32;
+    // Order in which a reader works through its own assignments and the forwarding chunks it relays.
+    //   0 = nearest destination first, then all forwarding chunks (the straightforward order).
+    //   1 = furthest first, with forwarding batches interleaved between own assignments, so downstream
+    //       cores are handed work as early as possible and are less likely to sit starved.
+    // Purely a scheduling choice: accuracy is identical either way.
+    uint32_t assignment_order = 1;
     // Fine-grained stall attribution in the producer (eth-slot / issue / ring-wait buckets). Off by
     // default: it costs a few wall-clock register reads per token, which is a few percent of the very
     // number being measured. Turn it on to explain a result, off to quote one.
@@ -103,6 +109,7 @@ struct CombineFabric2dParams {
         "axis",
         "num_l1_slots",
         "fwd_bump_every",
+        "assignment_order",
         "stall_telemetry",
         "topology",
         "movements");
@@ -115,6 +122,7 @@ struct CombineFabric2dParams {
             axis,
             num_l1_slots,
             fwd_bump_every,
+            assignment_order,
             stall_telemetry,
             topology,
             movements);
