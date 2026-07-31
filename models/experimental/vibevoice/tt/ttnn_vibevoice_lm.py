@@ -97,13 +97,17 @@ _WKV_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     fused_activation=None,
     mcast_in0=True,
 )
+# B=2 fused-KV: the 8x1=8-core / ib2 / per_core_N=2 config measured 25.1 us in the deployed frame
+# = 63 GB/s on a 1.57 MB weight.  2x8=16 cores (per_core_N=1, 16*1 == Nt=16) with in0_block_w=4
+# reaches 15.0 us = 104 GB/s (1.67x, 28 calls/frame => -0.29 ms).  maxabsdiff==0 vs auto and vs
+# the 8-core ib2 config, so the q/k/v path stays byte-identical.
 _WKV_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
-    in0_block_w=2,
+    compute_with_storage_grid_size=ttnn.CoreCoord(2, 8),
+    in0_block_w=4,
     out_subblock_h=1,
-    out_subblock_w=2,
+    out_subblock_w=1,
     per_core_M=2,
-    per_core_N=2,
+    per_core_N=1,
     fuse_batch=True,
     fused_activation=None,
     mcast_in0=True,
@@ -137,13 +141,17 @@ _FFN_DOWN_DECODE_PROGCFG_B1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     fused_activation=None,
     mcast_in0=True,
 )
+# B=2 down-proj: the 8x3=24-core / ib4 / per_core_N=2 config measured 99.1 us in the deployed
+# frame = 277 GB/s.  Spreading N over 6x8=48 cores (per_core_N=1, 48*1 == Nt=48) and widening the
+# K-streaming to in0_block_w=8 reaches 78.7 us = 350 GB/s (1.26x, 28 calls/frame => -0.57 ms).
+# maxabsdiff==0 vs both auto and the 24-core ib4 config, same in0_block_w argument as above.
 _FFN_DOWN_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
-    in0_block_w=4,
+    compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+    in0_block_w=8,
     out_subblock_h=1,
-    out_subblock_w=2,
+    out_subblock_w=1,
     per_core_M=2,
-    per_core_N=2,
+    per_core_N=1,
     fuse_batch=True,
     fused_activation=None,
     mcast_in0=True,
