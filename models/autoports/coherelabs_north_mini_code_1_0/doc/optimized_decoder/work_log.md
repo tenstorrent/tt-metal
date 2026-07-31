@@ -378,7 +378,7 @@ Result: 28 passed in 286.85 seconds
 - [x] Selected policies reproduced after default wiring at both batch sizes.
 - [x] Full optimized-only suite console, JUnit, and Watcher evidence retained.
 - [ ] Independent `$stage-review` clean-pass after remediation.
-- [ ] Local stage-owned commit and SHA log after clean review.
+- [x] Local stage-owned implementation commit: `26ffee67839`.
 
 ## 2026-07-31 PCC-gate autofix
 
@@ -445,6 +445,10 @@ Fresh `$stage-review` verdict: **clean-pass**, with no required-work findings.
 The reviewer confirmed the independent runtime, restored `0.995` gates,
 official-weight result, cache/context contract, first-review remediation,
 final latency wins, final Tracy policies with no host ops, exact-source
-Watcher run, optimize checklist, and stage scope. The local checkpoint is the
-only pending gate; the stage-running marker permits this scoped commit while
-forbidding checkout, branch, and reset operations.
+Watcher run, optimize checklist, and stage scope. The stage-running marker
+permitted the scoped checkpoint while forbidding checkout, branch, and reset
+operations.
+
+The scoped implementation, tests, documentation, and retained evidence were
+committed locally as `26ffee67839` (`Optimize North-Mini decoder`). No push was
+performed. This documentation/status update is a separate bookkeeping commit.

@@ -1,6 +1,7 @@
 # North-Mini-Code-1.0 optimized decoder
 
-Status: independent review clean-pass; local checkpoint pending.
+Status: complete; independent review clean-pass. Implementation checkpoint:
+`26ffee67839`.
 
 This stage optimizes the single-device decoder implemented by
 `tt/functional_decoder.py`.  It preserves the public prefill/decode, paged

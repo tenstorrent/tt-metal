@@ -24,10 +24,9 @@
     "required_work": []
   },
   "optimized_decoder_stage": {
-    "completion_status": "review_complete",
-    "pending_gates": [
-      "local_checkpoint_commit"
-    ],
+    "completion_status": "complete",
+    "pending_gates": [],
+    "implementation_commit": "26ffee67839",
     "independent_stage_review": {
       "verdict": "clean-pass",
       "required_work": []
