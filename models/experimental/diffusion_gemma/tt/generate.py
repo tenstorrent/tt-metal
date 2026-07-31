@@ -11,6 +11,7 @@ the DiffusionGemma-local commit decode path.
 
 from __future__ import annotations
 
+import os
 import time
 from numbers import Integral
 from typing import Callable, NamedTuple
@@ -969,6 +970,12 @@ def denoise_and_commit_block(
             raise degeneracy.DegenerateBlockError(message, tokens=trajectory.committed, stats=degeneracy_stats)
         logger.warning(f"{message}; re-denoising with fresh noise (attempt {attempt}/{max_attempts - 1})")
 
+    # Same probe as the prefill one (tt/serving.py): commit is the other hot NON-traced
+    # dispatch, and its latency is bimodal the same way (p50 0.19 s, mean 0.68 s, max 4.51 s
+    # on tt-shield run 30640405931). Prefill's spike turned out to be host program builds, so
+    # the first thing to know about commit is whether wall time is this thread's CPU too.
+    commit_probe = os.environ.get("DG_PREFILL_CPU_PROBE", "0") == "1"
+    commit_cpu0 = (time.process_time(), time.thread_time()) if commit_probe else None
     commit_t0 = time.perf_counter()
     commit_fn(
         tt_model,
@@ -978,6 +985,14 @@ def denoise_and_commit_block(
         page_tables_per_layer=page_tables_per_layer,
     )
     commit_s = time.perf_counter() - commit_t0
+    if commit_cpu0 is not None:
+        commit_proc = time.process_time() - commit_cpu0[0]
+        commit_thread = time.thread_time() - commit_cpu0[1]
+        logger.info(
+            f"DG_COMMIT_CPU start_pos={start_pos} wall_s={commit_s:.4f} "
+            f"process_cpu_s={commit_proc:.4f} thread_cpu_s={commit_thread:.4f} "
+            f"thread_cpu_frac={commit_thread / max(commit_s, 1e-9):.3f}"
+        )
     if timings is not None:
         timings.update(denoise_s=denoise_s, commit_s=commit_s)
     next_pos = start_pos + trajectory.committed.shape[1]

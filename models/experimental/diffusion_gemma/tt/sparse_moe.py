@@ -47,6 +47,92 @@ RAGGED_MAX_M_BLOCKS = 4
 # ``chunked_ragged_sparse_prefill_forward``). Matches the QB2-validated single-call ceiling.
 RAGGED_PREFILL_CHUNK = 4096
 
+# Segment-count ladder for the ragged groups. WHY THIS EXISTS: each group is handed to
+# ``ttnn.sparse_matmul`` as [1, group_size, m_blocks*TILE, H] with nnz=group_size, and
+# ``group_size`` is the number of expert-segments that happen to have that m_blocks -- i.e. it is
+# ROUTING-dependent. A new prompt routes differently, so the geometry is new, so ~3 sparse_matmuls
+# x 30 layers x N groups all MISS the program cache and get built ON THE HOST. Measured on QB2
+# 2026-07-31 with DG_PREFILL_CPU_PROBE: 4.0-7.98 s at cache_len 128 and 5.0-17.4 s at 2048, with
+# thread_cpu_frac 0.947-0.982, i.e. the spike is host compile, not device work, and py-spy lands in
+# ragged_sparse_prefill_forward's sparse_matmul. Rounding group_size onto this ladder collapses the
+# shape space to at most len(_GROUP_LADDER) x RAGGED_MAX_M_BLOCKS programs, all reused across
+# prompts and warmable at startup.
+#
+# The ladder is finer than powers of two on purpose: padded segments cost real device work (their
+# rows are zeroed by slot_valid, so they compute 0 x W = 0), so the ceiling on waste matters.
+# Powers of two waste up to 100%; this wastes at most 50% below 8 and at most 33% above it.
+_GROUP_LADDER = (1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512)
+
+
+def _ladder_group_size(group_size: int) -> int:
+    """Round a segment count up onto ``_GROUP_LADDER`` (next power of two beyond it)."""
+    for step in _GROUP_LADDER:
+        if group_size <= step:
+            return step
+    size = _GROUP_LADDER[-1]
+    while size < group_size:
+        size *= 2
+    return size
+
+
+def _ragged_ladder_enabled() -> bool:
+    return os.environ.get("DG_PREFILL_RAGGED_LADDER", "1") == "1"
+
+
+def _quantize_ragged_groups(groups, token_slot, packed_rows):
+    """Pad each group's segment count onto the ladder, keeping the output identical.
+
+    A padded segment gets ``slot_token=0`` and ``slot_valid=0``, so its gathered input rows are
+    exactly zero and its expert output is exactly zero; ``token_slot`` never points at them, so
+    nothing downstream reads them. Real segments keep their row order inside the group, and
+    ``sparse_matmul`` is batched per segment with no cross-segment reduction, so every real row is
+    bit-identical to the unpadded call.
+
+    ``sparsity`` must keep exactly one non-zero per group row: ``nnz`` is passed as the (now padded)
+    ``group_size``, and ttnn documents that ``nnz != count_nonzero(sparsity)`` HANGS the kernel
+    (matmul_nanobind.cpp:1053 -- the receiver loops nnz times while the sender multicasts once per
+    non-zero). Padded rows are therefore pointed at expert 0 rather than left all-zero.
+
+    ``token_slot`` holds absolute row indices into the concatenated groups, so padding a group
+    shifts every later group's base and the indices must be rebased.
+    """
+    import torch  # module-local, matching _ragged_metadata_host: no global torch import here
+
+    if not groups:
+        return groups, token_slot, packed_rows
+
+    quantized = []
+    rebase = []
+    old_offset = 0
+    new_offset = 0
+    for m_blocks, group_size, slot_token, slot_valid, sparsity in groups:
+        rows_per_segment = m_blocks * TILE
+        old_rows = group_size * rows_per_segment
+        padded_size = _ladder_group_size(group_size)
+        pad_rows = (padded_size - group_size) * rows_per_segment
+        if pad_rows:
+            slot_token = torch.cat([slot_token.reshape(-1), torch.zeros(pad_rows, dtype=slot_token.dtype)])
+            slot_valid = torch.cat([slot_valid.reshape(-1, 1), torch.zeros((pad_rows, 1), dtype=slot_valid.dtype)])
+            padded_sparsity = torch.zeros((1, 1, padded_size, sparsity.shape[-1]), dtype=sparsity.dtype)
+            padded_sparsity[0, 0, :group_size] = sparsity[0, 0]
+            padded_sparsity[0, 0, group_size:, 0] = 1
+            sparsity = padded_sparsity
+        rebase.append((old_offset, old_rows, new_offset))
+        quantized.append((m_blocks, padded_size, slot_token, slot_valid, sparsity))
+        old_offset += old_rows
+        new_offset += padded_size * rows_per_segment
+
+    if new_offset != old_offset:
+        rebased = token_slot.clone()
+        for group_old, old_rows, group_new in rebase:
+            if group_new == group_old:
+                continue
+            in_group = (token_slot >= group_old) & (token_slot < group_old + old_rows)
+            rebased[in_group] = token_slot[in_group] + (group_new - group_old)
+        token_slot = rebased
+
+    return quantized, token_slot, new_offset
+
 
 @dataclass
 class RaggedRouting:
@@ -275,11 +361,15 @@ def _ragged_metadata_host(dense_routing, num_experts, top_k, max_m_blocks=RAGGED
             sparsity = torch.zeros((1, 1, group_size, num_experts), dtype=torch.bfloat16)
             sparsity[0, 0, torch.arange(group_size), group_experts] = 1
             groups.append((m_blocks, group_size, slot_token, slot_valid, sparsity))
+        token_slot = torch.from_numpy(token_slot_np.copy())
+        packed_rows = len(slot_token_np)
+        if _ragged_ladder_enabled():
+            groups, token_slot, packed_rows = _quantize_ragged_groups(groups, token_slot, packed_rows)
         return (
             groups,
-            torch.from_numpy(token_slot_np.copy()),
+            token_slot,
             route_weight.reshape(S, top_k, 1),
-            len(slot_token_np),
+            packed_rows,
         )
 
     flat_expert = expert_index.reshape(-1)
@@ -330,6 +420,8 @@ def _ragged_metadata_host(dense_routing, num_experts, top_k, max_m_blocks=RAGGED
         groups.append((m_blocks, group_size, slot_token, slot_valid, sparsity))
         output_offset += total_rows
 
+    if _ragged_ladder_enabled():
+        groups, token_slot, output_offset = _quantize_ragged_groups(groups, token_slot, output_offset)
     return groups, token_slot, route_weight.reshape(S, top_k, 1), output_offset
 
 
