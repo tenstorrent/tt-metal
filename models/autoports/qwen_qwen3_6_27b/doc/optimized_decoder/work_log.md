@@ -127,4 +127,5 @@ The required report and final IR exist. An additional batch-1 capture is in
 
 - functional base: `c3cc345a10b`
 - optimized implementation and historical evidence: `c55a8c067c8`
-- evidence-remediation commit: pending final rereview
+- residual-chain optimization, evidence remediation, and clean rereview:
+  `81438cb467b`
