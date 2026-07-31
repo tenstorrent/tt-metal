@@ -224,9 +224,12 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
                 pc->out_subblock_w != 0 && pc->out_subblock_h != 0,
                 "sparse_matmul: out_subblock_w and out_subblock_h must be non-zero");
             TT_FATAL(
+                pc->out_block_w != 0 && pc->out_block_h != 0,
+                "sparse_matmul: out_block_w and out_block_h must be non-zero");
+            TT_FATAL(
                 pc->out_block_w % pc->out_subblock_w == 0,
                 "sparse_matmul: out_block_w ({}) must be divisible by out_subblock_w ({}); otherwise "
-                "in1_num_subblocks becomes 0 and the mcast_in0 kernel deadlocks",
+                "the mcast_in0 kernel can deadlock",
                 pc->out_block_w,
                 pc->out_subblock_w);
             TT_FATAL(
@@ -234,6 +237,11 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
                 "sparse_matmul: out_block_h ({}) must be divisible by out_subblock_h ({})",
                 pc->out_block_h,
                 pc->out_subblock_h);
+            TT_FATAL(
+                pc->per_core_M % pc->out_block_h == 0,
+                "sparse_matmul: per_core_M ({}) must be divisible by out_block_h ({})",
+                pc->per_core_M,
+                pc->out_block_h);
             TT_FATAL(
                 pc->per_core_N % pc->out_block_w == 0,
                 "sparse_matmul: per_core_N ({}) must be divisible by out_block_w ({})",
