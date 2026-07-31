@@ -518,12 +518,22 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
         record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
 
-        this->write_program_cmds_to_subgrid(
-            device_range,
-            program_cmd_seq,
-            dispatch_metadata.stall_first,
-            dispatch_metadata.stall_before_program,
-            chip_ids_in_workload);
+        {
+            // Spans the command write rather than marking its end. The device begins executing partway through this
+            // window -- measured ~10.7us in, against a write that takes 20-30us -- so a marker at either edge reads
+            // as though the device zone were misplaced. As a zone, the device zone visibly falls inside it.
+            ZoneNamedN(write_cmds_zone, "WriteProgramCmds", !tt::tt_metal::getDeviceProfilerState());
+            if (write_cmds_zone.IsActive()) {
+                const std::string zone_text = fmt::format("op_id={}", program.get_runtime_id());
+                ZoneTextV(write_cmds_zone, zone_text.c_str(), zone_text.size());
+            }
+            this->write_program_cmds_to_subgrid(
+                device_range,
+                program_cmd_seq,
+                dispatch_metadata.stall_first,
+                dispatch_metadata.stall_before_program,
+                chip_ids_in_workload);
+        }
 
         // Tag the host-side Tracy zone with the program's runtime_host_id so it pairs 1:1
         // with the device-side zones emitted by the real-time profiler.

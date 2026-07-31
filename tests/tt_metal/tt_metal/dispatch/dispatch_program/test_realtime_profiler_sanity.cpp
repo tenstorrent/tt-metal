@@ -367,9 +367,10 @@ TEST(RealtimeProfilerClockModel, HandshakeWorseThanTheStandingAnchorIsRejected) 
     const auto anchored_at = host_instant(1'000'000'000);
     ASSERT_TRUE(model.try_reanchor(ClockSyncSample{.host_time = anchored_at, .rtt = std::chrono::nanoseconds(1200)}));
 
-    // The standing anchor has drifted only nanoseconds in 10ms, so a round trip several times slower than the one it
-    // was placed with would land the anchor worse than leaving it alone.
-    const auto soon_after = anchored_at + std::chrono::milliseconds(10);
+    // The standing anchor has drifted only nanoseconds in 1ms, so a round trip several times slower than the one it
+    // was placed with would land the anchor worse than leaving it alone. The window over which that holds is set by
+    // kClockDriftPpm: at 150ppm the anchor is credited 150ns of degradation per millisecond.
+    const auto soon_after = anchored_at + std::chrono::milliseconds(1);
     EXPECT_FALSE(model.try_reanchor(ClockSyncSample{.host_time = soon_after, .rtt = std::chrono::microseconds(30)}));
     EXPECT_FALSE(model.try_reanchor(ClockSyncSample{.host_time = soon_after, .rtt = std::chrono::microseconds(2)}));
     // One as tight as the standing anchor is worth taking, since it is that much fresher.
@@ -382,12 +383,12 @@ TEST(RealtimeProfilerClockModel, DriftEventuallyMakesEvenASlowHandshakeWorthTaki
     const auto anchored_at = host_instant(1'000'000'000);
     ASSERT_TRUE(model.try_reanchor(ClockSyncSample{.host_time = anchored_at, .rtt = std::chrono::nanoseconds(1200)}));
 
-    // At ~6ppm the standing anchor's error passes a 30us placement somewhere between these two instants, and the
-    // slow handshake goes from being a downgrade to being an improvement.
-    EXPECT_FALSE(model.try_reanchor(
-        ClockSyncSample{.host_time = anchored_at + std::chrono::seconds(1), .rtt = std::chrono::microseconds(60)}));
+    // At kClockDriftPpm the standing anchor's error passes a 30us placement somewhere between these two instants
+    // (~196ms), and the slow handshake goes from being a downgrade to being an improvement.
+    EXPECT_FALSE(model.try_reanchor(ClockSyncSample{
+        .host_time = anchored_at + std::chrono::milliseconds(100), .rtt = std::chrono::microseconds(60)}));
     EXPECT_TRUE(model.try_reanchor(
-        ClockSyncSample{.host_time = anchored_at + std::chrono::seconds(30), .rtt = std::chrono::microseconds(60)}))
+        ClockSyncSample{.host_time = anchored_at + std::chrono::seconds(1), .rtt = std::chrono::microseconds(60)}))
         << "once drift has outgrown it, a loose anchor beats an old one";
 }
 

@@ -16,12 +16,12 @@ namespace tt::tt_metal {
 namespace {
 
 // Rate the device clock walks away from the frequency fitted at bring-up, used to judge how far the standing anchor
-// has degraded since it was placed. Dominated by the chip warming after a fit taken cold, so it is architecture- and
-// load-dependent: measured under trace replay at <=0.2ppm on Wormhole and 0.1-14.5ppm on Blackhole, always in the
-// same direction (the clock slows). Sized above the worst of those, because underestimating is the unsafe direction
-// -- it holds a stale anchor while the real error grows faster than modelled, where overestimating only re-anchors
-// sooner. RealtimeProfilerStress.ClockDriftStaysWithinModelBudget measures the rate and asserts this still bounds it.
-constexpr double kClockDriftPpm = 25.0;
+// has degraded since it was placed. The dominant term is AICLK moving under load, not the chip warming: fitting the
+// slope over successive 200ms windows while records stream measures a 123ppm spread on Blackhole, against effectively
+// zero on an idle chip. Sized above that, because underestimating is the unsafe direction -- it holds a stale anchor
+// while the real error grows faster than modelled, where overestimating only re-anchors sooner.
+// RealtimeProfilerStress.ClockDriftStaysWithinModelBudget measures the rate and asserts this still bounds it.
+constexpr double kClockDriftPpm = 150.0;
 
 // Half the round trip: the anchor could have landed anywhere inside it.
 constexpr std::chrono::nanoseconds placement_error(std::chrono::nanoseconds rtt) { return rtt / 2; }
@@ -85,8 +85,10 @@ std::optional<ClockModel::FitResidual> ClockModel::fit(
     // significant digits of the sums to catastrophic cancellation. Differencing two time_points yields a signed
     // duration, which is what the centering needs.
     const double n = static_cast<double>(fitted_samples.size());
+    // Centered on the same instant try_reanchor would anchor at, so the fit and the re-anchor place a sample at the
+    // same point and the initial anchor is not offset from every later one by half a bracket.
     const auto centered_host = [host_start](const ClockSyncSample& s) {
-        return static_cast<double>((s.host_time - host_start).count());
+        return static_cast<double>((s.host_time + placement_error(s.rtt) - host_start).count());
     };
 
     double host_mean = 0.0;
@@ -146,6 +148,15 @@ std::optional<ClockModel::FitResidual> ClockModel::fit(
 
 bool ClockModel::try_reanchor(const ClockSyncSample& sample) {
     if (last_reanchor_at_.has_value()) {
+        // Measured before the anchor moves: where the standing mapping said this probe's device timestamp would land,
+        // against where it actually did. That difference is what the mapping drifted over the interval just ended,
+        // and it is the only term of the error bar that is measured rather than assumed.
+        const double at_ns =
+            static_cast<double>((sample.host_time + placement_error(sample.rtt)).time_since_epoch().count());
+        const double predicted = frequency_ * at_ns + static_cast<double>(device_cycle_offset_);
+        last_drift_ = std::chrono::nanoseconds(
+            std::llround(std::abs(static_cast<double>(sample.device_ticks) - predicted) / frequency_));
+
         // Only worth taking if it lands the anchor better than the standing one now sits. The standing anchor's error
         // is where it was placed plus what the clock has drifted since, so a slow round trip -- the device servicing
         // the handshake late while it is busy pushing records, say -- loses to a slightly older anchor that is still
@@ -168,7 +179,11 @@ experimental::ProgramRealtimeClockSync ClockModel::mapping() const {
         .device_cycle_offset = device_cycle_offset_,
         // Where the anchor could have landed inside its round trip. Drift between re-anchors measures ~6 ppm, which
         // over one resync interval stays far inside this bound, so it carries no term of its own.
-        .sync_error = placement_error(rtt_),
+        // Placement plus drift: half the interval the anchor could have landed in, plus how far the mapping was
+        // measured to have moved over the interval just ended. The device clock's rate wanders briefly under load --
+        // 500-1000ppm in ~0.4% of intervals on Blackhole, against nothing at all when idle -- and no fit predicts
+        // that, so the honest bound reports what the last probe actually found rather than a modelled rate.
+        .sync_error = placement_error(rtt_) + last_drift_,
     };
 }
 

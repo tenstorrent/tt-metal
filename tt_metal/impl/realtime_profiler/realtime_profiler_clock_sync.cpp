@@ -6,37 +6,23 @@
 
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <exception>
 #include <mutex>
-#include <unordered_map>
-#include <memory>
+#include <optional>
 #include <thread>
-#include <unistd.h>
+#include <unordered_map>
 #include <vector>
-
-#if defined(__x86_64__) || defined(__i386__)
-#include <immintrin.h>
-#endif
 
 #include <tt-logger/tt-logger.hpp>
 
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/device.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
-#include <umd/device/driver_atomics.hpp>
 #include <umd/device/pcie/tlb_handle.hpp>
 #include <umd/device/pcie/tlb_window.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/tlb.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt_metal.hpp>
-
 #include "context/metal_context.hpp"
-#include "dispatch/system_memory_manager.hpp"
-#include "hostdev/realtime_profiler_msgs.h"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
@@ -45,37 +31,8 @@ namespace tt::tt_metal {
 
 namespace {
 
-// How far above the fastest round trip the link has ever managed a probe may land and still end the burst. An absolute
-// margin against that floor, not a fraction of the standing anchor: the re-anchor gate's drift allowance admits almost
-// any sample, so comparing against the previous acceptance lets the threshold walk upward one acceptance at a time
-// until it sits at the typical round trip instead of the best one. Against the floor the accepted round trip stays
-// within this margin of the best achievable, so the published bound cannot drift.
-constexpr auto kResyncExitMargin = std::chrono::nanoseconds(50);
-
-// Round-trip busy-poll backstop, not an accept threshold. The first kRttProbeHealthyPolls reads skip the deadline
-// check so a healthy handshake never reads the clock inside the round trip it is timing; only a stalled device
-// reaches the check.
-//
-// Steady state keeps a handshake only if it places the anchor better than the standing one has since degraded, so at
-// a ~1.3us round trip nothing above a few microseconds is ever taken. Polling far past that spends the sync thread on
-// a sample destined to be discarded, and the cost lands exactly when a device stops answering: every probe then runs
-// to full depth, and a pass over 32 devices has to fit inside kClockSyncInterval. The bound below still leaves room
-// for the drift term to justify a slower handshake after a couple of seconds of rejections, which is as long as this
-// is worth tolerating before the stall is the real problem.
-constexpr auto kResyncProbeTimeout = std::chrono::microseconds(50);
-// Bring-up has no standing anchor to beat, so its first handshake is accepted however slow. Worth waiting out a
-// loaded machine rather than giving up and running on the seeded AICLK.
-constexpr auto kCalibrateProbeTimeout = std::chrono::microseconds(300);
-constexpr uint32_t kRttProbeHealthyPolls = 128;
-
 // How long a cached calibration stays usable across a MeshDevice close/reopen.
 constexpr auto kCalibrationCacheMaxAge = std::chrono::seconds(60);
-
-// Host ACK buffer, 32-bit words: [device_time_lo, device_time_hi, token]. device_time is at the base so it is 8-byte
-// aligned; NOC PCIe writes require src/dst to share the low 4 bits, so its L1 source is 16-aligned and the token's is
-// 8-mod-16.
-constexpr uint32_t kSyncAckWords = 3;
-constexpr uint32_t kSyncAckTokenWord = 2;
 
 // Process-global per-physical-chip cache of the fitted clock frequency, so a rapid MeshDevice reopen can skip the
 // ~0.5s bring-up fit and take one anchor probe instead (device WALL_CLOCK is free-running across close). The offset is
@@ -115,21 +72,55 @@ RealtimeProfilerFrequencyCache& rt_profiler_frequency_cache() {
 
 }  // namespace
 
+RealtimeProfilerClockSync::RealtimeProfilerClockSync() = default;
+RealtimeProfilerClockSync::~RealtimeProfilerClockSync() = default;
+
 void RealtimeProfilerClockSync::configure(const RealtimeProfilerClockSyncConfig& config) {
     TTZoneScopedDN(RT_PROFILER, "ClockSyncConfigure");
     context_id_ = config.context_id;
     device_ = config.device;
     chip_id_ = config.device->id();
     profiler_core_ = config.profiler_core;
-    mesh_coord_ = config.mesh_coord;
-    hugepage_fallback_ = config.hugepage_fallback;
-    l1_ = resolve_l1_addrs(config.msg_base_addr);
-    // A chip always has a usable frequency, whatever happens to its sync handshake; later steps only refine it.
+    profiler_core_virtual_ = device_->virtual_core_from_logical_core(profiler_core_, CoreType::WORKER);
+    const auto& hal = MetalContext::instance(context_id_).hal();
+    wall_clock_addr_lo_ = hal.get_tensix_wall_clock_reg_addr_lo();
+    wall_clock_addr_hi_ = hal.get_tensix_wall_clock_reg_addr_hi();
+    // A chip always has a usable frequency, whatever happens to its sync. Later steps only refine it.
     model_.seed_frequency(MetalContext::instance(context_id_).get_cluster().get_device_aiclk(chip_id_) / 1000.0);
-    configure_write_path();
-    configure_ack_word(*config.mesh_device);
-    // Records can be drained before the first handshake completes, so the seeded AICLK has to be readable already.
+    configure_clock_read_path();
+    // Records can be drained before the first sample is taken, so the seeded AICLK has to be readable already.
     publish_mapping();
+}
+
+void RealtimeProfilerClockSync::configure_clock_read_path() {
+    try {
+        auto* tlb_manager =
+            MetalContext::instance(context_id_).get_cluster().get_driver()->get_chip(chip_id_)->get_tlb_manager();
+        if (tlb_manager == nullptr) {
+            return;
+        }
+        tt::umd::tlb_data cfg{};
+        cfg.local_offset = wall_clock_addr_lo_;
+        cfg.x_end = profiler_core_virtual_.x;
+        cfg.y_end = profiler_core_virtual_.y;
+        cfg.ordering = tt::umd::tlb_data::Strict;
+        clock_tlb_ = tlb_manager->allocate_tlb_window(cfg, tt::umd::TlbMapping::UC);
+        if (clock_tlb_ == nullptr) {
+            return;
+        }
+        // Resolved once: TlbWindow's accessors are virtual calls that re-validate the offset and re-derive the address
+        // on every access, and the window is fixed, so the address is not.
+        const uint64_t local = clock_tlb_->handle_ref().get_config().local_offset;
+        auto* base = clock_tlb_->handle_ref().get_base();
+        mapped_clock_lo_ = reinterpret_cast<volatile uint32_t*>(base + (wall_clock_addr_lo_ - local));
+        mapped_clock_hi_ = reinterpret_cast<volatile uint32_t*>(base + (wall_clock_addr_hi_ - local));
+    } catch (const std::exception& e) {
+        log_debug(
+            tt::LogMetal,
+            "[Real-time profiler] Device {}: no TLB window for the clock register ({}); sync reads it through UMD",
+            chip_id_,
+            e.what());
+    }
 }
 
 void RealtimeProfilerClockSync::publish_mapping() {
@@ -161,256 +152,114 @@ RealtimeProfilerClockSync::Calibration RealtimeProfilerClockSync::calibration() 
     }
 }
 
-RealtimeProfilerClockSync::SyncL1Addrs RealtimeProfilerClockSync::resolve_l1_addrs(uint32_t msg_base_addr) const {
-    using Msg = realtime_profiler_msgs::realtime_profiler_msg_t;
-    const auto& factory =
-        MetalContext::instance(context_id_).hal().get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
-    const auto field_addr = [&](Msg::Field field) -> uint32_t {
-        return msg_base_addr + static_cast<uint32_t>(factory.offset_of<Msg>(field));
-    };
-    return SyncL1Addrs{
-        .token = field_addr(Msg::Field::sync_token),
-        .ack_host_addr = field_addr(Msg::Field::sync_ack_host_addr),
-    };
-}
-
-void RealtimeProfilerClockSync::configure_write_path() {
-    try {
-        const CoreCoord rt_virtual = device_->virtual_core_from_logical_core(profiler_core_, CoreType::WORKER);
-        const tt_xy_pair tlb_core(rt_virtual.x, rt_virtual.y);
-        auto* tlb_manager =
-            MetalContext::instance(context_id_).get_cluster().get_driver()->get_chip(device_->id())->get_tlb_manager();
-        // ll_api::configure_static_tlbs gives every TENSIX core a static window at cluster init, keyed by its
-        // TRANSLATED coordinate, which is exactly what virtual_core_from_logical_core returns for a WORKER. The
-        // profiler core is a TENSIX worker, so this lookup hits its own window on every architecture that reaches
-        // here. is_tlb_mapped is the precondition get_tlb_window would otherwise throw on, and bounds-checks the
-        // token against the window; nothing is allocated, the window already exists.
-        if (tlb_manager == nullptr || !tlb_manager->is_tlb_mapped(tlb_core, l1_.token, sizeof(uint32_t))) {
-            return;
-        }
-        sync_tlb_ = tlb_manager->get_tlb_window(tlb_core);
-        // Resolve the token's mapped address once. TlbWindow::write32 is a virtual call that re-validates the
-        // offset and re-derives the address on every store; the window is static, so the address is not.
-        const uint64_t window_offset =
-            sync_tlb_->get_base_address() - sync_tlb_->handle_ref().get_config().local_offset;
-        sync_doorbell_ =
-            reinterpret_cast<volatile uint32_t*>(sync_tlb_->handle_ref().get_base() + l1_.token + window_offset);
-    } catch (const std::exception& e) {
-        log_debug(
-            tt::LogMetal,
-            "[Real-time profiler] Device {}: no TLB window for the profiler core ({}); sync uses write_core_immediate",
-            device_->id(),
-            e.what());
-    }
-}
-
-void RealtimeProfilerClockSync::configure_ack_word(distributed::MeshDevice& mesh_device) {
-    const uint32_t device_id = device_->id();
-    const auto write_field = [&](uint32_t addr, uint32_t val) {
-        std::vector<uint32_t> data = {val};
-        tt::tt_metal::detail::WriteToDeviceL1(device_, profiler_core_, addr, data, CoreType::WORKER);
-    };
-    try {
-        if (hugepage_fallback_) {
-            auto [ack_host, ack_dev_addr] = device_->sysmem_manager().allocate_region(kSyncAckWords * sizeof(uint32_t));
-            if (ack_host == nullptr) {
-                return;
-            }
-            ack_host_ptr_ = static_cast<volatile uint32_t*>(ack_host);
-            for (uint32_t w = 0; w < kSyncAckWords; ++w) {
-                const_cast<uint32_t*>(ack_host_ptr_)[w] = 0;
-            }
-
-            write_field(l1_.ack_host_addr, ack_dev_addr);
-            write_field(l1_.ack_host_addr + sizeof(uint32_t), 0);
-        } else {
-            const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
-            // Page-aligned because PinnedMemory maps whole pages; aligned new rather than aligned_alloc so the
-            // deleter is not hand-rolled memory management.
-            std::shared_ptr<uint32_t[]> backing(
-                new (std::align_val_t{page}) uint32_t[page / sizeof(uint32_t)],
-                [page](uint32_t* p) { operator delete[](p, std::align_val_t{page}); });
-            for (uint32_t w = 0; w < kSyncAckWords; ++w) {
-                backing[w] = 0;
-            }
-            tt::tt_metal::HostBuffer view(
-                ttsl::Span<uint32_t>(backing.get(), kSyncAckWords), tt::tt_metal::MemoryPin(backing));
-            distributed::MeshCoordinateRangeSet range;
-            range.merge(distributed::MeshCoordinateRange(mesh_coord_));
-            auto pinned = tt::tt_metal::experimental::PinnedMemory::Create(mesh_device, range, view, true);
-            if (!pinned) {
-                return;
-            }
-            const auto noc = pinned->get_noc_addr(device_id);
-            if (!noc.has_value()) {
-                return;
-            }
-            ack_host_backing_ = backing;
-            ack_pinned_ = pinned;
-            ack_host_ptr_ = backing.get();
-            write_field(l1_.ack_host_addr, static_cast<uint32_t>(noc->addr & 0xFFFFFFFFull));
-            write_field(l1_.ack_host_addr + sizeof(uint32_t), static_cast<uint32_t>(noc->addr >> 32));
-        }
-    } catch (const std::exception& e) {
-        log_debug(
-            tt::LogMetal,
-            "[Real-time profiler] Device {}: host-ACK setup failed ({}); sync round-trip bound disabled",
-            device_id,
-            e.what());
-    }
-}
-
-void RealtimeProfilerClockSync::write_token(uint32_t value) {
-    if (sync_doorbell_ != nullptr) {
-        *sync_doorbell_ = value;
-        tt_driver_atomics::sfence();
-    } else {
-        // Resolves the virtual core inside the interval the round trip is timed over. Every chip that gives the
-        // profiler core a static window takes the branch above, so this cost has nowhere to show up in practice.
-        const CoreCoord vcore = device_->virtual_core_from_logical_core(profiler_core_, CoreType::WORKER);
-        MetalContext::instance(context_id_)
-            .get_cluster()
-            .write_core_immediate(&value, sizeof(value), tt_cxy_pair(device_->id(), vcore), l1_.token);
-        tt_driver_atomics::sfence();
-    }
-}
-
-void RealtimeProfilerClockSync::evict_ack_line() const {
-#if defined(__x86_64__) || defined(__i386__)
-    // On the fallback path the device's PCIe writes may be non-snooped, so a cached line would read stale. The flush
-    // cannot be hoisted out of the poll loop: each load re-caches the line. clflushopt was measured on Wormhole and is
-    // indistinguishable from clflush here -- its advantage is pipelining a run of flushes, and this is one line
-    // flushed immediately before a load that needs it back, so the cost is the re-fetch, not the ordering.
-    if (hugepage_fallback_) {
-        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(ack_host_ptr_)));
-        _mm_lfence();
-    }
-#endif
-}
-
-uint32_t RealtimeProfilerClockSync::read_ack() const {
-    evict_ack_line();
-    return ack_host_ptr_[kSyncAckTokenWord];
-}
-
-uint64_t RealtimeProfilerClockSync::read_device_time() const {
-    evict_ack_line();
-    return (static_cast<uint64_t>(ack_host_ptr_[1]) << 32) | static_cast<uint64_t>(ack_host_ptr_[0]);
-}
-
-std::optional<std::chrono::nanoseconds> RealtimeProfilerClockSync::measure_rtt(
-    std::chrono::steady_clock::time_point host_before, uint32_t token, std::chrono::nanoseconds timeout) {
-    const auto deadline = host_before + timeout;
-    uint32_t polls = 0;
-    // Stop timing the moment the timestamp lands. The device sampled its clock before issuing that write, so the
-    // token write and both barriers that follow only widen the interval without adding uncertainty about when the
-    // clock was read. A torn read here is harmless: any change at all means the write has started.
-    while (read_device_time() == last_device_time_) {
-        if (++polls > kRttProbeHealthyPolls && std::chrono::steady_clock::now() > deadline) {
-            return std::nullopt;  // device stopped responding
-        }
-    }
-    const auto rtt = std::chrono::steady_clock::now() - host_before;
-    const uint64_t timed_device_time = read_device_time();
-
-    // Off the timed path: the token is ordered behind the timestamp, so it is what makes both words complete.
-    while (read_ack() != token) {
-        if (++polls > kRttProbeHealthyPolls && std::chrono::steady_clock::now() > deadline) {
-            last_device_time_ = read_device_time();
-            return std::nullopt;
-        }
-    }
-    // The token identifies this probe's reply, and the device writes it after the timestamp, so by now device_time
-    // holds this probe's value. If it moved since the read that stopped the clock, the change that stopped it came
-    // from an earlier probe whose reply was still in flight, and the interval is shorter than the true round trip.
-    // Such a sample re-anchors ahead of every honest one, since a smaller round trip always wins.
-    if (read_device_time() != timed_device_time) {
-        last_device_time_ = read_device_time();
-        return std::nullopt;
-    }
-    return rtt;
-}
-
-std::optional<ClockSyncSample> RealtimeProfilerClockSync::probe(std::chrono::nanoseconds timeout) {
-    // Opened before host_before is taken, so the zone's own cost stays outside the interval measure_rtt times.
-    // Nothing between that read and the round trip's end may be instrumented for the same reason.
+std::optional<ClockSyncSample> RealtimeProfilerClockSync::probe() {
+    // Opened before the bracket so the zone's own cost stays outside it. Nothing between the two clock reads may be
+    // instrumented, for the same reason.
     TTZoneScopedDN(RT_PROFILER, "Probe");
-    const auto host_before = std::chrono::steady_clock::now();
-    if (++sync_seq_ == 0) {
-        sync_seq_ = 1;
-    }
-    write_token(sync_seq_);
-    const auto rtt = measure_rtt(host_before, sync_seq_, timeout);
-    if (!rtt.has_value()) {
+    uint32_t lo = 0;
+    try {
+        // The high word is re-read only when it could have changed: after a wrap, or after a gap long enough that a
+        // wrap might have been missed entirely. A read of the low word latches the high word, so when it is read it
+        // completes the value sampled inside the bracket and does not need to sit inside it.
+        constexpr auto kMaxGapBeforeRereadingHigh = std::chrono::seconds(1);
+        const bool reread_high = last_probe_at_ == std::chrono::steady_clock::time_point{} ||
+                                 std::chrono::steady_clock::now() - last_probe_at_ > kMaxGapBeforeRereadingHigh;
+        std::chrono::steady_clock::time_point host_before;
+        std::chrono::steady_clock::time_point host_after;
+        if (mapped_clock_lo_ != nullptr) {
+            host_before = std::chrono::steady_clock::now();
+            lo = *mapped_clock_lo_;
+            host_after = std::chrono::steady_clock::now();
+            if (reread_high) {
+                cached_clock_hi_ = *mapped_clock_hi_;
+            }
+        } else {
+            auto& cluster = MetalContext::instance(context_id_).get_cluster();
+            const tt_cxy_pair target(chip_id_, profiler_core_virtual_);
+            host_before = std::chrono::steady_clock::now();
+            cluster.read_reg(&lo, target, wall_clock_addr_lo_);
+            host_after = std::chrono::steady_clock::now();
+            if (reread_high) {
+                cluster.read_reg(&cached_clock_hi_, target, wall_clock_addr_hi_);
+            }
+        }
+        if (!reread_high && lo < last_clock_lo_) {
+            ++cached_clock_hi_;  // the low word wrapped since the previous probe
+        }
+        last_clock_lo_ = lo;
+        last_probe_at_ = host_after;
+        const uint32_t hi = cached_clock_hi_;
+        const auto bracket = host_after - host_before;
+        TTZoneValueD(RT_PROFILER, static_cast<uint64_t>(bracket.count()));
+        return ClockSyncSample{
+            host_before,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(bracket),
+            (static_cast<uint64_t>(hi) << 32) | lo};
+    } catch (const std::exception& e) {
+        log_debug(tt::LogMetal, "[Real-time profiler] Device {}: clock read failed ({})", chip_id_, e.what());
         return std::nullopt;
     }
-    TTZoneValueD(RT_PROFILER, static_cast<uint64_t>(rtt->count()));
-    last_device_time_ = read_device_time();
-    return ClockSyncSample{host_before, *rtt, last_device_time_};
+}
+
+std::optional<ClockSyncSample> RealtimeProfilerClockSync::best_of(int probes) {
+    std::optional<ClockSyncSample> best;
+    for (int i = 0; i < probes; i++) {
+        const auto sample = probe();
+        if (sample.has_value() && (!best.has_value() || sample->rtt < best->rtt)) {
+            best = sample;
+        }
+    }
+    return best;
 }
 
 bool RealtimeProfilerClockSync::calibrate() {
     TTZoneScopedDN(RT_PROFILER, "Calibrate");
-    // Enough that the fitted slope is dominated by the baseline rather than per-probe noise. At 5ms spacing this is
+    // Enough that the fitted slope is dominated by the baseline rather than per-sample noise. At 5ms spacing this is
     // ~0.5s of bring-up per device.
     constexpr uint32_t kFitSamples = 100;
     constexpr auto kRunSyncSettleDelay = std::chrono::milliseconds(50);
     constexpr auto kRunSyncSampleInterval = std::chrono::milliseconds(5);
-    constexpr uint32_t kRunSyncMaxConsecutiveTimeouts = 3;
-    // A slow handshake places its sample badly rather than merely late, so spending one of the kFitSamples slots on
-    // it costs a real sample. Probe again instead, up to this many attempts, which is what keeps a degraded link from
-    // stretching bring-up: worst case is this many intervals rather than kFitSamples of them.
-    constexpr uint32_t kMaxProbeAttempts = kFitSamples * 3 / 2;
-    // Bar for accepting a probe, against the tightest round trip seen so far on this device. Same idea as resync's
-    // burst, which keeps probing until one matches the standing anchor.
-    constexpr int kProbeRttOutlierFactor = 2;
+    constexpr uint32_t kRunSyncMaxConsecutiveFailures = 3;
+    // Each fitted point is the tightest of a few reads, for the same reason resync bursts: one preempted read has a
+    // bracket wide enough that its midpoint is microseconds out, and at the ends of the span that tilts the slope by
+    // tens of ppm -- which the servo then spends the session correcting as though the chip were drifting.
+    constexpr int kProbesPerSample = 4;
+    // A settled clock fits this line to ~2ns rms; a fit taken while AICLK is ramping still uses every sample and still
+    // looks well-conditioned, but lands a frequency tens of ppm off and shows up as a residual three orders of
+    // magnitude above that. Retrying is cheap and the ramp is over in well under a second, where keeping the fit would
+    // have the servo correcting the error as drift for the rest of the session.
+    constexpr double kMaxFitResidualRmsNs = 200.0;
     const auto host_start_time = std::chrono::steady_clock::now();
 
     std::vector<ClockSyncSample> samples;
-    uint32_t rejected_probes = 0;
-    if (ack_host_ptr_ == nullptr) {
-        log_warning(
-            tt::LogMetal,
-            "[Real-time profiler] Device {} has no host ACK word; skipping sync (using default frequency)",
-            chip_id_);
-    } else {
-        std::this_thread::sleep_for(kRunSyncSettleDelay);
+    samples.reserve(kFitSamples);
+    std::this_thread::sleep_for(kRunSyncSettleDelay);
 
-        samples.reserve(kFitSamples);
-        uint32_t consecutive_timeouts = 0;
-        auto best_rtt = std::chrono::nanoseconds::max();
-        for (uint32_t attempt = 0; attempt < kMaxProbeAttempts && samples.size() < kFitSamples; attempt++) {
-            std::this_thread::sleep_for(kRunSyncSampleInterval);
+    // The first read pays the cold PCIe path, and sits at one end of the fitted span where a badly placed point has
+    // the most leverage over the slope. Taken and dropped rather than skipped, so the path is warm for the rest.
+    (void)probe();
 
-            const auto p = probe(kCalibrateProbeTimeout);
-            if (!p.has_value()) {
-                if (++consecutive_timeouts >= kRunSyncMaxConsecutiveTimeouts) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {} sync aborted after {} consecutive probe timeouts; the "
-                        "profiler kernel may not be responding (check DPRINT output)",
-                        chip_id_,
-                        consecutive_timeouts);
-                    break;
-                }
-                continue;
+    uint32_t consecutive_failures = 0;
+    for (uint32_t attempt = 0; attempt < kFitSamples; attempt++) {
+        std::this_thread::sleep_for(kRunSyncSampleInterval);
+        const auto p = best_of(kProbesPerSample);
+        if (!p.has_value()) {
+            if (++consecutive_failures >= kRunSyncMaxConsecutiveFailures) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {} sync aborted after {} consecutive failed clock reads",
+                    chip_id_,
+                    consecutive_failures);
+                break;
             }
-            consecutive_timeouts = 0;
-
-            // The first probe pays the cold PCIe path, so it sets no precedent for what a good round trip looks like.
-            if (attempt == 0) {
-                continue;
-            }
-            best_rtt = std::min(best_rtt, p->rtt);
-            if (p->rtt > best_rtt * kProbeRttOutlierFactor) {
-                ++rejected_probes;
-                continue;
-            }
-            samples.push_back(*p);
+            continue;
         }
+        consecutive_failures = 0;
+        samples.push_back(*p);
     }
 
-    // configure() already seeded the commanded AICLK, which the model keeps if the fit has too few samples.
+    // configure() already seeded the commanded AICLK, which the model keeps if the fit has too few samples. The model
+    // discards the loose brackets among these before regressing.
     const std::optional<ClockModel::FitResidual> residual = model_.fit(samples, host_start_time);
     // Unconditional: records can be drained before calibration finishes, so a mapping has to be readable even when
     // the fit is judged below not worth keeping.
@@ -423,20 +272,30 @@ bool RealtimeProfilerClockSync::calibrate() {
         return false;
     }
 
-    // Measured against kFitSamples rather than what was collected, so this catches both a link that exhausted the
-    // probe budget without filling the batch and one whose samples were scattered enough for the model to cut them.
-    // Half still fits a slope well -- the span is unchanged and the count only enters under a square root -- but
-    // below that another pass is likely to beat this one. Returning false re-runs the whole calibration through
-    // calibrate_device's existing retry budget, which is what bounds the cost of a chip that keeps failing.
+    // Measured against kFitSamples rather than what was collected, so this catches both a link that could not be read
+    // and one whose samples were scattered enough for the model to cut them. Half still fits a slope well -- the span
+    // is unchanged and the count only enters under a square root -- but below that another pass is likely to beat this
+    // one. Returning false re-runs the whole calibration through calibrate_device's existing retry budget, which is
+    // what bounds the cost of a chip that keeps failing.
     if (residual->num_samples_fitted * 2 < kFitSamples) {
         log_warning(
             tt::LogMetal,
-            "[Real-time profiler] Device {} fit only {} of {} wanted sync samples ({} probes re-taken); retrying "
-            "rather than fitting a frequency from what is left",
+            "[Real-time profiler] Device {} fit only {} of {} wanted sync samples; retrying rather than fitting a "
+            "frequency from what is left",
             chip_id_,
             residual->num_samples_fitted,
-            kFitSamples,
-            rejected_probes);
+            kFitSamples);
+        return false;
+    }
+
+    if (residual->rms_ns > kMaxFitResidualRmsNs) {
+        log_warning(
+            tt::LogMetal,
+            "[Real-time profiler] Device {} clock fit residual is {:.0f} ns rms, past the {:.0f} ns a settled clock "
+            "gives; the frequency was likely fitted across an AICLK change, so retrying",
+            chip_id_,
+            residual->rms_ns,
+            kMaxFitResidualRmsNs);
         return false;
     }
 
@@ -445,12 +304,11 @@ bool RealtimeProfilerClockSync::calibrate() {
     rt_profiler_frequency_cache().put(chip_id_, model_.frequency(), std::chrono::steady_clock::now());
     log_info(
         tt::LogMetal,
-        "[Real-time profiler] Device {} sync complete: fit {} of {} collected samples, {} probes re-taken for a slow "
-        "round trip, frequency={:.6f} GHz, fit residual rms={:.0f} ns max={:.0f} ns",
+        "[Real-time profiler] Device {} sync complete: fit {} of {} collected samples, frequency={:.6f} GHz, fit "
+        "residual rms={:.0f} ns max={:.0f} ns",
         chip_id_,
         residual->num_samples_fitted,
         residual->num_samples_offered,
-        rejected_probes,
         model_.frequency(),
         residual->rms_ns,
         residual->max_ns);
@@ -469,7 +327,7 @@ bool RealtimeProfilerClockSync::try_restore_calibration(std::chrono::steady_cloc
     publish_mapping();
     resync();
     if (!model_.is_anchored()) {
-        return false;  // probe failed, so fall back to a full fit
+        return false;  // the read failed, so fall back to a full fit
     }
     log_debug(
         tt::LogMetal,
@@ -481,47 +339,19 @@ bool RealtimeProfilerClockSync::try_restore_calibration(std::chrono::steady_cloc
 }
 
 bool RealtimeProfilerClockSync::resync() {
-    if (ack_host_ptr_ == nullptr) {
-        return true;
-    }
-    // The nested Probe zones are the burst: how deep it went before a round trip matched the standing anchor.
     TTZoneScopedDN(RT_PROFILER, "Resync");
-    try {
-        // Keep the tightest round trip so one slow probe cannot set the published bound, but stop as soon as one
-        // matches the standing anchor: each probe costs the profiler core two NOC writes and two barriers inside the
-        // loop that pushes records, so probes come out of record throughput. A degraded path never finds one and pays
-        // the full depth, which is exactly when the extra sampling is worth it. Whether the best of them is taken at
-        // all is the model's call, not this loop's.
-        constexpr int kMaxProbes = 10;
-        std::optional<ClockSyncSample> best;
-        bool within_margin = false;
-        for (int i = 0; i < kMaxProbes; i++) {
-            const auto sample = probe(kResyncProbeTimeout);
-            if (sample.has_value() && (!best.has_value() || sample->rtt < best->rtt)) {
-                best = sample;
-            }
-            if (best.has_value()) {
-                rtt_floor_ = std::min(rtt_floor_, best->rtt);
-                if (best->rtt <= rtt_floor_ + kResyncExitMargin) {
-                    within_margin = true;
-                    break;
-                }
-            }
-        }
-        // A floor the link can no longer reach would make every pass run to full depth, so a pass that never got
-        // within the margin adopts its own best. Any later probe that beats it lowers the floor again.
-        if (!within_margin && best.has_value()) {
-            rtt_floor_ = best->rtt;
-        }
-        if (!best.has_value()) {
-            return false;
-        }
-        if (model_.try_reanchor(*best)) {
-            publish_mapping();
-        }
-    } catch (const std::exception& e) {
-        log_warning(tt::LogMetal, "[Real-time profiler] Resync failed for device {}: {}", chip_id_, e.what());
+    // The bracket is what bounds the anchor, so the tightest of a few reads is the best anchor available. Ranked
+    // rather than compared against a threshold: under record load the whole distribution shifts, and an absolute
+    // threshold would reject every sample in a pass instead of picking that pass's best. Four is where the returns
+    // stop: the bracket distribution is tight enough (min 690ns, p99 740ns) that the tightest of eight beats the
+    // tightest of four by ~3ns of published error, for 1.6x the host cost.
+    constexpr int kProbes = 4;
+    const auto best = best_of(kProbes);
+    if (!best.has_value()) {
         return false;
+    }
+    if (model_.try_reanchor(*best)) {
+        publish_mapping();
     }
     return true;
 }

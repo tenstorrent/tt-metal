@@ -15,7 +15,9 @@ namespace tt::tt_metal::experimental {
 struct ProgramRealtimeClockSync {
     int64_t device_cycle_offset;  // Clock offset; a device timestamp maps to std::chrono::steady_clock host time as
                                   // host_ns = (timestamp - device_cycle_offset) / frequency
-    std::chrono::nanoseconds sync_error;  // Estimated sync mapping error; assumes device clock frequency is stable.
+    // Estimated sync mapping error: how far the anchor could have landed inside the round trip that placed it, plus
+    // how far the mapping was measured to have drifted over the interval just before this record.
+    std::chrono::nanoseconds sync_error;
 };
 
 struct ProgramRealtimeRecord {

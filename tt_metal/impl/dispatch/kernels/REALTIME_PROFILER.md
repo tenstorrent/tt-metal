@@ -66,9 +66,8 @@ host drains records faster than they are produced.
 The **NCRISC pusher** owns the slow PCIe path. Each iteration it snapshots
 `write_index`/`read_index`, and if the ring is non-empty it pushes *all*
 available entries in one `push_entries_to_host` call, then advances `read_index`
-by the number drained. It also services the host clock-sync handshake — NOC-writing
-the device WALL_CLOCK and token into a host-pinned ACK word — off the record ring
-entirely, so sync work never stalls the reader.
+by the number drained. Clock sync costs it nothing: the host reads this core's
+wall-clock register over the NOC directly, with no device software in the path.
 
 `push_entries_to_host` reserves the pages in the D2H socket, then issues
 coalesced NOC writes over PCIe — up to `NOC_MAX_BURST_SIZE` per write, chunked at

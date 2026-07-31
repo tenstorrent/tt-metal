@@ -33,7 +33,8 @@ tracy::TTDeviceMarker make_marker(
     const experimental::ProgramRealtimeRecord& record,
     uint64_t timestamp,
     tracy::TTDeviceMarkerType marker_type,
-    const std::string& file) {
+    const std::string& file,
+    const std::string& name) {
     tracy::TTDeviceMarker marker;
     marker.runtime_host_id = record.runtime_id;
     marker.chip_id = record.chip_id;
@@ -41,7 +42,10 @@ tracy::TTDeviceMarker make_marker(
     marker.core_y = 0;
     marker.risc = tracy::RiscType::BRISC;
     marker.timestamp = timestamp;
-    marker.marker_name = "Program";
+    // The runtime id goes in the name because TracyTTContext drops runtime_host_id for any zone not named
+    // BRISC-FW or ERISC-FW, to keep the per-RISC zones from multiplying source locations. One marker per program
+    // is emitted here, so that reasoning does not apply and the id would otherwise be invisible in the trace.
+    marker.marker_name = name;
     marker.marker_type = marker_type;
     marker.file = file;
     marker.line = 0;
@@ -89,18 +93,24 @@ void RealtimeProfilerTracyConsumer::CalibrateFromRecord(const experimental::Prog
     s.last_seen_offset = record.clock_sync.device_cycle_offset;
 
     // Re-steer the Tracy context on every offset change (a resync re-anchor, ~20/s) so its view tracks the mapping
-    // instead of lagging a throttle window behind it. clock_sync maps device cycles to steady_clock; recover the
-    // host anchor, then convert it into Tracy's rdtsc CPU-tick domain (only here, off the per-record path — see
-    // HostTimeToTracyCpuTicks).
-    const int64_t host_anchor = HostTimeToTracyCpuTicks(record.host_start());
+    // instead of lagging a throttle window behind it.
+    //
+    // Anchored on the present instant in both clocks, not on the record's start: a record reaches this thread ~100us
+    // after its program ran, so anchoring on record.host_start() would hand Tracy a cpuTime that far in the past, and
+    // Tracy places zones relative to that pair -- the back-dating showed up as zones sliding ~7us earlier than they
+    // belong. Projecting the device clock to now through the record's own mapping keeps the pair matched, and it also
+    // leaves HostTimeToTracyCpuTicks a delta of ~0, where its conversion error is smallest.
+    const auto now = std::chrono::steady_clock::now();
+    const int64_t host_anchor = HostTimeToTracyCpuTicks(now);
+    const uint64_t device_anchor = record.device_timestamp_at(now);
     const double frequency = record.frequency;
 
     if (first) {
-        s.ctx = AddDevice(record.chip_id, host_anchor, static_cast<double>(record.start_timestamp), frequency);
+        s.ctx = AddDevice(record.chip_id, host_anchor, static_cast<double>(device_anchor), frequency);
     } else {
-        CalibrateDevice(record.chip_id, host_anchor, record.start_timestamp, frequency);
+        CalibrateDevice(record.chip_id, host_anchor, device_anchor, frequency);
     }
-    PublishDeviceProfilerSyncAnchor(record.chip_id, host_anchor, record.start_timestamp, frequency);
+    PublishDeviceProfilerSyncAnchor(record.chip_id, host_anchor, device_anchor, frequency);
 }
 
 RealtimeProfilerTracyConsumer::~RealtimeProfilerTracyConsumer() {
@@ -211,9 +221,12 @@ void RealtimeProfilerTracyConsumer::HandleRecord(const experimental::ProgramReal
         file = "realtime_profiler";
     }
 
+    // Formatted once and shared by both markers; this runs per record on the delivery path.
+    const std::string name = fmt::format("Program op_id={}", record.runtime_id);
     TracyTTPushStartMarker(
-        ctx, make_marker(record, record.start_timestamp, tracy::TTDeviceMarkerType::ZONE_START, file));
-    TracyTTPushEndMarker(ctx, make_marker(record, record.end_timestamp, tracy::TTDeviceMarkerType::ZONE_END, file));
+        ctx, make_marker(record, record.start_timestamp, tracy::TTDeviceMarkerType::ZONE_START, file, name));
+    TracyTTPushEndMarker(
+        ctx, make_marker(record, record.end_timestamp, tracy::TTDeviceMarkerType::ZONE_END, file, name));
 }
 
 void RealtimeProfilerTracyConsumer::CalibrateDevice(

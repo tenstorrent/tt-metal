@@ -35,10 +35,6 @@ struct realtime_profiler_msg_t {
     struct realtime_profiler_timestamp_t kernel_end_a;
     struct realtime_profiler_timestamp_t kernel_start_b;
     struct realtime_profiler_timestamp_t kernel_end_b;
-    volatile uint32_t sync_ack_device_time[2];  // device WALL_CLOCK [lo, hi] staged for the ACK write
-    volatile uint32_t sync_ack_token;           // completeness token staged for the ACK write
-    volatile uint32_t sync_token;               // host->device token; nonzero means a handshake is pending
-    volatile uint32_t sync_ack_host_addr[2];    // host ACK buffer address [lo, hi], filled by the host at init
     volatile uint32_t program_id_fifo[32];
     volatile uint32_t program_id_fifo_start;
     volatile uint32_t program_id_fifo_end;

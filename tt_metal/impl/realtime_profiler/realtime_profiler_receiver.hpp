@@ -102,7 +102,7 @@ private:
     // Sets up the D2H socket and launches the BRISC/NCRISC kernels on each eligible local device. Devices failing the
     // eligibility gate or socket creation are skipped, so the result may be empty.
     static std::vector<DeviceState> initialize_devices(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id, bool hugepage_fallback);
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id);
     void calibrate_devices();
     void calibrate_device(DeviceState& dev_state);
 
@@ -146,8 +146,8 @@ private:
     std::atomic<bool> stop_{false};
 
     // Diagnostics, read by tests through the accessors above.
-    std::atomic<uint32_t> peak_fifo_pages_{0};        // all-time peak D2H FIFO usage
-    uint32_t fifo_pages_window_max_ = 0;              // peak since the last Tracy plot sample
+    std::atomic<uint32_t> peak_fifo_pages_{0};  // all-time peak D2H FIFO usage
+    uint32_t fifo_pages_window_max_ = 0;        // peak since the last Tracy plot sample
     std::chrono::steady_clock::time_point last_drain_gap_warn_{};
     std::atomic<uint64_t> num_published_records_{0};  // records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // batches published to the ring

@@ -398,6 +398,11 @@ private:
     uint32_t eth_interrupt_num_vecs_{};
     uint32_t noc_max_burst_size_bytes_{};
 
+    // NOC addresses of the tensix free-running cycle counter. Reading the low word latches the high word, so a
+    // reader must take them in that order to get a coherent pair. The two are not adjacent on every architecture.
+    uint32_t tensix_wall_clock_reg_addr_lo_{};
+    uint32_t tensix_wall_clock_reg_addr_hi_{};
+
     float eps_ = 0.0f;
     float nan_ = 0.0f;
     float inf_ = 0.0f;
@@ -498,6 +503,8 @@ public:
     }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
+    uint32_t get_tensix_wall_clock_reg_addr_lo() const { return tensix_wall_clock_reg_addr_lo_; }
+    uint32_t get_tensix_wall_clock_reg_addr_hi() const { return tensix_wall_clock_reg_addr_hi_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const

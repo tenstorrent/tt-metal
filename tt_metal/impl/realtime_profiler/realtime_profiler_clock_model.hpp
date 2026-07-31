@@ -57,6 +57,10 @@ public:
 
     [[nodiscard]] double frequency() const { return frequency_; }
 
+    // How far the standing mapping had drifted by the time the last probe landed: the probe's device timestamp minus
+    // what the mapping predicted for it. Zero until a second probe has something to be measured against.
+    [[nodiscard]] std::chrono::nanoseconds last_drift() const { return last_drift_; }
+
     // Round trip the standing anchor was placed with. A fresh probe that matches it is as good as the mapping has
     // been getting, so callers gathering probes can stop looking once they have one.
     [[nodiscard]] std::chrono::nanoseconds anchor_rtt() const { return rtt_; }
@@ -72,6 +76,7 @@ private:
     double frequency_ = 0.0;           // device cycles per host ns; positive from seed_frequency() onwards
     int64_t device_cycle_offset_ = 0;  // device_ticks = frequency * host_ns + device_cycle_offset
     std::chrono::nanoseconds rtt_{};   // round trip of the last accepted handshake; half of it bounds anchor placement
+    std::chrono::nanoseconds last_drift_{};
     std::optional<std::chrono::steady_clock::time_point> last_reanchor_at_;
 };
 

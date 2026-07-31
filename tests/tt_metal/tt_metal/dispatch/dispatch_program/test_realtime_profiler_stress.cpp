@@ -223,7 +223,7 @@ std::shared_ptr<distributed::MeshDevice> open_full_mesh() {
 // the chip is hot, which is when the rate is largest and the fit made at cold bring-up is furthest off.
 TEST(RealtimeProfilerStress, ClockDriftStaysWithinModelBudget) {
     // Must track kClockDriftPpm in realtime_profiler_clock_model.cpp.
-    constexpr double kModelledDriftPpm = 25.0;
+    constexpr double kModelledDriftPpm = 150.0;
     constexpr size_t kMinAnchorsPerChip = 100;
 
     auto mesh_device = open_full_mesh();
