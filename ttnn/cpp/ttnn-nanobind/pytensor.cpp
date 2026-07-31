@@ -1343,7 +1343,7 @@ void pytensor_module(nb::module_& mod) {
                     !experimental::per_core_allocation::is_per_core_allocation(
                         self.mesh_buffer().device_local_config().sharding_args),
                     "Per-core allocated tensors do not have a single address. Use "
-                    "experimental_per_core_buffer_address(core) instead.");
+                    "experimental_per_core_buffer_address(device_coord, core) instead.");
                 return self.mesh_buffer().address();
             },
             R"doc(
@@ -1357,22 +1357,50 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "device_coords",
+            [](const Tensor& self) -> std::vector<tt::tt_metal::distributed::MeshCoordinate> {
+                TT_FATAL(is_device_tensor(self), "{} doesn't support device_coords", self.storage_type());
+                const auto coords = self.device_storage().get_coords();
+                return {coords.begin(), coords.end()};
+            },
+            R"doc(
+            The mesh coordinates this tensor's storage spans.
+
+            One entry for a single-device tensor (whichever coordinate it was built at), and one
+            per device for a mesh tensor, in row-major order. Use it to name a device when
+            querying per-(device, core) state:
+
+            .. code-block:: python
+
+                addr = t.experimental_per_core_buffer_address(t.device_coords()[0], core)
+                per_dev = [t.experimental_per_core_buffer_address(c, core) for c in t.device_coords()]
+
+        )doc")
+        .def(
             "experimental_per_core_buffer_address",
-            [](const Tensor& self, const CoreCoord& core) -> uint32_t {
+            [](const Tensor& self,
+               const tt::tt_metal::distributed::MeshCoordinate& device_coord,
+               const CoreCoord& core) -> uint32_t {
                 TT_FATAL(
                     is_device_tensor(self),
                     "{} doesn't support experimental_per_core_buffer_address",
                     self.storage_type());
                 TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
-                return experimental::per_core_allocation::get_per_core_address(self.mesh_buffer(), core);
+                return experimental::per_core_allocation::get_per_core_address(self.mesh_buffer(), device_coord, core);
             },
+            nb::arg("device_coord"),
             nb::arg("core"),
             R"doc(
-            Get the per-core L1 address for a specific core (experimental per-core allocation).
+            Get the per-(device, core) L1 address for a core on a specific mesh device
+            (experimental per-core allocation).
+
+            Per-core allocation gives a different address per (device, core), so this is the
+            correct query for a multi-device tensor.
 
             .. code-block:: python
 
-                address = tt_tensor.experimental_per_core_buffer_address(ttnn.CoreCoord(0, 0))
+                address = tt_tensor.experimental_per_core_buffer_address(
+                    ttnn.MeshCoordinate(0, 1), ttnn.CoreCoord(0, 0))
 
         )doc")
         .def(
@@ -1387,14 +1415,14 @@ void pytensor_module(nb::module_& mod) {
             R"doc(
             Returns True if this tensor was allocated with experimental per-core L1 allocation.
 
-            Per-core allocated tensors have a different physical address per core, so they
-            cannot be queried with ``buffer_address()``. Use this property to branch between
-            ``buffer_address()`` and ``experimental_per_core_buffer_address(core)``.
+            Per-core allocated tensors have a different physical address per (device, core), so
+            they cannot be queried with ``buffer_address()``. Use this property to branch between
+            ``buffer_address()`` and ``experimental_per_core_buffer_address(device_coord, core)``.
 
             .. code-block:: python
 
                 if tensor.is_per_core_allocated():
-                    addr = tensor.experimental_per_core_buffer_address(core)
+                    addr = tensor.experimental_per_core_buffer_address(tensor.device_coords()[0], core)
                 else:
                     addr = tensor.buffer_address()
 

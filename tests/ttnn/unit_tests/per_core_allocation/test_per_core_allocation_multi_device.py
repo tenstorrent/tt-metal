@@ -20,6 +20,19 @@ from conftest import requires_hybrid_allocator
 # --- Helpers ---
 
 
+def _per_core_addr(tensor, core):
+    """Per-core L1 address of ``core`` on the tensor's own device.
+
+    Per-core allocation gives a different address per (device, core), so the query needs a
+    device.  Every tensor passed here is single-device -- a plain device, or one narrowed out
+    of a mesh with ``get_device_tensors`` -- so its one coordinate is the device to ask.  The
+    unpacking enforces that: a mesh tensor raises here instead of silently reporting whichever
+    device happens to come first.
+    """
+    (coord,) = tensor.device_coords()
+    return tensor.experimental_per_core_buffer_address(coord, core)
+
+
 def _create_per_core_tensor_on_mesh(
     mesh_device, core_grid, shard_shape, tensor_shape, layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 ):
@@ -79,7 +92,7 @@ def _assert_cross_device_consistency(tensor, cores, label=""):
     """Assert all devices have the same per-core addresses."""
     device_tensors = ttnn.get_device_tensors(tensor)
     for core in cores:
-        dev_addrs = [dt.experimental_per_core_buffer_address(core) for dt in device_tensors]
+        dev_addrs = [_per_core_addr(dt, core) for dt in device_tensors]
         assert all(a == dev_addrs[0] for a in dev_addrs), (
             f"{label}Core ({core.x},{core.y}): expected same addr across devices, "
             f"got {[f'{a:#x}' for a in dev_addrs]}"
@@ -91,7 +104,7 @@ def _assert_no_overlap_per_device(pc_tensor, pc_core, pc_size, ls_tensor, ls_siz
     pc_devs = ttnn.get_device_tensors(pc_tensor)
     ls_devs = ttnn.get_device_tensors(ls_tensor)
     for dev_idx, (pc_dt, ls_dt) in enumerate(zip(pc_devs, ls_devs)):
-        pc_addr = pc_dt.experimental_per_core_buffer_address(pc_core)
+        pc_addr = _per_core_addr(pc_dt, pc_core)
         ls_addr = ls_dt.buffer_address()
         assert not _addr_ranges_overlap(pc_addr, pc_size, ls_addr, ls_size), (
             f"{label}Device {dev_idx}: overlap per_core=[{pc_addr:#x}, +{pc_size}) vs "
@@ -111,7 +124,7 @@ def test_per_core_independent_addresses_across_devices(mesh_device):
     t1 = _create_per_core_single(mesh_device, core, shard_bytes)
 
     device_tensors = ttnn.get_device_tensors(t1)
-    addrs = [dt.experimental_per_core_buffer_address(core) for dt in device_tensors]
+    addrs = [_per_core_addr(dt, core) for dt in device_tensors]
 
     assert all(
         a == addrs[0] for a in addrs
@@ -163,7 +176,7 @@ def test_multi_core_per_core_all_cores(mesh_device):
 
     # All per-device tensors: all cores same address (fresh allocator, independent per-bank)
     for dev_idx, dt in enumerate(ttnn.get_device_tensors(t)):
-        addrs = [dt.experimental_per_core_buffer_address(c) for c in cores]
+        addrs = [_per_core_addr(dt, c) for c in cores]
         assert all(
             a == addrs[0] for a in addrs
         ), f"Device {dev_idx}: expected same address on all cores, got unique: {set(f'{a:#x}' for a in addrs)}"
@@ -289,8 +302,8 @@ def test_tetris_allocation_on_mesh(mesh_device):
                     pc_devs = ttnn.get_device_tensors(t)
                     other_devs = ttnn.get_device_tensors(tensors[other_label])
                     for dev_idx, (dt, odt) in enumerate(zip(pc_devs, other_devs)):
-                        addr = dt.experimental_per_core_buffer_address(cores[core_idx])
-                        other_addr = odt.experimental_per_core_buffer_address(cores[core_idx])
+                        addr = _per_core_addr(dt, cores[core_idx])
+                        other_addr = _per_core_addr(odt, cores[core_idx])
                         assert not _addr_ranges_overlap(addr, size, other_addr, other_size), (
                             f"Device {dev_idx}: overlap on core {core_idx}: "
                             f"{label}=[{addr:#x}, +{size}) vs {other_label}=[{other_addr:#x}, +{other_size})"
@@ -317,12 +330,16 @@ def test_dealloc_per_core_then_lockstep_reuses_space(mesh_device):
     size = 4096
 
     t_pc = _create_per_core_single(mesh_device, core, size)
-    pc_addr = t_pc.experimental_per_core_buffer_address(core)
+    # Per-core addresses are per (device, core), so read one per device off the narrowed tensors.
+    pc_addrs = [_per_core_addr(dt, core) for dt in ttnn.get_device_tensors(t_pc)]
     t_pc.deallocate(force=True)
 
     t_ls = _create_lockstep_single(mesh_device, core, size)
-    ls_addr = t_ls.buffer_address()
-    assert ls_addr == pc_addr, f"Expected lockstep to reuse freed per-core address {pc_addr:#x}, got {ls_addr:#x}"
+    ls_addr = t_ls.buffer_address()  # lockstep: one address for every device
+    for dev_idx, pc_addr in enumerate(pc_addrs):
+        assert (
+            ls_addr == pc_addr
+        ), f"Device {dev_idx}: expected lockstep to reuse freed per-core address {pc_addr:#x}, got {ls_addr:#x}"
 
 
 @requires_hybrid_allocator
@@ -332,12 +349,16 @@ def test_dealloc_lockstep_then_per_core_reuses_space(mesh_device):
     size = 4096
 
     t_ls = _create_lockstep_single(mesh_device, core, size)
-    ls_addr = t_ls.buffer_address()
+    ls_addr = t_ls.buffer_address()  # lockstep: one address for every device
     t_ls.deallocate(force=True)
 
     t_pc = _create_per_core_single(mesh_device, core, size)
-    pc_addr = t_pc.experimental_per_core_buffer_address(core)
-    assert pc_addr == ls_addr, f"Expected per-core to reuse freed lockstep address {ls_addr:#x}, got {pc_addr:#x}"
+    # Per-core addresses are per (device, core), so read one per device off the narrowed tensors.
+    pc_addrs = [_per_core_addr(dt, core) for dt in ttnn.get_device_tensors(t_pc)]
+    for dev_idx, pc_addr in enumerate(pc_addrs):
+        assert (
+            pc_addr == ls_addr
+        ), f"Device {dev_idx}: expected per-core to reuse freed lockstep address {ls_addr:#x}, got {pc_addr:#x}"
 
 
 @requires_hybrid_allocator
@@ -354,13 +375,13 @@ def test_multi_core_dealloc_realloc(mesh_device):
     t1 = _create_per_core_tensor_on_mesh(mesh_device, core_grid, [1, SHARD_BYTES], [num_cores, SHARD_BYTES])
     addrs1_per_dev = []
     for dt in ttnn.get_device_tensors(t1):
-        addrs1_per_dev.append([dt.experimental_per_core_buffer_address(c) for c in cores])
+        addrs1_per_dev.append([_per_core_addr(dt, c) for c in cores])
     t1.deallocate(force=True)
 
     # Second allocation — should reuse same addresses on each device
     t2 = _create_per_core_tensor_on_mesh(mesh_device, core_grid, [1, SHARD_BYTES], [num_cores, SHARD_BYTES])
     for dev_idx, dt in enumerate(ttnn.get_device_tensors(t2)):
-        addrs2 = [dt.experimental_per_core_buffer_address(c) for c in cores]
+        addrs2 = [_per_core_addr(dt, c) for c in cores]
         assert addrs1_per_dev[dev_idx] == addrs2, (
             f"Device {dev_idx}: expected same addresses after dealloc/realloc:\n"
             f"  first:  {[f'{a:#x}' for a in addrs1_per_dev[dev_idx]]}\n"
@@ -440,7 +461,7 @@ def test_triangle_per_core_then_uniform(mesh_device):
 
     # Validate inverse triangle per device
     for dev_idx, dt in enumerate(ttnn.get_device_tensors(sharded_tensor)):
-        addrs = [dt.experimental_per_core_buffer_address(c) for c in cores]
+        addrs = [_per_core_addr(dt, c) for c in cores]
         for i in range(num_cores - 1):
             assert addrs[i] > addrs[i + 1], (
                 f"Device {dev_idx}: expected inverse triangle: "
@@ -458,8 +479,8 @@ def test_triangle_per_core_then_uniform(mesh_device):
         tri_devs = ttnn.get_device_tensors(triangle_tensors[i])
         uni_devs = ttnn.get_device_tensors(sharded_tensor)
         for dev_idx, (tri_dt, uni_dt) in enumerate(zip(tri_devs, uni_devs)):
-            tri_addr = tri_dt.experimental_per_core_buffer_address(core)
-            uni_addr = uni_dt.experimental_per_core_buffer_address(core)
+            tri_addr = _per_core_addr(tri_dt, core)
+            uni_addr = _per_core_addr(uni_dt, core)
             assert not _addr_ranges_overlap(tri_addr, tri_size, uni_addr, TILE_BYTES), (
                 f"Device {dev_idx} core {i}: triangle=[{tri_addr:#x}, +{tri_size}) vs "
                 f"uniform=[{uni_addr:#x}, +{TILE_BYTES})"
@@ -531,8 +552,8 @@ def test_divergent_per_device_then_lockstep(mesh_device):
     t0 = _allocate_per_core_on_device(mesh_device, dev0_coord, core, per_device_sizes[0])
     t1 = _allocate_per_core_on_device(mesh_device, dev1_coord, core, per_device_sizes[1])
 
-    addr0 = t0.experimental_per_core_buffer_address(core)
-    addr1 = t1.experimental_per_core_buffer_address(core)
+    addr0 = _per_core_addr(t0, core)
+    addr1 = _per_core_addr(t1, core)
     logger.info(f"Device 0: per-core size={per_device_sizes[0]}, addr={addr0:#x}")
     logger.info(f"Device 1: per-core size={per_device_sizes[1]}, addr={addr1:#x}")
 
@@ -587,8 +608,8 @@ def test_divergent_multi_core_per_device_then_lockstep(mesh_device):
         t1 = _allocate_per_core_on_device(mesh_device, dev1_coord, core, dev1_sizes[core_idx])
         dev0_tensors.append(t0)
         dev1_tensors.append(t1)
-        dev0_addrs.append(t0.experimental_per_core_buffer_address(core))
-        dev1_addrs.append(t1.experimental_per_core_buffer_address(core))
+        dev0_addrs.append(_per_core_addr(t0, core))
+        dev1_addrs.append(_per_core_addr(t1, core))
 
     # Verify address differences match size differences
     for core_idx in range(num_cores):
@@ -621,3 +642,49 @@ def test_divergent_multi_core_per_device_then_lockstep(mesh_device):
             f"Device 1 core {core_idx}: overlap "
             f"per_core=[{dev1_addrs[core_idx]:#x}, +{dev1_sizes[core_idx]}) vs lockstep=[{ls_addrs[1]:#x}, +{ls_size})"
         )
+
+
+def test_per_core_address_resolves_per_device_after_skew(mesh_device):
+    """A per-core tensor whose L1 address diverges across devices must report each device's OWN
+    address — both when the device is named explicitly and when it comes from ``device_coords()``
+    on a tensor narrowed out of the mesh.
+
+    REGRESSION test. The address used to be resolved through the mesh buffer's *reference*
+    (first-local) buffer, so every device reported device 0's address, and narrowing with
+    ``get_device_tensors()[i]`` did not help: it shares the same MeshBuffer and only replaces the
+    coord list, which that path never read. The cross-device assertions elsewhere in this file
+    were therefore comparing device 0's address to itself and could not fail.
+
+    Skewing only device 1's frontier makes the two devices' addresses differ, which is what makes
+    the difference observable.
+    """
+    core = ttnn.CoreCoord(0, 0)
+    dev0 = ttnn.MeshCoordinate(0, 0)
+    dev1 = ttnn.MeshCoordinate(0, 1)
+
+    # Skew ONLY device 1: its per-bank allocator on `core` starts lower than device 0's.
+    # Held in a local so the allocation (and therefore the skew) outlives the queries below.
+    skew = _allocate_per_core_on_device(mesh_device, dev1, core, 4096)
+
+    SHARD_BYTES = 1024
+    w = _create_per_core_tensor_on_mesh(mesh_device, _single_core_grid(core), [1, SHARD_BYTES], [1, SHARD_BYTES])
+
+    # (1) The setup produced genuine per-device divergence.
+    per_device = [w.experimental_per_core_buffer_address(coord, core) for coord in (dev0, dev1)]
+    assert per_device[0] != per_device[1], (
+        f"expected divergent per-device addresses after skewing device 1; got " f"{[f'{a:#x}' for a in per_device]}"
+    )
+
+    # (2) A tensor narrowed out of the mesh names its own device via device_coords(), so it
+    #     reports that device's address rather than the reference device's.
+    narrowed = [_per_core_addr(dt, core) for dt in ttnn.get_device_tensors(w)]
+    assert narrowed == per_device, (
+        f"narrowed per-device addresses {[f'{a:#x}' for a in narrowed]} != "
+        f"per-(device, core) addresses {[f'{a:#x}' for a in per_device]} — narrowing did not "
+        f"carry the device through to the address query"
+    )
+
+    # (3) device_coords() enumerates the mesh in the same order, so it reproduces (1).
+    assert [w.experimental_per_core_buffer_address(c, core) for c in w.device_coords()] == per_device
+
+    assert skew.is_allocated()
