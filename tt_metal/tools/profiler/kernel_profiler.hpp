@@ -4,19 +4,22 @@
 //
 // SPSC variant of the device kernel profiler (X280-drained).
 //
-// Same public macro API as the original (now kept verbatim in
-// kernel_profiler_push.hpp), but a different backend: instead of filling an L1
-// buffer and pushing it to DRAM on quick_push()/finish(), each RISC streams its
-// markers into a per-RISC single-producer/single-consumer (SPSC) ring in L1. The
-// **X280** is the consumer that continuously drains those rings. The producing
-// RISC **blocks** (spins on the consumer head) when its ring is full — so the
-// stream is lossless and flow-controlled, with **no DRAM traffic** on
-// quick_push() or finish().
+// Same public macro API as the push-to-DRAM backend (kept verbatim in
+// kernel_profiler_push.hpp), but a wholly separate backend: each RISC streams its
+// markers into a per-RISC single-producer/single-consumer (SPSC) ring in L1, and a
+// drainer (X280 or DRISC) continuously empties those rings. The producing RISC
+// **blocks** (spins on the consumer head) when its ring is full — so the stream is
+// lossless and flow-controlled, and there is **no DRAM traffic** at all.
+//
+// The two backends never collide. This file owns SpscControlBuffer and the PP_* wire
+// types; ControlBuffer and PacketTypes belong to the DRAM backend and must not appear
+// here. Sharing a control word between them has silently broken both before.
 //
 //   Per RISC `r` (Tensix: BRISC/NCRISC/TRISC0-2):
 //     ring storage : profiler_data_buffer[r].data[0 .. PROFILER_L1_VECTOR_SIZE-1]
-//     tail (prod.) : profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + r]
-//     head (cons.) : profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER  + r]
+//     tail (prod.) : profiler_control_buffer[SPSC_RING_TAIL_0 + r]
+//     head (cons.) : profiler_control_buffer[SPSC_RING_HEAD_0 + r]
+//     identity     : profiler_control_buffer[SPSC_CORE_XY]  = (y << 16) | x
 //   tail/head are MONOTONIC word counts; storage index = count % CAPACITY.
 //   Append blocks while (tail - head) > CAPACITY - need, then writes + publishes
 //   tail. The X280 advances head as it drains.
@@ -156,11 +159,17 @@ constexpr uint32_t Hash16_CT(const char (&s)[N]) {
 
 enum class DoingDispatch { DISPATCH, DISPATCH_META, NOT_DISPATCH };
 
-constexpr uint32_t get_const_id(uint32_t id, PacketTypes type) { return ((id & 0xFFFF) | ((type << 16) & 0x7FFFF)); }
+// Zone kind, this backend's own. Previously the kind was packed into bits 16-18 of the id as a
+// hostdevcommon PacketTypes value and unpacked in zone_w0 -- a 3-bit channel into a 5-bit wire, whose
+// correctness depended on the numeric ordinals of an enum this backend does not own. The id now carries
+// the source-location hash and nothing else; the kind travels as its own argument.
+enum class ZoneKind : uint32_t { Start = 0, End = 1, Total = 2 };
 
-inline __attribute__((always_inline)) uint32_t get_id(uint32_t id, PacketTypes type) {
-    return ((id & 0xFFFF) | ((type << 16) & 0x7FFFF));
-}
+// The id is a 16-bit source-location hash. Kept as functions (rather than a bare mask at call sites)
+// because the host name map is keyed on this same value.
+constexpr uint32_t get_const_id(uint32_t id) { return id & 0xFFFF; }
+
+inline __attribute__((always_inline)) uint32_t get_id(uint32_t id) { return id & 0xFFFF; }
 
 // ---- SPSC ring primitives -------------------------------------------------
 
@@ -205,18 +214,16 @@ struct ppfmt {
     static inline uint32_t w0(uint32_t type, uint32_t low27) {
         return ((type & TYPE_MASK) << TYPE_SHIFT) | (low27 & LOW27_MASK);
     }
-    // Zone marker word0. The caller's timer_id still carries a PacketTypes value in bits 16-18 (it is
-    // also what keys the host name map), so map it EXPLICITLY to this wire's code -- never pass it
-    // through. Only the three zone kinds can appear here; data/event go through data_w0.
-    static inline uint32_t zone_w0(uint32_t timer_id) {
-        const uint32_t kind = (timer_id >> 16) & 0x7u;
+    // Zone marker word0. The kind is passed in, not dug out of the id. Only the three zone kinds can
+    // appear here; data/event go through data_w0/event_w0.
+    static inline uint32_t zone_w0(uint32_t id, ZoneKind kind) {
         uint32_t type = T_ZONE_START;
-        if (kind == 1u) {  // PacketTypes::ZONE_END
+        if (kind == ZoneKind::End) {
             type = T_ZONE_END;
-        } else if (kind == 2u) {  // PacketTypes::ZONE_TOTAL
+        } else if (kind == ZoneKind::Total) {
             type = T_ZONE_TOTAL;
         }
-        return w0(type, timer_id & HASH16_MASK);
+        return w0(type, id & HASH16_MASK);
     }
     // DATA/EVENT word0: size is in 32-bit words; 0 = a bare event. id is 20 bits (fed the 16-bit hash
     // today, or the raw event id from DeviceRecordEvent).
@@ -324,7 +331,7 @@ inline __attribute__((always_inline)) void publish_tail() {
 // the clock after the room is secured makes the marker's time reflect when it is actually written (>= the stall
 // end), keeping every lane's stream monotonic. Reserve worst case (a TIMER sticky + the marker) so the room
 // check -- and any stall -- happens once, up front, not between the two writes.
-inline __attribute__((always_inline)) void mark_time(uint32_t timer_id) {
+inline __attribute__((always_inline)) void mark_time(uint32_t timer_id, ZoneKind kind = ZoneKind::Start) {
     ring_ensure_room(SPSC_MARKER_WORDS + 1);  // worst case: 1-word TIMER sticky + 2-word marker
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
@@ -332,7 +339,7 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id) {
         ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));  // STICKY_TIMER: 1 word (type | timer_hi)
         g_prev_timer_hi = hi;
     }
-    ring_write_word(ppfmt::zone_w0(timer_id));  // word0: X280 zone type | zone srcloc (16-bit hash)
+    ring_write_word(ppfmt::zone_w0(timer_id, kind));  // word0: zone type | zone srcloc (16-bit hash)
     ring_write_word(lo);                        // word1: timer_low
     publish_tail();
 }
@@ -356,23 +363,15 @@ inline __attribute__((always_inline)) void mark_sticky_meta() {
 
 // Fixed-index write retained only for the trace-only build mode (writes directly into the ring storage
 // region; not used by the default SPSC path). 2-word marker: word0 = type|hash, word1 = timer_low.
-inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t index, uint32_t timer_id) {
+inline __attribute__((always_inline)) void mark_time_at_index_inlined(
+    uint32_t index, uint32_t timer_id, ZoneKind kind = ZoneKind::Start) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    profiler_data_buffer[myRiscID].data[index] = ppfmt::zone_w0(timer_id);
+    profiler_data_buffer[myRiscID].data[index] = ppfmt::zone_w0(timer_id, kind);
     profiler_data_buffer[myRiscID].data[index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
 }
 
-// ---- dropped-timestamp bookkeeping (no drops in blocking mode; kept for API) --
-
-inline __attribute__((always_inline)) void mark_dropped_timestamps(uint32_t index) {
-    uint32_t curr = profiler_control_buffer[DROPPED_ZONES];
-    profiler_control_buffer[DROPPED_ZONES] = (1 << index) | curr;
-}
-
-inline __attribute__((always_inline)) bool get_dropped_timestamps(uint32_t index) {
-    uint32_t curr = profiler_control_buffer[DROPPED_ZONES];
-    return ((curr >> index) & 0x1);
-}
+// No dropped-timestamp bookkeeping: the ring blocks rather than dropping, so the only way to lose a
+// marker is after PROFILER_TERMINATE releases a producer at teardown.
 
 inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue) {
     // Assign-ID hook (DeviceZoneSetCounter): emit the runtime host-id in-band as a STICKY_PROG packet.
@@ -389,7 +388,6 @@ inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValu
 }
 
 inline __attribute__((always_inline)) void set_profiler_zone_valid(bool condition) {
-    profiler_control_buffer[PROFILER_DONE] = !condition;  // retained for host / DRAM-backend parity
     zoneValid = condition;
     if (condition) {
         // Valid launch: commit the FW ZONE_START that init_profiler() held back, then stream normally
@@ -414,18 +412,13 @@ __attribute__((noinline)) void init_profiler(
 
 #if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
     defined(COMPILE_FOR_BRISC)
-    uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
-    profiler_control_buffer[PROFILER_DONE] = 0;
-    if (runCounter == 0) {
-        // First launch: empty every RISC's ring (head = tail = 0) and stamp coords. NOTE: do NOT
-        // write data[ID_HH] here — ID_HH is a live ring slot in this backend, so poking it corrupts
-        // a marker word (see set_host_counter). The ring is emptied via head/tail == 0 above.
-        for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
-            profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + riscID] = 0;
-            profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + riscID] = 0;
-        }
-        profiler_control_buffer[NOC_X] = my_x[0];
-        profiler_control_buffer[NOC_Y] = my_y[0];
+    // Stamp this core's identity once per FW session. Nothing else to initialise: the rings are
+    // head==tail==0 from L1 zeroing, and this backend keeps no run counter or done flag -- those are
+    // the DRAM backend's words.
+    static bool s_xy_stamped = false;
+    if (!s_xy_stamped) {
+        profiler_control_buffer[SPSC_CORE_XY] = (my_y[0] << 16) | (my_x[0] & 0xFFFF);
+        s_xy_stamped = true;
     }
 #endif
     // Seed this RISC's tail from L1 ONCE per FW session, then keep wIndex monotonic across launches --
@@ -459,26 +452,17 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
     for (int i = 0; i < SUM_COUNT; i++) {
         if (sums[i] > 0) {
             ring_ensure_room(SPSC_MARKER_WORDS);
-            ring_write_word(ppfmt::zone_w0(get_id(sumIDs[i], ZONE_TOTAL)));  // word0: PP_ZONE_TOTAL | hash
+            ring_write_word(ppfmt::zone_w0(get_id(sumIDs[i]), ZoneKind::Total));  // word0: PP_ZONE_TOTAL | hash
             ring_write_word(sums[i]);  // word1: accumulated sum (host reads-as-sum by type, not a timer)
         }
     }
     publish_tail();
 }
 
-__attribute__((noinline)) void finish_profiler() {
-    risc_finished_profiling();
-#if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
-    defined(COMPILE_FOR_BRISC)
-    profiler_control_buffer[RUN_COUNTER]++;
-    profiler_control_buffer[PROFILER_DONE] = 1;
-#endif
-}
+__attribute__((noinline)) void finish_profiler() { risc_finished_profiling(); }
 
-// No DRAM push in the SPSC backend — the X280 drains the ring continuously. These
-// are kept (as tail publishes / no-ops) so the existing call sites still compile.
-__attribute__((noinline)) void quick_push() { publish_tail(); }
-
+// Retained only because backend-agnostic headers (noc_event/fabric_event/perf_counters/
+// noc_debugging) call them unconditionally. They are no-ops here: this backend has no DRAM push.
 inline __attribute__((always_inline)) void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
     (void)cmd_buf;
     (void)linked;
@@ -492,12 +476,12 @@ inline __attribute__((always_inline)) void flush_to_dram_if_full(uint32_t additi
 template <uint32_t timer_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 struct profileScope {
     inline __attribute__((always_inline)) profileScope() { mark_time(timer_id); }
-    inline __attribute__((always_inline)) ~profileScope() { mark_time(get_const_id(timer_id, ZONE_END)); }
+    inline __attribute__((always_inline)) ~profileScope() { mark_time(timer_id, ZoneKind::End); }
 };
 
 // FW-wrapper scope (what DeviceZoneScopedMainN used to be, via profileScopeGuaranteed<hash,0>).
-// It owns the profiler LIFECYCLE ONLY -- ring init + zoneValid publish gate + RUN_COUNTER on the way in,
-// finish/publish on the way out -- and deliberately emits NO markers, so no "<RISC>-FW" zone appears.
+// It owns the profiler LIFECYCLE ONLY -- ring init + zoneValid publish gate on the way in, finish and
+// publish on the way out -- and deliberately emits NO markers, so no "<RISC>-FW" zone appears.
 // This must still wrap every kernel: without init_profiler()/finish_profiler() the ring is never set up
 // and NOTHING (including plain DeviceZoneScopedN) is published.
 // The KERNEL wrapper (index 1) no longer needs a special type at all -- DeviceZoneScopedMainChildN now
@@ -528,18 +512,13 @@ struct profileScopeAccumulate {
     }
 };
 
-template <
-    uint32_t data_id,
-    DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH,
-    PacketTypes packet_type = kernel_profiler::PacketTypes::TS_DATA,
-    typename... Args>
+// No PacketTypes template parameter: every call site took the TS_DATA default, whose
+// TimestampedDataSize is 1, so the check only ever asserted "one datum, no trailers". Stated directly
+// instead of routed through the other backend's enum.
+template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH, typename... Args>
 inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args... trailers) {
     constexpr uint32_t total_data_count = 1 + sizeof...(trailers);
-    constexpr uint32_t expected_size = kernel_profiler::TimestampedDataSize<packet_type>::size;
-
-    static_assert(
-        expected_size == 0 || total_data_count == expected_size,
-        "Number of arguments does not match expected size for this PacketType");
+    static_assert(total_data_count == 1, "timeStampedData takes exactly one uint64_t datum");
 
     // Reserve worst case (a 1-word TIMER sticky + the timing marker + 2 words/datum) BEFORE reading the clock,
     // so a full-ring stall does not backdate the marker (see mark_time's ordering note).
