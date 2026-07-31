@@ -6,7 +6,7 @@ CONTRIBUTION MEASUREMENT: the incumbent is the control, the delta IS the result,
 
 Everything runs at decode batch DECODE_BATCH. All artifacts under doc/advisor_challenger/.
 
-1. FREEZE THE INCUMBENT before running the advisor. Its own perf harness at DECODE_BATCH, 10 untimed warm-ups then n=5 timed. incumbent.json: repeats_ms, incumbent_ms = MEDIAN (not min), decode_batch and requested_decode_batch (both DECODE_BATCH), measured_at, harness, harness_scope, plus shipped_policy and shipped_weight_dtypes sourced from what EXECUTED (final tt-perf-report CSV or selected candidate JSON) — never resolved_policy.constructor_defaults. Save the op-level CSV per layer kind; its window must be within ~5x of incumbent_ms.
+1. FREEZE THE INCUMBENT before running the advisor. Its own perf harness at DECODE_BATCH, 10 untimed warm-ups then n=5 timed. incumbent.json: repeats_ms, incumbent_ms = MEDIAN (not min), decode_batch and requested_decode_batch (both DECODE_BATCH), measured_at, harness, harness_scope, plus shipped_policy and shipped_weight_dtypes from what EXECUTED (final CSV or selected candidate JSON), never constructor_defaults. Save the op-level CSV per layer kind; its window must be within ~5x of incumbent_ms.
 
 2. CAPTURE ONCE PER LAYER KIND at the shipped precision, decoder built with the shipped policy (template scripts/capture_template.py). Pass --pipeline-options allow-bf16-dram-sharded-matmul=true if any traced weight is bf16. Record capture_batch, captured_at (after measured_at), traced_weight_dtypes, and the LAYER SHARE of any kind you cannot capture — sparse_matmul and SSM ops are terminal in the tracer, so if such a kind dominates then "the advisor cannot reach N of M layers" is the result.
 
@@ -14,7 +14,7 @@ Everything runs at decode batch DECODE_BATCH. All artifacts under doc/advisor_ch
 
 4. SCREEN in the order it gives, each chain as ONE UNIT, one variable per measurement, recording repeats_ms. Also screen dram_resident rows ("leave this in DRAM" is advice, and de-sharding has won here), and discharge material_ops_on_le_2_cores with a measured attempt or a quoted hard error. Screen DS-matmul advice LAST. Kept candidates need their own CSV as perf_report plus the incumbent's oracle at its own PCC bar.
 
-NEVER COPY AN ADVISED CORE COUNT: the advisor selects on bytes and lands below the divisors of the tile count — 11 or 22 cores on a 128-tile norm where 32 gives exactly 4 tiles/core, and the same choice has produced configs that cannot execute. Take the op SET and the DIRECTION, derive geometry from tile divisibility, and sweep both sides of your own choice. compute_config/math_fidelity in the IR is traced state, not advice.
+AN ADVISED CORE COUNT IS ONE CANDIDATE, NOT A RECOMMENDATION — not ranked on latency, and legal only inside the advisor's own WHOLE-GRAPH plan. Take the op SET and DIRECTION, derive geometry from tile divisibility, always measure an exactly-dividing grid, and never sweep only at or below the advised value. On a neighbour-constraint failure, first pull that neighbour's advised placement in too — a chain extension, not a dead end. See SKILL.md "The advice is a whole-graph plan". compute_config/math_fidelity is traced state, not advice.
 
 5. DECIDE BY NON-OVERLAP: ship iff every candidate repeat beats every incumbent repeat. No noise floor, no min baseline. Record winning_repeats_ms, CONFIRM the winner in a fresh process, set confirmed_fresh_process.
 

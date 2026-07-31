@@ -21,28 +21,60 @@ measuring a doubtful candidate over dropping it.
 
 ## Division of labour
 
-The advisor is a deterministic pass. It enumerates legal placements completely, then selects among them
-without a latency term — the chain-level quantity it optimises is bytes. So:
+The advisor is a deterministic pass. It enumerates legal placements completely — every block-sharded
+height×width and every width up to the core count, deduped by resulting shard shape. What it then selects
+is not ranked on measured time: a per-op runtime estimate exists in the optimizer and is cached, but neither
+selecting file carries a cost or runtime term and the chain-level quantity computed is **bytes**. So:
 
 | the advisor supplies | you supply |
 |---|---|
 | the **op set** that is placed differently from the shipped graph | the **geometry** |
 | the **direction** — into L1, out to DRAM, different grid | the chain extent, and every measurement |
 
-**Never copy an advised core count.** Its selection is bytes-shaped and routinely lands below the divisors
-of the tensor's tile count: a 4096-wide (128-tile) norm was advised 11 and 22 cores where 32 gives exactly
-4 tiles per core and 64 is also legal. The same choice has produced configs that cannot execute
-(`per_core_K=9 is illegal` on a K=96-tile matmul). Take the op, derive the geometry from tile
-divisibility, and sweep both sides of your own choice.
+**Treat an advised core count as one candidate, not as a recommendation.** Two independent reasons:
+
+- *It is not ranked.* Selection has no latency term, so a small grid that fits the chain in L1 wins over a
+  larger one that computes faster. A 4096-wide (128-tile) norm was advised 11 and 22 cores where 32 gives
+  exactly 4 tiles per core and 64 is also legal — and both 32 and 64 are in the advisor's own candidate set.
+  Nothing in it distinguishes an exactly-dividing grid from a padded one.
+- *It is only legal inside the advisor's own plan.* The advisor re-derives the whole graph from
+  DRAM-interleaved inputs; it never sees your shipped layouts. So a single advised placement dropped onto an
+  otherwise-unmodified graph can violate a constraint of the shipped neighbour it never modelled —
+  `per_core_K=9 is illegal` on a K=96-tile matmul came from exactly this. A rejection of that kind is a
+  partial-application failure, not evidence the direction was wrong.
+
+So: take the op **set** and the **direction**, derive your own geometry from tile divisibility, and always
+measure at least one exactly-dividing grid. Test the advised value if you like, but never only at or below
+it — a sweep bounded above by the advised value cannot distinguish "advisor was right" from "we never looked
+higher".
 
 `compute_config` / `math_fidelity` in the advised IR mirror the captured graph. They are not advice;
 override them with your own fidelity decision.
 
+## The advice is a whole-graph plan; you apply parts of it
+
+This mismatch is the single most common source of confusion in this stage. The advisor re-derives the entire
+graph from DRAM-interleaved inputs — it never sees your shipped layouts — so its output is **one plan whose
+parts are only jointly valid**. You apply one chain at a time onto an otherwise-unmodified decoder.
+
+Consequences:
+
+- A placement that is legal in the plan can be **illegal in your graph**, because it violates a constraint of
+  a shipped neighbour the advisor never modelled. `per_core_K=9 is illegal` on a K=96-tile matmul is this.
+- **On a neighbour-constraint failure, extend the applied set before abandoning the direction.** Pull the
+  neighbour's advised placement in too and re-measure: that is a chain extension, and it is the move most
+  likely to make the pair self-consistent. Only after that fails is a compatible geometry of your own the
+  next option, and only after *that* is the direction itself in doubt.
+- An op the advisor reports as unplaceable may be unplaceable **only under its own upstream choice**. Check
+  what it did to the producer before accepting that verdict; the shipped graph may already repair it with a
+  conversion costing a microsecond or two.
+
 ## Chains
 
 **A chain is a run of ops all resident in L1, preferably on one consistent shard spec.** A DRAM crossing is
-the hard boundary; an internal L1 regrid is in-chain cost, not a split. (This is `$optimize` step 6 /
-OPT-003 — read it there rather than reinventing it.)
+the hard boundary; an internal L1 regrid is in-chain cost, not a split. The pricing below is what supports
+this; `$optimize` step 6 / OPT-003 states the same definition, and the optimizer implements it as
+`L1ChainConfig`, so do not reinvent it.
 
 Detect boundaries from **conversion ops present in the profile**, never from differing grids: a grid change
 is often absorbed by the consumer, so grid-differencing over-counts.
@@ -108,8 +140,10 @@ Read three things out of it:
   several per cent once its DRAM round trips are gone.
 - **`material_ops_on_le_2_cores`** — a material op left on ≤2 cores needs a measured attempt or a quoted
   hard error. Nothing else discharges it.
-- **`agrees_with_shipped`** — where the advisor independently re-derived your config. It contributes zero
-  *here* by construction; report the number, do not treat it as wasted advice.
+- **`agrees_with_shipped`** — where the advisor independently re-derived your config. Since it is blind to
+  your layouts, agreement is genuine re-derivation, and on one decoder it was 82 % of the window. Its
+  marginal contribution here is zero by construction; **report the number as a headline**, and do not read it
+  as wasted advice. How much a from-scratch optimization it would have saved is a different experiment.
 
 If the script aborts, fix the input or extend its op map. Do not hand-author its output.
 
