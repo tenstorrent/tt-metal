@@ -2352,9 +2352,7 @@ inline void _topk_xl_add_lsb_indices_()
 //
 // `remove_msb_values` runs on the PACK thread (TRISC2): the >64K (extended
 // 256K) flow needs to pack values out first, then overwrite the value half
-// of each DST word with zero, then pack out indices. Owning that overwrite
-// on PACK lets the value pack and the zero-overwrite overlap with MATH's
-// final merge tail, see the `op.hpp` wiring.
+// of each DST word with zero, then pack out indices.
 
 // Program ADDR_MOD_0 with a +2 increment: the two Dest rows of an SFPU
 // load/store. Used by both `remove_msb_values` and `separate_indices`,
@@ -2392,7 +2390,7 @@ inline void _topk_xl_remove_msb_values_()
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
 
     // The loop below holds a value in LREG0 across instructions while running on
-    // PACK (T2), and MATH does SFPU work itself, so this is only safe under SyncFull.
+    // PACK, and MATH does SFPU work itself, so this is only safe under SyncFull.
     static_assert(Dst == DstSync::SyncFull, "_topk_xl_remove_msb_values_ needs MATH quiesced: SyncFull only");
 
     constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
