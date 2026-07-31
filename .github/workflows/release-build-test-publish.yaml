@@ -139,7 +139,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact-tracy.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-tracy.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
-      mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
+      mlperf-read-only: false
       tier: "1"
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
 

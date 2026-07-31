@@ -137,6 +137,7 @@ jobs:
         # on every HEAD call even when the cache already has the model,
         # crashing with `OSError [Errno 30] Read-only file system`.
         HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '0' || '1' }}
+        HF_HOME: /mnt/MLPerf/huggingface
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         LOGURU_LEVEL: INFO
