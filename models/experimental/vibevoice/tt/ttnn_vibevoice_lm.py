@@ -66,12 +66,18 @@ _QO_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 _QO_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
 # B=2 variant of _QO_DECODE_PROGCFG for the CFG batch-2 fused decode (pos+neg rows folded
-# into M).  Identical in0_block_w / mcast / subblock; per_core_M=2 so it is valid for M=2.
-# Byte-identical per row to the per_core_M=1 B=1 config (row 0 maxabsdiff==0), i.e. the
-# K-reduction order is preserved — long-form-safe.
+# into M).  per_core_M=2 so it is valid for M=2.  Byte-identical per row to the per_core_M=1
+# B=1 config (row 0 maxabsdiff==0), i.e. the K-reduction order is preserved — long-form-safe.
+#
+# in0_block_w=8 (was 4): 21.0 -> 16.8 us in isolation (1.26x, 224 -> 282 GB/s), 56 calls/frame.
+# Swept at 24/48/16/12 cores; MORE cores did not help (48c bottomed at 19.1 us, and 48c/ib2 was
+# 30.0 us) — K-blocking, not core count, was the lever here.  Subblock is noise (sb1x1 16.6 us).
+# NOTE the bit-exactness boundary: ib in {4,8,12,16} are all maxabsdiff==0 against each other,
+# but ib>=24 differs (3.8e-06).  K is 48 tiles, so ib>=24 leaves <=2 K-blocks and the inter-block
+# accumulation path changes; do not raise this past 16.
 _QO_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
-    in0_block_w=4,
+    in0_block_w=8,
     out_subblock_h=1,
     out_subblock_w=2,
     per_core_M=2,
