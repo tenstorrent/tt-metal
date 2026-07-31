@@ -4,16 +4,13 @@
 
 """Merge gate: per-perf-test CSV schema versioning + metric-vocabulary drift.
 
-The per-test gate re-derives, for every perf test, the columns its CSV would
-carry (statically, from that test's ``PerfConfig`` parameters) and compares them
-to the recorded schema in ``helpers/perf_test_schemas.py``. A change to one
-test's columns fails with a per-test diff, so you can see exactly which test
-changed and how — and, because each test carries a ``version``, two reports of
-the same test are comparable by that number.
+For every perf test, re-derive the columns its CSV would carry (statically, from
+its PerfConfig parameters) and compare them to the recorded schema in
+helpers/perf_test_schemas.py. Drift fails with a per-test diff; each test's
+``version`` lets two reports of the same test be compared.
 
-Two smaller global gates keep the metric-column vocabulary (run-type names and
-efficiency-metric names) from drifting. Everything parses the source with
-``ast``, so the gate needs no hardware.
+Two smaller gates keep the metric vocabulary (run-type and efficiency-metric
+names) from drifting. Everything parses source with ``ast``, so no hardware.
 """
 
 import ast
@@ -52,9 +49,9 @@ def _load(module_filename: str):
 def _class_field_specs() -> dict:
     """Parameter class -> ordered [(field_name, default_is_none)].
 
-    Order matters so we can map positional constructor args to fields.
-    ``default_is_none`` marks a field the report DROPS when left unset (the
-    runtime emits a column only when its value is not None)."""
+    Order lets us map positional constructor args to fields. ``default_is_none``
+    marks a field the report drops when unset (a column is emitted only when the
+    value is not None)."""
     specs: dict[str, list] = {}
     for path in _iter_source_files():
         try:
@@ -83,11 +80,11 @@ def _class_field_specs() -> dict:
 
 
 def _emitted_fields(elt: ast.Call, specs: dict) -> list:
-    """Fields a param instantiation actually emits as CSV columns.
+    """Fields a param instantiation actually emits as columns.
 
-    Mirrors the runtime rule: a None-default field left unset is dropped, so we
-    emit a field unless (its default is None AND the call does not set it). This
-    stops us over-listing optional slots like MATH_OP.pool_type/unary_extra."""
+    Runtime rule: a None-default field left unset is dropped. So emit a field
+    unless its default is None and the call doesn't set it — this avoids
+    over-listing optional slots like MATH_OP.pool_type."""
     name = None
     if isinstance(elt.func, ast.Name):
         name = elt.func.id
@@ -102,15 +99,15 @@ def _emitted_fields(elt: ast.Call, specs: dict) -> list:
 
 
 def derive_perf_test_schemas() -> dict:
-    """{perf_test_name -> sorted column list} derived statically from PerfConfig.
+    """{perf_test_name -> sorted column list}, derived statically from PerfConfig.
 
-    Columns = the fixed sweep headers (formats/flags) + the sweep-parameter
-    fields the test actually sets + the marker column. Metric/counter columns are
-    formula-driven from run types and are covered by the drift gates below.
+    Columns = fixed sweep headers (formats/flags) + the sweep-parameter fields the
+    test sets + marker. Metric/counter columns are formula-driven and covered by
+    the drift gates below.
 
-    NOTE: static approximation. It cannot see params built with dynamic lists
-    (comprehensions/helpers), so such columns are under-listed; only the runtime
-    report (or a hardware-free report test, #51244) is exact.
+    Static approximation: it can't see params built from dynamic lists
+    (comprehensions/helpers), so those are under-listed. Only the runtime report
+    (or the hardware-free report test, #51244) is exact.
     """
     ps = _load("perf_schema.py")
     fixed = list(ps.FORMAT_HEADERS) + list(ps.FLAG_HEADERS)
@@ -236,11 +233,10 @@ def _load_perf_schema():
 def _reserved_headers() -> set:
     """Columns the pipeline injects itself, which no parameter field may shadow.
 
-    Beyond the fixed sweep headers, this reserves ``marker`` (the merge key — a
-    param named ``marker`` would be suffixed to ``marker_x``/``marker_y`` by the
-    cross-merge, evade the duplicate gate, and break marker processing) and
-    ``test_name``. ``loop_factor``/``tile_cnt`` are intentionally NOT reserved:
-    they ARE parameter fields (``LOOP_FACTOR``/``TILE_COUNT``).
+    The fixed sweep headers, plus ``marker`` (the merge key; a param named
+    ``marker`` would be renamed to ``marker_x`` by the merge and break marker
+    processing) and ``test_name``. ``loop_factor``/``tile_cnt`` are NOT reserved —
+    they are real parameter fields (LOOP_FACTOR/TILE_COUNT).
     """
     ps = _load_perf_schema()
     return set(ps.FIXED_SWEEP_HEADERS) | {ps.MARKER, ps.TEST_NAME_COLUMN}

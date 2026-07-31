@@ -4,14 +4,10 @@
 
 
 class PerfSchemaError(AssertionError):
-    """
-    Raised when a perf report's columns are not a valid, unique schema.
-
-    Two failure modes share this error: a single CSV that accumulates more than
-    one column schema (ragged, NaN-filled rows), and a report with two columns
-    that carry the same header name (a duplicate that would be silently mangled
-    into a ``<name>.1`` phantom). Both are fail-loud so the bad CSV never ships.
-    """
+    """Raised when a perf report's columns aren't a valid, unique schema: either a
+    CSV that mixes more than one column schema, or two columns sharing a header
+    name (which pandas would mangle into a ``<name>.1`` phantom). Fail loud so the
+    bad CSV never ships."""
 
 
 MARKER = "marker"
@@ -87,12 +83,9 @@ def assert_unique_columns(columns, context: str = "") -> None:
         )
 
 
-# Golden CSV-header catalog
-#
-# This catalog is HAND-MAINTAINED on purpose: a header changes ONLY when someone
-# edits a set below, so a rename becomes a reviewed diff instead of a silent
-# drift. When a test legitimately adds or renames a header, update the matching
-# set below in the SAME pull request.
+# Golden CSV-header catalog. Hand-maintained: a header changes only when someone
+# edits a set below, so a rename shows up as a reviewed diff. When a test adds or
+# renames a header, update the matching set in the same PR.
 
 # Run-type names — mirror helpers/llk_params.py::PerfRunType.
 RUN_TYPE_NAMES = frozenset(
