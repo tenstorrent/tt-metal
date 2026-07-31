@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import torch
 
@@ -334,14 +335,21 @@ class Attention(LightweightModule):
             return ttnn.ShardTensorToMesh(self.mesh_device, dim=2)
 
         if self.prefetcher is not None:
+            # The ring WO matmul runs after an all-gather that reconstructs the full attention-output
+            # width, so the weight must be 2D-sharded: rows (contraction) by cluster_shape[0] and
+            # output cols by cluster_shape[1]. The default get_wo_mesh_mapper() falls back to a 1D
+            # row-split (ShardTensorToMesh(dim=2)) when fused-AGMM is off (num_devices != 8), which
+            # mismatches the ring matmul; force the 2D mapper here to match get_sharded_wo_ring_mem_config.
             self.wo_sharded_ring = ttnn.as_tensor(
                 pt_wo,
                 dtype=self.wo_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.args.get_sharded_wo_ring_mem_config(),
-                mesh_mapper=get_wo_mesh_mapper(),
-                cache_file_name=(cache_name("wo_sharded_ring")),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(2, 3), mesh_shape=configuration.cluster_shape
+                ),
+                cache_file_name=(cache_name("wo_sharded_ring_2d")),
             )
 
         def get_wo_memory_config():
@@ -648,6 +656,31 @@ class Attention(LightweightModule):
         ###
         # Reshape and rotary embeddings
         ###
+        # PERF (ported from gemma2-bringup / sweep_create_heads.py): by default the fused-QKV is
+        # interleaved, so nlp_create_qkv_heads_decode runs on a single core (~14.8us). Width-sharding
+        # the input across 64 cores lets the op parallelize (~8.9us), with overlap_qk_coregrid=True
+        # (the sweep-winning config). Gated to single device / no-prefetcher; the multi-device path
+        # is left unchanged (it deadlocked before). TT_CREATE_HEADS_MD=1 opts multi-device in for
+        # measurement only.
+        create_head_kwargs = {}
+        _allow_multi_device = os.getenv("TT_CREATE_HEADS_MD") == "1"
+        if (
+            (self.args.num_devices == 1 or _allow_multi_device)
+            and self.prefetcher is None
+            and fqkv_shape[3] % (32 * 64) == 0
+        ):
+            xqkv_fused = ttnn.to_memory_config(
+                xqkv_fused,
+                ttnn.create_sharded_memory_config(
+                    shape=(32, fqkv_shape[3] // 64),
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                ),
+            )
+            create_head_kwargs["overlap_qk_coregrid"] = True
+
         (
             q_heads_pre_rot_1BQD,
             k_heads_pre_rot_1BKD,
@@ -657,6 +690,7 @@ class Attention(LightweightModule):
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             memory_config=self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher),
+            **create_head_kwargs,
         )
         norm_config = self.args.get_norm_config("attn", Mode.DECODE, None)
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode=Mode.DECODE, norm_config=norm_config)

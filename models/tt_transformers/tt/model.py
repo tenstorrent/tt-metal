@@ -83,7 +83,11 @@ class Transformer(LightweightModule):
                 args.max_seq_len,
                 args.rope_theta_local,
                 use_qk_fused=args.use_qk_fused,
-                prefetcher=None,
+                # Must share the prefetcher so local-rope decode ops (get_rot_mats cos/sin/trans_mat)
+                # are built on the prefetcher worker sub-core-grid. With prefetcher=None they land on
+                # the full grid and violate fd_mesh_command_queue.cpp:389 (sub_device_ids.size()==1)
+                # during prefetcher decode. No-op when prefetcher is None (default single-chip path).
+                prefetcher=prefetcher,
             )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
@@ -154,7 +158,14 @@ class Transformer(LightweightModule):
         # Initialize on-device sampling if supported
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
-        self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
+        single_device = list(self.mesh_device.shape) == [1, 1]
+        allow_force_argmax = self.args.model_config.get("SAMPLING_AG_CONFIG", {}).get("allow_force_argmax", False)
+        # On a single device, greedy sampling uses a full-width on-device ttnn.argmax (no all-gather,
+        # no 64K topk split), so force-argmax models can sample on device regardless of vocab size.
+        # This avoids the per-token host round-trip of the full logits (a big single-chip decode win).
+        self._supports_on_device_sampling = prefetcher is None and (
+            self.args.vocab_size // sampling_splits <= 64 * 1024 or (single_device and allow_force_argmax)
+        )
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,

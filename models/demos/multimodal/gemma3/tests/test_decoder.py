@@ -28,6 +28,8 @@ from models.tt_transformers.tt.rope import RotarySetup
             "T3K": (1, 8),
             "TG": (8, 4),
             "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
         }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
@@ -66,7 +68,16 @@ def test_decoder_inference(
     mode = Mode.DECODE
     dtype = ttnn.bfloat8_b
 
-    model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    # GATE_OPT=performance exercises the perf-mode fidelity (Lever A LoFi) for the accuracy gate.
+    # Unset/other -> None -> accuracy default (unchanged CI behavior).
+    _optimizations = None
+    if os.environ.get("GATE_OPT") == "performance":
+        from models.tt_transformers.tt.model_config import DecodersPrecision
+
+        _optimizations = lambda a: DecodersPrecision.performance(a.n_layers, a.model_name)
+    model_args = Gemma3ModelArgs(
+        mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, optimizations=_optimizations
+    )
 
     model_args.n_layers = 1
 

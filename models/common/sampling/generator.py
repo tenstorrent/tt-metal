@@ -281,10 +281,11 @@ class SamplingGenerator:
         *,
         penalties_on: bool,
         tt_out_tok: Optional[ttnn.Tensor],
+        active_rows: Optional[int] = None,
     ):
         if penalties_on:
             logits = self.tt_penalties.apply(logits)
-        tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+        tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok, active_rows=active_rows)
         return tt_tokens, tt_log_probs
 
     def capture_trace(
@@ -293,6 +294,7 @@ class SamplingGenerator:
         *,
         tt_out_tok: Optional[ttnn.Tensor] = None,
         skip_precompile: bool = False,
+        active_rows: Optional[int] = None,
     ) -> ttnn.Tensor:
         """
         Capture a trace of the sampling pipeline for the given configuration.
@@ -311,6 +313,7 @@ class SamplingGenerator:
                 logits,
                 penalties_on=penalties_on,
                 tt_out_tok=tt_out_tok,
+                active_rows=active_rows,
             )
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
@@ -318,6 +321,7 @@ class SamplingGenerator:
             logits,
             penalties_on=penalties_on,
             tt_out_tok=tt_out_tok,
+            active_rows=active_rows,
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
         ttnn.synchronize_device(self.mesh_device)
@@ -354,10 +358,14 @@ class SamplingGenerator:
         enable_trace: bool = True,
         tt_out_tok: Optional[ttnn.Tensor] = None,
         skip_precompile: bool = False,
+        active_rows: Optional[int] = None,
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
         replays a captured trace.
+
+        active_rows: real (unpadded) user count for the decode force-argmax fast path.
+        Leave None for prefill (the argmax must span all 32 tile rows there).
         """
 
         penalties_on = self._penalties_active
@@ -372,6 +380,7 @@ class SamplingGenerator:
                 logits,
                 penalties_on=penalties_on,
                 tt_out_tok=tt_out_tok,
+                active_rows=active_rows,
             )
         else:
             key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
@@ -380,6 +389,7 @@ class SamplingGenerator:
                     logits,
                     tt_out_tok=tt_out_tok,
                     skip_precompile=skip_precompile,
+                    active_rows=active_rows,
                 )
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)

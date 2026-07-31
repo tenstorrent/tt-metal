@@ -128,6 +128,9 @@ class TTSampling(LightweightModule):
         # Round up to the next tile boundary (32) — device tensors must be tile-aligned.
         raw_batch = getattr(args, "max_batch_size", 32)
         self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)
+        # Real (unpadded) user count. The decode force-argmax path only needs to reduce these
+        # rows (not the tile-padded 32); callers pass this as active_rows to forward().
+        self.decode_active_rows = max(1, raw_batch)
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
 
@@ -553,6 +556,7 @@ class TTSampling(LightweightModule):
         self,
         x: ttnn.Tensor,
         tt_out_tok: ttnn.Tensor = None,
+        active_rows: int = None,
     ):
         """
         Perform on-device sampling on logits tensor.
@@ -598,13 +602,37 @@ class TTSampling(LightweightModule):
                 )
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
-            x_untilized = ttnn.untilize(x, use_multicore=True)
-            tt_out_tok = ttnn.argmax(
-                x_untilized,
-                dim=-1,
-                output_tensor=tt_out_tok,
-                keepdim=False,
-            )
+            # DECODE fast path: a row-major argmax over just the active batch rows is ~40x cheaper
+            # than reducing the full 32-row tile (gpt-oss gtobarTT/gpt_oss_opt: ~8ms -> ~0.2ms/token).
+            # Only valid when the caller passes the real user count (decode). PREFILL must leave
+            # active_rows=None: there the 32 rows are sequence positions and downstream indexes the
+            # true last-token row (up to 31), so it keeps the original untilize + full-tile argmax.
+            out_rows = None if tt_out_tok is None else tt_out_tok.shape[-1]
+            if active_rows is not None and active_rows < x.shape[2]:
+                # Reduce only the real user rows in ROW_MAJOR (a 1-row last-dim reduction is
+                # ~40x cheaper than the padded 32-row tile). If a wider feedback buffer is
+                # preallocated (decode token buffer, e.g. 32), argmax into a right-sized temp
+                # then place it at the front rows and copy into the buffer in place (trace-safe).
+                x = ttnn.slice(x, (0, 0, 0, 0), (x.shape[0], x.shape[1], active_rows, x.shape[3]))
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                if tt_out_tok is None or out_rows == active_rows:
+                    tt_out_tok = ttnn.argmax(x, dim=-1, output_tensor=tt_out_tok, keepdim=False)
+                else:
+                    # Preallocated feedback buffer is wider (e.g. [1,1,1,32]); argmax the active
+                    # rows -> [.,.,active_rows], reshape those per-user tokens into the buffer's last
+                    # dim, pad to the full buffer width, and copy in place. Real users land at the
+                    # front positions (0..active_rows-1), matching the full-path layout.
+                    rank = len(tt_out_tok.shape)
+                    lead = [int(tt_out_tok.shape[i]) for i in range(rank - 1)]
+                    tok = ttnn.argmax(x, dim=-1, keepdim=False)  # [1, 1, active_rows]
+                    tok = ttnn.reshape(tok, (*lead, active_rows))
+                    pad = [(0, 0)] * (rank - 1) + [(0, out_rows - active_rows)]
+                    tok = ttnn.pad(tok, pad, value=0)
+                    ttnn.copy(tok, tt_out_tok)
+                    ttnn.deallocate(tok)
+            else:
+                x = ttnn.untilize(x, use_multicore=True)
+                tt_out_tok = ttnn.argmax(x, dim=-1, output_tensor=tt_out_tok, keepdim=False)
             # Argmax path: logprobs not supported (force-argmax is disabled
             # when logprobs are enabled via format_sampling_params guard).
             self.tt_log_probs = None

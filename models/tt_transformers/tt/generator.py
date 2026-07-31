@@ -1540,7 +1540,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # rank-2; ttnn.sampling requires a rank-4 preallocated output) —
                 # pass None so sampling allocates its own output.
                 tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
-                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=tt_out_tok)
+                decode_active_rows = getattr(getattr(sampling_module, "tt_sampling", None), "decode_active_rows", None)
+                sampling_module.capture_trace(
+                    logits=tt_out_trace[i], tt_out_tok=tt_out_tok, active_rows=decode_active_rows
+                )
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
@@ -1725,11 +1728,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 if sampling_enable_trace and self.trace_inputs_decode[True]
                 else None
             )
+            decode_active_rows = getattr(getattr(sampling_module, "tt_sampling", None), "decode_active_rows", None)
             sampled_outputs.append(
                 sampling_module.sample(
                     logits=logits_i,
                     tt_out_tok=tt_out_tok,
                     enable_trace=sampling_enable_trace,
+                    active_rows=decode_active_rows,
                 )
             )
         return sampled_outputs

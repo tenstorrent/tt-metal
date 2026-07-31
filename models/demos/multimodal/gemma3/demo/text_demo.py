@@ -72,6 +72,23 @@ def create_tt_model(
 ):
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
     from models.tt_transformers.tt.model import Transformer
+    from models.tt_transformers.tt.prefetcher import ARCH_CONFIG, Prefetcher, is_prefetcher_supported
+
+    # DRAM prefetcher (multi-chip only: single-chip is L1-blocked for gemma3-12b). Env-gated so the
+    # default single-chip/existing paths are untouched. num_tensors=5 == w1,w3,w2 (MLP) + WQKV,WO (attn).
+    use_prefetcher = os.getenv("TT_GEMMA3_PREFETCHER", "0") == "1"
+    prefetcher = None
+    if use_prefetcher:
+        model_name = os.getenv("HF_MODEL", "")
+        num_dev = mesh_device.get_num_devices()
+        # Mirror Prefetcher's auto-selection: it scans legal receiver-core counts and picks the
+        # first ring size that fits L1 (ring_size = receiver_cores * num_dram_banks).
+        num_senders = len(ARCH_CONFIG["blackhole"]["dram_banks"])
+        legal = ARCH_CONFIG["blackhole"]["legal_receiver_cores"]
+        assert any(
+            is_prefetcher_supported(model_name, num_dev, rc * num_senders) for rc in legal
+        ), f"DRAM prefetcher not supported for {model_name} on {num_dev} device(s)"
+        prefetcher = Prefetcher(mesh_device, num_tensors=5, num_layers=num_layers)
 
     tt_model_args = ModelArgs(
         mesh_device,
@@ -81,9 +98,12 @@ def create_tt_model(
         max_seq_len=max_seq_len,
         optimizations=optimizations,
         enable_program_trace=enable_program_trace,
+        prefetcher=prefetcher,
     )
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
+    if prefetcher is not None:
+        prefetcher.num_layers = tt_model_args.n_layers
 
     if paged_attention_config and tt_model_args.base_model_name in ["gemma-3-4b", "gemma-3-27b"]:
         # Paged decode tuning improves text generation quality without affecting non-paged multimodal vision demos.
@@ -127,6 +147,7 @@ def create_tt_model(
         state_dict=state_dict,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        prefetcher=prefetcher,
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
@@ -361,7 +382,7 @@ def _gemma3_text_demo_device_params():
             1,  # repeat_batches
             1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            int(os.getenv("TT_GEMMA3_PROF_TOKENS", "200")),  # max_generated_tokens (short for tracy profiling)
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -370,7 +391,7 @@ def _gemma3_text_demo_device_params():
             1,
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            os.getenv("TT_GEMMA3_PROF_NOTRACE", "0") != "1",  # enable_trace (off for tracy device profiling)
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts

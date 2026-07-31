@@ -1,0 +1,67 @@
+Gemma3 decode perf summary  (GATE_OPT=performance, batch-1, ISL 128 / OSL 200)
+Hardware: Blackhole. "1 chip" = one chip of the P300; "2 chip" = one P300 card (2 chips) TP=2.
+Scope: gemma3-12b (1 chip & 2 chip) and gemma3-27b (2 chip) only.
+
+============================================================================
+END-TO-END TRACED PERF (production path: trace ON, 200 tok, batch-1)
+============================================================================
+variant      hardware        TTFT(ms)  decode ms/tok   tok/s/user   dev-compute ceiling t/s/u
+gemma3-12b   1x P300 (1chip)   83.49      34.71          28.81            33.4
+gemma3-12b   1x P300 (2chip)   67.74      34.01          29.40            40.8
+gemma3-27b   1x P300 (2chip)  124.12      62.66          15.96            21.8
+
+Key reads:
+- 12b 2-chip (29.4) is only ~2% faster than 12b 1-chip (28.81): the CCL tax (~79 us/layer:
+  AllGather 52 + ReduceScatter 27) nearly cancels the benefit of splitting the matmuls across
+  2 chips. 2-chip only clearly wins on TTFT (67.7 vs 83.5 ms). For pure decode throughput,
+  1-chip 12b is the efficient point.
+- 12b 1-chip runs at 28.81 vs a 33.4 ceiling -> ~86% of the layer-compute ceiling: decode is
+  matmul/device-bound, NOT dispatch-bound, on the traced single-chip path.
+- 12b 2-chip runs at 29.4 vs a 40.8 ceiling -> ~72%: 2-chip is more CCL/dispatch-bound (idle
+  gaps waiting on the all-reduce + host-attached-chip imbalance).
+- 27b 2-chip runs at 15.96 vs a 21.8 ceiling -> ~73%: matmul 71% of device time + CCL 13% tax.
+
+============================================================================
+PER-OP DEVICE TIME  (tracy, 1 decoder layer x10 tokens, us / layer / token; 2-chip = dev0)
+============================================================================
+OP CODE                                   12b_1chip   12b_2chip   27b_2chip
+MatmulDeviceOperation                        468.18      302.99      521.06
+AllGatherAsyncDeviceOperation                  0.00       52.21       62.44
+LayerNormDeviceOperation                      33.14       32.70       30.64
+ReduceScatterMinimalAsyncDeviceOperation       0.00       26.87       28.72
+PagedUpdateCacheDeviceOperation               19.84       12.07       16.70
+BinaryNgDeviceOperation                       16.35        9.68        9.92
+NLPCreateQKVHeadsDecodeDeviceOperation        14.82        7.56       11.19
+TransposeDeviceOperation                      14.29       14.26       13.30
+EmbeddingsDeviceOperation                     12.15       12.08       10.17
+ReshardDeviceOperation                         8.30        1.88        3.03
+SdpaDecodeDeviceOperation                      8.21        7.85        6.90
+TilizeDeviceOperation                          6.61        6.61        4.21
+RotaryEmbeddingLlamaDeviceOperation            5.91        5.89        4.03
+InterleavedToShardedDeviceOperation            4.88        4.90        4.07
+SliceDeviceOperation                           3.69        3.64        3.40
+MeshPartitionDeviceOperation                   0.00        2.59        2.71
+UntilizeDeviceOperation                        2.31        2.32        1.60
+ShardedToInterleavedDeviceOperation            2.64        2.14        1.87
+TypecastDeviceOperation                        1.83        1.84        1.58
+NLPConcatHeadsDecodeDeviceOperation            1.38        0.73        0.86
+
+per-layer device sum / layers / decode ceiling:
+  12b_1chip   624.5 us/layer  x48 layers -> 29.98 ms/tok  -> 33.4 t/s/u ceiling
+  12b_2chip   510.8 us/layer  x48 layers -> 24.52 ms/tok  -> 40.8 t/s/u ceiling
+  27b_2chip   738.4 us/layer  x62 layers -> 45.78 ms/tok  -> 21.8 t/s/u ceiling
+
+matmul share of device compute per layer:
+  12b_1chip   matmul 468.2us (75%)   ccl   0.0us ( 0%)
+  12b_2chip   matmul 303.0us (59%)   ccl  79.1us (15%)
+  27b_2chip   matmul 521.1us (71%)   ccl  93.9us (13%)
+
+Notes:
+- "dev-compute ceiling" = from the per-op tracy profile (layers only). Real traced number is
+  below it because of non-layer ops (embedding, final norm, lm_head, on-device argmax sampling)
+  plus residual reshards and the small dispatch that survives tracing.
+- matmul is 59-75% of on-device decode time -> matmul kernel efficiency is the single biggest
+  lever; everything else (norms, sdpa, rope, cache) is small individually.
+- On 2-chip, dev0 (host-attached / MMIO chip) runs the same matmuls ~20% slower than dev1
+  (521 vs 434 us/layer on 27b), and TP is gated by the slower chip -> chip imbalance + CCL are
+  the 2-chip-specific costs, not the matmul core grids (grid narrowing was tested and rejected).

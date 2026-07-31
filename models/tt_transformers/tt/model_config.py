@@ -93,6 +93,7 @@ class OpGroup(Enum):
     LI_QKV_PREFILL = "li_qkv_prefill"
     LI_O_PREFILL = "li_o_prefill"
     SDPA_PREFILL = "sdpa_prefill"
+    LI_LM_HEAD = "li_lm_head"  # final vocab projection (logits), runs every decode token
     ACCURACY = "accuracy"  # This is a special group for accuracy mode, not an actual operator group
 
 
@@ -225,8 +226,23 @@ class ModelOptimizations:
             )
         else:
             settings = {
+                # Lever F (FF2 weights BFP8->BFP4) was TESTED and REJECTED: +4% perf (25.79 t/s/u) but
+                # top1 dropped 84.6->81.6 (below the 82.0 gate floor). The down-projection is too
+                # accuracy-sensitive for 4-bit. Kept at BFP8.
+                # Precision levers on the BFP8 matmuls were all TESTED and REJECTED (accuracy gate,
+                # top1 floor 82.0): FF2->BFP4 gave 81.6, QKV->BFP4 gave 79.0. Only FF1/FF3 tolerate
+                # BFP4. Decode is weight-BW-bound, so precision is the ceiling here -> exhausted.
                 "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
-                "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
+                # Lever A (single P150): drop decode-path matmul fidelity HiFi2 -> LoFi. Weights stay
+                # BFP8 (mantissa preserved); fewer math cycles. FF2 + QKV-decode + O-decode + LM-head
+                # (262k-vocab projection, every token). Accuracy-gated via ci-token-matching.
+                "OpFidelity": {
+                    OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                    OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+                    OpGroup.LI_QKV_DECODE: MathFidelitySetting.LOFI,
+                    OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                    OpGroup.LI_LM_HEAD: MathFidelitySetting.LOFI,
+                },
             }
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
@@ -314,6 +330,8 @@ class ModelOptimizations:
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
+                # LM head defaults to HiFi2 (preserves prior hardcoded lm_head.py behavior)
+                OpGroup.LI_LM_HEAD: MathFidelitySetting.HIFI2,
                 OpGroup.ACCURACY: MathFidelitySetting.HIFI4_FP32,
             },
         }
@@ -1121,7 +1139,13 @@ class ModelArgs:
                 self.model_config["FFN_LN_AG_CONFIG"] = default_ln_ag
                 self.model_config["ATTN_AGMM_CONFIG"] = default_agmm
                 self.model_config["MLP_RS_CONFIG"] = default_mlp_rs
-                self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_force_argmax
+                sampling_ag_config = dict(default_sampling_force_argmax)
+                # Single-device greedy can argmax the full logit width on-device (line 602 in
+                # tt_sampling.py: mask + untilize + ttnn.argmax, no all-gather, no 64K topk split).
+                # Enabling it avoids the per-token host round-trip of the full 262k-vocab logits.
+                if self.num_devices == 1:
+                    sampling_ag_config["allow_force_argmax"] = True
+                self.model_config["SAMPLING_AG_CONFIG"] = sampling_ag_config
 
             logger.info(f"Attention grid: {self.attn_input_grid}")
             logger.info(f"MLP grid: {self.mlp_core_grid}")
@@ -2367,8 +2391,12 @@ class ModelArgs:
     # NOTE: These attention helpers are placed here for historical reasons
     def get_sharded_wo_ring_mem_config(self):
         """Get the memory config for WO weights in ring mode."""
+        # WO's contraction dim is the attention output width (n_heads*head_dim), which differs from
+        # the model dim for gemma3 (head_dim=256 => 16*256=4096 != dim=3840). Rows (k) are split by
+        # cluster_shape[0] and output cols (n) by cluster_shape[1] to match the 2D ring shard of the
+        # weight. For models where n_heads*head_dim == dim (e.g. Llama) this is identical to before.
         wo_shape_ring = (
-            self.dim // self.cluster_shape[0],
+            (self.n_heads * self.head_dim) // self.cluster_shape[0],
             self.dim // self.cluster_shape[1],
         )
         return self.create_dram_sharded_mem_config(

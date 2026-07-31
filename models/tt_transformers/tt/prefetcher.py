@@ -35,6 +35,9 @@ VERIFIED_MODEL_CONFIGS = {
     "Qwen3-VL-72B": {"dim": 8192, "hidden_dim": 28672, "n_heads": 64, "n_kv_heads": 8},
     "Gemma3-4B": {"dim": 2560, "hidden_dim": 14336, "n_heads": 20, "n_kv_heads": 20},
     "Gemma3-27B": {"dim": 4608, "hidden_dim": 24576, "n_heads": 32, "n_kv_heads": 8},
+    # HF_MODEL is resolved to a snapshot path containing "gemma-3-12b", so the key is the
+    # lowercase HF slug substring (unlike the CamelCase keys above) to match is_prefetcher_supported.
+    "gemma-3-12b": {"dim": 3840, "hidden_dim": 15360, "n_heads": 16, "n_kv_heads": 8},
 }
 
 

@@ -76,6 +76,7 @@ class ModelArgs(TTModelArgs):
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
         enable_program_trace: bool = False,
+        prefetcher=None,
     ):
         # Resolve HF_MODEL to a local snapshot path before super().__init__() so that
         # all HF calls (AutoConfig, tokenizer, weights) skip the refs/main lookup,
@@ -101,6 +102,7 @@ class ModelArgs(TTModelArgs):
             max_seq_len=max_seq_len,
             optimizations=optimizations,
             cache_hf=cache_hf,
+            prefetcher=prefetcher,
         )
 
         # For Gemma3 we still need a real tokenizer even when using dummy_weights,

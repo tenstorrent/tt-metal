@@ -217,6 +217,26 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+  gemma-3-12b:
+    aliases: ["gemma-3-12b", "google/gemma-3-12b-it", "gemma-3-12b-vision"]
+    skus:
+      bh_p150:
+        entries:
+          # seq_len intentionally omitted so this matches any decode length (batch-1 gate).
+          - batch_size: 1
+            status: active
+            perf: {}
+            # top1/top5 token-matching floors (percent) vs HF greedy reference, single-P150.
+            # Reference points (temperature=0 greedy, deterministic):
+            #   accuracy-mode GOLD : top1 90.00, top5 99.20 (absolute ceiling)
+            #   performance base   : top1 83.20, top5 95.40 (BFP4 MLP + FF1/FF3 LoFi)
+            # We gate optimizations in PERFORMANCE mode, so the floor tracks the perf
+            # baseline minus ~1% for regression detection (not the gold ceiling).
+            accuracy:
+              top1: 82.0
+              top5: 94.0
+            owner_id: tvardhineni
+            team: models
   gemma-3-4b:
     aliases: ["gemma-3-4b", "google/gemma-3-4b-it", "gemma-3-4b-vision"]
     skus:
