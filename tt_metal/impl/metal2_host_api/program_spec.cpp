@@ -353,6 +353,21 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             //   anything else (multi-node sem, or a
             //   binder off the sem's node)          -> EXTERNAL (self-targeted NoC atomic; serializes
             //                                          local + remote writers at one NIU)
+            // Gen1 (Wormhole/Blackhole) keeps its historical behaviour EXACTLY: AUTO resolves to
+            // LOCAL_NONATOMIC, the plain uncached RMW every semaphore has always used there.
+            //
+            // This feature exists for a Gen2-only problem -- the Quasar DM write-back cache, which has
+            // no Gen1 equivalent -- so it must not change how a mature platform executes. Two concrete
+            // reasons beyond scope discipline: (1) the EXTERNAL path is a self-targeted NoC atomic, and
+            // this branch's own keystone fixture skips Wormhole on the grounds that it lacks the
+            // required NoC/RISC-V atomics, so selecting it there would be unproven; (2) silently turning
+            // an existing Gen1 program's plain write into a NoC round-trip is a device-mechanism change
+            // nobody asked for. A Gen1 user who wants atomicity can still force SemaphoreScope::EXTERNAL
+            // explicitly -- that path is untouched.
+            if (!is_gen2_arch()) {
+                return SemScope::LOCAL_NONATOMIC;
+            }
+
             const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
             const bool single_node = sem_nodes.num_cores() == 1;
             if (binders.writer_instance_count <= 1 && single_node) {
