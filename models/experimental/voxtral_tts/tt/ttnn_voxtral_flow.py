@@ -27,17 +27,17 @@ THIS BLOCK IS THE BOTTLENECK, measured -- 109 ms of a 158 ms frame at bf16 (69%)
 Block 1's whole 3.4B decode step. Parameter count says the opposite and parameter count is wrong
 here: Block 1's step is a few big matmuls, while this is ~660 tiny dispatch-bound ops (3-token
 sequence x 7 sequential steps x batch-2 CFG). Of the 109 ms, ~79 ms is the 7 velocity evaluations
-and ~30 ms is the host work below, so BOTH are worth attention. The ordered wins are in STATUS.md
-section 7; the first is moving the Euler update and CFG combine onto the device, which removes 7
-host round-trips per frame and is also what currently makes the ODE untraceable.
+and the rest is the host work below, so BOTH are worth attention. The ordered wins are in STATUS.md
+section 7; the next one is tracing the solve, which is now possible.
 
-HOST vs DEVICE. The 7 Euler steps and the 3-layer transformer run on device. Three things stay on
-host, deliberately:
+HOST vs DEVICE. The whole Euler solve -- the 3-layer transformer, the CFG combine and the state
+update -- runs on device, with nothing left in the loop that a trace could not capture. Two things
+stay on host, deliberately, and both are once per frame rather than once per step:
   * the semantic argmax -- a [B,8320] masked argmax whose result is an INDEX used to look up an
     embedding on host anyway (same reasoning as the codec's semantic gather).
   * the FSQ quantise -- clamp/scale/round on [B,36]; 36 values per frame is not worth a dispatch.
-  * time_embedding -- [B,64] of sin/cos from a fixed inv_freq table, once per step.
-The velocity field, which is 99% of the arithmetic, never leaves the device.
+`time_embedding` is also host code, but it is no longer per step or even per frame: the solver
+schedule is fixed, so `_schedule()` builds its projections once and caches them on device.
 """
 
 import torch
@@ -77,7 +77,8 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
 # softmax, matmul, silu, add all return bf16 from bf16 inputs), so this one constant sets weights
 # AND all activations. What it does NOT touch:
 #   * matmul accumulation, which stays fp32 via fp32_dest_acc_en above;
-#   * the host-side fp32 arithmetic -- the Euler state `x`, the CFG combine, FSQ, semantic argmax.
+#   * the solver arithmetic -- the Euler state `x` and the CFG combine are fp32 ON DEVICE (see
+#     decode_frame), and FSQ and the semantic argmax are fp32 on host.
 # That second exemption is load-bearing. `x` accumulates across all 7 Euler steps in fp32 and never
 # round-trips through bf16, so bf16 contributes a per-step rounding error rather than a compounding
 # one. Free-running generation bears that out: 458 frames vs fp32's 459 on a 125-word paragraph,
@@ -104,7 +105,7 @@ class TtVoxtralFlow:
         w = load_flow_state(ckpt_path)
         self.inv_freq = w["time_embedding.inv_freq"]          # host: time_embedding
         self.semantic_host = w["semantic_codebook_output.weight"].float()  # host: masked argmax
-        self._tproj = {}                                     # (batch, n_steps) -> resident tokens
+        self._sched = {}                     # (batch, n_steps) -> (time tokens, step widths)
 
         dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT,
                                        device=device)
@@ -178,22 +179,24 @@ class TtVoxtralFlow:
         return ttnn.linear(pos0, self.proj["acoustic_codebook_output"],
                            compute_kernel_config=COMPUTE_CONFIG)
 
-    def _time_projections(self, B, n_steps):
-        """The n_steps time-conditioning tokens, resident on device.
+    def _schedule(self, B, n_steps):
+        """-> (time-conditioning tokens on device, per-step dt). Built once per (batch, n_steps).
 
-        `ts = linspace(0, 1, n_steps+1)` never changes, so `time_projection(time_embedding(t))` is a
-        CONSTANT per step index -- it does not depend on the prompt, the frame, or x. It used to be
-        recomputed n_steps times per frame (a host sin/cos plus a 3072x3072 matmul each). Built once
-        per (batch, n_steps) and cached."""
+        The solver schedule `linspace(0, 1, n_steps+1)` never changes, so BOTH halves of it are
+        constants: `time_projection(time_embedding(t))` does not depend on the prompt, the frame or
+        x (it used to be recomputed every step -- a host sin/cos plus a 3072x3072 matmul each), and
+        neither do the step widths. They are derived and cached together here so a change to the
+        schedule cannot move the tokens without moving the dt values with them."""
         key = (B, n_steps)
-        if key not in self._tproj:
+        if key not in self._sched:
             ts = torch.linspace(0, 1, n_steps + 1)
-            self._tproj[key] = [
-                ttnn.linear(self._up(time_embedding(ts[i].view(1, 1).repeat(B, 1), self.inv_freq)),
-                            self.proj["time_projection"], compute_kernel_config=COMPUTE_CONFIG)
-                for i in range(n_steps)
-            ]
-        return self._tproj[key]
+            self._sched[key] = (
+                [ttnn.linear(self._up(time_embedding(ts[i].view(1, 1).repeat(B, 1), self.inv_freq)),
+                             self.proj["time_projection"], compute_kernel_config=COMPUTE_CONFIG)
+                 for i in range(n_steps)],
+                [float(ts[i + 1] - ts[i]) for i in range(n_steps)],
+            )
+        return self._sched[key]
 
     def _predict_velocity(self, x_t, llm_h, t_emb):
         """torch [B,36], [B,3072], [B,64] -> velocity torch [B,36]. Position 0 only.
@@ -249,17 +252,15 @@ class TtVoxtralFlow:
         B2 = 2 * B
         should = (sem_code != END_AUDIO_ID).reshape(B)
         x0 = torch.randn(B, N_ACOUSTIC_CODEBOOK) if x_0 is None else x_0
-        ts = torch.linspace(0, 1, n_steps + 1)
 
         x = self._up(x0.reshape(B, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32)   # solver state, fp32
         # llm conditioning is constant across the solve: cond ++ uncond, projected ONCE per frame
         # rather than once per step (it was n_steps identical 3072x3072 matmuls).
         p2 = ttnn.linear(self._up(torch.cat([llm_hidden, torch.zeros_like(llm_hidden)], 0)),
                          self.proj["llm_projection"], compute_kernel_config=COMPUTE_CONFIG)
-        p1s = self._time_projections(B2, n_steps)
+        p1s, dts = self._schedule(B2, n_steps)
 
-        for i in range(n_steps):
-            dt = float(ts[i + 1] - ts[i])
+        for i, dt in enumerate(dts):
             # cond+uncond as ONE 2B forward, matching the reference exactly.
             x2 = ttnn.concat([x, x], dim=0)
             p0 = ttnn.linear(ttnn.typecast(x2, self.dtype), self.proj["input_projection"],
