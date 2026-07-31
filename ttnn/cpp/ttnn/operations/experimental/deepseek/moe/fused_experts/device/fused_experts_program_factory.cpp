@@ -96,8 +96,12 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const uint32_t weight_tile_bytes = static_cast<uint32_t>(gate_up0_buffer->page_size());
     // Each core's weight slice is its 2 gate tiles + 2 paired up tiles per k-row.
     const uint32_t weight_slice_tiles = k_tiles * (2u * kTilesPerCore);
-    // Double-buffer the weight slice so the reader can prefetch the next expert.
-    const uint32_t weights_cb_bytes = weight_slice_tiles * weight_tile_bytes;
+    // Double-buffer the weight slice so the reader can hold one expert's slice ready in L1
+    // while compute consumes the previous expert's, overlapping data movement with
+    // computation (see tech_reports/Saturating_DRAM_bandwidth -- "In0 and in1 shards are
+    // also double buffered, to overlap the data movement with computation"). Down weights
+    // reuse this CB, so it must be at least as large as the (also double-buffered) down slice.
+    const uint32_t weights_cb_bytes = 2u * weight_slice_tiles * weight_tile_bytes;
 
     // down weights are [I, H] per expert (TILE layout), DRAM ND-sharded into [I, H/64]
     // column blocks (one per core). Core idx owns the H output cols [idx*64, idx*64+64) ->
@@ -474,18 +478,17 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::NOC_0,
     };
-    {
-        KernelDescriptor::CoreRuntimeArgs args{
-            routing_buffer->address(),
-            mcast_start_x,
-            mcast_start_y,
-            mcast_end_x,
-            mcast_end_y,
-            num_dests,
-            col_start_tile_for(sender),
-        };
-        sender_desc.runtime_args.emplace_back(sender, std::move(args));
-    }
+    // Pass the routing buffer as a BufferBinding (not a raw address) so the framework
+    // patches the address on program-cache hits instead of rebuilding the descriptor.
+    sender_desc.emplace_runtime_args(
+        sender,
+        {routing_buffer,
+         mcast_start_x,
+         mcast_start_y,
+         mcast_end_x,
+         mcast_end_y,
+         num_dests,
+         col_start_tile_for(sender)});
     desc.kernels.push_back(std::move(sender_desc));
 
     // ---- Input-broadcaster kernel on {1,0} (NoC 1). ----
@@ -510,18 +513,16 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         .noc = NOC::NOC_1,
     };
     // NoC 1 multicasts traverse from high to low coordinates, so swap start/end.
-    {
-        KernelDescriptor::CoreRuntimeArgs args{
-            input_buffer->address(),
-            mcast_end_x,
-            mcast_end_y,
-            mcast_start_x,
-            mcast_start_y,
-            num_dests,
-            col_start_tile_for(input_sender),
-        };
-        input_sender_desc.runtime_args.emplace_back(input_sender, std::move(args));
-    }
+    // input_buffer is a BufferBinding so the framework patches its address on cache hits.
+    input_sender_desc.emplace_runtime_args(
+        input_sender,
+        {input_buffer,
+         mcast_end_x,
+         mcast_end_y,
+         mcast_start_x,
+         mcast_start_y,
+         num_dests,
+         col_start_tile_for(input_sender)});
     desc.kernels.push_back(std::move(input_sender_desc));
 
     // ---- Receiver reader kernel on the other 62 cores (NoC 0). ----
@@ -607,10 +608,9 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         writer_desc.config = DataMovementConfigDescriptor{.processor = proc, .noc = noc};
         for (const auto& cr : cores.ranges()) {
             for (const auto& core : cr) {
-                writer_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        out_buffer->address(), col_start_tile_for(core), leader_noc_x, leader_noc_y});
+                // out_buffer is a BufferBinding so the framework patches its address on cache hits.
+                writer_desc.emplace_runtime_args(
+                    core, {out_buffer, col_start_tile_for(core), leader_noc_x, leader_noc_y});
             }
         }
         desc.kernels.push_back(std::move(writer_desc));
