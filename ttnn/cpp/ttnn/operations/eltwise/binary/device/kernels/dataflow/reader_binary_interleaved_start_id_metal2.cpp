@@ -13,7 +13,7 @@
 
 // This code is temporarily copied from ttnn/operations/datamovement/binary/device/ to demonstrate
 // the ability to keep the dataflow-buffer configs contiguous during dispatching.
-// When broadcating is properly supported we expect this code to be deleted or refactored substantially.
+// When broadcasting is properly supported we expect this code to be deleted or refactored substantially.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
