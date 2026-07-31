@@ -303,16 +303,6 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
-    if (tracking_enabled_) {
-        bool was_tracked = unsafe_allocation_contexts_.contains(buffer->unique_id());
-        for (auto& trace_entry : unsafe_tracked_ids_by_trace_) {
-            trace_entry.second.erase(buffer->unique_id());
-        }
-        unsafe_allocation_contexts_.erase(buffer->unique_id());
-        if (was_tracked && traceback_capture_enabled_) {
-            retired_traceback_ids.push_back(buffer->unique_id());
-        }
-    }
 
     // Per-core deallocation path
     if (buffer->per_core_allocation_) {
@@ -583,17 +573,41 @@ bool AllocatorImpl::allocations_unsafe() const {
     return allocations_unsafe_;
 }
 
-std::unordered_map<size_t, std::string> AllocatorImpl::get_unsafe_tracked_ids(std::uint32_t trace_id) const {
+std::unordered_map<size_t, std::string> AllocatorImpl::get_unsafe_tracked_ids(std::uint32_t trace_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     std::unordered_map<size_t, std::string> result;
     auto trace_it = unsafe_tracked_ids_by_trace_.find(trace_id);
     if (trace_it == unsafe_tracked_ids_by_trace_.end()) {
         return result;
     }
+
+    std::unordered_set<size_t> allocated_buffer_ids;
+    allocated_buffer_ids.reserve(allocated_buffers_.size());
+    for (const auto* buffer : allocated_buffers_) {
+        allocated_buffer_ids.insert(buffer->unique_id());
+    }
+
+    std::vector<size_t> retired_ids;
     for (size_t buffer_unique_id : trace_it->second) {
+        if (!allocated_buffer_ids.contains(buffer_unique_id)) {
+            retired_ids.push_back(buffer_unique_id);
+            continue;
+        }
         auto context_it = unsafe_allocation_contexts_.find(buffer_unique_id);
         result.emplace(
             buffer_unique_id, context_it == unsafe_allocation_contexts_.end() ? std::string{} : context_it->second);
+    }
+
+    // Deallocation stays identical to the pre-tracker hot path. Retire stale
+    // accounting lazily when a trace is checked instead.
+    for (size_t buffer_unique_id : retired_ids) {
+        for (auto& trace_entry : unsafe_tracked_ids_by_trace_) {
+            trace_entry.second.erase(buffer_unique_id);
+        }
+        bool was_tracked = unsafe_allocation_contexts_.erase(buffer_unique_id) > 0;
+        if (was_tracked && traceback_capture_enabled_) {
+            retired_traceback_ids.push_back(buffer_unique_id);
+        }
     }
     return result;
 }

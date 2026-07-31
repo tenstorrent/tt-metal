@@ -72,12 +72,15 @@ class UnsafeAllocationTracker:
 
         Reports allocation context (op name + compile args) and Python-side referrers.
         """
-        from ttnn._ttnn.operations.trace import get_unsafe_tracked_ids
+        from ttnn._ttnn.operations.trace import drain_retired_traceback_ids, get_unsafe_tracked_ids
 
         gc.collect()
 
         # get_unsafe_tracked_ids returns dict[int, str] mapping buffer_id -> allocation context
         live_unsafe_map = get_unsafe_tracked_ids(self.mesh_device, trace_id)
+        if self._diagnostics_enabled:
+            for buf_id in drain_retired_traceback_ids():
+                self._tracebacks.pop(buf_id, None)
         if not live_unsafe_map:
             return
 
