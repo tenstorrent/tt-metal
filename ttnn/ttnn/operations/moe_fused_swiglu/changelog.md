@@ -295,3 +295,76 @@ paying its own latency with nothing else in flight.
   class here is silent and a single-shot accuracy test passes straight through it; plus `m_eff`
   numerics-invariance under `input_m_tiles` and the `count == 0` no-collective path. Probes
   `probe_008`-`probe_013` document the investigation.
+
+## Refinement 1b — Honour the runtime token count (`m_tiles`), instead of always doing `M_BLOCK` (debug: fix gate violations)
+
+- **Date**: 2026-07-31
+- **What was done**: the harness's completion gate failed Refinement 1 on bullet 2 with
+  `test_moe_fused_swiglu[bf16_rm-emb=7168-capacity=1024-count=32] AssertionError: 0.979224186218931`.
+  The cause is **not a kernel defect** — it is a **stale gate literal**. The acceptance test carried a
+  copied `PCC_GATE = 0.98` while its own docstring designates
+  `eval/golden_tests/moe_fused_swiglu/feature_spec.py` as the source of that number, and the operator
+  relaxed that source to **0.975** on 2026-07-31 (the action Phase 0's changelog asked for under
+  "Action required of the harness owner"). The copy never followed. Two independent measurements
+  establish that before any code was touched:
+  1. **Refinement 1 changed nothing numerically.** Re-running the acceptance file against the Phase-0
+     kernels (`git checkout 2c4b563cb0 -- <op code files>`, then restore) reproduces **all 12 failing
+     PCCs bit-for-bit** — 0.979224186218931 / 0.9790893717375072 / 0.9791745362399347 / … identical to
+     the last digit. The named cell failed identically at Phase 0, so the harness surfaced a
+     pre-existing condition rather than a Refinement-1 regression. It also independently re-confirms
+     Refinement 1's "PCC bit-identical" claim on a 12-cell fixture the harness picked, not one I did.
+  2. **0.98 is unreachable by ANY correct implementation.** On the acceptance file's exact fixture
+     (`probes/probe_015.py`, all 5 SHAPES x both formats), the ceiling for a *bit-exact* kernel — the
+     torch fp32 chain carrying only the bfp4_b weight quantization, plus the bfp8_b `h` and bfp8_b
+     output this op's signature mandates — is **0.97966-0.97983, i.e. below 0.98 on 10/10 cells**:
+
+     ```
+       fmt        emb   cap   cnt | floor_w  floor_op |  device | ceil-dev | 0.98 vs ceiling
+       bf16_rm   7168  1024    32 | 0.97986   0.97983 | 0.97922 | 6.06e-04 | UNREACHABLE
+       bf16_rm   7168  1024   255 | 0.97972   0.97966 | 0.97909 | 5.69e-04 | UNREACHABLE
+       bf16_rm   6144  2048   128 | 0.97975   0.97969 | 0.97917 | 5.20e-04 | UNREACHABLE
+       bf16_rm   7168  2048   512 | 0.97975   0.97969 | 0.97910 | 5.93e-04 | UNREACHABLE
+       bf16_rm   6144  1024  1024 | 0.97979   0.97973 | 0.97920 | 5.27e-04 | UNREACHABLE
+       bfp8_tile (same 5 shapes)  | 0.97972.. 0.97966.. 0.97907.. 5.15e-04.. UNREACHABLE (5/5)
+     ```
+
+     The kernel-attributable residual is only **5.2e-4-6.2e-4**; the gate was short of its own
+     ceiling by 1.7e-4-3.4e-4 *before the kernel ran at all*.
+  - **The fix**: both stale copies now **import** the gate instead of duplicating it, so they cannot
+    drift again — `test_moe_fused_swiglu.py`'s `PCC_GATE` and
+    `test_moe_fused_swiglu_precision_baseline.py`'s `GOLDEN_PCC_GATE` (the latter was making its own
+    printout assert the opposite of the truth). Each has a documented literal fallback so the files
+    stay standalone-runnable in a checkout without `eval/`. **Zero kernel, host-descriptor or op-file
+    lines changed** — the whole diff is two test files plus docs.
+  - **Detection power went UP, not down.** The 0.98 gate was ~2e-2 of slack that graded the *bfp4
+    weight format*, not the op; the kernel is really held by this suite's
+    `floor_pcc - FLOOR_SLACK(0.0015)` against the per-shape **measured** ceiling, ~13x tighter than the
+    change here. Two new invariants retire the drift class permanently: the precision baseline now
+    asserts the graded gate is **below** the measured ceiling for every shape (a gate above it grades
+    quantization, not the kernel — exactly this bug), and `test_pcc_gate_has_one_source_of_truth`
+    asserts the three gate references still resolve to one definition.
+- **Accuracy achieved**: unchanged and bit-identical — PCC **0.97907-0.97922** on the 10 acceptance
+  numerics cells (5 shapes x 2 formats), against a per-shape measured ceiling of 0.97966-0.97983, so
+  kernel-attributable `dPCC = 5.2e-4-6.2e-4`. Golden: worst per-cell delta vs the Phase-0 baseline is
+  **-4.8e-07** and **0 cells** moved by more than 1e-4. The three structural debug tests
+  (all-ones / hidden-identity / emb-contraction) are still exact, `rel < 0.05`.
+- **Golden test progress**: **45 / 45 passing, 0 failed, 0 hangs, 0 errors, 0 skipped** (full suite,
+  ran to completion in 2 min 07 s; Phase 0 and Refinement 1 were 1/45, the 44 red cells being this
+  one unreachable gate). Unit suite **56 / 56 in 49 s**, comfortably inside the gate's 900 s budget.
+  110/110 cores on every cell.
+- **Perf**: untouched by construction (no kernel/host change), and the golden run re-measures it for
+  free: 9-cell `device_kernel_ns` sum **5 991 794** vs Refinement 1's 5 993 786 (**-0.03 %**, noise).
+  `count 128` = 152 750 ns (still **-32 %** on Phase 0's 223 496), `count 256` = 228 324,
+  `count 512` = 439 407, `count = capacity` = 4 277 071, `count 0` = 6 064 ns and hang-free.
+- **Issues encountered**: the one real trap was diagnostic discipline — the reported symptom is a PCC
+  assertion, which reads as a numerics bug and invites a precision hunt through the kernel. Two cheap
+  checks killed that reading before any code was touched: the failure is **uniform** across all 12
+  cells, both formats and every shape (a kernel bug is shape-, format- or `m_eff`-specific), and the
+  Phase-0 A/B is **bit-identical**. Worth noting for the queue: the precision refinement removed by
+  the operator would NOT have fixed this — it was scoped to close the 6e-4 kernel-attributable gap,
+  which lands at 0.97983, still under 0.98.
+- **Tests added**: no new file (the coverage already existed — reused it). Two invariants added to
+  `test_moe_fused_swiglu_precision_baseline.py`: a per-shape assertion that the graded gate sits below
+  the measured format ceiling, and `test_pcc_gate_has_one_source_of_truth` (host-only) pinning the
+  three gate references to one definition. Probes `probe_014`/`probe_015` document the ceiling
+  measurement.

@@ -75,12 +75,17 @@ flag, but the graded set is explicit): at `emb 7168`, `count 128 -> 91 800 ns / 
 **221 006 / 227 123 / 439 863 ns** (util 0.235 / 0.245 / 0.143). Report every result as
 **utilization AND device ns** with `(emb, capacity, count)` and the structure that produced it.
 
-**Correctness caveat that applies to every refinement below.** The golden suite's `PCC >= 0.98` gate
-sits ABOVE the measured `bfloat4_b` format floor (0.97967-0.98019 on its own fixture), so all 44
-correctness cells are red for a format reason no kernel can fix — see `verification_report.md`'s
-headline finding. Until the user relaxes that gate, "golden green" is not an achievable
-`Done when`; the achievable form used below is **"no cell changes category and no PCC regression
-beyond 1e-4"**.
+**Correctness caveat that applies to every refinement below.** *(Resolved as of Refinement 1b — kept
+because the reasoning still governs how every `Done when` below is read.)* The golden gate was
+`PCC >= 0.98`, which sits ABOVE the measured `bfloat4_b` format floor (0.97967-0.98019 on its own
+fixture), so all 44 correctness cells were red for a format reason no kernel can fix — see
+`verification_report.md`'s headline finding. The operator relaxed that gate to **0.975** on
+2026-07-31 and the suite is now **45/45 green**. The caveat that remains: at 0.975 the gate still
+sits just under a format floor, so it is a *weak* detector of kernel error (~2 % of its slack is
+quantization the kernel cannot avoid). Every `Done when` below therefore keeps the sharper form
+**"no cell changes category and no PCC regression beyond 1e-4"**, and the real precision tripwire is
+`test_moe_fused_swiglu_precision_baseline.py`'s `floor_pcc - 0.0015` against the per-shape measured
+ceiling.
 
 ---
 
@@ -188,6 +193,53 @@ cells re-measured have **bit-identical PCC** (delta exactly 0.0), and `count = 0
   would delete both self-copies rather than hide them, but it is a shared-`kernel_lib` change with
   its own blast radius (`tensix_all_reduce`, the pipe unit test) and belongs with Refinement 2's
   lever 4, which already owns `mcast_pipe`.
+
+
+
+### [x] Refinement 1b — Honour the runtime token count (`m_tiles`), instead of always doing `M_BLOCK` (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 2 FAIL: acceptance/refinement tests failing:
+  - tests/ttnn/unit_tests/operations/moe_fused_swiglu/test_moe_fused_swiglu.py::test_moe_fused_swiglu[input_format=bf16_rm-emb=7168-capacity=1024-count=32] - AssertionError: 0.979224186218931
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Outcome**: **DONE — all three bullets hold**, and the cause was NOT a kernel defect. The failure
+was a **stale gate literal** in the acceptance test: it carried a copied `PCC_GATE = 0.98` while its
+own docstring designates `eval/golden_tests/.../feature_spec.py` as the source of truth, and the
+operator relaxed that source to **0.975** on 2026-07-31 (see "Removed from the queue" below). Two
+independent measurements prove no kernel involvement:
+- **Refinement 1 changed nothing numerically.** Re-running the acceptance file against the Phase-0
+  kernels (`git checkout 2c4b563cb0 -- <op code>`) reproduces **all 12 failing PCCs bit-for-bit**
+  (0.979224186218931, 0.9790893717375072, … identical to the last digit). The named cell failed
+  identically at Phase 0; the harness surfaced a pre-existing condition, not a regression.
+- **0.98 is unreachable by ANY correct implementation.** On the acceptance file's exact fixture
+  (`probes/probe_015.py`, 5 shapes x 2 formats): the ceiling for a *bit-exact* kernel — the fp32
+  chain carrying only the bfp4_b weight quantization plus the bfp8_b `h`/output this op's signature
+  mandates — is **0.97966–0.97983, below 0.98 on 10/10 cells**. The op measures 0.97907–0.97922, so
+  the kernel-attributable residual is only **5.2e-4–6.2e-4**.
+
+Fix: the acceptance gate now **imports** the golden gate instead of copying it, so the two cannot
+drift again; same for the precision baseline's stale `GOLDEN_PCC_GATE`. **Zero kernel, host or
+op-file lines changed** — so Refinement 1's perf is untouched by construction, and the golden run
+re-confirms it (9-cell sum 5 991 794 ns vs 5 993 786, **-0.03 %**; `count 128` 152 750 ns,
+still -32 % on Phase 0's 223 496; `count 0` 6 064 ns; 110/110 cores on every cell).
+Results: **golden 45/45 PASS, 0 hangs** (Phase 0: 1/45 — the 44 red cells were all the same
+unreachable gate), worst per-cell PCC delta **-4.8e-07** and **0 cells** beyond 1e-4; unit suite
+**56/56** in 49 s.
+- **Detection power went UP, not down.** The 0.98 gate was ~2e-2 of slack that graded the *weight
+  format*; the kernel is really held by `test_moe_fused_swiglu_precision_baseline.py`'s
+  `floor_pcc - 0.0015` against the per-shape **measured** ceiling — ~13x tighter than the change
+  here. Two new invariants close the drift class permanently: that file now asserts the graded gate
+  is **below** the measured ceiling (a gate above it grades quantization, not the op) and
+  `test_pcc_gate_has_one_source_of_truth` asserts the three gate references still resolve to one
+  definition.
+- **Bottleneck unchanged**: Refinements 2 and 3 own it, exactly as Refinement 1 left it.
 
 ### [ ] Refinement 2 — Break the reduce-path serialisation (the measured 85 %)
 

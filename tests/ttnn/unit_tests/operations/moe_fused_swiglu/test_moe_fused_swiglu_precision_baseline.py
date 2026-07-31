@@ -6,17 +6,19 @@ Records PCC / max-abs / mean-abs / relative-RMS **and** the got/true ratio sprea
 handful of shapes, against two references:
 
   1. ``fp32``  — the unquantized oracle the golden suite grades against
-     (``eval/golden_tests/moe_fused_swiglu/helpers.py``, gate PCC >= 0.98).
+     (``eval/golden_tests/moe_fused_swiglu/helpers.py``; its gate is imported below).
   2. ``floor`` — the SAME torch chain with only the bfp4_b weight quantization applied
      (weights round-tripped through ``from_torch``/``to_torch``). This is the ceiling
      helpers.py itself calls the number "no correct implementation can beat", and it is
      the recipe helpers.py prescribes before blaming a kernel.
 
-FINDING THIS FILE PINS: the measured floor is **0.9797-0.9799 < 0.98**, i.e. the golden
-gate sits ABOVE the unbeatable format ceiling for these randn fixtures. The device lands
-0.0005-0.0007 under the floor, so the *kernel-attributable* error is what
-``FLOOR_SLACK`` gates here; the absolute 0.98 gate is unreachable and is reported in
-``verification_report.md`` as a harness finding, not chased in the kernel.
+FINDING THIS FILE PINS: the measured floor is **0.9797-0.9799**, so the ORIGINAL 0.98
+golden gate sat ABOVE the unbeatable format ceiling for these randn fixtures and was
+unreachable by any correct implementation. That finding was acted on — the operator
+relaxed the golden gate to 0.975 on 2026-07-31 — and this file's job is unchanged and
+is the reason the relaxation is safe: the device lands 0.0005-0.0007 under the floor,
+and it is that *kernel-attributable* margin, not the absolute gate, that ``FLOOR_SLACK``
+holds. A real precision regression trips here long before it trips a 0.975 gate.
 
 The got/true ratio spread is the scale-bug detector: a tight cluster of ``actual/expected``
 around a non-1.0 constant would mean a uniform scale/structural bug (fp32 intermediates
@@ -39,9 +41,14 @@ LOCAL_EXPERT_ID = 3
 GLOBAL_EXPERT_ID = 137
 PADDING_SENTINEL = 100.0
 
-# The golden suite's gate. Recorded for context; NOT asserted here (see the module
-# docstring: it is above the measured format floor).
-GOLDEN_PCC_GATE = 0.98
+# The golden suite's gate. Recorded for context; NOT asserted here (what IS asserted
+# is FLOOR_SLACK below). Imported rather than copied — this was a `0.98` literal that
+# went stale when the operator relaxed the golden gate to 0.975, which made the
+# printout below state the opposite of the truth.
+try:
+    from eval.golden_tests.moe_fused_swiglu.feature_spec import _PCC_GATE as GOLDEN_PCC_GATE
+except ImportError:  # a checkout without the eval harness
+    GOLDEN_PCC_GATE = 0.975
 
 # What the kernel is actually held to: how far below the measured bfp4-weight format
 # floor the device may land. Phase 0 measures 0.0005-0.0007, so 0.0015 is a
@@ -177,5 +184,35 @@ def test_precision_baseline(device, emb, capacity, count, input_format):
     assert torch.isfinite(actual).all(), "non-finite value in a defined output row"
     # The scale-bug tripwire: a uniform got/true ratio pinned away from 1.0.
     assert 0.9 < dev["r_med"] < 1.1, f"got/true median {dev['r_med']} — uniform scale error, not noise"
-    # The kernel is held to the measured format floor, not to the (unreachable) 0.98.
+    # The graded gate must be ACHIEVABLE. A gate above the format ceiling grades the
+    # bfp4_b weight quantization instead of the kernel, and no correct implementation
+    # can pass it — that is exactly the condition Refinement 1b was opened to fix.
+    assert GOLDEN_PCC_GATE < floor_pcc, (
+        f"the graded PCC gate {GOLDEN_PCC_GATE} sits ABOVE the measured format ceiling "
+        f"{floor_pcc:.6f} for (emb={emb}, capacity={capacity}, count={count}) — it is "
+        f"unreachable by any correct implementation and grades the weight format, not the op"
+    )
+    # The kernel is held to the measured format floor, which is far tighter than the gate.
     assert_with_pcc(expected, actual, floor_pcc - FLOOR_SLACK)
+
+
+def test_pcc_gate_has_one_source_of_truth():
+    """The acceptance gate must BE the golden suite's gate, not a copy of it.
+
+    Refinement 1b existed because those drifted: the golden gate was relaxed
+    0.98 -> 0.975 (below the format ceiling this file measures) and the acceptance
+    test kept the stale 0.98 literal, which left all 12 of its numerics cells
+    unsatisfiable. All three now resolve to one definition; this keeps them there.
+    Host-only — no device needed.
+    """
+    from eval.golden_tests.moe_fused_swiglu.feature_spec import _PCC_GATE as spec_gate
+    from eval.golden_tests.moe_fused_swiglu.helpers import _PCC_GATE as helpers_gate
+    from tests.ttnn.unit_tests.operations.moe_fused_swiglu.test_moe_fused_swiglu import PCC_GATE as acceptance_gate
+
+    assert (
+        helpers_gate == spec_gate
+    ), f"golden suite disagrees with itself: helpers.py {helpers_gate} vs feature_spec.py {spec_gate}"
+    assert acceptance_gate == spec_gate, (
+        f"the acceptance test's gate ({acceptance_gate}) has drifted from the golden "
+        f"suite's ({spec_gate}); it must track it by import, not by a copied literal"
+    )
