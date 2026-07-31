@@ -3,11 +3,13 @@
 
   reconcile.py --report shard_advise/<kind>/report.json \
                --perf   tracy/incumbent_<kind>_ops.csv \
+               --incumbent incumbent.json \
                --layer-kind <kind> --layers-of-kind N --total-layers M \
                --out    reconciliation_<kind>.json
 
-Emits a partition of the measured window: every device op gets exactly one bucket, and the buckets sum
-to 100 %:
+  reconcile.py --self-test        # regression fixtures, no inputs needed
+
+Partitions the measured window -- every device op gets exactly one bucket, and the buckets sum to 100 %:
 
   chain:<id>            in a maximal L1-resident run whose placement differs from shipped
   boundary              a conversion op -- what joining the chains either side would remove
@@ -15,11 +17,20 @@ to 100 %:
   agrees_with_shipped   advised == shipped
   untraced              in the profile, absent from the advisor's graph
 
-Candidates are ranked by CONVERSION VALUE -- the microseconds of boundary ops a change would remove --
-not by the advised ops' window share. A chain-lengthening change removes conversions, and those are
-separate device ops that an op-share threshold never counts.
+Then answers the two questions that decide whether screening is worth device time:
 
-Fails loudly: an unmapped op or an accounting that does not close is an error, not a silent gap.
+  feasibility           is the advisor's ceiling above this harness's own noise floor? A chain worth less
+                        than the spread of the incumbent's repeats cannot be resolved by non-overlap, so
+                        measuring it returns a zero that says nothing about the advice.
+  advised_boundaries    of the shipped conversions, which does the advice NOT place? Only those are
+                        attributable to the advisor; the rest are real cost belonging to $optimize.
+
+Chains are ranked by that attributable value, NOT by the advised ops' window share: a chain-lengthening
+change removes conversions, which are separate device ops an op-share threshold never counts.
+
+What it is authoritative about, and what it is only suggesting, is in the `confidence` block of every
+output, alongside `limitations`. It fails loudly -- a report covering more than one replay, an accounting
+that does not close, or inputs that appear to describe different graphs are errors, not silent gaps.
 """
 from __future__ import annotations
 
@@ -44,9 +55,6 @@ TTNN_TO_DEVICE = {
     "paged_scaled_dot_product_attention_decode": "SdpaDecode",
     "scaled_dot_product_attention_decode": "SdpaDecode",
 }
-# NO DEVICE OP: host-side tensor creation, and the two ops the advisor lists in reshards[] rather than
-# ops[]. NOT reshape: a reshape is sometimes a free view and sometimes a real ReshapeView kernel, so let
-# the pairing decide instead of asserting it is free.
 # ADVISED OPS EXCLUDED FROM PAIRING: their device counterpart is either nothing at all, or a movement op
 # that is already classified by role below. `to_layout` / `to_memory_config` are here for the second reason,
 # NOT because they are free -- a to_layout is exactly how a 6.7-10 us retilize enters the graph. Its cost is
@@ -493,12 +501,25 @@ def main() -> int:
     # cell had a whole-stage ceiling of 0.65x its floor and still shipped a win, and another had a ceiling of
     # 4.31x its floor but no single chain above it, screened them one at a time, and reported no change.
     floor_us = round((max(repeats) - min(repeats)) * 1000, 3) if len(repeats) >= 2 else None
-    ceiling_us = out_ceiling = round(sum(
+    ceiling_us = round(sum(
         r["us"] for r in rows if r["bucket"] == "boundary" and r.get("advised_here") is False), 3)
     for c in chains:
         c["vs_noise_floor"] = round(c["advisor_removes_us"] / floor_us, 2) if floor_us else None
         c["resolvable_alone"] = (c["advisor_removes_us"] > floor_us) if floor_us else None
         c["confidence"] = "low" if (c.pop("_positional", 0) or c.pop("_unresolved_us", 0)) else "high"
+
+    declared = set()
+    for src in (report.get("uncapturable") or {}, ):
+        declared |= {str(x).split(".")[-1] for x in (src.get("ops") or [])}
+    declared |= {str(x.get("op", "")).split(".")[-1] for x in (report.get("unfixable_ops") or [])}
+    untraced_rows = [r for r in rows if r["bucket"] == "untraced"]
+    untraced_detail = {
+        "ops": [{"device": r["device"], "us": r["us"], "share_pct": r["share_pct"]} for r in untraced_rows],
+        "declared_uncapturable_by_report": sorted(declared),
+        "note": "untraced means the profile has it and the advisor's graph does not. That is expected for "
+                "ops the report declares uncapturable (terminal in the tracer) and a problem otherwise. "
+                "This tool cannot tell the two apart per op -- the capture log can.",
+    }
 
     feasibility = {"noise_floor_us": floor_us, "noise_floor_source": "max-min of incumbent repeats_ms",
                    "repeats": len(repeats), "ceiling_us": ceiling_us,
@@ -535,8 +556,8 @@ def main() -> int:
                         "comparable. Fix the incumbent before screening."}
 
     out = {
-        "feasibility": feasibility,
-        "generated_by": "advisor-challenger/scripts/reconcile.py", "tool_version": 4,
+        "feasibility": feasibility, "untraced_detail": untraced_detail,
+        "generated_by": "advisor-challenger/scripts/reconcile.py", "tool_version": 5,
         "confidence": {
             "paired_by_name": len(byname), "paired_by_position": len(bypos),
             "us_paired_by_position": pos_us, "pct_paired_by_position": pos_share,
@@ -562,7 +583,17 @@ def main() -> int:
         "total_layers": a.total_layers, "measured_window_us": round(window, 3),
         "accounting": acct, "accounting_closes_100pct": closes,
         "accounted_us": round(accounted, 3),
-        "ranked_by": "advisor_removes_us, then conversion_value_us + chain op us -- NOT advised-op share",
+        "scope": {
+            "window_us": round(window, 3),
+            "incumbent_us": round(a.incumbent_ms * 1000, 3) if a.incumbent_ms else None,
+            "note": "The profile and the harness both cover ONE decoder layer, and window_us should be "
+                    "within a few percent of incumbent_us. per_model_us on each chain scales by "
+                    "layers_of_kind to the whole model and is an extrapolation -- never compare it to "
+                    "incumbent_ms, which is per layer.",
+            "layers_of_kind": a.layers_of_kind, "total_layers": a.total_layers},
+        "ranked_by": "advisor_removes_us (conversions the advice does not place), then total conversion "
+                     "value + chain op us. NOT the advised ops' window share. Compare each chain's "
+                     "vs_noise_floor before spending a measurement on it.",
         "advised_boundaries": bsum(rows),
         "chains": chains, "material_ops_on_le_2_cores": low,
         "note": "Screen chains in the order given, each as one unit, and record repeats_ms. Do NOT copy "
