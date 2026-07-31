@@ -1,0 +1,29 @@
+{
+  "config_id": "c007_activation_bf8",
+  "description": "Likely lower-precision activation trial: default optimized weights with BF8 residual/activation outputs, BF8 KV and CCL.",
+  "weight_groups": {
+    "embedding": {"dtype": "bfloat16"},
+    "attention.qkv": {"decode_dtype": "bfloat8_b", "prefill_dtype": "bfloat8_b"},
+    "attention.o": {"decode_dtype": "bfloat8_b", "prefill_dtype": "bfloat8_b"},
+    "mlp.gate_up": {"decode_dtype": "bfloat4_b", "prefill_dtype": "bfloat8_b"},
+    "mlp.down": {"decode_dtype": "bfloat4_b", "prefill_dtype": "bfloat8_b"},
+    "norm": {"dtype": "bfloat16"},
+    "lm_head": {"decode_dtype": "bfloat16", "prefill_dtype": "bfloat16"}
+  },
+  "layer_exceptions": [],
+  "activation_dtype": "bfloat8_b",
+  "residual_dtype": "bfloat8_b",
+  "ccl": {"policy": "sync_all_reduce", "decode_dtype": "bfloat8_b", "prefill_dtype": "bfloat16"},
+  "kv_cache_dtype": "bfloat8_b",
+  "compute_fidelity": {
+    "decode_matmul": "lofi",
+    "prefill_matmul": "hifi2",
+    "norm": "hifi4",
+    "lm_head_decode": "lofi",
+    "lm_head_prefill": "hifi2",
+    "sdpa_decode": "lofi",
+    "sdpa_prefill": "hifi4"
+  },
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16 logits into canonical split sampler; sampled token is uint32"
+}

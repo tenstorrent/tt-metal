@@ -1,0 +1,17 @@
+{
+  "status": "pass",
+  "failures": [],
+  "checks": {
+    "prefill_delegates_to_generator": true,
+    "decode_delegates_to_generator": true,
+    "vllm_owned_kv_cache_passed_by_identity": true,
+    "page_table_passed_by_identity": true,
+    "current_position_passed_by_identity": true,
+    "stale_token_feedback_contract_preserved": true,
+    "stale_current_position_contract_preserved": true,
+    "stale_page_table_contract_preserved": true,
+    "decode_trace_enabled_flag_passed": true,
+    "host_sampling_fallback_rejected": true,
+    "tt_async_decode_allows_overlap": false
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "status": "pass",
+  "model": "microsoft/Phi-3.5-mini-instruct",
+  "date": "2026-06-15",
+  "workload": {
+    "prompt_len": 128,
+    "gen_len": 128,
+    "batch": 1,
+    "num_requests": 32,
+    "concurrency": 1,
+    "max_num_seqs": 1,
+    "max_model_len": 512,
+    "block_size": 32,
+    "mesh": "T3K",
+    "sampling_mode": "sample_on_device_mode=all",
+    "tt_config": {
+      "trace_region_size": 200000000,
+      "fabric_config": "FABRIC_1D_RING"
+    }
+  },
+  "ttft_ms": 177.19703628245043,
+  "decode_ms_per_token_e2e": 19.439656400498105,
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": null,
+  "before": {
+    "artifact": "models/autoports/microsoft_phi_3_5_mini_instruct/readiness_vllm/vllm_benchmark_before_optimized_vllm.json",
+    "completed_requests": 32,
+    "ttft_ms": {
+      "p50": 170.79398799978662,
+      "p99": 222.99542400287464,
+      "mean": 173.4694139995554
+    },
+    "itl_ms": {
+      "p50": 19.333136995555833,
+      "p99": 21.10636600991711,
+      "mean": 19.45108036230464
+    },
+    "output_throughput_tok_per_s": 48.37798081020527,
+    "mean_per_request_decode_tps": 51.41247840750011
+  },
+  "after": {
+    "artifact": "models/autoports/microsoft_phi_3_5_mini_instruct/readiness_vllm/vllm_benchmark.json",
+    "completed_requests": 32,
+    "ttft_ms": {
+      "p50": 173.13391699281055,
+      "p99": 284.6028610074427,
+      "mean": 177.19703628245043
+    },
+    "itl_ms": {
+      "p50": 19.39126499928534,
+      "p99": 20.60809900285676,
+      "mean": 19.439656400498105
+    },
+    "output_throughput_tok_per_s": 48.33464860300155,
+    "mean_per_request_decode_tps": 51.438285865596775
+  },
+  "delta": {
+    "ttft_mean_ms": 3.7276222828950276,
+    "itl_mean_ms": -0.011423961806535858,
+    "output_throughput_tok_per_s": -0.043332207203722364,
+    "mean_per_request_decode_tps": 0.025807458096666294,
+    "mean_per_request_decode_tps_pct": 0.05019979770186253
+  },
+  "full_model_comparison": {
+    "selected_datatype_token_out_no_readback_tps": 56.371309885099734,
+    "optimized_full_model_token_out_no_readback_tps": 56.430601867147594,
+    "optimized_vllm_decode_tps": 51.438285865596775,
+    "vllm_vs_optimized_full_model_ratio": 0.9115355537321641,
+    "vllm_vs_optimized_full_model_pct": 91.1535553732164,
+    "optimized_full_model_artifact": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/optimized_full_model/perf/token_out_no_readback_prompt128_gen128_lmhead8192.json",
+    "selected_datatype_artifact": "models/autoports/microsoft_phi_3_5_mini_instruct/doc/datatype_sweep/perf/post_selection_token_out_no_readback_prompt128_gen128.json"
+  },
+  "serving_path": {
+    "adapter": "models/autoports/microsoft_phi_3_5_mini_instruct/tt/generator_vllm.py",
+    "generator": "models/autoports/microsoft_phi_3_5_mini_instruct/tt/generator.py",
+    "real_vllm_tt_plugin": true,
+    "supports_async_decode": true,
+    "tt_async_decode_allows_overlap": false,
+    "supports_sample_on_device": true,
+    "supports_prefix_caching": false,
+    "nonblocking_execute_trace": true,
+    "capture_sampling": true,
+    "host_sampling_fallback_rejected": true,
+    "unchanged_page_table_no_copy": true
+  },
+  "correctness": {
+    "sampling_tests": {
+      "artifact": "models/autoports/microsoft_phi_3_5_mini_instruct/readiness_vllm/sampling_tests.log",
+      "passed": 59,
+      "skipped": 13
+    },
+    "qualitative_outputs": "models/autoports/microsoft_phi_3_5_mini_instruct/readiness_vllm/vllm_qualitative_outputs.json",
+    "degenerate_output": "No degenerate output detected",
+    "adapter_contract": "models/autoports/microsoft_phi_3_5_mini_instruct/readiness_vllm/adapter_contract_checks.json",
+    "optimized_vllm_contract": "models/autoports/microsoft_phi_3_5_mini_instruct/readiness_vllm/optimized_vllm_contract_checks.json"
+  },
+  "runtime_audit": {
+    "server_log": "models/autoports/microsoft_phi_3_5_mini_instruct/readiness_vllm/server.log",
+    "active_trace_allocator_warning_count": 1,
+    "forbidden_hot_path_signature_count": 0,
+    "fallback_matches_only_config_text": true,
+    "leftover_serving_processes": false
+  },
+  "profiler": {
+    "vllm_serving_profiler_attempted": false,
+    "decode_ms_per_token_device_reason": "vLLM serving profiler collection intentionally disabled by selected skill guidance to protect T3K hardware.",
+    "device_context_artifacts": [
+      "models/autoports/microsoft_phi_3_5_mini_instruct/doc/optimized_full_model/perf/reduced_1layer_lmhead8192_token_out_perf_report.csv",
+      "models/autoports/microsoft_phi_3_5_mini_instruct/doc/optimized_full_model/perf/reduced_1layer_lmhead8192_token_out_perf_summary.csv.csv",
+      "models/autoports/microsoft_phi_3_5_mini_instruct/doc/optimized_full_model/perf_summary.json"
+    ]
+  },
+  "named_limitations": [
+    "batch-1 serving only",
+    "prefix caching disabled",
+    "async scheduler overlap disabled",
+    "one request-boundary active-trace allocator warning remains; releasing the trace per prefill was rejected because it degraded decode to 41.56 t/s/u",
+    "vllm_serving_profiler_disabled_to_protect_hardware"
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "model": "microsoft/Phi-3.5-mini-instruct",
+  "date": "2026-06-15",
+  "mesh": "T3K 1x8 ring",
+  "selected_path": {
+    "decoder_stack": "existing optimized multichip decoder policy unchanged",
+    "lm_head_per_device_vocab": 8192,
+    "padded_vocab_size": 65536,
+    "sampler": "canonical split top-k/top-p-capable TTSampling path, force-argmax disabled",
+    "token_feedback": "tt_out_tok feedback into persistent token input",
+    "host_boundary": "no per-token host readback or synchronization in measured token-out decode"
+  },
+  "accuracy": {
+    "prefill": {
+      "top1": "96/100",
+      "top5": "100/100",
+      "top100": "100/100",
+      "log": "logs/final_run_prefill_check_2026_06_15.log"
+    },
+    "teacher_forcing": {
+      "top1": "91/100",
+      "top5": "100/100",
+      "top100": "100/100",
+      "ttft_ms": 226.93,
+      "decode_t_s_u": 40.15,
+      "e2e_t_s_u": 37.13,
+      "log": "logs/final_run_teacher_forcing_2026_06_15.log"
+    },
+    "autoregressive": {
+      "max_new_tokens": 128,
+      "tt_completion": "../../readiness_autoregressive/tt_completion.txt",
+      "degenerate_scan": "logs/final_check_degenerate_output_2026_06_15.log"
+    }
+  },
+  "token_out_no_readback": {
+    "baseline_4032": {
+      "ttft_ms": 227.15120400243904,
+      "decode_t_s_u": 50.52036649768312,
+      "ms_per_token": 19.79399733859532,
+      "e2e_t_s_u": 35.71521664173448,
+      "artifact": "perf/token_out_no_readback_prompt128_gen128.json"
+    },
+    "selected_8192": {
+      "ttft_ms": 254.4650749914581,
+      "decode_t_s_u": 56.430601867147594,
+      "ms_per_token": 17.720881346512336,
+      "e2e_t_s_u": 38.82113322950039,
+      "artifact": "perf/token_out_no_readback_prompt128_gen128_lmhead8192.json"
+    }
+  },
+  "lower_bound_accounting": {
+    "optimized_layer_device_us": 543.09,
+    "optimized_layer_host_traced_us": 559.258,
+    "decoder_stack_device_ms": 17.37888,
+    "decoder_stack_host_traced_ms": 17.896256,
+    "selected_reduced_one_layer_full_path_device_us": 1168.96,
+    "estimated_terminal_device_ms": 0.62587,
+    "decoder_stack_device_plus_terminal_ms": 18.00475,
+    "selected_full_token_out_ms_per_token": 17.720881346512336
+  },
+  "reduced_profile": {
+    "baseline_device_us": 3210.51,
+    "baseline_topk_us": 2255.32,
+    "selected_device_us": 1168.96,
+    "selected_topk_us": 99.11,
+    "selected_sampling_us": 63.61,
+    "selected_lm_head_us": 207.993,
+    "selected_topk_cores": 17,
+    "selected_csv": "perf/reduced_1layer_lmhead8192_token_out_perf_report.csv",
+    "selected_summary_csv": "perf/reduced_1layer_lmhead8192_token_out_perf_summary.csv.csv",
+    "selected_trace_csv": "tracy/reduced_1layer_lmhead8192/reports/2026_06_15_18_18_41/ops_perf_results_2026_06_15_18_18_41.csv"
+  },
+  "runtime_audit": {
+    "static_fallback_audit": "logs/final_static_fallback_audit.log",
+    "watcher_log": "watcher/2026_06_15_full_token_out_watcher10_lmhead8192/generated/watcher/watcher.log",
+    "watcher_scan": "watcher/2026_06_15_full_token_out_watcher10_lmhead8192/watcher_scan.log",
+    "tt_smi_after": "all 8 Wormhole devices visible after profiler/watcher runs"
+  }
+}
