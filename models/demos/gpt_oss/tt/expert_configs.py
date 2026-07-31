@@ -47,8 +47,17 @@ class GPTOSSProgramConfig(ProgramConfig):
     decode_gate_up_cores: tuple[int, int] = (9, 5)
     decode_gate_up_in0_block_w: int = 3
     decode_gate_up_subblock_w: int = 4
+    # in0_block_w=9 (num_blocks_inner_dim = 90/9 = 10). Re-tuned IN-MODEL for the
+    # same reason as gate+up: the previous value of 30 was swept at a different
+    # core count, and in0_block_w is coupled to per_core_N through the per-core L1
+    # budget. Measured decode ms/tok at 45 cores:
+    #   ib=30 13.000 | 18 12.946 | 15 12.917 | 10 12.841 | 9 12.807
+    #   ib=6  13.010 | 5  13.253 | 3  14.269
+    # A real minimum at 9, not a plateau edge. Note the optimum differs from
+    # gate+up's (3) even though both run 45 cores -- down has per_core_N=2 vs 4
+    # and reads half the bytes, so its L1 tradeoff is different.
     decode_down_cores: tuple[int, int] = (9, 5)
-    decode_down_in0_block_w: int = 30
+    decode_down_in0_block_w: int = 9
     decode_down_subblock_w: int = 2
 
     # Prefill
