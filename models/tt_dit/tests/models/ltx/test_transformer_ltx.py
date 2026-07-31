@@ -1404,7 +1404,19 @@ def test_ltx_per_token_timestep_nonuniform(
 # and block wall-clock at steady state under a ttnn trace). Perf-only: no PCC.
 # ---------------------------------------------------------------------------
 def _build_video_trace_setup(
-    *, mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, F, H, W, has_audio=False, checkpoint_variant="fast"
+    *,
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    has_audio=False,
+    checkpoint_variant="fast",
+    num_layers=1,
 ):
     """Build the TT model + device-only ``inner_step`` kwargs for the trace-perf test.
 
@@ -1428,12 +1440,12 @@ def _build_video_trace_setup(
     if has_audio:
         # AV weights come from the 22B checkpoint (strict=False), same as the AV PCC path.
         checkpoint_22b = _resolve_checkpoint_22b(checkpoint_variant)
-        state_dict = _load_22b_state_dict(num_layers=1, checkpoint_path=checkpoint_22b)
+        state_dict = _load_22b_state_dict(num_layers=num_layers, checkpoint_path=checkpoint_22b)
         if state_dict is None:
             pytest.skip(f"22B checkpoint not found at {checkpoint_22b}")
     else:
-        # Random scaled weights (1 layer) from the diffusers 3D video model — the video PCC path.
-        torch_model = _make_diffusers_video_model(num_layers=1)
+        # Random scaled weights from the diffusers 3D video model — the video PCC path.
+        torch_model = _make_diffusers_video_model(num_layers=num_layers)
         torch_model.eval()
         _scale_init_(torch_model)
         state_dict = _convert_diffusers_video_model_to_tt(
@@ -1464,7 +1476,7 @@ def _build_video_trace_setup(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
         has_audio=has_audio,
-        num_layers=1,
+        num_layers=num_layers,
     )
     t0 = time.time()
     tt_model.load_torch_state_dict(state_dict, strict=not has_audio)
@@ -1525,13 +1537,156 @@ def _build_video_trace_setup(
     return tt_model, inner_kwargs, video_N_real
 
 
+def _build_trace_inner_kwargs(*, mesh_device, sp_axis, tp_axis, F, H, W, has_audio):
+    """Build ONLY the device inner_step kwargs for a given (F,H,W) — no model / CCLManager.
+
+    Split out so ONE model + CCLManager can be driven at multiple shapes (e.g. stage-1 then
+    stage-2) to reproduce the e2e's cross-stage device/semaphore-pool state. Mirrors the per-shape
+    tensor setup inside _build_video_trace_setup. Returns (inner_kwargs, video_N_real).
+    """
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    video_N_real = F * H * W
+    video_N = _sp_pad_len(video_N_real, sp_factor)
+    assert video_N % (32 * sp_factor) == 0
+    audio_N = AUDIO_N
+    if has_audio:
+        assert audio_N % (32 * sp_factor) == 0
+
+    torch.manual_seed(INPUT_SEED)
+    video_lat_real = torch.randn(1, video_N_real, IN_CHANNELS, dtype=torch.float32)
+    video_lat = _pad_seq_dim(video_lat_real, video_N, dim=1)
+    video_prompt = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
+    sigma_val = 0.5 if has_audio else TIMESTEP_VAL
+    timestep_torch = torch.tensor([sigma_val])
+
+    audio_lat = None
+    audio_prompt = None
+    if has_audio:
+        audio_lat = torch.randn(1, audio_N, AUDIO_IN_CHANNELS, dtype=torch.float32)
+        audio_prompt = torch.randn(1, PROMPT_LEN, AUDIO_CTX_DIM, dtype=torch.float32)
+
+    tt_video_prompt = bf16_tensor(video_prompt.unsqueeze(0), device=mesh_device)
+    tt_vc, tt_vs = _tt_rope(
+        _video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+
+    video_1BNI_torch = video_lat.unsqueeze(0)
+    B_size = video_1BNI_torch.shape[1]
+    video_1BNI = bf16_tensor(video_1BNI_torch, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+    timestep = bf16_tensor(timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, device=mesh_device)
+
+    inner_kwargs = dict(
+        video_1BNI=video_1BNI,
+        timestep=timestep,
+        video_prompt_1BLP=tt_video_prompt,
+        video_rope_cos=tt_vc,
+        video_rope_sin=tt_vs,
+        video_N=video_N_real,
+        trans_mat=tt_trans_mat,
+    )
+    if has_audio:
+        a_cos, a_sin = _tt_rope(_audio_rope_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+        vx_cos, vx_sin = _tt_rope(
+            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+        )
+        ax_cos, ax_sin = _tt_rope(
+            _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
+        )
+        ax_cos_full, ax_sin_full = _tt_rope_full(
+            _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
+        )
+        v_pad_sp = build_video_pad_mask(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
+        audio_1BNI = bf16_tensor(audio_lat.unsqueeze(0), device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+        inner_kwargs.update(
+            audio_1BNI=audio_1BNI,
+            audio_prompt_1BLP=bf16_tensor(audio_prompt.unsqueeze(0), device=mesh_device),
+            audio_rope_cos=a_cos,
+            audio_rope_sin=a_sin,
+            audio_N=audio_N,
+            video_cross_pe_cos=vx_cos,
+            video_cross_pe_sin=vx_sin,
+            audio_cross_pe_cos=ax_cos,
+            audio_cross_pe_sin=ax_sin,
+            audio_cross_pe_cos_full=ax_cos_full,
+            audio_cross_pe_sin_full=ax_sin_full,
+            video_padding_mask=v_pad_sp,
+        )
+    return inner_kwargs, video_N_real
+
+
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    # VIDEO stage-2 ring config only. Do NOT add AV / other-mesh params here (AV fabric shapes
-    # previously hung the device; recovery needs `tt-smi -glx_reset_auto`).
-    # ring_params_8k = FABRIC_1D_RING + 8192-B fabric router payload, matching the isolated
-    # test_strided_all_gather_minimal_matmul_ltx_configs (~398 µs) config. This op is fabric-transfer
-    # bound (~6% FLOPs), so payload size is the last uncontrolled variable vs the isolated run.
+    [
+        pytest.param((4, 8), 1, 0, 2, ring_params_4k, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0_4k"),
+        # 8k fabric payload variant (where stage-2 wedges at depth).
+        pytest.param((4, 8), 1, 0, 2, ring_params_8k, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0_8k"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("has_audio", [pytest.param(False, id="video"), pytest.param(True, id="av")])
+@pytest.mark.parametrize("checkpoint_variant", [pytest.param("fast", id="ckpt_fast")])
+def test_ltx_transformer_crossstage_hang(
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    has_audio,
+    checkpoint_variant,
+    reset_seeds,
+) -> None:
+    """FAST cross-stage repro of the e2e stage-2 deadlock: drive ONE model+CCLManager through
+    stage-1 then stage-2 (eager, no VAE/Gemma), so stage-2 reuses the shared strided-AGMM pool
+    that stage-1 left mid-rotation. PASSES -> not cross-stage; HANGS -> confirmed.
+    """
+    # Stage-2 shape; full depth (env-overridable) to stack many back-to-back strided ops per forward.
+    tt_model, kwargs_s2, vN2 = _build_video_trace_setup(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        F=19,
+        H=34,
+        W=60,
+        has_audio=has_audio,
+        checkpoint_variant=checkpoint_variant,
+        num_layers=int(os.environ.get("CROSSSTAGE_NUM_LAYERS", "48")),
+    )
+    # Stage-1 shape (half spatial res, like the e2e's height//2,width//2) on the SAME model.
+    kwargs_s1, vN1 = _build_trace_inner_kwargs(
+        mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, F=19, H=17, W=30, has_audio=has_audio
+    )
+    logger.info(f"cross-stage: stage-1 vN={vN1} then stage-2 vN={vN2} (shared CCLManager)")
+
+    # CROSSSTAGE_SKIP_S1=1 -> run only stage-2, isolating the stage transition from full-depth big-M.
+    skip_s1 = os.environ.get("CROSSSTAGE_SKIP_S1", "0") != "0"
+    if not skip_s1:
+        # Stage 1 first (eager) — populate/rotate the shared strided-AGMM semaphore pool at stage-1 M.
+        for i in range(3):
+            _ = tt_model.inner_step(**kwargs_s1)
+            ttnn.synchronize_device(mesh_device)
+            logger.info(f"stage-1 forward {i} done")
+        logger.info("stage-1 complete; entering STAGE-2 (the e2e hang point) ...")
+    else:
+        logger.info("SKIP_S1: entering STAGE-2 directly (48 layers, no stage-1) ...")
+
+    # Stage 2 (eager) — reuses the same pool. This is where the e2e deadlocks.
+    for i in range(3):
+        _ = tt_model.inner_step(**kwargs_s2)
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"stage-2 forward {i} done")
+
+    logger.info("PASSED cross-stage: stage-1 -> stage-2 completed without deadlock")
+    del tt_model
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    # VIDEO stage-2 ring config only (8k fabric payload); do NOT add AV/other-mesh params here.
     [pytest.param((4, 8), 1, 0, 2, ring_params_8k, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0_8k")],
     indirect=["mesh_device", "device_params"],
 )
@@ -1573,13 +1728,10 @@ def test_ltx_transformer_trace_perf(
         checkpoint_variant=checkpoint_variant,
     )
 
-    # AV runs many more ops than video (audio self/cross + a2v/v2a + audio ff/RS). The per-core
-    # 12000-marker profiler DRAM buffer is drained only at end-of-run, so warm + capture + replay
-    # markers all pile up and overflow (dropped markers -> stalled read / broken report). We drain
-    # the profiler after capture (below) so only the replays count against the budget; AV still uses
-    # fewer replays for headroom. n_warm is kept small so warm+capture stay under budget pre-drain.
-    n_warm = 1 if has_audio else 2
-    n_replay = 3 if has_audio else 5
+    # AV emits far more markers than video; keep warm/replay counts low (overridable via env) so the
+    # per-core profiler buffer doesn't overflow before the post-capture drain below.
+    n_warm = int(os.environ.get("LTX_PERF_N_WARM", "1" if has_audio else "2"))
+    n_replay = int(os.environ.get("LTX_PERF_N_REPLAY", "3" if has_audio else "5"))
 
     # Warm / compile: eager (untraced) calls precompile kernels (prep_run=False on inner_step).
     t0 = time.time()
@@ -1594,9 +1746,7 @@ def test_ltx_transformer_trace_perf(
     ttnn.synchronize_device(mesh_device)
     logger.info(f"trace capture: {time.time() - t0:.1f}s")
 
-    # Drain warm+capture markers so ONLY the signposted replays occupy the profiler DRAM buffer.
-    # This decouples the marker budget from n_warm/capture and lets AV run multiple steady replays
-    # without overflowing (the fix for the "Profiler DRAM buffers were full" drops on AV).
+    # Drain warm+capture markers so only the signposted replays occupy the profiler buffer.
     ttnn.ReadDeviceProfiler(mesh_device)
 
     # Steady-state replay under the signpost bracket for tt-perf-report --start/end-signpost.
@@ -1621,12 +1771,7 @@ def test_ltx_transformer_trace_perf(
     del tt_model
 
 
-# ---------------------------------------------------------------------------
-# Trace-based perf: SINGLE transformer BLOCK (isolates one block's program order,
-# avoiding the model-level patch-embed/proj-out/tilize/untilize/mesh-partition ops that
-# scramble the full-model view). Captures the block forward under a ttnn trace and replays
-# it under the same start/stop signpost bracket as test_ltx_transformer_trace_perf.
-# ---------------------------------------------------------------------------
+# Trace-based perf for a SINGLE transformer block (isolates one block's program order).
 def _build_block_trace_setup(
     *, mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, F, H, W, has_audio, checkpoint_variant="fast"
 ):

@@ -240,8 +240,9 @@ def test_strided_all_gather_minimal_matmul_async(
         # ("a_ff1", 38912, 2048, 2048, 1, True, "gelu_tanh", False, 16, 8, 4, 2, 2),
         ("a_gate", 38912, 2048, 8, 1, True, None, False, 16, 8, 1, 2, 1),
         ("a_gate_s1", 9728, 2048, 8, 1, True, None, False, 16, 8, 1, 2, 1),
-        ("a2v_attn_s1", 9728, 4096, 512, 1, True, None, False, 16, 8, 1, 2, 1),
-        ("a2v_attn_s2", 38912, 4096, 512, 1, True, None, False, 16, 8, 1, 2, 1),
+        # N_block=2 to match the in-model registry (N_block=1 deadlocks via the split-write path).
+        ("a2v_attn_s1", 9728, 4096, 512, 1, True, None, False, 16, 8, 2, 2, 2),
+        ("a2v_attn_s2", 38912, 4096, 512, 1, True, None, False, 16, 8, 2, 2, 2),
     ],
     ids=[
         "v_q_out",
@@ -263,8 +264,10 @@ def test_strided_all_gather_minimal_matmul_async(
     [
         (True, 3),
         (False, 1),
+        # Repeated eager invocations (no trace/warmup) to cover back-to-back sAGMM ops like the e2e.
+        (False, 8),
     ],
-    ids=["perf", "check"],
+    ids=["perf", "check", "check_multi"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
