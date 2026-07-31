@@ -678,26 +678,38 @@ Until then egress binds by ~2.7x.
 
 ## Gotchas
 
-**`cmake --install` is BROKEN in this tree, and the test silently uses a stale library.**
-`build_Release/test/tt_metal/unit_tests_api` resolves `libtt_metal.so` from the INSTALLED path
-`/localdev/$USER/tt-metal/lib/`, not from `build_Release/`. `cmake --install` currently aborts with
-`file RPATH_CHANGE could not write new RPATH` on a vendored benchmark target, before it ever reaches
-libtt_metal.so -- so that installed copy stays frozen at whatever date it was last written.
+**A stale `LD_LIBRARY_PATH` silently shadowed the build tree.** (Diagnosed and FIXED -- an earlier
+version of this note blamed `cmake --install`, which was wrong. **No install is required at all.**)
 
-`ninja` then reports success, the test binary relinks, and **nothing warns you** that every change to
-`mesh_device.cpp` / `profiler.cpp` / anything else in the library is absent from the run. This cost a
-false verification here: a run that appeared to confirm a new env-var gate was in fact executing a
-library from two days earlier that had never heard of it.
+The test binary's RUNPATH is correct and self-sufficient: its first entry is
+`/localdev/$USER/tt-metal/build/tt_metal`, and `build` is a symlink to the active build dir, so it
+already points at exactly what `ninja` just wrote.
 
-Until the install is fixed, run with:
+What defeated it was `~/.config/tt-mo/env/bh-07`, a `tt` per-target env file containing
+`LD_LIBRARY_PATH=/localdev/$USER/tt-metal/lib` -- an install prefix last written days earlier. `tt run`
+exports that before every command, and **`LD_LIBRARY_PATH` takes precedence over `RUNPATH`**, so every
+run loaded the stale library while `ninja` reported success and the binary relinked.
+
+This produced a false verification: a run that appeared to confirm a new env-var gate was executing a
+library that had never heard of the variable. **Kernel** edits are exempt -- they are JIT-compiled from
+source at runtime -- which is exactly why it hid: device-side changes took effect immediately while
+host-library changes silently did not.
+
+Fixed by repointing the env file at the build tree
+(`LD_LIBRARY_PATH=/localdev/$USER/tt-metal/build/tt_metal`). Going through the `build` symlink rather
+than an install prefix means it tracks whatever ninja produces and can never go stale. `bh-06` carried
+the same entry and was fixed too; `bh-11` never had it.
+
+Sanity check whenever host-side behaviour does not match the source:
 
 ```
-export LD_LIBRARY_PATH=/localdev/$USER/tt-metal/build_Release/tt_metal:$LD_LIBRARY_PATH
+ldd build_Release/test/tt_metal/unit_tests_api | grep libtt_metal
 ```
 
-and confirm with `ldd <binary> | grep libtt_metal`. Kernel changes are exempt -- they are JIT-compiled
-from source at runtime -- which is exactly why this hid for so long: the DRISC drainer edits took
-effect immediately while the host-library edits did not.
+If that is not under `build/`, the run is lying to you. (Separately: `cmake --install` does fail here
+with `RPATH_CHANGE could not write new RPATH`, and a failed install scatters `cmake/ include/ lib/
+share/` into the repo root as untracked files -- never `git add -A` after one. But it is not on the
+critical path, because nothing needs installing.)
 
 
 
