@@ -140,6 +140,7 @@ class ColParallelLinear(Module):
         fsdp_mesh_axis=None,
         ccl_manager=None,
         chunks=None,
+        chunk_sizes=None,
     ):
         super().__init__()
 
@@ -162,6 +163,10 @@ class ColParallelLinear(Module):
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
         self.chunks = chunks
+        # Per-chunk output widths in ELEMENTS (global, pre-TP-shard). None => uniform
+        # N/chunks. Lets one projection emit unequal-width outputs, e.g. a fused
+        # QKV+gate where the gate chunk is num_heads wide.
+        self.chunk_sizes = chunk_sizes
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -315,6 +320,11 @@ class ColParallelLinear(Module):
                 num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
+                # The op's N is the per-device (column-sharded) width, so the widths it gets must be
+                # per-device too. Each global width is divisible by the TP factor by construction.
+                chunk_sizes=(
+                    [w // parallel_config.tensor_parallel.factor for w in self.chunk_sizes] if self.chunk_sizes else []
+                ),
                 dtype=dtype,
                 fuse_swiglu=self.fuse_swiglu,
             )
