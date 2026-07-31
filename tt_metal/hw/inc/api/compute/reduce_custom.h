@@ -69,7 +69,8 @@ ALWI void reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape, st
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
-    reduce_block_max_row_init<block_ct_dim, respect_trigger>(ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
+    reduce_block_max_row_init<block_ct_dim, respect_trigger>(
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
 }
 
 // clang-format off
@@ -127,7 +128,11 @@ template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_
 ALWI void reduce_block_max_row(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t row_start_index, std::uint32_t idst) {
     reduce_block_max_row<block_ct_dim, respect_trigger>(
-        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), icb, icb_scaler, row_start_index, idst);
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
+        icb,
+        icb_scaler,
+        row_start_index,
+        idst);
 }
 
 #ifdef ARCH_BLACKHOLE
@@ -272,6 +277,10 @@ template <bool respect_trigger = false>
 ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit()));
+#elif defined(ARCH_QUASAR)
+    // The custom block reduce math uninit is a no-op (addrmods are reprogrammed by the next init).
+    (void)icb;
+    MATH((llk_math_reduce_block_max_row_uninit<DST_ACCUM_MODE>()));
 #else
     // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
     // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
@@ -283,6 +292,21 @@ ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
 }
 
 // Runtime variants - block_ct_dim and respect_trigger are runtime parameters.
+#ifdef ARCH_QUASAR
+// Quasar bakes the SrcA buffer descriptor into the unpack MOP at init, so the input CBs are required here.
+ALWI void reduce_block_max_row_init_runtime(
+    const ckernel::TensorShape& tensor_shape,
+    std::uint32_t ocb,
+    std::uint32_t block_ct_dim,
+    std::uint32_t icb,
+    std::uint32_t icb_scaler,
+    bool respect_trigger = false) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(
+        block_ct_dim, respect_trigger, icb, icb_scaler, tensor_shape)));
+    MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, tensor_shape)));
+    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
+}
+#else
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_init_runtime(
     const ckernel::TensorShape& tensor_shape,
@@ -294,13 +318,32 @@ ALWI void reduce_block_max_row_init_runtime(
     MATH((llk_math_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
+#endif
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
+#ifdef ARCH_QUASAR
+ALWI void reduce_block_max_row_init_runtime(
+    std::uint32_t ocb,
+    std::uint32_t block_ct_dim,
+    std::uint32_t icb,
+    std::uint32_t icb_scaler,
+    bool respect_trigger = false,
+    std::uint32_t num_faces = 4) {
+    reduce_block_max_row_init_runtime(
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
+        ocb,
+        block_ct_dim,
+        icb,
+        icb_scaler,
+        respect_trigger);
+}
+#else
 ALWI void reduce_block_max_row_init_runtime(
     std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
     reduce_block_max_row_init_runtime(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb, block_ct_dim, respect_trigger);
 }
+#endif
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_runtime(
@@ -339,6 +382,10 @@ ALWI void reduce_block_max_row_uninit_runtime(
     std::uint32_t icb, bool respect_trigger = false, bool overlap_first_half = false) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit()));
+#elif defined(ARCH_QUASAR)
+    // The custom block reduce math uninit is a no-op (addrmods are reprogrammed by the next init).
+    (void)icb;
+    MATH((llk_math_reduce_block_max_row_uninit_runtime<DST_ACCUM_MODE>()));
 #else
     MATH((llk_math_reduce_uninit(icb)));
 #endif
