@@ -19,6 +19,9 @@
   `candidates/functional_{full,linear}_prefill_b32_raw.log`.
 - Reran 9 static/contract tests, all four traced decode shapes, a watcher-clean
   full B32 run, and a separate final B1 Tracy profile after promotion.
+- Retained the complete final-default B32 watcher stream, including watcher
+  attach/detach, fallback audit, PCC, normal device closure, and exit status,
+  in `watcher/final_residual_chain_full_b32_raw.log`.
 
 ## 2026-07-31 — fresh checkpoint verification
 

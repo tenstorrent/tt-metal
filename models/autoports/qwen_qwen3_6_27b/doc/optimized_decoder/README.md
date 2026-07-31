@@ -42,6 +42,11 @@ is instrumented and is not mixed into this table.
 | optimized paged prefill to decode | 0.999993917 |
 | watcher, both kinds and batches | clean at interval 10 |
 
+The promoted residual-sharded default also has a complete fresh watcher stream
+at serving batch 32 in
+`watcher/final_residual_chain_full_b32_raw.log`. It records fallback exceptions,
+PCC 0.999592518/0.999824190, normal watcher detach/device closure, and exit 0.
+
 The initial real full-layer diagnostic exposed an inherited semantic bug:
 `q_proj` channels were split into contiguous Q/gate halves, but HF views the
 projection by head and chunks each `2*head_dim` pair. Correct per-head splitting
