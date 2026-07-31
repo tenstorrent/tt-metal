@@ -86,10 +86,12 @@ Do not present unbalanced group averages as parameter effects. For parameter
 2. Match rows on every relevant configuration column except `P` itself and
    columns that merely restate `P`. Classify each column `P` changes before
    dropping it from the key — see below.
-3. Keep exact baseline/treatment matches.
-4. For lower-is-better metrics compute
+3. Before joining, require the pairing key to be unique within each arm. Handle
+   intentional repeats as described below; never allow a many-to-many join.
+4. Keep exact baseline/treatment matches.
+5. For lower-is-better metrics compute
    `speedup = baseline_cycles / treatment_cycles`.
-5. Report geometric-mean and median speedup, dispersion, win/tie/loss counts,
+6. Report geometric-mean and median speedup, dispersion, win/tie/loss counts,
    and exact pair coverage.
 
 Use explicit denominators such as `1,344/1,344 matched pairs`, not “all pairs.”
@@ -124,6 +126,26 @@ For a linked axis, do one of the following, in order of preference:
 
 Never present a bundled effect as an independent one. This is the same
 prohibition as step 1, applied at the pairing stage.
+
+#### Duplicate pairing keys
+
+Audit key multiplicity separately in the baseline and treatment arms before
+joining. A plain merge is valid only when each key occurs at most once per arm;
+otherwise it creates an `n × m` Cartesian product, overweights duplicated
+configurations, and inflates the reported pair count.
+
+Handle intentional repeats in one of these ways:
+
+1. If runs are deliberately paired, add a stable run or repeat identifier to
+   the key and verify a one-to-one join.
+2. Otherwise, aggregate repeats once per arm and configuration key before
+   calculating the treatment effect. State the per-key aggregation and retain
+   repeat counts as supporting data.
+
+If neither treatment is justified, do not calculate a paired effect. Report
+duplicate counts and request enough run metadata to match repeats correctly.
+Pair coverage denominators count unique matched keys after this handling, not
+rows produced by a join.
 
 ### 6. Analyze interactions and confounding
 
@@ -210,23 +232,28 @@ axes, use this design unless the user requests another:
 1. Add four clickable fidelity options: `LoFi`, `HiFi2`, `HiFi3`, and `HiFi4`.
 2. Under the selected fidelity, show absolute cycles by composite
    input/register mode, output format, and geometry/destination accumulation.
-3. In input/register and output-format charts, split every metric by
-   `dest_acc`. Each category has eight adjacent bars:
-   - `geomean(L1_TO_L1)` for `dest_acc=No` and `Yes`;
-   - `geomean(UNPACK_ISOLATE)` for `dest_acc=No` and `Yes`;
-   - `geomean(MATH_ISOLATE)` for `dest_acc=No` and `Yes`;
-   - `geomean(PACK_ISOLATE)` for `dest_acc=No` and `Yes`.
-4. Use the same color for each metric pair and distinguish `dest_acc` with
-   opacity or another restrained treatment.
-5. In the geometry chart, destination accumulation is already encoded in the
-   x-axis label. Keep four metric bars per geometry; do not split them again.
-6. Add a red min–max whisker to every absolute-cycle bar. Calculate the minimum
+3. Before placing `dest_acc=No` and `Yes` bars side by side, audit whether both
+   arms contain identical geometries and other relevant configurations.
+4. If common geometry exists, restrict the split bars to that common support,
+   state the reduced coverage, and use the same color for each metric pair with
+   `dest_acc` distinguished by opacity or another restrained treatment.
+5. If no common geometry exists, as in the current Quasar matmul sweep, do not
+   split input/register or output-format categories into adjacent `dest_acc`
+   bars. Either omit that split in favor of the geometry chart or use separate
+   panels labeled **observed bundled population: dest_acc + geometry**. Explicitly
+   state that gaps between panels are descriptive and are not a `dest_acc`
+   effect.
+6. In the geometry chart, encode both geometry and destination accumulation in
+   the x-axis label. Keep four metric bars per composite category and do not
+   split them again.
+7. Add a red min–max whisker to every absolute-cycle bar. Calculate the minimum
    and maximum from exactly the rows summarized by that bar.
-7. Call this an **observed min–max range**, not variance. It is sensitive to
+8. Call this an **observed min–max range**, not variance. It is sensitive to
    extreme configurations and is not a repeated-run noise estimate.
-8. Hover must show category, metric, `dest_acc` when applicable, geometric
+9. Hover must show category, metric, `dest_acc` when applicable, geometric
    mean, minimum, maximum, and max-minus-min range.
-9. State sample counts separately for every `dest_acc` subgroup and geometry.
+10. State sample counts separately for every displayed subgroup and composite
+    geometry/destination category.
 
 Use a custom themed SVG when the built-in chart cannot draw per-bar min–max
 whiskers. Use host-theme colors; never hardcode red or other colors.
@@ -266,6 +293,8 @@ End on actions, not caveats.
 - [ ] Constants and non-estimable axes are identified.
 - [ ] Baselines, sample counts, and pair denominators are visible.
 - [ ] Relative effects use exact matches.
+- [ ] Pairing keys are unique per arm; intentional repeats use a stable run ID
+      or are aggregated per arm/key before a one-to-one join.
 - [ ] Columns dropped from the pairing key are restatements, not linked axes;
       any unavoidable bundle is labeled as such.
 - [ ] Geometric means are labeled as geometric means.
@@ -273,8 +302,9 @@ End on actions, not caveats.
 - [ ] Confounding and eligibility restrictions are documented.
 - [ ] Null results and strong claims are quantified and validated.
 - [ ] Canvas labels, units, hover values, and source captions are complete.
-- [ ] Absolute charts use fidelity selectors, destination splitting, and
-      per-bar min–max ranges where those axes exist.
+- [ ] Absolute charts use fidelity selectors and per-bar min–max ranges;
+      destination splitting is limited to common geometry, and confounded
+      populations are separated and labeled as bundles.
 - [ ] Min–max is described as observed range rather than variance.
 - [ ] The report ends with practical recommendations.
 
