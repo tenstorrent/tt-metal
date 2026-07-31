@@ -1497,7 +1497,8 @@ class TTVibeVoiceLM:
             )
             attn_rows.append(_reshape_tt(attn, [1, 1, 1, n_heads * head_dim]))
 
-        attn = ttnn.concat(attn_rows, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [2,1,1,n_heads*hd]
+        # L1: this concat is wo's in0 (1536x1536, 28 calls/frame).  Placement only, maxabsdiff==0.
+        attn = ttnn.concat(attn_rows, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)  # [2,1,1,n_heads*hd]
         out = ttnn.linear(
             attn,
             layer_w.wo,
@@ -1523,7 +1524,10 @@ class TTVibeVoiceLM:
             weight=lw.ffn_norm_w,
             epsilon=self.cfg.rms_norm_eps,
             compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # L1: this is the in0 of _ffn_layer's gate/up pair (1536x8960, 56 calls/frame), which was
+            # the last big DRAM-in0 matmul in the LM.  Placement only, maxabsdiff==0.  Decode-only
+            # path, so prefill's deliberate DRAM in0 (see _ffn_layer) is untouched.
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ffn_out = self._ffn_layer(x_norm, lw)  # batched [2,..] — auto matmuls, batch-independent
         x = ttnn.add(x, ffn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
