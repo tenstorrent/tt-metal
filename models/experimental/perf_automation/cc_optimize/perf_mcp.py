@@ -553,8 +553,8 @@ def _warm_start_for(model_root, op_code: str):
     like a table with no matching shape -- the pre-pass could be paid for and silently wasted.
 
     Resolving it HERE makes the recommendation data on next_target instead of a file the agent has
-    to remember to read. Deliberately narrow: no file, no entries, or no matching shape returns None
-    and the caller behaves exactly as it does today.
+    to remember to read. Deliberately narrow: no file, no seeds/table, or no matching shape returns
+    None and the caller behaves exactly as it does today.
     """
     import re as _re  # perf_mcp does not import re at module scope
 
@@ -568,22 +568,30 @@ def _warm_start_for(model_root, op_code: str):
         data = json.loads((Path(model_root) / "matmul_sweep.json").read_text())
     except Exception:  # noqa: BLE001
         return None
-    entries = data.get("entries") if isinstance(data, dict) else None
-    if not isinstance(entries, list):
+    if not isinstance(data, dict):
         return None
-    for e in entries:
-        if not isinstance(e, dict):
-            continue
+
+    # matmul_sweep.py writes summarize()'s output: `seeds` (pre-picked winners, shape NESTED under
+    # row["shape"], fidelity/dtype at top level) plus the full `table` (shape FLAT on the row, winner
+    # under row["best"]). It never writes an `entries` key -- reading that made every lookup return None
+    # and silently discarded the whole PCC-gated pre-pass. Read seeds first, fall back to the table row.
+    def _shape_of(row):
+        sh = row.get("shape") if isinstance(row.get("shape"), dict) else row
         try:
-            if (int(e["m"]), int(e["k"]), int(e["n"])) != want:
-                continue
+            return (int(sh["m"]), int(sh["k"]), int(sh["n"]))
         except (KeyError, TypeError, ValueError):
-            continue
-        out = {}
-        for k in ("fidelity", "dtype"):
-            if e.get(k):
-                out[k] = e[k]
+            return None
+
+    def _config_of(row):
+        src = row.get("best") if isinstance(row.get("best"), dict) else row
+        out = {k: src[k] for k in ("fidelity", "dtype") if isinstance(src, dict) and src.get(k)}
         return out or None
+
+    for row in (data.get("seeds") or []) + (data.get("table") or []):
+        if isinstance(row, dict) and _shape_of(row) == want:
+            cfg = _config_of(row)
+            if cfg:
+                return cfg
     return None
 
 
