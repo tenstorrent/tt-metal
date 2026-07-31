@@ -15,7 +15,8 @@
  * @brief Initializes the block reduce_max_row math thread (compile-time block_ct_dim).
  *
  * @tparam block_ct_dim  Number of tiles in the width dimension processed as one block.
- * @tparam is_fp32_dest_acc_en  32-bit DEST accumulation mode.
+ * @tparam is_fp32_dest_acc_en  32-bit DEST accumulation mode (not yet supported on Quasar).
+ * @param tensor_shape  Operand tile shape (face count / dims) baked into the pool MOP.
  * @note Specialized for SDPA/softmax block row-max; not a substitute for llk_math_reduce_init.
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
@@ -29,8 +30,11 @@ inline void llk_math_reduce_block_max_row_mop_config(const ckernel::TensorShape&
 }
 
 /**
- * @brief Executes the block reduce_max_row (compile-time block_ct_dim): accumulate the row-max across
- *        the block, then transpose once into a reduced column at DEST[dst_index].
+ * @brief Executes the block reduce_max_row: accumulate the row-max across the block, then transpose
+ *        each pooled row partial into a reduced column at DEST[dst_index].
+ *
+ * @param dst_index    DEST tile index that receives the reduced column.
+ * @param tensor_shape Operand tile shape (drives the transpose row count).
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void llk_math_reduce_block_max_row(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape) {
