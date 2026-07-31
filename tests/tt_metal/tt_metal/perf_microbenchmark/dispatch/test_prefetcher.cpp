@@ -464,6 +464,9 @@ protected:
 
     void SetUp() override {
         BaseTestFixture::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         dram_base_ = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
         num_banks_ = device_->allocator_impl()->get_num_banks(BufferType::DRAM);
         l1_alignment_ = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
@@ -1998,6 +2001,9 @@ protected:
 
     void SetUp() override {
         BasePrefetcherTestFixture::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         if (mesh_device_->num_devices() < 2) {
             GTEST_SKIP() << "Skipping RelayLinearHTest: need MMIO+remote pair in mesh";
         }

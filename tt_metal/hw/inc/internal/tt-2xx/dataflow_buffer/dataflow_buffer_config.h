@@ -22,6 +22,7 @@ namespace dfb {
 enum AccessPattern : uint8_t {
     STRIDED,
     ALL,
+    BLOCKED,
     UNKNOWN,
 };
 
@@ -83,7 +84,7 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     | dfb_initializer_per_risc_t | risc 0
     | dfb_initializer_per_risc_t | risc 1
     ...
-    (36 + (62 * 12)) * 16 = 12480 bytes
+    (38 + (62 * 12)) * 16 = 12512 bytes
 */
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
@@ -93,7 +94,7 @@ struct dfb_txn_id_descriptor_t {
     uint8_t num_entries_per_txn_id_per_tc;
 } __attribute__((packed));
 
-struct dfb_initializer_t {  // 36 bytes
+struct dfb_initializer_t {  // 38 bytes
     uint32_t logical_id;
     uint32_t entry_size;
     uint32_t stride_in_entries;
@@ -109,6 +110,11 @@ struct dfb_initializer_t {  // 36 bytes
     dfb_txn_id_descriptor_t consumer_txn_descriptor;
     uint8_t num_producers;
     uint8_t implicit_sync_configured; // 0: init state, 1: configured
+    // BLOCKED block_size per side (host serializes 1 for a non-BLOCKED side, so the device assigns
+    // LocalDFBInterface::block_size unconditionally). Used device-side to make the implicit-sync commit
+    // advance the tile-counter per-BLOCK (not per-entry), so asymmetric BLOCKED keeps block-granularity.
+    uint8_t producer_block_size;
+    uint8_t consumer_block_size;
 } __attribute__((packed));
 
 struct dfb_initializer_per_risc_t {  // 62 bytes
@@ -145,6 +151,6 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
     uint8_t tensix_mask;
 } __attribute__((packed));
 
-static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
+static_assert(sizeof(dfb_initializer_t) == 38, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 62, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");

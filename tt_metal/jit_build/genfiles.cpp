@@ -874,13 +874,13 @@ void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& o
         "#define DST_SYNC_MODE DstSync::Sync{}\n",
         options.fp32_dest_acc_en,
         options.dst_full_sync_en ? "Full" : "Half");
-    // (Quasar only) Explicit op-writer unpack-to-dest flag, baked here like DST_ACCUM_MODE so it is
-    // visible to the compute/LLK headers that consume it (all included after this descriptor file).
-    // WH/BH keep UnpackToDestEn hardcoded in their llk_defs.h (format-inferred routing), so we do not emit it
-    // for them doing so would redefine their constexpr.
+    // (Quasar only) Kernel-wide unpack-to-dest sync selector. Derived from the per-DFB
+    // unpack_to_dest_mode vector: true iff any operand routes to Dest. Keeps unpack_modes the single source of truth.
     if (arch == tt::ARCH::QUASAR) {
         fmt::format_to(
-            std::ostreambuf_iterator<char>(out), "constexpr bool UnpackToDestEn = {};\n", options.unpack_to_dest_en);
+            std::ostreambuf_iterator<char>(out),
+            "constexpr bool UnpackToDestEn = {};\n",
+            tt::any_unpack_to_dest(options.unpack_to_dest_mode));
     }
 }
 
@@ -927,7 +927,6 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     emit_pack_tile_dims(out, desc, max_cbs);
     // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
-    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
     out << "#if defined(UCK_CHLKC_PACK)\n";
     emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
     out << "#endif\n";   // if pack

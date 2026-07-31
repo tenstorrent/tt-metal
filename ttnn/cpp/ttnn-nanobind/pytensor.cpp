@@ -59,6 +59,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 
 #include <tracy/Tracy.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 using namespace tt::tt_metal;
 
@@ -1679,7 +1680,8 @@ void pytensor_module(nb::module_& mod) {
                 {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}},
                 {coord});
             DeviceStorage device_storage(
-                MeshTensor::from_buffer(std::move(*mesh_buffer), tensor_spec, std::move(topology)), {coord});
+                mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), tensor_spec, std::move(topology)),
+                {coord});
             return Tensor(std::move(device_storage));
         },
         nb::arg("host_tensor"),

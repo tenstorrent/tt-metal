@@ -64,6 +64,8 @@ using namespace tt::tt_metal::distributed;
 
 static bool dump_test_info = false;
 
+static bool slow_dispatch_enabled() { return std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr; }
+
 struct TestInfo {
     uint32_t iterations = DEFAULT_ITERATIONS;
     uint32_t warmup_iterations = DEFAULT_WARMUP_ITERATIONS;
@@ -1058,8 +1060,17 @@ int main(int argc, char** argv) {
     if (test_args::has_command_option(input_args, "--custom")) {
         TestInfo info;
         init(input_args, info);
+        if (info.use_trace && slow_dispatch_enabled()) {
+            log_info(tt::LogTest, "Trace capture is not supported for slow dispatch; skipping test");
+            return 0;
+        }
         FakeBenchmarkState state;
         return pgm_dispatch(state, info);
+    }
+
+    if (slow_dispatch_enabled()) {
+        log_info(tt::LogTest, "Program dispatch trace benchmarks are not supported for slow dispatch; skipping suite");
+        return 0;
     }
 
     if (test_args::has_command_option(input_args, "--dump-test-info")) {

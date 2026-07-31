@@ -1138,6 +1138,10 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
                         offset += serialized.size();
                     }
+                    // write_to_device transfers whole 32-bit words. If the serialized DFB config blob is
+                    // not word-aligned, the final 1-3 bytes would be dropped. This can truncate the last
+                    // per-RISC record. Pad the blob to a full word before writing it.
+                    dfb_config_vec.resize(tt::align(dfb_config_vec.size(), sizeof(uint32_t)), 0);
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
                     log_info(
                         tt::LogMetal,
