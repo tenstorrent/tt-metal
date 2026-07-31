@@ -30,12 +30,6 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-        // Some CI machines have lots of cards, running all tests on all cards is slow
-        // Coverage for multidevices is decent if we just confirm 2 work
-        this->num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (num_devices_ > 2) {
-            this->num_devices_ = 2;
-        }
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
             ids.push_back(id);
@@ -67,20 +61,19 @@ protected:
     void create_devices(const std::vector<ChipId>& device_ids) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        // TODO: Some CI machines have lots of cards, running all tests on all the cards is slow.
+        // Coverage for multidevices should be decent if we just confirm 2 work.
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             device_ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
         devices_.clear();
         for (const auto& [device_id, device] : id_to_device_) {
             devices_.push_back(device);
         }
-        this->num_devices_ = this->devices_.size();
     }
 
     explicit MeshDeviceFixture(
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
         MeshDispatchFixture(l1_small_size, trace_region_size) {}
-
-    size_t num_devices_{};
 
 public:
     std::pair<unsigned, unsigned> worker_grid_minimum_dims() {
@@ -143,12 +136,10 @@ protected:
         for (const auto& [device_id, device] : id_to_device_) {
             devices_.push_back(device);
         }
-        this->num_devices_ = this->devices_.size();
     }
 
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
-    size_t num_devices_{};
 };
 
 class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};
