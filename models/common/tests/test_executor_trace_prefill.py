@@ -4,68 +4,19 @@
 from models.common.models import executor as executor_module
 
 
-class _FakeTTTensor:
-    def __init__(self, shape):
-        self.shape = shape
-
-
-def test_prefill_sample_logits_pad_matches_sampler_batch(monkeypatch):
-    logits = _FakeTTTensor((1, 1, 1, 128))
-
-    class Sampler:
-        class config:
-            max_batch_size = 32
-
-    pad_calls = []
-
-    def fake_pad(tensor, padding, value):
-        pad_calls.append((tensor, padding, value))
-        return _FakeTTTensor((1, 1, 32, 128))
-
-    monkeypatch.setattr(executor_module.ttnn, "pad", fake_pad)
-
-    padded = executor_module._pad_prefill_sample_logits_for_sampler(logits, Sampler())
-
-    assert padded.shape == (1, 1, 32, 128)
-    assert pad_calls == [
-        (
-            logits,
-            [(0, 0), (0, 0), (0, 31), (0, 0)],
-            0.0,
-        )
-    ]
-
-
-def test_prefill_sample_logits_pad_noop_when_already_full_batch(monkeypatch):
-    logits = _FakeTTTensor((1, 1, 32, 128))
-
-    class Sampler:
-        class config:
-            max_batch_size = 32
-
-    monkeypatch.setattr(
-        executor_module.ttnn,
-        "pad",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected pad")),
-    )
-
-    assert executor_module._pad_prefill_sample_logits_for_sampler(logits, Sampler()) is logits
-
-
 def test_easy_trace_prefill_replay_copies_only_mutable_inputs(monkeypatch):
     engine = executor_module.TracedLLMExecutor.__new__(executor_module.TracedLLMExecutor)
     engine.mesh_device = "mesh"
-    trace_key = (128, 1)
-    engine.trace_id_prefill = {trace_key: 7}
+    engine.trace_id_prefill = {128: 7}
     engine.trace_inputs_prefill = {
-        trace_key: ("device_tokens", "device_cos", "device_sin", "device_page_table", None),
+        128: ("device_tokens", "device_cos", "device_sin", "device_page_table", None),
     }
-    engine.trace_output_prefill = {trace_key: "trace_output"}
+    engine.trace_output_prefill = {128: "trace_output"}
 
     monkeypatch.setattr(
         engine,
         "_prepare_prefill_trace_inputs_host",
-        lambda tokens, page_table, last_token_idx, batch_size: (
+        lambda tokens, page_table, last_token_idx: (
             "host_tokens",
             "device_cos_slice",
             "device_sin_slice",
@@ -104,108 +55,3 @@ def test_easy_trace_prefill_replay_copies_only_mutable_inputs(monkeypatch):
         )
     ]
     assert execute_calls == [("mesh", 7, 0, False)]
-
-
-def test_traced_sampled_decode_uses_device_feedback_after_reset(monkeypatch):
-    class Model:
-        vocab_size = 128
-        num_devices = 1
-        sampling = object()
-
-        def increment_positions(self, current_pos, rot_mat_idxs):
-            pass
-
-    engine = executor_module.TracedLLMExecutor.__new__(executor_module.TracedLLMExecutor)
-    engine.model = Model()
-    engine.mesh_device = "mesh"
-    engine.mode = None
-    engine.device_decode_feedback_enabled = True
-    engine.trace_ids_decode = {True: 7}
-    engine.trace_inputs_decode = {True: ("device_tokens", "device_pos", "device_rot", "device_page_table")}
-    engine.trace_output_decode = {True: ("device_toks", None)}
-    engine._prev_decode_page_table = None
-
-    class Eager:
-        def _assert_kv_cache_identity(self, kv_cache):
-            pass
-
-        def prepare_decode_inputs_host(self, tokens, start_pos, page_table):
-            return ("host_tokens", "host_pos", "host_rot", "host_page_table")
-
-    engine._eager = Eager()
-
-    copy_calls = []
-    monkeypatch.setattr(
-        executor_module,
-        "copy_host_to_device",
-        lambda host_tensors, device_tensors: copy_calls.append((host_tensors, device_tensors)),
-    )
-
-    page_table_copies = []
-    monkeypatch.setattr(
-        executor_module.ttnn,
-        "copy_host_to_device_tensor",
-        lambda host_tensor, device_tensor: page_table_copies.append((host_tensor, device_tensor)),
-    )
-    monkeypatch.setattr(executor_module.ttnn, "execute_trace", lambda *args, **kwargs: None)
-
-    tokens = executor_module.torch.tensor([11])
-    start_pos = executor_module.torch.tensor([5])
-    page_table = executor_module.torch.tensor([[0]], dtype=executor_module.torch.int32)
-
-    engine.decode_forward(
-        tokens,
-        start_pos,
-        page_table=page_table,
-        sampling_params=object(),
-        read_from_device=False,
-        reset_batch=True,
-    )
-    engine.decode_forward(
-        tokens,
-        start_pos + 1,
-        page_table=page_table,
-        sampling_params=object(),
-        read_from_device=False,
-    )
-    new_page_table = executor_module.torch.tensor([[1]], dtype=executor_module.torch.int32)
-    engine.decode_forward(
-        tokens,
-        start_pos + 2,
-        page_table=new_page_table,
-        sampling_params=object(),
-        read_from_device=False,
-    )
-
-    assert copy_calls == [
-        (
-            ("host_tokens", "host_pos", "host_rot", "host_page_table"),
-            ("device_tokens", "device_pos", "device_rot", "device_page_table"),
-        )
-    ]
-    assert page_table_copies == [("host_page_table", "device_page_table")]
-
-
-def test_compile_prefill_and_decode_uses_sampled_prefill_tokens(monkeypatch):
-    class Executor:
-        def compile_prefill(self, **kwargs):
-            assert kwargs["sampling_params"] == "sampling"
-            return (executor_module.torch.tensor([42]), None)
-
-        def compile_decode(self, **kwargs):
-            decode_calls.append(kwargs)
-
-    decode_calls = []
-    executor = Executor()
-    page_table = executor_module.torch.zeros((1, 1), dtype=executor_module.torch.int32)
-
-    executor_module._compile_prefill_and_decode(
-        executor,
-        prefill_tokens=executor_module.torch.ones((1, 128), dtype=executor_module.torch.long),
-        prefill_page_table=page_table,
-        sampling_params="sampling",
-    )
-
-    assert len(decode_calls) == 1
-    assert decode_calls[0]["tokens"].tolist() == [42]
-    assert decode_calls[0]["sampling_params"] == "sampling"
