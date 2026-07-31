@@ -978,16 +978,16 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
 # ---------------------------------------------------------------------------
 
 def _mr_config():
-    """(role, rank, world_size). Under an MPI launcher (OMPI_COMM_WORLD_SIZE > 1) initialize the
-    distributed context and take rank/size from it — rank 0 is the master. Standalone (the single-rank
-    de-risk, no mpirun) skips MPI entirely: master / 0 / 1, no coordination."""
+    """(rank, world_size). Under an MPI launcher (OMPI_COMM_WORLD_SIZE > 1) initialize the distributed
+    context and take rank/size from it. Standalone (the single-rank de-risk, no mpirun) skips MPI
+    entirely: 0 / 1, no coordination. rank 0 is the master; every other rank is a validator."""
     if int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1")) <= 1:
-        return ("master", 0, 1)
+        return (0, 1)
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
     rank = int(ttnn.distributed_context_get_rank())
     size = int(ttnn.distributed_context_get_size())
-    return ("master" if rank == 0 else "validator", rank, size)
+    return (rank, size)
 
 
 def _mr_bcast_resident(rank: int, resident: dict) -> dict:
@@ -1083,8 +1083,8 @@ def main() -> None:
         _apply_manifest_env(args.manifest)
     _load_env_config()
 
-    role, mr_rank, world_size = _mr_config()
-    if role == "validator":
+    mr_rank, world_size = _mr_config()
+    if mr_rank != 0:
         _run_validator(mr_rank, world_size)
         return
 
