@@ -106,6 +106,7 @@ class TtVoxtralFlow:
         self.inv_freq = w["time_embedding.inv_freq"]          # host: time_embedding
         self.semantic_host = w["semantic_codebook_output.weight"].float()  # host: masked argmax
         self._sched = {}                     # (batch, n_steps) -> (time tokens, step widths)
+        self._cfgbuf = {}                    # batch -> reused [2B,3072] cond++uncond host buffer
 
         dev = lambda t: ttnn.from_torch(t.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT,
                                        device=device)
@@ -178,6 +179,21 @@ class TtVoxtralFlow:
         pos0 = ttnn.slice(seq, [0, 0, 0], [B, 1, FM_INPUT_DIM])
         return ttnn.linear(pos0, self.proj["acoustic_codebook_output"],
                            compute_kernel_config=COMPUTE_CONFIG)
+
+    def _cfg_input(self, B, llm_hidden):
+        """-> [2B, 3072] = llm_hidden (cond) stacked on zeros (uncond), in a reused buffer.
+
+        CFG's unconditional half is a ZEROED hidden state, so the bottom half of this buffer is
+        zeros on every frame forever. Building it with `cat([h, zeros_like(h)])` allocated both the
+        zeros and the concatenation once per frame -- ~12 frames per second of audio, indefinitely.
+        Allocated once per batch instead, and only the top half is ever written; the zeros below are
+        never touched, so they cannot drift.
+        """
+        buf = self._cfgbuf.get(B)
+        if buf is None:
+            buf = self._cfgbuf[B] = torch.zeros(2 * B, FM_INPUT_DIM)
+        buf[:B] = llm_hidden            # bottom half stays zero by construction
+        return buf
 
     def _schedule(self, B, n_steps):
         """-> (time-conditioning tokens on device, per-step dt). Built once per (batch, n_steps).
@@ -256,7 +272,7 @@ class TtVoxtralFlow:
         x = self._up(x0.reshape(B, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32)   # solver state, fp32
         # llm conditioning is constant across the solve: cond ++ uncond, projected ONCE per frame
         # rather than once per step (it was n_steps identical 3072x3072 matmuls).
-        p2 = ttnn.linear(self._up(torch.cat([llm_hidden, torch.zeros_like(llm_hidden)], 0)),
+        p2 = ttnn.linear(self._up(self._cfg_input(B, llm_hidden)),
                          self.proj["llm_projection"], compute_kernel_config=COMPUTE_CONFIG)
         p1s, dts = self._schedule(B2, n_steps)
 
