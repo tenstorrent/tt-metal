@@ -320,6 +320,7 @@ struct FusedGatherContext {
     // Readiness: one semaphore slot per (source rank, chunk). Receivers block on these; senders
     // atomic-inc AFTER the payload is flushed.
     uint32_t chunk_ready_sem_id = 0;
+    uint32_t fwd_recv_sem_id = 0;  // counts forward-stream shard arrivals from the backward neighbour
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
@@ -366,6 +367,7 @@ FusedGatherContext build_fused_gather_context(
         return v;
     }()));
     ctx.chunk_ready_sem_id = CreateSemaphore(program, ring_crs, 0);
+    ctx.fwd_recv_sem_id = CreateSemaphore(program, ring_crs, 0);
 
     const size_t mux_base_l1 = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
@@ -487,6 +489,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     // compute fusion defines merged into cdefs. The in1 reader takes NO defines. Empty maps => the
     // byte-identical no-fusion compile. ----
     std::map<std::string, std::string> wdefs;
+    // Fused fabric all-gather. A PREPROCESSOR define, not just a compile-time arg: the prologue declares a
+    // TensorAccessorArgs that only exists when tp > 1, and `if constexpr` does NOT discard an ill-formed
+    // branch in a non-template function -- it would still be compiled and fail deduction on the tp == 1 build.
+    if (operation_attributes.tp > 1) {
+        wdefs["FUSED_GATHER"] = "1";
+    }
     // extra COMPUTE defines beyond fusion; currently only the reduction strategy (RSCATTER).
     std::map<std::string, std::string> cdefs_extra;
 
@@ -855,6 +863,11 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         TensorAccessorArgs(*tensor_args.fused_ternary_input_a->buffer()).append_to(wct);
         TensorAccessorArgs(*tensor_args.fused_ternary_input_b->buffer()).append_to(wct);
     }
+    // LOCAL-SHARD accessor for the fused gather. Appended LAST, after every existing accessor, so adding it
+    // cannot shift the indices the kernel already resolves by chaining. Only present/read when tp > 1.
+    if (operation_attributes.tp > 1) {
+        TensorAccessorArgs(*in0.buffer()).append_to(wct);
+    }
 
     // Split-NOC: reader on the core's in1 NoC, writer on the OTHER NoC.
     //   g0 (noc==0): reader RISCV_0/NOC0, writer RISCV_1/NOC1
@@ -1049,6 +1062,11 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(fused_gather.chunk_ready_sem_id);
             wa.push_back(fused_gather.mux_cfg_fwd ? 1u : 0u);
             wa.push_back(fused_gather.mux_cfg_bwd ? 1u : 0u);
+            wa.push_back(Mt_r);                          // global M tiles (staging row count)
+            wa.push_back(geo.Kt);                        // global K tiles (staging row stride)
+            wa.push_back(in0.buffer()->address());       // LOCAL shard base (in0_addr now points at staging)
+            wa.push_back(i / preaders_pf);               // bank id 0..7 -> which M-slice this core stages
+            wa.push_back(fused_gather.fwd_recv_sem_id);  // incremented by my BACKWARD neighbour
             if (is_master_ring) {
                 if (fused_gather.mux_cfg_fwd) {
                     const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);

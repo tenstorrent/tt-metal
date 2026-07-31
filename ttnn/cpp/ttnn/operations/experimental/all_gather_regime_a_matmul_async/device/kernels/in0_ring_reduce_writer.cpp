@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 
 void kernel_main() {
     constexpr uint32_t M_block = get_compile_time_arg_val(0);
@@ -55,7 +56,6 @@ void kernel_main() {
     constexpr auto ta_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto tb_args = TensorAccessorArgs<ta_args.next_compile_time_args_offset()>();
 #endif
-
     const uint32_t in0_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
     const uint32_t m_start = get_arg_val<uint32_t>(2);  // first logical M tile (balanced)
@@ -296,7 +296,8 @@ void kernel_main() {
     //   3. every core blocks on the readiness semaphore until all tp shards have landed.
     // Payload must precede readiness: flush the write, THEN atomic-inc, or a peer can consume a
     // half-written shard.
-    if constexpr (fused_gather_enabled) {
+#if defined(FUSED_GATHER)
+    {
         std::size_t fa = fused_rt_base;
         const uint32_t is_fabric_client = get_arg_val<uint32_t>(fa++);
         const uint32_t rank = get_arg_val<uint32_t>(fa++);
@@ -306,17 +307,96 @@ void kernel_main() {
         const uint32_t ready_sem_id = get_arg_val<uint32_t>(fa++);
         const uint32_t has_fwd = get_arg_val<uint32_t>(fa++);
         const uint32_t has_bwd = get_arg_val<uint32_t>(fa++);
-        (void)is_fabric_client;
-        (void)rank;
-        (void)tp;
-        (void)k_shard_tiles;
-        (void)stage_addr;
-        (void)ready_sem_id;
-        (void)has_fwd;
-        (void)has_bwd;
-        (void)fa;  // master-ring cores continue here into the mux client block (11 args per direction,
-                   // consumed by FabricMuxV2Sender::build_from_args) -- steps 1-3 land next.
+        const uint32_t Mt_total = get_arg_val<uint32_t>(fa++);
+        const uint32_t Kt_global = get_arg_val<uint32_t>(fa++);
+        const uint32_t shard_addr = get_arg_val<uint32_t>(fa++);
+        const uint32_t bank_id = get_arg_val<uint32_t>(fa++);
+        const uint32_t fwd_recv_sem_id = get_arg_val<uint32_t>(fa++);
+        (void)has_bwd;  // v1 is forward-only; the backward mux is deployed but not yet driven.
+
+        // LOCAL-SHARD accessor: the factory appends it AFTER every other accessor, and ONLY when tp > 1.
+        // It must therefore be declared in here -- declaring it unconditionally reads past the end of the
+        // compile-time args on the tp == 1 build and fails JIT template deduction.
+#if defined(FUSE_TERNARY)
+        constexpr auto shard_args = TensorAccessorArgs<tb_args.next_compile_time_args_offset()>();
+#elif defined(FUSE_BIAS)
+        constexpr auto shard_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+#else
+        constexpr auto shard_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#endif
+        // in0_args is ALREADY the staging accessor on the fused path (the host bound it there), so reuse
+        // it rather than declaring a second view of the same buffer.
+        const auto stage_acc = TensorAccessor(in0_args, stage_addr, tile_bytes);
+        const auto shard_acc = TensorAccessor(shard_args, shard_addr, tile_bytes);
+
+        // The 8 master-ring cores split the shard by M tiles; bank_id picks the slice. Ceil-divide so the
+        // last core takes the short tail rather than dropping rows.
+        const uint32_t m_per_core = (Mt_total + 7u) / 8u;
+        const uint32_t m_lo = bank_id * m_per_core;
+        const uint32_t m_hi = (m_lo + m_per_core < Mt_total) ? (m_lo + m_per_core) : Mt_total;
+
+        if (is_fabric_client && m_lo < m_hi) {
+            // ---- 1. stage OUR OWN shard: in0[m, k] -> staging[m, rank*k_shard_tiles + k] ----
+            // Local DRAM->DRAM, no fabric. Read into the scratch L1 slot then write back out.
+            const uint32_t scratch = get_write_ptr(in0_cb);  // cb0 is not yet in use at this point
+            const uint32_t own_k0 = rank * k_shard_tiles;
+            for (uint32_t m = m_lo; m < m_hi; ++m) {
+                for (uint32_t k = 0; k < k_shard_tiles; ++k) {
+                    noc_async_read_page(m * k_shard_tiles + k, shard_acc, scratch);
+                    noc_async_read_barrier();
+                    noc_async_write_page(m * Kt_global + own_k0 + k, stage_acc, scratch);
+                }
+            }
+            noc_async_write_barrier();
+
+            // ---- 2. forward ring: tp-1 rounds, each hop one shard further around ----
+            // Round r forwards the shard that ORIGINATED at rank-(r-1). It already sits at the same
+            // staging offset on this device as it will on the neighbour, so source and destination
+            // offsets are identical -- the hop is a straight staging->staging copy.
+            //
+            // v1 sends over NoC to the neighbour through the mux's unicast write. Dependencies: round r
+            // (r >= 2) may only forward once round r-1 has landed here, tracked by fwd_recv_sem.
+            if (has_fwd) {
+                auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(fa);
+                sender.open();
+                volatile tt_l1_ptr uint32_t* fwd_recv =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(fwd_recv_sem_id));
+
+                for (uint32_t r = 1; r < tp; ++r) {
+                    if (r >= 2) {
+                        noc_semaphore_wait_min(fwd_recv, r - 1);  // previous hop has landed
+                    }
+                    const uint32_t src_rank = (rank + tp - (r - 1)) % tp;
+                    const uint32_t k0 = src_rank * k_shard_tiles;
+                    for (uint32_t m = m_lo; m < m_hi; ++m) {
+                        for (uint32_t k = 0; k < k_shard_tiles; ++k) {
+                            noc_async_read_page(m * Kt_global + k0 + k, stage_acc, scratch);
+                            noc_async_read_barrier();
+                            // Payload to the neighbour's staging at the SAME offset.
+                            sender.wait_for_empty_write_slot();
+                            sender.send_payload_flush_non_blocking_from_address(scratch, tile_bytes);
+                        }
+                    }
+                    // Readiness strictly AFTER the payload has been flushed.
+                    sender.flush();
+                    noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, get_semaphore(fwd_recv_sem_id)), 1);
+                }
+                sender.close();
+            }
+        }
+
+        // ---- 3. block until every shard has landed ----
+        // Coarse barrier in v1: wait for all tp-1 remote shards before the on-chip ring starts. The design
+        // spec's progressive per-chunk consumption is the overlap step and comes next.
+        if (is_fabric_client) {
+            volatile tt_l1_ptr uint32_t* fwd_recv =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(fwd_recv_sem_id));
+            noc_semaphore_wait_min(fwd_recv, tp - 1);
+        }
+        noc_semaphore_wait_min(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem_id)), 0);  // placeholder
     }
+#endif  // FUSED_GATHER
 
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
     cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
