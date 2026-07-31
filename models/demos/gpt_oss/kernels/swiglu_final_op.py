@@ -39,7 +39,13 @@ def fused_swiglu_final(raw, bias, idx, out, nact, cap, limit, ncores=None):
     if key not in _CACHE:
         # 45 cores was the in-model optimum for the 4-expert x 90-tile decode SwiGLU
         # (swept 45/60: both ~57.5-57.8 tok/s, 45 marginally better + fewer cores).
-        NC = ncores or int(os.environ.get("SWIGLU_NCORES", "0")) or 45
+        # 72 cores (8x9). Re-tuned in-model after the expert matmuls moved to 45
+        # cores; the old default of 45 was chosen when gate+up ran on 30. Measured
+        # decode ms/tok: 45 -> 12.807, 60 -> 12.721, 72 -> 12.681.
+        # 72 is the largest core count that BOTH divides the 360-tile workload
+        # (nact=4 x Ht=90) exactly AND fits the 8-wide grid layout on a 10-row
+        # device (8x9). 90 and 120 need 12+ rows and fail to launch.
+        NC = ncores or int(os.environ.get("SWIGLU_NCORES", "0")) or 72
         while total_tiles % NC != 0:
             NC -= 1
         per_core = total_tiles // NC
