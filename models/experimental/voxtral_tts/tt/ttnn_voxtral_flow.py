@@ -122,7 +122,11 @@ USE_TRACE = False
 # it holds: 0.0% WER on English including the 125-word paragraph, 0.0% French, 5/5 natural
 # [END_AUDIO], and the paragraph free-runs to 448 frames against bf16's 458 and fp32's 459.
 # bfp4 was measured and REJECTED: 1.54x but 34.26% of codes differ and max deviation reaches 4.
-WEIGHT_DTYPE = ttnn.bfloat8_b
+#
+# NOT ENABLED YET. bfp8 spends accuracy margin to work around a structural inefficiency, and the
+# structural fixes (fused qkv / fused gate-up, DRAM-sharded matmul program configs) cost nothing
+# numerically. Try those first; bfp8 remains available as a measured fallback.
+WEIGHT_DTYPE = None
 
 
 class TtVoxtralFlow:
@@ -162,8 +166,10 @@ class TtVoxtralFlow:
                 "an": vec(w[p + "attention_norm.weight"]),
                 "fn": vec(w[p + "ffn_norm.weight"]),
                 "wq": lin(w[p + "attention.wq.weight"]),
-                "wk": lin(w[p + "attention.wk.weight"]),
-                "wv": lin(w[p + "attention.wv.weight"]),
+                # k and v fused into one weight -> one matmul, one weight stream. torch stores
+                # Linear as [out, in], so concatenate along dim 0 before the transpose in `lin`.
+                "wkv": lin(torch.cat([w[p + "attention.wk.weight"],
+                                      w[p + "attention.wv.weight"]], dim=0)),
                 "wo": lin(w[p + "attention.wo.weight"]),
                 "w1": lin(w[p + "feed_forward.w1.weight"]),
                 "w2": lin(w[p + "feed_forward.w2.weight"]),
@@ -177,14 +183,17 @@ class TtVoxtralFlow:
         """x [1,B*3,3072] -> same. Pre-norm, GQA 32/8, unmasked attention, SwiGLU."""
         h = ttnn.rms_norm(x, weight=w["an"], epsilon=FM_NORM_EPS,
                           compute_kernel_config=COMPUTE_CONFIG)
+        # k and v share ONE weight and ONE matmul, then nlp_create_qkv_heads splits them and builds
+        # the head layout in a single op. This replaces 3 linears + 6 reshape/permutes with 2 linears
+        # + 1 fused op. The earlier comment here claimed the fused op "needs a batch layout this does
+        # not have" -- it does not; the same two-tensor form used in Block 3 works directly.
         q = ttnn.linear(h, w["wq"], compute_kernel_config=COMPUTE_CONFIG)
-        k = ttnn.linear(h, w["wk"], compute_kernel_config=COMPUTE_CONFIG)
-        v = ttnn.linear(h, w["wv"], compute_kernel_config=COMPUTE_CONFIG)
-        # Heads via reshape+permute rather than the fused nlp_create_qkv_heads used in Block 3:
-        # the sequence is 3 tokens, so there is no data-movement cost worth fusing, and the fused
-        # op needs a batch layout this does not have.
-        hq = lambda t, n: ttnn.permute(ttnn.reshape(t, [B, 3, n, FM_HEAD_DIM]), (0, 2, 1, 3))
-        qh, kh, vh = hq(q, FM_N_HEADS), hq(k, FM_N_KV_HEADS), hq(v, FM_N_KV_HEADS)
+        kv = ttnn.linear(h, w["wkv"], compute_kernel_config=COMPUTE_CONFIG)
+        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(q, [B, 1, 3, FM_N_HEADS * FM_HEAD_DIM]),
+            ttnn.reshape(kv, [B, 1, 3, 2 * FM_N_KV_HEADS * FM_HEAD_DIM]),
+            num_heads=FM_N_HEADS, num_kv_heads=FM_N_KV_HEADS,
+            transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # GQA by hand: repeat k/v to the query head count. NO mask and NO RoPE -- bidirectional by
         # design. ttnn's sdpa would fuse these 7 ops into 1 and supports GQA natively, but it was
         # measured and rejected on accuracy -- see STATUS.md's Block 2 section before retrying.
@@ -195,7 +204,8 @@ class TtVoxtralFlow:
         s = ttnn.multiply(s, SCALE)
         a = ttnn.softmax(s, dim=-1, numeric_stable=True, compute_kernel_config=COMPUTE_CONFIG)
         a = ttnn.matmul(a, vr, compute_kernel_config=COMPUTE_CONFIG)
-        a = ttnn.reshape(ttnn.permute(a, (0, 2, 1, 3)), [B, 3, FM_N_HEADS * FM_HEAD_DIM])
+        # back to folded rows so wo and the MLP get the single-weight-read layout too
+        a = ttnn.reshape(ttnn.permute(a, (0, 2, 1, 3)), [1, B * 3, FM_N_HEADS * FM_HEAD_DIM])
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG))
         h = ttnn.rms_norm(x, weight=w["fn"], epsilon=FM_NORM_EPS,
                           compute_kernel_config=COMPUTE_CONFIG)
@@ -212,10 +222,17 @@ class TtVoxtralFlow:
 
         B here is the CFG-doubled batch: decode_frame passes 2*batch."""
         seq = ttnn.concat([ttnn.reshape(p, [B, 1, FM_INPUT_DIM]) for p in (p0, p1, p2)], dim=1)
+        # FOLD THE CFG BATCH INTO ROWS. A batched matmul re-reads the whole weight per batch
+        # element -- measured: [2,3,K]@[K,9216] costs 0.581 ms against 0.294 ms for [1,3,K], exactly
+        # 2x -- whereas [1,6,K] costs 0.296 ms, i.e. free, because 6 rows still fit one 32-row tile.
+        # A linear applies per row independently, so this is numerically identical and worth ~2x on
+        # every linear in the trunk. Only attention needs the batch separated again.
+        seq = ttnn.reshape(seq, [1, B * 3, FM_INPUT_DIM])
         for w in self.layers:
             seq = self._block(seq, w, B)
         seq = ttnn.rms_norm(seq, weight=self.norm, epsilon=FM_NORM_EPS,
                             compute_kernel_config=COMPUTE_CONFIG)
+        seq = ttnn.reshape(seq, [B, 3, FM_INPUT_DIM])
         pos0 = ttnn.slice(seq, [0, 0, 0], [B, 1, FM_INPUT_DIM])
         return ttnn.linear(pos0, self.proj["acoustic_codebook_output"],
                            compute_kernel_config=COMPUTE_CONFIG)
