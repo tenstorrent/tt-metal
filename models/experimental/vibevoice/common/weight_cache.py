@@ -146,7 +146,14 @@ class WeightCache:
         if not self.enabled:
             return ttnn.as_tensor(build(), dtype=dtype, layout=layout, memory_config=memory_config, device=device)
 
-        base = os.path.join(self.cache_dir, self._join(name))
+        # Pin the cache path under cache_dir before it reaches load_tensor / as_tensor's dump: the
+        # dir comes from an env var / CLI arg and ``name`` from the caller, so neither is trusted to
+        # stay inside on its own. Lexical check inlined at the sink (SAST can't follow a helper) —
+        # matches common/safe_paths.py and load_weights._read_weight_index.
+        root_abs = os.path.abspath(self.cache_dir)
+        base = os.path.abspath(os.path.join(root_abs, self._join(name)))
+        if not base.startswith(root_abs + os.sep):
+            raise ValueError(f"refusing cache path {base!r}: outside cache dir {root_abs!r}")
         final = f"{base}_dtype_{dtype.name}_layout_{layout.name}.tensorbin"
         if os.path.isfile(final):
             try:
