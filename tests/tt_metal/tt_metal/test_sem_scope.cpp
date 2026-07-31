@@ -323,7 +323,7 @@ protected:
                     .accessor_name = "counter",
                     .access_type = k.access,
                 }},
-                .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter"}},
+                .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx"}},
                 .hw_config = experimental::DataMovementGen2Config{},
             });
             bool placed = false;
@@ -343,7 +343,9 @@ protected:
                     k.node,
                     {{"report_addr", report_addr},
                      {"increment_times", k.increments},
-                     {"is_reporter", k.reporter ? 1u : 0u}}),
+                     {"is_reporter", k.reporter ? 1u : 0u},
+                     // Distinct barrier slot per kernel; slot 2 is reserved for the cached-sem seeder.
+                     {"barrier_idx", static_cast<uint32_t>(i)}}),
             });
         }
         std::vector<experimental::WorkUnitSpec> work_units;
@@ -648,7 +650,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
             .source = kernel_path_census,
             .num_threads = threads,
             .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
-            .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx"}},
             .hw_config = experimental::DataMovementGen2Config{},
         };
     };
@@ -666,13 +668,19 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
             .kernel = KA,
             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 core,
-                {{"report_addr", report_addr}, {"increment_times", concurrent_iterations}, {"is_reporter", 1u}}),
+                {{"report_addr", report_addr},
+                 {"increment_times", concurrent_iterations},
+                 {"is_reporter", 1u},
+                 {"barrier_idx", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = KB,
             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 core,
-                {{"report_addr", report_addr}, {"increment_times", concurrent_iterations}, {"is_reporter", 0u}}),
+                {{"report_addr", report_addr},
+                 {"increment_times", concurrent_iterations},
+                 {"is_reporter", 0u},
+                 {"barrier_idx", 1u}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);
@@ -825,7 +833,7 @@ TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
         .semaphore_bindings =
             {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"},
              {.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter_again"}},
-        .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx"}},
         .hw_config = experimental::DataMovementGen2Config{},
     };
     experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
