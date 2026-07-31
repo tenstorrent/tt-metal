@@ -1,0 +1,5 @@
+Runtime fallback audit for measured optimized token-out and sampler logs
+# models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_full_model/token_out_trace_evidence_stdout.txt
+# models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_full_model/runs/sampling_strategy_benchmark.log
+# models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_full_model/watcher/token_out_only_128_after_reset/watcher_run.log
+no runtime fallback signatures found

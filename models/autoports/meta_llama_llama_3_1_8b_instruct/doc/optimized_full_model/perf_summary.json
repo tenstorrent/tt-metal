@@ -1,0 +1,545 @@
+{
+  "stage": "optimized_full_model",
+  "status": "complete",
+  "completion_blockers": [],
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "commit": "86f8bc022e6d526d9766539c6ea50137cabec799",
+  "mesh": {
+    "shape": [
+      1,
+      8
+    ],
+    "topology": "ttnn.Topology.Ring",
+    "fabric_config": "ttnn.FabricConfig.FABRIC_1D_RING"
+  },
+  "decoder_policy": {
+    "name": "llama31_8b_t3k_1x8_tp8_bfp4_attn_bfp4_mlp_bfp8_act_decode_v2",
+    "activation_dtype": "ttnn.bfloat8_b",
+    "attention_weight_dtype": "ttnn.bfloat4_b",
+    "mlp_weight_dtype": "ttnn.bfloat4_b",
+    "kv_cache_dtype": "ttnn.bfloat8_b",
+    "mlp_math_fidelity": "ttnn.MathFidelity.LoFi",
+    "ccl": "async hidden all-gather, fused decode all-gather+WO, async MLP reduce-scatter, persistent decode CCL buffers",
+    "inter_layer_layout": "replicated full-hidden residual between decoder layers; width-sharded L1 residuals inside each decode layer"
+  },
+  "before_completed_full_model": {
+    "teacher_forcing_aime24_ttft_ms": 1094.6,
+    "teacher_forcing_aime24_decode_t_s_u": 22.18,
+    "teacher_forcing_aime24_e2e_t_s_u": 17.99,
+    "token_out_story_prompt_tokens": 60,
+    "token_out_generated_tokens": 100,
+    "token_out_ttft_ms": 616.64,
+    "token_out_steady_replay_t_s_u": 69.21,
+    "token_out_steady_replay_ms_per_token": 14.45
+  },
+  "after_optimized_full_model": {
+    "prefill_aime24_top1": 0.9,
+    "prefill_aime24_top5": 1.0,
+    "prefill_aime24_top100": 1.0,
+    "teacher_forcing_aime24_top1": 0.92,
+    "teacher_forcing_aime24_top5": 1.0,
+    "teacher_forcing_aime24_top100": 1.0,
+    "teacher_forcing_aime24_ttft_ms": 648.31,
+    "teacher_forcing_aime24_decode_t_s_u": 49.31,
+    "teacher_forcing_aime24_e2e_t_s_u": 37.65,
+    "token_out_no_readback_prompt_tokens": 128,
+    "token_out_no_readback_generated_tokens": 128,
+    "token_out_no_readback_ttft_ms": 629.731884226203,
+    "token_out_no_readback_steady_replay_t_s_u": 70.57582914026224,
+    "token_out_no_readback_steady_replay_ms_per_token": 14.16915695049933,
+    "token_out_no_readback_sampled_token_readbacks": 0,
+    "sampling_force_argmax": false,
+    "sampling_max_top_k": 32,
+    "greedy_uses_split_sampling": true,
+    "watcher_token_out_status": "pass",
+    "watcher_token_out_no_readback_ttft_ms": 1346.8019650317729,
+    "watcher_token_out_no_readback_steady_replay_t_s_u": 10.31945422974317,
+    "watcher_token_out_no_readback_steady_replay_ms_per_token": 96.90434956509206,
+    "sampler_split_greedy_ms_per_replay": 0.5142261070432141,
+    "sampler_split_topk_topp_ms_per_replay": 0.5142338632140309,
+    "sampler_split_greedy_semantically_greedy": true,
+    "sampler_force_argmax_available": false
+  },
+  "autoregressive": {
+    "prompt": "models/common/readiness_check/autoregressive_prompt.txt",
+    "generated_tokens": 128,
+    "degenerate_findings": [],
+    "adjacent_duplication": 0.0,
+    "trigram_loop_fraction": 0.0297,
+    "hf_tt_token_agreement": {
+      "matching_tokens": 30,
+      "compared_tokens": 128
+    }
+  },
+  "lower_bound": {
+    "decoder_layer_min_ms": 0.3974558785557747,
+    "decoder_layer_avg_ms": 0.40162313962355256,
+    "decoder_stack_min_ms": 12.71858811378479,
+    "decoder_stack_avg_ms": 12.851940467953682,
+    "reduced_one_layer_token_out_min_ms": 1.5515307895839214,
+    "reduced_one_layer_token_out_avg_ms": 1.5833306824788451,
+    "measured_terminal_min_ms": 1.1540749110281467,
+    "measured_terminal_avg_ms": 1.1817075428552926,
+    "stack_plus_terminal_min_ms": 13.872663024812937,
+    "stack_plus_terminal_avg_ms": 14.033648010808975,
+    "full_token_out_no_readback_ms": 14.16915695049933,
+    "gap_vs_stack_plus_terminal_min_ms": 0.2964939256863932,
+    "gap_vs_stack_plus_terminal_min_pct": 2.137253137022621,
+    "gap_vs_stack_plus_terminal_avg_ms": 0.1355089396903555,
+    "gap_vs_stack_plus_terminal_avg_pct": 0.9656002458233504
+  },
+  "reduced_profile": {
+    "prompt_tokens": 128,
+    "override_num_layers": 1,
+    "prefill_ms": 85.90895496308804,
+    "decode_replay_min_ms": 1.5515307895839214,
+    "decode_replay_avg_ms": 1.5833306824788451,
+    "trace_counters": {
+      "model_trace_captures": 1,
+      "model_trace_replays": 5,
+      "sampling_trace_invocations": 5,
+      "token_input_host_copies": 1,
+      "position_host_copies": 1,
+      "rope_index_host_copies": 1,
+      "page_table_host_copies": 1,
+      "sampled_token_readbacks": 0,
+      "position_device_increments": 5,
+      "rope_index_device_increments": 5,
+      "rope_matrix_device_refreshes": 0,
+      "hidden_device_refreshes": 0,
+      "last_page_table_refresh_changed_only": false,
+      "notes": [],
+      "decode_trace_captured": true,
+      "sampling_force_argmax": false,
+      "sampling_max_top_k": 32,
+      "padded_vocab_size": 128256,
+      "vocab_size": 128256
+    },
+    "token_out_top_device_time_buckets": [
+      {
+        "Total % [%]": "39.35",
+        "Op Code": "MatmulDeviceOperation (in0:width_sharded)",
+        "Device Time Sum [\u03bcs]": "544.46",
+        "Op Count": "8",
+        "Op Category": "Compute",
+        "Min FLOPs [%]": "22.45",
+        "Max FLOPs [%]": "41.81",
+        "Mean FLOPs [%]": "36.77",
+        "Std FLOPs [%]": "6.28",
+        "Weighted Mean FLOPs [%]": "38.72"
+      },
+      {
+        "Total % [%]": "11.15",
+        "Op Code": "TopKDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "154.23",
+        "Op Count": "1",
+        "Op Category": "Other",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "9.67",
+        "Op Code": "AllGatherDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "133.84",
+        "Op Count": "2",
+        "Op Category": "Other",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "4.61",
+        "Op Code": "SamplingDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "63.81",
+        "Op Count": "1",
+        "Op Category": "Other",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "3.96",
+        "Op Code": "AllGatherAsyncDeviceOperation (in0:width_sharded)",
+        "Device Time Sum [\u03bcs]": "54.84",
+        "Op Count": "2",
+        "Op Category": "Other",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "3.87",
+        "Op Code": "ReduceScatterMinimalAsyncDeviceOperation (in0:l1_interleaved)",
+        "Device Time Sum [\u03bcs]": "53.54",
+        "Op Count": "1",
+        "Op Category": "Other",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "3.51",
+        "Op Code": "PadDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "48.54",
+        "Op Count": "1",
+        "Op Category": "TM",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "3.11",
+        "Op Code": "AllGatherMatmulAsyncDeviceOperation (in0:width_sharded)",
+        "Device Time Sum [\u03bcs]": "42.98",
+        "Op Count": "1",
+        "Op Category": "Other",
+        "Min FLOPs [%]": "1.36",
+        "Max FLOPs [%]": "1.36",
+        "Mean FLOPs [%]": "1.36",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": "1.36"
+      },
+      {
+        "Total % [%]": "2.68",
+        "Op Code": "LayerNormDeviceOperation (in0:width_sharded)",
+        "Device Time Sum [\u03bcs]": "37.14",
+        "Op Count": "3",
+        "Op Category": "Compute",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "2.50",
+        "Op Code": "UntilizeWithUnpaddingDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "34.60",
+        "Op Count": "2",
+        "Op Category": "TM",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "2.17",
+        "Op Code": "AllGatherAsyncDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "30.05",
+        "Op Count": "1",
+        "Op Category": "Other",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "1.97",
+        "Op Code": "ManualSeedDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "27.19",
+        "Op Count": "1",
+        "Op Category": "Other",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      }
+    ],
+    "prefill_top_device_time_buckets": [
+      {
+        "Total % [%]": "25.21",
+        "Op Code": "MatmulDeviceOperation (in0:width_sharded)",
+        "Device Time Sum [\u03bcs]": "415.74",
+        "Op Count": "4",
+        "Op Category": "Compute",
+        "Min FLOPs [%]": "39.93",
+        "Max FLOPs [%]": "41.64",
+        "Mean FLOPs [%]": "40.97",
+        "Std FLOPs [%]": "0.74",
+        "Weighted Mean FLOPs [%]": "40.98"
+      },
+      {
+        "Total % [%]": "21.70",
+        "Op Code": "MatmulDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "357.94",
+        "Op Count": "5",
+        "Op Category": "Compute",
+        "Min FLOPs [%]": "27.45",
+        "Max FLOPs [%]": "44.59",
+        "Mean FLOPs [%]": "32.24",
+        "Std FLOPs [%]": "7.39",
+        "Weighted Mean FLOPs [%]": "35.19"
+      },
+      {
+        "Total % [%]": "19.93",
+        "Op Code": "AllGatherAsyncDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "328.68",
+        "Op Count": "4",
+        "Op Category": "Other",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "15.37",
+        "Op Code": "LayerNormDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "253.49",
+        "Op Count": "3",
+        "Op Category": "Compute",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "6.33",
+        "Op Code": "ReduceScatterMinimalAsyncDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "104.35",
+        "Op Count": "1",
+        "Op Category": "Other",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "3.33",
+        "Op Code": "BinaryNgDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "54.96",
+        "Op Count": "3",
+        "Op Category": "Compute",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "1.96",
+        "Op Code": "RotaryEmbeddingLlamaDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "32.28",
+        "Op Count": "2",
+        "Op Category": "Compute",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "1.64",
+        "Op Code": "SDPAOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "27.04",
+        "Op Count": "1",
+        "Op Category": "Compute",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "0.77",
+        "Op Code": "NlpCreateHeadsDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "12.69",
+        "Op Count": "1",
+        "Op Category": "TM",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "0.75",
+        "Op Code": "ShardedToInterleavedDeviceOperation (in0:width_sharded)",
+        "Device Time Sum [\u03bcs]": "12.32",
+        "Op Count": "4",
+        "Op Category": "DM",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "0.63",
+        "Op Code": "TypecastDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "10.44",
+        "Op Count": "5",
+        "Op Category": "TM",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      },
+      {
+        "Total % [%]": "0.63",
+        "Op Code": "EmbeddingsDeviceOperation (in0:dram_interleaved)",
+        "Device Time Sum [\u03bcs]": "10.39",
+        "Op Count": "1",
+        "Op Category": "Compute",
+        "Min FLOPs [%]": "",
+        "Max FLOPs [%]": "",
+        "Mean FLOPs [%]": "",
+        "Std FLOPs [%]": "",
+        "Weighted Mean FLOPs [%]": ""
+      }
+    ]
+  },
+  "watcher": {
+    "full_eth_attempt": {
+      "artifact_dir": "watcher/token_out_no_readback_128",
+      "result": "failed",
+      "failure": "Timeout waiting for Ethernet core service remote IO request in WatcherServer::poll_watcher_data",
+      "hardware_status_after": "all 8 chips listed by tt-smi"
+    },
+    "disable_eth_attempt": {
+      "artifact_dir": "watcher/token_out_no_readback_128_disable_eth",
+      "result": "failed_before_model_execution",
+      "failure": "ETH core heartbeat check failed during topology discovery",
+      "hardware_status_after": "all 8 chips listed by tt-smi"
+    },
+    "after_reset_all_probes_attempt": {
+      "artifact_dir": "watcher/token_out_no_readback_128_after_reset",
+      "result": "token_out_json_pass_then_watcher_timeout_during_extra_probes",
+      "token_out_status": "pass",
+      "token_out_no_readback_steady_replay_t_s_u": 10.320427886690196,
+      "token_out_no_readback_steady_replay_ms_per_token": 96.89520734791009,
+      "failure": "Timeout waiting for Ethernet core service remote IO request during later trace-feedback/top-k probes"
+    },
+    "token_out_only_after_reset": {
+      "artifact_dir": "watcher/token_out_only_128_after_reset",
+      "result": "pass",
+      "token_out_only": true,
+      "token_out_no_readback_ttft_ms": 1346.8019650317729,
+      "token_out_no_readback_steady_replay_t_s_u": 10.31945422974317,
+      "token_out_no_readback_steady_replay_ms_per_token": 96.90434956509206,
+      "sampled_token_readbacks": 0,
+      "runtime_failure_signature_scan": "no matches in watcher_run.log or generated/watcher/watcher.log",
+      "hardware_status_after": "all 8 chips listed by tt-smi"
+    },
+    "hardware_recovery": {
+      "reset_after_initial_failures": "hardware_recovery/tt_smi_reset_all_after_watcher_failures.log",
+      "reset_after_second_timeout": "hardware_recovery/tt_smi_reset_all_after_second_watcher_timeout.log",
+      "status_after_reset": "hardware_recovery/hardware_status_after_reset.log",
+      "fabric_open_smoke": "hardware_recovery/fabric_open_smoke_after_reset.log",
+      "status_after_clean_watcher_and_sampler": "hardware_recovery/hardware_status_after_clean_watcher_and_sampler.log"
+    }
+  },
+  "artifacts": {
+    "token_out_trace_evidence": "token_out_trace_evidence.json",
+    "reduced_profile_summary": "reduced_profile_summary.json",
+    "tracy_ops_csv": "tracy/reduced_profile/reduced_profile_ops_perf_results.csv",
+    "token_out_perf_report_csv": "tracy/reduced_profile/reduced_token_out_decode_perf_report.csv",
+    "token_out_perf_report_stacked_csv": "tracy/reduced_profile/reduced_token_out_decode_perf_report_stacked.csv",
+    "prefill_perf_report_csv": "tracy/reduced_profile/reduced_prefill_perf_report.csv",
+    "autoregressive_meta": "autoregressive_story_128/autoregressive_meta.json",
+    "degenerate_report": "autoregressive_degenerate_report.json",
+    "sampling_strategy_benchmark": "sampling_strategy_benchmark.json",
+    "sampling_strategy_benchmark_log": "runs/sampling_strategy_benchmark.log",
+    "watcher_token_out_only_json": "watcher/token_out_only_128_after_reset/token_out_trace_evidence_watcher.json",
+    "watcher_token_out_only_log": "watcher/token_out_only_128_after_reset/watcher_run.log",
+    "watcher_token_out_only_watcher_log": "watcher/token_out_only_128_after_reset/generated/watcher/watcher.log",
+    "watcher_token_out_only_failure_scan": "watcher/token_out_only_128_after_reset/runtime_failure_signature_scan_logs_only.txt",
+    "watcher_after_reset_token_out_json": "watcher/token_out_no_readback_128_after_reset/token_out_trace_evidence_watcher.json",
+    "hardware_recovery": "hardware_recovery/",
+    "runtime_fallback_audit": "runtime_fallback_audit.txt"
+  },
+  "completion_date": "2026-06-15",
+  "sampler_strategy_benchmark": {
+    "status": "pass",
+    "selected_strategy": "split_greedy",
+    "sampling_contract": {
+      "max_top_k": 32,
+      "num_gather_links": 1,
+      "sampling_dp": 1,
+      "sampling_all_gather_axis": 1,
+      "pad_logits_to_power_of_2": true,
+      "force_argmax_available": {
+        "available": false,
+        "reason": "Llama31_8B_InstructFullModel.make_sampling_args() exposes model_config={} with no SAMPLING_AG_CONFIG.allow_force_argmax, and the readiness generator rejects force-argmax if it activates for greedy decode.",
+        "sampling_ag_config": null
+      }
+    },
+    "split_greedy": {
+      "replay_count": 64,
+      "elapsed_s": 0.032910470850765705,
+      "ms_per_replay": 0.5142261070432141,
+      "replays_per_s": 1944.6698374572468,
+      "available": true,
+      "selected": true,
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_k": 1,
+        "top_p": 0.0
+      },
+      "force_argmax": false,
+      "sampled_token": 11,
+      "reference_argmax_token": 11,
+      "reference_logits_shape": [
+        1,
+        1,
+        32,
+        128256
+      ],
+      "semantically_greedy": true
+    },
+    "split_topk_topp": {
+      "replay_count": 64,
+      "elapsed_s": 0.032910967245697975,
+      "ms_per_replay": 0.5142338632140309,
+      "replays_per_s": 1944.6405060722088,
+      "available": true,
+      "selected_for_greedy": false,
+      "sampling_params": {
+        "temperature": 0.7,
+        "top_k": 8,
+        "top_p": 0.9
+      },
+      "force_argmax": false,
+      "sampled_token_after_replays": 323
+    },
+    "force_argmax": {
+      "available": false,
+      "benchmarked": false,
+      "selected": false,
+      "reason": "Llama31_8B_InstructFullModel.make_sampling_args() exposes model_config={} with no SAMPLING_AG_CONFIG.allow_force_argmax, and the readiness generator rejects force-argmax if it activates for greedy decode."
+    }
+  },
+  "known_limitations": [
+    "The first sampling trace capture still emits TTNN allocator warning about allocating device buffers while a model trace is active.",
+    "Same-process readback token-out plus no-readback token-out attempts can hit a later prefill L1 circular-buffer clash; measured optimized token-out runs no-readback in a fresh process.",
+    "Clean watcher evidence is scoped to the measured optimized token-out path; trace-feedback and top-k/top-p probes are covered by normal evidence."
+  ],
+  "runtime_fallback_audit": {
+    "artifact": "runtime_fallback_audit.txt",
+    "result": "no runtime fallback signatures found",
+    "logs": [
+      "token_out_trace_evidence_stdout.txt",
+      "runs/sampling_strategy_benchmark.log",
+      "watcher/token_out_only_128_after_reset/watcher_run.log"
+    ]
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "stage": "optimized_vllm",
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "workload": {
+    "prompt_len": 128,
+    "gen_len": 128,
+    "batch": 1,
+    "num_requests": 32,
+    "concurrency": 1,
+    "max_num_seqs": 1,
+    "max_model_len": 1024,
+    "mesh_device": "T3K",
+    "fabric_config": "FABRIC_1D_RING",
+    "sample_on_device_mode": "all",
+    "trace_mode": "decode_only"
+  },
+  "before": {
+    "artifact": "artifacts/before_vllm_integration/vllm_benchmark.json",
+    "ttft_ms": 81.09782310202718,
+    "ttft_p99_ms": 1047.0093130134046,
+    "itl_p50_ms": 15.76933590695262,
+    "itl_p99_ms": 25.091025047004223,
+    "decode_ms_per_token_e2e": 18.554483517405874,
+    "output_throughput_tok_per_s": 51.83978935179492,
+    "mean_per_user_decode_t_s_u": 53.90442625700889
+  },
+  "after": {
+    "artifact": "artifacts/after_async_token_refresh_benchmark/vllm_benchmark.json",
+    "ttft_ms": 80.98234096542001,
+    "ttft_p99_ms": 990.7975918613374,
+    "itl_p50_ms": 15.751678962260485,
+    "itl_p99_ms": 22.71064603701234,
+    "decode_ms_per_token_e2e": 18.4872240855594,
+    "output_throughput_tok_per_s": 52.07100240117883,
+    "mean_per_user_decode_t_s_u": 54.10049039953269
+  },
+  "optimized_full_model_comparison": {
+    "artifact": "../optimized_full_model/token_out_trace_evidence.json",
+    "token_out_no_readback_ttft_ms": 629.731884226203,
+    "token_out_no_readback_steady_replay_t_s_u": 70.57582914026224,
+    "token_out_no_readback_steady_replay_ms_per_token": 14.16915695049933,
+    "vllm_after_mean_decode_vs_full_model_no_readback_ratio": 0.7665554881746454,
+    "vllm_after_itl_p50_implied_t_s_u": 63.48529461579053,
+    "vllm_after_itl_p50_vs_full_model_no_readback_ratio": 0.8995261695840577
+  },
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": null,
+  "profile_reason": "vLLM serving stages intentionally do not collect Tracy, tt-perf-report, TT_METAL_DEVICE_PROFILER, or live-server device-profiler evidence. Device-op context comes from the delegated optimized full-model reduced token-out trace and tt-perf-report artifacts under ../optimized_full_model/tracy/reduced_profile/.",
+  "named_limitations": [
+    "Live vLLM mean per-request decode includes mandatory host token application and first decode model/sampling trace setup per request.",
+    "Scheduler overlap remains disabled: tt_async_decode_allows_overlap=false.",
+    "The adapter supports max_num_seqs=1.",
+    "Host-compatibility sampling features and top-k/all-vocab logprobs are intentionally skipped or rejected under sample_on_device_mode=all."
+  ]
+}

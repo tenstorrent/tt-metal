@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "config_id": "safe_bfp8_bf16_act_hifi2",
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "description": "Canonical safer policy: BFP8 dense weights and KV cache, BF16 activation/residual/CCL tensors, and HiFi2 MLP compute.",
+  "runtime": {
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "mlp_mul_dtype": "bfloat8_b",
+    "logits_device_dtype": "bfloat16",
+    "sampling_dtype": "device logits gathered through split sampling; host accuracy logits are converted to float32"
+  },
+  "weight_groups": {
+    "embedding": {
+      "dtype": "bfloat16"
+    },
+    "norms": {
+      "dtype": "bfloat16"
+    },
+    "attention": {
+      "dtype": "bfloat8_b",
+      "layers": "all"
+    },
+    "mlp": {
+      "dtype": "bfloat8_b",
+      "layers": "all"
+    },
+    "lm_head": {
+      "dtype": "bfloat8_b"
+    }
+  },
+  "compute_fidelities": {
+    "attention": "HiFi2",
+    "mlp": "HiFi2",
+    "lm_head": "HiFi2",
+    "norms": "HiFi4"
+  },
+  "layer_exceptions": [],
+  "logits_sampling_dtype_assumptions": {
+    "accuracy_readback": "TT logits are converted to host float32 before top-k comparison.",
+    "token_out_sampling": "Split sampling consumes device logits directly; force-argmax is not enabled."
+  }
+}

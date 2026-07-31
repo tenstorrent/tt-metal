@@ -1,0 +1,90 @@
+{
+  "stage": "optimized_multichip_decoder",
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "path": "models/autoports/meta_llama_llama_3_1_8b_instruct/tt/multichip_decoder.py",
+  "mesh": {
+    "shape": [1, 8],
+    "topology": "ttnn.Topology.Ring",
+    "fabric_config": "ttnn.FabricConfig.FABRIC_1D_RING"
+  },
+  "workload": {
+    "batch": 1,
+    "prefill_seq_len": 128,
+    "decode_tokens_per_replay": 1,
+    "max_seq_len": 256,
+    "page_block_size": 64,
+    "max_num_blocks": 4
+  },
+  "policy": {
+    "name": "llama31_8b_t3k_1x8_tp8_bfp4_attn_bfp4_mlp_bfp8_act_decode_v2",
+    "activation_dtype": "ttnn.bfloat8_b",
+    "attention_weight_dtype": "ttnn.bfloat4_b",
+    "mlp_gate_up_dtype": "ttnn.bfloat4_b",
+    "mlp_down_dtype": "ttnn.bfloat4_b",
+    "kv_cache_dtype": "ttnn.bfloat8_b",
+    "mlp_math_fidelity": "ttnn.MathFidelity.LoFi"
+  },
+  "before_synthetic": {
+    "prefill_pcc_vs_optimized": 0.9999957546448677,
+    "decode_pcc_vs_optimized_trace": 0.9999870318423426,
+    "multichip_prefill_ms_e2e": 2.8265262953937054,
+    "multichip_decode_ms_e2e_min": 0.4422650672495365,
+    "multichip_decode_ms_e2e_avg": 0.4453344736248255,
+    "runtime_fallback_audit": "multichip_prefill_decode_clean"
+  },
+  "final_synthetic": {
+    "artifact": "runs/final_full_test_16_replays_after_attention_trial_reverted.log",
+    "prefill_pcc_vs_optimized": 0.9996764336199454,
+    "decode_pcc_vs_optimized_trace": 0.9999044394414383,
+    "single_chip_prefill_ms_e2e": 3.317510709166527,
+    "single_chip_decode_ms_e2e_min": 0.7905862294137478,
+    "single_chip_decode_ms_e2e_avg": 0.7937005429994315,
+    "multichip_prefill_ms_e2e": 2.8145541436970234,
+    "multichip_decode_ms_e2e_min": 0.3974558785557747,
+    "multichip_decode_ms_e2e_avg": 0.40162313962355256,
+    "trace_determinism_pcc": 1.0,
+    "eager_trace_pcc": 1.0,
+    "runtime_fallback_audit": "multichip_prefill_decode_clean"
+  },
+  "final_real_weight_layer0": {
+    "artifact": "runs/final_real_weight_layer0_multichip_check.log",
+    "prefill_pcc_vs_optimized": 0.999867004626159,
+    "decode_pcc_vs_optimized_trace": 0.999931400571509,
+    "single_chip_prefill_ms_e2e": 3.4264307469129562,
+    "single_chip_decode_ms_e2e_min": 0.7903729565441608,
+    "single_chip_decode_ms_e2e_avg": 0.7942511001601815,
+    "multichip_prefill_ms_e2e": 3.080476075410843,
+    "multichip_decode_ms_e2e_min": 0.39528682827949524,
+    "multichip_decode_ms_e2e_avg": 0.39838056545704603,
+    "trace_determinism_pcc": 1.0,
+    "eager_trace_pcc": 1.0,
+    "runtime_fallback_audit": "multichip_prefill_decode_clean"
+  },
+  "profiler_profile_only": {
+    "artifact_dir": "tracy/synthetic_profile_only",
+    "ops_csv": "tracy/synthetic_profile_only/multichip_profile_only_ops_perf_results.csv",
+    "prefill_perf_report_csv": "tracy/synthetic_profile_only/multichip_prefill_perf_report.csv",
+    "decode_perf_report_csv": "tracy/synthetic_profile_only/multichip_decode_perf_report.csv",
+    "decode_perf_report_per_device_csv": "tracy/synthetic_profile_only/multichip_decode_perf_report_per_device.csv",
+    "prefill_ms_e2e": 4.707457963377237,
+    "decode_ms_e2e_min": 0.44508185237646103,
+    "decode_ms_e2e_avg": 0.44817698653787374,
+    "prefill_device_op_time_us": 1017.62025,
+    "decode_device_op_time_us": 370.8805,
+    "roofline_ms_per_token_estimate": 0.047,
+    "runtime_fallback_audit": "multichip_prefill_decode_clean"
+  },
+  "named_limitations": [
+    "tt-perf-report high op-to-op gap is larger than the traced replay wall time for this multidevice signposted window and is treated as a profiler/signpost association artifact.",
+    "The preserved inter-layer decoder boundary is replicated full hidden; a hidden-sharded inter-layer contract would require distributed RMSNorm and a different residual-add contract."
+  ],
+  "watcher": {
+    "artifact_dir": "watcher/synthetic_ring_final_after_recovery",
+    "result": "1 passed in 327.44s",
+    "grep_failure_scan": "no matches"
+  },
+  "hardware_health": {
+    "final_artifact": "hardware_status_final_after_real_weight_check.log",
+    "chips_discoverable": [0, 1, 2, 3, 4, 5, 6, 7]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "hf_model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "model_dir": "models/autoports/meta_llama_llama_3_1_8b_instruct",
+  "prompt_file": "models/common/readiness_check/autoregressive_prompt.txt",
+  "prompt_text": "Once upon a time, in a small village nestled between two great mountains, there lived a curious young girl named Elena. Every morning, she would climb to the top of the eastern hill and watch the sunrise paint the valley gold. One day, while sitting beneath her favorite oak tree, she noticed",
+  "prompt_tokens": 60,
+  "override_num_layers": 1,
+  "max_seq_len": 1024,
+  "max_num_blocks": 16,
+  "prefill_ms": 86.50395413860679,
+  "decode_replay_ms": [
+    1.878575887531042,
+    1.7598867416381836,
+    1.7637340351939201,
+    1.6540070064365864
+  ],
+  "decode_replay_min_ms": 1.6540070064365864,
+  "decode_replay_avg_ms": 1.764050917699933,
+  "trace_counters": {
+    "model_trace_captures": 1,
+    "model_trace_replays": 5,
+    "sampling_trace_invocations": 5,
+    "token_input_host_copies": 1,
+    "position_host_copies": 1,
+    "rope_index_host_copies": 1,
+    "page_table_host_copies": 1,
+    "sampled_token_readbacks": 5,
+    "position_device_increments": 5,
+    "rope_index_device_increments": 5,
+    "rope_matrix_device_refreshes": 0,
+    "hidden_device_refreshes": 0,
+    "last_page_table_refresh_changed_only": false,
+    "notes": [],
+    "decode_trace_captured": true,
+    "sampling_force_argmax": false,
+    "sampling_max_top_k": 32,
+    "padded_vocab_size": 128256,
+    "vocab_size": 128256
+  },
+  "sampling_force_argmax": false,
+  "sampling_max_top_k": 32
+}

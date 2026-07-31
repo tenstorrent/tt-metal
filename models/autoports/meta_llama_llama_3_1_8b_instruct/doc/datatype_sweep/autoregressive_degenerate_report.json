@@ -1,0 +1,20 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/autoregressive_story_128/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 101,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0297
+    },
+    {
+      "artifact": "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/datatype_sweep/autoregressive_story_128/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 30,
+      "compared_tokens": 128
+    }
+  ],
+  "exit_code": 0
+}
