@@ -245,7 +245,9 @@ public:
     void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
     const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
     void set_program_binary_status(ChipId device_id, ProgramBinaryStatus status);
-    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
+    // Returns a reference into kernels_ so the hot runtime-arg patch path doesn't pay a shared_ptr
+    // refcount round trip per lookup. Stable: unordered_map values don't move on rehash.
+    const std::shared_ptr<Kernel>& get_kernel(KernelHandle kernel_id) const;
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
