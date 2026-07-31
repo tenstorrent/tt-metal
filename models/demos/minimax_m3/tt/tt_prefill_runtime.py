@@ -93,6 +93,8 @@ class TtPrefillRuntime:
         self.compiled = False
         # Per-layer LayerAck callback, registered via set_layer_ack_channel() after compile.
         self._on_layer_complete = None
+        # Per-layer completion sink for pipelined prefill, registered via set_layer_completion_sink().
+        self._layer_completion_sink = None
 
         # The Model builds `hf_config.num_hidden_layers` decoder layers, but the KV cache (and gather /
         # PCC) is sized to `config.num_layers`. Pin them equal so a partial-model run (PREFILL_NUM_LAYERS
@@ -252,6 +254,7 @@ class TtPrefillRuntime:
         slot_id: int,
         actual_start: int,
         actual_end: int,
+        request_id: int = 0,
         *,
         skip_lm_head: bool = True,
         get_last_token: int = -1,
@@ -305,6 +308,16 @@ class TtPrefillRuntime:
         # per-chunk host reshard, and the tensors are persistent (do NOT deallocate them here). The KV
         # cache is engine-owned and passed in. If a LayerAck channel is registered, the model bumps it
         # once per layer via on_layer_complete.
+        # Pipelined mode registers a completion sink keyed by (layer_idx, request_id); bind request_id per
+        # call so the synchronous per-layer callback reads no mutable state. Single-host mode uses the ack.
+        if self._layer_completion_sink is not None:
+            sink = self._layer_completion_sink
+
+            def on_layer_complete(layer_idx: int) -> None:
+                sink(layer_idx, request_id)
+
+        else:
+            on_layer_complete = self._on_layer_complete
         out = self.model.prefill_forward(
             x_embd,
             rot_mats_global=self.rope_indexed,
@@ -314,7 +327,7 @@ class TtPrefillRuntime:
             get_last_token=get_last_token,
             skip_lm_head=skip_lm_head,  # default: cache-fill only (skip final norm + lm_head)
             indexed_rope=True,
-            on_layer_complete=self._on_layer_complete,
+            on_layer_complete=on_layer_complete,
         )
         if not self.config.is_last_rank:
             # Middle rank: hand the slice's output hidden state to the next rank.
@@ -335,6 +348,15 @@ class TtPrefillRuntime:
             layer_ack_channel.inject(1)
 
         self._on_layer_complete = on_layer_complete
+
+    def set_layer_completion_sink(self, sink) -> None:
+        """Register a per-layer completion sink for pipelined (multi-rank) prefill. ``sink`` is called once
+        per layer as ``sink(layer_idx, request_id)`` — the global layer index plus the current request/chunk
+        id (bound per ``prefill_chunk`` call, so the sink reads no mutable runtime state). Replaces the
+        single-host ack-counter inject: the runner pushes a full completion into the host-local
+        LayerCompletionQueue and the LayerCompletionRouter re-emits it in seq order to the scheduler channel."""
+        assert self.compiled, "Call compile() before set_layer_completion_sink()"
+        self._layer_completion_sink = sink
 
     def gather_layer(self, kv_cache, slot_id: int, layer_idx: int, n_tokens: int):
         """Read one layer's device cache back to NATURAL token order (un-rotating the block-cyclic SP
