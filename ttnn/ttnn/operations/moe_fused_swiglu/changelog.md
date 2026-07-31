@@ -13,10 +13,13 @@ Device: **blackhole_p150**, `compute_with_storage_grid_size() = 11 x 10` (the p1
 | **Ne** emb, `down` output | across ALL cores | `ec(i)` = `split_work_to_cores(EMB_T, 110)`, stride `EC_MAX` | 2–3 |
 | **Kh** hidden, `down` contraction | sequential per core | `HGROUPS` K-blocks of `HN_PAD` | 11 x 6 |
 | **M** tokens | sequential outer loop | `M_BLOCK` (CB sizing) / runtime `m_eff` (work) | 8 / `pow2_ceil(tail M_t)` |
+| **weights** over M | READ ONCE, reused every M-block | `W_RESIDENT` / `WD_RESIDENT` | on / on (Refinement 3) |
 | **x** over Hn | rotating injector + ROW multicast | — | 1 tile-row per injector |
 | **h** over Ne | grid-wide multicast, `HGROUPS` rounds | `DEPTH_H` | 3 |
 
-Buffer depths: `DEPTH_W=2`, `DEPTH_H=3`, `DEPTH_OUT=2`, `DEPTH_XSTAGE=1`, `XSTICK_ROWS=1`.
+Buffer depths: `depth_w=1`, `depth_wd=HGROUPS`, `DEPTH_X=2`, `DEPTH_H=3`, `DEPTH_OUT=2`,
+`DEPTH_XSTAGE=1`, `XSTICK_ROWS=1` (Refinement 3: the weight CBs are filled on M-block 0 and REUSED,
+so `DEPTH_W`'s second slot became dead and its 155 KB funds the resident-x double buffer).
 Read knobs: `WRUN=8`, `WD_AHEAD=1`. Sub-block: `OUT_SUBBLOCK_H=1`, `out_subblock_w = HN_PAD` (gate/up)
 / `ec` (down). L1: **~1.35 MB** of the 1.43 MB budget.
 
@@ -518,3 +521,106 @@ outstanding read, so a prefetch issued a few instructions before one is not a pr
   "broken" means a hang or run-to-run garbage rather than a compile error. Covers 2 shapes x 2
   formats x 5 knob settings, on a `count 288` case that spans two M-blocks with a shrunk tail so the
   writer's deferred output barrier is exercised too.
+
+## Refinement 3 — Software-pipeline the M-block (the `count >= 512` cliff)
+
+- **Date**: 2026-07-31
+- **What was done**: the heading's premise — "nothing of block `b+1`'s x staging, multicast and
+  weight stream is hidden under block `b`'s phase-2 compute" — held, but the sharpest reading of it
+  was not "hide the weight stream", it was **"don't re-issue it at all"**. Every weight read in the
+  three kernels is a pure function of this core's `kstart`/`hstart`/`jstart` with **no M-block index
+  in it** (`BR::read(wg_acc, (kstart+k)*HID_T, hstart, …)` and its W_up / W_down twins), so
+  `count 512` was reading 26 MB of bfp4 **twice** and `count = capacity` **twenty times**. The
+  harness grades `read_bytes` with the weights counted ONCE (`feature_spec.read_bytes`), so every
+  re-read was pure loss against the metric as well as against the clock.
+  Reused: every kernel, every CB, every collective — no new kernel file, no new CB, no protocol
+  change, and **compute is untouched, bit-for-bit**. Added: two residency knobs, one resident-x
+  depth knob, one host precondition guard, one test file.
+
+### 1. Cross-M-block weight residency — the lever, and why it needs no compute change
+
+The CB cycle already returns each weight block to the same L1 slot every M-block, so residency is
+purely "skip the DRAM read, keep the handshake":
+
+  * `cb_w_gate` / `cb_w_up` hold ONE block (`depth_w == 1`), so reserve/push always lands at the base;
+  * `cb_w_down` holds exactly `HGROUPS` K-blocks against exactly `HGROUPS` pushes per M-block, so
+    K-block `r` always occupies slot `r`.
+
+`cb_pop_front` only advances a read pointer — it never clears the bytes — and each weight CB has a
+single producer, so the block a later M-block re-reserves still holds what block 0 read into it. The
+reader/writer therefore keep the **full** reserve/push/barrier cycle and trip counts, and guard only
+the `BR::read` loops with `(b == 0) || !RESIDENT`. That is what makes compute byte-identical and the
+whole change ~15 lines of kernel code.
+
+`depth_wd == HGROUPS` is **forced, not chosen**: the invariant is `HGROUPS % depth_wd == 0` and
+`HGROUPS` is 11 here — prime — so 11 is the only legal depth above `wd_ahead + 2`. That precondition
+is now asserted host-side (breaking it would silently matmul against the WRONG weight block on
+`b > 0` only: no hang, no compile error, wrong numbers on the multi-M-block path alone).
+
+### 2. Each lever measured alone (one fresh-cache run per variant, 9 graded loose cells)
+
+| lever | knob | `count 512` | `count = capacity` | 9-cell sum | verdict |
+|---|---|---|---|---|---|
+| gate/up residency (`DEPTH_W` 2 -> 1, **frees 155 KB**) | `W_RESIDENT` | **-6.25 %** | **-12.47 %** | **-9.36 %** | shipped at 1 |
+| + W_down residency (`depth_wd` 5 -> 11, costs 60.8 KB) | `WD_RESIDENT` | a further **-1.52 %** | a further **-2.92 %** | a further **-2.04 %** | shipped at 1 |
+| + resident-x double buffer (costs 195.5 KB) | `DEPTH_X` | a further -0.47 % | a further **-1.49 %** | a further -1.07 % | shipped at 2, path-gated |
+
+- **Gate/up residency is free on every single-M-block cell** (all within +-0.53 %), exactly as it
+  must be — `b == 0` still reads. It also *pays for* the rest of the refinement: collapsing
+  `DEPTH_W` to 1 frees 155 KB, which is the budget Refinement 3's verifier notes said `DEPTH_X`
+  needed and did not have.
+- **`DEPTH_X` moved only where it can act.** It is the heading's named lever, and the five
+  single-M-block cells provably never reserve the second slot — yet they moved
+  +1.03 / +0.73 / +0.69 / -0.92 / -0.54 %. That is a **free calibration of this op's per-cell noise
+  floor at ~1 %**, and it is the yardstick every single-cell claim here is read against.
+- **`DEPTH_X` is path-gated** to programs whose *sized* M extent (`ceil(input_m_tiles / M_BLOCK)`)
+  can reach a second M-block, so the 195.5 KB slot is never allocated where it is provably dead. The
+  runtime count is device-resident and cannot gate a CB size; the sized extent is the tightest
+  host-time bound available.
+
+### 3. Results (shipped configuration, confirmation run)
+
+| cell | R2 baseline | shipped | delta |
+|---|---|---|---|
+| `count 512` (`m_blocks = 2`, **the target**) | 431 030 | **395 080** | **-8.34 %** |
+| `count = capacity` (`m_blocks = 20`) | 4 200 686 | **3 512 739** | **-16.38 %** |
+| `count 128` | 144 179 | 144 153 | -0.02 % |
+| `count 256` | 220 576 | 222 831 | +1.02 % (noise floor — see below) |
+| `cap 1024` / `cap 2048`, count 256 | 222 687 / 222 801 | 222 298 / 224 833 | -0.17 % / +0.91 % |
+| `bfp8_tile`, count 256 | 217 913 | 217 955 | +0.02 % |
+| `emb 6144`, count 256 | 207 901 | 209 399 | +0.72 % |
+| `count 0` | 6 058 | 6 024 | -0.56 % (hang-free) |
+| **9-cell sum** | **5 873 831** | **5 155 312** | **-12.23 %** |
+
+`count 512` is now **1.77x** `count 256` rather than 1.95x, and the `count >= 512` regime is the
+only thing that moved — which is the fix landing exactly where the heading aimed it.
+
+- **The one honest caveat**: across five runs `count 256` read 220 576 / 221 269 / 224 615 / 222 173
+  / 222 831 ns with no monotone relation to any knob, and the depth_wd 5 vs 11 configurations
+  average +1.03 % apart. So W_down residency *may* cost ~1 % on single-M-block cells (more L1, a
+  deeper CB) — it sits right at the independently-measured ~1 % noise floor and cannot be resolved
+  further without many more runs. It is kept because the **graded triple is net better with it on**
+  (795 785 -> 762 064 = -4.24 %, vs -3.30 % with it off) and it cannot be path-gated: `depth_wd` is a
+  CB size, fixed at program build, while `m_blocks` is device-resident.
+- **Accuracy achieved**: PCC **0.979044-0.979215** across 29 golden cells, unchanged in category and
+  well inside the pre-existing band; residency is scheduling-only and asserted **bit-identical**
+  against the re-reading path by the new test (see below). Golden slice **29 / 29 passing, 0 hangs,
+  0 errors**, 110/110 cores on every cell. Unit suite **94 / 94 in 67 s**.
+- **L1**: 1 533 952 B of 1 572 864 B at emb 7168 (~38 KB free), a net **+101 KB** over Refinement 2
+  (+195.5 x, +60.8 wd, -155.2 w). Measured, not estimated — the figure comes from the device's own
+  overflow report on the residency-OFF arm.
+- **Issues encountered**: (a) turning residency OFF while leaving `DEPTH_X` at 2 asks for both the
+  weight double-buffer and the resident-x slot and genuinely does not fit at emb 7168 (1 692 928 B
+  against 1 572 864 B) — the exact arithmetic the verifier notes predicted, confirmed on device; both
+  knob tests now pair the two, which is also the more meaningful A/B; (b) **a real L1 coupling with
+  a prior phase**: Refinement 2's parked lever 1 (`REDUCE_SLOTS_CAP = 2`, +102 KB) can no longer be
+  turned *together with* the resident-x slot at emb 7168, so
+  `test_moe_fused_swiglu_r2_knobs.py` now exercises it paired with `DEPTH_X = 1` and documents the
+  shared budget rather than papering over it. Whoever turns lever 1 for real faces the same choice.
+- **Tests added**: `test_moe_fused_swiglu_r3_residency.py` (18 cases) — residency ON vs OFF must be
+  **bit-identical**, on shapes spanning 2, 2-with-a-shrunk-tail and **4** M-blocks x both formats,
+  plus the same for `DEPTH_X`. Bit-identity is the only assertion sharp enough here: a wrong-weight-
+  block bug would move PCC by ~2e-2 while the graded gate has ~5e-3 of slack against a 0.9797 format
+  ceiling, so a PCC gate would hide it. Four blocks matter — two proves the slot is re-read, only
+  more than two proves the `cb_w_down` cycle **closes** each block rather than drifting a slot per
+  block. A host-side guard now asserts that precondition at the single source of truth.

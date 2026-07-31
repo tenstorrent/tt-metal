@@ -112,6 +112,32 @@ KB1_FRACTION = 1
 
 #: Buffer depths (per streaming CB).
 DEPTH_W = 2  # gate/up weight CBs: overlap the next K-block's DRAM read with compute
+#: Resident-x slots in `cb_x_tiles` — Refinement 3's named lever. 1 (the Phase-0 shape) makes the
+#: reader's `cb_reserve_back(cb_x_tiles)` for M-block b+1 block until compute has popped block b's
+#: resident x, i.e. until block b is COMPLETELY finished: nothing of b+1's x staging or row
+#: multicast can start under b's phase 2. A second slot decouples them.
+#:
+#: Costs `M_BLOCK * KR_PAD` bfp8 tiles (195.5 KB at M_BLOCK 8 / KR_PAD 23), which only fits because
+#: W_RESIDENT below collapses `DEPTH_W` to 1 and frees 155 KB.
+#:
+#: MEASURED (Refinement 3, against the resident-weight configuration, one fresh-cache run each).
+#: It can only act where `m_blocks > 1`, and that is exactly where it moved:
+#:   `count 512` (2 blocks)      397 954 -> 396 078 ns  = -0.47 %
+#:   `count = capacity` (20)   3 569 484 -> 3 516 405 ns = -1.49 %
+#: while the five SINGLE-block cells — which provably never reserve the second slot — moved
+#: +1.03 / +0.73 / +0.69 / -0.92 / -0.54 %, i.e. this op's per-cell noise floor, measured for free.
+#: SHIPPED at 2, path-gated below to programs whose SIZED M extent can reach a second block.
+#: On the bf16_rm path it currently hides the x STICK READ but not the row multicast: the reader's
+#: staging blocks on `cb_wait_front(cb_x_stage)`, i.e. on compute's fused tilize, which still sits
+#: at the top of block b+1's compute iteration. Hoisting that tilize is the complementary step —
+#: see the Refinement 3 Outcome note in `op_requirements.md`.
+#:
+#: SAFE AT ANY DEPTH for the multicast: the landing address must be identical on every core in the
+#: row, and it is — the write pointer after `b` blocks is `(sum of pushed m_eff) * KR_PAD` pages,
+#: a pure function of the mailbox words, hence the same number on all 110 cores. And no reserve can
+#: straddle the FIFO end: only the LAST block shrinks, so every earlier write pointer is a multiple
+#: of `M_BLOCK * KR_PAD`, and `m_eff | M_BLOCK` (Refinement 1's power-of-two invariant).
+DEPTH_X = int(os.environ.get("MOE_SWIGLU_DEPTH_X", 2))
 #: phase-2 (W_down) weight CB depth, in K-blocks — see the derivation of `depth_wd` below.
 #: Overridable for `/perf-measure` A/B via MOE_SWIGLU_DEPTH_WD; HGROUPS reproduces the
 #: whole-hidden-extent sizing this CB used to have.
@@ -158,6 +184,54 @@ ZONES = os.environ.get("MOE_SWIGLU_ZONES", "") not in ("", "0")
 #: the block published in a round is the one that round consumes, so >= 2 is what actually decouples
 #: compute from the DRAM read.
 WD_AHEAD = int(os.environ.get("MOE_SWIGLU_WD_AHEAD", 1))
+
+#: Refinement 3 — CROSS-M-BLOCK WEIGHT RESIDENCY. The three bfp4 weight streams are read once per
+#: M-BLOCK today, but every one of those reads is BYTE-IDENTICAL: `BR::read(wg_acc, (kstart+k)*HID_T,
+#: hstart, ...)` (reader), the W_up twin (writer) and the W_down K-blocks (reader) are all pure
+#: functions of this core's `kstart`/`hstart`/`jstart`, with NO dependence on the M-block index. So
+#: `count 512` reads 26 MB of weights TWICE and `count = capacity` reads it TEN times — which is
+#: exactly the `m_blocks > 1` cliff (count 512 measured at 431 030 ns vs count 256's 220 576, i.e.
+#: 1.95x for 2x the tokens), and it is also why the graded target is reachable at all: the harness
+#: grades `read_bytes` with the weights counted ONCE (feature_spec.read_bytes), so a re-read is pure
+#: loss against the metric.
+#:
+#: The mechanism needs NO compute-side change and no new CB, because the CB cycle already returns
+#: each weight block to the same L1 slot every M-block:
+#:   * `cb_w_gate` / `cb_w_up` hold ONE block (depth_w == 1 below), so the reserve/push cycle always
+#:     lands at the CB base;
+#:   * `cb_w_down` holds exactly `HGROUPS` K-blocks (depth_wd forced to HGROUPS below) and the
+#:     reader pushes exactly `HGROUPS` per M-block, so K-block r always occupies slot r.
+#: `cb_pop_front` only advances a read pointer — it does not clear the bytes — and these CBs have a
+#: single producer, so the block a later M-block re-reserves still holds the data it read at b == 0.
+#: The reader/writer therefore keep the FULL reserve/push handshake (compute's waits and pops are
+#: untouched, bit-for-bit) and skip only the `BR::read` DRAM loops for b > 0.
+#:
+#: MEASURED (Refinement 3, one fresh-cache run each over the 9 graded loose cells). Gate/up
+#: residency alone, i.e. this knob with WD_RESIDENT=0:
+#:   `count 512`  (2 M-blocks)  431 030 -> 404 078 ns   = -6.25 %
+#:   `count = capacity` (20)  4 200 686 -> 3 676 894 ns = -12.47 %
+#:   9-cell sum               5 873 831 -> 5 323 776 ns = -9.36 %
+#: and every SINGLE-M-block cell inside +-0.53 %, i.e. free — as it must be, since b == 0 still
+#: reads. SHIPPED AT 1.
+W_RESIDENT = int(os.environ.get("MOE_SWIGLU_W_RESIDENT", 1))  # gate/up (NoC0 + NoC1 halves)
+#: The W_down half of the same lever. Kept as a SEPARATE knob because it is the one with an L1
+#: price: residency requires `depth_wd == HGROUPS` (the slot-r-holds-K-block-r invariant above),
+#: which is +60.8 KB over the measured-optimal depth 5. Gate/up residency is free — it SAVES 155 KB
+#: by collapsing DEPTH_W to 1.
+#:
+#: `depth_wd == HGROUPS` is FORCED, not chosen: the invariant is that the reader's HGROUPS pushes
+#: per M-block bring the write pointer exactly back to the CB base, i.e. `HGROUPS % depth_wd == 0`,
+#: and HGROUPS is 11 here — prime — so 11 is the only depth above `wd_ahead + 2` that qualifies.
+#:
+#: MEASURED (Refinement 3), as the DELTA on top of gate/up residency:
+#:   `count 512`               404 078 -> 397 954 ns   = a further -1.52 %
+#:   `count = capacity`      3 676 894 -> 3 569 484 ns = a further -2.92 %
+#:   9-cell sum              5 323 776 -> 5 215 058 ns = a further -2.04 %
+#: The single-block cells drifted +0.3 to +1.5 % against the gate/up-only run, which reads as this
+#: op's ~1 % per-cell noise (the two other count-256 cells, cap 1024 and cap 2048, moved the other
+#: way at -0.51 / -0.26 % against the same reference, and the DEPTH_X run below independently
+#: measured +-1.0 % on cells it cannot affect at all). SHIPPED AT 1.
+WD_RESIDENT = int(os.environ.get("MOE_SWIGLU_WD_RESIDENT", 1))
 
 #: Reduce-tree fan-in cap (>= ceil(log2(KGROUPS)) for the binary tree below).
 MAX_CHILDREN = 5
@@ -367,6 +441,26 @@ def create_program_descriptor(
     depth_wd = max(DEPTH_WD, wd_ahead + 2)
     if wd_ahead > 1 and HGROUPS % depth_wd != 0:
         depth_wd = HGROUPS
+    # W_down residency (Refinement 3) needs the CB to hold the WHOLE phase-2 K stream, so that the
+    # reader's `HGROUPS` pushes per M-block bring the write pointer exactly back to the base and
+    # K-block r always occupies slot r. Then b > 0 can re-push slot r without re-reading it.
+    if WD_RESIDENT:
+        depth_wd = HGROUPS
+    # The residency PRECONDITION, asserted rather than assumed: the reader pushes exactly HGROUPS
+    # W_down K-blocks per M-block, so slot r holds K-block r on EVERY M-block only while the CB
+    # capacity divides that push count. Break it (a future depth knob, a different per-block push
+    # count) and M-blocks b > 0 silently matmul against the WRONG weight block — no hang, no
+    # compile error, just wrong numbers on the multi-M-block path alone.
+    if WD_RESIDENT and (depth_wd == 0 or HGROUPS % depth_wd != 0):
+        raise RuntimeError(
+            f"moe_fused_swiglu: WD_RESIDENT needs cb_w_down's depth ({depth_wd} K-blocks) to divide "
+            f"the {HGROUPS} blocks pushed per M-block, so the write pointer returns to the CB base "
+            f"every M-block; set MOE_SWIGLU_WD_RESIDENT=0 or fix the depth"
+        )
+    # gate/up residency makes the second weight slot dead by construction (the CB is filled once and
+    # every later M-block re-pushes the same bytes), so it FREES DEPTH_W's 155 KB rather than
+    # costing L1 — which is what pays for DEPTH_X's resident-x slot below.
+    depth_w = 1 if W_RESIDENT else DEPTH_W
     ec_sizes, ec_starts = _split(EMB_T, num_cores)
     # EC_MAX is the phase-2 N *stride*: every phase-2 CB reserves/pushes in EC_MAX-wide units so
     # its page count is a multiple of the increment (a CB whose total is not a multiple of its
@@ -531,7 +625,18 @@ def create_program_descriptor(
     idx_page = int(global_expert_idx_table.buffer_aligned_page_size())
 
     # ---- CB page counts: functions of the knobs only ----
-    n_x_tiles = M_BLOCK * KR_PAD  # ONE slot -> identical mcast landing address on every core
+    # DEPTH_X slots of M_BLOCK*KR_PAD tiles. The mcast landing address stays identical on every core
+    # at any depth (see the DEPTH_X knob); depth 2 is what lets the reader stage M-block b+1's x
+    # while compute is still in block b's phase 2.
+    #
+    # PATH-GATED to programs that can actually reach a second M-block. `input_m_tiles` is the
+    # host-time SIZED token extent, so `ceil(M_T_MAX / M_BLOCK)` is the maximum `m_blocks` any
+    # runtime count can produce; at 1 the extra slot could never be reserved, so allocating it would
+    # be 195.5 KB of provably dead L1. The runtime count is device-resident and cannot gate this —
+    # the sized extent can, and it is the tightest host-time bound available.
+    max_m_blocks = (M_T_MAX + M_BLOCK - 1) // M_BLOCK
+    depth_x = DEPTH_X if max_m_blocks > 1 else 1
+    n_x_tiles = depth_x * M_BLOCK * KR_PAD
     n_gu_block = M_BLOCK * HN_PAD
     n_w_gu = KR_PAD * HN_PAD  # one gate/up K-block (num_k_blocks == 1)
     n_w_down = depth_wd * HN_PAD * EC_MAX  # DEPTH knob x one phase-2 K-block (see depth_wd above)
@@ -553,8 +658,8 @@ def create_program_descriptor(
         ),
         _cb(CB_X_TILES, all_cores, n_x_tiles, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_X_STAGE, all_cores, n_x_stage, bfp8_tile, ttnn.bfloat8_b),
-        _cb(CB_W_GATE, all_cores, DEPTH_W * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
-        _cb(CB_W_UP, all_cores, DEPTH_W * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
+        _cb(CB_W_GATE, all_cores, depth_w * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
+        _cb(CB_W_UP, all_cores, depth_w * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
         _cb(CB_W_DOWN, all_cores, n_w_down, bfp4_tile, ttnn.bfloat4_b),  # depth_wd K-blocks
         _cb(CB_REDUCE_GATE_IN, all_cores, reduce_slots * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_REDUCE_UP_IN, all_cores, reduce_slots * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
@@ -602,6 +707,8 @@ def create_program_descriptor(
         wd_ahead,
         M_EFF_MIN,
         reduce_slots,
+        W_RESIDENT,
+        WD_RESIDENT,
         CB_X_IN,
         CB_X_TILES,
         CB_X_STAGE,
@@ -638,6 +745,7 @@ def create_program_descriptor(
         MAILBOX_MAGIC,
         M_EFF_MIN,
         reduce_slots,
+        W_RESIDENT,
         CB_W_UP,
         CB_OUT_TILES,
         CB_GATE_SEND,

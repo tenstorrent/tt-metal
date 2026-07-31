@@ -93,20 +93,26 @@ constexpr uint32_t M_EFF_MIN = get_compile_time_arg_val(25);
 // Concurrent child landing slots in cb_reduce_*_in (Refinement 2 lever 1). A parent invites its
 // children in waves of this size instead of one at a time; 1 is the Phase-0 protocol.
 constexpr uint32_t REDUCE_SLOTS = get_compile_time_arg_val(26);
+// REFINEMENT 3 — CROSS-M-BLOCK WEIGHT RESIDENCY. Every weight read below is a pure function of this
+// core's kstart/hstart/jstart with NO M-block index in it, so M-block b > 0 re-reads bytes that are
+// still sitting in the same CB slot. With residency on, the reserve/push handshake is kept EXACTLY
+// as-is (compute's waits and pops are untouched) and only the DRAM read loops are skipped.
+constexpr uint32_t W_RESIDENT = get_compile_time_arg_val(27);   // W_gate (this kernel) + W_up (writer)
+constexpr uint32_t WD_RESIDENT = get_compile_time_arg_val(28);  // the phase-2 W_down K stream
 
-constexpr uint32_t cb_x_in = get_compile_time_arg_val(27);
-constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(28);
-constexpr uint32_t cb_x_stage = get_compile_time_arg_val(29);
-constexpr uint32_t cb_w_gate = get_compile_time_arg_val(30);
-constexpr uint32_t cb_w_down = get_compile_time_arg_val(31);
-constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(32);
-constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(33);
-constexpr uint32_t cb_h = get_compile_time_arg_val(34);
-constexpr uint32_t cb_h_local = get_compile_time_arg_val(35);
-constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(36);
-constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(37);
+constexpr uint32_t cb_x_in = get_compile_time_arg_val(29);
+constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(30);
+constexpr uint32_t cb_x_stage = get_compile_time_arg_val(31);
+constexpr uint32_t cb_w_gate = get_compile_time_arg_val(32);
+constexpr uint32_t cb_w_down = get_compile_time_arg_val(33);
+constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(34);
+constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(35);
+constexpr uint32_t cb_h = get_compile_time_arg_val(36);
+constexpr uint32_t cb_h_local = get_compile_time_arg_val(37);
+constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(38);
+constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(39);
 
-constexpr uint32_t CT_XMCAST = 38;
+constexpr uint32_t CT_XMCAST = 40;
 constexpr uint32_t CT_HMCAST = CT_XMCAST + 5;
 
 constexpr uint32_t TILE_H = 32;
@@ -226,6 +232,14 @@ void kernel_main() {
         const uint32_t x_slot_tiles = m_eff * KR_PAD;   // resident in0 block, one slot
         const uint32_t h_block_tiles = m_eff * HN_PAD;  // one phase-2 K-block of h
 
+        // REFINEMENT 3 — the weight DRAM read happens on M-block 0 only when the block is resident.
+        // `cb_pop_front` advances a read pointer without touching the bytes, and each weight CB has
+        // a single producer, so the slot a later M-block re-reserves still holds what block 0 read
+        // into it. Everything else — reserve, push, barrier, trip counts — is unchanged, which is
+        // what keeps compute bit-for-bit identical.
+        const bool read_wg = (b == 0) || (W_RESIDENT == 0);
+        const bool read_wd = (b == 0) || (WD_RESIDENT == 0);
+
         // -------------------------------------------------------------------
         // Phase 1a — stage x and multicast it along the grid row.
         //
@@ -251,15 +265,17 @@ void kernel_main() {
             MOE_ZONE("R_WG_ISSUE");
             const uint32_t wg_wp = get_write_ptr(cb_w_gate);
 #ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
-            for (uint32_t k = 0; k < kr; ++k) {
-                BR::read(
-                    wg_acc,
-                    (kstart + k) * HID_T,
-                    hstart,
-                    hstart + hn,
-                    SLOTS_H,
-                    wg_wp + k * HN_PAD * BFP4_TILE,
-                    BFP4_TILE);
+            if (read_wg) {
+                for (uint32_t k = 0; k < kr; ++k) {
+                    BR::read(
+                        wg_acc,
+                        (kstart + k) * HID_T,
+                        hstart,
+                        hstart + hn,
+                        SLOTS_H,
+                        wg_wp + k * HN_PAD * BFP4_TILE,
+                        BFP4_TILE);
+                }
             }
 #else
             (void)wg_wp;
@@ -377,17 +393,19 @@ void kernel_main() {
                     hn_r = HID_T - hbase;
                 }
 #ifndef ABLATE_NO_W_XFER
-                for (uint32_t k = 0; k < hn_r; ++k) {
-                    // W_down's K axis is `h`'s hidden axis, which the Hn split remapped too, so the
-                    // row index goes through the same remap as the N axis.
-                    BR::read(
-                        wd_acc,
-                        BR::remap(hbase + k, SLOTS_H) * EMB_T,
-                        jstart,
-                        jstart + ec,
-                        SLOTS_E,
-                        wp + (r * WD_BLOCK_TILES + k * EC_MAX) * BFP4_TILE,
-                        BFP4_TILE);
+                if (read_wd) {
+                    for (uint32_t k = 0; k < hn_r; ++k) {
+                        // W_down's K axis is `h`'s hidden axis, which the Hn split remapped too, so
+                        // the row index goes through the same remap as the N axis.
+                        BR::read(
+                            wd_acc,
+                            BR::remap(hbase + k, SLOTS_H) * EMB_T,
+                            jstart,
+                            jstart + ec,
+                            SLOTS_E,
+                            wp + (r * WD_BLOCK_TILES + k * EC_MAX) * BFP4_TILE,
+                            BFP4_TILE);
+                    }
                 }
 #endif
             }
@@ -523,15 +541,17 @@ void kernel_main() {
                     cb_reserve_back(cb_w_down, WD_BLOCK_TILES);
                     const uint32_t wp = get_write_ptr(cb_w_down);
 #ifndef ABLATE_NO_W_XFER
-                    for (uint32_t k = 0; k < hn_r; ++k) {
-                        BR::read(
-                            wd_acc,
-                            BR::remap(hbase + k, SLOTS_H) * EMB_T,
-                            jstart,
-                            jstart + ec,
-                            SLOTS_E,
-                            wp + k * EC_MAX * BFP4_TILE,
-                            BFP4_TILE);
+                    if (read_wd) {
+                        for (uint32_t k = 0; k < hn_r; ++k) {
+                            BR::read(
+                                wd_acc,
+                                BR::remap(hbase + k, SLOTS_H) * EMB_T,
+                                jstart,
+                                jstart + ec,
+                                SLOTS_E,
+                                wp + k * EC_MAX * BFP4_TILE,
+                                BFP4_TILE);
+                        }
                     }
 #else
                     (void)wp;

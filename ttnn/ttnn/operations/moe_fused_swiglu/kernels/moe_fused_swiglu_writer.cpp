@@ -46,15 +46,19 @@ constexpr uint32_t M_EFF_MIN = get_compile_time_arg_val(16);
 // Concurrent child landing slots in the parent's cb_reduce_*_in (Refinement 2 lever 1) — the child
 // needs it only to stride its own slot index into the parent's CB.
 constexpr uint32_t REDUCE_SLOTS = get_compile_time_arg_val(17);
+// REFINEMENT 3 — cross-M-block weight residency, the NoC1 half. W_up's read below carries no
+// M-block index, so every block after the first re-reads bytes still resident in `cb_w_up`'s single
+// slot. See the reader's W_RESIDENT comment for why the reserve/push handshake stays untouched.
+constexpr uint32_t W_RESIDENT = get_compile_time_arg_val(18);
 
-constexpr uint32_t cb_w_up = get_compile_time_arg_val(18);
-constexpr uint32_t cb_out_tiles = get_compile_time_arg_val(19);
-constexpr uint32_t cb_gate_send = get_compile_time_arg_val(20);
-constexpr uint32_t cb_up_send = get_compile_time_arg_val(21);
-constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(22);
-constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(23);
+constexpr uint32_t cb_w_up = get_compile_time_arg_val(19);
+constexpr uint32_t cb_out_tiles = get_compile_time_arg_val(20);
+constexpr uint32_t cb_gate_send = get_compile_time_arg_val(21);
+constexpr uint32_t cb_up_send = get_compile_time_arg_val(22);
+constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(23);
+constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(24);
 
-constexpr uint32_t TA_BASE = 24;
+constexpr uint32_t TA_BASE = 25;
 constexpr auto wu_args = TensorAccessorArgs<TA_BASE>();
 constexpr auto out_args = TensorAccessorArgs<wu_args.next_compile_time_args_offset()>();
 
@@ -141,9 +145,18 @@ void kernel_main() {
             MOE_ZONE("W_WUP");
             const uint32_t wp = get_write_ptr(cb_w_up);
 #ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
-            for (uint32_t k = 0; k < kr; ++k) {
-                BR::read(
-                    wu_acc, (kstart + k) * HID_T, hstart, hstart + hn, SLOTS_H, wp + k * HN_PAD * BFP4_TILE, BFP4_TILE);
+            // REFINEMENT 3: M-block 0 only when W_up is resident (the read carries no `b`).
+            if ((b == 0) || (W_RESIDENT == 0)) {
+                for (uint32_t k = 0; k < kr; ++k) {
+                    BR::read(
+                        wu_acc,
+                        (kstart + k) * HID_T,
+                        hstart,
+                        hstart + hn,
+                        SLOTS_H,
+                        wp + k * HN_PAD * BFP4_TILE,
+                        BFP4_TILE);
+                }
             }
 #else
             (void)wp;

@@ -40,13 +40,27 @@ PADDING_SENTINEL = 100.0
 
 _FORMATS = {"bf16_rm": (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT), "bfp8_tile": (ttnn.bfloat8_b, ttnn.TILE_LAYOUT)}
 
-# (knob attribute, value, why it must be exercised)
+# (knob overrides, why they must be exercised)
+#
+# REFINEMENT 3 UPDATE — these are OVERRIDE GROUPS now, not single knobs, because L1 became a shared
+# budget between parked levers. Refinement 3 shipped `DEPTH_X = 2` (a second resident-x slot,
+# +195.5 KB at emb 7168), funded by weight residency collapsing `DEPTH_W` to 1. That leaves ~38 KB
+# of slack, and lever 1's `REDUCE_SLOTS_CAP = 2` wants +102 KB (one extra `M_BLOCK * HN_PAD` slot in
+# EACH of the two reduce landing CBs), so the two can no longer be turned TOGETHER at emb 7168:
+# measured 1 638 400 B against a 1 572 864 B budget, which throws at program build.
+#
+# That is a real finding about the budget, not a defect in either lever, so it is recorded here
+# rather than papered over: lever 1 is still fully exercised, just paired with the resident-x slot
+# turned back off. Whoever turns lever 1 for real has to make the same choice.
 KNOB_SETTINGS = [
-    ("REDUCE_SLOTS_CAP", 2, "lever 1: wave invites + per-child slot stride in the reduce tree"),
-    ("HN_BLOCK", 3, "lever 2: 2 in1 sub-blocks, incl. the ragged column's narrowed last sub-block"),
-    ("OUT_SUBBLOCK_H_DN_MAX", 4, "lever 3: `down` sub-block height 2 (emb 7168) / 4 (emb 6144)"),
-    ("WD_AHEAD", 2, "the deferred read barrier's `wd_pending` carried across a round boundary"),
-    ("WD_AHEAD", 3, "same, two blocks of prefetch depth"),
+    (
+        {"REDUCE_SLOTS_CAP": 2, "DEPTH_X": 1},
+        "lever 1: wave invites + per-child slot stride in the reduce tree (needs DEPTH_X=1 for L1)",
+    ),
+    ({"HN_BLOCK": 3}, "lever 2: 2 in1 sub-blocks, incl. the ragged column's narrowed last sub-block"),
+    ({"OUT_SUBBLOCK_H_DN_MAX": 4}, "lever 3: `down` sub-block height 2 (emb 7168) / 4 (emb 6144)"),
+    ({"WD_AHEAD": 2}, "the deferred read barrier's `wd_pending` carried across a round boundary"),
+    ({"WD_AHEAD": 3}, "same, two blocks of prefetch depth"),
 ]
 
 # count 288 spans TWO M-blocks with a SHRUNK tail (m_eff 8 then 1), so one dispatch covers the
@@ -91,21 +105,23 @@ def _run(args, count):
 
 @pytest.mark.parametrize("emb, capacity, count", SHAPES)
 @pytest.mark.parametrize("input_format", list(_FORMATS))
-@pytest.mark.parametrize("knob, value, why", KNOB_SETTINGS)
-def test_parked_knob_is_numerics_invariant(device, emb, capacity, count, input_format, knob, value, why):
+@pytest.mark.parametrize("overrides, why", KNOB_SETTINGS)
+def test_parked_knob_is_numerics_invariant(device, emb, capacity, count, input_format, overrides, why):
     """Turning a parked scheduling knob must not change one bit of the output (nor hang)."""
     args = _build(emb, capacity, count, input_format, device)
     baseline = _run(args, count)
 
-    original = getattr(pd, knob)
+    original = {k: getattr(pd, k) for k in overrides}
     try:
-        setattr(pd, knob, value)
+        for k, v in overrides.items():
+            setattr(pd, k, v)
         turned = _run(args, count)
     finally:
-        setattr(pd, knob, original)
+        for k, v in original.items():
+            setattr(pd, k, v)
 
     assert torch.equal(turned, baseline), (
-        f"{knob}={value} ({why}) changed the output on "
+        f"{overrides} ({why}) changed the output on "
         f"emb={emb} capacity={capacity} count={count} {input_format}: "
         f"max|delta| = {(turned - baseline).abs().max().item()}"
     )

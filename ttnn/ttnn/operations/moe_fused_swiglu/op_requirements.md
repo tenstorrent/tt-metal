@@ -337,7 +337,7 @@ still ~6.0 us: `count 256` **225 932 -> 223 062 (-1.27 %, -1.6 % on the 5-run me
   per-`off` CBs and an interleaved SwiGLU gather. K-blocking is NOT an alternative: `InputPolicy`'s
   `NoWaitNoPop` is in1-only (`static_assert` on in0), so in0 cannot be retained across K-blocks.
 
-### [ ] Refinement 3 — Software-pipeline the M-block (the `count >= 512` cliff)
+### [x] Refinement 3 — Software-pipeline the M-block (the `count >= 512` cliff)
 
 **Type**: perf
 
@@ -377,6 +377,48 @@ regressed; the `count = capacity` reported-only case improves or is unchanged; t
 regression; no golden cell changes category and no PCC moves by more than 1e-4; `count = 0` still
 cannot hang (the pipelined prologue must still be skipped uniformly on all 110 cores when
 `m_blocks == 0`).
+
+**Outcome**: **DONE.** `count 512` **431 030 -> 395 080 ns (-8.34 %)**, `count = capacity`
+**4 200 686 -> 3 512 739 (-16.38 %)**, 9-cell sum **-12.23 %**; `count 128` -0.02 %, `bfp8_tile`
++0.02 %, `count 0` 6 024 ns and hang-free. Golden **29/29** (the 9 loose + all 20 multi-M-block
+`test_op` cells), 110/110 cores, PCC 0.979044-0.979215 — no cell changed category. Unit suite
+**94/94**. `count 512` is now **1.77x** `count 256` instead of 1.95x.
+- **The premise held but the sharpest form of it was not "hide the weight stream" — it was "stop
+  re-issuing it".** Every weight read is a pure function of this core's `kstart`/`hstart`/`jstart`
+  with **no M-block index in it**, so `count 512` read 26 MB of bfp4 twice and `count = capacity`
+  twenty times — and the harness grades `read_bytes` with the weights counted ONCE, so the re-read
+  was loss against the metric as well as the clock. Residency needs **no compute change and no new
+  CB**: the CB cycle already returns each weight block to the same L1 slot every M-block, so the
+  reader/writer keep the full reserve/push handshake and skip only the `BR::read` loops.
+- **Three levers, each measured alone, all three shipped**: gate/up residency (`W_RESIDENT`,
+  `count 512` -6.25 %, `c=cap` -12.47 %, and *free* on every single-M-block cell — it also FREES
+  155 KB by collapsing `DEPTH_W` to 1, which is what funds the rest); W_down residency
+  (`WD_RESIDENT`, a further -1.52 % / -2.92 %, costing 60.8 KB because `depth_wd == HGROUPS` is
+  forced by a prime `HGROUPS = 11`); and the heading's own named lever, the resident-x double buffer
+  (`DEPTH_X = 2`, a further -0.47 % / -1.49 %, path-gated to programs whose sized M extent can reach
+  a second block so the 195.5 KB is never dead).
+- **Bottleneck now, and the next lever.** `DEPTH_X` moved `c=cap` but barely `count 512`, and the
+  reason is precise: on the bf16_rm path the second slot currently hides only the x **stick read**,
+  not the row **multicast**, because the reader's staging blocks on `cb_wait_front(cb_x_stage)` —
+  i.e. on compute's fused tilize, which still sits at the top of block `b+1`'s compute iteration.
+  The complementary step is hoisting that tilize into block `b` (after the SwiGLU) plus moving the
+  reader's `cb_x_in` staging for `b+1` ahead of block `b`'s h rounds. **NOT attempted here** because
+  the obvious placement — tilize `b+1` immediately before the `down` matmul — **deadlocks**: compute
+  would wait on `cb_x_in(b+1)` while the reader waits on a `cb_h` slot that only compute's `down`
+  matmul frees, and `DEPTH_H` would have to grow from 3 to `HGROUPS = 11` slots (153 KB -> 561 KB) to
+  break the cycle. It needs the reader-side staging hoist as well, i.e. a genuine three-kernel
+  software pipeline, on a collective that already produced one silent race in this op. Ceiling is
+  modest: the x transport measures 3.3 % of a block, and only the ~3/11 of `down` the reader runs
+  ahead of is available to hide it under.
+- **A real L1 coupling to know about**: at emb 7168 the op now sits at 1 533 952 B of 1 572 864 B
+  (~38 KB free, +101 KB over Refinement 2), so Refinement 2's parked lever 1
+  (`REDUCE_SLOTS_CAP = 2`, +102 KB) and the resident-x slot can no longer both be turned on.
+  `test_moe_fused_swiglu_r2_knobs.py` now exercises lever 1 paired with `DEPTH_X = 1` and documents
+  the shared budget.
+- **Measurement note worth keeping**: `DEPTH_X` cannot affect a single-M-block cell (the second slot
+  is never reserved), yet those five cells moved +1.03 / +0.73 / +0.69 / -0.92 / -0.54 % — a free
+  calibration putting this op's per-cell noise floor at **~1 %**. Every single-cell claim above is
+  read against that, including `count 256`'s +1.02 %, which is inside it.
 
 ## Removed from the queue: the precision refinement
 
