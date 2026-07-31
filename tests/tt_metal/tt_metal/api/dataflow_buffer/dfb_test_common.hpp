@@ -786,8 +786,8 @@ inline void run_a1_blocked_pipeline(
     const m2::NodeCoord node{0, 0};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     const m2::DFBSpecName DFB_IN{"dfb_in"};
     const m2::DFBSpecName DFB_OUT{"dfb_out"};
@@ -978,8 +978,8 @@ inline void run_a1_fanout_blocked_pipeline(
     const m2::NodeCoord node{0, 0};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     const m2::DFBSpecName DFB_IN{"dfb_in"};
     const m2::DFBSpecName DFB_OUT{"dfb_out"};
