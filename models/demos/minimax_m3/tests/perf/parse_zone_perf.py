@@ -302,7 +302,11 @@ def layer_class(zone):
 
 def aggregate_by_class(summary):
     """Sum each relative zone path over all layers of a class, and count the layers involved."""
-    agg = defaultdict(lambda: defaultdict(lambda: {"ms": 0.0, "layers": set(), "ops": 0, "mib": 0.0, "gbs": []}))
+    agg = defaultdict(
+        lambda: defaultdict(
+            lambda: {"ms": 0.0, "layers": set(), "ops": 0, "mib": 0.0, "gbs": [], "dram": [], "noc": []}
+        )
+    )
     for zone, s in summary.items():
         lc = layer_class(zone)
         if lc is None:
@@ -316,6 +320,12 @@ def aggregate_by_class(summary):
         e["mib"] += s["mib"]
         if s["gbs"]:
             e["gbs"].append(s["gbs"])
+        # Only present when the capture ran with --collect-noc-traces AND tt-npe is importable;
+        # stays empty otherwise, which the report renders as "not measured" rather than zero.
+        if s.get("dram_util") is not None:
+            e["dram"].append(s["dram_util"])
+        if s.get("noc_util") is not None:
+            e["noc"].append(s["noc_util"])
     result = {}
     for cls, rels in agg.items():
         result[cls] = {}
@@ -328,6 +338,8 @@ def aggregate_by_class(summary):
                 "ops_per_layer": e["ops"] / n if n else 0,
                 "mib_per_layer": e["mib"] / n if n else 0.0,
                 "gbs_mean": sum(e["gbs"]) / len(e["gbs"]) if e["gbs"] else 0.0,
+                "dram_util": sum(e["dram"]) / len(e["dram"]) if e["dram"] else None,
+                "noc_util": sum(e["noc"]) / len(e["noc"]) if e["noc"] else None,
             }
     return result
 

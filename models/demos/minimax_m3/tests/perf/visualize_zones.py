@@ -127,8 +127,9 @@ def text_report(byclass, acc, acct, csv_path):
         out += [
             "",
             f"--- {cls.upper()} layer · {total:.3f} ms/layer · {n} layer(s) sampled ---",
-            f"  {'zone':<34} {'ms/layer':>9} {'% layer':>8} {'ops':>5} {'MiB':>8} {'GB/s':>7}  kind",
-            f"  {'-'*34} {'-'*9} {'-'*8} {'-'*5} {'-'*8} {'-'*7}  {'-'*6}",
+            f"  {'zone':<34} {'ms/layer':>9} {'% layer':>8} {'ops':>5} {'MiB':>8} {'GB/s':>7} "
+            f"{'DRAM%':>6} {'NOC%':>6}  kind",
+            f"  {'-'*34} {'-'*9} {'-'*8} {'-'*5} {'-'*8} {'-'*7} {'-'*6} {'-'*6}  {'-'*6}",
         ]
         for rel, v in sorted(rels.items(), key=lambda kv: -kv[1]["ms_per_layer"]):
             if rel in PARENTS and rel != "(layer total)":
@@ -138,10 +139,18 @@ def text_report(byclass, acc, acct, csv_path):
             else:
                 mark = ""
             pct = 100 * v["ms_per_layer"] / total if total else 0
+            du = f"{v['dram_util']:.1f}" if v.get("dram_util") is not None else "-"
+            nu = f"{v['noc_util']:.1f}" if v.get("noc_util") is not None else "-"
             out.append(
                 f"  {rel:<34} {v['ms_per_layer']:>9.3f} {pct:>7.1f}% {v['ops_per_layer']:>5.0f} "
-                f"{v['mib_per_layer']:>8.1f} {v['gbs_mean']:>7.0f}  {cat(rel)}{mark}"
+                f"{v['mib_per_layer']:>8.1f} {v['gbs_mean']:>7.0f} {du:>6} {nu:>6}  {cat(rel)}{mark}"
             )
+    if not any(v.get("dram_util") is not None for rels in byclass.values() for v in rels.values()):
+        out += [
+            "",
+            "  DRAM% / NOC% not measured: re-run the capture with NOC_TRACES=1 (needs tt-npe built and",
+            "  on PYTHONPATH via its ENV_SETUP). Without it the columns stay '-'.",
+        ]
     if acct:
         out += [
             "",
@@ -257,6 +266,7 @@ def build_html(byclass, summary, acc, acct, csv_path):
         {
             "panels": panels,
             "tlDevice": tl_dev,
+            "hasUtil": any(v.get("dram_util") is not None for rels in byclass.values() for v in rels.values()),
             "dense": rows("dense"),
             "sparse": rows("sparse"),
             "denseTotal": byclass.get("dense", {}).get("(layer total)", {}).get("ms_per_layer", 0),
@@ -368,6 +378,12 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:.85em;background:var(--r
    <span><i class="sw" style="background:var(--cool)"></i>fastest chip</span>
    <span><i class="sw" style="background:var(--hot)"></i>slowest chip</span>
    <span style="color:var(--ink-3)">hover for device id and time</span></div></div></section>
+<section id="utilnote" style="display:none"><div class="panel" style="border-left:3px solid var(--ink-3)">
+ <b>DRAM / NOC utilization not measured in this capture.</b> Re-run with <code>NOC_TRACES=1</code> to add
+ per-op <code>DRAM BW UTIL (%)</code> and <code>NOC UTIL (%)</code> columns — it needs tt-npe built and on
+ <code>PYTHONPATH</code> (see its <code>ENV_SETUP</code>). Without it the profiler reports time and bytes
+ moved, but cannot say whether a zone is bandwidth-bound or waiting.
+</div></section>
 <section><h2>Sparse layer</h2><div class="scroller"><table id="t-sparse"></table></div></section>
 <section><h2>Dense layer</h2><div class="scroller"><table id="t-dense"></table></div></section>
 <section><h2>Ops inside the heaviest zones</h2><div class="panel" id="opdetail"></div></section>
@@ -448,18 +464,29 @@ document.getElementById("imb").addEventListener("mousemove",e=>{
  const el=e.target.closest("i[data-t]");el?showTip(e,el.dataset.t):hideTip();});
 document.getElementById("imb").addEventListener("mouseleave",hideTip);
 
+// Utilization gets a saturation tint so a bandwidth-bound zone is visible without reading numbers.
+function util(v){
+  const t=Math.min(Math.max(v,0),100)/100;
+  const c=t>0.75?"var(--hot)":t>0.4?"var(--comm)":"var(--ink-2)";
+  return `<span style="color:${c};font-weight:${t>0.75?600:400}">${v.toFixed(1)}</span>`;
+}
 function table(id,rows){
  if(!rows.length){document.getElementById(id).closest("section").style.display="none";return;}
  const max=Math.max(...rows.map(r=>r[1]));
  document.getElementById(id).innerHTML=
   `<thead><tr><th class="zname">zone</th><th class="barcell"></th><th>ms</th><th>ops</th><th>MiB</th>
-   <th>GB/s</th></tr></thead><tbody>`+rows.map(([z,ms,o,mib,g,k])=>
+   <th>GB/s</th>${D.hasUtil?"<th>DRAM %</th><th>NOC %</th>":""}</tr></thead><tbody>`+
+   rows.map(([z,ms,o,mib,g,k,du,nu])=>
    `<tr><td class="zname">${z}</td><td class="barcell"><span class="bar"
      style="width:${Math.max(2,100*ms/max).toFixed(1)}%;background:${col(k)}"></span></td>
     <td class="mono">${ms.toFixed(3)}</td><td class="mono">${o}</td>
-    <td class="mono">${mib.toFixed(1)}</td><td class="mono">${g}</td></tr>`).join("")+"</tbody>";
+    <td class="mono">${mib.toFixed(1)}</td><td class="mono">${g}</td>`+
+    (D.hasUtil?`<td class="mono">${du==null?"—":util(du)}</td>
+                <td class="mono">${nu==null?"—":util(nu)}</td>`:"")+
+   `</tr>`).join("")+"</tbody>";
 }
 table("t-sparse",D.sparse);table("t-dense",D.dense);
+if(!D.hasUtil){document.getElementById("utilnote").style.display="";}
 
 document.getElementById("opdetail").innerHTML=D.opdetail.map(z=>
  `<div class="opz"><div class="h"><span>${z.zone}</span><b>${z.ms.toFixed(3)} ms</b></div>

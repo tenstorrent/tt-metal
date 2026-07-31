@@ -69,7 +69,7 @@ Opening that path in an editor shows you HTML source, not the report — it need
 | `CACHE=N` | tokens already cached before the profiled chunk | runs both 25600 and 56320 |
 | `CHUNK=N` | tokens in the profiled chunk | 5120 |
 | `EXPERT_DTYPE=bf4\|bf8` | MoE routed-expert weight dtype | bf4 |
-| `NOC_TRACES=1` | + tt-npe DRAM/NOC utilization per op | off |
+| `NOC_TRACES=1` | + DRAM/NOC utilization per op. Requires tt-npe installed separately (see *Reading the report*) | off |
 | `SKIP_PREFIX=1` | skip the prefill, attend a zeroed cache — fast but MoE routing is unrepresentative | off |
 
 ### Detail levels
@@ -159,8 +159,12 @@ Same mechanism deepseek_v3_d_p uses (`forward_layer_{i}_start` in `tt/tt_prefill
 - **`GB/s` is bytes-moved ÷ that zone's device time**, with bytes computed from each op's input+output
   shapes and dtypes (block-float formats include their block scales). Compare against the chip's DRAM
   ceiling to judge whether a zone is bandwidth-bound.
-- **`DRAM%` / NOC util** only appear with `NOC_TRACES=1` (tt-npe simulates the traffic and the profiler
-  fills `DRAM BW UTIL (%)` / `NOC UTIL (%)` per op).
+- **`DRAM%` / `NOC%`** are the answer to "is this zone bandwidth-bound or just waiting". They only
+  appear with `NOC_TRACES=1`, which needs **tt-npe installed separately** — it is not vendored in
+  tt-metal. Clone and build https://github.com/tenstorrent/tt-npe, then `source tt-npe/ENV_SETUP` so
+  `npe_analyze_noc_trace_dir` is importable. Without it the capture still collects NoC traces (and pays
+  for them) but the analysis is skipped and the columns read `-`; the report says so explicitly rather
+  than showing zeros.
 - `ops/layer` on a parent zone counts its children's ops too.
 
 ## Gotchas that will bite
