@@ -82,6 +82,9 @@ PREFILL_MULTIPLE = 128
 # positions: attention is ~4 ms of a ~34 ms step at L=224, so the overshoot costs ~2% and buys back
 # tens of seconds. It also leaves few enough distinct shapes for device tracing to be feasible.
 DECODE_WINDOW = 256
+# Both are free to grow, but not off the tile grid: prefill's mask and decode's cache slice are
+# both cut at these boundaries, and a ragged one would silently misalign them rather than raise.
+assert PREFILL_MULTIPLE % TILE == 0 and DECODE_WINDOW % TILE == 0
 
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True,

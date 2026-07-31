@@ -22,10 +22,10 @@ WHAT RUNS WHERE. Blocks 1-3 all run on device. Three host steps remain, each del
   * Block 2's semantic argmax and FSQ quantise (see ttnn_voxtral_flow's docstring)
 
 FIDELITY, measured per block against the fp32 CPU reference. Block 1 figures are for the DEFAULT
-backbone (ours, `ttnn_voxtral_gpt`) at BFP8 weights, on real prompts -- never random ones, which
-are a pessimistic proxy and cost a lot of time once (STATUS.md trap #12):
-    Block 1 prefill  PCC 0.999881  (last position -- the only one Block 2 consumes)
-    Block 1 decode   PCC 0.99986
+backbone, the `tt_transformers` wrapper; `ttnn_voxtral_gpt` scores far better per block but is not
+default yet, for the reasons at BACKBONE_IMPL below:
+    Block 1 prefill  PCC 0.999564  (last position; ours 0.999874)
+    Block 1 decode   PCC 0.981     (ours 0.99984)
     Block 2 velocity PCC 0.9999989, semantic codes EXACT, 73/74 frame codes exact on synthetic h
     Block 3          real speech PCC 0.999984, worst sample 1.16% of peak
 The end-to-end question is not any of those PCCs -- it is how many of the 37 INTEGER codes per
@@ -46,11 +46,23 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import CFG_ALPHA, TtVo
 
 FRAME_RATE = 12.5
 
-# Which Block 1 to run. "gpt" is ours (tt/ttnn_voxtral_gpt.py); "tt_transformers" is the older
-# wrapper, kept runnable so any regression can be bisected against it in one command:
-#   VOXTRAL_BACKBONE=tt_transformers HF_MODEL=<dir> python .../generate_quality_set.py
-# See STATUS.md's Block 1 section for the measurements that decided the default.
-BACKBONE_IMPL = os.environ.get("VOXTRAL_BACKBONE", "gpt")
+# Which Block 1 to run. "tt_transformers" is the older wrapper and REMAINS THE DEFAULT; "gpt" is
+# ours (tt/ttnn_voxtral_gpt.py), selected with VOXTRAL_BACKBONE=gpt.
+#
+# Ours is better on every per-block metric -- prefill last-position PCC 0.999874 vs 0.999564,
+# decode 0.99984 vs 0.981, 33.6 ms/step vs 48 -- and it holds up end to end on 13 of 14 scored
+# fixture cases at 0.0% WER, including the 125-word paragraph. It is NOT the default because of
+# two open failures that the per-block numbers do not see:
+#   * case 4 ("Hello.", the shortest prompt at P=74) collapses into a repetition loop -- 157 frames
+#     of "you know you know ..." where the current build says "Hello." in 9. Other short prompts
+#     are fine (case 13 P=79, case 12 P=100), so this is not simply prompt length.
+#   * case 3 reproducibly hangs in BLOCK 3's decode, at bucket 512 -- the identical shape case 2
+#     decoded successfully moments earlier in the same process. Block 1 alone runs 1400 steps
+#     clean, and Block 3 alone handles every length from 465 to 640 in 0.1 s, so neither is at
+#     fault in isolation and the interaction is not yet understood.
+# STATUS.md's rule for this swap is that the working pipeline is the thing to beat, so it stays
+# default until both are closed. Flip this line, not a caller, when they are.
+BACKBONE_IMPL = os.environ.get("VOXTRAL_BACKBONE", "tt_transformers")
 
 
 class TtVoxtralPipeline:
