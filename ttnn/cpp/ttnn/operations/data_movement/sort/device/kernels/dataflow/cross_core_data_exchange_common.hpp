@@ -45,10 +45,13 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
  * @param other_core_x                 Physical X coordinate of the peer core.
  * @param other_core_y                 Physical Y coordinate of the peer core.
  */
+// Scope-generic in the semaphore: the caller's Semaphore is CTAD-deduced from its baked
+// SemaphoreBindingToken, so its Scope is whatever the host chose and cannot be pinned here.
+template <SemScope SemS>
 FORCE_INLINE
 void sort_noc_exchange_Wt_tiles(
     Noc& noc,
-    Semaphore<>& sem_self,
+    Semaphore<ProgrammableCoreType::TENSIX, SemS>& sem_self,
     uint32_t value_tensor_this_dfb_id,
     uint32_t index_tensor_this_dfb_id,
     uint32_t dfb_value_peer_id,
@@ -171,10 +174,12 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
  *
  * @note If only one core is participating, the function returns immediately.
  */
+// Scope-generic for the same reason as sort_noc_exchange_Wt_tiles above.
+template <SemScope SemS>
 FORCE_INLINE
 void sort_barrier(
     Noc& noc,
-    Semaphore<>& sem_barrier,
+    Semaphore<ProgrammableCoreType::TENSIX, SemS>& sem_barrier,
     uint32_t physical_core_lookup_table_dfb_id,
     uint32_t this_core_id,
     uint32_t leader_core_id,

@@ -111,6 +111,34 @@ std::string strip_comments(const std::string& text) {
 // two-statement form where the address is computed on a previous line -- which let a real in-tree
 // raw writer through. A declared binding never needs any of these: it uses Semaphore(sem::<name>),
 // whose up()/down() call into these primitives from inside the framework header, not kernel source.
+// A baked sem:: token must be constructed WITHOUT an explicit template argument list, so CTAD can
+// adopt the host-chosen scope. `Semaphore<> s(sem::x)` (or any explicit <...>) pins the class default
+// LOCAL_NONATOMIC instead, contradicting the baked scope and firing the token ctor's static_assert --
+// a hard JIT compile failure. This is not a "raw access", so the pattern list below cannot see it;
+// six live sites reached the tree that way, four of them for weeks. Detected separately here.
+std::vector<std::string> find_pinned_scope_constructions(const std::string& code) {
+    std::vector<std::string> found;
+    size_t pos = 0;
+    while ((pos = code.find("Semaphore<", pos)) != std::string::npos) {
+        const size_t close = code.find('>', pos);
+        if (close == std::string::npos) {
+            break;
+        }
+        // Only a construction over a sem:: token matters; `Semaphore<> s(raw_id)` uses the unaffected
+        // uint32_t ctor, and a `Semaphore<...>&` parameter is fine as long as it is scope-generic.
+        const size_t stmt_end = code.find(';', close);
+        if (stmt_end != std::string::npos && code.compare(close, stmt_end - close, code.substr(close, stmt_end - close)) == 0) {
+            const std::string stmt = code.substr(close, stmt_end - close);
+            if (stmt.find("sem::") != std::string::npos) {
+                found.emplace_back("Semaphore<...> constructed over a sem:: token (drop <> and let CTAD "
+                                   "adopt the baked scope)");
+            }
+        }
+        pos = close + 1;
+    }
+    return found;
+}
+
 std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
     static const char* kPatterns[] = {
         "get_semaphore(",                // turning a semaphore id into a raw address
@@ -186,6 +214,10 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
          "void kernel_main() {\n    uint64_t a = get_noc_addr(1, 1, 64);\n    noc_semaphore_inc(a, 1);\n}",
          true},
         {"raw_local_set", "void kernel_main() { noc_semaphore_set(ptr, 5); }", true},
+        // The shape that slipped past this lint six times: explicit <> pins the class-default scope.
+        {"pinned_scope_ctor", "void kernel_main() { Semaphore<> s(sem::counter); }", true},
+        // ...but the same spelling over a RAW id uses the unaffected uint32_t ctor and is legal.
+        {"pinned_scope_raw_id_ok", "void kernel_main() { Semaphore<> s(sem_id); }", false},
         {"multicast_set", "void kernel_main() { noc_semaphore_set_multicast(a, b, 1); }", true},
         // A declared binding: the managed accessor only, no raw primitive in kernel source.
         {"clean_declared", "void kernel_main() {\n    Semaphore s(sem::counter);\n    s.up(1);\n}", false},
@@ -197,7 +229,10 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
     };
 
     for (const auto& c : cases) {
-        const auto found = find_raw_semaphore_uses(strip_comments(c.body));
+        auto found = find_raw_semaphore_uses(strip_comments(c.body));
+        for (auto& p : find_pinned_scope_constructions(strip_comments(c.body))) {
+            found.push_back(p);
+        }
         if (c.should_flag) {
             EXPECT_FALSE(found.empty()) << "detector MISSED a raw semaphore access in case '" << c.name
                                         << "' -- the scan test would silently pass on this code";
@@ -250,8 +285,12 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
             if (is_allowlisted(path_str)) {
                 continue;
             }
-            for (const auto& pat : find_raw_semaphore_uses(strip_comments(text))) {
+            const std::string code = strip_comments(text);
+            for (const auto& pat : find_raw_semaphore_uses(code)) {
                 violations.push_back(path_str + "  uses raw: " + pat);
+            }
+            for (const auto& pat : find_pinned_scope_constructions(code)) {
+                violations.push_back(path_str + "  pins scope: " + pat);
             }
         }
     }
