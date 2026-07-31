@@ -860,7 +860,15 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         // Non-loopback multicast throughout: master 0 sets its own flag directly, and this variant
         // explicitly does not write to self, so any range containing master 0 must not count it in
         // num_dests.
-        const bool master0_on_noc1 = (core_noc[0] != 0u);
+        // Which NOC master 0's WRITER uses -- note the inversion: NoC group 0 runs writerA, which is
+        // created on RISCV_1 / NOC::RISCV_1_default, i.e. NOC_1. Group 1 runs writerB on NOC_0.
+        // A multicast rectangle must be given its corners in the issuing NOC's traversal order, and NOC_1
+        // traverses opposite to NOC_0, so group 0 is exactly the case that needs the swap.
+        //
+        // Getting this backwards is near-invisible on a single ring: those 8 cores are bank-adjacent and
+        // scattered, so merge_ranges leaves them as 1x1 rectangles where start == end and the swap is a
+        // no-op. It only bites once several cores actually merge into a rectangle.
+        const bool master0_on_noc1 = (core_noc[0] == 0u);
         // all_cores was built one CoreRange(c, c) per core and CoreRangeSet does NOT auto-coalesce, so
         // without this the "per-range" multicast degenerates to one rectangle per core (79 for an 80-core
         // grid) and buys nothing.
