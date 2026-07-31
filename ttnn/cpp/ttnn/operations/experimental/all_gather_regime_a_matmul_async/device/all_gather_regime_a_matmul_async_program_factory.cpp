@@ -813,6 +813,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     };
 
     // writer compile args (in0_ring_reduce_writer.cpp order). TensorAccessorArgs(in0) then (out).
+    // Index in the writer's runtime args where the fused-gather block begins. MUST mirror the wa push
+    // order below exactly: 17 fixed, then bias, ternary, chunk, and reduce-scatter args. Asserted against
+    // the real wa.size() at emission time so the two can never silently drift apart.
+    const uint32_t fused_rt_base = 17u + (has_bias ? 1u : 0u) + (has_ternary ? 3u : 0u) +
+                                   ((n_chunks > 1u) ? (2u + (n_chunks - 1u)) : 0u) + (rscatter ? 7u : 0u);
+
     std::vector<uint32_t> wct = {
         geo.M_block_capacity,  // 0
         kb,                    // 1 K_block
@@ -827,7 +833,13 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         red_sem,               // 10
         geo.N_bpc,             // 11 N_bpc
         redfree_sem,           // 12
-        use_reduce};           // 13
+        use_reduce,            // 13
+        // ---- fused fabric all-gather (Phase 1) ----
+        // 14: 0 => the whole gather prologue compiles out, so tp==1 is byte-identical.
+        // 15: index into the writer's runtime args where the fused block starts. Passed explicitly because
+        //     the block sits after a variable number of optional bias / ternary / chunk / rscatter args.
+        (operation_attributes.tp > 1) ? 1u : 0u,  // 14 fused_gather_enabled
+        fused_rt_base};                           // 15 fused_rt_base
     // in0 ACCESSOR: on the fused path the matmul reads the GATHERED activation out of the staging buffer,
     // not the local shard. The staging buffer is [M, K_global] so the existing (m*Kt + k) addressing and the
     // geo.in0_stride_k row stride are already correct for it -- the matmul body needs no change at all, the
@@ -1018,6 +1030,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         //         then, per present direction, the mux client-connection block appended by
         //         append_client_connection_rt_args (opaque to us -- the kernel hands it to FabricMuxV2Sender).
         if (fused_gather.enabled) {
+            TT_FATAL(
+                wa.size() == fused_rt_base,
+                "fused_rt_base ({}) must match the actual writer arg count ({}); the CT arg and the wa push "
+                "order have drifted",
+                fused_rt_base,
+                wa.size());
             // EVERY core gets the common block at the same index (`fused_rt_base`, a compile-time arg), so
             // the kernel can locate it without knowing which optional fusion args preceded it. The first
             // word says whether this core is a fabric client; only master-ring cores get the mux block.

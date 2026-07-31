@@ -35,7 +35,13 @@ void kernel_main() {
     constexpr uint32_t N_bpc = get_compile_time_arg_val(11);           // N-sub-blocks per core
     constexpr uint32_t redfree_sem_id = get_compile_time_arg_val(12);  // cb_reduce reverse credit
     constexpr uint32_t use_reduce = get_compile_time_arg_val(13);      // 0 when Pk==1; else cb_reduce DEPTH
-    constexpr auto in0_args = TensorAccessorArgs<14>();
+    // ---- Fused fabric all-gather (Phase 1). 0 => the whole prologue compiles out (tp == 1). ----
+    constexpr uint32_t fused_gather_enabled = get_compile_time_arg_val(14);
+    constexpr uint32_t fused_rt_base = get_compile_time_arg_val(15);  // first runtime arg of the fused block
+    // Accessor args start after the 16 scalar compile-time args above (0..15). This index is COUPLED to
+    // the host's wct push order -- adding a scalar CT arg without bumping it silently misparses every
+    // accessor and corrupts the output rather than failing to build.
+    constexpr auto in0_args = TensorAccessorArgs<16>();
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     // Optional fused-epilogue operands (appended by the factory in this order: bias, then ternary_a/_b).
     // Present only when the matching define is set, so the no-fusion compile is unchanged.
@@ -272,6 +278,45 @@ void kernel_main() {
     const uint32_t rs_P = get_arg_val<uint32_t>(fidx++);            // cycle size = Pk
     const uint32_t rs_T = get_arg_val<uint32_t>(fidx++);            // tiles per sub-block = M_block*N_block
 #endif
+
+    // ---- PHASE 0: fused fabric all-gather (Phase 1 of the design spec; DRAM-staged) ----
+    //
+    // Runs BEFORE the on-chip ring below. Two different rings, easy to confuse:
+    //   * the fabric gather here spans the TP group ACROSS DEVICES and fills the staging buffer;
+    //   * the loop below is the existing 8-core ON-CHIP rotation, and is untouched.
+    //
+    // Once staging holds the full [M, K_global] activation, the on-chip ring reads it with global-K stride
+    // exactly as it reads a single-chip in0 -- the host has already pointed the in0 accessor and in0_addr
+    // at the staging buffer, so nothing below needs to change.
+    //
+    // Order of business:
+    //   1. copy this rank's own shard into staging at K offset rank * k_shard_tiles (local, no fabric);
+    //   2. master-ring cores push that shard to the neighbours' staging over mux v2, forward/backward,
+    //      re-injecting received shards until every rank has all tp of them (store-and-forward);
+    //   3. every core blocks on the readiness semaphore until all tp shards have landed.
+    // Payload must precede readiness: flush the write, THEN atomic-inc, or a peer can consume a
+    // half-written shard.
+    if constexpr (fused_gather_enabled) {
+        std::size_t fa = fused_rt_base;
+        const uint32_t is_fabric_client = get_arg_val<uint32_t>(fa++);
+        const uint32_t rank = get_arg_val<uint32_t>(fa++);
+        const uint32_t tp = get_arg_val<uint32_t>(fa++);
+        const uint32_t k_shard_tiles = get_arg_val<uint32_t>(fa++);
+        const uint32_t stage_addr = get_arg_val<uint32_t>(fa++);
+        const uint32_t ready_sem_id = get_arg_val<uint32_t>(fa++);
+        const uint32_t has_fwd = get_arg_val<uint32_t>(fa++);
+        const uint32_t has_bwd = get_arg_val<uint32_t>(fa++);
+        (void)is_fabric_client;
+        (void)rank;
+        (void)tp;
+        (void)k_shard_tiles;
+        (void)stage_addr;
+        (void)ready_sem_id;
+        (void)has_fwd;
+        (void)has_bwd;
+        (void)fa;  // master-ring cores continue here into the mux client block (11 args per direction,
+                   // consumed by FabricMuxV2Sender::build_from_args) -- steps 1-3 land next.
+    }
 
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
     cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
