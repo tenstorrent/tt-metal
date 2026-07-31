@@ -483,7 +483,7 @@ void InterleavedToShardedPartialDeviceOperation::override_runtime_arguments(
             cb_addr_only.cbs.emplace_back();  // input CB placeholder (unbound; address unchanged)
         }
         cb_addr_only.cbs.push_back(CBDescriptor{.buffer = dst_buffer});
-        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);
+        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
     }
 }
 
