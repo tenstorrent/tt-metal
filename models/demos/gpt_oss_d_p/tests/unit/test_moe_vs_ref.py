@@ -12,9 +12,10 @@ Three tests, two of which run on a single card:
 
   2. test_routed_expert_ffn_vs_ref  (single card, mesh=1, all experts local, fabric DISABLED)
        Mirrors deepseek_v3_d_p/tests/op_unit_tests/test_ttnn_routed_expert.py's `single-1` param, but
-       with GPT-OSS dims (emb 2880 / hidden 2880), a reduced expert count (E=8, topk=4), the
-       SwiGluOai activation, and a BIAS-FREE SwiGLU-OAI torch reference (biases land with #49619).
-       PCC >= 0.97. Validates the fused routed-expert kernel wiring.
+       with GPT-OSS dims (emb 2880 / hidden 2880), a reduced expert count (E=8, topk=4) and the
+       SwiGluOai activation. Parametrized over `biasfree` and `biased` (per-expert gate/up/down
+       biases, #49619 — the deployment default): the `biased` case exercises the exact path the model
+       runs. PCC >= 0.97. Validates the fused routed-expert kernel wiring.
 
   3. test_gpt_oss_moe_vs_ref  (GALAXY ONLY — gated behind requires_mesh_topology((4,8)))
        Full TtGptOssMoE end-to-end (router -> dispatch -> routed_expert -> combine -> reduce) at
@@ -124,19 +125,36 @@ def test_router_vs_ref(mesh_device, num_tokens, reset_seeds):
 # =====================================================================================
 # SwiGLU-OAI bias-free torch expert (matches ttnn.RoutedExpertActivation.SwiGluOai without bias)
 # =====================================================================================
-def _swiglu_oai_ffn(x, w):
-    """Bias-free clamped swigluoai FFN. w: HF (out, in) tensors gate_proj/up_proj/down_proj."""
-    g = (x @ w["gate_proj"].t()).clamp(max=LIMIT)
-    u = (x @ w["up_proj"].t()).clamp(min=-LIMIT, max=LIMIT)
-    return ((u + 1.0) * (g * torch.sigmoid(ALPHA * g))) @ w["down_proj"].t()
+def _swiglu_oai_ffn(x, w, b=None):
+    """Clamped swigluoai FFN. w: HF (out, in) tensors gate_proj/up_proj/down_proj. b (optional):
+    per-expert gate_proj_bias/up_proj_bias/down_proj_bias (1D), applied the way the fused kernel does
+    (#49619): gate/up bias BEFORE the clamp, down bias AFTER the down matmul."""
+    gp = x @ w["gate_proj"].t()
+    up = x @ w["up_proj"].t()
+    if b is not None:
+        gp = gp + b["gate_proj_bias"]
+        up = up + b["up_proj_bias"]
+    g = gp.clamp(max=LIMIT)
+    u = up.clamp(min=-LIMIT, max=LIMIT)
+    out = ((u + 1.0) * (g * torch.sigmoid(ALPHA * g))) @ w["down_proj"].t()
+    if b is not None:
+        out = out + b["down_proj_bias"]
+    return out
 
 
 @torch.no_grad()
 def _run_torch_routed_experts(
-    dispatched_buffer, weights_list, experts_per_chip, num_dispatch_groups, dispatch_group_size, expert_token_counts
+    dispatched_buffer,
+    weights_list,
+    experts_per_chip,
+    num_dispatch_groups,
+    dispatch_group_size,
+    expert_token_counts,
+    biases_list=None,
 ):
     """Torch SwiGLU-OAI routed experts over the dispatch-shaped buffer. Mirrors the offset walk in
-    deepseek's test_ttnn_routed_expert.run_torch_routed_experts (TILE-aligned per-expert regions)."""
+    deepseek's test_ttnn_routed_expert.run_torch_routed_experts (TILE-aligned per-expert regions).
+    biases_list (optional): per-expert bias dicts in the same global order as weights_list."""
     out = torch.zeros_like(dispatched_buffer)
     for dg in range(num_dispatch_groups):
         for ds in range(dispatch_group_size):
@@ -154,13 +172,14 @@ def _run_torch_routed_experts(
                 count = expert_token_counts[dg, 0, ge].item()
                 if count > 0:
                     xin = dispatched_buffer[dg, ds, off : off + count, :].float()
-                    out[dg, ds, off : off + count, :] = _swiglu_oai_ffn(xin, weights_list[ge])
+                    b = biases_list[ge] if biases_list is not None else None
+                    out[dg, ds, off : off + count, :] = _swiglu_oai_ffn(xin, weights_list[ge], b)
                 off += (count + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
     return out
 
 
 # =====================================================================================
-# 2. Routed-expert FFN plumbing PCC, BIAS-FREE (single card, mesh=1)
+# 2. Routed-expert FFN plumbing PCC (single card, mesh=1) — bias-free AND biased
 # =====================================================================================
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -172,6 +191,7 @@ def _run_torch_routed_experts(
     [(256, HIDDEN, INTER, 8, TOPK, 8)],
     ids=["gptoss-e8"],
 )
+@pytest.mark.parametrize("use_bias", [False, True], ids=["biasfree", "biased"])
 def test_routed_expert_ffn_vs_ref(
     mesh_device,
     device_params,
@@ -181,11 +201,13 @@ def test_routed_expert_ffn_vs_ref(
     num_routed_experts,
     num_experts_per_tok,
     capacity_factor,
+    use_bias,
     reset_seeds,
 ):
-    """TtRoutedExpert (SwiGluOai, bias-free) vs a bias-free SwiGLU-OAI torch reference. All experts
+    """TtRoutedExpert (SwiGluOai) vs a SwiGLU-OAI torch reference, both bias-free (``biasfree``) and
+    with per-expert gate/up/down biases (``biased``, #49619 — the deployment default). All experts
     local on a single device (mesh=1). Validates the fused routed-expert kernel wiring at GPT-OSS
-    dims; the biased version lands with #49619."""
+    dims, including the bias path the model actually runs."""
     torch.manual_seed(42)
     num_devices = mesh_device.get_num_devices()
     mc = extract_mesh_config(mesh_device)
@@ -235,6 +257,20 @@ def test_routed_expert_ffn_vs_ref(
         }
         for _ in range(total_experts)
     ]
+    # Per-expert gate/up/down biases (deployment default, #49619). Kept at the same 0.02 scale as the
+    # weights so the biased path exercises real (non-trivial) bias contributions.
+    biases_list = (
+        [
+            {
+                "gate_proj_bias": torch.randn(hidden_dim) * 0.02,
+                "up_proj_bias": torch.randn(hidden_dim) * 0.02,
+                "down_proj_bias": torch.randn(emb_dim) * 0.02,
+            }
+            for _ in range(total_experts)
+        ]
+        if use_bias
+        else None
+    )
 
     torch_outputs = _run_torch_routed_experts(
         dispatched_buffer_torch,
@@ -243,6 +279,7 @@ def test_routed_expert_ffn_vs_ref(
         num_dispatch_groups,
         dispatch_group_size,
         expert_token_counts_torch,
+        biases_list=biases_list,
     )
 
     dispatched_buffer_tt = ttnn.from_torch(
@@ -268,7 +305,8 @@ def test_routed_expert_ffn_vs_ref(
     )
     global_expert_idx_tt = ttnn.squeeze(ttnn.squeeze(global_expert_idx_tt, 0), 0)
 
-    # BIAS-FREE TtRoutedExpert (no bias kwarg — the current kernel is bias-free; #49619).
+    # TtRoutedExpert (SwiGluOai). torch_biases=None -> bias-free path; a per-expert bias list -> the
+    # biased fused path (#49619, the deployment default).
     tt_routed_expert = TtRoutedExpert(
         mesh_device=mesh_device,
         experts_per_chip=experts_per_chip,
@@ -277,6 +315,7 @@ def test_routed_expert_ffn_vs_ref(
         hidden_dim=hidden_dim,
         max_tokens=max_tok,
         torch_weights=weights_list,
+        torch_biases=biases_list,
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
         activation=ttnn.RoutedExpertActivation.SwiGluOai,

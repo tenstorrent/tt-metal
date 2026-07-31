@@ -14,10 +14,10 @@ GPT-OSS-specific differences vs the MiniMax-M3 template:
     Linear bias) is different math from DeepSeek/MiniMax and lives in ``TtGptOssRouter``. This module
     REQUIRES external ``topk_indices`` / ``topk_weights`` in ``forward`` (no TtMoEGatePrefill).
   - NO shared expert (GPT-OSS has none; the M3 shared-expert wiring is dropped).
-  - Expert FFNs carry gate/up/down biases. The current ``unified_routed_expert_moe`` kernel on this
-    branch does NOT accept bias args (#49619), so this module runs the routed experts BIAS-FREE.
-    Biases are threaded as far as ``__init__`` behind ``use_expert_bias`` and a ``# TODO(#49619)``
-    where they would be passed to ``TtRoutedExpert`` — see below.
+  - Expert FFNs carry gate/up/down biases. #49619 (bias in unified_routed_expert_moe /
+    TtRoutedExpert) is MERGED, so this module passes the biases through to TtRoutedExpert behind
+    ``use_expert_bias`` (the kernel adds gate/up bias before the clamp and down bias after the down
+    matmul, SwiGluOai only). ``use_expert_bias=False`` keeps the bias-free path.
 
 Keeps M3's ``combine(init_zeros=True)`` (safe for skewed routing) and
 ``activation=ttnn.RoutedExpertActivation.SwiGluOai`` (bakes GPT-OSS's alpha=1.702 / limit=7.0).
@@ -68,14 +68,13 @@ class TtGptOssMoE(LightweightModule):
         self.experts_per_chip = experts_per_chip
         self.emb_dim = emb_dim
 
-        # ---- Expert bias (#49619) -----------------------------------------------------------------
-        # The current unified_routed_expert_moe kernel on this branch is BIAS-FREE — passing a
-        # bias/torch_biases kwarg to TtRoutedExpert WILL CRASH. We keep the prepared biases here so
-        # the hookup is a one-line change once #49619 lands; do NOT enable use_expert_bias until then.
+        # ---- Expert bias (#49619, MERGED) ---------------------------------------------------------
+        # unified_routed_expert_moe / TtRoutedExpert now accept per-expert gate/up/down biases, so
+        # use_expert_bias=True is supported: the prepared biases are passed to TtRoutedExpert below
+        # (gate/up bias before the clamp, down bias after the down matmul; SwiGluOai only). Set
+        # use_expert_bias=False to fall back to the bias-free path.
         self.routed_expert_biases = routed_expert_biases
         self.use_expert_bias = use_expert_bias
-        # #49619 (bias in unified_routed_expert_moe / TtRoutedExpert) is now MERGED, so
-        # use_expert_bias=True is supported: biases are passed to TtRoutedExpert below.
 
         expert_dispatch_table = ExpertMapping.create_dispatch_table(
             num_routed_experts, dispatch_group_size, num_dispatch_groups

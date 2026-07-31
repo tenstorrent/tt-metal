@@ -22,8 +22,9 @@ This module:
     gather itself — no explicit permutation here).
 
 Biases are emitted into a SEPARATE structure (``routed_expert_biases``) and are NOT attached to
-the weight dicts: the current ``unified_routed_expert_moe`` kernel on this branch does NOT accept
-bias args (see #49619). The biased hookup is stubbed in ``TtGptOssMoE``.
+the weight dicts. ``TtGptOssMoE`` passes them through to ``TtRoutedExpert`` (#49619, merged: the
+``unified_routed_expert_moe`` kernel adds gate/up bias before the clamp and down bias after the
+down matmul, SwiGluOai only).
 
 Target dtypes (applied downstream by TtRoutedExpert, not here): weights bfloat4_b, activations
 bfloat8_b. This module returns plain torch tensors.

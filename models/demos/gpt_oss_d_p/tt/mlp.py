@@ -81,8 +81,9 @@ class MLP:
         )
 
         # De-interleave gate_up_proj, transpose to HF (out,in), global expert order 0..E-1.
-        # Biases are kept SEPARATE (not attached to the weight dicts) — the current kernel is
-        # bias-free (#49619). None in cache-only mode -> TtRoutedExpert loads tilized weights from cache.
+        # Biases are kept SEPARATE (not attached to the weight dicts) and passed through to
+        # TtRoutedExpert (#49619 merged). None in cache-only mode -> TtRoutedExpert loads tilized
+        # weights from cache.
         cache_only = not state_dict
         if cache_only:
             routed_w, routed_b = None, None
