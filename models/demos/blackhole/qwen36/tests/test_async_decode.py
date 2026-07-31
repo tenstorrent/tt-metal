@@ -16,8 +16,6 @@ replays a token, which shows up only as degraded output. So the gate here is exa
 against the known-good host-staged path, over several steps, not a single-step PCC.
 """
 
-import os
-import time
 
 import pytest
 import torch
@@ -445,91 +443,3 @@ def test_bucket_switch_continuity_matches_host_reference(mesh_device, schedule, 
     for tid in tids.values():
         ttnn.release_trace(mesh_device, tid)
     logger.info(f"PASSED: schedule {schedule} matches the always-host-reloaded reference")
-
-
-@pytest.mark.skip(
-    reason="HANGS THE BOARD (needs tt-smi -r). Capturing/replaying a sampling trace from this bare "
-    "harness deadlocks: the generator drives the sampler through sample_decode_on_device, which "
-    "also calls seed_manager.get_new_values() and apply_decode_state() around every step, and this "
-    "test does not. The server itself runs the same non-greedy sampling trace without hanging, so "
-    "the fault is in the harness, not the model. Reproduce the sampler cost with a server A/B "
-    "instead: rerun the benchmark with --extra-body '{\"temperature\": 0}' and compare TPOT. Only "
-    "the decode-trace-alone part of this test (which does run) was used for a reported number."
-)
-@torch.no_grad()
-@_parametrize_traced()
-@pytest.mark.parametrize("mode", ["served", "greedy"])
-@pytest.mark.parametrize("B", [1, 8], ids=["width1", "width8"])
-def test_decode_plus_sampling_device_floor(mesh_device, B, mode, reset_seeds, ensure_gc):
-    """Device floor INCLUDING the on-device sampler, at the served sampling params.
-
-    The 42.4 / 49.1 ms floors quoted so far measured the decode trace ALONE. The server also runs
-    the sampler on device every step, and Qwen3.6's generation_config.json makes every request
-    non-greedy (temperature 1.0, top_k 20, top_p 0.95), which takes the topk + all-gather +
-    ttnn.sampling path instead of the cheap argmax. That cost belongs in the floor.
-
-    ONE sampling trace per test run, hence the ``mode`` parameter rather than a loop. Capturing a
-    second sampling trace while the decode trace and the first sampling trace are already live
-    allocates device buffers under a live trace ("Allocating device buffers is unsafe due to the
-    existence of an active trace", tt_metal/impl/allocator.cpp:123) and hangs the board.
-    """
-    ITERS = 50
-    ctx = int(os.environ.get("QWEN36_ASYNC_FLOOR_CTX", "4096"))
-    bpu = ctx // BLOCK
-    BMAX = 8
-    model = Qwen36Model.from_pretrained(
-        mesh_device, max_batch_size=BMAX, max_seq_len=ctx, n_layers=None, hf_model="Qwen/Qwen3.6-27B"
-    )
-    if model.sampling is None:
-        pytest.skip("no on-device sampling on this mesh")
-    args = model.args
-    slots = model._decode_token_slots
-    model.allocate_kv_caches((BMAX * bpu, args.n_local_kv_heads, BLOCK, args.head_dim), ttnn.bfloat16, batch_size=BMAX)
-    pt = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(BMAX)])[:B]
-    model.reset_tp()
-
-    dev = model.prepare_inputs_decode(
-        torch.tensor([[100 + u] for u in range(B)], dtype=torch.int32),
-        torch.full((B,), ctx - 64, dtype=torch.int32),
-        pt,
-    )
-    model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=True)
-    ttnn.synchronize_device(mesh_device)
-    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    logits = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=True)
-    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
-    model.sampling.set_trace_bucket(B)
-
-    def _time(fn):
-        fn()
-        ttnn.synchronize_device(mesh_device)
-        t0 = time.perf_counter()
-        for _ in range(ITERS):
-            fn()
-        ttnn.synchronize_device(mesh_device)
-        return (time.perf_counter() - t0) * 1000.0 / ITERS
-
-    decode_ms = _time(lambda: ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False))
-    logger.info(f"FLOOR width={B} ctx={ctx}: decode trace alone      = {decode_ms:.3f} ms/step")
-
-    if mode == "greedy":
-        params = SamplingParams(temperature=[0.0] * slots, top_k=[1] * slots, top_p=[1.0] * slots)
-    else:  # the params generation_config.json applies to every served request
-        params = SamplingParams(temperature=[1.0] * slots, top_k=[20] * slots, top_p=[0.95] * slots)
-    model.sampling.apply_decode_state([params], reset_batch=True)
-    model.sampling.sample(logits, tt_out_tok=dev[0], enable_trace=True)  # capture (the only one)
-    ttnn.synchronize_device(mesh_device)
-
-    def _step():
-        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
-        model.sampling.sample(logits, tt_out_tok=dev[0], enable_trace=True)
-
-    total = _time(_step)
-    logger.info(
-        f"FLOOR width={B} ctx={ctx} {mode:6s} (argmax={model.sampling.tt_sampling.force_argmax_sampling}): "
-        f"decode+sampling = {total:.3f} ms/step, sampler = {total - decode_ms:.3f} ms, "
-        f"ceiling {1000.0 / total:.2f} tok/s"
-    )
-    ttnn.release_trace(mesh_device, tid)
-    assert decode_ms > 0 and total >= decode_ms

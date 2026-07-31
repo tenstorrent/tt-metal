@@ -38,9 +38,11 @@ class Qwen36Model:
             self.tt_ccl = None
         self.configuration = args  # Generator reads model.configuration.max_seq_len
         self.sampling_dp = 1
-        # Reuses the vocab-sharded lm_head as the sampler's shard: needs divisible vocab; 64K = top-k limit.
+        # Certified on-device sampling topology: P150x4 (1x4 TP). Qwen's 248,320-token
+        # vocabulary becomes 62,080 logits/device, below the Top-K path's 64K shard limit.
+        mesh_shape = tuple(int(dim) for dim in mesh_device.shape)
         self._supports_on_device_sampling = (
-            self.num_devices > 1
+            mesh_shape == (1, 4)
             and args.vocab_size % self.num_devices == 0
             and (args.vocab_size // self.num_devices <= 64 * 1024)
         )

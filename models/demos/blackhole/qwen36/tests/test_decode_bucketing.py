@@ -74,6 +74,73 @@ def test_async_capability_matches_device_sampling():
     assert capabilities["supports_async_decode"] == capabilities["supports_sample_on_device"]
 
 
+def test_unsupported_device_sampling_fails_at_startup(expect_error):
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+
+    model = SimpleNamespace(
+        sampling=None,
+        mesh_device=SimpleNamespace(shape=(1, 1)),
+        num_devices=1,
+        args=SimpleNamespace(vocab_size=248320),
+    )
+    wrapper = SimpleNamespace(model=[model])
+
+    Qwen36ForCausalLM._validate_device_sampling_request(wrapper, False)
+    with expect_error(RuntimeError, "requires the certified 1x4 TP topology"):
+        Qwen36ForCausalLM._validate_device_sampling_request(wrapper, True)
+
+
+def test_batched_prefill_requires_explicit_empty_slots(expect_error):
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+
+    with expect_error(RuntimeError, "requires explicit empty_slots"):
+        Qwen36ForCausalLM._prefill_forward_tp_batched(
+            None,
+            SimpleNamespace(),
+            torch.zeros(2, 4, dtype=torch.int32),
+            torch.zeros(2, 1, dtype=torch.int32),
+            torch.tensor([4, 4]),
+            None,
+        )
+
+
+def test_positional_slot_remap_reaches_qwen_gdn(monkeypatch):
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+    from models.tt_transformers.tt.generator import Generator
+
+    remaps = []
+    model = SimpleNamespace(
+        num_devices=4,
+        args=SimpleNamespace(max_batch_size=8),
+        sampling=None,
+        _remap_gdn_slots=lambda remap: remaps.append(remap),
+    )
+    wrapper = object.__new__(Qwen36ForCausalLM)
+    wrapper.model = [model]
+    wrapper.model_args = [SimpleNamespace(mesh_device=None)]
+    wrapper.data_parallel = 1
+    monkeypatch.setattr(Generator, "decode_forward", lambda self, *args, **kwargs: "decoded")
+
+    slot_remap = torch.arange(8, dtype=torch.int32)
+    result = wrapper.decode_forward(
+        torch.zeros(8, 1, dtype=torch.int32),
+        torch.zeros(8, dtype=torch.int32),
+        torch.zeros(8, 1, dtype=torch.int32),
+        None,
+        True,
+        True,
+        None,
+        False,
+        None,
+        None,
+        slot_remap,
+    )
+
+    assert result == "decoded"
+    assert len(remaps) == 1 and remaps[0] is slot_remap
+    wrapper.model = []
+
+
 def test_bucket_warmup_compiles_all_widths_before_capture(monkeypatch):
     from models.common.warmup import WarmupForwardMixin
     from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM

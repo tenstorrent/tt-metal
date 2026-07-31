@@ -57,6 +57,21 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         "supports_sample_on_device": True,
     }
 
+    def _validate_device_sampling_request(self, requested):
+        if not requested:
+            return
+        for model in self.model:
+            if model.sampling is not None:
+                continue
+            mesh_shape = tuple(int(dim) for dim in model.mesh_device.shape)
+            logits_per_device = math.ceil(model.args.vocab_size / model.num_devices)
+            raise RuntimeError(
+                "Qwen3.6 on-device sampling requires the certified 1x4 TP topology "
+                f"with at most 65536 logits/device; got mesh={mesh_shape}, "
+                f"vocab={model.args.vocab_size}, logits/device={logits_per_device}. "
+                "Unset sample_on_device_mode for host sampling."
+            )
+
     @classmethod
     def get_max_tokens_all_users(
         cls,
@@ -191,10 +206,16 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if not hasattr(self, "_slots_prefilled_since_decode"):
             self._slots_prefilled_since_decode = set()
         empty_slots = kwargs.get("empty_slots")
+        batched = model.num_devices > 1 and model.args.max_batch_size > 1
+        if batched and empty_slots is None:
+            raise RuntimeError(
+                "Qwen batched prefill requires explicit empty_slots from the vLLM state-slot contract; "
+                "refusing to guess rows because that can overwrite live GDN state."
+            )
         self._slots_prefilled_since_decode.update(
             range(tokens.shape[0]) if empty_slots is None else [int(s) for s in empty_slots]
         )
-        if model.num_devices > 1 and model.args.max_batch_size > 1:
+        if batched:
             # Batched text prefill into decode slots (MM is B=1). Require real visual data, not a
             # non-None empty pixel_values placeholder from vLLM on text requests.
             assert not self._has_visual(kwargs, "pixel_values") and not self._has_visual(
@@ -269,18 +290,15 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         tokens:      torch [N, max_T] (rows are the N requests scheduled this prefill step).
         page_table:  torch [N, max_blocks] — row u = request u's blocks.
         prompt_lens: per-request real lengths (row u trimmed to prompt_lens[u]).
-        empty_slots: per-request decode slot; defaults to range(N) (mirrors Generator.prefill_forward_text).
+        empty_slots: explicit per-request decode slot from vLLM.
         Returns ([N, 1, vocab] host logits, [N] zero rope_deltas — text M-RoPE delta is 0, applied model-side).
         """
         N = tokens.shape[0]
         plens = [int(prompt_lens[u]) for u in range(N)] if prompt_lens is not None else [tokens.shape[1]] * N
         if empty_slots is None:
-            # Fallback only: blind 0..N-1 overwrites live GDN rows. Runner should pass empty_slots.
-            logger.warning(
-                f"Qwen batched prefill got no empty_slots for {N} user(s); assuming rows 0..{N-1}. "
-                "If other requests are decoding, their GDN state is about to be overwritten."
+            raise RuntimeError(
+                "Qwen batched prefill requires explicit empty_slots; blind row assignment can overwrite live GDN state."
             )
-            empty_slots = list(range(N))
         empty_slots = [int(s) for s in empty_slots]
         assert (
             len(set(empty_slots)) == len(empty_slots) == N
@@ -301,9 +319,10 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             logger.info("Decode trace replay active (Qwen)")
         model = self.model[0]
         # Remap GDN state before decode: vLLM rows move on eviction/condense; plugin remaps its
-        # buffers/seed in super(), but GDN is model-internal. Pass slot_remap through for that.
+        # buffers/seed in super(), but GDN is model-internal. The base API accepts slot_remap as
+        # positional argument 10 or by keyword, and both forms must move GDN before forward.
         if model.num_devices > 1 and model.args.max_batch_size > 1:
-            slot_remap = kwargs.get("slot_remap")
+            slot_remap = kwargs.get("slot_remap", args[10] if len(args) > 10 else None)
             if slot_remap is not None:
                 model._remap_gdn_slots(slot_remap)
         # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
@@ -400,6 +419,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.
         # Drop stale `non_greedy_decoding_on_device` from the old vLLM plugin; no-op for Qwen.
         kwargs.pop("non_greedy_decoding_on_device", None)
+        self._validate_device_sampling_request(kwargs.get("can_sample_on_device", False))
         max_b = kwargs.get("max_batch_size")
         # Compile every width before the first trace capture. Program-cache allocations made by a
         # later width can otherwise overlap temporary addresses baked into an earlier live trace.
