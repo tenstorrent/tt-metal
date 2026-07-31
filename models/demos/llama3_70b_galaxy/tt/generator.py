@@ -1744,7 +1744,9 @@ class Generator(WarmupForwardMixin):
         if sampling_params is not None and (active_seed_slots is None or active_seed_slots):
             seed_values = getattr(sampling_params, "seed", None)
             if reset_sampling_state:
-                seed_manager.reset_decode_batch(seed_values, active_seed_slots)
+                # Reset unconditionally, including seed=None, so decode-only
+                # sampling uploads fresh device seeds for the new state.
+                seed_manager.reset_seed_from_slots(seed_values, active_seed_slots)
                 seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots, start_pos)
             elif reload_sampling_params:
                 seed_manager.reset_seed_from_slots_if_needed(

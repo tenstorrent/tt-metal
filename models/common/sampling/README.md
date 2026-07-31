@@ -101,6 +101,14 @@ advance seeds — callers apply slot remaps first, reset/align seeds when state 
 reset, and call `seed_manager.get_new_values()` exactly once per sampled token.
 The legacy `reset_batch=` keyword remains as a compatibility alias.
 
+This contract includes the unconditional first-decode reseed for `seed=None`
+also addressed by
+[tt-metal#51556](https://github.com/tenstorrent/tt-metal/pull/51556).
+It does not depend on that PR.
+`reset_sampling_state=True` calls `reset_seed_from_slots(...)` rather than the
+conditional helper, ensuring decode-only sampling actually initializes and
+uploads fresh device seeds when both the requested and cached seed are `None`.
+
 ## vLLM Decode Update Contract
 
 The paired vLLM TT plugin sends four boolean commands on every decode:

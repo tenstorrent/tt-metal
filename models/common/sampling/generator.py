@@ -977,23 +977,6 @@ class SeedManager:
         if reset_slots:
             self.reset_seed_from_slots(seeds, reset_slots)
 
-    def reset_decode_batch(self, seeds, active_slots) -> None:
-        """Reinitialize RNG ownership for a new decode batch layout.
-
-        Removed slots must not keep an explicit seed that leaves
-        ``_seed_active`` true, and a newly reused identity slot must receive a
-        fresh unseeded RNG even when both the old and new request have
-        ``seed=None``. Continuing explicitly seeded requests are subsequently
-        aligned to absolute positions by the caller.
-        """
-        active_slots = {int(slot) for slot in active_slots}
-        for slot in range(self.max_batch_size):
-            if slot not in active_slots:
-                self.seeds[slot] = None
-                self.seed_counters[slot] = 0
-                self.rngs[slot].seed(self._next_unseeded_rng_seed())
-        self.reset_seed_from_slots(seeds, sorted(active_slots))
-
     def align_seed_counters_to_positions(self, seeds, user_ids, positions, offset: int = 1):
         """Make explicit-seed decode independent of persistent slot lifetime.
 

@@ -157,6 +157,50 @@ def test_deepseek_sampling_seed_reset_uses_row_padded_device_slots():
     assert seeds[104:] == [None] * 24
 
 
+def test_deepseek_unseeded_sampling_reset_initializes_all_device_slots():
+    batch_size = 16
+    generator = _fake_deepseek_generator(batch_size_per_row=8, sampling_dp=2)
+    sampling_params = SamplingParams(
+        temperature=[0.6] * batch_size,
+        top_k=[32] * batch_size,
+        top_p=[0.95] * batch_size,
+        seed=None,
+    )
+
+    DeepseekGenerator._reset_sampling_state(generator, sampling_params, batch_size, generator.batch_size_per_row)
+
+    [(seeds, user_ids)] = generator.sampling_generator.seed_manager.reset_calls
+    assert seeds == [None] * 64
+    assert user_ids == list(range(64))
+
+
+def test_deepseek_force_reset_rebuilds_unchanged_sampling_state():
+    sampling_params = SamplingParams(temperature=0.6, top_k=32, top_p=0.95, seed=None)
+    reset_calls = []
+    generator = SimpleNamespace(
+        batch_size=1,
+        batch_size_per_row=1,
+        sampling_params=sampling_params,
+        sampling_generator=object(),
+        _to_local_sampling_params=lambda params: params,
+        _normalize_sampling_params_for_batch=lambda params, batch_size: params,
+        _are_sampling_params_same=lambda new, previous: True,
+        _get_sampling_value=lambda value, index: value[index] if isinstance(value, list) else value,
+        _reset_sampling_state=lambda params, batch_size, batch_size_per_row: reset_calls.append(
+            (params, batch_size, batch_size_per_row)
+        ),
+    )
+
+    DeepseekGenerator._validate_and_initialize_sampling(
+        generator,
+        sampling_params,
+        sample_on_device=True,
+        force_reset=True,
+    )
+
+    assert reset_calls == [(sampling_params, 1, 1)]
+
+
 @torch.no_grad()
 @pytest.mark.parametrize(
     "sampling_params",

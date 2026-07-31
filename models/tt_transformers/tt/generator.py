@@ -2169,9 +2169,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         s = format_sampling_params(chunk, seed_bs).seed
                         seed_values += s if isinstance(s, list) else [s] * seed_bs
                 if reset_sampling_state:
-                    # A layout/mode transition reinitializes every active slot,
-                    # including unseeded requests reusing an identity slot.
-                    sampling_module.seed_manager.reset_decode_batch(
+                    # A state reset is unconditional even for seed=None:
+                    # reset_if_needed would see None == None and skip the
+                    # fresh device-seed upload in decode-only sampling mode.
+                    sampling_module.seed_manager.reset_seed_from_slots(
                         seed_values, active_seed_slots
                     )
                     sampling_module.seed_manager.align_seed_counters_to_positions(

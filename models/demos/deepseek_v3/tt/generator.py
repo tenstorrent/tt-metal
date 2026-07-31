@@ -453,6 +453,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         sample_on_device: bool,
         enable_trace: bool = False,
         enable_mtp: bool = False,
+        force_reset: bool = False,
     ) -> None:
         if enable_mtp and sample_on_device:
             raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
@@ -483,8 +484,9 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 )
 
             if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
-                # sampling generator exists; reset if params are different
-                if not params_same:
+                # vLLM can require a state reset even when the values are
+                # unchanged, for example on first decode after a layout change.
+                if force_reset or not params_same:
                     self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
             else:
                 # create new sampling generator
@@ -955,9 +957,12 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # the chunks raw here, and only format a copy to preserve seed padding.
         seed_params = format_sampling_params(sampling_params, max_batch_size=batch_size)
         seed = getattr(seed_params, "seed", None)
-        if seed is not None:
-            seed_slots = self._sampling_device_seed_slots(seed, batch_size)
-            self.sampling_generator.seed_manager.reset_seed(seed_slots, list(range(len(seed_slots))))
+        if seed is None:
+            seed = [None] * batch_size
+        seed_slots = self._sampling_device_seed_slots(seed, batch_size)
+        # This must be unconditional: when both requested and cached seeds are
+        # None, a conditional reset would skip the fresh device-seed upload.
+        self.sampling_generator.seed_manager.reset_seed(seed_slots, list(range(len(seed_slots))))
         self.sampling_generator.apply_decode_state(
             sampling_param_chunks,
             reset_batch=True,
@@ -1083,10 +1088,11 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         Contract differences vs the tt_transformers base (deferred reconciliation):
         - Deepseek applies sampling *state* (params/seeds, lazy generator
-          creation) in :meth:`_validate_and_initialize_sampling`, gated on
-          param change — not unconditionally per step. Passing ``sampling_params``
-          here refreshes that state (idempotent when unchanged); the vLLM bridge
-          already initialises it before the forward, so it passes ``None``.
+          creation) in :meth:`_validate_and_initialize_sampling`. The vLLM
+          bridge passes ``force_reset=True`` when its explicit state-reset
+          command is set, including when parameter values are unchanged, then
+          passes ``None`` here because it already applied the state before the
+          forward.
         - ``prompt_tokens`` / ``output_tokens`` / ``slot_remap`` are not yet
           threaded into deepseek's penalty/seed state (see
           :meth:`_reset_sampling_state` TODO); accepted for signature
