@@ -153,6 +153,7 @@
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.1-8B-Instruct MESH_DEVICE=N150 SAMPLING_MODE=on_device_topk PIPELINE_READBACK=1
     pytest --timeout 420 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-token-accuracy-repeat_batch-1-prefetcher-off-N150]"
     pytest --timeout 600 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-eval-32-repeat_batch-3-prefetcher-off-perf-report-off-N150]"
+    pytest --timeout 600 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-eval-32-repeat_batch-1-prefetcher-off-perf-report-on-N150]"
   model-name: llama3.1-8b
   skus:
     wh_n150:

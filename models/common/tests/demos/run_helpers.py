@@ -73,6 +73,7 @@ class PerfBenchmarkResult:
     batch_size: int
     num_decode_tokens: int
     generated_token_ids: list[list[int]]
+    decode_iteration_times_s: list[float] = field(default_factory=list)
 
     @property
     def ttft_ms(self) -> float:
@@ -461,6 +462,7 @@ def run_perf_benchmark(
 
     compile_time = None
     decode_times = []
+    decode_iteration_times = []
     sampled_decode_start = None
     pending_host_output = None
     pending_read_events = None
@@ -505,8 +507,10 @@ def run_perf_benchmark(
 
             if iteration == 0:
                 compile_time = elapsed
-            elif sampling_params is None:
-                decode_times.append(elapsed)
+            else:
+                decode_iteration_times.append(elapsed)
+                if sampling_params is None:
+                    decode_times.append(elapsed)
 
             if sampling_params is None:
                 if isinstance(output, torch.Tensor) and output.dim() >= 2:
@@ -553,6 +557,7 @@ def run_perf_benchmark(
         batch_size=batch_size,
         num_decode_tokens=num_decode_tokens,
         generated_token_ids=generated_token_ids,
+        decode_iteration_times_s=decode_iteration_times,
     )
 
 

@@ -48,7 +48,7 @@ from models.common.tests.demos.run_helpers import (
 )
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
-from models.demos.utils.trace_region_sizes import resolve_trace_region_size
+from models.demos.utils.trace_region_sizes import hf_model_name_candidates, resolve_trace_region_size
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import create_submeshes
 
@@ -106,6 +106,26 @@ EXPECTED_METRICS = {
 
 PERF_TOLERANCE = 0.05
 DEMO_DIR = Path(__file__).parent
+
+
+def _benchmark_model_identity(hf_model: str, fallback_model_name: str) -> tuple[str, str]:
+    """Return TTTv1-compatible base identity plus a stable model variant."""
+    canonical_model = next(
+        (
+            candidate
+            for candidate in hf_model_name_candidates(hf_model)
+            if "/" in candidate and not Path(candidate).is_absolute() and not Path(candidate).exists()
+        ),
+        fallback_model_name,
+    )
+    model_variant = Path(canonical_model).name
+    instruct_suffix = "-Instruct"
+    base_model = (
+        model_variant[: -len(instruct_suffix)]
+        if model_variant.lower().endswith(instruct_suffix.lower())
+        else model_variant
+    )
+    return base_model, model_variant
 
 
 @dataclass(frozen=True)
@@ -401,7 +421,6 @@ def test_llama3_8b(test_config, ttnn_mesh_device, optimizations):
                     _expected_for_case(expected, case.performance_case),
                     prompts=prompts,
                     case_name=f"{optimizations}/{case.name}",
-                    num_decode_tokens=case.num_decode_tokens,
                     profiler=profiler,
                     result=result,
                     prompt_lens=prompt_lens,
@@ -499,7 +518,7 @@ def _run_token_accuracy(llm, mesh_device, expected, optimizations: str):
 
     if os.environ.get("CI") == "true":
         hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-        model_target = Path(hf_model).name if Path(hf_model).exists() else hf_model
+        model_target, _ = _benchmark_model_identity(hf_model, llm.model_name)
         central = resolve_accuracy_targets(
             model_target,
             get_device_name(mesh_device),
@@ -591,7 +610,7 @@ def _measure_teacher_forcing_accuracy(llm, mesh_device, *, optimizations: str, l
 
     if os.environ.get("CI") == "true":
         hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-        model_target = Path(hf_model).name if Path(hf_model).exists() else hf_model
+        model_target, model_variant = _benchmark_model_identity(hf_model, llm.model_name)
         num_target = len(reference_tokens) - prompt_len
         measurements = {
             "prefill_t/s": result.prefill_tok_s,
@@ -612,7 +631,11 @@ def _measure_teacher_forcing_accuracy(llm, mesh_device, *, optimizations: str, l
             device_name=get_device_name(mesh_device),
             num_layers=len(model_config.block_configs),
             batch_size=1,
-            config_params={"optimization_profile": optimizations, "workload": "token-accuracy"},
+            config_params={
+                "model_variant": model_variant,
+                "optimization_profile": optimizations,
+                "workload": "token-accuracy",
+            },
             input_sequence_length=prompt_len,
             output_sequence_length=num_target,
         )
@@ -699,13 +722,14 @@ def _report_performance(
     *,
     prompts,
     case_name,
-    num_decode_tokens,
     profiler,
     result,
     prompt_lens,
     sampling_mode,
+    log_text=True,
+    data_parallel=1,
 ) -> None:
-    """Log, persist, and validate one completed performance run."""
+    """Log and persist one run, applying gates only when ``expected`` is non-empty."""
     model_config = llm.model.config
     logger.info(
         f"Performance — TTFT: {result.ttft_ms:.1f}ms, "
@@ -713,11 +737,12 @@ def _report_performance(
         f"tok/s: {result.tok_s:.1f}, "
         f"decode latency: {result.decode_latency_mean_ms:.2f}ms"
     )
-    log_generated_text(prompts, result.generated_token_ids, llm.tokenizer)
+    if log_text:
+        log_generated_text(prompts, result.generated_token_ids, llm.tokenizer)
 
     if os.environ.get("CI") == "true":
         hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-        model_target = Path(hf_model).name if Path(hf_model).exists() else hf_model
+        model_target, model_variant = _benchmark_model_identity(hf_model, llm.model_name)
         prefill_seq_len = int(prompt_lens.max())
         measurements = {
             "prefill_t/s": (
@@ -730,6 +755,41 @@ def _report_performance(
         benchmark_data = create_benchmark_data(
             profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, targets={}
         )
+        decode_iteration_times = result.decode_iteration_times_s or result.decode_times_s
+        for token_pos, decode_time_s in enumerate(decode_iteration_times, start=1):
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                f"time_to_token_{token_pos}",
+                decode_time_s * 1000,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
+        for token_pos in (1, 128, 1024, 2048, 4096, 8192):
+            if token_pos <= len(decode_iteration_times):
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,
+                    "inference_decode",
+                    f"decode_latency_ms_token_{token_pos}",
+                    decode_iteration_times[token_pos - 1] * 1000,
+                    step_warm_up_num_iterations=None,
+                    target=None,
+                )
+        # Match TTTv1's historical first-128 window: compile iteration 0 is
+        # excluded, leaving steady-state iterations 1 through 127.
+        first_window = decode_iteration_times[:127]
+        if first_window:
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "avg_decode_time_first_128",
+                sum(first_window) * 1000 / len(first_window),
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
         benchmark_data.save_partial_run_json(
             profiler,
             run_type="demo_perf",
@@ -739,12 +799,15 @@ def _report_performance(
             num_layers=len(model_config.block_configs),
             batch_size=result.batch_size,
             config_params={
+                "model_variant": model_variant,
+                "data_parallel": data_parallel,
+                "tensor_parallel": model_config.num_devices,
                 "sampling_mode": sampling_mode,
                 "optimization_profile": case_name.split("/", 1)[0],
                 "workload": case_name.split("/", 1)[1],
             },
-            input_sequence_length=model_config.max_seq_len,
-            output_sequence_length=num_decode_tokens,
+            input_sequence_length=prefill_seq_len,
+            output_sequence_length=result.num_decode_tokens,
         )
 
     if expected:
@@ -776,7 +839,6 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name, num_d
         expected,
         prompts=prompts,
         case_name=case_name,
-        num_decode_tokens=num_decode_tokens,
         profiler=profiler,
         result=result,
         prompt_lens=prompt_lens,
@@ -854,6 +916,12 @@ def _run_eval_repeat_batches(
 
 
 def _run_dp_smoke(mesh_device, optimizations: str, case: DemoCase) -> None:
+    """Run a functional DP smoke with telemetry, not a performance gate.
+
+    ``optimizations`` names the model optimization profile; it does not make
+    this a gated performance test. TTTv1 DP parity requires logging and CI
+    artifacts while functional execution determines pass/fail.
+    """
     data_parallel = case.data_parallel
     per_lane_batch_size = case.batch_size // data_parallel
     assert per_lane_batch_size == 1, f"{case.name} expects one active user per DP lane"
@@ -900,21 +968,42 @@ def _run_dp_smoke(mesh_device, optimizations: str, case: DemoCase) -> None:
             reserve_decode_tokens=case.num_decode_tokens,
         )
         sampling_mode, sampling_params = _sampling_params_for_model(llms[0].model, case_name=case.name)
-        result = run_perf_benchmark(
-            group,
-            tokens=input_tokens,
-            kv_cache=kv_cache,
-            page_table=page_table,
-            num_decode_tokens=case.num_decode_tokens,
-            max_batch_size=case.batch_size,
-            prompt_lens=prompt_lens,
-            sampling_params=sampling_params,
-            prefill_sampling_params=None,
-            pipeline_readback=os.environ.get("PIPELINE_READBACK", "1").lower() not in ("0", "false", "no"),
-        )
+        profiler = BenchmarkProfiler()
+        profiler.start("run")
+        try:
+            result = run_perf_benchmark(
+                group,
+                tokens=input_tokens,
+                kv_cache=kv_cache,
+                page_table=page_table,
+                num_decode_tokens=case.num_decode_tokens,
+                max_batch_size=case.batch_size,
+                prompt_lens=prompt_lens,
+                sampling_params=sampling_params,
+                prefill_sampling_params=None,
+                pipeline_readback=os.environ.get("PIPELINE_READBACK", "1").lower() not in ("0", "false", "no"),
+                profiler=profiler,
+            )
+        finally:
+            profiler.end("run")
+        # Match TTTv1's correctness-before-telemetry ordering: a failed DP run
+        # must not leave a benchmark partial for post-failure artifact processing.
         assert len(result.generated_token_ids) == data_parallel
         assert all(result.generated_token_ids), f"{case.name}: every DP lane must return output"
         assert_no_special_tokens(result.generated_token_ids, llms[0].tokenizer, case_name=case.name)
+        _report_performance(
+            llms[0],
+            mesh_device,
+            {},
+            prompts=prompts,
+            case_name=f"{optimizations}/{case.name}",
+            profiler=profiler,
+            result=result,
+            prompt_lens=prompt_lens,
+            sampling_mode=sampling_mode,
+            log_text=False,
+            data_parallel=data_parallel,
+        )
     finally:
         if group is not None:
             group.cleanup()

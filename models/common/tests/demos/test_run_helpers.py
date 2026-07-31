@@ -192,6 +192,7 @@ def test_perf_benchmark_host_argmax_path_preserves_timing_and_tokens(monkeypatch
     assert result.prefill_time_s == pytest.approx(0.1)
     assert result.compile_decode_time_s == pytest.approx(0.2)
     assert result.decode_times_s == pytest.approx([0.25, 0.3])
+    assert result.decode_iteration_times_s == pytest.approx([0.25, 0.3])
     assert result.generated_token_ids == [[2, 3, 4, 5]]
 
 
@@ -277,6 +278,7 @@ def test_perf_benchmark_uses_public_async_readback_without_trace_introspection(m
     assert synchronized_events == [0, 1, 2]
     assert result.generated_token_ids == [[2, 3, 4, 5]]
     assert len(result.decode_times_s) == 2
+    assert result.decode_iteration_times_s == pytest.approx([0.1, 0.1])
     assert profiler.events == [
         ("start", "inference_prefill"),
         ("end", "inference_prefill"),
