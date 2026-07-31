@@ -183,9 +183,90 @@ jobs:
       - name: Install Wheel
         run: |
           python3 -m pip install --force-reinstall ttnn-*.whl
-      - name: Generate tray to PCIe device mapping
+      - name: Reset and health-check Blackhole cluster
+        # Blackhole clusters can come up cold/degraded at the start of a nightly
+        # run (SYS-1634 / BH-84). The resulting inconsistent cluster descriptor
+        # makes serialize_cluster_descriptor() crash in the next step. Reset the
+        # cards and verify links are online before opening the cluster.
+        if: ${{ matrix.arch == 'blackhole' }}
+        timeout-minutes: 25
+        env:
+          DEV_IMAGE: ${{ needs.build-artifact.outputs.dev-docker-image }}
         run: |
-          python3 .github/scripts/utils/generate_tray_mapping.py
+          HEALTH_CHECK=./build/test/tt_metal/tt_fabric/test_system_health
+          # Run the binary inside the dev image, which carries its runtime deps
+          # (OpenMPI etc.) that are absent on the bare-metal runner. LD_LIBRARY_PATH
+          # is *prepended* to the image's own value on purpose: build/lib holds the
+          # extracted libtt_metal.so, while libmpi.so.40 (ULFM OpenMPI) only resolves
+          # via the path the image already sets.
+          health_check() {
+            docker run --rm --privileged \
+              --device /dev/tenstorrent --device /dev/ipmi0 \
+              -v /dev/hugepages-1G:/dev/hugepages-1G \
+              -v "$PWD":/work -w /work -e TT_METAL_HOME=/work \
+              "$DEV_IMAGE" \
+              bash -c 'export LD_LIBRARY_PATH="/work/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; exec ./build/test/tt_metal/tt_fabric/test_system_health'
+          }
+          if [ ! -x "$HEALTH_CHECK" ]; then
+            echo "::warning::test_system_health not in the build artifact; resetting without link verification"
+            exec bash .github/scripts/utils/glx_reset.sh
+          fi
+          # A full galaxy reset takes minutes, so a handful of attempts is the most
+          # that fits the step timeout -- and a state that survives 3 resets is not
+          # the transient cold-start this works around.
+          ATTEMPTS=3
+          for i in $(seq 1 $ATTEMPTS); do
+            echo "Reset/health-check attempt $i of $ATTEMPTS"
+            if bash .github/scripts/utils/glx_reset.sh && health_check; then
+              echo "Reset + health check passed"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          echo "Cluster did not become healthy after $ATTEMPTS reset attempts"
+          exit 1
+      - name: Generate tray to PCIe device mapping
+        # Retry with a reset in between: the first cluster open of a nightly run
+        # can still hit a transient degraded state (manual re-runs historically
+        # pass), so automate that recovery instead of failing the whole job.
+        # Budget covers 3 mapping attempts plus the 2 galaxy resets between them.
+        timeout-minutes: 20
+        run: |
+          # A board reset does not free a stale process still holding the device,
+          # so kill holders too (sudo: needed to read other users' /proc fds).
+          free_tt_devices() { sudo python3 .github/scripts/utils/free_tt_devices.py || true; sleep 3; }
+          # A missing/unenumerated device yields an incomplete mapping that would
+          # only fail later in create-files with no recovery; treat it as a failed
+          # attempt so the reset+retry below can bring the device back.
+          EXPECTED=$(( ${{ matrix.num_containers }} * ${{ matrix.chips_per_container }} ))
+          generate_ok() {
+            local count
+            python3 .github/scripts/utils/generate_tray_mapping.py || return 1
+            count=$(python3 -c "import yaml; d=yaml.safe_load(open('tray_to_pcie_device_mapping.yaml')); print(sum(len(v) for v in d.get('device_mapping', {}).values()))") || return 1
+            if [ "$count" -ne "$EXPECTED" ]; then
+              echo "Incomplete cluster: mapped $count devices, expected $EXPECTED"
+              return 1
+            fi
+          }
+          ATTEMPTS=3
+          free_tt_devices
+          for i in $(seq 1 $ATTEMPTS); do
+            echo "generate_tray_mapping attempt $i of $ATTEMPTS"
+            if generate_ok; then
+              echo "Tray mapping generated successfully"
+              exit 0
+            fi
+            echo "generate_tray_mapping failed on attempt $i"
+            if [ "$i" -lt "$ATTEMPTS" ]; then
+              free_tt_devices
+              echo "Resetting cluster before retry..."
+              bash .github/scripts/utils/glx_reset.sh || true
+              sleep 10
+            fi
+          done
+          echo "generate_tray_mapping failed after $ATTEMPTS attempts"
+          exit 1
       - name: Create Docker Compose file
         run: |
           TRAY_MAPPING_ARG=""
