@@ -1115,6 +1115,25 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 
+        # Only rank 0 writes the merged table, but every rank (and every co-located producer) reads it
+        # back. Multi-host therefore requires shared storage; the per-host default is invisible to the
+        # other hosts. Reject it here — rank-invariant (same env + num_ranks), so all ranks raise
+        # together before the stage-layout all-gather below rather than deadlocking the survivors.
+        if num_ranks > 1:
+            _abs_table = os.path.abspath(table_path)
+            if any(_abs_table == p or _abs_table.startswith(p + "/") for p in ("/tmp", "/dev/shm", "/run", "/var/tmp")):
+                raise ValueError(
+                    f"PREFILL_MIGRATION_TABLE_PATH={_abs_table} is on per-host storage; with num_ranks="
+                    f"{num_ranks} the table rank 0 writes is invisible to the other hosts' readers. Point "
+                    "it at shared/NFS storage (e.g. /data/...)."
+                )
+
+        # Drop a stale table from a prior run before rank 0 rebuilds it, so a reader can never
+        # deserialize last run's table (same rationale as the DONE sentinel above).
+        if is_first_rank and os.path.exists(table_path):
+            logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
+            os.remove(table_path)
+
         # ALL RANKS join the stage-layout all-gather (collective barrier; rank 0 needs the merged
         # layout to build the table). Real migration also delivers this rank's local FNID->UMD map to
         # its co-located worker first; mock has no worker (the producer reads a serialized JSON map),
@@ -1148,8 +1167,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             # EVERY rank serializes its OWN local fabric_node -> ASIC unique_id device map so each
             # co-located producer can resolve only its host's chips for read_dram_umd (the multi-rank
             # merged table carries every host's fnids; a producer with just its local map naturally
-            # filters to its own layers). The device-map path must be host-local (each rank overwrites
-            # the same name on its own host); the table path is shared (only rank 0 writes it).
+            # filters to its own layers). The device-map path is host-local (each rank overwrites the
+            # same name on its own host); the table path MUST be on shared storage (only rank 0 writes
+            # it, but every host's reader resolves the same path) — enforced above for num_ranks > 1.
             device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
             serialize_device_map(mesh_device, device_map_path)
             if is_first_rank:

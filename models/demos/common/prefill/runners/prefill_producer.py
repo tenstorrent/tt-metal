@@ -214,6 +214,28 @@ def _chunk_to_host_array(chunk_token_ids):
 # ---------------------------------------------------------------------------
 
 
+# Per-host filesystems: a table written under one of these by rank 0 is invisible to validators on
+# other hosts, which resolve the same path against their OWN local mount.
+_PER_HOST_FS_PREFIXES = ("/tmp", "/dev/shm", "/run", "/var/tmp")
+
+
+def _require_shared_table_path(world_size: int) -> None:
+    """Every validator reads the same serialized table rank 0 writes, so multi-rank requires it on
+    shared storage. Reject the per-host default early and symmetrically — same env + world_size on
+    every rank means all ranks exit together, never half-opening a coordination barrier — instead of
+    letting a remote validator silently read a missing/stale file."""
+    if world_size <= 1:
+        return
+    table_path = os.path.abspath(os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"))
+    if any(table_path == p or table_path.startswith(p + "/") for p in _PER_HOST_FS_PREFIXES):
+        logger.error(
+            f"[producer] PREFILL_MIGRATION_TABLE_PATH={table_path!r} is on per-host storage; multi-rank "
+            f"(world_size={world_size}) validators on other hosts cannot read rank 0's table. Point it at "
+            "shared/NFS storage (e.g. /data/...)."
+        )
+        sys.exit(1)
+
+
 def _read_kv_chunk_table(timeout_s: int):
     """Poll for and deserialize the KV chunk address table the runner published to
     PREFILL_MIGRATION_TABLE_PATH. Fully device-less (import_from_protobuf_file rebuilds it from the
@@ -1028,18 +1050,22 @@ def _run_validator(rank: int, world_size: int) -> None:
     if not cfg.verify:
         logger.error("[producer] multi-rank requires PREFILL_PRODUCER_CHECK_PCC=1 (validators only verify).")
         sys.exit(1)
+    _require_shared_table_path(world_size)
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
     logger.info(f"[producer] validator rank={rank}/{world_size}: read-back only (no H2D feed)")
 
-    # Read the table before GO, but never let a corrupt/partial table raise here: that would skip the
-    # resident-map broadcast below and hang the master in its GO allgather. Fail into ok=False instead.
+    # GO before the table read: the master broadcasts the resident map only after draining every
+    # LayerAck, which also means rank 0 finished publishing this run's table. Reading after GO can't
+    # observe a stale prior-run table, and a read failure here still reaches the verdict allgather
+    # (ok=False) — the master already cleared GO, so it can't hang.
+    resident = _mr_bcast_resident(rank, {})
+    logger.info(f"[producer] validator rank={rank}: GO received, {len(resident)} resident slots")
+
     try:
         kv_table = _read_kv_chunk_table(timeout_s)
     except Exception as e:
         logger.error(f"[producer] validator: KV table read raised: {type(e).__name__}: {e}")
         kv_table = None
-    resident = _mr_bcast_resident(rank, {})
-    logger.info(f"[producer] validator rank={rank}: GO received, {len(resident)} resident slots")
 
     stats = RunStats(resident=resident, total_pushes=0, push_ms=[], completed=0, wall_s=0.0)
     ok = True
@@ -1095,6 +1121,7 @@ def main() -> None:
     if world_size > 1 and not cfg.verify:
         logger.error("[producer] multi-rank requires PREFILL_PRODUCER_CHECK_PCC=1 (all ranks verify).")
         sys.exit(1)
+    _require_shared_table_path(world_size)
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
     logger.info(
