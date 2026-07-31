@@ -1556,25 +1556,6 @@ void MeshDeviceImpl::init_perf_debug_profiler(const std::shared_ptr<MeshDevice>&
     if (s == nullptr || *s == '\0' || *s == '0') {
         return;
     }
-    // The X280 path is DISABLED while the DRISC drainer is the focus (2026-07-31).
-    //
-    // This is a hard error rather than a silent skip, and that is deliberate. TT_METAL_PERF_DEBUG_PROFILER
-    // does two things at once: it stands down the other two consumers (RealtimeProfilerManager here, and
-    // the DRAM profiler's per-program control-buffer reset in profiler.cpp) AND it boots the X280. Merely
-    // not booting the X280 would leave the destructive half in force -- producers emitting with no
-    // consumer at all. That does not fail, it HANGS: kernel_profiler.hpp's producer blocks on a full ring
-    // by design, so every profiled RISC would wedge at the ring ceiling.
-    //
-    // Use TT_METAL_DRISC_PROFILER=1 instead, which performs the same exclusion and expects an externally
-    // supplied DRISC drainer. To revive the X280 path, delete this block -- nothing else here was
-    // changed. Note the standalone X280 reader firmware is also stale; see the banners in
-    // tools/x280_bm/src/prof{stream,cons,cons_split,ll}.c.
-    TT_THROW(
-        "TT_METAL_PERF_DEBUG_PROFILER is disabled: the X280 profiler path is currently turned off in "
-        "favour of the DRISC drainer. Use TT_METAL_DRISC_PROFILER=1 and supply a DRISC drainer, or "
-        "remove this guard in MeshDeviceImpl::init_perf_debug_profiler to re-enable X280. Refusing "
-        "rather than skipping, because skipping would disable the other ring consumers and leave every "
-        "profiled RISC blocked on a full ring.");
     perf_debug_profiler_ = std::make_unique<PerfDebugProfiler>(mesh_device);
 }
 
