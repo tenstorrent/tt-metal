@@ -211,7 +211,7 @@ RotaryEmbeddingLlamaDeviceOperation::spec_return_value_t RotaryEmbeddingLlamaDev
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& shape = input_tensor.logical_shape();
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(),
@@ -229,11 +229,11 @@ RotaryEmbeddingLlamaDeviceOperation::tensor_return_value_t RotaryEmbeddingLlamaD
 
 namespace ttnn::prim {
 
-tt::tt_metal::Tensor rotary_embedding_llama(
-    const tt::tt_metal::Tensor& input_tensor,
-    const tt::tt_metal::Tensor& cos_cache,
-    const tt::tt_metal::Tensor& sin_cache,
-    const tt::tt_metal::Tensor& trans_mat,
+ttnn::Tensor rotary_embedding_llama(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& cos_cache,
+    const ttnn::Tensor& sin_cache,
+    const ttnn::Tensor& trans_mat,
     bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {

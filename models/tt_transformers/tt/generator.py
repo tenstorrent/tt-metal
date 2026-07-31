@@ -1068,6 +1068,45 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         else:
             return output_tensor
 
+    def _paged_prefill_block_size(self, kv_cache):
+        """Block size for chunked-prefill page-table padding/slicing.
+
+        Defaults to the cache's declared block_size. Models whose paged ops address
+        an HMA-shared K/V buffer through a smaller per-layer effective block_size
+        (e.g. gemma4 hybrid kv-cache groups: full-attention head_dim=512 viewing a
+        buffer declared for a head_dim=256 sliding layer) override this so the page
+        table math matches ``paged_fill_cache`` / the chunked SDPA. Non-overriding
+        models are unaffected.
+        """
+        return get_block_size(kv_cache)
+
+    def _chunk_prefill_get_last_token(self, *, is_last_chunk, last_token_idx_in_chunk, chunk_size):
+        """``get_last_token`` for one generator-level prefill chunk.
+
+        Default (legacy): always the last-chunk's relative index. Correct for
+        lm_head on the final chunk, but intermediate chunks then inherit a short
+        index and under-fill their KV — fatal for models that treat
+        ``get_last_token+1`` as the real fill length (Gemma4 bounded sliding).
+        Those models override this.
+        """
+        del is_last_chunk, chunk_size
+        return (last_token_idx_in_chunk // 32) * 32
+
+    def _chunk_prefill_page_table(self, page_table, *, user_id, model_id=-1, kv_cache=None):
+        """Page table + block_size for multi-chunk ``chunk_page_table`` slices.
+
+        Full-attention ``paged_fill_cache`` writes via ``chunk_page_table`` (absolute
+        block offsets for the current chunk). Returns ``(page_table, block_size)``.
+
+        Default: the legacy ``page_table`` and ``_paged_prefill_block_size``. Hybrid
+        kv-cache-group models override this to return a full-attention layer's
+        per-layer table and that group's block_size — the legacy table is often
+        group 0 (sliding), whose block IDs / column stride must not be used for
+        full-layer fill.
+        """
+        del user_id, model_id
+        return page_table, self._paged_prefill_block_size(kv_cache)
+
     def prefill_forward_single_user_text(
         self,
         tokens,  # New tokens to prefill (without the cached tokens), padded by get_padded_prefill_len()
@@ -1108,13 +1147,23 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 chunk_size = seq_len
 
             last_token_idx_in_seq = last_token_idx - num_cached_tokens  # Excluding the cached tokens
-            block_size = get_block_size(kv_cache)
             last_token_idx_in_chunk = last_token_idx_in_seq % chunk_size
             # Calculate which chunk contains the last_token_idx
             last_chunk_start = (last_token_idx_in_seq // chunk_size) * chunk_size
-            page_table_user = page_table[user_id : user_id + 1, :]
-            # Pad page table to match number of blocks in seq_len
-            num_padding_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size) - page_table_user.shape[1]
+            # Hybrid models may substitute a full-attention per-layer table here
+            # so ``chunk_page_table`` carries the block IDs (and column stride) that
+            # full-layer fill actually writes (legacy ``page_table`` is often
+            # sliding group 0 with a different unified block_size).
+            chunk_source_page_table, block_size = self._chunk_prefill_page_table(
+                page_table, user_id=user_id, model_id=model_id, kv_cache=kv_cache
+            )
+            page_table_user = chunk_source_page_table[user_id : user_id + 1, :]
+            # Trim over-wide tables (vLLM hybrid pads per-layer tables to
+            # max_num_blocks_per_req) so the pad width below stays non-negative.
+            needed_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
+            if page_table_user.shape[1] > needed_blocks:
+                page_table_user = page_table_user[:, :needed_blocks]
+            num_padding_blocks = needed_blocks - page_table_user.shape[1]
             page_table_user_padded = torch.cat(
                 [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
             )
@@ -1142,6 +1191,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # Cached pages must be skipped as well,
                 # so using absolute indexes.
                 chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
+                is_last_chunk = chunk_start_relative == last_chunk_start
 
                 chunk_inputs = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
@@ -1160,7 +1210,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     chunk_page_table_tt,
                     _chunk_start_idx_tt,
                 ) = chunk_inputs
-
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
                     rot_mats_global=chunk_rot_mats_global_prefill,
@@ -1169,13 +1218,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
-                    get_last_token=(last_token_idx_in_chunk // 32) * 32,
+                    get_last_token=self._chunk_prefill_get_last_token(
+                        is_last_chunk=is_last_chunk,
+                        last_token_idx_in_chunk=last_token_idx_in_chunk,
+                        chunk_size=chunk_size,
+                    ),
                     kv_cache=kv_cache,
                     batch_size=batch_size,
                     **kwargs,
                 )
 
-                if chunk_start_relative == last_chunk_start:
+                if is_last_chunk:
                     return tt_logits
                 else:
                     del tt_logits

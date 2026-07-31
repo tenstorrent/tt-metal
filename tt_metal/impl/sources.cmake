@@ -2,6 +2,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/mesh_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/umd_dram_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blaze/named_kernel_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/host_api/temp_quasar_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
@@ -56,6 +58,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_run_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
@@ -65,6 +68,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/program/kernel_compile_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptor_patching.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
@@ -86,6 +90,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command_calculator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_engine_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/service/service_core_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/simple_trace_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
@@ -145,6 +150,10 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/distributed_tensor_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/byte_based_data_transfer_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_pad_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_to_tensor_spec_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_live_ranges.cpp
 )

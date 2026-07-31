@@ -21,8 +21,9 @@ def assert_vbench_quality(
     try:
         from vbench import VBench
     except ImportError as e:
-        logger.warning(f"VBench import failed ({e}), skipping quality evaluation")
-        return {}
+        # Never silently pass: a requested quality gate with no vbench must surface, not no-op.
+        # Callers that treat missing vbench as skippable should guard with pytest.importorskip.
+        raise RuntimeError("VBench quality gate requested but `vbench` is not installed") from e
 
     # VBench 0.1.5 checkpoints contain typing.OrderedDict which is rejected by
     # torch.load's weights_only=True default (PyTorch 2.6+).
@@ -60,7 +61,8 @@ def assert_vbench_quality(
 
     for metric, minimum in thresholds.items():
         if metric not in scores:
-            continue
+            # A requested threshold with no returned score is an ungated dimension, not a pass.
+            raise AssertionError(f"VBench returned no score for requested metric {metric!r}")
         if scores[metric] < minimum:
             msg = f"VBench {metric} = {scores[metric]:.4f} < {minimum:.4f}"
             raise AssertionError(msg)

@@ -50,7 +50,7 @@ on:
 
 jobs:
   compute-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.build.outputs.value }}
     steps:
@@ -77,7 +77,7 @@ jobs:
     secrets: inherit
     with:
       tracy: true
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}

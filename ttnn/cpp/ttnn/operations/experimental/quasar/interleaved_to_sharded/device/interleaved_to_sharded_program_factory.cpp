@@ -16,6 +16,8 @@
 
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -29,7 +31,11 @@ namespace {
 // (Pattern: Unity-build hygiene for anonymous-namespace symbols).
 const DFBSpecName I2S_INPUT_DFB{"i2s_input"};
 const DFBSpecName I2S_OUTPUT_DFB{"i2s_output"};
-const DFBSpecName I2S_SCRATCH_DFB{"i2s_scratch"};
+// SCRATCH is modeled as a private node-local L1 scratchpad (not a DFB): the stick-layout reader is
+// the sole user (it both fills it via src->scratch and drains it via a local scratch->dest copy).
+// A self-looped DFB (same DM kernel bound PRODUCER+CONSUMER) is rejected on Gen2/Quasar by the
+// program_spec validator; a scratchpad has no producer/consumer edge, so it validates everywhere.
+const ScratchpadSpecName I2S_SCRATCH_PAD{"i2s_scratch"};
 
 const TensorParamName I2S_INPUT{"i2s_input"};
 const TensorParamName I2S_OUTPUT{"i2s_output"};
@@ -180,13 +186,14 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         });
     }
 
-    // SCRATCH DFB: only on the stick-layout reader path, used as a TRID staging buffer.
+    // SCRATCH scratchpad: only on the stick-layout reader path, used as a TRID staging buffer.
+    // Reserved as raw node-local L1 sized for `num_trids` staging slots. Modeled as a scratchpad
+    // (not a DFB) because the reader is its only user (no downstream consumer), which would otherwise
+    // make it an unsupported DM producer+consumer self-loop DFB on Gen2/Quasar.
     if (!is_tile && use_scratch) {
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = I2S_SCRATCH_DFB,
-            .entry_size = scratch_cb_page_size,
-            .num_entries = num_trids,
-            .data_format_metadata = input_cb_data_format,
+        spec.scratchpads.push_back(ScratchpadSpec{
+            .unique_id = I2S_SCRATCH_PAD,
+            .size_per_node = scratch_cb_page_size * num_trids,
         });
     }
 
@@ -195,7 +202,8 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     KernelSpec reader{
         .unique_id = I2S_READER,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = I2S_INPUT, .accessor_name = "src"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
     if (is_tile) {
         reader.source =
@@ -221,14 +229,15 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/dataflow/"
             "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp";
         reader.compile_time_args = {{"num_trids", num_trids}};
-        // SCRATCH is a self-loop on the reader (produces and consumes its own staging buffer).
-        reader.dfb_bindings = {
-            ProducerOf(reader_out_dfb, "in0"),
-            DFBBinding{
-                .dfb_spec_name = I2S_SCRATCH_DFB, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
-            DFBBinding{
-                .dfb_spec_name = I2S_SCRATCH_DFB, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
-        };
+        reader.dfb_bindings = {ProducerOf(reader_out_dfb, "in0")};
+        // SCRATCH staging buffer: bound as a private scratchpad (raw node-local L1), not a DFB. The
+        // reader both fills it and drains it itself, so a DFB would be a producer+consumer self-loop
+        // on this DM kernel — unsupported on Gen2/Quasar. Only present on the stick-layout path
+        // (this branch), guarded by the same `use_scratch` condition that declares the ScratchpadSpec.
+        if (use_scratch) {
+            reader.scratchpad_bindings = {
+                ScratchpadBinding{.scratchpad_spec_name = I2S_SCRATCH_PAD, .accessor_name = "pad"}};
+        }
         reader.runtime_arg_schema = {
             .runtime_arg_names = {
                 "block_height",
@@ -244,7 +253,8 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // Writer kernel.
     KernelSpec writer{
         .unique_id = I2S_WRITER,
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
     if (dst_is_dram) {
         writer.dfb_bindings = {ConsumerOf(I2S_OUTPUT_DFB, "out")};
@@ -293,7 +303,9 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
                       "eltwise_copy.cpp",
             .dfb_bindings = {ConsumerOf(I2S_INPUT_DFB, "in0"), ProducerOf(I2S_OUTPUT_DFB, "out")},
             .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-            .hw_config = ComputeHardwareConfig{},
+            .hw_config = ttnn::to_compute_hardware_config(
+                input.device()->arch(),
+                ttnn::ComputeKernelConfig{.math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false}),
         });
     }
 
@@ -317,6 +329,9 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
 
     for (const auto& core : cores) {
         uint32_t curr_num_units_per_shard = num_units_per_shard;
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
         if (is_tile) {
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = num_units_per_shard_width;
@@ -352,33 +367,36 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             curr_num_units_per_shard = shard_height * num_units_per_shard_width;
 
             // Reader run-time args (buffer-address slot 0 is gone — bound via TensorParameter).
-            reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = core,
-                .args = {
+            AddRuntimeArgsForNode(
+                reader_rtas,
+                core,
+                {
                     {"block_height_tiles", shard_height},
                     {"block_width_tiles", shard_width},
                     {"padded_offset_bytes", padded_offset},
                     {"input_width_offset_tiles", num_units_offset},
                     {"block_num_tiles", curr_num_units_per_shard},
                     {"start_id_offset", curr_idx_h + curr_idx_w},
-                    {"start_id_base", starting_idx_h}}});
+                    {"start_id_base", starting_idx_h},
+                });
 
             // Writer run-time args
             uint32_t pad_offset = (num_units_per_shard_width - shard_width) * output_unit_size;
             if (dst_is_dram) {
-                writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                    .node = core,
-                    .args = {
+                AddRuntimeArgsForNode(
+                    writer_rtas,
+                    core,
+                    {
                         {"block_height_tiles", shard_height},
                         {"block_width_tiles", shard_width},
                         {"padded_offset", pad_offset},
                         {"block_width_padded_num_tiles", curr_num_units_per_shard},
                         {"output_width_tiles", num_units_offset},
                         {"start_id_offset", curr_idx_h + curr_idx_w},
-                        {"start_id_base", starting_idx_h}}});
+                        {"start_id_base", starting_idx_h},
+                    });
             } else {
-                writer_run.runtime_arg_values.push_back(
-                    KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", curr_num_units_per_shard}}});
+                writer_rtas["num_units"][core] = curr_num_units_per_shard;
             }
 
             // Update indexing
@@ -452,9 +470,10 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             // Reader run-time args (buffer-address slot 0 is gone — bound via TensorParameter;
             // legacy slot 1 `num_units_per_row` was emitted but never read by the kernel, so it
             // is dropped here to match the kernel's actual reads).
-            reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = core,
-                .args = {
+            AddRuntimeArgsForNode(
+                reader_rtas,
+                core,
+                {
                     {"block_height", shard_height},
                     {"block_width_bytes", shard_width},
                     {"padded_block_width_bytes", padded_offset_bytes},
@@ -462,24 +481,26 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
                     {"aligned_input_width_offset_bytes", aligned_width_offset},
                     {"aligned_block_width_bytes", aligned_shard_width},
                     {"aligned_offset", aligned_offset},
-                    {"start_id", curr_idx_h}}});
+                    {"start_id", curr_idx_h},
+                });
 
             // Writer run-time args
             if (dst_is_dram) {
                 uint32_t page_id_within_row = curr_idx_w / input_unit_size;
                 uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
                 uint32_t start_id = (curr_idx_h * output_width_in_pages) + page_id_within_row;
-                writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                    .node = core,
-                    .args = {
+                AddRuntimeArgsForNode(
+                    writer_rtas,
+                    core,
+                    {
                         {"block_height", shard_height},
                         {"block_width_bytes", shard_width},
                         {"padded_block_width_bytes", padded_offset_bytes},
                         {"start_id", start_id},
-                        {"output_width_in_pages", output_width_in_pages}}});
+                        {"output_width_in_pages", output_width_in_pages},
+                    });
             } else {
-                writer_run.runtime_arg_values.push_back(
-                    KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", curr_num_units_per_shard}}});
+                writer_rtas["num_units"][core] = curr_num_units_per_shard;
             }
 
             // Update indexing
@@ -490,8 +511,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             }
         }
         if (convert_df) {
-            compute_run.runtime_arg_values.push_back(
-                KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", curr_num_units_per_shard}}});
+            compute_rtas["num_units"][core] = curr_num_units_per_shard;
         }
     }
 

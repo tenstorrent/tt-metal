@@ -15,6 +15,9 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
+#endif
 #include <tt-metalium/tt_align.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -27,12 +30,20 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
+// Drive the device forward one step from a host socket credit-wait loop. Simulator co-steps the umd
+// clock; emule pumps the parked fiber scheduler so a kernel blocked on this host-fed socket resumes.
 void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoordinate& device_coord) {
     if (mesh_device == nullptr) {
         return;
     }
 
     const auto& cluster = MetalContext::instance().get_cluster();
+#ifdef TT_METAL_USE_EMULE
+    if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
+        tt::tt_metal::emule::pump_device();
+        return;
+    }
+#endif
     if (cluster.get_target_device_type() != tt::TargetDevice::Simulator) {
         return;
     }
@@ -66,7 +77,7 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     // NamedShm::create zero-initializes the region; no explicit memset needed.
     host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
     tt::tt_metal::HostBuffer bytes_acked_buffer_view(
-        tt::stl::Span<uint32_t>(host_buffer_.get(), 1), tt::tt_metal::MemoryPin(host_buffer_));
+        ttsl::Span<uint32_t>(host_buffer_.get(), 1), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, bytes_acked_buffer_view, true);
 
@@ -104,7 +115,7 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
     host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
 
     tt::tt_metal::HostBuffer host_buffer_view(
-        tt::stl::Span<uint32_t>(host_buffer_.get(), host_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
+        ttsl::Span<uint32_t>(host_buffer_.get(), host_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 
@@ -248,6 +259,13 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
+    // Mock/emulated chips have no TLB manager (get_tlb_manager() == nullptr), so they can't take the
+    // static-TLB path: the target_in_static_tlb guard below excludes them (which also keeps
+    // is_tlb_mapped() from dereferencing the null manager), and they fall through to the
+    // cluster.write_core() dynamic writer. SWEmuleChip backs that with real memory-backed I/O;
+    // MockChip never invokes pcie_writer at runtime (only socket construction / JIT), so the
+    // installed writer is harmless there.
+
     // Receiver core type is recorded explicitly at construction (the DRAM-recv
     // ctor sets Dram, every other path is Tensix). Used only to resolve the
     // virtual coordinate — logical coords overlap across core types, so this
@@ -282,7 +300,8 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // need a per-write driver reconfig.
     const tt_xy_pair tlb_core(recv_virtual_core.x, recv_virtual_core.y);
     const bool target_in_static_tlb =
-        mesh_device && MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
+        mesh_device && !cluster.is_mock_or_emulated() &&
+        MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
         cluster.get_driver()
             ->get_chip(recv_device_id)
             ->get_tlb_manager()
@@ -482,6 +501,40 @@ void H2DSocket::reserve_bytes(uint32_t num_bytes) {
         bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
         bytes_acked_ = bytes_acked_value;
     }
+}
+
+bool H2DSocket::has_space(std::optional<uint32_t> num_bytes_to_check) {
+    TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
+    uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
+    uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+
+    // bytes_acked_ is monotonically increasing -> more bytes acked => more bytes_free
+    // If we bytes_acked_old < bytes_acked_new => bytes_free_old < bytes_free_new
+    // If bytes_free_old > num_bytes then this is safe as bytes_free_new > bytes_free_old > num_bytes necessarily
+    if (bytes_free >= num_bytes) {
+        return true;
+    }
+
+    tt_driver_atomics::mfence();
+    volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+    bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
+    bytes_acked_ = bytes_acked_value;
+    return bytes_free >= num_bytes;
+}
+
+bool H2DSocket::acked_past(uint32_t watermark) {
+    // in_flight = bytes_sent_ - bytes_acked_ (unsigned, always <= fifo_size_)
+    // bytes_since_watermark = bytes_sent_ - watermark (unsigned, in [0, fifo_size_])
+    // Write at watermark is done iff bytes_acked_ >= watermark, equivalently
+    // in_flight <= bytes_since_watermark.
+    uint32_t bytes_since_watermark = bytes_sent_ - watermark;
+    if (bytes_sent_ - bytes_acked_ <= bytes_since_watermark) {
+        return true;
+    }
+    tt_driver_atomics::mfence();
+    volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+    bytes_acked_ = bytes_acked_value;
+    return bytes_sent_ - bytes_acked_ <= bytes_since_watermark;
 }
 
 void H2DSocket::push_bytes(uint32_t num_bytes) {

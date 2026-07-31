@@ -8,6 +8,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
@@ -51,6 +54,7 @@ void kernel_main() {
     const uint32_t input_tile_bytes = get_tile_size(input_cb);
     const uint32_t stats_tile_bytes = get_tile_size(stats_cb);
     const uint32_t weight_tile_bytes = get_tile_size(weight_cb);
+    const uint32_t transformation_mat_tile_bytes = get_tile_size(transformation_mat_cb);
     const uint32_t rope_cos_tile_bytes = get_tile_size(rope_cos_cb);
     const uint32_t rope_sin_tile_bytes = get_tile_size(rope_sin_cb);
 
@@ -60,6 +64,14 @@ void kernel_main() {
     const auto transformation_mat_accessor = TensorAccessor(transformation_mat_args, transformation_mat_addr);
     const auto rope_cos_accessor = TensorAccessor(rope_cos_args, rope_cos_addr);
     const auto rope_sin_accessor = TensorAccessor(rope_sin_args, rope_sin_addr);
+
+    Noc noc;
+    CircularBuffer cb_input(input_cb);
+    CircularBuffer cb_stats(stats_cb);
+    CircularBuffer cb_weight(weight_cb);
+    CircularBuffer cb_transformation_mat(transformation_mat_cb);
+    CircularBuffer cb_rope_cos(rope_cos_cb);
+    CircularBuffer cb_rope_sin(rope_sin_cb);
 
     /**
      * Op asserts that weight input is bf16.
@@ -79,56 +91,77 @@ void kernel_main() {
 
     if constexpr (fuse_rope) {
         // Read the single-tile transformation matrix for ROPE.
-        cb_reserve_back(transformation_mat_cb, 1);
-        uint32_t transformation_mat_wr_ptr = get_write_ptr(transformation_mat_cb);
-        noc_async_read_page(0, transformation_mat_accessor, transformation_mat_wr_ptr);
-        noc_async_read_barrier();
-        cb_push_back(transformation_mat_cb, 1);
+        cb_transformation_mat.reserve_back(1);
+        noc.async_read(
+            transformation_mat_accessor,
+            cb_transformation_mat,
+            transformation_mat_tile_bytes,
+            {.page_id = 0},
+            {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_transformation_mat.push_back(1);
     }
 
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t stats_tile_idx = tile_row * stats_tiles_cols;
         // Read stats tiles
-        cb_reserve_back(stats_cb, stats_tiles_cols);
-        uint32_t stats_wr_ptr = get_write_ptr(stats_cb);
+        cb_stats.reserve_back(stats_tiles_cols);
+        uint32_t stats_wr_offset = 0;
         for (uint32_t col_tile = 0; col_tile < stats_tiles_cols; col_tile++) {
-            noc_async_read_page(stats_tile_idx, stats_accessor, stats_wr_ptr);
-            stats_wr_ptr += stats_tile_bytes;
+            noc.async_read(
+                stats_accessor,
+                cb_stats,
+                stats_tile_bytes,
+                {.page_id = stats_tile_idx},
+                {.offset_bytes = stats_wr_offset});
+            stats_wr_offset += stats_tile_bytes;
             stats_tile_idx++;
         }
-        noc_async_read_barrier();
-        cb_push_back(stats_cb, stats_tiles_cols);
+        noc.async_read_barrier();
+        cb_stats.push_back(stats_tiles_cols);
 
         // read input tiles
         uint32_t input_tile_idx = tile_row * num_tile_cols;
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-            cb_reserve_back(input_cb, block_size);
-            uint32_t input_wr_ptr = get_write_ptr(input_cb);
+            cb_input.reserve_back(block_size);
+            uint32_t input_wr_offset = 0;
 
             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                noc_async_read_page(input_tile_idx, input_accessor, input_wr_ptr);
-                input_wr_ptr += input_tile_bytes;
+                noc.async_read(
+                    input_accessor,
+                    cb_input,
+                    input_tile_bytes,
+                    {.page_id = input_tile_idx},
+                    {.offset_bytes = input_wr_offset});
+                input_wr_offset += input_tile_bytes;
                 input_tile_idx++;
             }
-            noc_async_read_barrier();
-            cb_push_back(input_cb, block_size);
+            noc.async_read_barrier();
+            cb_input.push_back(block_size);
 
             if constexpr (has_weight) {
                 if (tile_row == tile_row_start) {
-                    cb_reserve_back(weight_cb, block_size);
-                    uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
+                    cb_weight.reserve_back(block_size);
+                    uint32_t weight_wr_offset = 0;
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                        uint64_t weight_noc_addr = weight_accessor.get_noc_addr(col_tile + i);
-
                         // Rather than read a full tile containing sparse data,
                         // just read the first row of the tile from the faces.
-                        noc_async_read(weight_noc_addr, weight_wr_ptr, face_row_bytes /*one face row*/);
-                        noc_async_read(
-                            weight_noc_addr + face_bytes, weight_wr_ptr + face_bytes, face_row_bytes /*one face row*/);
-                        weight_wr_ptr += weight_tile_bytes;
+                        noc.async_read(
+                            weight_accessor,
+                            cb_weight,
+                            face_row_bytes /*one face row*/,
+                            {.page_id = col_tile + i, .offset_bytes = 0},
+                            {.offset_bytes = weight_wr_offset});
+                        noc.async_read(
+                            weight_accessor,
+                            cb_weight,
+                            face_row_bytes /*one face row*/,
+                            {.page_id = col_tile + i, .offset_bytes = face_bytes},
+                            {.offset_bytes = weight_wr_offset + face_bytes});
+                        weight_wr_offset += weight_tile_bytes;
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(weight_cb, block_size);
+                    noc.async_read_barrier();
+                    cb_weight.push_back(block_size);
                 }
             }
             if constexpr (fuse_rope) {
@@ -137,23 +170,33 @@ void kernel_main() {
                      * When processing the first column of a specific row, read the sin/cos inputs for rope.
                      */
                     uint32_t rope_tile_start_idx = tile_row * head_dim_tiles;
-                    cb_reserve_back(rope_cos_cb, head_dim_tiles);
-                    uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
+                    cb_rope_cos.reserve_back(head_dim_tiles);
+                    uint32_t rope_cos_wr_offset = 0;
                     for (uint32_t i = 0; i < head_dim_tiles; i++) {
-                        noc_async_read_page(rope_tile_start_idx + i, rope_cos_accessor, rope_cos_wr_ptr);
-                        rope_cos_wr_ptr += rope_cos_tile_bytes;
+                        noc.async_read(
+                            rope_cos_accessor,
+                            cb_rope_cos,
+                            rope_cos_tile_bytes,
+                            {.page_id = rope_tile_start_idx + i},
+                            {.offset_bytes = rope_cos_wr_offset});
+                        rope_cos_wr_offset += rope_cos_tile_bytes;
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(rope_cos_cb, head_dim_tiles);
+                    noc.async_read_barrier();
+                    cb_rope_cos.push_back(head_dim_tiles);
 
-                    cb_reserve_back(rope_sin_cb, head_dim_tiles);
-                    uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
+                    cb_rope_sin.reserve_back(head_dim_tiles);
+                    uint32_t rope_sin_wr_offset = 0;
                     for (uint32_t i = 0; i < head_dim_tiles; i++) {
-                        noc_async_read_page(rope_tile_start_idx + i, rope_sin_accessor, rope_sin_wr_ptr);
-                        rope_sin_wr_ptr += rope_sin_tile_bytes;
+                        noc.async_read(
+                            rope_sin_accessor,
+                            cb_rope_sin,
+                            rope_sin_tile_bytes,
+                            {.page_id = rope_tile_start_idx + i},
+                            {.offset_bytes = rope_sin_wr_offset});
+                        rope_sin_wr_offset += rope_sin_tile_bytes;
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(rope_sin_cb, head_dim_tiles);
+                    noc.async_read_barrier();
+                    cb_rope_sin.push_back(head_dim_tiles);
                 }
             }
         }

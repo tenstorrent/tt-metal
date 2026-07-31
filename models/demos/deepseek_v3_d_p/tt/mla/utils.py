@@ -3,8 +3,6 @@
 
 import torch
 
-import ttnn
-
 
 def create_balanced_chunk_order(sp_factor: int) -> list[int]:
     """Create balanced chunk order for sequence reordering.
@@ -113,6 +111,28 @@ def rotated_chip_positions(kv_actual_isl: int, sp: int, chunk_local: int) -> lis
     return positions
 
 
+def rotated_chip_real_token_counts(kv_actual_isl: int, actual_isl: int, sp: int, chunk_local: int) -> list[int]:
+    """Per-chip count of REAL (non-pad) rows carried by a rotated chunk, keyed off
+    rotated_chip_positions so it cannot drift from the writer kernel.
+
+    A rotated chunk's `chunk_size_global` rows tile [kv_actual_isl, kv_actual_isl + chunk_size_global)
+    but are spread across chips by the KV-pad-aware rotation, so a chip's real-row count is NOT
+    ``min(chunk_local, actual_isl - c * chunk_local)`` -- that formula only holds for the SEQUENTIAL
+    layout (which is the degenerate kv_actual_isl == 0 / slab-aligned case, where this function
+    reduces to it exactly).
+
+    Positions increase monotonically with the chip-local row (a slab step adds chunk_size_global
+    while the within-slab offset rewinds by at most chunk_local < chunk_size_global), so each chip's
+    real rows are a contiguous PREFIX of its local rows. That is what lets a single count per chip
+    describe the split, and why the consumers' RIGHT-padding contract still holds under rotation.
+    """
+    valid_end = kv_actual_isl + actual_isl
+    return [
+        sum(1 for p in row if kv_actual_isl <= p < valid_end)
+        for row in rotated_chip_positions(kv_actual_isl, sp, chunk_local)
+    ]
+
+
 def blockcyclic_positions(sp: int, chunk_size_global: int, seq_len_cache: int) -> torch.Tensor:
     """Global natural position held by each block-cyclic shard row (device-major: an SP-contiguous
     split of the cache's seq dim yields each chip's rows).
@@ -143,39 +163,6 @@ def blockcyclic_cache_host(
     valid = p < prior_len
     out[valid] = kv_natural[p[valid]]
     return out.reshape(1, 1, seq_len_cache, kvpe_dim)
-
-
-def blockcyclic_to_natural(t, sp: int, seq_len_local: int, end_pos: int):
-    """Reorder a gathered full-cache tensor from the cache's block-cyclic SP layout into natural
-    token order, on device — the inverse of blockcyclic_positions. t is [1, 1, seq_len_cache, 576]
-    ROW_MAJOR (block-cyclic); returns [1, 1, end_pos, 576] natural order. Identity order at sp==1."""
-    seq_len_cache, d = t.shape[2], t.shape[3]
-    chunk_local = seq_len_local  # = chunk_size_global / sp
-    slabs = seq_len_cache // (sp * chunk_local)  # chunks written into the cache
-    if sp == 1:
-        return ttnn.slice(t, (0, 0, 0, 0), (1, 1, end_pos, d))  # identity order
-    # Reorder block-cyclic [chip, slab, off] → natural [slab, chip, off]. A reshape+permute leaves
-    # the result physically NON-contiguous (a strided view): to_torch honours the strides, but the
-    # sparse_sdpa reader consumes raw physical order and silently reads garbage. Concatenating
-    # contiguous per-(slab,chip) slabs materialises a fresh contiguous tensor instead.
-    seq_local_cache = slabs * chunk_local  # rows held by one chip
-    blocks = [
-        ttnn.slice(
-            t,
-            (0, 0, c * seq_local_cache + s * chunk_local, 0),
-            (1, 1, c * seq_local_cache + (s + 1) * chunk_local, d),
-        )
-        for s in range(slabs)
-        for c in range(sp)
-    ]
-    flat = ttnn.concat(blocks, dim=2)
-    for b in blocks:
-        ttnn.deallocate(b)
-    if end_pos == seq_len_cache:
-        return flat
-    out = ttnn.slice(flat, (0, 0, 0, 0), (1, 1, end_pos, d))
-    ttnn.deallocate(flat)  # the slice is a fresh tensor; free the full concat
-    return out
 
 
 def global_to_local_token_id(

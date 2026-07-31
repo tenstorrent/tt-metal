@@ -64,7 +64,8 @@ void write_go_signal(
         dev_msgs::RUN_MSG_GO,
         dispatch_core.x,
         dispatch_core.y,
-        MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index));
+        MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index) +
+            MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id));
 
     // When running with dispatch_s enabled:
     //   - dispatch_d must notify dispatch_s that a go signal can be sent
@@ -95,6 +96,25 @@ void write_go_signal(
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
 
+    sysmem_manager.fetch_queue_reserve_back(cq_id);
+    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+}
+
+void write_rt_profiler_flush(
+    uint8_t cq_id, SubDeviceId sub_device_id, SystemMemoryManager& sysmem_manager, uint32_t wait_count) {
+    DeviceCommandCalculator calculator;
+    calculator.add_dispatch_rt_profiler_flush();
+    uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+
+    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+
+    HugepageDeviceCommand flush_cmd_sequence(cmd_region, cmd_sequence_sizeB);
+    const uint32_t wait_stream = MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id);
+    flush_cmd_sequence.add_dispatch_rt_profiler_flush(wait_count, wait_stream);
+
+    TT_ASSERT(flush_cmd_sequence.size_bytes() == flush_cmd_sequence.write_offset_bytes());
+
+    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     sysmem_manager.fetch_queue_reserve_back(cq_id);
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }

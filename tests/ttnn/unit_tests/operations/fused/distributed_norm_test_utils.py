@@ -157,6 +157,7 @@ def compute_ttnn_distributed_norm(
     mesh_device,
     norm_type,
     eps,
+    input_dtype,
     use_legacy=False,
     use_high_precision=True,
     weight_layout=ttnn.TILE_LAYOUT,
@@ -174,6 +175,7 @@ def compute_ttnn_distributed_norm(
         mesh_device: TTNN mesh device
         norm_type: "layer_norm" or "rms_norm"
         eps: Epsilon value
+        input_dtype: TTNN dtype for input/stats/gamma/beta (required)
         use_legacy: Whether to use legacy reduction/rsqrt
         use_high_precision: Whether to use high precision compute config
         weight_layout: Memory layout for weight tensor
@@ -192,7 +194,7 @@ def compute_ttnn_distributed_norm(
         torch_input,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
+        dtype=input_dtype,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
     )
 
@@ -208,7 +210,7 @@ def compute_ttnn_distributed_norm(
 
     ttnn_weight = ttnn.from_torch(
         torch_weight.reshape(weight_shape),
-        dtype=ttnn.bfloat16,
+        dtype=input_dtype,
         device=mesh_device,
         layout=weight_layout,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=weight_shard_dim),
@@ -228,7 +230,7 @@ def compute_ttnn_distributed_norm(
 
         ttnn_bias = ttnn.from_torch(
             torch_bias.reshape(bias_shape),
-            dtype=ttnn.bfloat16,
+            dtype=input_dtype,
             device=mesh_device,
             layout=bias_layout,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=bias_shard_dim),
@@ -282,7 +284,7 @@ def compute_ttnn_distributed_norm(
         ttnn_stats = ttnn.layer_norm_pre_all_gather(
             ttnn_input,
             compute_kernel_config=compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            dtype=input_dtype,
             program_config=program_config,
             recip_tensor=recip_tensor,
         )
@@ -297,18 +299,14 @@ def compute_ttnn_distributed_norm(
         raise ValueError(f"Unknown norm_type: {norm_type}")
 
     # Step 2: Gather statistics across devices
-    ccl_semaphore_handles = setup_ccl_semaphores(mesh_device)
+    setup_ccl_semaphores(mesh_device)
     ttnn.synchronize_device(mesh_device)
 
-    ttnn_stats_gathered = ttnn.experimental.all_gather_async(
+    ttnn_stats_gathered = ttnn.all_gather(
         ttnn_stats,
         dim=3,
-        multi_device_global_semaphore=ccl_semaphore_handles,
-        num_links=1,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_device=mesh_device,
-        topology=ttnn.Topology.Linear,
         cluster_axis=1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # Step 3: Compute normalization
@@ -376,6 +374,7 @@ def run_distributed_norm_test(
     hidden_dim,
     eps,
     norm_type,
+    input_dtype,
     mean=0,
     var=1,
     outlier_pct=0,
@@ -398,6 +397,7 @@ def run_distributed_norm_test(
         hidden_dim: Hidden dimension
         eps: Epsilon for numerical stability
         norm_type: "layer_norm" or "rms_norm"
+        input_dtype: TTNN dtype for input/stats/gamma/beta (required)
         mean: Mean of input distribution
         var: Variance of input distribution
         outlier_pct: Percentage of outliers
@@ -437,6 +437,7 @@ def run_distributed_norm_test(
         mesh_device,
         norm_type,
         eps,
+        input_dtype,
         use_legacy,
         use_high_precision,
         weight_layout,

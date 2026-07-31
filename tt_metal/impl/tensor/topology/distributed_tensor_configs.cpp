@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include <tt_stl/overloaded.hpp>
 
 namespace tt::tt_metal::distributed {
 
 std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& placement) {
     std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [&](const MeshMapperConfig::Replicate& /*replicate*/) { os << "PlacementReplicate()"; },
             [&](const MeshMapperConfig::Shard& shard) { os << "PlacementShard(" << shard.dim << ")"; },
         },
@@ -36,7 +36,7 @@ std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config) {
 
 bool operator==(const MeshMapperConfig::Placement& lhs, const MeshMapperConfig::Placement& rhs) {
     return std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [&](const MeshMapperConfig::Replicate& l, const MeshMapperConfig::Replicate& r) { return l == r; },
             [&](const MeshMapperConfig::Shard& l, const MeshMapperConfig::Shard& r) { return l == r; },
             [&](const auto&, const auto&) { return false; },  // Different types are never equal

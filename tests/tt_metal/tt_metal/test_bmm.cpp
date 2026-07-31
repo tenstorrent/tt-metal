@@ -68,12 +68,9 @@ BmmTensors create_bmm_tensors(distributed::MeshDevice& mesh_device, const BmmPar
     const uint32_t num_tiles_B = p.Kt * p.Nt * p.B_total;
     const uint32_t num_tiles_C = p.Mt * p.Nt * p.B_total;
     return {
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_A), TensorTopology{}),
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_B), TensorTopology{}),
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_C), TensorTopology{}),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_A)),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_B)),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_C)),
     };
 }
 
@@ -86,19 +83,20 @@ experimental::ProgramSpec build_bmm_program_spec(
     // On Quasar we also enable implicit sync on each DFB so the reader/writer kernels can drop
     // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
     // and must be disabled to match the explicit-sync kernel branch.
-    experimental::DataMovementHardwareConfig reader_config{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}};
-    experimental::DataMovementHardwareConfig writer_config{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}};
-    if (!use_implicit_sync) {
-        reader_config.gen2_config->disable_dfb_implicit_sync_for_all = true;
-        writer_config.gen2_config->disable_dfb_implicit_sync_for_all = true;
+    const bool is_quasar = tensors.src0.device().arch() == ARCH::QUASAR;
+    experimental::DataMovementHardwareConfig reader_config;
+    experimental::DataMovementHardwareConfig writer_config;
+    experimental::ComputeHardwareConfig compute_config;
+    if (is_quasar) {
+        reader_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
+        writer_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
+        compute_config = experimental::ComputeGen2Config{};
+    } else {
+        reader_config = experimental::DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default};
+        writer_config = experimental::DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+        compute_config = experimental::ComputeGen1Config{};
     }
 
     experimental::DataflowBufferSpec src0_dfb_spec{
@@ -155,7 +153,7 @@ experimental::ProgramSpec build_bmm_program_spec(
              experimental::AllConsumerOf(SRC1_DFB, "src1"),
              experimental::ProducerOf(DST_DFB, "dst")},
         .compile_time_args = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = compute_config,
     };
 
     return experimental::ProgramSpec{
@@ -230,7 +228,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {{node, {{"batch_start", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"batch_start", 0u}}),
             .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
@@ -242,7 +240,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"batch_start", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"batch_start", 0u}}),
             .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
@@ -305,7 +303,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {{node0, {{"batch_start", 0u}}}, {node1, {{"batch_start", 1u}}}},
+            .runtime_arg_values = {{"batch_start", {{node0, 0u}, {node1, 1u}}}},
             .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
@@ -317,7 +315,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node0, {{"batch_start", 0u}}}, {node1, {{"batch_start", 1u}}}},
+            .runtime_arg_values = {{"batch_start", {{node0, 0u}, {node1, 1u}}}},
             .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},

@@ -131,9 +131,11 @@ static uint32_t upstream_blocked_counter = 0;
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uint32_t prefetch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 constexpr uint32_t upstream_blocked_count_addr =
-    prefetch_telemetry_base + offsetof(tt::tt_metal::PrefetchCoreTelemetry, upstream_blocked_count);
+    prefetch_telemetry_base +
+    offsetof(tt::tt_metal::dispatch_telemetry_types::PrefetchCoreTelemetry, upstream_blocked_count);
 constexpr uint32_t upstream_unblocked_count_addr =
-    prefetch_telemetry_base + offsetof(tt::tt_metal::PrefetchCoreTelemetry, upstream_unblocked_count);
+    prefetch_telemetry_base +
+    offsetof(tt::tt_metal::dispatch_telemetry_types::PrefetchCoreTelemetry, upstream_unblocked_count);
 using PrefetchTelemetryBlockGuard = TelemetryBlockGuard<
     upstream_blocked_count_addr,
     upstream_unblocked_count_addr,
@@ -1420,7 +1422,7 @@ uint32_t process_stall(uintptr_t cmd_ptr) {
 
     WAYPOINT("PSW");
     volatile tt_l1_ptr uint32_t* sem_addr =
-        uncached_l1_ptr<uint32_t>(get_semaphore<fd_core_type>(my_downstream_sync_sem_id));
+        uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(my_downstream_sync_sem_id));
     uint32_t heartbeat = 0;
     do {
         invalidate_l1_cache();
@@ -2173,7 +2175,8 @@ bool process_cmd(
     }
 
     if constexpr (telemetry_enabled) {
-        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::PrefetchCoreTelemetry*>(prefetch_telemetry_base)
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::PrefetchCoreTelemetry*>(
+            prefetch_telemetry_base)
             ->command_count = ++command_counter;
     }
     return done;
@@ -2647,7 +2650,8 @@ void kernel_main_h() {
         }
 
         if constexpr (telemetry_enabled) {
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::PrefetchCoreTelemetry*>(prefetch_telemetry_base)
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::PrefetchCoreTelemetry*>(
+                prefetch_telemetry_base)
                 ->command_count = ++command_counter;
         }
     }
@@ -2688,9 +2692,9 @@ void kernel_main_d() {
 #if !defined(ARCH_QUASAR)
     // On Quasar, relay to the dispatcher is a same-core uncached memcpy; no NOC init-state needed.
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
-        0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, my_noc_index);
+        0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, 1, my_noc_index);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
-        0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, my_noc_index);
+        0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, 1, my_noc_index);
 #endif
 #endif
 

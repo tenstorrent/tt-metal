@@ -25,6 +25,13 @@ constexpr auto to_underlying(T t) noexcept
     return static_cast<std::underlying_type_t<T>>(t);
 }
 
+enum Srcs
+{
+    SrcA = 0,
+    SrcB = 1,
+    SrcC = 2
+};
+
 enum register_space_e
 {
     TDMA_REGS     = 0x0,
@@ -53,6 +60,9 @@ enum class BinaryOp : std::uint8_t
     GE,
     MAX,
     MIN,
+    QUANT,
+    REQUANT,
+    DEQUANT,
 };
 
 // For instructions that address lower/upper 16 bits of a register

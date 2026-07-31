@@ -290,8 +290,8 @@ void kernel_main() {
 
     // TensorAccessors
     const auto input_tensor_addr_gen = TensorAccessor(input_args, input_tensor_address);
-    const auto indices_tensor_addr_gen = TensorAccessor(indices_args, indices_tensor_address);
-    const auto scores_tensor_addr_gen = TensorAccessor(scores_args, scores_tensor_address);
+    [[maybe_unused]] const auto indices_tensor_addr_gen = TensorAccessor(indices_args, indices_tensor_address);
+    [[maybe_unused]] const auto scores_tensor_addr_gen = TensorAccessor(scores_args, scores_tensor_address);
     const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
     const auto per_expert_total_tokens_output_tensor_addr_gen =
         TensorAccessor(per_expert_total_tokens_output_args, per_expert_total_tokens_output_tensor_address);
