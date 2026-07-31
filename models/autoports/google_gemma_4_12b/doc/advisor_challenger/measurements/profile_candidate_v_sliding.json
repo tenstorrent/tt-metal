@@ -1,0 +1,55 @@
+{
+  "label": "profile_candidate_v_sliding",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "repeats_ms": [
+    1.2525296583771706,
+    1.246837005019188,
+    1.247700024396181,
+    1.247055809944868,
+    1.2467335909605026
+  ],
+  "median_ms": 1.247055809944868,
+  "noise_floor_ms": 0.005796067416667938,
+  "harness": ".agents/skills/advisor-challenger/scripts/harness_template.py",
+  "harness_scope": "one decoder layer, traced decode replay, batch 32, measured end to end on the host",
+  "measured_at": "2026-07-31T17:26:24+00:00",
+  "shipped_policy": {
+    "activation_dtype": "bf16",
+    "attention_dtype": {
+      "sliding_attention": "bfp8",
+      "full_attention": "bf16"
+    },
+    "attention_qkv_dtype": {
+      "sliding_attention": "bfp8",
+      "full_attention": "bf16"
+    },
+    "attention_o_dtype": {
+      "sliding_attention": "bf16",
+      "full_attention": "bf16"
+    },
+    "shared_mlp_dtype": "bfp8",
+    "shared_mlp_down_dtype": "bfp8",
+    "shared_mlp_decode_dtype": "bfp8",
+    "shared_mlp_decode_down_dtype": "bfp8",
+    "kv_cache_dtype": "bf16",
+    "fuse_mlp_gelu": true,
+    "decode_norm_sharded": true,
+    "attention_decode_o_interleaved": false
+  },
+  "shipped_weight_dtypes": {
+    "sliding_attention_qkv": "BFLOAT8_B",
+    "sliding_attention_o": "BFLOAT16",
+    "full_attention_qkv": "BFLOAT16",
+    "full_attention_o": "BFLOAT16",
+    "mlp_gate_up_down": "BFLOAT8_B",
+    "kv_cache": "BFLOAT16"
+  },
+  "shipped_policy_source": "doc/optimized_decoder/README.md selected configs and executed warmed decode reports",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

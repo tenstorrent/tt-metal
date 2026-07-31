@@ -1,0 +1,60 @@
+{
+  "outcome": "improved",
+  "changed": true,
+  "changed_precision": false,
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "capture_batch": 32,
+  "incumbent_ms": 1.241522990167141,
+  "final_ms": 1.2187889963388443,
+  "repeats_ms": [1.2187889963388443, 1.219478901475668, 1.2177802622318268, 1.2177137285470963, 1.2193819135427475],
+  "winning_repeats_ms": [1.2187889963388443, 1.219478901475668, 1.2177802622318268, 1.2177137285470963, 1.2193819135427475],
+  "winning_config": {
+    "keep_q_l1_extended_to_sharded_sdpa": true,
+    "keep_k_l1_across_per_head_norm": true,
+    "keep_v_l1_across_per_head_norm": true,
+    "mlp_direct_down_input_layout": true,
+    "o_chain_l1": {"sliding_attention": false, "full_attention": true}
+  },
+  "oracle": "real google/gemma-4-12B layers 0 and 5 against Hugging Face Gemma4TextDecoderLayer",
+  "oracle_scope": "prefill and decode for both shipped layer kinds and all placement changes",
+  "oracle_reference": "transformers Gemma4TextDecoderLayer loaded from real checkpoint tensors",
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "oracle_pcc": 0.9996584864862607,
+  "oracle_per_kind": {
+    "sliding_attention": {"layer": 0, "prefill_pcc": 0.9996128304843268, "decode_pcc": 0.9998707062418563},
+    "full_attention": {"layer": 5, "prefill_pcc": 0.9996584864862607, "decode_pcc": 0.9996586498771043}
+  },
+  "confirmed_fresh_process": true,
+  "fresh_confirmation": {
+    "sliding_attention": {"median_ms": 1.2177056632936, "repeats_ms": [1.2180647440254688, 1.2177056632936, 1.2180631421506405, 1.2176182866096497, 1.2176773883402348]},
+    "full_attention": {"median_ms": 1.3072953559458256, "repeats_ms": [1.3072953559458256, 1.3096136040985584, 1.3069054298102856, 1.312895268201828, 1.306327935308218]}
+  },
+  "rejected_knobs": {
+    "GEMMA4_12B_ADVISOR_O_L1_on_sliding_attention": "default off; five-repeat distribution overlaps the frozen incumbent",
+    "rope_cache_relayout": "default off; the actual full-model control already executes row-major 2D caches",
+    "GEMMA4_12B_ADVISOR_CAPTURE": "default off; capture-only static graph declarations"
+  },
+  "model_estimate": {
+    "before_us": 58520.088,
+    "after_us": 57211.86782211113,
+    "band_us": 55.528,
+    "per_kind": {
+      "sliding_attention": {"before_us": 47984.16, "after_us": 47074.80024686814, "layers": 40},
+      "full_attention": {"before_us": 10535.928, "after_us": 10137.067575242996, "layers": 8}
+    },
+    "method": "per-layer measured delta x layers_of_kind, summed; incumbent uncertainty summed linearly"
+  },
+  "combination": {
+    "best_set": ["Q L1 extension", "K L1", "V L1", "MLP direct-down", "full-only O L1"],
+    "measured_sets": [
+      {"set": ["sliding Q+K+V+MLP"], "measured_ms": 1.2187889963388443, "repeats_ms": [1.2187889963388443, 1.219478901475668, 1.2177802622318268, 1.2177137285470963, 1.2193819135427475], "oracle_passed": true},
+      {"set": ["full Q+K+V+MLP+O"], "measured_ms": 1.306016780436039, "repeats_ms": [1.306089535355568, 1.305853258818388, 1.3050954043865204, 1.306016780436039, 1.3064672239124775], "oracle_passed": true}
+    ]
+  },
+  "iterations": [
+    {"trigger": "initial advisor capture and incumbent-profile ranking"},
+    {"trigger": "apply independently winning chains and grouped below-floor chains", "reranked_from": ["candidate_sliding_attention_ops.csv", "candidate_full_attention_ops.csv"]}
+  ]
+}

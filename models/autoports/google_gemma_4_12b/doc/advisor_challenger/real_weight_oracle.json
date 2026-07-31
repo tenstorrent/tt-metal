@@ -1,0 +1,22 @@
+{
+  "weights": "real",
+  "checkpoint": "google/gemma-4-12B",
+  "test": "test_real_weight_oracle.py",
+  "passed": true,
+  "layer_kinds": {
+    "sliding_attention": {
+      "layer_idx": 0,
+      "prefill_pcc": 0.9996128304843268,
+      "prefill_threshold": 0.995,
+      "decode_pcc": 0.9998707062418563,
+      "decode_threshold": 0.993
+    },
+    "full_attention": {
+      "layer_idx": 5,
+      "prefill_pcc": 0.9996584864862607,
+      "prefill_threshold": 0.995,
+      "decode_pcc": 0.9996586498771043,
+      "decode_threshold": 0.995
+    }
+  }
+}

@@ -13,6 +13,7 @@ activation fusion.
 from __future__ import annotations
 
 import math
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -566,6 +567,9 @@ class OptimizedSharedMLP:
         return output
 
     def decode_forward(self, hidden_states):
+        advisor_capture = os.getenv("GEMMA4_12B_ADVISOR_CAPTURE", "0") == "1"
+        gate_memcfg = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if advisor_capture else None
+        advisor_direct_down = os.getenv("GEMMA4_12B_ADVISOR_MLP_DIRECT_DOWN", "1") == "1"
         hidden_states = ttnn.to_memory_config(hidden_states, self.decode_input_memcfg)
         gate = ttnn.linear(
             hidden_states,
@@ -591,15 +595,25 @@ class OptimizedSharedMLP:
                 up,
                 input_tensor_a_activations=[ttnn.UnaryOpType.GELU],
                 dtype=self.activation_dtype,
-                memory_config=gate.memory_config(),
+                memory_config=(
+                    self.decode_mlp2_input_memcfg if advisor_direct_down else gate_memcfg or gate.memory_config()
+                ),
             )
         else:
             gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
-            hidden = ttnn.mul(gate, up, dtype=self.activation_dtype, memory_config=gate.memory_config())
+            hidden = ttnn.mul(
+                gate,
+                up,
+                dtype=self.activation_dtype,
+                memory_config=(
+                    self.decode_mlp2_input_memcfg if advisor_direct_down else gate_memcfg or gate.memory_config()
+                ),
+            )
         gate.deallocate(True)
         up.deallocate(True)
 
-        hidden = ttnn.to_memory_config(hidden, self.decode_mlp2_input_memcfg)
+        if not advisor_direct_down:
+            hidden = ttnn.to_memory_config(hidden, self.decode_mlp2_input_memcfg)
         output = ttnn.linear(
             hidden,
             self.decode_down_proj,
@@ -1014,18 +1028,37 @@ class OptimizedGemma4Attention:
             program_config=self.decode_qkv_program_config,
         )
         hidden_states.deallocate(True)
-        if xqkv.is_sharded():
+        advisor_capture = os.getenv("GEMMA4_12B_ADVISOR_CAPTURE", "0") == "1"
+        if advisor_capture or xqkv.is_sharded():
             xqkv_interleaved = ttnn.sharded_to_interleaved(xqkv, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
             xqkv.deallocate(True)
             xqkv = xqkv_interleaved
 
-        tt_q, tt_k, tt_v = split_qkv_heads_decode(xqkv, self.config, self.config.use_kv_tying, tp=1)
+        if advisor_capture:
+            tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
+                xqkv,
+                num_heads=self.config.num_attention_heads,
+                num_kv_heads=self.config.num_key_value_heads,
+                memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            )
+        else:
+            tt_q, tt_k, tt_v = split_qkv_heads_decode(xqkv, self.config, self.config.use_kv_tying, tp=1)
         xqkv.deallocate(True)
 
-        q_sharded_mem = tt_q.memory_config()
-        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-        tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-        tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+        q_sharded_mem = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG if advisor_capture else tt_q.memory_config()
+        advisor_keep_q_l1 = os.getenv("GEMMA4_12B_ADVISOR_KEEP_Q_L1", "1") == "1"
+        if advisor_keep_q_l1:
+            tt_q = ttnn.to_memory_config(tt_q, ttnn.L1_MEMORY_CONFIG)
+        else:
+            tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+        if os.getenv("GEMMA4_12B_ADVISOR_KEEP_K_L1", "1") == "1":
+            tt_k = ttnn.to_memory_config(tt_k, ttnn.L1_MEMORY_CONFIG)
+        else:
+            tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
+        if os.getenv("GEMMA4_12B_ADVISOR_KEEP_V_L1", "1") == "1":
+            tt_v = ttnn.to_memory_config(tt_v, ttnn.L1_MEMORY_CONFIG)
+        else:
+            tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
         tt_q = apply_per_head_norm(tt_q, self.q_norm_weight, self.config.rms_norm_eps, with_scale=True)
         tt_k = apply_per_head_norm(tt_k, self.k_norm_weight, self.config.rms_norm_eps, with_scale=True)
         tt_v = apply_per_head_norm(tt_v, None, self.config.rms_norm_eps, with_scale=False)
@@ -1079,6 +1112,9 @@ class OptimizedGemma4Attention:
             k_cache = tt_k
             v_cache = tt_v
 
+        if advisor_keep_q_l1:
+            tt_q = ttnn.to_memory_config(tt_q, q_sharded_mem)
+
         sliding_window = self.config.sliding_window if self.config.is_sliding else None
         if page_table is not None:
             tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -1112,7 +1148,11 @@ class OptimizedGemma4Attention:
 
         tt_out = ttnn.transpose(tt_sdpa, 1, 2)
         tt_sdpa.deallocate(True)
-        tt_out = ttnn.experimental.nlp_concat_heads(tt_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        advisor_o_l1 = os.getenv("GEMMA4_12B_ADVISOR_O_L1", "0" if self.config.is_sliding else "1") == "1"
+        tt_out = ttnn.experimental.nlp_concat_heads(
+            tt_out,
+            memory_config=ttnn.L1_MEMORY_CONFIG if advisor_o_l1 else ttnn.DRAM_MEMORY_CONFIG,
+        )
         if self.decode_o_interleaved:
             tt_out = ttnn.linear(
                 tt_out,
