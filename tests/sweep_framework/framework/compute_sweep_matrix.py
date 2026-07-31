@@ -34,6 +34,7 @@ from matrix_runner_config import (
     LEAD_MODELS_BATCH_POLICY,
     LEAD_MODELS_DEFAULT_TEST_GROUP,
     LEAD_MODELS_SUITE_NAME,
+    MAX_BATCH_MODULES,
     MODEL_TRACED_BATCH_POLICY,
     SCHEDULE_TYPES,
     SUPPORTED_VECTOR_GROUPING_MODES,
@@ -205,6 +206,11 @@ def _batch_modules_for_test_group(base_modules, batch_size, batch_policy=None):
 
     Modules listed in LEAD_MODELS_BATCH_POLICY["solo_modules"] are pulled out
     and given their own dedicated 1-module batch before the rest are chunked.
+
+    A ``parallel_jobs`` policy fixes the job count and lets the batch width grow
+    with the module set, so it is capped at MAX_BATCH_MODULES: past that the job
+    count rises instead, keeping any single timeout from taking down a very wide
+    batch (see MAX_BATCH_MODULES for the run that motivated the cap).
     """
     solo_set = set(LEAD_MODELS_BATCH_POLICY.get("solo_modules", []))
     solo = [m for m in base_modules if m in solo_set]
@@ -212,10 +218,10 @@ def _batch_modules_for_test_group(base_modules, batch_size, batch_policy=None):
 
     parallel_jobs = (batch_policy or {}).get("parallel_jobs")
     if parallel_jobs:
-        size = max(1, -(-len(rest) // parallel_jobs))
+        size = min(MAX_BATCH_MODULES, max(1, -(-len(rest) // parallel_jobs)))
         batches = chunk_modules(rest, size)
     else:
-        batches = chunk_modules(rest, batch_size)
+        batches = chunk_modules(rest, min(batch_size, MAX_BATCH_MODULES))
 
     for sm in solo:
         batches.append(sm)

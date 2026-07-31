@@ -183,30 +183,48 @@ def _resolve_runs_on(sku_name):
 #                          that SKU for ONE run (sum of every batch's timeout).
 #                          verify_time_budget.py sums it per (team, sku) against
 #                          .github/time_budget.yaml -> ttnn.sweep.
-#   batch.default/overrides — the PER-BATCH (per-op) timeout policy used to size
-#                          each GH job's timeout-minutes.
+#   batch.overhead/default/overrides — the PER-BATCH (per-op) timeout policy used
+#                          to size each GH job's timeout-minutes.
 #
 # The batch count is dynamic (modules are discovered from the generated vector
 # files at runtime), so a job's timeout is built up from its ops rather than by
 # dividing the SKU total by the batch count — dividing would shrink every long
 # batch's ceiling as soon as the run produced more (shorter) batches.
 DEFAULT_JOB_TIMEOUT_MIN = 60
-DEFAULT_PER_OP_TIMEOUT_MIN = 4
+DEFAULT_PER_OP_TIMEOUT_MIN = 8
+
+# Fixed per-job cost charged once per batch on top of its ops: container start,
+# artifact download, tt-metal cache warm, device reset. The cheapest sweep job in
+# run 30553811243 took 3.1 min without running any meaningful op work, and a
+# single download-artifact step in that run took 6.5 min. Billing 100% of a
+# batch's ceiling to op work is what put the passing jobs right up against their
+# wall (3.1 -> 11.6 min against a 12 min ceiling) and killed 42 of 119 jobs.
+DEFAULT_BATCH_OVERHEAD_MIN = 6
+
+# Modules per batch never exceed this, even when a group's `parallel_jobs` policy
+# would produce a larger chunk. Without it a big module set collapses into a few
+# very wide jobs — run 30553811243 put 17 modules in one t3k batch, giving a
+# 90-minute single-job ceiling that then expired and took all 17 ops down with
+# it. Capping trades more (shorter, independently retryable) jobs for a bounded
+# blast radius per timeout.
+MAX_BATCH_MODULES = 8
 
 # Fallback per-op policy for (target, sku) pairs not tracked in the yaml (e.g.
-# nightly / comprehensive runs). Mirrors the yaml's shared _batch_defaults so an
-# untracked lane still right-sizes heavy ops instead of one flat ceiling.
+# nightly / comprehensive runs). Mirrors the model_traced block in that file (the
+# more conservative of the two targets) so an untracked lane still right-sizes
+# heavy ops instead of one flat ceiling.
 DEFAULT_BATCH_POLICY = {
+    "overhead": DEFAULT_BATCH_OVERHEAD_MIN,
     "default": DEFAULT_PER_OP_TIMEOUT_MIN,
     "overrides": {
-        "all_gather_async": 30,
-        "conv2d": 26,
-        "reduce_scatter": 24,
-        "all_reduce": 24,
-        "matmul": 15,
-        "linear": 15,
-        "reshape": 12,
-        "split": 12,
+        "all_gather_async": 45,
+        "conv2d": 40,
+        "reduce_scatter": 36,
+        "all_reduce": 36,
+        "matmul": 24,
+        "linear": 24,
+        "reshape": 18,
+        "split": 18,
     },
 }
 
@@ -287,12 +305,15 @@ def get_batch_timeout(target, sku, module_selector, default=DEFAULT_JOB_TIMEOUT_
 
     ``module_selector`` is the comma-joined set of module tokens in the batch.
     Ops in a batch run sequentially, so the batch ceiling is the SUM of its ops'
-    per-op ceilings. An empty selector falls back to the hard job ceiling."""
+    per-op ceilings, plus the policy's fixed per-batch ``overhead`` for the job
+    setup that is not op work. An empty selector falls back to the hard job
+    ceiling."""
     policy = _sweep_batch_policy_map().get((target, sku)) or DEFAULT_BATCH_POLICY
     tokens = [t for t in (module_selector or "").split(",") if t]
     if not tokens:
         return default
-    total = sum(_op_timeout_min(t, policy) for t in tokens)
+    overhead = policy.get("overhead", DEFAULT_BATCH_OVERHEAD_MIN)
+    total = overhead + sum(_op_timeout_min(t, policy) for t in tokens)
     return max(1, int(round(total)))
 
 
