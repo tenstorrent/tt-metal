@@ -29,4 +29,8 @@ global_env:
   PREFILL_H2D_SERVICE_ID: "ds_prefill"
   PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
   PREFILL_PP_FILE_BARRIER: "1"
+  # Vestigial socket L1 buffer: the activation bypasses it DRAM->DRAM, only ~12B metadata transits, so its
+  # size is L1 footprint only. 32KB (half the 64KB default) is the minimal reduction that keeps it clear of
+  # the routed-expert MoE static CBs (see 4rank).
+  PREFILL_PP_D2D_FIFO_BYTES: "32768"
   LOGURU_LEVEL: "INFO"
