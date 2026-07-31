@@ -12,7 +12,9 @@ matmuls from DRAM-sharding consideration for a dtype the model never used. The s
 BFP8 attention by hand, worth -10.0%.
 
 `SETUP.md` B.1 lists what to reuse from the model's test builders -- "config, synthetic state dict, paged
-KV cache, rope, current_pos" -- and never mentions the precision policy. That omission is the bug.
+KV cache, rope, current_pos". It used to stop there, and that omission is what produced the captures above;
+it now names the shipped policy too and points this stage here. Recording what was traced is still this
+template's job, because only an artifact lets the gate verify it.
 
 So: CONSTRUCT WITH THE SHIPPED POLICY, and record what you traced so the gate can verify it.
 The shipped policy comes from what EXECUTED -- the final tt-perf-report CSV or the selected candidate

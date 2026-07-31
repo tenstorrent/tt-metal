@@ -73,8 +73,11 @@ Consequences:
 
 **A chain is a run of ops all resident in L1, preferably on one consistent shard spec.** A DRAM crossing is
 the hard boundary; an internal L1 regrid is in-chain cost, not a split. The pricing below is what supports
-this; `$optimize` step 6 / OPT-003 states the same definition, and the optimizer implements it as
-`L1ChainConfig`, so do not reinvent it.
+this. **This definition is deliberately broader than `$optimize`'s**, which asks for a chain on *one
+consistent shard spec* (step 6 / OPT-003, "preserve the decode residual layout through norms and residual
+adds"). Here an internal regrid is priced, not forbidden: tt-mlir models the chain as `L1ChainConfig`, which
+carries a per-edge `memReconfigEntryMap`, so a reconfigure inside a chain is a cost the optimizer itself
+represents. Use the broader definition and read the regrid off the profile — but do not reinvent either.
 
 Detect boundaries from **conversion ops present in the profile**, never from differing grids: a grid change
 is often absorbed by the consumer, so grid-differencing over-counts.
@@ -257,8 +260,11 @@ Read four things out of it:
 - **`advised_boundaries`** — how many shipped conversions the advisor drops, agrees with, and leaves
   undetermined, with the µs. `us_advisor_drops` is the stage's upper bound on conversion-removal value;
   screening cannot beat it, so if it is small, say so early rather than after nine measurements.
-- **`material_ops_on_le_2_cores`** — a material op left on ≤2 cores needs a measured attempt or a quoted
-  hard error. Nothing else discharges it.
+- **`material_ops_on_le_2_cores`** — a material op left on ≤2 cores *where the advisor disagrees*. That is
+  advisor-attributable, and needs a measured attempt or a quoted hard error; nothing else discharges it. Its
+  sibling `starved_ops_not_attributable` holds the ones the advisor places the same way: real waste, but
+  improving them is a direct grid sweep with no advisor contribution. Report those, hand them to `$optimize`,
+  and do not screen them here.
 - **`agrees_with_shipped`** — where the advisor independently re-derived your config. Since it is blind to
   your layouts, agreement is genuine re-derivation, and on one decoder it was 82 % of the window. Its
   marginal contribution here is zero by construction; **report the number as a headline**, and do not read it
@@ -391,6 +397,27 @@ topology rewrite that changes an op's shape; a dtype change is not one. Cap at 3
 
 Extension is not free: growing L1 residency hits capacity walls, and a bad placement in this project wedged
 PCIe and needed a `tt-smi` reset. Do not run extension experiments alongside a measured stage.
+
+## Scope: what this stage is not
+
+02b measures one thing — what the advisor adds to an already-optimized decoder. It is **not** a second
+`$optimize` pass, and the fastest way to ruin its result is to do optimize's work inside it and book the
+gain here. Three categories to report and hand over rather than screen, all of them separated for you by
+`reconcile.py`:
+
+| surfaced as | why it is out of scope |
+|---|---|
+| `advised_boundaries.us_advisor_agrees` | the advisor places the same conversion, so removing it is your idea |
+| `starved_ops_not_attributable` | a starved op the advisor also starves — a direct grid sweep |
+| `model_estimate.layer_handoff` | the advisor is never asked about a layer boundary |
+
+Precision is likewise not this stage's axis: the datatype sweep chose it, and `compute_config` /
+`math_fidelity` in the advised IR only mirror what was traced. Changing them turns a placement measurement
+into a precision one and drags in a real-weight correctness bar (step 4) for no advisor attribution.
+
+Sweeping expert and norm grids **directly**, without the advisor, is a separate and often better-paying
+activity — it belongs to `$optimize`, and one model's norms went 85 µs → 9 µs that way with no advisor
+involved.
 
 ## What this stage cannot reach
 

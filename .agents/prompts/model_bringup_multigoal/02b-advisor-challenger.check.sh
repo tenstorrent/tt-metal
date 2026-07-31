@@ -247,45 +247,47 @@ if f.get("changed") is None: crit.append("`changed` missing -- a no-change resul
 if not f.get("oracle"): crit.append("oracle missing -- name the correctness oracle the result passed")
 if f.get("oracle_passed") is not True:
     crit.append("oracle_passed is not true -- a faster decoder that fails its oracle is a regression")
-# an oracle is only a correctness gate if it compares against a reference the change cannot also move
-od = (str(f.get("oracle") or "") + " " + str(f.get("oracle_scope") or "")).lower()
+# WHAT KIND OF ORACLE THIS STAGE NEEDS. 02b changes PLACEMENT, not precision, so by $optimize's own rule
+# (line 170 / OPT-012 -- "synthetic runs can catch crashes and op-contract failures, but precision vetoes
+# need real weights") synthetic weights are adequate here, PROVIDED the comparison is differential: the same
+# weights on both sides, candidate against the frozen incumbent, at the incumbent's own PCC bar. Real weights
+# are required only when the shipped change touches dtype or fidelity. Do not demand more of this stage than
+# the single-chip optimize stage demands of itself.
+od = (str(f.get("oracle") or "") + " " + str(f.get("oracle_scope") or "")
+      + " " + str(f.get("oracle_reference") or "")).lower()
 ow = str(f.get("oracle_weights") or "").lower()
-selfref = any(k in od for k in ("eager-vs-traced", "traced-vs-eager", "replay pcc", "preservation"))
 if ow not in ("real", "synthetic"):
-    (crit if f.get("changed") else warn).append(
-        "oracle_weights missing: state 'real' or 'synthetic'. A synthetic-weight PCC does NOT bound the "
-        "real-weight PCC when the shipped policy quantises to BFLOAT4_B/BFLOAT8_B -- quantisation error "
-        "depends on the weight distribution, and random weights have none of the outliers real ones do.")
-elif ow != "real" and f.get("changed"):
-    crit.append("a change shipped against a SYNTHETIC-weight oracle. Validate a shipped change on real "
-                "weights, or say explicitly that the correctness evidence is plumbing-only.")
-if selfref:
-    (crit if f.get("changed") else warn).append(
-        f"the oracle ({od[:60]}) compares the implementation against itself or against the frozen "
-        "incumbent, so it cannot fail for a placement change that keeps tracing working. That is a sanity "
-        "check, not a correctness oracle. One corpus cell reported PCC exactly 1.0 this way.")
-# "keep every losing knob default-off" is half code state, which this gate cannot see, and half record,
-# which it can: a rejected candidate that is written down stays re-measurable without another capture.
-try:
-    _rc = [json.load(open(os.path.join(os.environ["CH_D"], n)))
-           for n in sorted(os.listdir(os.environ["CH_D"])) if n.startswith("reconciliation")]
-except Exception:
-    _rc = []
-_rej = {c.get("chain") for d in _rc for c in (d.get("chains") or [])
-        if (c.get("verdict") or "").lower() in ("rejected", "below_threshold")}
-_recorded = set(f.get("rejected_knobs") or [])
-for _s in ((f.get("combination") or {}).get("measured_sets") or []):
-    _recorded |= set(_s.get("chains") or []) | set(_s.get("set") or [])
-_missing = sorted(_rej - _recorded)
-if _missing:
-    warn.append(f"rejected candidates not recorded anywhere in final.json: {', '.join(_missing[:4])}. Keep "
-                "each losing knob in the decoder default-off and name it in rejected_knobs, so it can be "
-                "re-measured without another capture.")
+    crit.append("oracle_weights missing: record 'real' or 'synthetic' so the correctness evidence is legible.")
+if f.get("changed") and f.get("changed_precision"):
+    if ow != "real":
+        crit.append("this change touches dtype or fidelity, which is a PRECISION decision: it needs a "
+                    "real-weight oracle. A synthetic-weight PCC does not bound the real-weight PCC, because "
+                    "quantisation error depends on a weight distribution random tensors do not have.")
+elif f.get("changed") and ow != "real":
+    warn.append("placement-only change on a synthetic-weight oracle. Acceptable here -- state in the README "
+                "that the correctness evidence is differential (same weights, candidate vs frozen incumbent) "
+                "rather than absolute.")
+# A differential oracle against the frozen incumbent is the RIGHT oracle for a placement change. What is
+# useless is comparing an execution path against itself: one corpus cell reported eager-vs-traced-replay PCC
+# of exactly 1.0, which no placement change can move.
+if f.get("changed") and any(k in od for k in ("eager-vs-traced", "traced-vs-eager", "replay pcc")):
+    crit.append("the oracle compares eager execution against traced replay of the same implementation, which "
+                "cannot fail for a placement change (one corpus cell reported PCC exactly 1.0 this way). "
+                "Compare the candidate against the frozen incumbent instead.")
+if f.get("changed") and not f.get("oracle_reference"):
+    warn.append("oracle_reference not named -- say what the candidate was compared against (the frozen "
+                "incumbent is the expected answer for a placement change).")
 for k, v in f.items():
-    if k.endswith("_passed") and v is False:
-        crit.append(f"{k} is false: a correctness check failed and the cell shipped anyway. One corpus cell "
-                    "had absolute_pcc_current_environment_passed=False and shipped on a preservation "
-                    "argument, leaving it with no working absolute correctness check.")
+    if k.endswith("_passed") and v is False and k != "oracle_passed":
+        # If nothing shipped, a failing absolute check is usually the incumbent's pre-existing condition and
+        # not this stage's defect -- one corpus cell inherited a sliding-attention PCC of 0.9889 against a
+        # 0.993 bar. If something DID ship, the failure is disqualifying: you cannot tell whether the change
+        # caused it.
+        (crit if f.get("changed") else warn).append(
+            f"{k} is false. " + ("A change shipped while a correctness check was failing, so its effect on "
+                                 "that check is unknown." if f.get("changed") else
+                                 "Nothing shipped, so this is most likely pre-existing in the incumbent -- "
+                                 "say so explicitly and attribute it to the earlier stage."))
 if isinstance(fm, (int, float)) and isinstance(im, (int, float)) and fm > im:
     crit.append(f"final_ms {fm} > incumbent_ms {im}: this stage may not ship a slower decoder")
 if f.get("changed"):

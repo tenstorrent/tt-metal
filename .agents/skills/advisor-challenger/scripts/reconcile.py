@@ -542,8 +542,17 @@ def main() -> int:
         v["share_pct"] = round(100 * v["us"] / window, 3)
     closes = abs(accounted - window) < 0.01
 
-    low = [r for r in rows if r["bucket"] in ("chain", "agrees_with_shipped")
-           and (r.get("shipped_cores") or 99) <= 2 and r["share_pct"] >= 1.0]
+    # A material op on almost no cores is only THIS stage's business when the advisor disagrees with that
+    # placement -- then it is advisor-attributable and needs an attempt. Where the advisor wants the same
+    # 1-core placement, fixing it is a direct grid sweep with no advisor contribution: report it and hand it
+    # to $optimize. Keeping those two apart is what stops this stage growing into a second optimize pass.
+    starved = [r for r in rows if (r.get("shipped_cores") or 99) <= 2 and r["share_pct"] >= 1.0
+               and r["bucket"] in ("chain", "agrees_with_shipped")]
+    low = [r for r in starved if r["bucket"] == "chain"]
+    low_out_of_scope = [dict(r, note="the advisor wants this placement too, so improving it is a direct grid "
+                                     "sweep with no advisor contribution -- report it, hand it to $optimize, "
+                                     "and do not screen it here")
+                        for r in starved if r["bucket"] == "agrees_with_shipped"]
 
     # How much of the accounting rests on positional guesses rather than name evidence. This is the tool's
     # generality check: on a model whose ops it does not recognise the buckets degrade, and it must SAY so
@@ -759,6 +768,7 @@ def main() -> int:
                      "vs_noise_floor before spending a measurement on it.",
         "advised_boundaries": bsum(rows),
         "chains": chains, "material_ops_on_le_2_cores": low,
+        "starved_ops_not_attributable": low_out_of_scope,
         "note": "Screen chains in the order given, each as one unit, and record repeats_ms. Do NOT copy "
                 "advised core counts: they are selected under a bytes-shaped objective and are often "
                 "smaller than the divisors of the tensor's tile count. The advisor's contribution is the "
@@ -803,6 +813,9 @@ def main() -> int:
     if "incumbent_ms_is_not_median" in f:
         print(f"   !! incumbent_ms {f['incumbent_ms_is_not_median']['recorded']} is not the median "
               f"{f['incumbent_ms_is_not_median']['median']} -- fix before screening")
+    for r in low_out_of_scope:
+        print(f"   -- {r['device']} on {r['shipped_cores']} core(s), {r['us']:.3f} us ({r['share_pct']} %) "
+              f"-- advisor agrees, so NOT this stage's: report it and hand it to $optimize")
     for r in low:
         print(f"   !! BIGGER THAN THE CEILING: {r['device']} on {r['shipped_cores']} core(s), "
               f"{r['us']:.3f} us ({r['share_pct']} % of the window) -- needs a measured attempt or a quoted "
