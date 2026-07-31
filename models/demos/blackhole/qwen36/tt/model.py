@@ -3316,9 +3316,16 @@ class Qwen36Model:
         if self.num_devices > 1:
             # TP: read one replica (get_device_tensors[0]), not ConcatMeshToTensor (~4x readback).
             full = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
-            return full.reshape(-1, self.args.vocab_size)[: B * S].view(B, S, -1)
-        out = ttnn.to_torch(tt_out).float()
-        return out[:B, :S, : self.args.vocab_size].view(B, S, -1)
+        else:
+            full = ttnn.to_torch(tt_out).float()
+        rows = full.reshape(-1, self.args.vocab_size)
+        required_rows = B * S
+        if rows.shape[0] < required_rows:
+            # Decode bucketing returns only the active prefix. The shared
+            # generator requests the fixed serving width, so add neutral rows
+            # instead of splitting each vocabulary row during ``view(B, S, -1)``.
+            rows = torch.nn.functional.pad(rows, (0, 0, 0, required_rows - rows.shape[0]))
+        return rows[:required_rows].view(B, S, self.args.vocab_size)
 
     def _save_deltanet_states(self):
         """Snapshot GDN state to host (guard across decode-trace capture's double forward)."""

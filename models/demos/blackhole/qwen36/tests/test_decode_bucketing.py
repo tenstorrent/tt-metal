@@ -9,6 +9,7 @@
 import os
 import statistics
 import time
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -62,6 +63,23 @@ def test_bucket_selection():
     tokens, positions = _padded_decode_batch(1, 8)
     assert _pick_bucket(tokens, positions, 8) == 1
     logger.info("PASSED: bucket selection picks smallest pow2 >= num_active and never drops active rows")
+
+
+@pytest.mark.parametrize("width", [1, 2, 4, 8])
+def test_bucketed_host_logits_are_padded_to_serving_width(monkeypatch, width):
+    """Host sampling must keep one complete vocabulary vector per active row."""
+    serving_width, vocab = 8, 16
+    device_logits = torch.arange(width * vocab, dtype=torch.float32).reshape(1, 1, width, vocab)
+    opaque = object()
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda tensor: [device_logits])
+    monkeypatch.setattr(ttnn, "to_torch", lambda tensor: tensor)
+    model = SimpleNamespace(num_devices=4, args=SimpleNamespace(vocab_size=vocab))
+
+    got = Qwen36Model.process_output_decode(model, opaque, serving_width, S=1)
+
+    assert got.shape == (serving_width, 1, vocab)
+    assert torch.equal(got[:width, 0], device_logits.reshape(width, vocab))
+    assert torch.count_nonzero(got[width:]) == 0
 
 
 def _build(mesh_device, bmax):
