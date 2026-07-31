@@ -76,6 +76,7 @@ DRAMUsage get_dram_usage(const std::string& name) {
 
 std::vector<std::pair<std::string, DRAMUsage>> get_dram_usage_all() {
     std::vector<std::pair<std::string, DRAMUsage>> result;
+    result.reserve(trace_order.size());
     for (const auto& name : trace_order) {
         result.push_back(std::make_pair(name, get_dram_usage(name)));
     }
@@ -92,6 +93,7 @@ L1UsagePerCore get_l1_usage(const std::string& name) {
 
 std::vector<std::pair<std::string, L1UsagePerCore>> get_l1_usage_all() {
     std::vector<std::pair<std::string, L1UsagePerCore>> result;
+    result.reserve(trace_order.size());
     for (const auto& name : trace_order) {
         result.push_back(std::make_pair(name, get_l1_usage(name)));
     }
