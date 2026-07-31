@@ -41,7 +41,7 @@ using TensorPrefetcherQueueTensor =
 //        request), so a single prefetcher can serve GCBs with different
 //        num_receivers values.
 //   2. queue_tensor_prefetcher_request(device, tensors, global_cb, device_subset=None,
-//                                      cq_id=None)
+//                                      capture_into_trace=False)
 //      - Push one request. `tensors` is the full, flattened list of weights (at
 //        least one), streamed in list order; each item is (weight, block_count)
 //        or (weight, block_count, rotation) (see TensorPrefetcherQueueTensor).

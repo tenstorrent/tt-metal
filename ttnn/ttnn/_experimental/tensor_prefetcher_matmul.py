@@ -30,8 +30,6 @@ decorator honours ``queue_id``/``cq_id`` on any op (it applies them by making th
 queue current), so a passed-through ``cq_id`` would have steered the matmul alone.
 """
 
-from contextlib import nullcontext
-
 import ttnn
 
 
@@ -86,25 +84,28 @@ def prefetch_and_linear(
         request = (weight, block_count, list(range(block_count)))
     else:
         request = (weight, block_count)
-    # queue_id wins over cq_id, as in ttnn's operation decorator. Making the queue current
-    # for the whole block is what ties the two halves to it -- both read the thread's current
-    # queue, so neither can end up on a different one.
+    # queue_id wins over cq_id, matching the precedence in ttnn's operation decorator -- which
+    # is also what applies it: both calls below are ttnn operations, so each one makes this
+    # queue current for its own duration. Forwarding it to both is the whole point of taking
+    # the argument here; reaching ttnn.linear alone (as it would through **linear_kwargs) would
+    # steer the matmul and leave the prefetch on whatever queue was already current.
     selected_cq_id = queue_id if queue_id is not None else cq_id
-    with ttnn.command_queue(selected_cq_id) if selected_cq_id is not None else nullcontext():
-        ttnn.experimental.queue_tensor_prefetcher_request(
-            device,
-            [request],
-            global_cb=global_cb,
-            # Let the prefetch be captured against the queue the matmul below dispatches on:
-            # under trace capture both halves land in the one trace and replay together.
-            # Leaving this False would capture the matmul but send the prefetch immediately,
-            # so a replay would never refill the GCB and the matmul would hang.
-            capture_into_trace=True,
-        )
-        return ttnn.linear(
-            input_tensor_a,
-            weight,
-            program_config=program_config,
-            global_cb=global_cb,
-            **linear_kwargs,
-        )
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        device,
+        [request],
+        global_cb=global_cb,
+        # Let the prefetch be captured against the queue the matmul below dispatches on: under
+        # trace capture both halves land in the one trace and replay together. Leaving this
+        # False would capture the matmul but send the prefetch immediately, so a replay would
+        # never refill the GCB and the matmul would hang.
+        capture_into_trace=True,
+        cq_id=selected_cq_id,
+    )
+    return ttnn.linear(
+        input_tensor_a,
+        weight,
+        program_config=program_config,
+        global_cb=global_cb,
+        cq_id=selected_cq_id,
+        **linear_kwargs,
+    )

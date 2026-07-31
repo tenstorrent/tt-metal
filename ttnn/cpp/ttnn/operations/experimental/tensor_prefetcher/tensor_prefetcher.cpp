@@ -56,9 +56,11 @@ void wait_for_cq_on_tensor_prefetcher(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     std::optional<uint8_t> cq_id,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset) {
-    // std::nullopt fences the calling thread's current queue. That covers the keyword form
-    // too: ttnn's FastOperation wrapper consumes a `cq_id=` keyword and applies it by making
-    // that queue current (ttnn/ttnn/decorators.py), so it never arrives here as a value.
+    // A positional cq_id arrives here as a value and names the queue directly. A keyword
+    // cq_id= does not: ttnn's FastOperation wrapper pops it and applies it by making that
+    // queue current for the call (ttnn/ttnn/decorators.py), leaving std::nullopt here.
+    // Resolving std::nullopt to the thread's current queue is what makes the two forms agree
+    // — as a plain `uint8_t cq_id = 0` the keyword form silently fenced queue 0 instead.
     tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(mesh_device->mesh_command_queue(cq_id), device_subset);
 }
 
