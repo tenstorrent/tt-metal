@@ -190,7 +190,7 @@ is recorded under `triage/` and was not treated as model evidence.
 - [x] watcher-clean correctness run
 - [x] raw profiler dumps removed; compact evidence retained
 - [x] independent `$stage-review` clean pass after current remediation
-- [ ] local stage commit and SHA
+- [x] local stage commit and SHA
 
 The fresh independent remediation rereview returned `clean-pass` with no
 required work, material concerns, or acceptance-affecting hard-check gaps.
@@ -434,3 +434,13 @@ Frozen gates were regenerated: correctness 14/14, stress 4/4, performance
 skip. A fresh independent rereview inspected the frozen code, tests, PCC,
 performance, profiler accounting, boundary/context, stress, watcher, and JUnit
 artifacts and returned `clean-pass` with no required work or material concerns.
+
+## Local checkpoint
+
+The optimized decoder implementation, tests, compact profiler reports, and
+frozen evidence were committed locally as `e7a39a9e19d` (`Add optimized Gemma
+4 26B decoder`) on top of starting checkpoint `9d3247ee51c`. Nothing was
+pushed. The four generated raw Tracy CSV captures exceed the repository's
+500-KB artifact policy and remain local/ignored; their compact per-op reports,
+stacked summaries, plots, and reconciled accounting are included in the
+checkpoint.
