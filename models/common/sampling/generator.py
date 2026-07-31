@@ -285,7 +285,48 @@ class SamplingGenerator:
         if penalties_on:
             logits = self.tt_penalties.apply(logits)
         tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+        if penalties_on:
+            # Fold the penalty bookkeeping into the sampled step rather than running it afterwards in
+            # sample(). The order is unchanged -- penalties are applied to this step's logits from the
+            # previous steps' counts, then the new token is counted -- but doing it here means it is part
+            # of whatever trace captures this, instead of a handful of scatter/tilize/reshape allocations
+            # on every decode step behind a live trace. Those ops take no preallocated output tensor, so
+            # tracing them is the only way to stop them allocating.
+            self.tt_penalties.update_output_tokens(tt_out_tok if tt_out_tok is not None else tt_tokens)
         return tt_tokens, tt_log_probs
+
+    def reset_penalty_counts(self):
+        """Zero the output-token penalty counters, if penalties are active.
+
+        Needed after any pass that runs the sampling pipeline for its side effects rather than its result:
+        _run_sampling now counts the sampled token, so a pre-compile or a trace capture over dummy inputs
+        would otherwise leave those phantom tokens in the counts and skew the next real step's penalties.
+        In-place, so it allocates nothing.
+        """
+        if self._penalties_active:
+            self.tt_penalties.reset_output_tokens()
+
+    def precompile(
+        self,
+        logits: ttnn.Tensor,
+        *,
+        tt_out_tok: Optional[ttnn.Tensor] = None,
+    ) -> None:
+        """Run the sampling pipeline once without capturing, to compile it and size its scratch.
+
+        This is the pre-compile step :meth:`capture_trace` would otherwise do inline. Callers that capture
+        the sampling trace behind another trace (e.g. right after the decode trace) should run it earlier,
+        while no trace is live on device, and then pass ``skip_precompile=True`` to :meth:`capture_trace`;
+        left inline, this pass allocates device buffers that a live trace can corrupt on replay.
+
+        ``logits`` only has to match the spec of the tensor that will later be captured, not be it.
+        """
+        self._run_sampling(
+            logits,
+            penalties_on=self._penalties_active,
+            tt_out_tok=tt_out_tok,
+        )
+        self.reset_penalty_counts()
 
     def capture_trace(
         self,
@@ -321,6 +362,7 @@ class SamplingGenerator:
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
         ttnn.synchronize_device(self.mesh_device)
+        self.reset_penalty_counts()
 
         if tt_out_tok is not None:
             if isinstance(sampled, tuple):
@@ -385,11 +427,8 @@ class SamplingGenerator:
             self._validate_trace_inputs(slot, logits, tt_out_tok)
             tt_out = self._execute_trace(key)
 
-        if penalties_on and tt_out is not None:
-            if isinstance(tt_out, tuple):
-                self.tt_penalties.update_output_tokens(tt_out[0])
-            else:
-                self.tt_penalties.update_output_tokens(tt_out)
+        # The penalty update now runs inside _run_sampling, so it is captured with the rest of the sampled
+        # step and replayed with it -- there is nothing to do here.
         return tt_out
 
 
