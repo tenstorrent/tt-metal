@@ -50,12 +50,59 @@ M_BLOCK = 8
 #: assertion below reads it.
 DEST_AUTO_LIMIT_TILES = 8
 
-#: Token tiles per output sub-block. DEST budget is out_subblock_h * out_subblock_w <=
-#: DEST_AUTO_LIMIT_TILES, and out_subblock_w carries the whole HN_PAD / ec width here, so the
-#: height factor is 1. NOTE: that leaves phase 2 at ec (2-3) of 8 DEST tiles — a measured
-#: perf lever (`matmul_output_subblock`: the win tracks sub-block SIZE) that wants a SEPARATE
-#: height knob for the `down` matmul, since HN_PAD=6 pins gate/up at 1. See op_requirements.md.
-OUT_SUBBLOCK_H = 1
+#: Token tiles per gate/up output sub-block (the matmul's `out_subblock_h`). PINNED AT 1 and NOT a
+#: knob: the gate/up output must stay m-major with HN_PAD consecutive hidden tiles per token row,
+#: because that IS the `cb_h` in0 layout phase 2 reads. `OutputCBLayout::SubblockMajor` walks
+#: in0_subblock outer / in1_subblock inner, so height 1 keeps the order `m*HN_PAD + n` for ANY
+#: in1_num_subblocks — but height 2 would emit `sb*2*HN_PAD + off*2*w + h*w + n`, i.e. `h` and
+#: `off` swapped, which silently permutes h. DEST is 1 x HN_PAD = 6 of 8 either way.
+OUT_SUBBLOCK_H_GU = 1
+
+#: Token tiles per `down` output sub-block — Refinement 2 lever 3. SEPARATE from the gate/up knob
+#: above: `down`'s out_subblock_w is `ec` (2-3), so at height 1 its sub-block is 2-3 tiles of a
+#: DEST budget of 8, and `matmul_output_subblock` measures the win tracking sub-block SIZE
+#: (1x1 -> any 8-tile shape = 1.46x; a 4-tile shape = 1.40x). The `down` matmul packs
+#: `OutputCBLayout::TileRowMajor` at `out_row_width = EC_MAX`, which places every tile at its true
+#: row-major offset, so its output layout is height-AGNOSTIC and this really is a pure knob turn.
+#:
+#: The value is DERIVED (largest power of two whose sub-block still fits DEST) and clamped by this
+#: cap, so it tracks EC_MAX across emb widths instead of being a literal: cap 4 gives 2 at EC_MAX 3
+#: (emb 7168, 6 DEST tiles) and 4 at EC_MAX 2 (emb 6144, 8 tiles). The kernels additionally take
+#: `min(this, m_eff)` at runtime, so the runtime M shrink is untouched: M_EFF_MIN stays
+#: pow2_ceil(OUT_SUBBLOCK_H_GU) = 1 and `count 32` still does m_eff 1.
+#:
+#: MEASURED (Refinement 2, bf16_rm, count 256 / 128 / emb 6144 count 256):
+#:   cap 1 (Phase-0 shape) 226 645 / 151 109 / 212 222 ns
+#:   cap 4 (derived 2/2/4) 228 310 / 151 434 / 215 124 ns   = +0.7 % / +0.2 % / +1.4 %
+#: A consistent small REGRESSION, so the knob is PARKED AT 1 — byte-identical to Phase 0, zero cost,
+#: still live. `matmul_output_subblock`'s 1.46x is measured on an L1-resident, compute-bound matmul
+#: with Kt=1; this `down` matmul is gated on the h all-gather and on a per-round DRAM read, so a
+#: bigger DEST sub-block buys nothing and the extra DEST pressure costs. Worth re-turning only if a
+#: later refinement makes phase 2 compute-bound.
+OUT_SUBBLOCK_H_DN_MAX = int(os.environ.get("MOE_SWIGLU_SBH_DN", 1))
+
+#: Hidden tiles per gate/up output SUB-BLOCK (the matmul's `out_subblock_w`) — Refinement 2 lever 2.
+#: 0 means "the whole HN_PAD", i.e. `in1_num_subblocks == 1`, which is the Phase-0 shape and the
+#: thing op_design.md §4.3's per-sub-block reduce pipelining needs broken up. A smaller value splits
+#: the gate/up block into `HN_PAD / HN_BLOCK` in1 sub-blocks.
+#:
+#: Layout-safe at ANY value because `OUT_SUBBLOCK_H_GU == 1`: `OutputCBLayout::SubblockMajor` walks
+#: in0_subblock outer / in1_subblock inner, so the emitted order stays `m*HN_PAD + n` — the exact
+#: `cb_h` in0 order phase 2 reads. Must DIVIDE HN_PAD, and the ragged last column (hn < HN_PAD) must
+#: still land inside the LAST sub-block, since `last_in1_subblock_w_valid` can narrow that sub-block
+#: but cannot skip a whole one; both are asserted below.
+#:
+#: MEASURED (Refinement 2, bf16_rm, count 256 / 128 / emb 6144 count 256):
+#:   HN_BLOCK 6 == HN_PAD (default) 222 446 / 144 500 / 208 500 ns (medians)
+#:   HN_BLOCK 3 (2 in1 sub-blocks) 224 296 / 143 516 / 210 307 ns  = +0.8 % / -0.7 % / +0.9 %
+#: A wash, and for a understood reason: the split HALVES the DEST sub-block (6 -> 3 tiles) — which
+#: `matmul_output_subblock` measures as a real slowdown — while the thing it is supposed to buy,
+#: op_design.md §4.3's "sub-block `off`'s reduce overlaps `off+1`'s matmul", needs the REDUCE to be
+#: split per sub-block too, which this knob alone does not do. That pipelining is bounded by the
+#: measured cost of the whole reduce transport (4.2 % of count 256 — see changelog), and the
+#: parallel-fan-in experiment below showed that cost is bandwidth, not serialisation. PARKED at
+#: HN_PAD (byte-identical), still live for a future per-sub-block reduce.
+HN_BLOCK = int(os.environ.get("MOE_SWIGLU_HN_BLOCK", 0))
 
 #: K tiles per gate/up matmul K-block, expressed as a fraction of the per-row K extent.
 #: 1 == the coarsest correct block (num_k_blocks == 1), which is what lets the gate and the up
@@ -83,19 +130,62 @@ WRUN = int(os.environ.get("MOE_SWIGLU_WRUN", 8))
 #: MOE_SWIGLU_ABLATE=skip_compute defines SKIP_COMPUTE in the compute TU, which drops the inner
 #: matmul LLK call while keeping every CB wait/push, reload and L1_ACC toggle — the documented
 #: way to separate the dataflow ceiling from the compute ceiling. NOT a correctness mode.
+#:
+#: The COLLECTIVE ablations (Refinement 2) stub one transport at a time in the dataflow TUs while
+#: keeping every CB reserve/push/pop and every loop trip count, so the diff against the baseline is
+#: that collective's exposed cost:
+#:   no_reduce_xfer — parent skips invite + data wait, child skips the two unicasts + the signal
+#:   no_h_xfer      — the h all-gather send/receive is dropped (cb_h still cycles)
+#:   no_x_xfer      — the x row-multicast send/receive is dropped (cb_x_tiles still cycles)
+#:   no_w_xfer      — the three bfp4 weight DRAM streams are dropped (CBs + barriers still cycle)
+#: None is a correctness mode; each answers "how much of the 85% is THIS collective?".
 ABLATE = os.environ.get("MOE_SWIGLU_ABLATE", "")
+_DM_ABLATIONS = ("no_reduce_xfer", "no_h_xfer", "no_x_xfer", "no_w_xfer")
+
+#: `/perf-measure` phase zones (MOE_SWIGLU_ZONES=1): bracket each SERIAL STAGE of the per-M-block
+#: chain with a DeviceZoneScopedN so the profiler reports where the time actually goes. Compiled
+#: out entirely when unset, so the shipped kernels are byte-identical.
+ZONES = os.environ.get("MOE_SWIGLU_ZONES", "") not in ("", "0")
 
 #: W_down prefetch depth, in phase-2 K-blocks kept in flight ahead of the round that consumes
 #: them. Clamped to [1, HGROUPS].
 #:
-#: MEASURED (emb 7168, count 256, bf16_rm): 1 -> 227.8 us, 4 -> 228.7 us, 11 -> 240.1 us. Deeper
-#: prefetch does NOT help, which is itself the finding: the phase-2 weight stream is not
-#: DRAM-latency bound. Parked at 1 (byte-identical to the naive per-round read) and kept as a
-#: live knob — it becomes worth turning only once the h all-gather stops being the critical path.
+#: MEASURED AT PHASE 0 (emb 7168, count 256, bf16_rm): 1 -> 227.8 us, 4 -> 228.7 us, 11 -> 240.1 us.
+#: That null had a CAUSE, found in Refinement 2: the round issued its block and then immediately ran
+#: `noc_async_read_barrier()`, which drains EVERY outstanding read — so however deep the prefetch,
+#: the latency was still paid on the spot. The reader now defers that barrier past the round's
+#: collective (see "DEFERRED READ BARRIER" in the reader), which is what makes this knob live: at 1
+#: the block published in a round is the one that round consumes, so >= 2 is what actually decouples
+#: compute from the DRAM read.
 WD_AHEAD = int(os.environ.get("MOE_SWIGLU_WD_AHEAD", 1))
 
 #: Reduce-tree fan-in cap (>= ceil(log2(KGROUPS)) for the binary tree below).
 MAX_CHILDREN = 5
+
+#: Refinement 2 lever 1 — how many child partials the reduce-tree LANDING CBs
+#: (`cb_reduce_gate_in` / `cb_reduce_up_in`) can hold AT ONCE, i.e. how many children a parent can
+#: have in flight concurrently.
+#:
+#: 1 (the Phase-0 shape) forces the parent to invite child `c`, wait for its data, hand it to
+#: compute and only THEN invite `c + 1` — up to 4 SEQUENTIAL ~102 KB round trips per M-block at the
+#: root. Raising it lets the parent invite every child at once and wait for `num_children` arrivals.
+#:
+#: The slot count is DERIVED as min(real max fan-in, this cap) so it tracks the tree instead of
+#: being a literal; the cap exists because each extra slot costs `M_BLOCK * HN_PAD` tiles of bfp8
+#: L1 in EACH of the two CBs (2 x 51 KB = 102 KB per extra slot at M_BLOCK 8 / HN_PAD 6) and the
+#: bf16_rm path has ~159 KB free, so 2 is the most that fits today.
+#:
+#: MEASURED (Refinement 2, bf16_rm, count 256 / 128 / emb 6144 count 256):
+#:   cap 1 (Phase-0, one child at a time) 226 009 / 153 883 / 211 220 ns
+#:   cap 2 (two children concurrent)      230 482 / 152 454 / 217 121 ns  = +2.0 % / -0.9 % / +2.8 %
+#: A REGRESSION at count 256, and the ablation says why: the ENTIRE reduce transport is only 4.2 %
+#: of count 256 (baseline 226 134 ns vs 216 651 with the transport stubbed), and roughly half of
+#: that is destination-port BANDWIDTH — four children write 4 x 102 KB into one core's L1, which
+#: concurrency cannot speed up. What the one-slot protocol did buy is an interleave that the wave
+#: protocol gives up: child `c`'s ~102 KB transfer overlapped child `c-1`'s in-place `add`. PARKED
+#: AT 1 — byte-identical to Phase 0, no L1 cost (so Refinement 3 keeps the space), still live and
+#: already fan-in-general if a later structure makes the transport latency-bound.
+REDUCE_SLOTS_CAP = int(os.environ.get("MOE_SWIGLU_REDUCE_SLOTS", 1))
 
 #: Mailbox handshake word — the reader publishes {count, M_t, m_blocks} plus this flag.
 MAILBOX_MAGIC = 0xC0FFEE01
@@ -271,7 +361,10 @@ def create_program_descriptor(
     # divides the per-M-block push count. When it does not (only reachable via the
     # MOE_SWIGLU_WD_AHEAD ablation), fall back to the whole stream so the knob stays legal at any
     # value.
-    depth_wd = max(DEPTH_WD, wd_ahead + 1)
+    # >= wd_ahead + 2: the blocks in flight, PLUS the one the reader has reserved but not yet
+    # published (the deferred-barrier restructure carries exactly one such block across a round
+    # boundary), PLUS the one compute is consuming.
+    depth_wd = max(DEPTH_WD, wd_ahead + 2)
     if wd_ahead > 1 and HGROUPS % depth_wd != 0:
         depth_wd = HGROUPS
     ec_sizes, ec_starts = _split(EMB_T, num_cores)
@@ -281,15 +374,40 @@ def create_program_descriptor(
     # tail columns unread — out_subblock_w stays `ec`, so no extra FMA work is done.
     EC_MAX = max(ec_sizes)
 
-    # DEST budget: out_subblock_h * out_subblock_w <= DEST_AUTO_LIMIT. out_subblock_w carries the
-    # full HN_PAD (gate/up) and ec (down) widths, so both must fit.
-    if OUT_SUBBLOCK_H * HN_PAD > DEST_AUTO_LIMIT_TILES or OUT_SUBBLOCK_H * EC_MAX > DEST_AUTO_LIMIT_TILES:
+    # DEST budget: out_subblock_h * out_subblock_w <= DEST_AUTO_LIMIT, per matmul.
+    #   gate/up  out_subblock_w = HN_PAD, height pinned at OUT_SUBBLOCK_H_GU (see the knob).
+    #   down     out_subblock_w = ec (<= EC_MAX), height DERIVED here — Refinement 2 lever 3.
+    # gate/up in1 sub-block width — Refinement 2 lever 2. 0 (default) = the whole HN_PAD.
+    hn_block = HN_PAD if HN_BLOCK <= 0 or HN_BLOCK >= HN_PAD else HN_BLOCK
+    if HN_PAD % hn_block != 0:
+        raise RuntimeError(f"moe_fused_swiglu: HN_BLOCK {hn_block} must divide HN_PAD {HN_PAD}")
+    gu_in1_subblocks = HN_PAD // hn_block
+    # The ragged column's real width must reach INTO the last sub-block: the helper can narrow the
+    # last in1 sub-block's FMA width (`last_in1_subblock_w_valid`) but cannot drop one entirely.
+    if min(hn_sizes) <= (gu_in1_subblocks - 1) * hn_block:
         raise RuntimeError(
-            f"moe_fused_swiglu: out sub-block {OUT_SUBBLOCK_H}x(max {HN_PAD},{EC_MAX}) exceeds the "
+            f"moe_fused_swiglu: HN_BLOCK {hn_block} leaves the ragged column (hn={min(hn_sizes)}) "
+            f"with an entirely empty last in1 sub-block; use a wider HN_BLOCK"
+        )
+    if OUT_SUBBLOCK_H_GU * hn_block > DEST_AUTO_LIMIT_TILES:
+        raise RuntimeError(
+            f"moe_fused_swiglu: gate/up sub-block {OUT_SUBBLOCK_H_GU}x{hn_block} exceeds the "
             f"DEST budget of {DEST_AUTO_LIMIT_TILES} tiles"
         )
-    if M_BLOCK % OUT_SUBBLOCK_H != 0:
-        raise RuntimeError(f"moe_fused_swiglu: M_BLOCK {M_BLOCK} must be a multiple of {OUT_SUBBLOCK_H}")
+    # Largest POWER OF TWO height whose `down` sub-block still fits DEST, capped by the knob and by
+    # M_BLOCK. Power of two so that `min(h, m_eff)` divides m_eff exactly for every runtime m_eff
+    # (which is itself a power of two) — that is what keeps the M shrink and this lever orthogonal.
+    OUT_SUBBLOCK_H_DN = 1
+    while (
+        OUT_SUBBLOCK_H_DN * 2 <= min(OUT_SUBBLOCK_H_DN_MAX, M_BLOCK)
+        and OUT_SUBBLOCK_H_DN * 2 * EC_MAX <= DEST_AUTO_LIMIT_TILES
+    ):
+        OUT_SUBBLOCK_H_DN *= 2
+    if M_BLOCK % OUT_SUBBLOCK_H_GU != 0 or M_BLOCK % OUT_SUBBLOCK_H_DN != 0:
+        raise RuntimeError(
+            f"moe_fused_swiglu: M_BLOCK {M_BLOCK} must be a multiple of both sub-block heights "
+            f"({OUT_SUBBLOCK_H_GU} gate/up, {OUT_SUBBLOCK_H_DN} down)"
+        )
 
     # ---- the runtime M shrink (op_design.md §3's `m_tiles`) ----
     # The kernels work `m_eff = m_tiles_eff(M_t, b, M_BLOCK, M_EFF_MIN)` token tile-rows per block,
@@ -298,16 +416,18 @@ def create_program_descriptor(
     #   1. M_BLOCK is a power of two, so every m_eff (a power of two <= M_BLOCK) DIVIDES it. Each
     #      M-scaled CB total is DEPTH * M_BLOCK * W, so a m_eff * W reserve can never straddle the
     #      FIFO end whatever order the blocks push in.
-    #   2. M_EFF_MIN keeps m_eff a multiple of the matmul's out_subblock_h, so the kernels'
-    #      `m_eff / OUT_SUBBLOCK_H` sub-block count stays exact.
+    #   2. M_EFF_MIN keeps m_eff a multiple of the gate/up out_subblock_h, so the kernels'
+    #      `m_eff / OUT_SUBBLOCK_H_GU` sub-block count stays exact. The `down` height does NOT
+    #      enter M_EFF_MIN: the kernel takes `min(OUT_SUBBLOCK_H_DN, m_eff)` at runtime, so raising
+    #      it never forces a larger m_eff (i.e. never re-adds work at `count <= 32`).
     if _pow2_ceil(M_BLOCK) != M_BLOCK:
         raise RuntimeError(
             f"moe_fused_swiglu: M_BLOCK {M_BLOCK} must be a power of two so every runtime m_eff "
             f"divides it (see m_tiles_eff in kernels/moe_fused_swiglu_common.hpp)"
         )
-    M_EFF_MIN = _pow2_ceil(OUT_SUBBLOCK_H)
+    M_EFF_MIN = _pow2_ceil(OUT_SUBBLOCK_H_GU)
     if M_EFF_MIN > M_BLOCK:
-        raise RuntimeError(f"moe_fused_swiglu: OUT_SUBBLOCK_H {OUT_SUBBLOCK_H} exceeds M_BLOCK {M_BLOCK}")
+        raise RuntimeError(f"moe_fused_swiglu: OUT_SUBBLOCK_H_GU {OUT_SUBBLOCK_H_GU} exceeds M_BLOCK {M_BLOCK}")
 
     # ---- DRAM bank-run coalescing precondition (op_design.md §1.5) ----
     dram_align = ttnn.get_dram_alignment()
@@ -331,6 +451,21 @@ def create_program_descriptor(
 
     # ---- reduce tree ----
     tree = _reduce_tree(KGROUPS, HGROUPS)
+    max_fan_in = max(len(n["children"]) for n in tree.values())
+    if max_fan_in > MAX_CHILDREN:
+        raise RuntimeError(f"moe_fused_swiglu: tree fan-in {max_fan_in} exceeds MAX_CHILDREN {MAX_CHILDREN}")
+    # Concurrent child landing slots — Refinement 2 lever 1. Derived from the REAL fan-in, capped by
+    # the L1 knob; 1 reproduces the Phase-0 invite-one-child-at-a-time protocol byte-for-byte.
+    reduce_slots = max(1, min(max_fan_in, REDUCE_SLOTS_CAP))
+    # A parent invites its children in WAVES of `reduce_slots`, so child `c`'s landing slot is
+    # `c % reduce_slots` — the one number the child needs and the only new runtime arg. Waves keep
+    # the whole-CB reserve/push granularity (and therefore the "every core's write pointer is the CB
+    # base" invariant the child's address proxy depends on) at ANY fan-in, and `reduce_slots == 1`
+    # degenerates to the Phase-0 one-child-at-a-time protocol byte-for-byte.
+    _slot_of = {}
+    for _node in tree.values():
+        for c, ch in enumerate(_node["children"]):
+            _slot_of[ch] = c % reduce_slots
 
     # ---- collectives: emit the mcast wire (Mcast1D / Mcast2D own the coord + rect math) ----
     # Reader runs on NOC_0 (ReaderDataMovementConfig -> preferred_noc_for_dram_read).
@@ -421,8 +556,8 @@ def create_program_descriptor(
         _cb(CB_W_GATE, all_cores, DEPTH_W * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
         _cb(CB_W_UP, all_cores, DEPTH_W * n_w_gu, bfp4_tile, ttnn.bfloat4_b),
         _cb(CB_W_DOWN, all_cores, n_w_down, bfp4_tile, ttnn.bfloat4_b),  # depth_wd K-blocks
-        _cb(CB_REDUCE_GATE_IN, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
-        _cb(CB_REDUCE_UP_IN, all_cores, n_gu_block, bfp8_tile, ttnn.bfloat8_b),
+        _cb(CB_REDUCE_GATE_IN, all_cores, reduce_slots * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
+        _cb(CB_REDUCE_UP_IN, all_cores, reduce_slots * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_H, all_cores, DEPTH_H * n_gu_block, bfp8_tile, ttnn.bfloat8_b),
         _cb(CB_IDX_SCRATCH, all_cores, 1, max(idx_page, dram_align), ttnn.uint32),
         _cb(CB_COUNTS_SCRATCH, all_cores, 1, max(counts_page, dram_align), ttnn.uint32),
@@ -466,6 +601,7 @@ def create_program_descriptor(
         MAILBOX_MAGIC,
         wd_ahead,
         M_EFF_MIN,
+        reduce_slots,
         CB_X_IN,
         CB_X_TILES,
         CB_X_STAGE,
@@ -501,6 +637,7 @@ def create_program_descriptor(
         remap,
         MAILBOX_MAGIC,
         M_EFF_MIN,
+        reduce_slots,
         CB_W_UP,
         CB_OUT_TILES,
         CB_GATE_SEND,
@@ -519,9 +656,12 @@ def create_program_descriptor(
         HGROUPS,
         HID_T,
         input_format,
-        OUT_SUBBLOCK_H,
+        OUT_SUBBLOCK_H_GU,
         MAILBOX_MAGIC,
         M_EFF_MIN,
+        OUT_SUBBLOCK_H_DN,
+        reduce_slots,
+        hn_block,
         CB_X_IN,
         CB_X_TILES,
         CB_X_STAGE,
@@ -586,6 +726,8 @@ def create_program_descriptor(
             reader_rt[x][y] = args
 
             px, py = _virt(device, *node["parent"]) if node["parent"] is not None else (0, 0)
+            # This core's landing slot in its parent's reduce CBs (Refinement 2 lever 1).
+            my_slot = _slot_of.get((x, y), 0)
             writer_rt[x][y] = [
                 mailbox_addr,
                 w_up.buffer_address(),
@@ -599,6 +741,7 @@ def create_program_descriptor(
                 1 if node["is_root"] else 0,
                 px,
                 py,
+                my_slot,
             ]
 
             compute_rt[x][y] = [
@@ -611,6 +754,13 @@ def create_program_descriptor(
                 x,  # my_col — the x-multicast injection slot (round t's injector is column t % HGROUPS)
             ]
 
+    # `/perf-measure` collective ablations: one transport stubbed, all CB scaffolding intact.
+    # `+`-separated so stages can be peeled off CUMULATIVELY (they overlap, so removing one alone
+    # under-counts it — the documented ablation methodology).
+    dm_defines = [("ABLATE_" + a.upper(), "1") for a in ABLATE.split("+") if a in _DM_ABLATIONS]
+    zone_defines = [("MOE_SWIGLU_ZONES", "1")] if ZONES else []
+    dm_defines = dm_defines + zone_defines
+
     kernels = [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "moe_fused_swiglu_reader.cpp"),
@@ -618,6 +768,7 @@ def create_program_descriptor(
             compile_time_args=reader_ct,
             runtime_args=reader_rt,
             config=ttnn.ReaderConfigDescriptor(),
+            defines=dm_defines,
         ),
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "moe_fused_swiglu_writer.cpp"),
@@ -625,6 +776,7 @@ def create_program_descriptor(
             compile_time_args=writer_ct,
             runtime_args=writer_rt,
             config=ttnn.WriterConfigDescriptor(),
+            defines=dm_defines,
         ),
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "moe_fused_swiglu_compute.cpp"),
@@ -632,7 +784,7 @@ def create_program_descriptor(
             compile_time_args=compute_ct,
             runtime_args=compute_rt,
             config=compute_kernel_config,
-            defines=[("SKIP_COMPUTE", "1")] if ABLATE == "skip_compute" else [],
+            defines=([("SKIP_COMPUTE", "1")] if "skip_compute" in ABLATE.split("+") else []) + zone_defines,
         ),
     ]
 

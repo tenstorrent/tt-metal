@@ -43,21 +43,30 @@ constexpr uint32_t MAILBOX_MAGIC = get_compile_time_arg_val(15);
 // Smallest legal `m_eff` (= the matmul's out_subblock_h rounded up to a power of two). One
 // host-side definition, passed identically to all three kernels — see m_tiles_eff().
 constexpr uint32_t M_EFF_MIN = get_compile_time_arg_val(16);
+// Concurrent child landing slots in the parent's cb_reduce_*_in (Refinement 2 lever 1) — the child
+// needs it only to stride its own slot index into the parent's CB.
+constexpr uint32_t REDUCE_SLOTS = get_compile_time_arg_val(17);
 
-constexpr uint32_t cb_w_up = get_compile_time_arg_val(17);
-constexpr uint32_t cb_out_tiles = get_compile_time_arg_val(18);
-constexpr uint32_t cb_gate_send = get_compile_time_arg_val(19);
-constexpr uint32_t cb_up_send = get_compile_time_arg_val(20);
-constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(21);
-constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(22);
+constexpr uint32_t cb_w_up = get_compile_time_arg_val(18);
+constexpr uint32_t cb_out_tiles = get_compile_time_arg_val(19);
+constexpr uint32_t cb_gate_send = get_compile_time_arg_val(20);
+constexpr uint32_t cb_up_send = get_compile_time_arg_val(21);
+constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(22);
+constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(23);
 
-constexpr uint32_t TA_BASE = 23;
+constexpr uint32_t TA_BASE = 24;
 constexpr auto wu_args = TensorAccessorArgs<TA_BASE>();
 constexpr auto out_args = TensorAccessorArgs<wu_args.next_compile_time_args_offset()>();
 
 // Bank-run coalescing (see moe_fused_swiglu_bank_runs.hpp): ONE definition, bound here to this
 // kernel's compile-time knobs — identical to the reader's binding, which is the point.
 using BR = moe_fused_swiglu::BankRuns<REMAP != 0, NUM_BANKS, WRUN>;
+
+#ifdef MOE_SWIGLU_ZONES
+#define MOE_ZONE(n) DeviceZoneScopedN(n)
+#else
+#define MOE_ZONE(n) ((void)0)
+#endif
 
 void kernel_main() {
     const uint32_t mailbox_addr = get_arg_val<uint32_t>(0);
@@ -72,6 +81,9 @@ void kernel_main() {
     const uint32_t is_root = get_arg_val<uint32_t>(9);
     const uint32_t parent_x = get_arg_val<uint32_t>(10);
     const uint32_t parent_y = get_arg_val<uint32_t>(11);
+    // This core's landing SLOT in its parent's reduce CBs (Refinement 2 lever 1) = its index in the
+    // parent's child list modulo REDUCE_SLOTS, so the children of one invite wave never collide.
+    const uint32_t my_slot = get_arg_val<uint32_t>(12);
 
     const auto wu_acc = TensorAccessor(wu_args, w_up_addr, BFP4_TILE);
     const auto out_acc = TensorAccessor(out_args, out_addr, BFP8_TILE);
@@ -87,10 +99,21 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_go_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_GO)));
     uint32_t invites = 0;
+#ifdef ABLATE_NO_REDUCE_XFER
+    (void)sem_go_ptr;
+    (void)invites;
+    (void)parent_x;
+    (void)parent_y;
+    (void)my_slot;
+#endif
 
     constexpr uint32_t SLOTS_H = REMAP ? (HID_T / NUM_BANKS) : HID_T;
     constexpr uint32_t SLOTS_E = REMAP ? (EMB_T / NUM_BANKS) : EMB_T;
     constexpr uint32_t WU_BLOCK_TILES = KR_PAD * HN_PAD;
+    constexpr uint32_t SLOT_TILES = M_BLOCK * HN_PAD;  // one child's landing slot in the parent
+
+    // The output block written but not yet barriered/popped — see the DEFERRED WRITE BARRIER below.
+    uint32_t out_pending = 0;
 
     for (uint32_t b = 0; b < m_blocks; ++b) {
         // The RUNTIME token tile-rows this block works on — the SAME number the reader uses for its
@@ -99,38 +122,61 @@ void kernel_main() {
         const uint32_t gu_block_tiles = m_eff * HN_PAD;
         const uint32_t out_block_tiles = m_eff * EC_MAX;
 
+        // DEFERRED WRITE BARRIER (Refinement 2, the writer twin of the reader's deferred READ
+        // barrier). The previous M-block's output write-back is drained HERE, not where it was
+        // issued: `noc_async_write_barrier()` waits for every outstanding write, so barriering at
+        // the issue site made the last stage of block `b` pay its full DRAM write latency with
+        // nothing else in flight — and it sits between block `b` and block `b+1`, i.e. exactly on
+        // the multi-M-block critical path (count > 256). Draining it here instead lets it ride this
+        // block's W_up read. DEPTH_OUT >= 2 is what makes the extra outstanding block legal.
+        if (out_pending) {
+            noc_async_write_barrier();
+            cb_pop_front(cb_out_tiles, out_pending);
+            out_pending = 0;
+        }
+
         // ---- W_up: NoC1 half of the gate/up weight stream, same bank-run coalescing ----
         cb_reserve_back(cb_w_up, WU_BLOCK_TILES);
         {
+            MOE_ZONE("W_WUP");
             const uint32_t wp = get_write_ptr(cb_w_up);
+#ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
             for (uint32_t k = 0; k < kr; ++k) {
                 BR::read(
                     wu_acc, (kstart + k) * HID_T, hstart, hstart + hn, SLOTS_H, wp + k * HN_PAD * BFP4_TILE, BFP4_TILE);
             }
+#else
+            (void)wp;
+#endif
             noc_async_read_barrier();
         }
         cb_push_back(cb_w_up, WU_BLOCK_TILES);
 
         // ---- reduce tree, CHILD side ----
         if (!is_root) {
+            MOE_ZONE("W_CHILD");
             cb_wait_front(cb_gate_send, gu_block_tiles);
             cb_wait_front(cb_up_send, gu_block_tiles);
+#ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the tree edge, keep the CB cycle
             // The parent invites us once per M-block; SEM_GO is monotone so no reset is needed.
             noc_semaphore_wait_min(sem_go_ptr, ++invites);
-            // Every core has the identical CB layout, and cb_reduce_*_in is a single slot pushed
-            // WHOLE (so its write pointer is always the CB base on every core), so our own write
-            // pointer IS the parent's landing address. Only the m_eff live tile-rows are shipped —
-            // the tail of the slot belongs to undefined token rows and the parent drops it.
+            // Every core has the identical CB layout and cb_reduce_*_in is pushed WHOLE (so its
+            // write pointer is always the CB base on every core), so our own write pointer + our
+            // slot stride IS the parent's landing address — no address negotiation. Only the m_eff
+            // live tile-rows are shipped; the tail of the slot belongs to undefined token rows and
+            // the parent drops it.
+            const uint32_t slot_bytes = my_slot * SLOT_TILES * BFP8_TILE;
             noc_async_write(
                 get_read_ptr(cb_gate_send),
-                get_noc_addr(parent_x, parent_y, get_write_ptr(cb_reduce_gate_in)),
+                get_noc_addr(parent_x, parent_y, get_write_ptr(cb_reduce_gate_in) + slot_bytes),
                 gu_block_tiles * BFP8_TILE);
             noc_async_write(
                 get_read_ptr(cb_up_send),
-                get_noc_addr(parent_x, parent_y, get_write_ptr(cb_reduce_up_in)),
+                get_noc_addr(parent_x, parent_y, get_write_ptr(cb_reduce_up_in) + slot_bytes),
                 gu_block_tiles * BFP8_TILE);
             noc_async_write_barrier();
             noc_semaphore_inc(get_noc_addr(parent_x, parent_y, static_cast<uint32_t>(get_semaphore(SEM_DATA))), 1);
+#endif
             cb_pop_front(cb_gate_send, gu_block_tiles);
             cb_pop_front(cb_up_send, gu_block_tiles);
         }
@@ -138,18 +184,28 @@ void kernel_main() {
         // ---- output write-back, coalesced over the emb axis ----
         // EC_MAX is the L1 row stride of the block (uniform CB increment); `ec` is how many of
         // those columns this core actually owns.
-        cb_wait_front(cb_out_tiles, out_block_tiles);
         {
-            const uint32_t rp = get_read_ptr(cb_out_tiles);
-            for (uint32_t t = 0; t < m_eff; ++t) {
-                const uint32_t row = b * M_BLOCK + t;
-                if (row >= m_t) {
-                    break;  // rows past ceil_tile(count) are never written
+            MOE_ZONE("W_OUT");
+            cb_wait_front(cb_out_tiles, out_block_tiles);
+            {
+                const uint32_t rp = get_read_ptr(cb_out_tiles);
+                for (uint32_t t = 0; t < m_eff; ++t) {
+                    const uint32_t row = b * M_BLOCK + t;
+                    if (row >= m_t) {
+                        break;  // rows past ceil_tile(count) are never written
+                    }
+                    BR::write(
+                        out_acc, row * EMB_T, jstart, jstart + ec, SLOTS_E, rp + t * EC_MAX * BFP8_TILE, BFP8_TILE);
                 }
-                BR::write(out_acc, row * EMB_T, jstart, jstart + ec, SLOTS_E, rp + t * EC_MAX * BFP8_TILE, BFP8_TILE);
             }
-            noc_async_write_barrier();
+            // Issued only — the barrier and the pop happen at the top of the NEXT M-block (or in the
+            // epilogue below for the last one).
+            out_pending = out_block_tiles;
         }
-        cb_pop_front(cb_out_tiles, out_block_tiles);
+    }
+
+    if (out_pending) {
+        noc_async_write_barrier();
+        cb_pop_front(cb_out_tiles, out_pending);
     }
 }

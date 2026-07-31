@@ -241,7 +241,7 @@ unreachable gate), worst per-cell PCC delta **-4.8e-07** and **0 cells** beyond 
   definition.
 - **Bottleneck unchanged**: Refinements 2 and 3 own it, exactly as Refinement 1 left it.
 
-### [ ] Refinement 2 — Break the reduce-path serialisation (the measured 85 %)
+### [x] Refinement 2 — Break the reduce-path serialisation (the measured 85 %)
 
 **Type**: perf
 
@@ -293,6 +293,49 @@ x's row x % KGROUPS` already spreads the roots over all rows; do not move that.
 (the one closest to a real router's count) and does not regress `count 128` / `count 512`; the guard
 set shows no regression; each lever's contribution is recorded separately in `changelog.md`
 (kept-or-dropped, with the ns); no golden cell changes category and no PCC moves by more than 1e-4.
+
+**Outcome**: **DONE.** All 9 graded loose cells got faster, **sum 5 985 714 -> 5 881 105 ns
+(-1.75 %)**, with **PCC bit-identical (delta exactly 0.0) on all 8 numeric cells** and `count = 0`
+still ~6.0 us: `count 256` **225 932 -> 223 062 (-1.27 %, -1.6 % on the 5-run median)`,
+`count 128` **-4.49 %**, `count 512` **-1.64 %**, `count = capacity` **-1.63 %**, `bfp8_tile`
+**-2.42 %**, `emb 6144` **-1.93 %**, `cap 1024 / 2048` **-2.12 / -1.76 %**. Golden 9/9 loose +
+14/14 `test_op` slice, unit suite 56/56 + 20 new.
+- **The heading's premise did not survive measurement, and that is the finding.** Four new
+  `/perf-measure` transport ablations (each stubs ONE payload, keeps every CB op and trip count) put
+  the collectives at **18 %**, not 85 %, of `count 256`: h all-gather **9.0 %**, reduce **4.2 %**,
+  x multicast **3.3 %** — and all three together only **18.1 %**, so they overlap heavily. The
+  single biggest term is the **bfp4 weight DRAM stream at 18.5 %** (31.9 % at `count 128`), and with
+  every collective AND the matmul math removed the op still takes **165 us of 226**.
+- **Levers 1-3 were built, measured, and all three PARKED at byte-identical defaults** (kept as live
+  knobs with their numbers in the descriptor, not deleted): lever 1 parallel fan-in +2.0 % at
+  `count 256`, lever 2 `HN_BLOCK=3` +0.8 %, lever 3 `down` sub-block height +0.7 %. Lever 1's ceiling
+  was the 4.2 % the reduce transport costs in total, about half of which is destination-port
+  bandwidth that concurrency cannot beat — and the wave protocol gives up the transport/`add`
+  interleave the one-slot protocol had.
+- **Lever 4 was analysed and deliberately NOT built.** `DataReadySignal::Counter` on its own cannot
+  break the round chain: `PRE_HANDSHAKE` is what serialises it (a receiver acks round `r+1`'s sender
+  only inside `receive(r+1)`, i.e. after `receive(r)` returned), and that is true under Flag and
+  Counter alike. Counter is only the PREREQUISITE for the actual lever — LOOK-AHEAD acking, where a
+  receiver reserves `DEPTH_H` cb_h slots and pre-acks the next senders — which needs a new ack-only
+  `ReceiverPipe` entry point plus the documented unlinked-send + acked-barrier Counter fix. That is
+  the sharpest remaining idea and it is recorded here rather than filed, per the perf protocol.
+- **What DID pay is the same defect class the Goal names — "each stage paying its own latency with
+  nothing else in flight" — but in the READ BARRIERS, not the collectives.**
+  `noc_async_read_barrier()` is all-or-nothing, so issuing a prefetch and barriering it a few
+  instructions later pays its full DRAM latency on the spot. The phase-2 round did exactly that once
+  per round on all 110 cores (which is *why* `WD_AHEAD` measured neutral at Phase 0 — no prefetch
+  depth can help while the barrier that drains it is the next statement). Deferring that barrier past
+  the round's collective, plus the writer twin for the output write-back across the M-block boundary,
+  is the whole win.
+- **Bottleneck now**: the count-independent **weight stream** (18.5 % exposed at `count 256`, 31.9 %
+  at 128, against a hard ~51 us / 23 % DRAM floor for 26 MB), and inside one M-block it has nothing
+  to hide under because `num_k_blocks == 1` fronts the entire gate/up block before the matmul starts.
+  **Next lever, and why not here**: N-sub-blocking phase 1 into `n_off` separate `matmul_block` calls
+  so the weight fetch pipelines against the matmul. Measured ceiling ~5 % (the gate/up matmul is only
+  ~12 us, so that is all that can be hidden), and it is NOT a knob turn — separate calls append
+  off-major to `cb_gate_acc`, which breaks the m-major `cb_h` in0 order phase 2 requires, so it needs
+  per-`off` CBs and an interleaved SwiGLU gather. K-blocking is NOT an alternative: `InputPolicy`'s
+  `NoWaitNoPop` is in1-only (`static_assert` on in0), so in0 cannot be retained across K-blocks.
 
 ### [ ] Refinement 3 — Software-pipeline the M-block (the `count >= 512` cliff)
 

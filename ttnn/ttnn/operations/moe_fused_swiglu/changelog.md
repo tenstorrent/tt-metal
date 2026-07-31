@@ -368,3 +368,153 @@ paying its own latency with nothing else in flight.
   the measured format ceiling, and `test_pcc_gate_has_one_source_of_truth` (host-only) pinning the
   three gate references to one definition. Probes `probe_014`/`probe_015` document the ceiling
   measurement.
+
+## Refinement 2 — Break the reduce-path serialisation (the measured 85 %)
+
+- **Date**: 2026-07-31
+- **What was done**: measured the four named levers, then fixed the thing the measurement actually
+  found. Reused: every existing kernel, CB and collective — no new kernel file, no new CB, no
+  protocol rewrite. Added: four transport ablations, five perf knobs (three parked), two barrier
+  deferrals, one test file.
+
+### 1. The premise, re-measured — the collectives are 18 %, not 85 %
+
+`/perf-measure` ablations, each stubbing ONE payload while keeping every CB reserve/push/pop and
+every loop trip count (`MOE_SWIGLU_ABLATE=...`, `+`-separated to peel stages off cumulatively).
+bf16_rm, emb 7168, cap 5120, one fresh-cache run each:
+
+| variant | count 256 | vs base | count 128 | vs base |
+|---|---|---|---|---|
+| baseline | 226 134 | — | 151 387 | — |
+| `no_x_xfer` (x row-multicast) | 218 719 | **-3.3 %** | 144 287 | -4.7 % |
+| `no_reduce_xfer` (whole reduce tree) | 216 651 | **-4.2 %** | 147 547 | -2.5 % |
+| `no_h_xfer` (h all-gather) | 205 849 | **-9.0 %** | 132 181 | -12.7 % |
+| `no_w_xfer` (all three bfp4 weight streams) | 184 324 | **-18.5 %** | 103 073 | **-31.9 %** |
+| all three collectives off | 185 159 | -18.1 % | 121 664 | -19.6 % |
+| + `skip_compute` | 164 933 | -27.1 % | 124 274 | -17.9 % |
+
+Three readings, all of which redirected this refinement:
+1. **The collectives are 18 %, not 85 %** — and the three together (-18.1 %) cost barely more than
+   the h all-gather plus the reduce alone, i.e. they already overlap each other heavily.
+2. **The single biggest term is the weight DRAM stream** (-18.5 % at count 256, -31.9 % at 128). It
+   is count-INDEPENDENT and carries a hard floor: 26 MB at 512 GB/s is ~51 us, 23 % of count 256.
+3. **With every collective AND the matmul math gone, 165 us of 226 remain.** So no single named
+   lever could have delivered a large win; the reduce path in particular is capped at 4.2 %.
+
+### 2. The four named levers — each measured alone, each kept as a live knob
+
+All three built levers are **PARKED at a byte-identical default** with their measurement recorded at
+the knob's definition in `moe_fused_swiglu_program_descriptor.py`. None was deleted; none costs L1
+at its default (so Refinement 3 keeps the space it was promised).
+
+| lever | knob | count 256 | count 128 | emb 6144 | verdict |
+|---|---|---|---|---|---|
+| 1 — parallel reduce fan-in | `REDUCE_SLOTS_CAP` 1 -> 2 | **+2.0 %** | -0.9 % | +2.8 % | parked at 1 |
+| 2 — per-sub-block gate/up blocking | `HN_BLOCK` 6 -> 3 | +0.8 % | -0.7 % | +0.9 % | parked at HN_PAD |
+| 3 — phase-2 DEST occupancy | `OUT_SUBBLOCK_H_DN_MAX` 1 -> 4 | +0.7 % | +0.2 % | +1.4 % | parked at 1 |
+| 4 — `DataReadySignal::Counter` | — | not built (see below) | | | analysed |
+
+- **Lever 1** was implemented in full and is fan-in-general: the parent invites its children in
+  WAVES of `REDUCE_SLOTS` into disjoint landing slots (child `c` owns slot `c % REDUCE_SLOTS`, its
+  own runtime arg) and waits once per wave on the monotone `SEM_DATA`. The whole-CB reserve/push
+  granularity is preserved, which is what keeps the child's "my write pointer IS the parent's
+  landing address" proxy valid on every core. It **regresses** at count 256 for a measured reason:
+  the entire reduce transport is only 4.2 %, roughly half of that is destination-port BANDWIDTH
+  (four children write 4 x 102 KB into ONE core's L1, which concurrency cannot speed up), and the
+  wave protocol gives up the interleave the one-slot protocol had — child `c`'s transfer used to
+  overlap child `c-1`'s in-place `add`. Turn it when the transport becomes latency-bound.
+- **Lever 2** is layout-safe at any width (verified from `OutputCBLayout::SubblockMajor`'s
+  in0-outer/in1-inner walk: at `out_subblock_h == 1` the order stays `m*HN_PAD + n`, the exact
+  `cb_h` in0 order phase 2 reads), including the ragged column's narrowed last sub-block. It is a
+  wash because it HALVES the DEST sub-block (6 -> 3 tiles, which `matmul_output_subblock` measures
+  as a real slowdown) while the overlap it exists to enable — §4.3's "sub-block `off`'s reduce
+  overlaps `off+1`'s matmul" — additionally needs the REDUCE split per sub-block, and lever 1 just
+  showed that reduce is bandwidth-bound, not serialisation-bound.
+- **Lever 3**'s height is DERIVED (largest power of two whose sub-block fits DEST, so it tracks
+  `EC_MAX` across emb widths) and the kernel takes `min(., m_eff)` at runtime, so it never forces a
+  larger `m_eff` and Refinement 1 is untouched. `matmul_output_subblock`'s 1.46x is measured on an
+  L1-resident compute-bound matmul; this `down` matmul waits on the h all-gather and on a per-round
+  DRAM read, so the bigger DEST sub-block buys nothing and its DEST pressure costs.
+- **Lever 4 was analysed and deliberately not built.** Counter on its own cannot break the h round
+  chain: `PRE_HANDSHAKE` is what serialises it — a receiver acks round `r+1`'s sender only inside
+  `receive(r+1)`, which runs after `receive(r)` returned — and that holds under Flag and Counter
+  alike. Counter is the PREREQUISITE for the real lever, LOOK-AHEAD acking (reserve `DEPTH_H` cb_h
+  slots, pre-ack the next senders so a sender starts the moment it sees the previous round instead
+  of after a full 109-ack round trip). That is unsafe under Flag — one shared cell, so a pre-acked
+  sender's VALID is lost — which is exactly why Counter is needed. It needs a new ack-only
+  `ReceiverPipe` entry point plus the documented unlinked-send + acked-barrier Counter fix in
+  shared `kernel_lib`. Recorded as the sharpest remaining idea; not filed as a follow-up, per the
+  perf protocol.
+
+### 3. What actually paid: the barriers, not the collectives
+
+The Goal's own words — *"each stage paying its own latency with nothing else in flight"* — turned
+out to describe the **read barriers**, not the transports. `noc_async_read_barrier()` drains EVERY
+outstanding read, so a prefetch issued a few instructions before one is not a prefetch at all.
+
+1. **Deferred READ barrier (reader, phase 2).** Each of the 11 h rounds used to issue its W_down
+   K-block and barrier it immediately, before the collective — paying the full DRAM latency on the
+   spot, on all 110 cores, once per round. **This is why `WD_AHEAD` measured neutral at Phase 0**: no
+   prefetch depth can help while the barrier that drains it is the next statement. The issue now
+   moves AFTER the round's send/receive and its barrier moves to the NEXT round, so the read lands
+   underneath a whole grid-wide multicast (`wd_pending` carries the one in-flight block across the
+   round boundary; the sender still drains before it broadcasts, one core per round). Measured at
+   count 256 / 128 / emb 6144: **222 446 / 144 133 / 208 565** vs 226 009 / 153 883 / 211 220.
+   Re-swept `WD_AHEAD` now that it is live: **1 -> 222 446, 2 -> 225 796, 3 -> 233 552**; shipped at
+   1, and `depth_wd` now floors at `wd_ahead + 2` for the extra in-flight block.
+2. **Deferred WRITE barrier (writer, output).** The writer twin: the output write-back's
+   `noc_async_write_barrier()` sat at its issue site, i.e. exactly between M-block `b` and `b+1`.
+   It now drains at the top of the next M-block so it rides that block's W_up read (`DEPTH_OUT >= 2`
+   makes the extra outstanding block legal). Costs nothing at count <= 256 (one M-block) and pays on
+   the multi-block path: **count 512 -1.7 %, count = capacity -1.8 %**.
+3. **Tried and reverted, recorded at the site because it is counter-intuitive**: the x-staging
+   prologue's own barriers ALSO drain the W_gate prefetch, so the design's "the gate weight block
+   hides under the x multicast chain" never happened. Issuing W_gate after the prologue instead
+   measured **WORSE** (223 172 / 145 140 / 210 773) — started later, the read no longer overlaps the
+   prologue's own stick reads, and that overlap is worth more than the handshake chain's.
+
+### 4. Results
+
+- **Accuracy achieved**: PCC **bit-identical to the pre-refinement baseline — delta exactly
+  0.0e+00 on all 8 numeric loose cells**. Everything here is scheduling; no number changes.
+  Golden slice PCC 0.97902-0.97955, rtol/atol untouched, no inf/NaN. Shapes: all 9 loose cells
+  (emb 6144/7168 x cap 1024/2048/5120 x count 0/128/256/512/5120 x bf16_rm/bfp8_tile) plus the
+  14-cell `cap1024` `test_op` slice.
+- **Perf** (`device_kernel_ns`, graded loose cases):
+
+  | cell | before | after | delta |
+  |---|---|---|---|
+  | `count 128` | 150 543 | **143 785** | **-4.49 %** |
+  | `count 256` (the target) | 225 932 | **223 062** | **-1.27 %** (-1.6 % on the 5-run median) |
+  | `count 512` (`m_blocks = 2`) | 440 390 | **433 160** | **-1.64 %** |
+  | `cap 1024`, count 256 | 225 692 | 220 904 | -2.12 % |
+  | `cap 2048`, count 256 | 225 810 | 221 847 | -1.76 % |
+  | `bfp8_tile`, count 256 | 224 101 | 218 683 | -2.42 % |
+  | `emb 6144`, count 256 | 212 899 | 208 793 | -1.93 % |
+  | `count = capacity` | 4 274 336 | 4 204 858 | -1.63 % |
+  | `count 0` | 6 011 | 6 013 | +0.03 % (noise, hang-free) |
+  | **9-cell sum** | **5 985 714** | **5 881 105** | **-1.75 %** |
+
+  Every cell improved; the guard set is inside it (both formats, both emb widths, all three
+  capacities, `m_blocks > 1`, and the no-work path). Run-to-run spread on `count 256` measured at
+  ~1.5 %, so the single-cell number is reported alongside the 5-run median and the 9-cell sum, where
+  8 of 8 cells moving the same way is the real evidence.
+- **Golden test progress**: **9 / 9 loose + 14 / 14 `test_op` slice passing, 0 hangs, 0 errors**,
+  110/110 cores on every cell, no cell changed category and no PCC moved at all.
+- **Issues encountered**: (a) the four named levers were aimed at a bottleneck the ablations showed
+  is 4.2 % — the ablations had to come first, and they cost 8 device runs before a line of lever code
+  was written; (b) `MOE_SWIGLU_ABLATE=no_handshake`, which Phase 0 recorded at -5 %, now HANGS (the
+  consumer-ready ack IS the cb_h flow control) — it is a broken ablation, not a lever, and the
+  no-handshake number in §5 above should not be trusted; (c) the `MOE_SWIGLU_ZONES` phase-zone hook
+  is committed and compiled out by default, but the one profiled run with it enabled produced an
+  EMPTY device CSV — the hook is unproven, so the next reader should debug it before relying on it;
+  (d) `count 256`'s ~1.5 % run-to-run spread is wider than the 0.4 % the requirements assume for the
+  9-cell sum, so per-cell claims here are medians.
+- **Tests added**: `test_moe_fused_swiglu_r2_knobs.py` (20 cases) — every PARKED knob turned to its
+  non-default value must produce **bit-identical** output. A parked knob is precisely what rots:
+  the shipped path never touches it, and each of these changes a CROSS-CORE protocol
+  (`REDUCE_SLOTS >= 2` switches the reduce tree to wave invites with a per-child slot stride;
+  `WD_AHEAD >= 2` changes which K-block the deferred barrier carries across a round boundary), where
+  "broken" means a hang or run-to-run garbage rather than a compile error. Covers 2 shapes x 2
+  formats x 5 knob settings, on a `count 288` case that spans two M-blocks with a shrunk tail so the
+  writer's deferred output barrier is exercised too.

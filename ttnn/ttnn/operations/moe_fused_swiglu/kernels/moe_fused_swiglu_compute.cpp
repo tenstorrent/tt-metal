@@ -32,6 +32,12 @@
 
 using namespace compute_kernel_lib;
 
+#ifdef MOE_SWIGLU_ZONES
+#define MOE_ZONE(n) DeviceZoneScopedN(n)
+#else
+#define MOE_ZONE(n) ((void)0)
+#endif
+
 constexpr uint32_t M_BLOCK = get_compile_time_arg_val(0);
 constexpr uint32_t KR_PAD = get_compile_time_arg_val(1);
 constexpr uint32_t HN_PAD = get_compile_time_arg_val(2);
@@ -39,30 +45,44 @@ constexpr uint32_t EC_MAX = get_compile_time_arg_val(3);  // phase-2 N stride (u
 constexpr uint32_t HGROUPS = get_compile_time_arg_val(4);
 constexpr uint32_t HID_T = get_compile_time_arg_val(5);
 constexpr uint32_t INPUT_FORMAT = get_compile_time_arg_val(6);
-constexpr uint32_t OUT_SUBBLOCK_H = get_compile_time_arg_val(7);
+constexpr uint32_t OUT_SUBBLOCK_H_GU = get_compile_time_arg_val(7);
 constexpr uint32_t MAILBOX_MAGIC = get_compile_time_arg_val(8);
-// Smallest legal `m_eff` (= OUT_SUBBLOCK_H rounded up to a power of two, so `m_eff /
-// OUT_SUBBLOCK_H` below is always exact). One host-side definition, identical in all three
-// kernels — see m_tiles_eff().
+// Smallest legal `m_eff` (= OUT_SUBBLOCK_H_GU rounded up to a power of two, so the gate/up
+// `m_eff / OUT_SUBBLOCK_H_GU` below is always exact). One host-side definition, identical in all
+// three kernels — see m_tiles_eff().
 constexpr uint32_t M_EFF_MIN = get_compile_time_arg_val(9);
+// `down` output sub-block HEIGHT (Refinement 2 lever 3). Separate from the gate/up height because
+// `down`'s width is `ec` (2-3) against a DEST budget of 8, while gate/up's is already HN_PAD = 6.
+// Host-derived as the largest power of two whose sub-block fits DEST; taken as min(.., m_eff) below
+// so it never constrains the runtime M shrink.
+constexpr uint32_t OUT_SUBBLOCK_H_DN = get_compile_time_arg_val(10);
+// Concurrent child landing slots in cb_reduce_*_in (Refinement 2 lever 1). The reduce loop below
+// walks the parent's invite WAVES with exactly this granularity, so it must be the same number the
+// reader uses; 1 is the Phase-0 one-child-at-a-time protocol.
+constexpr uint32_t REDUCE_SLOTS = get_compile_time_arg_val(11);
+// gate/up in1 sub-block WIDTH in hidden tiles (Refinement 2 lever 2). HN_PAD == one sub-block ==
+// the Phase-0 shape; a divisor of it splits the block so a downstream per-sub-block reduce has
+// something to pipeline against. Layout-safe at OUT_SUBBLOCK_H_GU == 1 — SubblockMajor walks
+// in0_subblock outer / in1_subblock inner, so the tile order stays m*HN_PAD + n either way.
+constexpr uint32_t HN_BLOCK = get_compile_time_arg_val(12);
 
-constexpr uint32_t cb_x_in = get_compile_time_arg_val(10);
-constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(11);
-constexpr uint32_t cb_x_stage = get_compile_time_arg_val(12);
-constexpr uint32_t cb_w_gate = get_compile_time_arg_val(13);
-constexpr uint32_t cb_w_up = get_compile_time_arg_val(14);
-constexpr uint32_t cb_w_down = get_compile_time_arg_val(15);
-constexpr uint32_t cb_gate_acc = get_compile_time_arg_val(16);
-constexpr uint32_t cb_up_acc = get_compile_time_arg_val(17);
-constexpr uint32_t cb_gate_send = get_compile_time_arg_val(18);
-constexpr uint32_t cb_up_send = get_compile_time_arg_val(19);
-constexpr uint32_t cb_gate_silu = get_compile_time_arg_val(20);
-constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(21);
-constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(22);
-constexpr uint32_t cb_h_local = get_compile_time_arg_val(23);
-constexpr uint32_t cb_h = get_compile_time_arg_val(24);
-constexpr uint32_t cb_out_interm = get_compile_time_arg_val(25);
-constexpr uint32_t cb_out_tiles = get_compile_time_arg_val(26);
+constexpr uint32_t cb_x_in = get_compile_time_arg_val(13);
+constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(14);
+constexpr uint32_t cb_x_stage = get_compile_time_arg_val(15);
+constexpr uint32_t cb_w_gate = get_compile_time_arg_val(16);
+constexpr uint32_t cb_w_up = get_compile_time_arg_val(17);
+constexpr uint32_t cb_w_down = get_compile_time_arg_val(18);
+constexpr uint32_t cb_gate_acc = get_compile_time_arg_val(19);
+constexpr uint32_t cb_up_acc = get_compile_time_arg_val(20);
+constexpr uint32_t cb_gate_send = get_compile_time_arg_val(21);
+constexpr uint32_t cb_up_send = get_compile_time_arg_val(22);
+constexpr uint32_t cb_gate_silu = get_compile_time_arg_val(23);
+constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(24);
+constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(25);
+constexpr uint32_t cb_h_local = get_compile_time_arg_val(26);
+constexpr uint32_t cb_h = get_compile_time_arg_val(27);
+constexpr uint32_t cb_out_interm = get_compile_time_arg_val(28);
+constexpr uint32_t cb_out_tiles = get_compile_time_arg_val(29);
 
 constexpr uint32_t TILE_H = 32;
 
@@ -117,9 +137,10 @@ void kernel_main() {
     CircularBuffer out_interm_buf(cb_out_interm);
     CircularBuffer out_tiles_buf(cb_out_tiles);
 
-    // The reduce slots are the ONE M-scaled pair that is always pushed WHOLE: the child unicasts
-    // to its own cb_reduce_*_in write pointer as a proxy for the parent's, which only holds while
-    // every push wraps back to the CB base. Live tokens occupy the first m_eff*HN_PAD tiles.
+    // The reduce CBs are the ONE M-scaled pair that is always pushed WHOLE: the child unicasts to
+    // its own cb_reduce_*_in write pointer (+ its slot stride) as a proxy for the parent's, which
+    // only holds while every push wraps back to the CB base. Live tokens occupy the first
+    // m_eff*HN_PAD tiles of each slot; the reader pushes REDUCE_SLOTS slots per invite WAVE.
     constexpr uint32_t REDUCE_SLOT_TILES = M_BLOCK * HN_PAD;
 
     const uint32_t hn_last = HID_T - (HGROUPS - 1) * HN_PAD;
@@ -136,17 +157,24 @@ void kernel_main() {
 
         // gate/up: [m_eff, HN_PAD] = x[m_eff, kr] @ W[kr, HN_PAD]. ONE K-block whose width is the
         // whole per-row K extent, which is what lets both matmuls read the same resident in0.
-        MatmulBlockShape shape_gu = MatmulBlockShape::of(m_eff / OUT_SUBBLOCK_H, 1, OUT_SUBBLOCK_H, HN_PAD, KR_PAD, 1);
-        shape_gu.last_in1_subblock_w_valid = (hn < HN_PAD) ? hn : 0;
+        constexpr uint32_t GU_IN1_SUBBLOCKS = HN_PAD / HN_BLOCK;
+        MatmulBlockShape shape_gu =
+            MatmulBlockShape::of(m_eff / OUT_SUBBLOCK_H_GU, GU_IN1_SUBBLOCKS, OUT_SUBBLOCK_H_GU, HN_BLOCK, KR_PAD, 1);
+        // The ragged column (hn < HN_PAD) narrows the FMA width of the LAST in1 sub-block only; the
+        // host guarantees that sub-block still holds at least one real column. 0 means "full".
+        shape_gu.last_in1_subblock_w_valid = (hn < HN_PAD) ? (hn - (GU_IN1_SUBBLOCKS - 1) * HN_BLOCK) : 0;
 
         // down: [m_eff, ec] = h[m_eff, HGROUPS*HN_PAD] @ W_down[.., ec], HGROUPS K-blocks.
         // The FMA width is the real `ec`, but the in1 read stride and the output row stride are the
         // uniform EC_MAX so every phase-2 CB increment is core-independent.
-        const MatmulBlockShape shape_dn =
-            MatmulBlockShape::of(m_eff / OUT_SUBBLOCK_H, 1, OUT_SUBBLOCK_H, ec, HN_PAD, HGROUPS);
+        // Both heights are powers of two and m_eff is a power of two, so min(.,.) DIVIDES m_eff
+        // exactly — the `down` height never forces a larger m_eff (Refinement 1 stays intact).
+        const uint32_t sbh_dn = (OUT_SUBBLOCK_H_DN < m_eff) ? OUT_SUBBLOCK_H_DN : m_eff;
+        const MatmulBlockShape shape_dn = MatmulBlockShape::of(m_eff / sbh_dn, 1, sbh_dn, ec, HN_PAD, HGROUPS);
 
         // ---- 1. fused tilize of the x tile-rows this core injects (bf16 ROW_MAJOR only) ----
         if constexpr (INPUT_FORMAT == 0) {
+            MOE_ZONE("C_TILIZE");
             const uint32_t n_inject = moe_fused_swiglu::inject_rows(m_eff, my_col, HGROUPS);
             for (uint32_t i = 0; i < n_inject; ++i) {
                 // Asymmetric page mode: TILE_H row-major stick slices in -> KR_PAD bfp8 tiles out.
@@ -155,117 +183,151 @@ void kernel_main() {
         }
 
         // ---- 2. gate and up over the same resident x block ----
-        matmul_block<
-            /*transpose=*/false,
-            /*packer_l1_acc=*/false,
-            LastBlockTarget::Out,
-            OutputCBLayout::SubblockMajor,
-            matmul_config::InitMode::Short,
-            InputPolicy::WaitAndRetainOnLastBlock,
-            InputPolicy::WaitAndPopPerKBlock,
-            NoPostCompute,
-            NoPreKBlock,
-            NoPostKBlock,
-            /*untilize_block_ct_dim=*/0,
-            KrSteps>(x_buf, wg_buf, gate_buf, gate_buf, shape_gu, {}, {}, 0, 0, {}, KrSteps{kr});
+        {
+            MOE_ZONE("C_GATEUP");
+            matmul_block<
+                /*transpose=*/false,
+                /*packer_l1_acc=*/false,
+                LastBlockTarget::Out,
+                OutputCBLayout::SubblockMajor,
+                matmul_config::InitMode::Short,
+                InputPolicy::WaitAndRetainOnLastBlock,
+                InputPolicy::WaitAndPopPerKBlock,
+                NoPostCompute,
+                NoPreKBlock,
+                NoPostKBlock,
+                /*untilize_block_ct_dim=*/0,
+                KrSteps>(x_buf, wg_buf, gate_buf, gate_buf, shape_gu, {}, {}, 0, 0, {}, KrSteps{kr});
 
-        matmul_block<
-            /*transpose=*/false,
-            /*packer_l1_acc=*/false,
-            LastBlockTarget::Out,
-            OutputCBLayout::SubblockMajor,
-            matmul_config::InitMode::Short,
-            InputPolicy::WaitAndRetainOnLastBlock,
-            InputPolicy::WaitAndPopPerKBlock,
-            NoPostCompute,
-            NoPreKBlock,
-            NoPostKBlock,
-            /*untilize_block_ct_dim=*/0,
-            KrSteps>(x_buf, wu_buf, up_buf, up_buf, shape_gu, {}, {}, 0, 0, {}, KrSteps{kr});
+            matmul_block<
+                /*transpose=*/false,
+                /*packer_l1_acc=*/false,
+                LastBlockTarget::Out,
+                OutputCBLayout::SubblockMajor,
+                matmul_config::InitMode::Short,
+                InputPolicy::WaitAndRetainOnLastBlock,
+                InputPolicy::WaitAndPopPerKBlock,
+                NoPostCompute,
+                NoPreKBlock,
+                NoPostKBlock,
+                /*untilize_block_ct_dim=*/0,
+                KrSteps>(x_buf, wu_buf, up_buf, up_buf, shape_gu, {}, {}, 0, 0, {}, KrSteps{kr});
+        }
 
         // ---- 3. cross-column reduce + SwiGLU ----
-        for (uint32_t c = 0; c < num_children; ++c) {
-            const bool final_child = (c + 1 == num_children);
-            if (is_root && final_child) {
-                // Root's last gate add: SiLU is fused on the PACKER thread, so the activation
-                // overlaps the math thread instead of costing a separate SFPU pass.
-                //
-                // One call per token tile-row: the helper's bias index does not advance with
-                // in0_subblock (bias_add_helpers.inl:141), so an Elementwise bias spanning
-                // M_BLOCK tile-rows is walked with bias_offset instead, one M-row per call.
-                // The slot arrives WHOLE (see REDUCE_SLOT_TILES) but only its first m_eff tile-rows
-                // carry live tokens, so the bias walk stops at m_eff and the tail is dropped.
-                rg_buf.wait_front(REDUCE_SLOT_TILES);
-                for (uint32_t m = 0; m < m_eff; ++m) {
-                    add_bias_bcast_rows<
-                        BiasBroadcast::Elementwise,
-                        OutputCBLayout::SubblockMajor,
-                        bias_add_config::NoPostBias,
-                        SiluActivation>(
-                        gate_buf, rg_buf, silu_buf, BiasAddShape::of(1, 1, OUT_SUBBLOCK_H, HN_PAD), {}, m * HN_PAD);
+        {
+            MOE_ZONE("C_REDUCE");
+            // Walk the reader's invite WAVES (Refinement 2 lever 1): the reader reserves and pushes the
+            // WHOLE CB — REDUCE_SLOTS slots — per wave, so this side consumes exactly that much per
+            // wave, adding the `wave` slots that carry a child and draining the rest.
+            for (uint32_t c0 = 0; c0 < num_children; c0 += REDUCE_SLOTS) {
+                uint32_t wave = num_children - c0;
+                if (wave > REDUCE_SLOTS) {
+                    wave = REDUCE_SLOTS;
                 }
-                rg_buf.pop_front(REDUCE_SLOT_TILES);
-            } else {
-                add<input(cb_gate_acc), input(cb_reduce_gate_in), output(cb_gate_acc)>(
-                    EltwiseShape::tiles(gu_block_tiles));
-                if (gu_block_tiles < REDUCE_SLOT_TILES) {
-                    rg_buf.pop_front(REDUCE_SLOT_TILES - gu_block_tiles);
+                for (uint32_t c = c0; c < c0 + wave; ++c) {
+                    const bool final_child = (c + 1 == num_children);
+                    if (is_root && final_child) {
+                        // Root's last gate add: SiLU is fused on the PACKER thread, so the activation
+                        // overlaps the math thread instead of costing a separate SFPU pass.
+                        //
+                        // One call per token tile-row: the helper's bias index does not advance with
+                        // in0_subblock (bias_add_helpers.inl:141), so an Elementwise bias spanning
+                        // M_BLOCK tile-rows is walked with bias_offset instead, one M-row per call.
+                        // The slot arrives WHOLE (see REDUCE_SLOT_TILES) but only its first m_eff tile-rows
+                        // carry live tokens, so the bias walk stops at m_eff and the tail is dropped.
+                        rg_buf.wait_front(REDUCE_SLOT_TILES);
+                        for (uint32_t m = 0; m < m_eff; ++m) {
+                            add_bias_bcast_rows<
+                                BiasBroadcast::Elementwise,
+                                OutputCBLayout::SubblockMajor,
+                                bias_add_config::NoPostBias,
+                                SiluActivation>(
+                                gate_buf,
+                                rg_buf,
+                                silu_buf,
+                                BiasAddShape::of(1, 1, OUT_SUBBLOCK_H_GU, HN_PAD),
+                                {},
+                                m * HN_PAD);
+                        }
+                        rg_buf.pop_front(REDUCE_SLOT_TILES);
+                    } else {
+                        add<input(cb_gate_acc), input(cb_reduce_gate_in), output(cb_gate_acc)>(
+                            EltwiseShape::tiles(gu_block_tiles));
+                        if (gu_block_tiles < REDUCE_SLOT_TILES) {
+                            rg_buf.pop_front(REDUCE_SLOT_TILES - gu_block_tiles);
+                        }
+                    }
+                    add<input(cb_up_acc), input(cb_reduce_up_in), output(cb_up_acc)>(
+                        EltwiseShape::tiles(gu_block_tiles));
+                    if (gu_block_tiles < REDUCE_SLOT_TILES) {
+                        ru_buf.pop_front(REDUCE_SLOT_TILES - gu_block_tiles);
+                    }
                 }
-            }
-            add<input(cb_up_acc), input(cb_reduce_up_in), output(cb_up_acc)>(EltwiseShape::tiles(gu_block_tiles));
-            if (gu_block_tiles < REDUCE_SLOT_TILES) {
-                ru_buf.pop_front(REDUCE_SLOT_TILES - gu_block_tiles);
+                // Drain the slots of this wave that carried no child, so the pop total matches the
+                // reader's whole-CB push and the write pointer stays block-aligned on every core.
+                if (wave < REDUCE_SLOTS) {
+                    const uint32_t idle = (REDUCE_SLOTS - wave) * REDUCE_SLOT_TILES;
+                    rg_buf.pop_front(idle);
+                    ru_buf.pop_front(idle);
+                }
             }
         }
 
-        if (is_root) {
-            // FPU multiply through L1 (deliberately not SFPU and not DEST-reuse — the L1
-            // round-trip measured faster for an FPU consumer, examples/compute_fusion).
-            mul<input(cb_gate_silu), input(cb_up_acc), output(cb_h_local)>(EltwiseShape::tiles(gu_block_tiles));
-        } else {
-            copy<input(cb_gate_acc), output(cb_gate_send)>(EltwiseShape::tiles(gu_block_tiles));
-            copy<input(cb_up_acc), output(cb_up_send)>(EltwiseShape::tiles(gu_block_tiles));
+        {
+            MOE_ZONE("C_SWIGLU");
+            if (is_root) {
+                // FPU multiply through L1 (deliberately not SFPU and not DEST-reuse — the L1
+                // round-trip measured faster for an FPU consumer, examples/compute_fusion).
+                mul<input(cb_gate_silu), input(cb_up_acc), output(cb_h_local)>(EltwiseShape::tiles(gu_block_tiles));
+            } else {
+                copy<input(cb_gate_acc), output(cb_gate_send)>(EltwiseShape::tiles(gu_block_tiles));
+                copy<input(cb_up_acc), output(cb_up_send)>(EltwiseShape::tiles(gu_block_tiles));
+            }
         }
 
         // ---- 4. down matmul: HGROUPS K-blocks, packer L1 accumulation into a caller-owned
         // interm region (so every K-block accumulates at the SAME L1 address) ----
-        out_interm_buf.reserve_back(out_block_tiles);
-        matmul_block<
-            /*transpose=*/false,
-            /*packer_l1_acc=*/true,
-            LastBlockTarget::Interm,
-            OutputCBLayout::TileRowMajor,
-            matmul_config::InitMode::Short,
-            InputPolicy::WaitAndPopPerKBlock,
-            InputPolicy::WaitAndPopPerKBlock,
-            NoPostCompute,
-            NoPreKBlock,
-            NoPostKBlock,
-            /*untilize_block_ct_dim=*/0,
-            HnSteps,
-            NoIn0Source,
-            NoIn1BaseOffset,
-            /*caller_owns_pack_target=*/true>(
-            h_buf,
-            wd_buf,
-            out_tiles_buf,
-            out_interm_buf,
-            shape_dn,
-            {},
-            {},
-            /*in1_per_core_w=*/EC_MAX,
-            /*out_row_width=*/EC_MAX,
-            {},
-            HnSteps{hn_last});
-        out_interm_buf.push_back(out_block_tiles);
-        // matmul_block leaves packer L1 accumulation ENABLED after its last K-block, and neither
-        // the eltwise chain (L1Accumulation::Disabled is a compile-time no-op) nor a
-        // packer_l1_acc=false matmul resets it. Without this the copy below — and the next
-        // M-block's gate matmul — would ACCUMULATE onto stale L1 instead of overwriting.
-        pack_reconfig_l1_acc(0);
+        {
+            MOE_ZONE("C_DOWN");
+            out_interm_buf.reserve_back(out_block_tiles);
+            matmul_block<
+                /*transpose=*/false,
+                /*packer_l1_acc=*/true,
+                LastBlockTarget::Interm,
+                OutputCBLayout::TileRowMajor,
+                matmul_config::InitMode::Short,
+                InputPolicy::WaitAndPopPerKBlock,
+                InputPolicy::WaitAndPopPerKBlock,
+                NoPostCompute,
+                NoPreKBlock,
+                NoPostKBlock,
+                /*untilize_block_ct_dim=*/0,
+                HnSteps,
+                NoIn0Source,
+                NoIn1BaseOffset,
+                /*caller_owns_pack_target=*/true>(
+                h_buf,
+                wd_buf,
+                out_tiles_buf,
+                out_interm_buf,
+                shape_dn,
+                {},
+                {},
+                /*in1_per_core_w=*/EC_MAX,
+                /*out_row_width=*/EC_MAX,
+                {},
+                HnSteps{hn_last});
+            out_interm_buf.push_back(out_block_tiles);
+            // matmul_block leaves packer L1 accumulation ENABLED after its last K-block, and neither
+            // the eltwise chain (L1Accumulation::Disabled is a compile-time no-op) nor a
+            // packer_l1_acc=false matmul resets it. Without this the copy below — and the next
+            // M-block's gate matmul — would ACCUMULATE onto stale L1 instead of overwriting.
+            pack_reconfig_l1_acc(0);
 
-        // The one genuine dtype boundary: bf16 accumulation -> bfp8 output tiles.
-        copy<input(cb_out_interm), output(cb_out_tiles)>(EltwiseShape::tiles(out_block_tiles));
+            // The one genuine dtype boundary: bf16 accumulation -> bfp8 output tiles.
+            copy<input(cb_out_interm), output(cb_out_tiles)>(EltwiseShape::tiles(out_block_tiles));
+        }
 
         // The resident x block was retained by both matmuls; release it now.
         x_buf.pop_front(x_slot_tiles);

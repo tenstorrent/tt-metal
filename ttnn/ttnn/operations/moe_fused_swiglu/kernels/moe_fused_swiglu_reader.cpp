@@ -44,6 +44,15 @@
 
 using namespace dataflow_kernel_lib;
 
+// `/perf-measure` phase zones (MOE_SWIGLU_ZONES=1). OFF by default and compiled out entirely, so
+// the shipped kernel is byte-identical. Each zone brackets ONE serial stage of the reader's
+// per-M-block chain, which is what the "serial composition" question needs measured.
+#ifdef MOE_SWIGLU_ZONES
+#define MOE_ZONE(n) DeviceZoneScopedN(n)
+#else
+#define MOE_ZONE(n) ((void)0)
+#endif
+
 // ---------------------------------------------------------------------------
 // Compile-time block model. Every trip count and CB increment below is derived
 // from these; none is a literal.
@@ -81,20 +90,23 @@ constexpr uint32_t WD_AHEAD = get_compile_time_arg_val(24);
 // Smallest legal `m_eff` (= the matmul's out_subblock_h rounded up to a power of two). One
 // host-side definition, passed identically to all three kernels — see m_tiles_eff().
 constexpr uint32_t M_EFF_MIN = get_compile_time_arg_val(25);
+// Concurrent child landing slots in cb_reduce_*_in (Refinement 2 lever 1). A parent invites its
+// children in waves of this size instead of one at a time; 1 is the Phase-0 protocol.
+constexpr uint32_t REDUCE_SLOTS = get_compile_time_arg_val(26);
 
-constexpr uint32_t cb_x_in = get_compile_time_arg_val(26);
-constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(27);
-constexpr uint32_t cb_x_stage = get_compile_time_arg_val(28);
-constexpr uint32_t cb_w_gate = get_compile_time_arg_val(29);
-constexpr uint32_t cb_w_down = get_compile_time_arg_val(30);
-constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(31);
-constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(32);
-constexpr uint32_t cb_h = get_compile_time_arg_val(33);
-constexpr uint32_t cb_h_local = get_compile_time_arg_val(34);
-constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(35);
-constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(36);
+constexpr uint32_t cb_x_in = get_compile_time_arg_val(27);
+constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(28);
+constexpr uint32_t cb_x_stage = get_compile_time_arg_val(29);
+constexpr uint32_t cb_w_gate = get_compile_time_arg_val(30);
+constexpr uint32_t cb_w_down = get_compile_time_arg_val(31);
+constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(32);
+constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(33);
+constexpr uint32_t cb_h = get_compile_time_arg_val(34);
+constexpr uint32_t cb_h_local = get_compile_time_arg_val(35);
+constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(36);
+constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(37);
 
-constexpr uint32_t CT_XMCAST = 37;
+constexpr uint32_t CT_XMCAST = 38;
 constexpr uint32_t CT_HMCAST = CT_XMCAST + 5;
 
 constexpr uint32_t TILE_H = 32;
@@ -191,12 +203,17 @@ void kernel_main() {
     const uint32_t sem_data = static_cast<uint32_t>(get_semaphore(SEM_DATA));
     volatile tt_l1_ptr uint32_t* sem_data_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_data);
     uint32_t data_arrivals = 0;
+#ifdef ABLATE_NO_REDUCE_XFER
+    (void)sem_data_ptr;
+    (void)data_arrivals;
+#endif
 
     constexpr uint32_t SLOTS_H = REMAP ? (HID_T / NUM_BANKS) : HID_T;
     constexpr uint32_t SLOTS_E = REMAP ? (EMB_T / NUM_BANKS) : EMB_T;
 
     constexpr uint32_t WG_BLOCK_TILES = KR_PAD * HN_PAD;      // one gate weight K-block (num_k_blocks == 1)
-    constexpr uint32_t REDUCE_SLOT_TILES = M_BLOCK * HN_PAD;  // ONE whole slot — see the note in phase 1c
+    constexpr uint32_t REDUCE_SLOT_TILES = M_BLOCK * HN_PAD;  // one child's landing slot
+    constexpr uint32_t REDUCE_CB_TILES = REDUCE_SLOTS * REDUCE_SLOT_TILES;  // the whole CB — see 1c
     constexpr uint32_t X_ROW_BYTES = KR_PAD * BFP8_TILE;
 
     // `count == 0` -> m_blocks == 0 on every core: no CB traffic, no collective round, no
@@ -215,16 +232,38 @@ void kernel_main() {
         // cb_x_tiles is ONE slot of M_BLOCK*KR_PAD tiles, so its write pointer is the same L1
         // address on every core in the row (mcast_pipe requires an identical landing address).
         // -------------------------------------------------------------------
-        // W_gate is ISSUED HERE, ahead of the x rounds, and only BARRIERED/pushed after them:
-        // the x multicast is a chain of M_BLOCK semaphore handshakes with almost no NoC payload,
-        // so the whole gate weight block's DRAM latency hides underneath it. With
-        // num_k_blocks == 1 the block has to be fully fronted before the gate matmul starts, so
-        // this is the only place its latency can be overlapped.
+        // W_gate is ISSUED HERE, ahead of the staging prologue and the x rounds, and only
+        // BARRIERED/pushed after them: with num_k_blocks == 1 the whole block must be fronted
+        // before the gate matmul starts, so this is the only place its DRAM latency can overlap
+        // anything.
+        //
+        // REFINEMENT 2 MEASUREMENT, recorded because it is counter-intuitive: the staging
+        // prologue's own `noc_async_read_barrier()` calls DRAIN this prefetch (a read barrier is
+        // all-or-nothing), so the block is fully paid for before the multicast chain it was
+        // designed to hide under even starts. Issuing it AFTER the prologue instead — so the chain
+        // really does cover it — was tried and measured WORSE (223 172 / 145 140 / 210 773 ns vs
+        // 222 446 / 144 133 / 208 565 on count 256 / 128 / emb 6144): started later, the read no
+        // longer overlaps the prologue's OWN stick reads, and that overlap is worth more than the
+        // handshake chain's. Kept here. The same defect class in phase 2 — where the barrier had
+        // nothing else to cover — is real and is fixed below.
         cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
-        const uint32_t wg_wp = get_write_ptr(cb_w_gate);
-        for (uint32_t k = 0; k < kr; ++k) {
-            BR::read(
-                wg_acc, (kstart + k) * HID_T, hstart, hstart + hn, SLOTS_H, wg_wp + k * HN_PAD * BFP4_TILE, BFP4_TILE);
+        {
+            MOE_ZONE("R_WG_ISSUE");
+            const uint32_t wg_wp = get_write_ptr(cb_w_gate);
+#ifndef ABLATE_NO_W_XFER  // /perf-measure: drop the weight DRAM stream, keep every CB + barrier
+            for (uint32_t k = 0; k < kr; ++k) {
+                BR::read(
+                    wg_acc,
+                    (kstart + k) * HID_T,
+                    hstart,
+                    hstart + hn,
+                    SLOTS_H,
+                    wg_wp + k * HN_PAD * BFP4_TILE,
+                    BFP4_TILE);
+            }
+#else
+            (void)wg_wp;
+#endif
         }
 
         cb_reserve_back(cb_x_tiles, x_slot_tiles);
@@ -250,36 +289,39 @@ void kernel_main() {
         // LAST tile-row is consumed before its multicast lands: silent, run-to-run garbage.
         // `noc_async_read_barrier()` IS a real arrival guarantee, so landing the data here removes
         // the loopback altogether, for the same NoC bytes (one fewer multicast destination).
-        for (uint32_t t = my_col; t < m_eff; t += HGROUPS) {
-            const uint32_t dst = x_base + t * X_ROW_BYTES;
-            uint32_t row = b * M_BLOCK + t;
-            if (row >= M_T_MAX) {
-                row = M_T_MAX - 1;  // rows past the sized region are UNDEFINED; stay in bounds
-            }
-            if constexpr (INPUT_FORMAT == 0) {
-                // bf16 ROW_MAJOR: read this row-group's emb slice of 32 sticks; compute tilizes
-                // them to bfp8 in cb_x_stage; copy the tile-row into the resident slot.
-                cb_reserve_back(cb_x_in, TILE_H);
-                const uint32_t wp = get_write_ptr(cb_x_in);
-                for (uint32_t s = 0; s < TILE_H; ++s) {
-                    noc_async_read(
-                        x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
-                        wp + s * X_SLICE,
-                        kr * BF16_TILE_ROW_BYTES);
+        {
+            MOE_ZONE("R_XSTAGE");
+            for (uint32_t t = my_col; t < m_eff; t += HGROUPS) {
+                const uint32_t dst = x_base + t * X_ROW_BYTES;
+                uint32_t row = b * M_BLOCK + t;
+                if (row >= M_T_MAX) {
+                    row = M_T_MAX - 1;  // rows past the sized region are UNDEFINED; stay in bounds
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_x_in, TILE_H);
+                if constexpr (INPUT_FORMAT == 0) {
+                    // bf16 ROW_MAJOR: read this row-group's emb slice of 32 sticks; compute tilizes
+                    // them to bfp8 in cb_x_stage; copy the tile-row into the resident slot.
+                    cb_reserve_back(cb_x_in, TILE_H);
+                    const uint32_t wp = get_write_ptr(cb_x_in);
+                    for (uint32_t s = 0; s < TILE_H; ++s) {
+                        noc_async_read(
+                            x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
+                            wp + s * X_SLICE,
+                            kr * BF16_TILE_ROW_BYTES);
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_x_in, TILE_H);
 
-                cb_wait_front(cb_x_stage, KR_PAD);
-                noc_async_read(get_noc_addr(get_read_ptr(cb_x_stage)), dst, X_ROW_BYTES);
-                noc_async_read_barrier();
-                cb_pop_front(cb_x_stage, KR_PAD);
-            } else {
-                // bfp8_b TILE: the tiles land straight in the resident slot, no tilize.
-                for (uint32_t i = 0; i < kr; ++i) {
-                    noc_async_read(x_acc.get_noc_addr(row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
+                    cb_wait_front(cb_x_stage, KR_PAD);
+                    noc_async_read(get_noc_addr(get_read_ptr(cb_x_stage)), dst, X_ROW_BYTES);
+                    noc_async_read_barrier();
+                    cb_pop_front(cb_x_stage, KR_PAD);
+                } else {
+                    // bfp8_b TILE: the tiles land straight in the resident slot, no tilize.
+                    for (uint32_t i = 0; i < kr; ++i) {
+                        noc_async_read(x_acc.get_noc_addr(row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
+                    }
+                    noc_async_read_barrier();
                 }
-                noc_async_read_barrier();
             }
         }
 
@@ -288,23 +330,31 @@ void kernel_main() {
         // the staged bytes, and at count 32 an eighth. m_eff divides M_BLOCK, so cb_x_tiles' write
         // pointer stays block-aligned and identical on every core in the row (which mcast_pipe
         // requires of the landing address).
-        if constexpr (xmc.active) {
-            for (uint32_t t = 0; t < m_eff; ++t) {
-                const uint32_t round = t % HGROUPS;
-                if (round == my_col) {
-                    x_send.send(x_base + t * X_ROW_BYTES, x_base + t * X_ROW_BYTES, X_ROW_BYTES);
-                } else {
-                    x_recv.receive(round);
+#ifndef ABLATE_NO_X_XFER  // /perf-measure: drop the x transport, keep cb_x_tiles' reserve/push
+        {
+            MOE_ZONE("R_XMCAST");
+            if constexpr (xmc.active) {
+                for (uint32_t t = 0; t < m_eff; ++t) {
+                    const uint32_t round = t % HGROUPS;
+                    if (round == my_col) {
+                        x_send.send(x_base + t * X_ROW_BYTES, x_base + t * X_ROW_BYTES, X_ROW_BYTES);
+                    } else {
+                        x_recv.receive(round);
+                    }
                 }
             }
         }
+#endif
         cb_push_back(cb_x_tiles, x_slot_tiles);
 
         // -------------------------------------------------------------------
         // Phase 1b — W_gate landed under the x rounds; publish it.
         // (W_up is the writer's twin on NoC1 — the dual-NoC split of op_design.md §1.5.)
         // -------------------------------------------------------------------
-        noc_async_read_barrier();
+        {
+            MOE_ZONE("R_WG_WAIT");
+            noc_async_read_barrier();
+        }
         cb_push_back(cb_w_gate, WG_BLOCK_TILES);
 
         // -------------------------------------------------------------------
@@ -319,12 +369,14 @@ void kernel_main() {
         cb_reserve_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
         {
             const uint32_t wp = get_write_ptr(cb_w_down);
+            (void)wp;
             for (uint32_t r = 0; r < WD_AHEAD; ++r) {
                 const uint32_t hbase = r * HN_PAD;
                 uint32_t hn_r = HN_PAD;
                 if (hbase + hn_r > HID_T) {
                     hn_r = HID_T - hbase;
                 }
+#ifndef ABLATE_NO_W_XFER
                 for (uint32_t k = 0; k < hn_r; ++k) {
                     // W_down's K axis is `h`'s hidden axis, which the Hn split remapped too, so the
                     // row index goes through the same remap as the N axis.
@@ -337,31 +389,50 @@ void kernel_main() {
                         wp + (r * WD_BLOCK_TILES + k * EC_MAX) * BFP4_TILE,
                         BFP4_TILE);
                 }
+#endif
             }
         }
 
         // -------------------------------------------------------------------
-        // Phase 1c — reduce tree, PARENT side. One slot per incoming partial, so the child's
-        // landing address is the CB base on every core; the invite (SEM_GO) is the flow control
-        // that keeps a child from overwriting a slot compute has not consumed yet.
+        // Phase 1c — reduce tree, PARENT side. The invite (SEM_GO) is the flow control that keeps a
+        // child from overwriting a landing slot compute has not consumed yet.
         //
-        // These two CBs are the ONE place the m_eff shrink does NOT move the CB accounting: the
-        // child unicasts to its OWN `get_write_ptr(cb_reduce_*_in)` on the assumption that the
-        // parent's pointer is the same, and that only holds while every push is a WHOLE slot (a
-        // whole-slot push always wraps back to the CB base, on every core, whatever its child
-        // count). So the slot stays full here and the child writes only the m_eff*HN_PAD tiles that
-        // carry live tokens; compute adds those and drops the rest (they are undefined rows).
-        // The transport — the expensive part, up to 4 serial ~102 KB round trips — halves anyway.
+        // REFINEMENT 2 LEVER 1 — the invites go out in WAVES of REDUCE_SLOTS, not one at a time.
+        // With one slot the parent had to invite child `c`, wait for its ~102 KB, hand it to compute
+        // and only then invite `c + 1`: up to 4 SEQUENTIAL round trips per M-block at the root.
+        // With REDUCE_SLOTS slots, a wave's children all transfer CONCURRENTLY into disjoint slots
+        // (child `c` owns slot `c % REDUCE_SLOTS`, its own runtime arg) and the parent waits once
+        // for the whole wave on the monotone SEM_DATA counter.
+        //
+        // The reserve/push granularity stays the WHOLE CB, which is what preserves the address
+        // proxy this transport is built on: the child unicasts to its OWN
+        // `get_write_ptr(cb_reduce_*_in)` (+ its slot stride) as a stand-in for the parent's, and
+        // that only holds while every push wraps the write pointer back to the CB base — which a
+        // whole-CB push does on every core, whatever its child count. It is also why the m_eff
+        // shrink does not move THIS accounting: a slot stays M_BLOCK*HN_PAD tiles and the child
+        // ships only the m_eff*HN_PAD tiles that carry live tokens (compute drops the tail).
         // -------------------------------------------------------------------
-        for (uint32_t c = 0; c < num_children; ++c) {
-            const uint32_t cx = get_arg_val<uint32_t>(RT_CHILDREN + 2 * c + 0);
-            const uint32_t cy = get_arg_val<uint32_t>(RT_CHILDREN + 2 * c + 1);
-            cb_reserve_back(cb_reduce_gate_in, REDUCE_SLOT_TILES);
-            cb_reserve_back(cb_reduce_up_in, REDUCE_SLOT_TILES);
-            noc_semaphore_inc(get_noc_addr(cx, cy, static_cast<uint32_t>(get_semaphore(SEM_GO))), 1);
-            noc_semaphore_wait_min(sem_data_ptr, ++data_arrivals);
-            cb_push_back(cb_reduce_gate_in, REDUCE_SLOT_TILES);
-            cb_push_back(cb_reduce_up_in, REDUCE_SLOT_TILES);
+        {
+            MOE_ZONE("R_REDUCE");
+            for (uint32_t c0 = 0; c0 < num_children; c0 += REDUCE_SLOTS) {
+                uint32_t wave = num_children - c0;
+                if (wave > REDUCE_SLOTS) {
+                    wave = REDUCE_SLOTS;
+                }
+                cb_reserve_back(cb_reduce_gate_in, REDUCE_CB_TILES);
+                cb_reserve_back(cb_reduce_up_in, REDUCE_CB_TILES);
+#ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop invite + data wait, keep the CB cycle
+                for (uint32_t c = c0; c < c0 + wave; ++c) {
+                    const uint32_t cx = get_arg_val<uint32_t>(RT_CHILDREN + 2 * c + 0);
+                    const uint32_t cy = get_arg_val<uint32_t>(RT_CHILDREN + 2 * c + 1);
+                    noc_semaphore_inc(get_noc_addr(cx, cy, static_cast<uint32_t>(get_semaphore(SEM_GO))), 1);
+                }
+                data_arrivals += wave;
+                noc_semaphore_wait_min(sem_data_ptr, data_arrivals);
+#endif
+                cb_push_back(cb_reduce_gate_in, REDUCE_CB_TILES);
+                cb_push_back(cb_reduce_up_in, REDUCE_CB_TILES);
+            }
         }
 
         // -------------------------------------------------------------------
@@ -369,72 +440,113 @@ void kernel_main() {
         // the phase-2 K stream, so it overlaps `down` compute and flow-controls itself on cb_h.
         // The batch issued above landed under the reduce handshakes; publish it, then stream the
         // remaining K-blocks one round ahead of the round that consumes them.
+        //
+        // REFINEMENT 2 — DEFERRED READ BARRIER. The round's W_down block used to be issued AND
+        // barriered inside the same round, before the collective: `noc_async_read_barrier()` drains
+        // EVERY outstanding read, so the block's DRAM latency was paid on the spot with nothing else
+        // in flight, on all 110 cores, once per round. That is why `WD_AHEAD` measured neutral at
+        // Phase 0 — a deeper prefetch cannot help while the barrier that drains it sits one
+        // instruction later. Now the issue moves AFTER the round's send/receive and its barrier
+        // moves to the NEXT round, so the read lands underneath a whole grid-wide multicast.
+        // `wd_pending` carries the one block that is issued-but-not-yet-published across the round
+        // boundary; the last issue is at round HGROUPS-1-WD_AHEAD, so it is always published inside
+        // the loop and nothing leaks out.
         // -------------------------------------------------------------------
         noc_async_read_barrier();
         cb_push_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
-        for (uint32_t r = 0; r < HGROUPS; ++r) {
-            // This round's cb_h slot is reserved BEFORE the W_down prefetch so that the round's
-            // sender can ISSUE its self-copy first and ONE barrier below covers both: the copy then
-            // rides the W_down DRAM read's latency instead of adding its own to the round chain.
-            // Reordering the two reserves cannot deadlock — cb_w_down always runs WD_AHEAD blocks
-            // ahead of cb_h, so a compute thread waiting on K-block k already has its in1.
-            cb_reserve_back(cb_h, h_block_tiles);
-            const uint32_t hdst = get_write_ptr(cb_h);
-            const bool i_send = (is_root && r == my_col);
-            if (i_send) {
-                // Self-copy cb_h_local -> this round's cb_h slot, so the send below is `src == dst`
-                // and therefore EXCLUDE-source. Identical reasoning to the x send above: a
-                // `src != dst` send is a LOOPBACK multicast, and mcast_pipe's rotating-sender flag
-                // reset then races this core's own in-flight VALID, so the root's remaining
-                // `receive()` calls shift one round early and the LAST h K-block is consumed before
-                // it lands. Measured: with the x send fixed but this one left as a loopback, PCC on
-                // a fixed input still varied 0.959-0.979 run to run on BOTH activation formats (the
-                // bfp8 path has no x loopback, so this send was the only remaining suspect); with
-                // both fixed it is bit-stable. Same NoC bytes, one fewer mcast destination.
-                cb_wait_front(cb_h_local, h_block_tiles);
-                noc_async_read(get_noc_addr(get_read_ptr(cb_h_local)), hdst, h_block_tiles * BFP8_TILE);
-            }
+        {
+            MOE_ZONE("R_PHASE2");
+            bool wd_pending = false;
+            for (uint32_t r = 0; r < HGROUPS; ++r) {
+                // This round's cb_h slot is reserved first so the round's sender can ISSUE its self-copy
+                // before the barrier below, which then covers the self-copy AND the previous round's
+                // W_down block in one drain.
+                cb_reserve_back(cb_h, h_block_tiles);
+                const uint32_t hdst = get_write_ptr(cb_h);
+                const bool i_send = (is_root && r == my_col);
+                if (i_send) {
+                    // Self-copy cb_h_local -> this round's cb_h slot, so the send below is `src == dst`
+                    // and therefore EXCLUDE-source. Identical reasoning to the x send above: a
+                    // `src != dst` send is a LOOPBACK multicast, and mcast_pipe's rotating-sender flag
+                    // reset then races this core's own in-flight VALID, so the root's remaining
+                    // `receive()` calls shift one round early and the LAST h K-block is consumed before
+                    // it lands. Measured: with the x send fixed but this one left as a loopback, PCC on
+                    // a fixed input still varied 0.959-0.979 run to run on BOTH activation formats (the
+                    // bfp8 path has no x loopback, so this send was the only remaining suspect); with
+                    // both fixed it is bit-stable. Same NoC bytes, one fewer mcast destination.
+                    cb_wait_front(cb_h_local, h_block_tiles);
+                    noc_async_read(get_noc_addr(get_read_ptr(cb_h_local)), hdst, h_block_tiles * BFP8_TILE);
+                }
 
-            // Stay WD_AHEAD K-blocks ahead of the round being consumed.
-            const uint32_t pre = r + WD_AHEAD;
-            const bool prefetch = pre < HGROUPS;
-            if (prefetch) {
-                const uint32_t hbase = pre * HN_PAD;
-                uint32_t hn_r = HN_PAD;
-                if (hbase + hn_r > HID_T) {
-                    hn_r = HID_T - hbase;
+                if (i_send) {
+                    // The SENDER must drain before it broadcasts (its self-copy has to have landed), so
+                    // it also publishes the pending W_down block here. One core per round pays this.
+                    noc_async_read_barrier();  // the self-copy AND the previous round's W_down block
+                    if (wd_pending) {
+                        cb_push_back(cb_w_down, WD_BLOCK_TILES);
+                        wd_pending = false;
+                    }
+                    cb_pop_front(cb_h_local, h_block_tiles);
+#ifndef ABLATE_NO_H_XFER  // /perf-measure: drop the h transport, keep cb_h's reserve/push
+                    if constexpr (hmc.active) {
+                        h_send.send(hdst, hdst, h_block_tiles * BFP8_TILE);
+                    }
+#endif
+                } else {
+                    // The other 109 cores drain AFTER the multicast, so the previous round's W_down read
+                    // had this whole round's grid-wide broadcast to land under — that is the deferral.
+#ifndef ABLATE_NO_H_XFER
+                    if constexpr (hmc.active) {
+                        // Round r's sender is column r's root, core (r, r % KGROUPS); the rotating
+                        // sender list is row-major over the rect.
+                        h_recv.receive((r % KGROUPS) * HGROUPS + r);
+                    }
+#endif
+                    if (wd_pending) {
+                        noc_async_read_barrier();
+                        cb_push_back(cb_w_down, WD_BLOCK_TILES);
+                        wd_pending = false;
+                    }
                 }
-                cb_reserve_back(cb_w_down, WD_BLOCK_TILES);
-                const uint32_t wp = get_write_ptr(cb_w_down);
-                for (uint32_t k = 0; k < hn_r; ++k) {
-                    BR::read(
-                        wd_acc,
-                        BR::remap(hbase + k, SLOTS_H) * EMB_T,
-                        jstart,
-                        jstart + ec,
-                        SLOTS_E,
-                        wp + k * EC_MAX * BFP4_TILE,
-                        BFP4_TILE);
+
+                // ISSUE the next K-block only now — after this round's collective — so its latency is
+                // paid under the NEXT round's, not under this one's barrier. Stays WD_AHEAD K-blocks
+                // ahead of the round being consumed; WD_AHEAD >= 2 is what actually decouples compute
+                // from this block (at 1 the block published here is the one this round consumes).
+                const uint32_t pre = r + WD_AHEAD;
+                if (pre < HGROUPS) {
+                    const uint32_t hbase = pre * HN_PAD;
+                    uint32_t hn_r = HN_PAD;
+                    if (hbase + hn_r > HID_T) {
+                        hn_r = HID_T - hbase;
+                    }
+                    cb_reserve_back(cb_w_down, WD_BLOCK_TILES);
+                    const uint32_t wp = get_write_ptr(cb_w_down);
+#ifndef ABLATE_NO_W_XFER
+                    for (uint32_t k = 0; k < hn_r; ++k) {
+                        BR::read(
+                            wd_acc,
+                            BR::remap(hbase + k, SLOTS_H) * EMB_T,
+                            jstart,
+                            jstart + ec,
+                            SLOTS_E,
+                            wp + k * EC_MAX * BFP4_TILE,
+                            BFP4_TILE);
+                    }
+#else
+                    (void)wp;
+#endif
+                    wd_pending = true;
                 }
+                cb_push_back(cb_h, h_block_tiles);
             }
-            noc_async_read_barrier();  // ONE barrier: the sender's h self-copy AND the W_down block
-            if (prefetch) {
+            // The last issue is at round HGROUPS-1-WD_AHEAD and is published at round
+            // HGROUPS-WD_AHEAD <= HGROUPS-1, so nothing is ever left pending here. Kept as an
+            // ASSERT-free safety drain for a future WD_AHEAD that changes that arithmetic.
+            if (wd_pending) {
+                noc_async_read_barrier();
                 cb_push_back(cb_w_down, WD_BLOCK_TILES);
             }
-
-            if (i_send) {
-                cb_pop_front(cb_h_local, h_block_tiles);
-                if constexpr (hmc.active) {
-                    h_send.send(hdst, hdst, h_block_tiles * BFP8_TILE);
-                }
-            } else {
-                if constexpr (hmc.active) {
-                    // Round r's sender is column r's root, core (r, r % KGROUPS); the rotating
-                    // sender list is row-major over the rect.
-                    h_recv.receive((r % KGROUPS) * HGROUPS + r);
-                }
-            }
-            cb_push_back(cb_h, h_block_tiles);
         }
     }
 }
