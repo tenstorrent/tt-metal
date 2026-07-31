@@ -33,10 +33,16 @@ HIDDEN = 2048
 # ---------------------------------------------------------------------------
 # BLOCKING KNOBS — the single source of truth. Each is defined exactly once.
 # ---------------------------------------------------------------------------
-#: Token tile-rows per M-block. The sequential outer loop is ceil(M_t / M_BLOCK); the graded
-#: counts 128 and 256 fit ONE block, so the weight stream is read exactly once for them.
-#: Raising it (to fold count=512 into one block as well) is a knob turn — it costs
-#: (M_BLOCK - 8) * KR_PAD tiles of resident-x L1 plus the same scaling on every per-block CB.
+#: Token tile-rows per M-block — the CB SIZING bound. The sequential outer loop is
+#: ceil(M_t / M_BLOCK); the graded counts 128 and 256 fit ONE block, so the weight stream is read
+#: exactly once for them. Raising it (to fold count=512 into one block as well) is a knob turn — it
+#: costs (M_BLOCK - 8) * KR_PAD tiles of resident-x L1 plus the same scaling on every per-block CB.
+#:
+#: The WORK per block is the runtime `m_eff = m_tiles_eff(M_t, b, M_BLOCK, M_EFF_MIN)` derived on
+#: device (kernels/moe_fused_swiglu_common.hpp), NOT M_BLOCK: the tail block shrinks to a power of
+#: two >= its real tile-row count, so count 128 does 4 tile-rows of work in a block sized for 8.
+#: MUST be a power of two, so every `m_eff` divides it and no shrunk CB reserve can straddle a FIFO
+#: end (the reserve granularity has to divide the DEPTH * M_BLOCK * W total).
 M_BLOCK = 8
 
 #: DEST tile budget for one output sub-block: 8 at half sync (dst_full_sync_en=False) with
@@ -125,6 +131,14 @@ SEM_X_BASE = 0  # x row multicast (data_ready, consumer_ready)
 SEM_H_BASE = 2  # h all-gather   (data_ready, consumer_ready)
 SEM_GO = 4  # reduce tree: parent -> child "your slot is free, send"
 SEM_DATA = 5  # reduce tree: child -> parent "partials landed"
+
+
+def _pow2_ceil(v):
+    """Smallest power of two >= v (v >= 1)."""
+    p = 1
+    while p < v:
+        p <<= 1
+    return p
 
 
 def _split(total, groups):
@@ -276,6 +290,24 @@ def create_program_descriptor(
         )
     if M_BLOCK % OUT_SUBBLOCK_H != 0:
         raise RuntimeError(f"moe_fused_swiglu: M_BLOCK {M_BLOCK} must be a multiple of {OUT_SUBBLOCK_H}")
+
+    # ---- the runtime M shrink (op_design.md §3's `m_tiles`) ----
+    # The kernels work `m_eff = m_tiles_eff(M_t, b, M_BLOCK, M_EFF_MIN)` token tile-rows per block,
+    # not M_BLOCK. Two host-side preconditions make that safe, and both are asserted here rather
+    # than assumed device-side:
+    #   1. M_BLOCK is a power of two, so every m_eff (a power of two <= M_BLOCK) DIVIDES it. Each
+    #      M-scaled CB total is DEPTH * M_BLOCK * W, so a m_eff * W reserve can never straddle the
+    #      FIFO end whatever order the blocks push in.
+    #   2. M_EFF_MIN keeps m_eff a multiple of the matmul's out_subblock_h, so the kernels'
+    #      `m_eff / OUT_SUBBLOCK_H` sub-block count stays exact.
+    if _pow2_ceil(M_BLOCK) != M_BLOCK:
+        raise RuntimeError(
+            f"moe_fused_swiglu: M_BLOCK {M_BLOCK} must be a power of two so every runtime m_eff "
+            f"divides it (see m_tiles_eff in kernels/moe_fused_swiglu_common.hpp)"
+        )
+    M_EFF_MIN = _pow2_ceil(OUT_SUBBLOCK_H)
+    if M_EFF_MIN > M_BLOCK:
+        raise RuntimeError(f"moe_fused_swiglu: OUT_SUBBLOCK_H {OUT_SUBBLOCK_H} exceeds M_BLOCK {M_BLOCK}")
 
     # ---- DRAM bank-run coalescing precondition (op_design.md §1.5) ----
     dram_align = ttnn.get_dram_alignment()
@@ -433,6 +465,7 @@ def create_program_descriptor(
         remap,
         MAILBOX_MAGIC,
         wd_ahead,
+        M_EFF_MIN,
         CB_X_IN,
         CB_X_TILES,
         CB_X_STAGE,
@@ -467,6 +500,7 @@ def create_program_descriptor(
         bfp8_tile,
         remap,
         MAILBOX_MAGIC,
+        M_EFF_MIN,
         CB_W_UP,
         CB_OUT_TILES,
         CB_GATE_SEND,
@@ -487,6 +521,7 @@ def create_program_descriptor(
         input_format,
         OUT_SUBBLOCK_H,
         MAILBOX_MAGIC,
+        M_EFF_MIN,
         CB_X_IN,
         CB_X_TILES,
         CB_X_STAGE,
@@ -519,8 +554,9 @@ def create_program_descriptor(
             kr, kstart = kr_sizes[y], kr_starts[y]
             hn, hstart = hn_sizes[x], x * HN_PAD
             ec, jstart = ec_sizes[i], ec_starts[i]
-            # tile-rows this core injects into the row multicast
-            n_inject = len([t for t in range(M_BLOCK) if t % HGROUPS == x])
+            # The tile-rows this core injects into the row multicast are NO LONGER a host constant:
+            # they depend on the runtime m_eff, so compute derives them from `my_col` with the same
+            # shared `inject_rows()` the reader's staging loop implements.
 
             args = [
                 mailbox_addr,
@@ -572,7 +608,7 @@ def create_program_descriptor(
                 ec,
                 1 if node["is_root"] else 0,
                 len(node["children"]),
-                n_inject,
+                x,  # my_col — the x-multicast injection slot (round t's injector is column t % HGROUPS)
             ]
 
     kernels = [

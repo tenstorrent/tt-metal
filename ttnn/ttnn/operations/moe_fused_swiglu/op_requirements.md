@@ -255,43 +255,29 @@ regression; no golden cell changes category and no PCC moves by more than 1e-4; 
 cannot hang (the pipelined prologue must still be skipped uniformly on all 110 cores when
 `m_blocks == 0`).
 
-### [ ] Refinement 4 — Close the kernel-attributable precision gap to the format floor
+## Removed from the queue: the precision refinement
 
-**Goal**: the 44 `supported_fail` cells sit at `pcc 0.9789-0.9796` against a measured `bfloat4_b`
-format floor of `0.97967-0.98019`; the **kernel-attributable** shortfall is a consistent
-**5.7e-4 to 6.8e-4** (measured per shape by
-`tests/.../test_moe_fused_swiglu_precision_baseline.py`), of which ~6e-5 is the contractual bfp8
-`h`/output and is not recoverable. Recover the rest — target `floor - dPCC <= 1e-4` — with
-descriptor-level format changes only:
-- `cb_out_interm` (phase-2 packer-L1 accumulation, 11 accumulate steps) `Float16_b -> Float32`:
-  +48 KB L1, and confirm `packer_l1_acc` is legal with an fp32 interm at 16-bit DEST.
-- `cb_gate_acc` / `cb_up_acc` (the gate/up accumulators the 4 reduce levels add into, currently
-  bfp8 -> ~0.4 % re-quantization per level) `Bfloat8_b -> Float16_b`: +2 x 51 KB L1 and no NoC cost
-  (these are local; only `cb_*_send` / `cb_reduce_*_in` cross the NoC).
-- `cb_gate_silu` likewise, if it pays.
-Keep the **transport** formats (`cb_x_tiles`, `cb_h`, `cb_*_send`, `cb_reduce_*_in`) in bfp8 — those
-are `in0` unpack bytes and multicast bytes, i.e. the perf decision of `op_design.md` §1.6; changing
-them trades measured time for ~1e-4 of PCC.
+A fourth entry (close the kernel-attributable precision gap to the `bfloat4_b` format floor via
+`/numeric-formats-metal`) was written and then **removed by the operator on 2026-07-31**. Do not
+re-file it.
 
-**Implementation skill**: /numeric-formats-metal
+Why it was dropped, so the finding is not lost:
 
-**Verifier notes**: **order this LAST and know what it can and cannot do.**
-- It **cannot turn a single cell green**: the format floor itself is below the golden gate on 11 of
-  the 12 (emb, capacity, fill) combinations (`verification_report.md`, headline finding). The cells
-  flip only when the user relaxes `_PCC_GATE` to <= 0.975 via `/golden-tests`. What this refinement
-  buys is an honest kernel at its ceiling, and a `pcc` number that stops absorbing avoidable error.
-- It **conflicts with the perf refinements**: every item above spends L1 (+150 KB if all three land)
-  that Refinements 2 and 3 need, and it is the *only* entry here that can regress device ns. Land it
-  after them and re-measure the graded loose cases.
-- `fp32_dest_acc_en` is **not** available: the prompt pins it False and the golden harness passes its
-  own `ComputeConfigDescriptor` with `fp32_dest_acc_en=False`, so the 16-bit DEST accumulation inside
-  each K-block stays. Higher `math_fidelity` is also a dead end — measured at +1.5e-4 PCC for 2-4x
-  the FPU passes.
-- The measurement to gate on already exists: the precision baseline prints `kernel-attributable
-  dpcc` per shape and asserts against `floor - 0.0015`; tighten that constant as the gap closes.
+- The golden `_PCC_GATE` has been relaxed from `0.98` to **`0.975`** in
+  `eval/golden_tests/moe_fused_swiglu/{helpers.py,feature_spec.py}`, on the strength of this run's
+  own measurement: the unbeatable `bfloat4_b` floor on the suite's fixture is `0.97967-0.98019`, so
+  the old gate sat below the floor on 11 of the 12 `(emb, capacity, fill)` combinations. The 44 cells
+  at `pcc 0.9789-0.9796` now PASS. The precision work was never able to flip a cell — that was
+  already in its own verifier notes — and now there is no cell left to flip.
+- It is graded on nothing. This op's bar is achieved DRAM read utilization; PCC is a floor to clear,
+  not a metric to maximize.
+- It actively costs the refinements that ARE graded: ~150 KB of L1 if all three format widenings land
+  (`cb_out_interm` to Float32, `cb_gate_acc`/`cb_up_acc` to Float16_b), which is L1 that Refinements 2
+  and 3 need — and it was the only entry in this queue that could regress device ns.
 
-**Done when**: `kernel-attributable dpcc <= 1e-4` on all 8 rows of the precision baseline (from
-5.7e-4-6.8e-4), the baseline's `FLOOR_SLACK` tightened to match, all 44 golden cells still in
-`numerical-precision` with `pcc` strictly improved, and the graded loose cases' `device_kernel_ns`
-regressed by no more than 1 % (report the exact cost; if a lever costs more than that, drop it and
-record the trade).
+The residual gap it would have closed is a consistent `5.7e-4` to `6.8e-4` of kernel-attributable
+`dPCC` below the floor, measured per shape by
+`tests/ttnn/unit_tests/operations/moe_fused_swiglu/test_moe_fused_swiglu_precision_baseline.py`.
+That baseline still runs and still asserts against `floor - 0.0015`; leave it as the regression guard
+it is. If precision ever becomes load-bearing, the measurement and the three candidate levers are
+recoverable from `verification_report.md` and from this file's history.

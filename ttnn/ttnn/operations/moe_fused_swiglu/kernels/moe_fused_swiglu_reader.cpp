@@ -78,20 +78,23 @@ constexpr uint32_t MAILBOX_MAGIC = get_compile_time_arg_val(23);
 // W_down prefetch depth in phase-2 K-blocks: how many blocks are kept in flight ahead
 // of the round that consumes them. 1 == the per-round read (DRAM-latency bound).
 constexpr uint32_t WD_AHEAD = get_compile_time_arg_val(24);
+// Smallest legal `m_eff` (= the matmul's out_subblock_h rounded up to a power of two). One
+// host-side definition, passed identically to all three kernels — see m_tiles_eff().
+constexpr uint32_t M_EFF_MIN = get_compile_time_arg_val(25);
 
-constexpr uint32_t cb_x_in = get_compile_time_arg_val(25);
-constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(26);
-constexpr uint32_t cb_x_stage = get_compile_time_arg_val(27);
-constexpr uint32_t cb_w_gate = get_compile_time_arg_val(28);
-constexpr uint32_t cb_w_down = get_compile_time_arg_val(29);
-constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(30);
-constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(31);
-constexpr uint32_t cb_h = get_compile_time_arg_val(32);
-constexpr uint32_t cb_h_local = get_compile_time_arg_val(33);
-constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(34);
-constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(35);
+constexpr uint32_t cb_x_in = get_compile_time_arg_val(26);
+constexpr uint32_t cb_x_tiles = get_compile_time_arg_val(27);
+constexpr uint32_t cb_x_stage = get_compile_time_arg_val(28);
+constexpr uint32_t cb_w_gate = get_compile_time_arg_val(29);
+constexpr uint32_t cb_w_down = get_compile_time_arg_val(30);
+constexpr uint32_t cb_reduce_gate_in = get_compile_time_arg_val(31);
+constexpr uint32_t cb_reduce_up_in = get_compile_time_arg_val(32);
+constexpr uint32_t cb_h = get_compile_time_arg_val(33);
+constexpr uint32_t cb_h_local = get_compile_time_arg_val(34);
+constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(35);
+constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(36);
 
-constexpr uint32_t CT_XMCAST = 36;
+constexpr uint32_t CT_XMCAST = 37;
 constexpr uint32_t CT_HMCAST = CT_XMCAST + 5;
 
 constexpr uint32_t TILE_H = 32;
@@ -192,14 +195,20 @@ void kernel_main() {
     constexpr uint32_t SLOTS_H = REMAP ? (HID_T / NUM_BANKS) : HID_T;
     constexpr uint32_t SLOTS_E = REMAP ? (EMB_T / NUM_BANKS) : EMB_T;
 
-    constexpr uint32_t X_SLOT_TILES = M_BLOCK * KR_PAD;   // resident in0 block, one slot
-    constexpr uint32_t WG_BLOCK_TILES = KR_PAD * HN_PAD;  // one gate weight K-block (num_k_blocks == 1)
-    constexpr uint32_t H_BLOCK_TILES = M_BLOCK * HN_PAD;  // one phase-2 K-block of h
+    constexpr uint32_t WG_BLOCK_TILES = KR_PAD * HN_PAD;      // one gate weight K-block (num_k_blocks == 1)
+    constexpr uint32_t REDUCE_SLOT_TILES = M_BLOCK * HN_PAD;  // ONE whole slot — see the note in phase 1c
     constexpr uint32_t X_ROW_BYTES = KR_PAD * BFP8_TILE;
 
     // `count == 0` -> m_blocks == 0 on every core: no CB traffic, no collective round, no
     // semaphore. Uniform across the grid, so it cannot hang.
     for (uint32_t b = 0; b < m_blocks; ++b) {
+        // The RUNTIME token tile-rows this block actually works on. Identical on every core (it is
+        // a pure function of the same mailbox words), which is what keeps the three collectives'
+        // round counts and landing addresses in lockstep across the grid.
+        const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, b, M_BLOCK, M_EFF_MIN);
+        const uint32_t x_slot_tiles = m_eff * KR_PAD;   // resident in0 block, one slot
+        const uint32_t h_block_tiles = m_eff * HN_PAD;  // one phase-2 K-block of h
+
         // -------------------------------------------------------------------
         // Phase 1a — stage x and multicast it along the grid row.
         //
@@ -218,10 +227,14 @@ void kernel_main() {
                 wg_acc, (kstart + k) * HID_T, hstart, hstart + hn, SLOTS_H, wg_wp + k * HN_PAD * BFP4_TILE, BFP4_TILE);
         }
 
-        cb_reserve_back(cb_x_tiles, X_SLOT_TILES);
+        cb_reserve_back(cb_x_tiles, x_slot_tiles);
         const uint32_t x_base = get_write_ptr(cb_x_tiles);
 
-        for (uint32_t t = 0; t < M_BLOCK; ++t) {
+        // m_eff rounds, not M_BLOCK: at count 128 (M_t 4) this is HALF the handshake chain and
+        // half the staged bytes, and at count 32 an eighth. m_eff divides M_BLOCK, so cb_x_tiles'
+        // write pointer stays block-aligned and identical on every core in the row (which
+        // mcast_pipe requires of the landing address).
+        for (uint32_t t = 0; t < m_eff; ++t) {
             const uint32_t round = t % HGROUPS;
             const uint32_t dst = x_base + t * X_ROW_BYTES;
             if (round == my_col) {
@@ -231,7 +244,8 @@ void kernel_main() {
                 }
                 if constexpr (INPUT_FORMAT == 0) {
                     // bf16 ROW_MAJOR: read this row-group's emb slice of 32 sticks, compute
-                    // tilizes it to bfp8 in cb_x_stage, then multicast (loopback into cb_x_tiles).
+                    // tilizes it to bfp8 in cb_x_stage, then land it in the resident slot and
+                    // broadcast IN PLACE.
                     cb_reserve_back(cb_x_in, TILE_H);
                     const uint32_t wp = get_write_ptr(cb_x_in);
                     for (uint32_t s = 0; s < TILE_H; ++s) {
@@ -243,14 +257,28 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(cb_x_in, TILE_H);
 
+                    // Self-copy cb_x_stage -> the resident slot FIRST, so the multicast below is
+                    // `src == dst` and therefore EXCLUDE-source, exactly like the bfp8 branch.
+                    //
+                    // This is NOT a stylistic choice. A `src != dst` send is a LOOPBACK multicast
+                    // (mcast_pipe.inl `loopback = in_rect_ && src_l1 != dst_l1`), which makes this
+                    // core's OWN data-ready cell a multicast destination — and the rotating-sender
+                    // reset right after (`data_ready_.set(INVALID)` behind a `fence_()` that is
+                    // `async_writes_flushed`, i.e. SENT, not LANDED) then races that in-flight
+                    // VALID. When the late VALID wins, this core's NEXT `receive()` returns on a
+                    // stale flag, every later round shifts one early, and the block's LAST token
+                    // tile-row is consumed before its multicast has landed — silent, run-to-run
+                    // garbage in exactly that tile-row. `noc_async_read_barrier()` IS a real
+                    // arrival guarantee, so doing the self-copy here removes the loopback
+                    // altogether. Same NoC bytes as before (one fewer multicast destination, one
+                    // local L1->L1 copy) and it frees cb_x_stage a step earlier.
                     cb_wait_front(cb_x_stage, KR_PAD);
-                    if constexpr (xmc.active) {
-                        x_send.send(get_read_ptr(cb_x_stage), dst, X_ROW_BYTES);
-                    } else {
-                        noc_async_read(get_noc_addr(get_read_ptr(cb_x_stage)), dst, X_ROW_BYTES);
-                        noc_async_read_barrier();
-                    }
+                    noc_async_read(get_noc_addr(get_read_ptr(cb_x_stage)), dst, X_ROW_BYTES);
+                    noc_async_read_barrier();
                     cb_pop_front(cb_x_stage, KR_PAD);
+                    if constexpr (xmc.active) {
+                        x_send.send(dst, dst, X_ROW_BYTES);
+                    }
                 } else {
                     // bfp8_b TILE: land the tiles straight in the resident slot, then broadcast
                     // in place (src == dst, so the pipe multicasts EXCLUDE-source).
@@ -268,7 +296,7 @@ void kernel_main() {
                 }
             }
         }
-        cb_push_back(cb_x_tiles, X_SLOT_TILES);
+        cb_push_back(cb_x_tiles, x_slot_tiles);
 
         // -------------------------------------------------------------------
         // Phase 1b — W_gate landed under the x rounds; publish it.
@@ -314,16 +342,24 @@ void kernel_main() {
         // Phase 1c — reduce tree, PARENT side. One slot per incoming partial, so the child's
         // landing address is the CB base on every core; the invite (SEM_GO) is the flow control
         // that keeps a child from overwriting a slot compute has not consumed yet.
+        //
+        // These two CBs are the ONE place the m_eff shrink does NOT move the CB accounting: the
+        // child unicasts to its OWN `get_write_ptr(cb_reduce_*_in)` on the assumption that the
+        // parent's pointer is the same, and that only holds while every push is a WHOLE slot (a
+        // whole-slot push always wraps back to the CB base, on every core, whatever its child
+        // count). So the slot stays full here and the child writes only the m_eff*HN_PAD tiles that
+        // carry live tokens; compute adds those and drops the rest (they are undefined rows).
+        // The transport — the expensive part, up to 4 serial ~102 KB round trips — halves anyway.
         // -------------------------------------------------------------------
         for (uint32_t c = 0; c < num_children; ++c) {
             const uint32_t cx = get_arg_val<uint32_t>(RT_CHILDREN + 2 * c + 0);
             const uint32_t cy = get_arg_val<uint32_t>(RT_CHILDREN + 2 * c + 1);
-            cb_reserve_back(cb_reduce_gate_in, H_BLOCK_TILES);
-            cb_reserve_back(cb_reduce_up_in, H_BLOCK_TILES);
+            cb_reserve_back(cb_reduce_gate_in, REDUCE_SLOT_TILES);
+            cb_reserve_back(cb_reduce_up_in, REDUCE_SLOT_TILES);
             noc_semaphore_inc(get_noc_addr(cx, cy, static_cast<uint32_t>(get_semaphore(SEM_GO))), 1);
             noc_semaphore_wait_min(sem_data_ptr, ++data_arrivals);
-            cb_push_back(cb_reduce_gate_in, H_BLOCK_TILES);
-            cb_push_back(cb_reduce_up_in, H_BLOCK_TILES);
+            cb_push_back(cb_reduce_gate_in, REDUCE_SLOT_TILES);
+            cb_push_back(cb_reduce_up_in, REDUCE_SLOT_TILES);
         }
 
         // -------------------------------------------------------------------
@@ -359,17 +395,25 @@ void kernel_main() {
                 cb_push_back(cb_w_down, WD_BLOCK_TILES);
             }
 
-            cb_reserve_back(cb_h, H_BLOCK_TILES);
+            cb_reserve_back(cb_h, h_block_tiles);
             const uint32_t hdst = get_write_ptr(cb_h);
             if (is_root && r == my_col) {
-                cb_wait_front(cb_h_local, H_BLOCK_TILES);
+                // Self-copy cb_h_local -> this round's cb_h slot FIRST, then broadcast IN PLACE
+                // (`src == dst`, EXCLUDE-source). Identical reasoning to the x send above: a
+                // `src != dst` send is a LOOPBACK multicast, and mcast_pipe's rotating-sender flag
+                // reset then races this core's own in-flight VALID, so the root's remaining
+                // `receive()` calls shift one round early and the LAST h K-block is consumed before
+                // it lands. Measured: with the x send fixed but this one left as a loopback, PCC on
+                // a fixed input still varied 0.959-0.979 run to run on BOTH activation formats
+                // (the bfp8 path has no x loopback, so this send was the only remaining suspect);
+                // with both fixed it is bit-stable. Same NoC bytes, one fewer mcast destination.
+                cb_wait_front(cb_h_local, h_block_tiles);
+                noc_async_read(get_noc_addr(get_read_ptr(cb_h_local)), hdst, h_block_tiles * BFP8_TILE);
+                noc_async_read_barrier();
+                cb_pop_front(cb_h_local, h_block_tiles);
                 if constexpr (hmc.active) {
-                    h_send.send(get_read_ptr(cb_h_local), hdst, H_BLOCK_TILES * BFP8_TILE);
-                } else {
-                    noc_async_read(get_noc_addr(get_read_ptr(cb_h_local)), hdst, H_BLOCK_TILES * BFP8_TILE);
-                    noc_async_read_barrier();
+                    h_send.send(hdst, hdst, h_block_tiles * BFP8_TILE);
                 }
-                cb_pop_front(cb_h_local, H_BLOCK_TILES);
             } else {
                 if constexpr (hmc.active) {
                     // Round r's sender is column r's root, core (r, r % KGROUPS); the rotating
@@ -377,7 +421,7 @@ void kernel_main() {
                     h_recv.receive((r % KGROUPS) * HGROUPS + r);
                 }
             }
-            cb_push_back(cb_h, H_BLOCK_TILES);
+            cb_push_back(cb_h, h_block_tiles);
         }
     }
 }
