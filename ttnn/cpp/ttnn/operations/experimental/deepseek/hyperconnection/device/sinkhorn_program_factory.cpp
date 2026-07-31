@@ -20,7 +20,7 @@ constexpr uint32_t kSinkCbScaler = tt::CBIndex::c_2;
 constexpr uint32_t kSinkCbMask = tt::CBIndex::c_3;
 constexpr uint32_t kSinkCbComb = tt::CBIndex::c_4;
 constexpr uint32_t kSinkCbReduce = tt::CBIndex::c_5;
-constexpr uint32_t kSinkCbScratch = tt::CBIndex::c_6;
+constexpr uint32_t kSinkCbEpsMask = tt::CBIndex::c_6;
 constexpr uint32_t kSinkCbOut = tt::CBIndex::c_7;
 
 constexpr char kSinkhornReaderKernelPath[] =
@@ -66,7 +66,7 @@ SinkhornProgramFactory::cached_program_t SinkhornProgramFactory::create(
     make_cb(kSinkCbMask, 1);
     make_cb(kSinkCbComb, tile_buffering);
     make_cb(kSinkCbReduce, tile_buffering);
-    make_cb(kSinkCbScratch, tile_buffering);
+    make_cb(kSinkCbEpsMask, 1);
     make_cb(kSinkCbOut, tile_buffering);
 
     // Scaler tile holds 1.0f (bf16 hi-half) for plain sum/max reductions.
@@ -81,6 +81,8 @@ SinkhornProgramFactory::cached_program_t SinkhornProgramFactory::create(
         kSinkCbScaler,
         scaler_bits,
         operation_attributes.num_streams,
+        kSinkCbEpsMask,
+        eps_bits,
     };
     TensorAccessorArgs(comb_w.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(comb_bias.buffer()).append_to(reader_compile_time_args);
@@ -95,7 +97,7 @@ SinkhornProgramFactory::cached_program_t SinkhornProgramFactory::create(
         kSinkCbMask,
         kSinkCbComb,
         kSinkCbReduce,
-        kSinkCbScratch,
+        kSinkCbEpsMask,
         kSinkCbOut,
         operation_attributes.num_streams,
         operation_attributes.sinkhorn_iters,

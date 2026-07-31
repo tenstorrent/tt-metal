@@ -34,6 +34,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import render_message
+from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
 from models.experimental.deepseek_v4_flash.tt.paged_cache import round_context
@@ -41,7 +42,7 @@ from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
-DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark")
+DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731")
 DEFAULT_WEIGHT_DTYPE = ttnn.bfloat4_b
 DEFAULT_BLOCK_SIZE = 32
 
@@ -275,7 +276,9 @@ class DeepSeekV4Generator:
         self.activate_session(sid)
         if self.traced:
             return self.model.decode_traced(int(token_id), int(pos))
-        return ttnn.to_torch(self.lm_head(self.model.decode(int(token_id), int(pos), self.rope)))
+        hidden = self.model.decode(int(token_id), int(pos), self.rope)
+        with _region("LM_HEAD"):
+            return ttnn.to_torch(self.lm_head(hidden))
 
     def logits(self, sid: int | None, token_id: int, pos: int) -> torch.Tensor:
         """:meth:`step`'s logits as a flat ``[vocab]`` float32 row."""
