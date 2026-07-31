@@ -81,10 +81,14 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             weight_dtype=weight_dtype,
         )
         self.input_layernorm = DeepSeekV4RMSNorm(
-            weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm")
+            weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm"), sharded=True
         )
         self.post_attention_layernorm = DeepSeekV4RMSNorm(
-            weights["post_attention_layernorm.weight"], eps, device, cache.file("post_attention_layernorm")
+            weights["post_attention_layernorm.weight"],
+            eps,
+            device,
+            cache.file("post_attention_layernorm"),
+            sharded=True,
         )
         self.attn_hc = DeepSeekV4HyperConnection(
             config, _strip_prefix(weights, "attn_hc"), device, cache=cache.sub("attn_hc")
@@ -101,21 +105,13 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
 
         ``post`` ``[B,S,H,1]``, ``comb`` ``[B,S,H,H]``, ``sublayer_out`` ``[B,S,1,D]``,
         ``streams`` ``[B,S,H,D]``; returns ``[B,S,H,D]``.
+
+        Fused into a single composite device op (``ttnn.experimental.deepseek.mix_streams``)
+        that folds the broadcast-multiply, the ``comb`` transpose (via ``transpose_a=True``)
+        and the add into one op call, matching the eager math at HiFi4 / fp32 dest acc.
         """
-        b, s, hc, d = streams.shape
-        t = b * s
         _profile(self.device)
-
-        # placement = post.unsqueeze(-1) * sublayer_out.unsqueeze(-2) -> [1,T,H,D].
-        out = ttnn.reshape(sublayer_out, [1, t, 1, d])
-        out = ttnn.repeat(out, ttnn.Shape([1, 1, hc, 1]))  # broadcast over the stream axis
-        placement = ttnn.multiply(out, ttnn.reshape(post, [1, t, hc, 1]))
-
-        # mix = matmul(comb.transpose(-1, -2), streams): sum over the FIRST hc axis.
-        comb_t = ttnn.transpose(ttnn.reshape(comb, [1, t, hc, hc]), -2, -1)
-        mixed = ttnn.matmul(comb_t, ttnn.reshape(streams, [1, t, hc, d]), compute_kernel_config=_HIFI4)
-
-        return ttnn.reshape(ttnn.add(placement, mixed), [b, s, hc, d])
+        return ttnn.experimental.deepseek.mix_streams(post, comb, sublayer_out, streams, compute_kernel_config=_HIFI4)
 
     def decode(
         self,
@@ -202,8 +198,9 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         variant per window phase (see :meth:`DeepSeekV4Model._capture_traces`)."""
         # return ttnn.assign(hidden_streams, memory_config=hidden_streams.memory_config())
         post, comb, collapsed = self.attn_hc(hidden_streams)
+        normed = self.input_layernorm(collapsed)
         attn_out = self.self_attn.decode_static(
-            self.input_layernorm(collapsed),
+            normed,
             cos,
             sin,
             neg_sin,
@@ -221,5 +218,6 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         )
         hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
         post, comb, collapsed = self.ffn_hc(hidden_streams)
-        mlp_out = self.mlp.decode_static(self.post_attention_layernorm(collapsed), hash_token=hash_token)
+        collapsed = self.post_attention_layernorm(collapsed)
+        mlp_out = self.mlp.decode_static(collapsed, hash_token=hash_token)
         return self._mix(post, comb, mlp_out, hidden_streams)

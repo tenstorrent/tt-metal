@@ -28,9 +28,17 @@ namespace ttnn::operations::experimental::transformer::fused_partial_rope {
 //   out[..., :D-Rd] = x[..., :D-Rd]
 //   out[..., D-Rd:] = x_rope * cos + (x_rope @ trans_mat) * sin
 //
-// Layout (v1): height-sharded L1, one tile-row (32 rows) per core, so
-// num_cores = ceil(rows / 32). `cos`/`sin` are `[1, 1, rows, Rd]` sharded on the
-// same core grid; `trans_mat` is a single [32, 32] rotate_half tile, replicated.
+// Two input layouts are supported, each with its own program factory:
+//   * height-sharded L1: one tile-row (32 rows) per core, so
+//     num_cores = ceil(rows / 32). Core i owns input tile-row i.
+//   * width-sharded L1: every core holds all rows but only a `shard_width`
+//     column slice of D, so a core's columns can land wholly in the "nope"
+//     region, wholly in the rope region, or straddle the boundary.
+// In both cases `cos`/`sin` are `[1, 1, rows, Rd]` (or a single broadcast row)
+// DRAM-interleaved tables streamed per-core by the reader, and `trans_mat` is a
+// single [32, 32] rotate_half tile, replicated. The rotation is block-diagonal
+// per tile (it pairs channels 2p / 2p+1), so each rope tile rotates
+// independently of how the columns are spread over cores.
 // -----------------------------------------------------------------------------
 struct FusedPartialRopeDeviceOperation {
     struct operation_attributes_t {
@@ -56,7 +64,14 @@ struct FusedPartialRopeDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<ShardedProgramFactory>;
+    struct WidthShardedProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<ShardedProgramFactory, WidthShardedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
