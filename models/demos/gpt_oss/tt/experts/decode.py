@@ -59,7 +59,10 @@ def decode_forward(
     # EP-specific routing remap for sparsity
     if ep > 1:
         sparsity = ttnn.moe_routing_remap(
-            ttnn.reshape(sparsity, (1, sparsity.shape[-1])), config.num_experts_per_tok, ep, 0
+            ttnn.reshape(sparsity, (1, sparsity.shape[-1])),
+            config.num_experts_per_tok,
+            ep,
+            mesh_config.ep_axis,
         )
         routing_weights = ttnn.tilize_with_zero_padding(sparsity, use_multicore=True)
 
