@@ -328,6 +328,11 @@ def run_all_gather_impl(
             logger.info(f"Done iteration {i}")
 
     if not skip_check:
+        # Check output_topology
+        actual = [repr(p) for p in tt_all_gather_out_tensor_list[0].tensor_topology().placements()]
+        expected = ["PlacementReplicate()"] * len(actual)
+        assert actual == expected, f"FAILED output_topology: expected {expected}, got {actual}"
+
         for i in range(num_iters):
             tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
             torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
@@ -1151,104 +1156,6 @@ def test_all_gather_page_indexing(
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "ag_output_shape, dim, expects_composite",
-    [
-        # Per-device [32]: the gather dim is tile-aligned, so the native path takes it.
-        ([256], -1, False),
-        # Per-device [200]: the gather dim pads up to a tile, so it falls back to composite.
-        ([1600], 0, True),
-    ],
-    ids=["rank1_native", "rank1_composite"],
-)
-@pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
-)
-def test_all_gather_low_rank_route(mesh_device, ag_output_shape, dim, expects_composite):
-    # Both routes produce correct data, so only the output buffer identifies the route: native writes into
-    # the persistent output buffer, composite ignores it and allocates its own.
-    tt_input = ttnn.from_torch(
-        torch.rand(ag_output_shape, dtype=torch.bfloat16),
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
-        device=mesh_device,
-    )
-    persistent_output_buffer = ttnn.from_torch(
-        torch.zeros(ag_output_shape),
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        device=mesh_device,
-    )
-
-    tt_output = ttnn.all_gather(tt_input, dim=dim, output_tensor=persistent_output_buffer)
-
-    used_composite = tt_output.buffer_address() != persistent_output_buffer.buffer_address()
-    assert used_composite == expects_composite, f"expected composite={expects_composite}, got {used_composite}"
-
-
-@skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
-)
-def test_all_gather_invalid_dim(mesh_device, expect_error):
-    # -2 is the trap: for a rank-1 shape ShapeBase[-2] returns a phantom 1 rather than throwing, so an
-    # unguarded dim would gather garbage instead of erroring.
-    tt_input = ttnn.from_torch(
-        torch.rand([256], dtype=torch.bfloat16),
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        device=mesh_device,
-    )
-
-    with expect_error(RuntimeError, "Invalid gather dim"):
-        ttnn.all_gather(tt_input, dim=-2)
-
-
-@skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "mapper_dim, gather_dim, expect_replicated",
-    [
-        # The mapper keeps the dim as the caller spelled it while the gather dim is normalized, so the two
-        # have to be compared as axes: -1 and 3 are the same axis of a rank-4 tensor.
-        (-1, -1, True),
-        # Different axes, so the Shard placement must survive.
-        (-2, 3, False),
-    ],
-    ids=["same_axis", "different_axis"],
-)
-@pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
-)
-def test_all_gather_output_topology(mesh_device, mapper_dim, gather_dim, expect_replicated):
-    # Gathering the sharded axis replicates it, and the output topology has to say so.
-    devices = mesh_device.get_num_devices()
-    tt_input = ttnn.from_torch(
-        torch.rand([1, 1, 32 * devices, 32 * devices], dtype=torch.bfloat16),
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=mapper_dim),
-        device=mesh_device,
-    )
-
-    tt_output = ttnn.all_gather(tt_input, dim=gather_dim)
-
-    placements = list(tt_output.tensor_topology().placements())
-    has_shard = any(isinstance(p, ttnn.PlacementShard) for p in placements)
-    if expect_replicated:
-        assert not has_shard, f"gathered axis is still marked sharded: {placements}"
-    else:
-        assert has_shard, f"a non-gathered sharded axis lost its Shard placement: {placements}"
-
-
-@skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("ag_input_dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, mem_config_input, mem_config_ag",
@@ -1398,6 +1305,47 @@ def test_all_gather_nd_sharded(
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "mapper_dim, gather_dim, expect_replicated",
+    [
+        # The mapper keeps the dim as the caller spelled it while the gather dim is normalized, so the two
+        # have to be compared as axes: -1 and 3 are the same axis of a rank-4 tensor.
+        (-1, -1, True),
+        # Different axes, so the Shard placement must survive.
+        (-2, 3, False),
+        # No Shard placement anywhere to begin with; gathering must not introduce a spurious one.
+        (None, -1, True),
+    ],
+    ids=["same_axis", "different_axis", "already_replicated"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
+)
+def test_all_gather_output_topology(mesh_device, mapper_dim, gather_dim, expect_replicated):
+    # Gathering the sharded axis replicates it, and the output topology has to say so.
+    devices = mesh_device.get_num_devices()
+    mesh_mapper = (
+        ttnn.ReplicateTensorToMesh(mesh_device)
+        if mapper_dim is None
+        else ttnn.ShardTensorToMesh(mesh_device, dim=mapper_dim)
+    )
+
+    tt_input = ttnn.from_torch(
+        torch.rand([1, 1, 32 * devices, 32 * devices], dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+        device=mesh_device,
+    )
+    tt_output = ttnn.all_gather(tt_input, dim=gather_dim)
+
+    actual = [repr(p) for p in tt_output.tensor_topology().placements()]
+    expected = ["PlacementReplicate()"] if expect_replicated else [f"PlacementShard({mapper_dim})"]
+    assert actual == expected, f"FAILED output_topology: expected {expected}, got {actual}"
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype",
@@ -1459,6 +1407,108 @@ def test_all_gather_2x4(
         use_persistent_buffers=False,
         cluster_axis=1,
     )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "cluster_axis, gather_dim, other_dim",
+    [
+        # Different tensor dims sharded on each mesh axis; gathering one must not disturb the other's Shard.
+        (0, 2, 3),
+        (1, 3, 2),
+    ],
+    ids=["cluster_axis_0", "cluster_axis_1"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["fabric_1d"]
+)
+def test_all_gather_output_topology_2x4(mesh_device, cluster_axis, gather_dim, other_dim):
+    mesh_shape = tuple(mesh_device.shape)
+    shard_dims = [None, None]
+    shard_dims[cluster_axis] = gather_dim
+    shard_dims[1 - cluster_axis] = other_dim
+
+    tt_input = ttnn.from_torch(
+        torch.rand([1, 1, 32 * mesh_shape[0], 32 * mesh_shape[1]], dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(shard_dims), mesh_shape=mesh_shape),
+        device=mesh_device,
+    )
+
+    tt_output = ttnn.all_gather(tt_input, dim=gather_dim, cluster_axis=cluster_axis)
+
+    actual = [repr(p) for p in tt_output.tensor_topology().placements()]
+    expected = [None, None]
+    expected[cluster_axis] = "PlacementReplicate()"
+    expected[1 - cluster_axis] = f"PlacementShard({other_dim})"
+    assert actual == expected, f"FAILED output_topology: expected {expected}, got {actual}"
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape, dim, output_dtype, output_layout, output_shape, msg_pattern",
+    [
+        ([256], -2, ttnn.bfloat16, ttnn.TILE_LAYOUT, [2048], "Invalid gather dim"),
+        (
+            [1, 1, 32, 32],
+            -1,
+            ttnn.bfloat8_b,
+            ttnn.TILE_LAYOUT,
+            [1, 1, 32, 256],
+            "Output tensor dtype .* should be same as input tensor dtype",
+        ),
+        (
+            [1, 1, 32, 32],
+            -1,
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            [1, 1, 32, 256],
+            "Output tensor layout .* should be same as input tensor layout",
+        ),
+        (
+            [1, 1, 32, 32],
+            -1,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            [1, 1, 32, 128],
+            "Output tensor shape must be",
+        ),
+    ],
+    ids=[
+        "invalid_dim",
+        "persistent_output_wrong_dtype",
+        "persistent_output_wrong_layout",
+        "persistent_output_wrong_shape",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
+)
+def test_all_gather_negative_tests(
+    mesh_device, input_shape, dim, output_dtype, output_layout, output_shape, msg_pattern, expect_error
+):
+    tt_input = ttnn.from_torch(
+        torch.rand(input_shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+    persistent_output_buffer = ttnn.from_torch(
+        torch.zeros(output_shape),
+        layout=output_layout,
+        dtype=output_dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+
+    with expect_error(RuntimeError, msg_pattern):
+        ttnn.all_gather(tt_input, dim=dim, output_tensor=persistent_output_buffer)
 
 
 def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, memory_config, layout, device):
