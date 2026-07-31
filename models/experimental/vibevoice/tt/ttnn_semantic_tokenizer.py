@@ -51,6 +51,12 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=False,
 )
 
+# Replace the out_w==1 streaming depthwise conv2d with multiply+reduce (see TTConv1d.__init__).
+# DEFAULT OFF: 11.6x on the op and closer to fp32 in isolation, but NOT bit-exact, and a full
+# 100-min render came out 84.4 min instead of 93.2 with one speaker's level visibly down (voiced
+# RMS p5 -19%, p90 +14%).  Not yet bisected against VV_SHARDED_NORM, which is the other suspect.
+_DW1_MULREDUCE = os.environ.get("VV_DW1_MULREDUCE", "0") == "1"
+
 
 # ── FFN down-proj (linear2) decode program configs (VV_POST_L2_PROGCFG=1) ─────
 # The deepest tokenizer stages (dim 2048 / 1024) run one latent frame => T<=32 rows
@@ -389,6 +395,38 @@ class TTConv1d:
         else:
             self.bias = None
 
+        # ── out_w==1 depthwise fast path (opt-in: VV_DW1_MULREDUCE=1, default OFF) ───
+        # A streaming depthwise conv whose cache-padded input is exactly K wide produces ONE
+        # output column, i.e. out[c] = sum_k x[k, c] * w[c, k] (+ b[c]) — a broadcast multiply
+        # and a K-row reduce.  ttnn.conv2d cannot express that cheaply: with groups>1 AND a
+        # bias it misses the 1d-depthwise path (is_1d_depthwise_conv() requires !has_bias), so
+        # the weight is expanded to a dense block-diagonal [K*C, C] — for C=2048 that is 58 MB
+        # of DRAM read per call to do 14336 MACs (99.95% of it zeros), measured 187.8 us.
+        # tilize + multiply + reduce is 16.2 us (11.6x) and lands CLOSER to the fp32 reference
+        # (rel_rms 3.6e-3 vs 6.0e-3), which matters because this conv is the value-changing op
+        # in the streaming feedback loop.  Weight is pre-transposed to [1, 1, K, C].
+        self._dw1: Optional[tuple] = None
+        if cw.groups == self.in_ch == self.out_ch and self.stride == 1 and _DW1_MULREDUCE:
+            w_kc = cw.weight.reshape(self.out_ch, K).t().contiguous().reshape(1, 1, K, self.out_ch)
+            self._dw1 = (
+                ttnn.as_tensor(
+                    w_kc.to(tdtype),
+                    device=device,
+                    dtype=compute_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                None
+                if cw.bias is None
+                else ttnn.as_tensor(
+                    cw.bias.to(tdtype).view(1, 1, 1, -1).contiguous(),
+                    device=device,
+                    dtype=compute_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+            )
+
         # Streaming context cache: last `causal_pad` input columns [B, 1, causal_pad, in_ch].
         # context_size == causal_pad == (K-1)*dilation - (stride-1) (reference SConv1d).
         self._cache = None
@@ -485,6 +523,23 @@ class TTConv1d:
                 x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             input_width = T
             conv_padding = (0, 0, cp, extra_pad)
+
+        # out_w==1 depthwise: multiply+reduce instead of a dense block-diagonal conv2d.  Same
+        # output ([B, 1, 1, out_ch], TILE, DRAM interleaved) as the conv2d path below.  The
+        # tilize zero-fills rows K..31 and the pre-transposed weight is zero there too, so the
+        # tile-pad rows cannot contribute to the reduce.
+        if self._dw1 is not None and use_cache and T_padded == self.K:
+            w_kc, b_c = self._dw1
+            xt = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            out = ttnn.sum(
+                ttnn.multiply(xt, w_kc, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                dim=2,
+                keepdim=True,
+                compute_kernel_config=_HIFI4,
+            )
+            if b_c is not None:
+                out = ttnn.add(out, b_c, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            return out
 
         # VV_CONV_SINGLE_BLOCK=1 (default): force the depthwise conv (groups>1) onto the
         # single-height-block path by setting act_block_h >= the full output height.  The
