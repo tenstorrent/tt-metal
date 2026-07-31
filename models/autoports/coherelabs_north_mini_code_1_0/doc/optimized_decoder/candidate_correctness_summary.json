@@ -1,0 +1,35 @@
+{
+  "threshold": 0.995,
+  "selected_policy": {
+    "dense_synthetic_traced_decode_pcc": 0.9993443595019876,
+    "dense_real_weight_prefill_pcc": 0.9997715821988136,
+    "dense_real_weight_traced_decode_pcc": 0.9992591153469044,
+    "sliding_moe_real_weight_decode_pcc": 0.9997213420656484,
+    "full_moe_real_weight_prefill_vs_functional_pcc": 0.99965027162882,
+    "full_moe_real_weight_traced_decode_vs_functional_pcc": 0.9996039181698199,
+    "sliding_moe_prefill_pcc": 0.9995155108427529,
+    "full_moe_prefill_pcc": 0.9995772098122035,
+    "sliding_moe_traced_decode_pcc": 0.9998205878184351,
+    "full_moe_traced_decode_pcc": 0.9997997724114763,
+    "zero_routing_score_repeated_trace_pcc": 1.0,
+    "selected_layer1_router_indices": [107, 119, 126, 14, 61, 79, 18, 20]
+  },
+  "rejected_precision_candidates": {
+    "expert_bfloat4_b_lofi_real_weight_pcc": 0.987855,
+    "attention_bfloat4_b_lofi_pcc": 0.956701,
+    "final_topology_dense_bfloat4_b_lofi_synthetic_pcc": 0.9609597107913233,
+    "final_topology_dense_bfloat4_b_lofi_real_prefill_pcc": 0.9666240169779701,
+    "final_topology_dense_bfloat4_b_lofi_real_traced_decode_pcc": 0.9601010388619905
+  },
+  "router_output_layout": {
+    "sliding_moe_layer1": "L1; preserves exact real-weight top-8 selection",
+    "full_moe_layer4": "DRAM; L1 changed a near-boundary real-weight top-8 selection and reduced PCC to 0.9798"
+  },
+  "source": [
+    "final_pytest.log",
+    "real_weight_layer0_selected.log",
+    "real_weight_layer4_selected.log",
+    "candidate_dram_sharded_dense_bfp4_lofi_real_weight.log",
+    "exact_sparse_mask_repeated_trace.log"
+  ]
+}

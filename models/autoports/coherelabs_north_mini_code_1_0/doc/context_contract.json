@@ -1,6 +1,7 @@
 {
   "model_id": "CohereLabs/North-Mini-Code-1.0",
   "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "contract_origin_stage": "functional_decoder",
   "hf_advertised_context": 500000,
   "functional_decoder_supported_context": 500000,
   "current_supported_context": 500000,
@@ -16,9 +17,9 @@
   "page_size": 32,
   "cache_dtype": "bfloat16",
   "capability_reduction": null,
-  "completion_status": "complete",
-  "pending_gates": [],
-  "independent_stage_review": {
+  "functional_decoder_completion_status": "complete",
+  "functional_decoder_pending_gates": [],
+  "functional_decoder_independent_stage_review": {
     "verdict": "clean-pass",
     "required_work": []
   },
@@ -91,5 +92,24 @@
     "batch_1_context_500000_kv_bytes": 1024000000,
     "batch_32_context_500000_kv_bytes": 32768000000,
     "note": "All three layer kinds passed near-limit nonaligned prefill and batch-1 advertised-context traced decode. Batch-32 advertised-context cache allocation and traced dense decode passed; no capability reduction is applied."
+  },
+  "optimized_decoder_evidence": {
+    "scope": "batch-1 decode optimization; batch 32 was explicitly out of scope and was not measured or gated",
+    "context_preserved": 500000,
+    "cache_dtype": "bfloat16",
+    "decode_position": 499999,
+    "result": "exact-final all representative layer kinds passed with finite outputs",
+    "artifacts": [
+      "optimized_decoder/decode_layer0_context500000_batch1.json",
+      "optimized_decoder/decode_layer1_context500000_batch1.json",
+      "optimized_decoder/decode_layer4_context500000_batch1.json"
+    ],
+    "batch_32_status": "inherited capability; not remeasured because it is out of scope for this stage",
+    "capability_reduction": null,
+    "optimized_stage_status": "complete",
+    "independent_stage_review": {
+      "verdict": "clean-pass",
+      "status": "no required work"
+    }
   }
 }
