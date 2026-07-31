@@ -1,0 +1,94 @@
+{
+  "batch": 1,
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "optimized_policy": {
+    "advisor_roles": [
+      "sliding_dram_qkv_w1",
+      "full_dram_qkv_w2",
+      "persistent_o_proj",
+      "packed_dense",
+      "dense_down_w3",
+      "expert_gate_grid_w11",
+      "expert_up_w11",
+      "expert_up_grid_x11",
+      "fused_router_scale",
+      "prefill_expert_packed_gate_up_grid_11x4",
+      "prefill_expert_packed_gate_up_w11",
+      "prefill_expert_packed_gate_up_l1",
+      "prefill_expert_down_grid_11x8",
+      "prefill_expert_down_w11",
+      "prefill_expert_down_l1",
+      "b32_dram_packed_dense_w4",
+      "b32_sliding_dram_qkv_w2"
+    ],
+    "attention_fidelity": "functional",
+    "attention_weight_dtype": "bf16",
+    "decode_layout": "advisor_selected_l1_width_sharded",
+    "dense_mlp_fidelity": "functional",
+    "dense_mlp_weight_dtype": "bf16",
+    "expert_fidelity": "functional",
+    "expert_weight_dtype": "bfp8",
+    "name": "shard_advisor_selected_batch1",
+    "prefill_layout": "dram_interleaved",
+    "shard_advisor_seeded": true
+  },
+  "provenance": {
+    "environment_overrides": {},
+    "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_STRESS=1 python -m pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_repeated_trace_stress",
+    "optimized_decoder_sha256": "608da0656b1d4f0b8c3b3c812b032cfdcb6cd99631a32f1f3bb7cfa58a53a747",
+    "optimized_policy": {
+      "advisor_roles": [
+        "sliding_dram_qkv_w1",
+        "full_dram_qkv_w2",
+        "persistent_o_proj",
+        "packed_dense",
+        "dense_down_w3",
+        "expert_gate_grid_w11",
+        "expert_up_w11",
+        "expert_up_grid_x11",
+        "fused_router_scale",
+        "prefill_expert_packed_gate_up_grid_11x4",
+        "prefill_expert_packed_gate_up_w11",
+        "prefill_expert_packed_gate_up_l1",
+        "prefill_expert_down_grid_11x8",
+        "prefill_expert_down_w11",
+        "prefill_expert_down_l1",
+        "b32_dram_packed_dense_w4",
+        "b32_sliding_dram_qkv_w2"
+      ],
+      "attention_fidelity": "functional",
+      "attention_weight_dtype": "bf16",
+      "decode_layout": "advisor_selected_l1_width_sharded",
+      "dense_mlp_fidelity": "functional",
+      "dense_mlp_weight_dtype": "bf16",
+      "expert_fidelity": "functional",
+      "expert_weight_dtype": "bfp8",
+      "name": "shard_advisor_selected_batch1",
+      "prefill_layout": "dram_interleaved",
+      "shard_advisor_seeded": true
+    },
+    "optimized_test_sha256": "cc62897949aba36ec7019313ed81372bbff514d0cee3a4ca8322336a8267a5e6"
+  },
+  "repetitions": [
+    {
+      "eager_vs_trace_replay_pcc": 1.0,
+      "hf_vs_trace_replay_pcc": 0.9991145323119924,
+      "repeat_replay_pcc": 1.0,
+      "repetition": 0
+    },
+    {
+      "eager_vs_trace_replay_pcc": 1.0,
+      "hf_vs_trace_replay_pcc": 0.9991145323119924,
+      "repeat_replay_pcc": 1.0,
+      "repetition": 1
+    },
+    {
+      "eager_vs_trace_replay_pcc": 1.0,
+      "hf_vs_trace_replay_pcc": 0.9991145323119924,
+      "repeat_replay_pcc": 1.0,
+      "repetition": 2
+    }
+  ]
+}

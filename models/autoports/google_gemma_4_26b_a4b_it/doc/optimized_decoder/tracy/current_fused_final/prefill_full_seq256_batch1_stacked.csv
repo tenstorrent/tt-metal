@@ -1,0 +1,27 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+55.41,SparseMatmulDeviceOperation (in0:dram_interleaved),11927.03,8,Compute,8.95,8.97,8.95,0.01,8.95
+27.03,SparseMatmulDeviceOperation (in0:l1_interleaved),5819.13,8,Compute,4.58,4.60,4.59,0.01,4.59
+3.33,MatmulDeviceOperation (in0:dram_interleaved),715.77,6,Compute,16.62,29.46,20.36,4.73,20.75
+3.12,BinaryNgDeviceOperation (in0:l1_interleaved),670.76,16,Compute,,,,,
+2.41,UnaryDeviceOperation (in0:l1_interleaved),518.18,24,Compute,,,,,
+1.88,LayerNormDeviceOperation (in0:dram_interleaved),405.63,11,Compute,,,,,
+1.02,FastReduceNCDeviceOperation (in0:l1_interleaved),218.78,8,Compute,,,,,
+1.00,PermuteDeviceOperation (in0:l1_interleaved),214.52,8,TM,,,,,
+0.75,SliceDeviceOperation (in0:l1_interleaved),162.23,16,TM,,,,,
+0.71,BinaryNgDeviceOperation (in0:dram_interleaved),152.87,7,Compute,,,,,
+0.62,NlpCreateHeadsDeviceOperation (in0:dram_interleaved),134.54,1,TM,,,,,
+0.62,RotaryEmbeddingHfDeviceOperation (in0:dram_interleaved),134.13,2,Other,,,,,
+0.53,SDPAOperation (in0:dram_interleaved),113.51,1,Compute,,,,,
+0.50,NLPConcatHeadsDeviceOperation (in0:dram_interleaved),108.68,1,TM,,,,,
+0.33,PermuteDeviceOperation (in0:dram_interleaved),69.97,8,TM,,,,,
+0.18,ConcatDeviceOperation (in0:dram_interleaved),39.45,7,TM,,,,,
+0.13,SliceDeviceOperation (in0:dram_interleaved),27.36,18,TM,,,,,
+0.12,TopKDeviceOperation (in0:dram_interleaved),25.06,1,Other,,,,,
+0.10,UntilizeWithUnpaddingDeviceOperation (in0:dram_interleaved),20.96,2,TM,,,,,
+0.08,TypecastDeviceOperation (in0:dram_interleaved),16.62,3,TM,,,,,
+0.04,ScatterDeviceOperation (in0:dram_interleaved),9.13,1,Other,,,,,
+0.03,PagedFillCacheDeviceOperation (in0:dram_interleaved),6.55,2,Other,,,,,
+0.03,SoftmaxDeviceOperation (in0:dram_interleaved),6.35,1,Compute,,,,,
+0.02,UntilizeDeviceOperation (in0:dram_interleaved),4.80,1,TM,,,,,
+0.01,TilizeDeviceOperation (in0:dram_interleaved),2.95,1,TM,,,,,
+0.01,UnaryDeviceOperation (in0:dram_interleaved),2.02,1,Compute,,,,,

@@ -1,0 +1,27 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+56.35,SparseMatmulDeviceOperation (in0:dram_interleaved),11924.19,8,Compute,8.93,8.97,8.96,0.01,8.96
+27.50,SparseMatmulDeviceOperation (in0:l1_interleaved),5819.53,8,Compute,4.57,4.60,4.59,0.01,4.59
+3.17,BinaryNgDeviceOperation (in0:l1_interleaved),670.39,16,Compute,,,,,
+2.61,MatmulDeviceOperation (in0:dram_interleaved),552.80,6,Compute,16.61,36.58,21.41,7.60,22.43
+2.45,UnaryDeviceOperation (in0:l1_interleaved),519.47,24,Compute,,,,,
+1.83,LayerNormDeviceOperation (in0:dram_interleaved),387.26,11,Compute,,,,,
+1.04,FastReduceNCDeviceOperation (in0:l1_interleaved),219.14,8,Compute,,,,,
+1.01,PermuteDeviceOperation (in0:l1_interleaved),214.29,8,TM,,,,,
+0.77,SliceDeviceOperation (in0:l1_interleaved),162.32,16,TM,,,,,
+0.73,BinaryNgDeviceOperation (in0:dram_interleaved),154.34,7,Compute,,,,,
+0.51,NlpCreateHeadsDeviceOperation (in0:dram_interleaved),108.97,1,TM,,,,,
+0.40,RotaryEmbeddingHfDeviceOperation (in0:dram_interleaved),85.54,2,Other,,,,,
+0.31,PermuteDeviceOperation (in0:dram_interleaved),65.50,8,TM,,,,,
+0.29,SDPAOperation (in0:dram_interleaved),60.35,1,Compute,,,,,
+0.26,NLPConcatHeadsDeviceOperation (in0:dram_interleaved),54.07,1,TM,,,,,
+0.18,ConcatDeviceOperation (in0:dram_interleaved),38.41,7,TM,,,,,
+0.12,TopKDeviceOperation (in0:dram_interleaved),25.56,1,Other,,,,,
+0.11,SliceDeviceOperation (in0:dram_interleaved),22.99,18,TM,,,,,
+0.10,UntilizeWithUnpaddingDeviceOperation (in0:dram_interleaved),20.93,2,TM,,,,,
+0.08,TypecastDeviceOperation (in0:dram_interleaved),16.95,3,TM,,,,,
+0.06,PagedFillCacheDeviceOperation (in0:dram_interleaved),12.36,2,Other,,,,,
+0.04,ScatterDeviceOperation (in0:dram_interleaved),9.13,1,Other,,,,,
+0.03,SoftmaxDeviceOperation (in0:dram_interleaved),6.36,1,Compute,,,,,
+0.02,UntilizeDeviceOperation (in0:dram_interleaved),4.79,1,TM,,,,,
+0.01,TilizeDeviceOperation (in0:dram_interleaved),2.97,1,TM,,,,,
+0.01,UnaryDeviceOperation (in0:dram_interleaved),2.02,1,Compute,,,,,

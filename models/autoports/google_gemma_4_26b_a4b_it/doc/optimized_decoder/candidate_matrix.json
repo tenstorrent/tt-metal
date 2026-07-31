@@ -1,0 +1,136 @@
+{
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "frozen_source_sha256": "608da0656b1d4f0b8c3b3c812b032cfdcb6cd99631a32f1f3bb7cfa58a53a747",
+  "frozen_test_sha256": "cc62897949aba36ec7019313ed81372bbff514d0cee3a4ca8322336a8267a5e6",
+  "regime": {
+    "arch": "BLACKHOLE",
+    "batches": [1, 32],
+    "decode_current_position": 1024,
+    "expert_weight_dtype": "BFP8",
+    "dense_weight_dtype": "BF16"
+  },
+  "sweeps": {
+    "expert_up_in0_block_w": [
+      {"value": 1, "host_ms": 1.885219, "decision": "baseline"},
+      {"value": 2, "host_ms": 1.817909, "decision": "reject"},
+      {"value": 4, "host_ms": 1.743627, "decision": "reject"},
+      {"value": 8, "host_ms": 1.722457, "decision": "reject"},
+      {"value": 11, "host_ms": 1.713520, "decision": "apply"},
+      {"value": 22, "host_ms": 1.723689, "decision": "reject"},
+      {"value": 44, "host_ms": 1.750971, "decision": "reject"}
+    ],
+    "expert_down_in0_block_w": [
+      {"value": 1, "host_ms": 1.885219, "decision": "apply"},
+      {"value": 2, "host_ms": 1.914434, "decision": "reject"},
+      {"value": 11, "host_ms": 1.887392, "decision": "reject"},
+      {"value": 22, "host_ms": 1.897711, "decision": "reject"}
+    ],
+    "expert_output_placement": [
+      {"role": "up", "placement": "L1", "host_ms": 1.713520, "decision": "apply"},
+      {"role": "up", "placement": "DRAM", "host_ms": 1.973847, "decision": "reject"},
+      {"role": "down", "placement": "L1", "host_ms": 1.885219, "decision": "apply"},
+      {"role": "down", "placement": "DRAM", "host_ms": 2.072294, "decision": "reject"}
+    ],
+    "dense_down_in0_block_w": [
+      {"value": 2, "host_ms": 1.646468, "decision": "baseline"},
+      {"value": 3, "host_ms": 1.634145, "decision": "apply"},
+      {"value": 6, "host_ms": 1.637442, "decision": "reject"},
+      {"value": 11, "host_ms": 1.640248, "decision": "reject"},
+      {"value": 22, "host_ms": 1.642002, "decision": "reject"},
+      {"value": 33, "host_ms": 1.652250, "decision": "reject"}
+    ],
+    "qkv_in0_block_w": [
+      {"value": 1, "host_ms": 1.621994, "decode_pcc": 0.999526, "decision": "apply_sliding"},
+      {"value": 2, "decode_pcc": 0.993473, "decision": "reject"},
+      {"value": 4, "host_ms": 1.628759, "decision": "reject"},
+      {"value": 8, "host_ms": 1.626403, "decision": "reject"},
+      {"value": 11, "host_ms": 1.628968, "decision": "reject"}
+    ],
+    "topology": [
+      {"name": "advisor_separate_dense", "host_ms": 1.885219, "decision": "reject"},
+      {"name": "load_time_packed_gate_up", "host_ms": 1.653410, "decode_pcc": 0.999605, "decision": "apply"},
+      {"name": "persistent_o_l1_width", "result": "rms_norm_contract_error", "decision": "adapt"},
+      {"name": "persistent_o_l1_interleaved", "host_ms": 1.646468, "decision": "apply"},
+      {"name": "fused_router_static_scales", "host_ms": 1.617621, "decode_pcc": 0.999521, "decision": "apply"}
+    ],
+    "expert_up_core_grid_batch1": [
+      {"grid": "portable_2_core", "in0_block_w": 11, "host_ms": 1.621431, "decision": "reject"},
+      {"grid": "4x6", "result": "num_cores_with_work_22_ne_receivers_24", "decision": "adapt"},
+      {"grid": "8x3", "result": "same_non_rectangular_22_vs_24_blocker", "decision": "reject_with_exact_blocker"},
+      {"grid": "11x2", "in0_block_w": 11, "host_ms": 1.391426, "decode_pcc": 0.999521, "decision": "apply"}
+    ],
+    "expert_precision_on_selected_grid_batch1": [
+      {"dtype": "BFP8", "fidelity": "LoFi", "host_ms": 1.393212, "prefill_pcc": 0.998634, "decode_pcc": 0.999521, "decision": "apply"},
+      {"dtype": "BFP4", "fidelity": "LoFi", "host_ms": 1.373545, "prefill_pcc": 0.996457, "decode_pcc": 0.997280, "non_aligned_length_31_pcc": 0.994344, "decision": "reject_non_aligned_correctness"}
+    ],
+    "expert_up_batch32": [
+      {"attempted_outer_batch": 32, "effective_sparse_m": 1, "runtime": "serialized independent routing rows", "decision": "inapplicable"},
+      {"grid": "11x2", "in0_block_w": 88, "reported_host_ms": 18.470751, "decision": "invalidate_dead_branch"},
+      {"grid": "11x2", "in0_block_w": 11, "runtime_reachable": true, "decision": "apply_per_serialized_row"}
+    ],
+    "dense_layout_batch32": [
+      {"name": "TTNN_auto_separate_dense", "host_ms": 19.579731, "decision": "apply"},
+      {"name": "packed_11x6", "in0_block_w": 8, "host_ms": 19.561017, "decision": "reject_within_noise"},
+      {"name": "packed_11x6_plus_down_11x8", "in0_block_w": 11, "down_in0_block_w": 3, "host_ms": 19.560304, "decision": "reject_within_noise"}
+    ],
+    "large_prefill_packed_dense_seq256": [
+      {"program": "TTNN_auto", "host_ms": 168.636244, "decision": "apply"},
+      {"program": "11x8_2D", "in0_block_w": 8, "host_ms": 171.481235, "decision": "reject"},
+      {"program": "11x8_2D", "in0_block_w": 11, "host_ms": 171.703078, "decision": "reject"}
+    ],
+    "attention_precision_current_fused_port": [
+      {"dtype": "BFP4", "fidelity": "LoFi", "sliding_prefill_pcc": 0.969190, "sliding_decode_pcc": 0.979630, "full_prefill_pcc": 0.988143, "full_decode_pcc": 0.979503, "decision": "reject_real_weight_correctness"},
+      {"dtype": "BF16", "fidelity": "LoFi", "sliding_batch1_ms": 1.376742, "full_batch1_ms": 1.543338, "sliding_batch32_ms": 19.544218, "full_batch32_ms": 19.365503, "decision": "reject_mixed_within_noise"},
+      {"dtype": "BF16", "fidelity": "runtime_selected", "sliding_batch1_ms": 1.377123, "full_batch1_ms": 1.542923, "sliding_batch32_ms": 19.546640, "full_batch32_ms": 19.375510, "decision": "apply"}
+    ],
+    "sharded_rms_norm_current_fused_port": [
+      {"scope": "all_hidden_decode_norms", "sliding_decode_pcc": 0.993390, "full_decode_pcc": 0.990832, "decision": "reject_correctness"},
+      {"scope": "post_attention_hidden_norm_only", "sliding_decode_pcc": 0.993870, "fidelity": "HiFi4_fp32_acc", "decision": "reject_correctness"}
+    ],
+    "expert_gate_fidelity_current_fused_port": [
+      {"fidelity": "LoFi", "sliding_decode_pcc": 0.999507, "full_decode_pcc": 0.999806, "sliding_batch1_ms": 1.368616, "full_batch1_ms": 1.537142, "sliding_batch32_ms": 19.510496, "full_batch32_ms": 19.338990, "samples": 20, "decision": "reject_sub_noise_and_lower_pcc"},
+      {"fidelity": "HiFi4", "sliding_decode_pcc": 0.999521, "full_decode_pcc": 0.999824, "sliding_batch1_ms": 1.369537, "full_batch1_ms": 1.537848, "sliding_batch32_ms": 19.550047, "full_batch32_ms": 19.372889, "samples": 20, "decision": "apply_accuracy_margin"}
+    ],
+    "sparse_prefill_seq256": [
+      {"name": "portable_baseline", "host_ms": 168.958800, "decision": "baseline"},
+      {"name": "gate_exact_11x2_w11_l1", "host_ms": 108.494765, "decision": "continue"},
+      {"name": "gate_up_exact_11x2_w11_l1", "host_ms": 48.633498, "decision": "continue"},
+      {"name": "gate_up_down_exact_w11_l1_chunk32", "host_ms": 32.093236, "decision": "apply"},
+      {"name": "packed_gate_up_11x4_w11_l1_plus_down_11x8_w11_l1_chunk32", "host_ms": 21.490080, "decision": "apply_final"},
+      {"name": "gate_up_down_exact_w11_dram_chunk32", "host_ms": 34.469339, "decision": "reject_slower"},
+      {"name": "gate_up_down_exact_w11_l1_chunk64", "host_ms": 54.814527, "decision": "reject_slower"},
+      {"name": "gate_up_down_exact_w11_l1_chunk128", "result": "l1_capacity_validation", "decision": "adapt"},
+      {"name": "gate_up_down_exact_w11_dram_chunk128", "host_ms_approx": 103.0, "decision": "reject_after_adaptation"}
+    ],
+    "dram_decode_batch1": [
+      {"role": "qkv", "width": 1, "layer": "sliding", "host_ms": 1.351172, "decode_pcc": 0.999521, "decision": "apply_sliding_only"},
+      {"role": "qkv", "width": 1, "layer": "full", "host_ms": 1.507741, "decode_pcc": 0.983679, "decision": "reject_full_correctness"},
+      {"role": "qkv", "width": 2, "layer": "full", "host_ms": 1.505068, "decode_pcc": 0.999804, "decision": "apply_full_only"},
+      {"role": "qkv", "width": 2, "layer": "sliding", "decode_pcc": 0.993311, "decision": "reject_sliding_correctness"},
+      {"role": "packed_dense", "width": 8, "host_ms": 1.378790, "decision": "reject_regression"},
+      {"role": "packed_dense", "width": 4, "host_ms": 1.375754, "decision": "reject_regression"},
+      {"role": "dense_down", "width": 3, "host_ms": 1.403417, "decision": "reject_regression"},
+      {"role": "dense_down", "width": 6, "host_ms": 1.405451, "decision": "reject_regression"}
+    ],
+    "dram_decode_batch32": [
+      {"role": "qkv", "width": 2, "sliding_ms": 19.450342, "sliding_decode_pcc": 0.999451, "samples": 50, "decision": "apply_sliding_only"},
+      {"role": "qkv", "width": 2, "layer": "full", "full_ms": 19.353300, "full_decode_pcc": 0.984152, "decision": "reject_full_correctness"},
+      {"role": "packed_dense", "width": 4, "sliding_ms": 19.461517, "full_ms": 19.344595, "sliding_decode_pcc": 0.999446, "full_decode_pcc": 0.999836, "decision": "apply"},
+      {"role": "dense_down", "width": 3, "sliding_ms": 19.526930, "full_ms": 19.351316, "decision": "reject_mixed_sub_noise"},
+      {"roles": "packed_dense_w4+dense_down_w3", "sliding_ms": 19.492766, "full_ms": 19.327302, "decision": "reject_mixed_vs_packed_only"}
+    ],
+    "frozen_decode_baseline_50": [
+      {"layer": "sliding", "batch": 1, "decode_ms": 1.369657, "baseline": "best_correct_pre_autofix"},
+      {"layer": "full", "batch": 1, "decode_ms": 1.538101, "baseline": "best_correct_pre_autofix"},
+      {"layer": "sliding", "batch": 32, "decode_ms": 19.477006, "baseline": "final_source_without_layer_specific_qkv"},
+      {"layer": "full", "batch": 32, "decode_ms": 19.343033, "baseline": "final_source_without_layer_specific_qkv"}
+    ],
+    "frozen_final": [
+      {"layer": "sliding", "batch": 1, "prefill_ms": 82.472863, "decode_ms": 1.351698, "samples": 50},
+      {"layer": "full", "batch": 1, "prefill_ms": 83.621333, "decode_ms": 1.503703, "samples": 50},
+      {"layer": "sliding", "batch": 32, "prefill_ms": 2637.948045, "decode_ms": 19.444872, "decode_samples": 50},
+      {"layer": "full", "batch": 32, "prefill_ms": 2675.147579, "decode_ms": 19.342580, "decode_samples": 50}
+    ]
+  },
+  "exact_subblock_blocker": "All canonical sparse up/down output geometries have per_core_N=11. TTNN output subblocks are limited to area <=4 and must divide per_core_N, so output_subblock_w=1 is the only legal value."
+}

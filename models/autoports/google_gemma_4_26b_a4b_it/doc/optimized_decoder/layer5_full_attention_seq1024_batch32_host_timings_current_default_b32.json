@@ -1,0 +1,79 @@
+{
+  "cache_shape": [
+    288,
+    2,
+    128,
+    512
+  ],
+  "decode_batch": 32,
+  "decode_current_pos": 1024,
+  "decode_trace_host_ms": 19.379031960852444,
+  "decode_trace_host_samples_ms": [
+    19.379031960852444,
+    19.372829992789775,
+    19.379442965146154,
+    19.377569027710706,
+    19.379141042008996
+  ],
+  "layer_idx": 5,
+  "layer_type": "full_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "provenance": {
+    "checkout_git_sha": "9d3247ee51cc2ac3c05c3b9f6f2549284c4f6694",
+    "environment_overrides": {
+      "GEMMA4_OPTIMIZED_ARTIFACT_SUFFIX": "current_default_b32"
+    },
+    "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_FUNCTIONAL_DECODER_PERF=1 python -m pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_perf_profile",
+    "hardware": {
+      "arch": "Arch.BLACKHOLE",
+      "device_ids": [
+        3
+      ],
+      "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39"
+    },
+    "optimized_decoder_sha256": "208257b494a06d8ec6872feb5dc597c5535ebc08a2f71ca27e69e66d6ae07603",
+    "optimized_policy": {
+      "advisor_roles": [
+        "qkv_local_w1",
+        "persistent_o_proj",
+        "packed_dense",
+        "dense_down_w3",
+        "expert_gate_grid_w11",
+        "expert_up_w11",
+        "expert_up_grid_x11",
+        "fused_router_scale",
+        "prefill_expert_gate_grid_11x2",
+        "prefill_expert_gate_w11",
+        "prefill_expert_gate_l1",
+        "prefill_expert_up_grid_11x2",
+        "prefill_expert_up_w11",
+        "prefill_expert_up_l1",
+        "prefill_expert_down_grid_11x8",
+        "prefill_expert_down_w11",
+        "prefill_expert_down_l1"
+      ],
+      "attention_fidelity": "functional",
+      "attention_weight_dtype": "bf16",
+      "decode_layout": "advisor_selected_l1_width_sharded",
+      "dense_mlp_fidelity": "functional",
+      "dense_mlp_weight_dtype": "bf16",
+      "expert_fidelity": "functional",
+      "expert_weight_dtype": "bfp8",
+      "name": "shard_advisor_selected_batch1",
+      "prefill_layout": "dram_interleaved",
+      "shard_advisor_seeded": true
+    },
+    "optimized_test_sha256": "4782b17e50ef4c8c238804eb5ea9603d657f356caf7b966c61bf15810678839d",
+    "selected_decoder_class": "models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder.OptimizedDecoder",
+    "selected_variant": "functional",
+    "source_sha256": {
+      "functional_decoder": "6fdec7f771d77e14d99aa201a49099c0f00a0abc600ae489e27afccf3df59e2e",
+      "functional_test": "9caa982c5edf2ff2dddf70e26cdfdc4847a2acd5b5c7d03cc94ff4a408f2a3ee",
+      "selected_decoder": "208257b494a06d8ec6872feb5dc597c5535ebc08a2f71ca27e69e66d6ae07603"
+    },
+    "ttnn_extension_path": "/home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so",
+    "ttnn_extension_sha256": "004ca3464fc6aa2925633bd6b50d6b910ecac170a2c7330587760f42bb0593c0"
+  },
+  "sequence_length": 1024,
+  "shared_physical_cache": false
+}

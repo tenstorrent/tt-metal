@@ -1,0 +1,61 @@
+{
+  "cache_shape": [
+    5,
+    8,
+    64,
+    256
+  ],
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "page_table_shape": [
+    1,
+    5
+  ],
+  "prefill_batch": 1,
+  "prefill_host_ms": 21.49007999105379,
+  "provenance": {
+    "environment_overrides": {
+      "GEMMA4_ADVISOR_ROLES": "sliding_dram_qkv_w1,full_dram_qkv_w2,persistent_o_proj,packed_dense,dense_down_w3,expert_gate_grid_w11,expert_up_w11,expert_up_grid_x11,fused_router_scale,prefill_expert_packed_gate_up,prefill_expert_packed_gate_up_grid_11x4,prefill_expert_packed_gate_up_w11,prefill_expert_packed_gate_up_l1,prefill_expert_down_grid_11x8,prefill_expert_down_w11,prefill_expert_down_l1,b32_dram_packed_dense_w4",
+      "GEMMA4_CANDIDATE_CUMULATIVE": "1",
+      "GEMMA4_OPTIMIZATION_POLICY": "advisor_seed",
+      "GEMMA4_OPTIMIZED_ARTIFACT_SUFFIX": "packed_sparse_w11_l1"
+    },
+    "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_PREFILL_PROFILE=1 python -m pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_prefill_only_profile",
+    "optimized_decoder_sha256": "3d623a6a7b644d8d5bffa1e8b82004e0d06fe975925af15a85d35ee1cf7814c2",
+    "optimized_policy": {
+      "advisor_roles": [
+        "sliding_dram_qkv_w1",
+        "full_dram_qkv_w2",
+        "persistent_o_proj",
+        "packed_dense",
+        "dense_down_w3",
+        "expert_gate_grid_w11",
+        "expert_up_w11",
+        "expert_up_grid_x11",
+        "fused_router_scale",
+        "prefill_expert_packed_gate_up",
+        "prefill_expert_packed_gate_up_grid_11x4",
+        "prefill_expert_packed_gate_up_w11",
+        "prefill_expert_packed_gate_up_l1",
+        "prefill_expert_down_grid_11x8",
+        "prefill_expert_down_w11",
+        "prefill_expert_down_l1",
+        "b32_dram_packed_dense_w4"
+      ],
+      "attention_fidelity": "functional",
+      "attention_weight_dtype": "bf16",
+      "decode_layout": "advisor_selected_l1_width_sharded",
+      "dense_mlp_fidelity": "functional",
+      "dense_mlp_weight_dtype": "bf16",
+      "expert_fidelity": "functional",
+      "expert_weight_dtype": "bfp8",
+      "name": "shard_advisor_selected_batch1",
+      "prefill_layout": "dram_interleaved",
+      "shard_advisor_seeded": true
+    },
+    "optimized_test_sha256": "34adb78536d4e6cb94519dc8ca0a88ca24cb98df1c23285de445fea00cf1c364"
+  },
+  "sequence_length": 256,
+  "shared_physical_cache": true
+}

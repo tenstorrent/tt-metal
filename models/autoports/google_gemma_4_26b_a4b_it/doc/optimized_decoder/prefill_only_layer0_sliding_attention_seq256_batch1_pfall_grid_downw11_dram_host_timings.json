@@ -1,0 +1,61 @@
+{
+  "cache_shape": [
+    5,
+    8,
+    64,
+    256
+  ],
+  "layer_idx": 0,
+  "layer_type": "sliding_attention",
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "page_table_shape": [
+    1,
+    5
+  ],
+  "prefill_batch": 1,
+  "prefill_host_ms": 34.469339007046074,
+  "provenance": {
+    "environment_overrides": {
+      "GEMMA4_ADVISOR_ROLES": "qkv_local_w1,persistent_o_proj,packed_dense,dense_down_w3,expert_gate_grid_w11,expert_up_w11,expert_up_grid_x11,fused_router_scale,prefill_expert_gate_grid_11x2,prefill_expert_gate_w11,prefill_expert_gate_l1,prefill_expert_up_grid_11x2,prefill_expert_up_w11,prefill_expert_up_l1,prefill_expert_down_grid_11x8,prefill_expert_down_w11,prefill_expert_down_dram",
+      "GEMMA4_CANDIDATE_CUMULATIVE": "1",
+      "GEMMA4_OPTIMIZATION_POLICY": "advisor_seed",
+      "GEMMA4_OPTIMIZED_ARTIFACT_SUFFIX": "pfall_grid_downw11_dram"
+    },
+    "exact_command": "GEMMA4_RANGE_DOWNLOAD=1 GEMMA4_OPTIMIZED_PREFILL_PROFILE=1 python -m pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py::test_optimized_prefill_only_profile",
+    "optimized_decoder_sha256": "79ac96ec44914536a2442edd83786b524d42c1cad580bd7c0f621219b3a3c9b4",
+    "optimized_policy": {
+      "advisor_roles": [
+        "qkv_local_w1",
+        "persistent_o_proj",
+        "packed_dense",
+        "dense_down_w3",
+        "expert_gate_grid_w11",
+        "expert_up_w11",
+        "expert_up_grid_x11",
+        "fused_router_scale",
+        "prefill_expert_gate_grid_11x2",
+        "prefill_expert_gate_w11",
+        "prefill_expert_gate_l1",
+        "prefill_expert_up_grid_11x2",
+        "prefill_expert_up_w11",
+        "prefill_expert_up_l1",
+        "prefill_expert_down_grid_11x8",
+        "prefill_expert_down_w11",
+        "prefill_expert_down_dram"
+      ],
+      "attention_fidelity": "functional",
+      "attention_weight_dtype": "bf16",
+      "decode_layout": "advisor_selected_l1_width_sharded",
+      "dense_mlp_fidelity": "functional",
+      "dense_mlp_weight_dtype": "bf16",
+      "expert_fidelity": "functional",
+      "expert_weight_dtype": "bfp8",
+      "name": "shard_advisor_selected_batch1",
+      "prefill_layout": "dram_interleaved",
+      "shard_advisor_seeded": true
+    },
+    "optimized_test_sha256": "7b98bcadd638137ab8d05bafb65330ea385ad801ced023507d7a7d118eb3ba53"
+  },
+  "sequence_length": 256,
+  "shared_physical_cache": true
+}

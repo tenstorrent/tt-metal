@@ -1,0 +1,9 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE_decode_only_layer0_sliding_attention_seq1024_batch1'.
+Using operations until 'PERF_DECODE_decode_only_layer0_sliding_attention_seq1024_batch1_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/final_sliding_attention_batch1/decode_perf_report.csv
+Overall DRAM roofline (modeled ops): 19.6% (100 GB/s)
