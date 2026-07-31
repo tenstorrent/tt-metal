@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-07-24-v1"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-08-01-v1"
 UNKNOWN_RUNNER = "(unknown runner)"
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
@@ -35,6 +35,9 @@ FABRIC_LINK_MISMATCH_RE = re.compile(
     r"\S+\s+to\s+\S+\s+only\s+has\s+\d+\s+channels",
     re.IGNORECASE,
 )
+OUT_OF_DISK_HARD_RE = re.compile(r"(no\s+space\s+left\s+on\s+device|enospc)", re.IGNORECASE)
+DISK_USAGE_RE = re.compile(r"disk\s+usage\s+is\s+(?P<percent>\d{1,3})\s*%", re.IGNORECASE)
+DISK_USAGE_HIGH_RE = re.compile(r"disk\s+usage\s+is\s+high", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -453,6 +456,9 @@ def strip_terminal_sequences(value: str) -> str:
 
 
 def signature_found(log_text: str, signature: ErrorSignature) -> bool:
+    if signature.key == "OUT_OF_DISK_FOUND":
+        return out_of_disk_signature_found(log_text)
+
     if signature.pattern:
         flags = 0 if signature.case_sensitive else re.IGNORECASE
         return re.search(signature.pattern, log_text, flags=flags) is not None
@@ -463,6 +469,31 @@ def signature_found(log_text: str, signature: ErrorSignature) -> bool:
     if signature.case_sensitive:
         return signature.needle in log_text
     return signature.needle.lower() in log_text.lower()
+
+
+def out_of_disk_signature_found(log_text: str) -> bool:
+    plain_log_text = strip_terminal_sequences(log_text)
+    if OUT_OF_DISK_HARD_RE.search(plain_log_text):
+        return True
+
+    high_positions: list[int] = []
+    usage_reports: list[tuple[int, int]] = []
+    for match in DISK_USAGE_RE.finditer(plain_log_text):
+        percent = int(match.group("percent"))
+        usage_reports.append((match.start(), percent))
+        if percent >= 90:
+            high_positions.append(match.start())
+
+    high_positions.extend(match.start() for match in DISK_USAGE_HIGH_RE.finditer(plain_log_text))
+    if not high_positions:
+        return False
+
+    first_high_position = min(high_positions)
+    later_usage_reports = [(position, percent) for position, percent in usage_reports if position > first_high_position]
+    if later_usage_reports and later_usage_reports[-1][1] < 90:
+        return False
+
+    return True
 
 
 def format_fabric_node(mesh: str, device: str) -> str:
