@@ -146,10 +146,6 @@ private:
     // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
     // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
     bool allocations_unsafe_ = false;
-    bool tracked_allocations_unsafe_ = false;
-    bool tracking_enabled_ = false;
-    bool traceback_capture_enabled_ = false;
-    bool skip_program_cache_ = false;
 
     std::unique_ptr<BankManager> dram_manager_;
     std::unique_ptr<BankManager> l1_manager_;
@@ -175,8 +171,12 @@ private:
     // TODO(river): Revisit during API refactor.
     std::unique_ptr<Allocator> view_;
 
-    // Keep tracker-only state after the allocator's hot fields so enabling the
+    // Keep all tracker-only state after the allocator's original fields so the
     // compiled-in feature does not perturb their cache layout when tracking is disabled.
+    bool tracked_allocations_unsafe_ = false;
+    bool tracking_enabled_ = false;
+    bool traceback_capture_enabled_ = false;
+    bool skip_program_cache_ = false;
     std::unordered_map<std::uint32_t, std::unordered_set<size_t>> unsafe_tracked_ids_by_trace_;
     std::unordered_map<size_t, std::string> unsafe_allocation_contexts_;
 };

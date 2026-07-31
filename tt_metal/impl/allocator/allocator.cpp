@@ -52,10 +52,11 @@ bool trace_allocation_diagnostics_enabled() { return trace_alloc_diagnostics_ena
 bool trace_allocation_skip_program_cache_enabled() { return trace_alloc_skip_program_cache_enabled; }
 
 AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
+    config_(std::make_unique<AllocatorConfig>(alloc_config)),
+    view_(std::make_unique<Allocator>(this)),
     tracking_enabled_(trace_allocation_tracking_enabled()),
     traceback_capture_enabled_(trace_allocation_diagnostics_enabled()),
-    skip_program_cache_(trace_allocation_skip_program_cache_enabled()),
-    config_(std::make_unique<AllocatorConfig>(alloc_config)), view_(std::make_unique<Allocator>(this)) {}
+    skip_program_cache_(trace_allocation_skip_program_cache_enabled()) {}
 
 void AllocatorImpl::validate_bank_assignments() const {
     TT_ASSERT(not bank_id_to_dram_channel_.empty() and not dram_channel_to_bank_ids_.empty());
