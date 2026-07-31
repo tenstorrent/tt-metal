@@ -3713,13 +3713,19 @@ def termination_check() -> dict:
     material = _material_gap_ms(dev)
     for o in rep.get("open_ops") or []:
         gap = o.get("gap_ms") or 0.0
-        if gap < material:
+        # eff_gap is precision-aware for matmuls, == gap otherwise; keep the op if EITHER is material.
+        eff_gap = o.get("eff_gap_ms")
+        if eff_gap is None:
+            eff_gap = gap
+        if max(gap, eff_gap) < material:
             continue
         op_code = o.get("op_code") or o.get("bucket") or ""
         entry = {
             "op": op_code,
             "op_class": o.get("bucket"),
             "gap_ms": round(float(gap), 4),
+            "achievable_gap_ms": o.get("achievable_gap_ms"),
+            "eff_gap_ms": round(float(eff_gap), 4),
             "bound_by": o.get("bound_by"),
             "grid": o.get("grid"),
             "weight_dtype": o.get("weight_dtype"),
@@ -3738,7 +3744,7 @@ def termination_check() -> dict:
     decode_block = _decode_gate(prof, attempts)
     if decode_block:
         blocking.append(decode_block)
-    blocking.sort(key=lambda b: -(b.get("gap_ms") or 0.0))
+    blocking.sort(key=lambda b: -(b.get("eff_gap_ms") or b.get("gap_ms") or 0.0))
     can_stop = not blocking
     pt_status = _perf_target_status(rep, dev)
     # STOPPING IS ONLY ALLOWED AGAINST A REAL BANDWIDTH BAND. 60-80% of peak DRAM bandwidth is a

@@ -117,12 +117,14 @@ def annotate_op(op: dict[str, Any], env: dict[str, Any], dispatch_per_op: float 
     count = int(op.get("count") or 1)
 
     compute = None
+    achievable_compute = None  # matmul floor at the LOWEST (LoFi) fidelity -> the precision headroom
     if any(t in op_code for t in _MATMUL_OPS):
         parsed = parse_matmul_shape(op.get("shape", ""))
         if parsed:
             m, k, n = parsed
             flops = matmul_flops(m, k, n) * count  # device_ms is total over count
             compute = ideal_ms_compute(flops, op.get("fidelity", ""), facts)
+            achievable_compute = ideal_ms_compute(flops, "lofi", facts)  # highest peak -> lowest floor
 
     memory = ideal_ms_memory(float(op.get("bytes") or 0.0), op.get("memory", ""), facts)
     dispatch = (dispatch_per_op * count) if dispatch_per_op else None
@@ -137,10 +139,26 @@ def annotate_op(op: dict[str, Any], env: dict[str, Any], dispatch_per_op: float 
         op[
             "bound_by"
         ] = bound_by  # which floor dominates -> the knob class (compute->grid/fidelity, memory->dtype/shard, dispatch->fuse/trace)
+        # achievable_* = matmul floor at its best (LoFi) precision -> the reachable precision headroom the
+        # current-fidelity gap_ms cannot see. gap_ms itself is untouched; None for non-matmuls.
+        if achievable_compute is not None:
+            reachable = [x for x in (achievable_compute, memory, dispatch) if x is not None]
+            if reachable:
+                _ai = max(reachable)
+                op["achievable_ideal_ms"] = round(_ai, 4)
+                op["achievable_gap_ms"] = round(max(0.0, measured - _ai), 4)
+            else:
+                op["achievable_ideal_ms"] = op["ideal_ms"]
+                op["achievable_gap_ms"] = op["gap_ms"]
+        else:
+            op["achievable_ideal_ms"] = None
+            op["achievable_gap_ms"] = None
     else:
         op["ideal_ms"] = None
         op["gap_ms"] = None
         op["bound_by"] = None
+        op["achievable_ideal_ms"] = None
+        op["achievable_gap_ms"] = None
     return op
 
 
@@ -211,10 +229,15 @@ def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, A
     rows = []
     for o in r["ops"]:
         ideal, gap = o.get("ideal_ms"), o.get("gap_ms")
+        # eff_* ranks/keeps-open on whichever gap is bigger: precision-aware for matmuls, == current otherwise.
+        eff_ideal = o.get("achievable_ideal_ms") or ideal
+        eff_gap = o.get("achievable_gap_ms")
+        if eff_gap is None:
+            eff_gap = gap
         if ideal is None:
             at_floor = None
         else:
-            at_floor = gap <= _AT_FLOOR_ABS_MS or gap <= _AT_FLOOR_FRAC * ideal
+            at_floor = eff_gap <= _AT_FLOOR_ABS_MS or eff_gap <= _AT_FLOOR_FRAC * (eff_ideal or ideal)
         rows.append(
             {
                 "bucket": o.get("bucket"),
@@ -224,6 +247,8 @@ def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, A
                 "device_ms": o.get("device_ms"),
                 "ideal_ms": ideal,
                 "gap_ms": gap,
+                "achievable_gap_ms": o.get("achievable_gap_ms"),
+                "eff_gap_ms": eff_gap,  # ranking key: precision-aware for matmuls, == gap_ms otherwise
                 "gap_pct": (round(100.0 * gap / ideal, 1) if ideal else None),
                 "bound_by": o.get("bound_by"),
                 "grid": o.get("grid"),
@@ -235,7 +260,7 @@ def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, A
         )
     modeled = [x for x in rows if x["ideal_ms"] is not None]
     open_ops = [x for x in modeled if x["at_floor"] is False]
-    open_ops.sort(key=lambda x: -(x["gap_ms"] or 0.0))
+    open_ops.sort(key=lambda x: -(x["eff_gap_ms"] or 0.0))
     return {
         "total_device_ms": r["total_device_ms"],
         "modeled_floor_ms": r["total_ideal_ms"],  # Σ ttnn-reachable floor of modeled ops
