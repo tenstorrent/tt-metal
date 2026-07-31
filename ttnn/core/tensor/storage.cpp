@@ -165,13 +165,13 @@ const tt::tt_metal::distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() co
         mesh_tensor_holder_->state_);
 }
 
-const distributed::MeshBuffer& DeviceStorage::get_root_mesh_buffer() const {
+const tt::tt_metal::distributed::MeshBuffer& DeviceStorage::get_root_mesh_buffer() const {
     return std::visit(
         ttsl::overloaded{
-            [](const MeshTensorHolder::Allocated& allocated) -> const distributed::MeshBuffer& {
+            [](const MeshTensorHolder::Allocated& allocated) -> const tt::tt_metal::distributed::MeshBuffer& {
                 return allocated.mesh_tensor_.mesh_buffer();
             },
-            [](const auto&) -> const distributed::MeshBuffer& { TT_THROW("Tensor is not allocated"); }},
+            [](const auto&) -> const tt::tt_metal::distributed::MeshBuffer& { TT_THROW("Tensor is not allocated"); }},
         get_root_mesh_tensor()->state_);
 }
 
