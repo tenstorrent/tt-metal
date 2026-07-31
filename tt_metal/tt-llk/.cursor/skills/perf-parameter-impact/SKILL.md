@@ -82,8 +82,9 @@ Do not present unbalanced group averages as parameter effects. For parameter
 `P`:
 
 1. Choose baseline and treatment values.
-2. Match rows on every relevant configuration column except `P` and columns
-   deterministically changed by `P`.
+2. Match rows on every relevant configuration column except `P` itself and
+   columns that merely restate `P`. Classify each column `P` changes before
+   dropping it from the key — see below.
 3. Keep exact baseline/treatment matches.
 4. For lower-is-better metrics compute
    `speedup = baseline_cycles / treatment_cycles`.
@@ -93,6 +94,35 @@ Do not present unbalanced group averages as parameter effects. For parameter
 Use explicit denominators such as `1,344/1,344 matched pairs`, not “all pairs.”
 A value above `1.0x` is a speedup. If pairing is impossible, label the result
 descriptive rather than causal.
+
+#### Columns changed by `P`
+
+Dropping a column from the matching key because `P` determines it is only safe
+when that column carries no performance effect of its own. Separate the two
+cases:
+
+- **Restatement.** The column is a different encoding of `P` and has no
+  independent effect. Drop it from the key.
+- **Linked axis.** The column has its own effect and the sweep yokes it to `P`.
+  Dropping it manufactures pairs across unlike configurations and charges their
+  combined difference to `P`.
+
+Quasar matmul is the standing example: `matmul_dimensions()` halves the
+destination tile budget when `dest_acc=Yes`, so geometry is not free to match
+across `dest_acc`. Pairing while ignoring geometry compares different shapes
+and calls the difference a `dest_acc` effect.
+
+For a linked axis, do one of the following, in order of preference:
+
+1. Restrict to the sub-region where the linked column takes the same value in
+   both arms, and report the reduced coverage explicitly.
+2. If no such sub-region exists, report the **bundled** effect of `P` together
+   with its linked axes, name the bundle in the label, and state that the
+   independent effect of `P` is not identifiable from this sweep.
+3. Request the missing sweep combinations needed to separate them.
+
+Never present a bundled effect as an independent one. This is the same
+prohibition as step 1, applied at the pairing stage.
 
 ### 6. Analyze interactions and confounding
 
@@ -235,6 +265,8 @@ End on actions, not caveats.
 - [ ] Constants and non-estimable axes are identified.
 - [ ] Baselines, sample counts, and pair denominators are visible.
 - [ ] Relative effects use exact matches.
+- [ ] Columns dropped from the pairing key are restatements, not linked axes;
+      any unavoidable bundle is labeled as such.
 - [ ] Geometric means are labeled as geometric means.
 - [ ] Bottleneck claims use isolate metrics.
 - [ ] Confounding and eligibility restrictions are documented.
