@@ -4,6 +4,7 @@
 
 #include "fused_partial_rope_device_operation.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 
@@ -28,11 +29,20 @@ constexpr auto kReaderKernelPath =
 constexpr auto kComputeKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/transformer/fused_partial_rope/device/kernels/compute/"
     "fused_partial_rope.cpp";
+constexpr auto kWidthReaderKernelPath =
+    "ttnn/cpp/ttnn/operations/experimental/transformer/fused_partial_rope/device/kernels/dataflow/"
+    "reader_fused_partial_rope_width_sharded.cpp";
+constexpr auto kWidthComputeKernelPath =
+    "ttnn/cpp/ttnn/operations/experimental/transformer/fused_partial_rope/device/kernels/compute/"
+    "fused_partial_rope_width_sharded.cpp";
 
 }  // namespace
 
 FusedPartialRopeDeviceOperation::program_factory_t FusedPartialRopeDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    if (tensor_args.input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        return WidthShardedProgramFactory{};
+    }
     return ShardedProgramFactory{};
 }
 
@@ -55,10 +65,11 @@ void FusedPartialRopeDeviceOperation::validate_on_program_cache_miss(
 
     // X is the only sharded operand; cos / sin / trans_mat are DRAM-interleaved and read
     // per-core by the reader kernel.
+    const auto input_layout = input.memory_config().memory_layout();
     TT_FATAL(
-        input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-        "input must be height-sharded (got {})",
-        input.memory_config().memory_layout());
+        input_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "input must be height- or width-sharded (got {})",
+        input_layout);
     TT_FATAL(
         cos.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "cos must be DRAM-interleaved (got {})",
@@ -95,16 +106,47 @@ void FusedPartialRopeDeviceOperation::validate_on_program_cache_miss(
         TILE_WIDTH,
         trans_mat_shape);
 
-    // One tile-row (32 rows) per shard core. cos/sin either provide one tile-row per core
-    // (per-row tables) or a single tile-row that the kernel broadcasts across every input row
-    // (e.g. decode: one position shared across all heads).
-    const uint32_t num_cores = input.memory_config().shard_spec().value().grid.num_cores();
+    const auto& shard_spec = input.memory_config().shard_spec().value();
+    const uint32_t num_cores = shard_spec.grid.num_cores();
     const uint32_t cos_rows_t = cos_shape[-2] / TILE_HEIGHT;
+    const bool cos_bcast = cos.logical_shape()[-2] == 1;
+
+    if (input_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        // One tile-row (32 rows) per shard core. cos/sin either provide one tile-row per core
+        // (per-row tables) or a single tile-row that the kernel broadcasts across every input row
+        // (e.g. decode: one position shared across all heads).
+        TT_FATAL(
+            cos_rows_t == num_cores || cos_bcast,
+            "cos/sin tile-rows ({}) must equal the input shard core count ({}) or be a single row (broadcast)",
+            cos_rows_t,
+            num_cores);
+        return;
+    }
+
+    // Width-sharded: every core holds all rows and a `shard_width` column slice of D.
+    const uint32_t shard_height = shard_spec.shape[0];
+    const uint32_t shard_width = shard_spec.shape[1];
+    const uint32_t rows = input_shape[-2];
+    TT_FATAL(shard_width % TILE_WIDTH == 0, "input shard width ({}) must be tile-aligned", shard_width);
     TT_FATAL(
-        cos_rows_t == num_cores || cos.logical_shape()[-2] == 1,
-        "cos/sin tile-rows ({}) must equal the input shard core count ({}) or be a single row (broadcast)",
+        shard_width * num_cores == D,
+        "input shard width ({}) over {} cores must cover the head dim ({})",
+        shard_width,
+        num_cores,
+        D);
+    TT_FATAL(
+        shard_height == rows,
+        "width-sharded input shard height ({}) must cover every (padded) input row ({})",
+        shard_height,
+        rows);
+
+    // cos/sin are indexed by row-tile on every core, so they must span the input's rows (or be a
+    // single broadcast row).
+    TT_FATAL(
+        cos_rows_t == rows / TILE_HEIGHT || cos_bcast,
+        "cos/sin tile-rows ({}) must equal the input tile-rows ({}) or be a single row (broadcast)",
         cos_rows_t,
-        num_cores);
+        rows / TILE_HEIGHT);
 }
 
 FusedPartialRopeDeviceOperation::spec_return_value_t FusedPartialRopeDeviceOperation::compute_output_specs(
@@ -281,6 +323,180 @@ tt::tt_metal::ProgramDescriptor FusedPartialRopeDeviceOperation::ShardedProgramF
         const uint32_t cos_sin_start_tile = cos_bcast ? 0 : i * rope_Wt;
         reader_desc.emplace_runtime_args(cores[i], {cos_buffer, sin_buffer, trans_mat_buffer, cos_sin_start_tile});
         compute_desc.runtime_args.emplace_back(cores[i], KernelDescriptor::CoreRuntimeArgs{});
+    }
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+    return desc;
+}
+
+tt::tt_metal::ProgramDescriptor FusedPartialRopeDeviceOperation::WidthShardedProgramFactory::create_descriptor(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const auto& input = tensor_args.input;
+    const auto& cos = tensor_args.cos;
+    const auto& sin = tensor_args.sin;
+    const auto& trans_mat = tensor_args.trans_mat;
+
+    const tt::DataFormat input_df = datatype_to_dataformat_converter(input.dtype());
+    const uint32_t input_tile_size = tt::tile_size(input_df);
+    const tt::DataFormat cos_df = datatype_to_dataformat_converter(cos.dtype());
+    const uint32_t cos_tile_size = tt::tile_size(cos_df);
+    const tt::DataFormat sin_df = datatype_to_dataformat_converter(sin.dtype());
+    const uint32_t sin_tile_size = tt::tile_size(sin_df);
+    const tt::DataFormat trans_mat_df = datatype_to_dataformat_converter(trans_mat.dtype());
+    const uint32_t trans_mat_tile_size = tt::tile_size(trans_mat_df);
+    const tt::DataFormat output_df = datatype_to_dataformat_converter(output.dtype());
+    const uint32_t output_tile_size = tt::tile_size(output_df);
+
+    const auto& shard_spec = input.memory_config().shard_spec().value();
+    const uint32_t D = input.padded_shape()[-1];
+    const uint32_t Rd = args.rope_dim;
+    const uint32_t nope_Wt = (D - Rd) / TILE_WIDTH;  // leading pass-through tiles (global)
+    const uint32_t rope_Wt = Rd / TILE_WIDTH;        // trailing rope tiles (global), = cos/sin width
+    // Every core holds the full column height and a `shard_width` slice of D.
+    const uint32_t Ht = shard_spec.shape[0] / TILE_HEIGHT;
+    const uint32_t Wt_local = shard_spec.shape[1] / TILE_WIDTH;
+    const uint32_t shard_tiles = Ht * Wt_local;
+
+    // A single logical cos/sin row => broadcast that row across every input row on device.
+    const bool cos_bcast = cos.logical_shape()[-2] == 1;
+
+    // The rope region is the trailing `rope_Wt` tiles, so the core owning the last column slice
+    // holds the most rope tiles of any core; every CB is sized for it.
+    const uint32_t max_rope_local = std::min(Wt_local, rope_Wt);
+    const uint32_t cos_sin_cb_tiles = std::max(max_rope_local * (cos_bcast ? 1u : Ht), 1u);
+    const uint32_t interm_cb_tiles = std::max(max_rope_local, 1u);
+
+    auto* device = input.device();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
+
+    const CoreRangeSet all_cores = shard_spec.grid;
+
+    tt::tt_metal::ProgramDescriptor desc;
+
+    // Buffer-backed (globally-allocated) CBs for the resident shards.
+    constexpr uint8_t in_cb_index = tt::CBIndex::c_0;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = shard_tiles * input_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = in_cb_index, .data_format = input_df, .page_size = input_tile_size}}},
+        .buffer = input.buffer(),
+    });
+    constexpr uint8_t cos_cb_index = tt::CBIndex::c_1;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cos_sin_cb_tiles * cos_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cos_cb_index, .data_format = cos_df, .page_size = cos_tile_size}}},
+    });
+    constexpr uint8_t sin_cb_index = tt::CBIndex::c_2;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cos_sin_cb_tiles * sin_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = sin_cb_index, .data_format = sin_df, .page_size = sin_tile_size}}},
+    });
+    constexpr uint8_t out_cb_index = tt::CBIndex::c_16;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = shard_tiles * output_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = out_cb_index, .data_format = output_df, .page_size = output_tile_size}}},
+        .buffer = output.buffer(),
+    });
+
+    // Non-resident CBs: trans_mat (read from DRAM by the reader) + rotate/mul intermediates.
+    constexpr uint8_t trans_mat_cb_index = tt::CBIndex::c_3;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * trans_mat_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = trans_mat_cb_index, .data_format = trans_mat_df, .page_size = trans_mat_tile_size}}},
+    });
+    constexpr uint8_t rotated_interm_cb_index = tt::CBIndex::c_24;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = interm_cb_tiles * input_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = rotated_interm_cb_index, .data_format = input_df, .page_size = input_tile_size}}},
+    });
+    constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = interm_cb_tiles * cos_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cos_interm_cb_index, .data_format = cos_df, .page_size = cos_tile_size}}},
+    });
+    constexpr uint8_t sin_interm_cb_index = tt::CBIndex::c_26;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = interm_cb_tiles * sin_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = sin_interm_cb_index, .data_format = sin_df, .page_size = sin_tile_size}}},
+    });
+
+    auto* cos_buffer = cos.buffer();
+    auto* sin_buffer = sin.buffer();
+    auto* trans_mat_buffer = trans_mat.buffer();
+
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
+        (uint32_t)cos_cb_index,
+        (uint32_t)sin_cb_index,
+        (uint32_t)trans_mat_cb_index,
+        (uint32_t)Ht,
+        (uint32_t)rope_Wt,
+        (uint32_t)cos_bcast,
+    };
+    TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*trans_mat_buffer).append_to(reader_compile_time_args);
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kWidthReaderKernelPath;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor::CompileTimeArgs compute_kernel_args = {
+        (uint32_t)in_cb_index,
+        (uint32_t)cos_cb_index,
+        (uint32_t)sin_cb_index,
+        (uint32_t)trans_mat_cb_index,
+        (uint32_t)rotated_interm_cb_index,
+        (uint32_t)cos_interm_cb_index,
+        (uint32_t)sin_interm_cb_index,
+        (uint32_t)out_cb_index,
+        (uint32_t)Ht,
+        (uint32_t)Wt_local,
+        (uint32_t)cos_bcast,
+    };
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = kWidthComputeKernelPath;
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = std::move(compute_kernel_args);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+    };
+
+    // Per-core runtime args: where this core's column slice falls relative to the global nope/rope
+    // boundary. Core i owns column tiles [i*Wt_local, (i+1)*Wt_local), of which the ones at or past
+    // `nope_Wt` are rope tiles starting at column `rope_col_start` of the cos/sin tables.
+    const auto& cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
+    reader_desc.runtime_args.reserve(cores.size());
+    compute_desc.runtime_args.reserve(cores.size());
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        const uint32_t g0 = i * Wt_local;
+        const uint32_t nope_local = g0 >= nope_Wt ? 0 : std::min(nope_Wt - g0, Wt_local);
+        const uint32_t rope_local = Wt_local - nope_local;
+        const uint32_t rope_col_start = rope_local > 0 ? (g0 + nope_local) - nope_Wt : 0;
+        reader_desc.emplace_runtime_args(
+            cores[i], {cos_buffer, sin_buffer, trans_mat_buffer, rope_local, rope_col_start});
+        compute_desc.emplace_runtime_args(cores[i], {nope_local, rope_local});
     }
 
     desc.kernels.push_back(std::move(reader_desc));

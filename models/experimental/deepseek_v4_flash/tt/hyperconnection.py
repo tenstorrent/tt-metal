@@ -81,20 +81,19 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         t = b * s
 
         # Flatten streams to [1,1,T,H*D] and unweighted-RMSNorm over H*D.
-        flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d])
         flat_mem_config = width_sharded_l1_config(t, hc * d, self.device)
-        flat = ttnn.to_memory_config(flat, flat_mem_config)
+        flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d], memory_config=flat_mem_config)
         flat = _rms_norm_unweighted(flat, self.norm_eps)
 
         fused_w = self.fn(flat)  # [1,1,T,(2+H)*H]
-        pre_w, post_w, comb_w = ttnn.split(fused_w, [hc, hc, hc * hc], dim=3)  # [1,1,T,H], [1,1,T,H], [1,1,T,H*H]
         _profile(self.device)
 
+        # The pre_w / post_w / comb_w slices are split out of `fused_w` inside the op
+        # (fused_hyperconnection_pre_post kernel); pre_w / post_w are consumed in-place
+        # and comb_w is returned already laid out as the [1,1,H,H] comb matrix.
         return ttnn.experimental.deepseek.fused_hyperconnection(
             hidden_streams,
-            pre_w=pre_w,
-            post_w=post_w,
-            comb_w=comb_w,
+            fused_w=fused_w,
             pre_bias=self.pre_b,
             post_bias=self.post_b,
             comb_bias=self.comb_b,

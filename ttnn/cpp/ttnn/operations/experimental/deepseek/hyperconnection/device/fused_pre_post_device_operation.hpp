@@ -34,15 +34,18 @@ struct FusedPrePostDeviceOperation {
 
 namespace ttnn::prim {
 
-// Decode-only (T == 1) fused stage. Returns {post, collapsed}:
-//   post      = 2 * sigmoid(post_w * post_scale + post_bias)              [1,1,1,H]
-//   collapsed = (sigmoid(pre_w * pre_scale + pre_bias) + eps) @ hidden    [1,1,1,D]
-std::array<Tensor, 2> fused_hyperconnection_pre_post(
-    const Tensor& pre_w,
-    const Tensor& post_w,
+// Decode-only (T == 1) fused stage. Splits fused_w [1,1,1,(2+H)*H] inside the kernel into
+// pre_w / post_w (consumed in-place) and comb_w (rearranged to [1,1,H,H]). Returns
+// {post, collapsed, comb_w_mat}:
+//   post        = 2 * sigmoid(post_w * post_scale + post_bias)              [1,1,1,H]
+//   collapsed   = (sigmoid(pre_w * pre_scale + pre_bias) + eps) @ hidden     [1,1,1,D]
+//   comb_w_mat  = comb_w slice of fused_w, laid out as the [1,1,H,H] comb matrix
+std::array<Tensor, 3> fused_hyperconnection_pre_post(
+    const Tensor& fused_w,
     const Tensor& pre_bias,
     const Tensor& post_bias,
     const Tensor& hidden_streams,
+    uint32_t num_streams,
     float pre_scale,
     float post_scale,
     float eps,

@@ -54,6 +54,13 @@ def _height_sharded_cfg(width: int, num_cores: int) -> ttnn.MemoryConfig:
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard)
 
 
+def _width_sharded_cfg(rows: int, width: int, num_cores: int) -> ttnn.MemoryConfig:
+    """Width-sharded L1: every core holds all ``rows`` but a ``width // num_cores`` column slice."""
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard = ttnn.ShardSpec(grid, [rows, width // num_cores], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard)
+
+
 # (head_dim D, rope_dim Rd, rows)
 @pytest.mark.parametrize(
     "D, Rd, rows",
@@ -99,3 +106,54 @@ def test_fused_partial_rope_op(device, reset_seeds, D, Rd, rows):
     logger.info(f"[fused_partial_rope D={D} Rd={Rd} rows={rows}] {comp_allclose(ref, got)}")
     logger.info(f"[fused_partial_rope D={D} Rd={Rd} rows={rows}] PCC: {pcc_message}")
     assert passing, f"fused_partial_rope PCC < {PCC_THRESHOLD} (D={D}, Rd={Rd}, rows={rows}): {pcc_message}"
+
+
+# (head_dim D, rope_dim Rd, rows, num_cores, cos broadcast). The core count picks how the D
+# columns split against the nope/rope boundary at D - Rd:
+#   512/64 over 8 cores -> 2 tiles per core, boundary at tile 14: cores 0-6 nope-only, core 7 rope-only
+#   512/64 over 4 cores -> 4 tiles per core, boundary inside core 3's slice (straddle)
+#   D == Rd             -> every core is rope-only
+@pytest.mark.parametrize(
+    "D, Rd, rows, num_cores, cos_bcast",
+    (
+        (512, 64, 64, 8, False),  # aligned split: nope-only + rope-only cores
+        (512, 64, 64, 4, False),  # boundary straddles a shard
+        (512, 128, 96, 8, False),  # 3 row-tiles per core, wider rope region
+        (64, 64, 32, 2, False),  # D == Rd edge case (no nope)
+        (512, 64, 64, 4, True),  # single cos/sin row broadcast over all row-tiles
+    ),
+)
+def test_fused_partial_rope_op_width_sharded(device, reset_seeds, D, Rd, rows, num_cores, cos_bcast):
+    cos_rows = 1 if cos_bcast else rows
+
+    x = torch.randn(1, 1, rows, D, dtype=torch.float32)
+    cos = torch.randn(1, 1, cos_rows, Rd, dtype=torch.float32)
+    sin = torch.randn(1, 1, cos_rows, Rd, dtype=torch.float32)
+    rot = _interleaved_rotate_matrix(Rd)
+
+    ref = _torch_reference(x, cos, sin, rot, Rd)
+
+    # X is width-sharded L1 (a column slice per core); cos/sin/trans_mat are DRAM-interleaved.
+    x_tt = ttnn.to_memory_config(
+        ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        _width_sharded_cfg(rows, D, num_cores),
+    )
+    cos_tt = ttnn.from_torch(
+        cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    sin_tt = ttnn.from_torch(
+        sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    trans_mat = _interleaved_rotate_matrix(TILE).reshape(1, 1, TILE, TILE)
+    trans_mat_tt = ttnn.from_torch(
+        trans_mat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    out_tt = ttnn.experimental.fused_partial_rope(x_tt, cos_tt, sin_tt, trans_mat_tt, Rd)
+    got = ttnn.to_torch(out_tt).reshape(ref.shape).float()
+
+    tag = f"D={D} Rd={Rd} rows={rows} cores={num_cores} bcast={cos_bcast}"
+    passing, pcc_message = comp_pcc(ref, got, pcc=PCC_THRESHOLD)
+    logger.info(f"[fused_partial_rope width-sharded {tag}] {comp_allclose(ref, got)}")
+    logger.info(f"[fused_partial_rope width-sharded {tag}] PCC: {pcc_message}")
+    assert passing, f"fused_partial_rope width-sharded PCC < {PCC_THRESHOLD} ({tag}): {pcc_message}"

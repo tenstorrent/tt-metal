@@ -2,7 +2,7 @@ from typing import Callable, Optional
 
 import ttnn
 
-from .common import DeepSeekV4Module, _HIFI4, rectangular_core_range_set, width_sharded_l1_config
+from .common import DeepSeekV4Module, _HIFI4, width_sharded_l1_config
 from .weight_cache import _load_weight, _materialize
 import torch
 
@@ -30,29 +30,6 @@ def regular_width_sharded_l1_config(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-
-def reshard_to_rectangular_grid(x: ttnn.Tensor) -> ttnn.Tensor:
-    if not x.is_sharded():
-        return x
-
-    memory_config = x.memory_config()
-    shard_spec = memory_config.shard_spec
-    rectangular_grid = rectangular_core_range_set(shard_spec.grid.num_cores(), x.device())
-    if shard_spec.grid == rectangular_grid:
-        return x
-
-    rectangular_shard_spec = ttnn.ShardSpec(
-        rectangular_grid,
-        shard_spec.shape,
-        shard_spec.orientation,
-    )
-    rectangular_memory_config = ttnn.MemoryConfig(
-        memory_config.memory_layout,
-        memory_config.buffer_type,
-        rectangular_shard_spec,
-    )
-    return ttnn.to_memory_config(x, rectangular_memory_config)
 
 
 def to_ttnn_device(
@@ -376,8 +353,13 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
             # shard while the whole tensor is a single tile-row.
             if rows <= ttnn.TILE_SIZE:
                 x = ttnn.to_memory_config(x, width_sharded_l1_config(rows, d, x.device()))
-        x = reshard_to_rectangular_grid(x)
-        return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps)
+        # Keep the output in the same sharded layout the norm just
+        # consumed, so the next op (LinearDecode / _apply_rope) doesn't round-trip
+        # through DRAM-interleaved. ``ttnn.rms_norm`` requires a sharded output to
+        # match the input's memory layout, so passing the input's own config is the
+        # documented contract; for DRAM-interleaved inputs this is the default anyway.
+        assert x.is_sharded(), "input must be sharded"
+        return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps, memory_config=x.memory_config())
 
 
 def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
@@ -386,5 +368,8 @@ def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
     #     b, s, t, d = x.shape
     #     x_mem_config = width_sharded_l1_config(b * s * t, d, x.device())
     #     x = ttnn.to_memory_config(x, x_mem_config)
-    x = reshard_to_rectangular_grid(x)
-    return ttnn.rms_norm(x, epsilon=eps)
+    # See ``DeepSeekV4RMSNorm.forward``: keep the output in the input's (sharded)
+    # layout instead of dropping to DRAM-interleaved, so the next op avoids a
+    # sharded->DRAM->sharded round-trip.
+    assert x.is_sharded(), "input must be sharded"
+    return ttnn.rms_norm(x, epsilon=eps, memory_config=x.memory_config())
