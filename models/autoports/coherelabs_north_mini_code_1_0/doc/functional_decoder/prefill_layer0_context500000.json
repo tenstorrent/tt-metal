@@ -1,0 +1,11 @@
+{
+  "single_pass_ms": 159559.73756699677,
+  "finite": true,
+  "mode": "prefill",
+  "batch": 1,
+  "context": 500000,
+  "layer": 0,
+  "layer_kind": "dense_full_forced_rope",
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37",
+  "kv_cache_bytes": 1024000000
+}

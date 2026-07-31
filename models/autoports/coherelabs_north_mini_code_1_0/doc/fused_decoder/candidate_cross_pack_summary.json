@@ -1,0 +1,38 @@
+{
+  "candidate": "cross-branch shared-LHS QKV plus dense gate/up projection",
+  "layer": 0,
+  "packed_output_width": 11264,
+  "components": {
+    "qkv_width": 5120,
+    "gate_up_width": 6144
+  },
+  "correctness": {
+    "prefill_seq33_pcc": 0.9997154220,
+    "decode_batch1_trace_pcc": 0.9997645623,
+    "acceptance_pcc": 0.995
+  },
+  "latency_ms": {
+    "prefill_batch1": {
+      "candidate": 0.610207602,
+      "selected_separate_qkv_and_gate_up": 0.580181050
+    },
+    "decode_batch1": {
+      "candidate": 0.329290751,
+      "selected_separate_qkv_and_gate_up": 0.320013450
+    },
+    "decode_batch32": {
+      "candidate": 5.885739101,
+      "selected_separate_qkv_and_gate_up": 5.697804599
+    }
+  },
+  "measurement": {
+    "warmups": 5,
+    "iterations": 20,
+    "artifacts": [
+      "candidate_cross_pack_prefill_layer0_batch1.json",
+      "candidate_cross_pack_decode_layer0_batch1.json",
+      "candidate_cross_pack_decode_layer0_batch32.json"
+    ]
+  },
+  "decision": "rejected: PCC passed but all mandatory dense regimes regressed"
+}

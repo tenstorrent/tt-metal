@@ -1,0 +1,125 @@
+2026-07-31 07:59:56.183 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/dense/prefill
+2026-07-31 07:59:56.184 | INFO     | __main__:main:395 - Using port 8086
+2026-07-31 07:59:56.184 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-07-31 07:59:56.191 | INFO     | __main__:main:413 - Test process started
+2026-07-31 07:59:56.895 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/dense/prefill
+2026-07-31 07:59:57.127 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-31 08:00:05.541 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-31 08:00:05.541 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-31 08:00:05.541 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-31 08:00:05.541 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-31 08:00:05.542 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-31 08:00:05.542 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-31 08:00:05.546 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-31 08:00:05.624 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-31 08:00:05.624 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-31 08:00:05.624 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-07-31 08:00:05.624 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-31 08:00:05.626 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-31 08:00:05.872 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.853faf68e2b0.6002.ee080000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  853faf68e2b0
+  Space Requested: 16777216 B
+  Space Available: 17551360 B
+--------------------------------------------------------------------------
+2026-07-31 08:00:05.993 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-31 08:00:05.993 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-31 08:00:05.993 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-31 08:00:05.993 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-31 08:00:05.993 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:05.993 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:05.993 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:05.993 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:05.993 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:05.993 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:05.993 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:05.993 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-31 08:00:05.993 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-31 08:00:05.993 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-31 08:00:06.034 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-31 08:00:06.041 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-07-31 08:00:06.082 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680356416_memory' (shm_resource_tracker.cpp:282)
+2026-07-31 08:00:06.661 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=179250769677452 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-31 08:00:06.844 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-31 08:00:06.845 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-07-31 08:00:07.173 | info     |           Metal | Device kernel duration perf summary (device=3): count=103, min=1449ns, avg=39592.5ns, max=163876ns (profiler_analysis.cpp:675)
+2026-07-31 08:00:07.173 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=16300ns, range=[0..163000), underflow(<0ns)=0, overflow(>=163000ns)=1) (profiler_analysis.cpp:718)
+2026-07-31 08:00:07.173 | info     |           Metal |   [           0 ..        16300) |########################################|       43 (profiler_analysis.cpp:723)
+2026-07-31 08:00:07.173 | info     |           Metal |   [       16300 ..        32600) |###############                         |       16 (profiler_analysis.cpp:723)
+2026-07-31 08:00:07.173 | info     |           Metal |   [       32600 ..        48900) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-31 08:00:07.173 | info     |           Metal |   [       48900 ..        65200) |#################                       |       18 (profiler_analysis.cpp:723)
+2026-07-31 08:00:07.173 | info     |           Metal |   [       65200 ..        81500) |############                            |       13 (profiler_analysis.cpp:723)
+2026-07-31 08:00:07.173 | info     |           Metal |   [       81500 ..        97800) |#######                                 |        7 (profiler_analysis.cpp:723)
+2026-07-31 08:00:07.173 | info     |           Metal |   [       97800 ..       114100) |#                                       |        1 (profiler_analysis.cpp:723)
+2026-07-31 08:00:07.173 | info     |           Metal |   [      114100 ..       130400) |##                                      |        2 (profiler_analysis.cpp:723)
+2026-07-31 08:00:07.173 | info     |           Metal |   [      130400 ..       146700) |#                                       |        1 (profiler_analysis.cpp:723)
+2026-07-31 08:00:07.173 | info     |           Metal |   [      146700 ..       163000) |#                                       |        1 (profiler_analysis.cpp:723)
+{
+  "mean_ms": 0.6039449945092201,
+  "min_ms": 0.6002129812259227,
+  "samples_ms": [
+    0.6076770077925175,
+    0.6002129812259227
+  ],
+  "mode": "prefill",
+  "batch": 1,
+  "sequence": 128,
+  "layer": 0,
+  "model_revision": "d11e61a842617a22dc328552fa5bb86231ee4f37"
+}
+nanobind: leaked 1 instances!
+ - leaked instance 0x7dd50452a238 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - ... skipped remainder
+nanobind: leaked 199 functions!
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "host_buffer"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "is_per_core_allocated"
+ - leaked function "from_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-31 08:00:08.043 | info     |    BuildKernels | JIT cache stats: 159/159 hits (100.0%) [159 cached, 20 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-31 08:00:08.043 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-31 08:00:08.055 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-31 08:00:08.055 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-31 08:00:08.492 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-31 08:00:08.492 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-31 08:00:08.492 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+2026-07-31 08:00:08.741 | INFO     | __main__:main:452 - Copying /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/mvasiljevic/tt-metal/build/profiler/build_wasm/traces/optimized_decoder_perf_prefill_batch1_final2_2026_07_31_08_00_08.tracy
+2026-07-31 08:00:08.741 | INFO     | __main__:main:455 - Copied /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/mvasiljevic/tt-metal/build/profiler/build_wasm/traces/optimized_decoder_perf_prefill_batch1_final2_2026_07_31_08_00_08.tracy
+2026-07-31 08:00:08.741 | INFO     | __main__:main:464 - embed.tracy -> traces/optimized_decoder_perf_prefill_batch1_final2_2026_07_31_08_00_08.tracy
+2026-07-31 08:00:08.741 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-07-31 08:00:08.741 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-07-31 08:00:08.742 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-07-31 08:00:10.589 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/dense/prefill/.logs/tracy_ops_times.csv
+2026-07-31 08:00:10.663 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/dense/prefill/.logs/tracy_ops_data.csv
+2026-07-31 08:00:10.663 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:345 - Importing ops logs
+/home/mvasiljevic/tt-metal/tools/tracy/process_ops_logs.py:450: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-07-31 08:00:15.425 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-07-31 08:00:15.425 | INFO     | tracy.process_ops_logs:append_device_data:1009 - Appending device data
+2026-07-31 08:00:15.579 | INFO     | tracy.process_ops_logs:generate_reports:1342 - OPs' perf analysis is finished! Generating reports ...
+2026-07-31 08:00:15.579 | INFO     | tracy.process_ops_logs:generate_reports:1360 - Copying runtime artifacts
+2026-07-31 08:00:15.591 | INFO     | tracy.process_ops_logs:generate_reports:1369 - Generating OPs CSV
+2026-07-31 08:00:15.620 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /home/mvasiljevic/tt-metal/models/autoports/coherelabs_north_mini_code_1_0/doc/optimized_decoder/tracy/dense/prefill/reports/prefill_batch1_final2/2026_07_31_08_00_15/ops_perf_results_prefill_batch1_final2_2026_07_31_08_00_15.csv
