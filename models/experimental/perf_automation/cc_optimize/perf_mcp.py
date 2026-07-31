@@ -41,7 +41,10 @@ from agent.handlers import remeasure as _rm  # noqa: E402
 from agent.measure import measure_runs  # noqa: E402
 from agent.pcc_runner import run_pcc  # noqa: E402
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+try:  # mcp < 2.0
+    from mcp.server.fastmcp import FastMCP  # noqa: E402
+except ModuleNotFoundError:  # mcp >= 2.0 renamed FastMCP -> MCPServer
+    from mcp.server.mcpserver import MCPServer as FastMCP  # noqa: E402
 
 mcp = FastMCP("perf-mcp")
 
