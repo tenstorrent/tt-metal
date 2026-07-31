@@ -37,13 +37,11 @@ void queue_tensor_prefetcher_request(
             inputs.push_back({tensor.mesh_tensor(), block_count, rotation});
         }
     }
-    // The command queue to consider is always the calling thread's current one: ttnn's
-    // FastOperation wrapper consumes a `cq_id`/`queue_id` keyword before this function is
-    // reached and applies it by pushing that queue as the thread's current one (see
-    // ttnn/ttnn/decorators.py), which is also what ttnn.command_queue(n) does. So the
-    // caller-visible knob here is whether to consider a queue at all: with
-    // capture_into_trace false we hand metal no queue, and the request is sent immediately
-    // even if that queue is mid trace-capture.
+    // There is no cq_id parameter to consult: a `cq_id`/`queue_id` keyword is consumed by
+    // ttnn's operation wrapper before this function runs, and applied by making that queue
+    // the thread's current one. So the knob left here is whether to consider a queue at all
+    // — with capture_into_trace false we hand metal no queue, and the request is sent
+    // immediately even mid trace-capture.
     tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
         *mesh_device,
         global_cb,
@@ -56,11 +54,10 @@ void wait_for_cq_on_tensor_prefetcher(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     std::optional<uint8_t> cq_id,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset) {
-    // A positional cq_id arrives here as a value and names the queue directly. A keyword
-    // cq_id= does not: ttnn's FastOperation wrapper pops it and applies it by making that
-    // queue current for the call (ttnn/ttnn/decorators.py), leaving std::nullopt here.
-    // Resolving std::nullopt to the thread's current queue is what makes the two forms agree
-    // — as a plain `uint8_t cq_id = 0` the keyword form silently fenced queue 0 instead.
+    // cq_id must stay optional, not `uint8_t = 0`: only the positional form reaches here as a
+    // value, since a keyword cq_id= is consumed by the wrapper and applied by making that
+    // queue current. Resolving nullopt to the thread's current queue is what makes the two
+    // forms agree; defaulting to 0 would silently fence queue 0 for the keyword form.
     tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(mesh_device->mesh_command_queue(cq_id), device_subset);
 }
 

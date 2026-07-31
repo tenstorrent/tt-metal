@@ -80,11 +80,9 @@ public:
 
     void start();
 
-    // When `trace_capture_cq` is non-null and mid trace-capture, the serialized request pages
-    // are captured into trace_requests_ keyed by that trace's MeshTraceId instead of being sent
-    // immediately; they are (re)sent on every replay_trace() of that trace. Otherwise — a
-    // non-capturing queue, or a null `trace_capture_cq` — the pages are queued for immediate
-    // fan-out. A non-null queue must belong to this manager's mesh device.
+    // Capture-vs-send contract, and the `trace_capture_cq` precondition: see
+    // QueueTensorPrefetcherRequest. Captured pages live in trace_requests_ keyed by the
+    // recording trace's MeshTraceId, and are re-queued by replay_trace().
     void queue(
         const experimental::GlobalCircularBuffer& gcb,
         const std::optional<MeshCoordinateRangeSet>& device_subset,

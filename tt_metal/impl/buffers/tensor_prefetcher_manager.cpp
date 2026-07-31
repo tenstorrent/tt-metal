@@ -948,10 +948,8 @@ void TensorPrefetcherManager::queue(
         }
     }
 
-    // If the caller named a command queue and it is mid trace-capture, capture this request into
-    // the trace instead of sending it now; it is (re)sent on every replay of that trace. With no
-    // queue (nullptr) the request is never captured — it is sent immediately via the host worker,
-    // as is a named queue that is not capturing.
+    // Engaged only when the caller named a queue that is mid trace-capture; that is what
+    // routes the request into the trace below instead of out via the host worker.
     const std::optional<MeshTraceId> recording_trace_id =
         trace_capture_cq != nullptr ? trace_capture_cq->trace_id() : std::nullopt;
 
@@ -1055,10 +1053,11 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     }
 
     // (a) Dispatcher write: bump every target DRAM core's signal slot for this CQ. Runs
-    // under the api lock we already hold (the method does not re-lock).
-    auto* cq_base = dynamic_cast<MeshCommandQueueBase*>(&cq);
-    TT_FATAL(cq_base != nullptr, "MeshCommandQueue is not a MeshCommandQueueBase");
-    cq_base->enqueue_write_dram_core_counter(
+    // under the api lock we already hold (the method does not re-lock). Re-resolving by id
+    // (safe: we checked cq.device() above) gets the queue as a MeshCommandQueueBase, which
+    // is what exposes enqueue_write_dram_core_counter.
+    auto& cq_base = mesh_device_->impl().mesh_command_queue_base(static_cast<uint8_t>(cq_id));
+    cq_base.enqueue_write_dram_core_counter(
         ttsl::Span<const DeviceMemoryAddress>(targets), signal_value, /*blocking=*/false);
 
     // (b) Queue a WAIT_CQ request. It rides the same async worker path as prefetch
@@ -1251,7 +1250,6 @@ void QueueTensorPrefetcherRequest(
 void WaitForCqOnTensorPrefetcher(
     distributed::MeshCommandQueue& cq, const std::optional<distributed::MeshCoordinateRangeSet>& device_subset) {
     auto* mesh_device = cq.device();
-    TT_FATAL(mesh_device != nullptr, "WaitForCqOnTensorPrefetcher command queue has no mesh device");
     auto& manager = mesh_device->impl().tensor_prefetcher(mesh_device);
     manager.enqueue_cq_signal_and_wait(cq, device_subset);
 }

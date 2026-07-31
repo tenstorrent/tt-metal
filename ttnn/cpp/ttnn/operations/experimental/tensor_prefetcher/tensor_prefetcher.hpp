@@ -64,8 +64,7 @@ void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device)
 // `capture_into_trace` selects whether this request may be captured into a trace: when true
 // and the calling thread's current command queue is mid trace-capture, the request is captured
 // and re-sent on every execute_trace of that trace; when false the request is always sent
-// immediately. Which queue that is follows ttnn's usual convention (a `cq_id`/`queue_id`
-// keyword, or ttnn.command_queue(n)) — see the note in the .cpp.
+// immediately.
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,

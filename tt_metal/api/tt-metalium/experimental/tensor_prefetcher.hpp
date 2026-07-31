@@ -119,15 +119,13 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //   - Per-tensor `rotation` (on each TensorPrefetcherInput) is documented on that struct; a
 //     non-empty rotation enables streaming and sets the per-receiver delivery order, the only
 //     knob that varies delivery order within a request.
-//   - `trace_capture_cq` is the command queue on which a trace may be recording,
-//     and must belong to `mesh_device`. When it is non-null and that CQ is mid
-//     trace-capture, the request is captured into the trace instead of being sent
-//     immediately, and is (re)sent on every replay of that trace (ReplayTrace /
-//     ttnn.execute_trace). When it is non-null and that CQ is not capturing, the
-//     request is sent immediately. When it is null (the default), the request is
-//     never captured — it is always sent immediately, whatever any command queue
-//     is doing. Pass `&mesh_device.mesh_command_queue()` to opt into capture on the
-//     calling thread's current queue.
+//   - `trace_capture_cq` is the command queue on which a trace may be recording, and
+//     must belong to `mesh_device`. When it is non-null and mid trace-capture, the
+//     request is captured into the trace instead of being sent, and is (re)sent on
+//     every replay of that trace (ReplayTrace / ttnn.execute_trace). Otherwise — a
+//     non-capturing queue, or null (the default) — the request is sent immediately,
+//     whatever any command queue is doing. Pass `&mesh_device.mesh_command_queue()`
+//     to opt into capture on the calling thread's current queue.
 //
 // The caller is responsible for keeping the tensors in `input_tensors` and
 // `gcb` alive until Stop returns.
