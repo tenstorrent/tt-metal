@@ -256,6 +256,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 sampling_params,
                 sample_on_device,
                 enable_trace=enable_trace,
+                force_reset=reset_sampling_state,
             )
         decode_step_output = super().decode_forward(
             tokens=tokens_step,
