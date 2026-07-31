@@ -741,6 +741,19 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     for (uint32_t b = 0; b < 8u; ++b) {
         master_ring_cores.push_back(cores[b * preaders_pf]);
     }
+    // GUARD: today only the 8 master-ring cores wait on the gather (fwd_recv_sem), but EVERY core reads the
+    // staging buffer in the on-chip ring below. With more than one ring group the non-master cores would
+    // read staging before the remote shards land -- silently wrong numbers, not a hang, and only on some
+    // devices. Until those cores get a barrier of their own (a multicast credit from the master ring), the
+    // fused path is restricted to the single-ring case where every core IS a master.
+    TT_FATAL(
+        operation_attributes.tp == 1 || preaders_pf == 1u,
+        "fused gather currently supports a single in0 ring (8 cores) only, but this shape planned {} ring "
+        "groups ({} cores). Non-master cores have no gather barrier yet; refusing rather than returning "
+        "silently wrong results.",
+        preaders_pf,
+        geo.num_cores);
+
     FusedGatherContext fused_gather =
         build_fused_gather_context(program, operation_attributes, mesh_coordinate, in0, master_ring_cores, device);
 
