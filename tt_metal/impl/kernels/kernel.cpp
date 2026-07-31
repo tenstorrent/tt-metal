@@ -182,10 +182,10 @@ Kernel::Kernel(
 void Kernel::register_kernel_with_watcher() {
     auto& watcher = MetalContext::instance().watcher_server();
     if (!watcher) {
-        // Null for mock and emulated targets (no watcher created); nothing to register.
+        // Null for non-silicon targets without a watcher; nothing to register.
         TT_FATAL(
-            MetalContext::instance().get_cluster().is_mock_or_emulated(),
-            "Watcher server is unavailable, and the target is not a mock or emulated device");
+            MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Silicon,
+            "Watcher server is unavailable for a silicon target");
         this->watcher_kernel_id_ = -1;
         return;
     }
