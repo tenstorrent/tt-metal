@@ -416,7 +416,15 @@ class TtPrefillRuntime:
         return [block]
 
     def kv_cache_pcc_check(
-        self, kv_caches: MlaKvCaches, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
+        self,
+        kv_caches: MlaKvCaches,
+        *,
+        slot_id: int,
+        n_chunks: int,
+        trace_dir=None,
+        first_layer_idx: int = 0,
+        real_len: int | None = None,
+        pt_path_override: str | None = None,
     ) -> float:
         """Optional bring-up hook (not part of the core runtime contract; never called in production
         serving). PCC the populated engine-owned primary KV cache (`.kvpe`) for `slot_id` against the
@@ -431,6 +439,8 @@ class TtPrefillRuntime:
             n_chunks=n_chunks,
             trace_dir=trace_dir,
             first_layer_idx=first_layer_idx,
+            real_len=real_len,
+            pt_path_override=pt_path_override,
         )
 
     def set_layer_completion_sink(self, sink) -> None:

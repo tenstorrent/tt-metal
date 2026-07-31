@@ -982,6 +982,17 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     _selftest = os.environ.get("PREFILL_MIGRATION_SELFTEST", "0") == "1"
     _migration_enabled = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1" or _selftest
     _interleaved = os.environ.get("PREFILL_MIGRATION_INTERLEAVED", "0") == "1"
+    _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
+
+    # Mock migration publishes ONE whole-model table; there is no per-stage merge for it, so a pipeline
+    # run would have every rank overwrite the same table path with its own layer slice. Rank-invariant,
+    # so every rank raises together.
+    if num_ranks > 1 and _mock_migration:
+        raise ValueError(
+            f"PREFILL_MOCK_MIGRATION=1 is single-rank only (num_ranks={num_ranks}): the mock table spans "
+            "the whole model and no cross-stage merge exists for it. Use PREFILL_ENABLE_MIGRATION=1 for "
+            "the pipeline path."
+        )
 
     # Both flags put a scheduler stand-in on the master's ack channel, and try_consume_all() is a
     # destructive read against one shared cursor -- two consumers split the ack stream instead of each
@@ -1013,7 +1024,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         #     path (runtime.build_kv_chunk_table — the model owns the cache layout / address math).
         #   * RANK 0 ONLY publishes that serialized table to the worker and blocks on WORKER_READY.
         from models.demos.common.prefill.runners.migration import (
-            deliver_device_map_and_gather_stage_layout,
+            allgather_kv_stage_layout,
+            build_local_device_map,
+            deliver_local_device_map,
             publish_serialized_table_and_wait_ready,
         )
 
@@ -1024,54 +1037,64 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 
-        # ALL RANKS: deliver local device map + contribute this stage to the merged table (barrier).
-        # Ask the runtime for this stage's KV base -- the engine must not introspect the opaque
-        # KvCaches struct, whose shape is per-model
-        if not hasattr(runtime, "kv_migration_base_address"):
-            raise RuntimeError(
-                f"migration enabled but runtime {type(runtime).__name__} implements no "
-                "kv_migration_base_address (see docs/ADDING_A_PREFILL_MODEL.md §2)."
+        # inline deliver device map
+        local_device_map = build_local_device_map(mesh_device, GLOBAL_MESH_SHAPE)
+        deliver_local_device_map(local_device_map, rank)
+
+        if not single_rank:
+            # ALL RANKS: deliver local device map + contribute this stage to the merged table (barrier).
+            # Ask the runtime for this stage's KV base -- the engine must not introspect the opaque
+            # KvCaches struct, whose shape is per-model
+            if not hasattr(runtime, "kv_migration_base_address"):
+                raise RuntimeError(
+                    f"migration enabled but runtime {type(runtime).__name__} implements no "
+                    "kv_migration_base_address (see docs/ADDING_A_PREFILL_MODEL.md §2)."
+                )
+            kv_base_addr = runtime.kv_migration_base_address(kv_caches)
+
+            stage_layout = allgather_kv_stage_layout(
+                mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers
             )
-        kv_base_addr = runtime.kv_migration_base_address(kv_caches)
-        stage_layout = deliver_device_map_and_gather_stage_layout(
-            mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers, rank
-        )
 
         if is_first_rank:
             # RANK 0: model runtime builds + serializes the merged table (spanning all gathered
             # stages), then publish the serialized path + block on WORKER_READY.
-            table_path = runtime.build_kv_chunk_table(
-                kv_caches,
-                table_path,
-                first_layer_idx=first_layer_idx,
-                num_my_layers=num_my_layers,
-                stage_layout=stage_layout,
-            )
+            if single_rank:
+                table_path = runtime.build_kv_chunk_table(kv_caches, path=table_path)
+            else:
+                table_path = runtime.build_kv_chunk_table(
+                    kv_caches,
+                    table_path,
+                    first_layer_idx=first_layer_idx,
+                    num_my_layers=num_my_layers,
+                    stage_layout=stage_layout,
+                )
             migration_endpoint = publish_serialized_table_and_wait_ready(
                 table_path=table_path,
                 wait_ready_timeout_ms=wait_ready_ms,
-            )
-        elif os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1":
-            # Mock integration (prefill_producer.py): serialize the KV chunk table so an external
-            # producer can read it back via ttnn.experimental.disaggregation.import_from_protobuf_file
-            # and locate each chunk — WITHOUT the migration_endpoint worker (no MigrationLayerClient,
-            # no WORKER_READY). One galaxy => one complete table spanning all NUM_LAYERS / NUM_USERS
-            # (both caches, merged, for a sparse model).
-            table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
-            runtime.build_kv_chunk_table(kv_caches, path=table_path)
-            # Also publish the fabric_node -> ASIC unique_id device map so the producer can resolve chips
-            # for its device-less UMD read (read_dram_umd) without touching the ControlPlane.
-            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
-            serialize_device_map(mesh_device, device_map_path)
-            logger.info(
-                f"[mock-migration] KV chunk table -> {table_path}, device map -> {device_map_path} "
-                f"(no migration worker); prefill_producer can import them"
             )
         else:
             logger.info(
                 f"[migration] rank {rank}: delivered local device map + contributed stage "
                 f"(first_layer={first_layer_idx}, count={num_my_layers}); rank 0 sends the merged table."
             )
+
+    elif _mock_migration:
+        # Mock integration (prefill_producer.py): serialize the KV chunk table so an external
+        # producer can read it back via ttnn.experimental.disaggregation.import_from_protobuf_file
+        # and locate each chunk — WITHOUT the migration_endpoint worker (no MigrationLayerClient,
+        # no WORKER_READY). One galaxy => one complete table spanning all NUM_LAYERS / NUM_USERS
+        # (both caches, merged, for a sparse model).
+        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        runtime.build_kv_chunk_table(kv_caches, path=table_path)
+        # Also publish the fabric_node -> ASIC unique_id device map so the producer can resolve chips
+        # for its device-less UMD read (read_dram_umd) without touching the ControlPlane.
+        device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+        serialize_device_map(mesh_device, device_map_path)
+        logger.info(
+            f"[mock-migration] KV chunk table -> {table_path}, device map -> {device_map_path} "
+            f"(no migration worker); prefill_producer can import them"
+        )
 
     if single_rank and enable_layer_ack:
         # Direct path: the runtime owns + inject()s the scheduler counter channel.
