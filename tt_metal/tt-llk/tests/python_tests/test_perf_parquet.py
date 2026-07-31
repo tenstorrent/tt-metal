@@ -11,8 +11,26 @@ shared wide schema (DB_SCHEMA), that columns a test did not emit become NULL
 
 import pandas as pd
 import pyarrow.parquet as pq
-from helpers.perf_parquet import align_to_schema, arrow_schema, to_table, write_parquet
+import pytest
+from helpers.perf_parquet import (
+    align_to_schema,
+    arrow_schema,
+    build_run_batch,
+    stamp_provenance,
+    to_table,
+    write_parquet,
+    write_run_batch,
+)
 from helpers.perf_wide_schema import DB_SCHEMA
+
+_RUN_PROV = dict(
+    commit_sha="abc123",
+    arch="wormhole",
+    run_id="42",
+    timestamp="2026-01-01T00:00:00",
+    pipeline="PR",
+    pr_number="7",
+)
 
 
 def _output_row():
@@ -30,15 +48,7 @@ def _output_row():
 
 
 def _stamp_provenance(df):
-    df = df.copy()
-    df["test_name"] = "perf_x"
-    df["commit_sha"] = "abc123"
-    df["arch"] = "wormhole"
-    df["run_id"] = "42"
-    df["timestamp"] = "2026-01-01T00:00:00"
-    df["pipeline"] = "PR"
-    df["pr_number"] = "7"
-    return df
+    return stamp_provenance(df, test_name="perf_x", **_RUN_PROV)
 
 
 def test_arrow_schema_matches_db_schema():
@@ -85,3 +95,57 @@ def test_csv_and_parquet_agree(tmp_path):
     assert list(from_csv["mean(MATH_ISOLATE)"].dropna()) == list(
         from_pq["mean(MATH_ISOLATE)"].dropna()
     )
+
+
+# ── Run-level publication ─────────────────────────────────────────────────────
+
+
+def _output_row_b():
+    """A second test emitting a different column set (no MATH_ISOLATE)."""
+    return pd.DataFrame(
+        {
+            "marker": ["INIT", "TILE_LOOP"],
+            "mean(PACK_ISOLATE)": [5.0, 6.0],
+            "num_faces": [4, 4],
+            "tile_cnt": [2, 2],
+        }
+    )
+
+
+def test_run_batch_compacts_multiple_tests():
+    # Two tests with different columns -> one batch, one schema, rows summed.
+    table = build_run_batch(
+        {"perf_a": _output_row(), "perf_b": _output_row_b()}, **_RUN_PROV
+    )
+    assert table.schema.names == [c.name for c in DB_SCHEMA]
+
+    df = table.to_pandas()
+    assert len(df) == 4  # 2 markers x 2 tests
+    assert set(df["test_name"]) == {"perf_a", "perf_b"}
+    # A column only one test emits is NULL on the other test's rows.
+    assert df[df["test_name"] == "perf_b"]["mean(MATH_ISOLATE)"].isna().all()
+    assert df[df["test_name"] == "perf_a"]["num_faces"].isna().all()
+
+
+def test_run_batch_rejects_missing_mandatory_provenance():
+    prov = dict(_RUN_PROV, commit_sha=None)
+    with pytest.raises(ValueError, match="commit_sha"):
+        build_run_batch({"perf_a": _output_row()}, **prov)
+
+
+def test_pipeline_column_distinguishes_pr_and_nightly():
+    # PR and nightly share the schema; only execution metadata differs.
+    prov = dict(_RUN_PROV, pipeline="nightly", pr_number=None)
+    table = build_run_batch({"perf_a": _output_row()}, **prov)
+    assert set(table.to_pandas()["pipeline"]) == {"nightly"}
+
+
+def test_write_run_batch_is_one_file_per_run(tmp_path):
+    path = tmp_path / "run_42.parquet"
+    write_run_batch(
+        {"perf_a": _output_row(), "perf_b": _output_row_b()}, path, **_RUN_PROV
+    )
+    assert path.exists()
+    table = pq.read_table(path)
+    assert table.schema.names == [c.name for c in DB_SCHEMA]
+    assert table.num_rows == 4
