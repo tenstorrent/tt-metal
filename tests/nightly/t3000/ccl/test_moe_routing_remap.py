@@ -136,3 +136,77 @@ def test_gen_tensors(mesh_device, non_zero_size, expert_parallel_size, num_clust
             idx = tuple(i[1] for i in idx.tolist())
             idxs.add(idx)
         assert len(idxs) == 1
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "cluster_axis, invalid_expert_parallel_size",
+    [
+        # Issue #51214 bug 11: on main the TT_FATAL parsed as
+        # (expert_parallel_size == (cluster_axis == 0)) ? num_cols : num_rows,
+        # so mismatched sizes were never rejected. A 2x4 mesh has 2 rows / 4 cols.
+        # Use sizes that divide num_cluster_experts=32 so we reach the mesh-axis check
+        # (not the earlier "evenly divisible by cluster" TT_FATAL).
+        (0, 4),  # axis 0 = rows (size 2), 4 != 2
+        (1, 2),  # axis 1 = cols (size 4), 2 != 4
+    ],
+    ids=["cluster_axis0_rows", "cluster_axis1_cols"],
+)
+def test_moe_routing_remap_rejects_mismatched_expert_parallel_size(
+    mesh_device, cluster_axis, invalid_expert_parallel_size, expect_error
+):
+    """Regression for #51214 item 11: expert_parallel_size must match the cluster axis extent.
+
+    On main the validation TT_FATAL is dead code due to operator precedence, so this call
+    silently runs with a bogus per-device partition. With the fix it must fail loudly.
+    """
+    mesh_shape = tuple(mesh_device.shape)
+    assert invalid_expert_parallel_size != mesh_shape[cluster_axis]
+
+    routing_weights_torch = _gen_input_routing_weights(non_zero_size=8, num_cluster_experts=32)
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights_torch,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    with expect_error(RuntimeError, "expert parallel size .* should be the same as size of cluster axis"):
+        ttnn.moe_routing_remap(
+            tt_routing_weights,
+            non_zero_weight_size=8,
+            expert_parallel_size=invalid_expert_parallel_size,
+            cluster_axis=cluster_axis,
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
+def test_moe_routing_remap_accepts_matching_expert_parallel_size(mesh_device, cluster_axis):
+    """Companion to the rejection test: the tightened check must not reject legal sizes.
+
+    The happy-path test above pytest.skips on mismatch, so without this there is no assertion
+    that expert_parallel_size == cluster-axis extent is still accepted after the fix.
+    """
+    mesh_shape = tuple(mesh_device.shape)
+    expert_parallel_size = mesh_shape[cluster_axis]
+
+    routing_weights_torch = _gen_input_routing_weights(non_zero_size=8, num_cluster_experts=32)
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights_torch,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    tt_output = ttnn.moe_routing_remap(
+        tt_routing_weights,
+        non_zero_weight_size=8,
+        expert_parallel_size=expert_parallel_size,
+        cluster_axis=cluster_axis,
+    )
+    assert tt_output.shape == tt_routing_weights.shape
