@@ -127,7 +127,12 @@ class CCLManager:
         return self._ring_gather_buffers[cache_key]
 
     def reset_global_semaphores(self):
-        """Reset all global semaphores to 0"""
+        """Reset the reduce-scatter / all-gather ping-pong semaphores to 0.
+
+        NOTE: this deliberately does NOT reset the barrier or ring-attention semaphores this manager
+        also allocates. One-shot prefill never reuses a CCLManager across runs, so those never carry
+        stale state today. TODO(P5): reset them here too once multi-run / chunked prefill reuses a
+        single CCLManager across prefill calls."""
         for sem in self.rs_ping_pong_semaphores:
             ttnn.reset_global_semaphore_value(sem, 0)
         for sem in self.ag_ping_pong_semaphores:

@@ -120,6 +120,12 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             weight_cache_path=params.weight_cache_path,
             owns_kv_cache=False,  # engine owns the cache (from allocate_kv_cache); passed into every call
         )
+        # TODO(P5, engine integration): this builds with state_dict={}, i.e. it relies on a
+        # pre-populated TTNN weight cache (tilized weights + the MLP expert-bias sidecar) and does
+        # NOT fall back to loading real bf16 weights when the cache is incomplete, unlike
+        # minimax_m3's build_runtime (ModelArgs.load_state_dict). The validated path today is the
+        # standalone galaxy harness (tests/galaxy_prefill_kv_pcc.py), which loads real weights. Wire
+        # the bf16 fallback here when the common/prefill engine path is brought up on galaxy.
         return TtPrefillRuntime(
             mesh_device=mesh_device,
             hf_config=hf_config,
