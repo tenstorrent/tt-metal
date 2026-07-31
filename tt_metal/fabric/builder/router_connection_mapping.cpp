@@ -97,7 +97,7 @@ bool RouterConnectionMapping::wires_into(
 
     if (egress_direction == RoutingDirection::Z) {
         if (!express_routing_enabled) {
-            // Legacy: the extra port exists in the set only as the boundary template (MESH_TO_Z).
+            // Legacy: the extra port exists in the set only as the boundary template's target.
             return z_role == ZPortRole::INTERMESH_BOUNDARY;
         }
         // Express: Z is a legal target for every producer except an intramesh X one (dimension
@@ -292,7 +292,7 @@ RouterConnectionMapping RouterConnectionMapping::for_router(
     RouterConnectionMapping mapping;
 
     // A port with no routing direction gets the boundary template: the full non-self set on VC1,
-    // typed from-boundary. Its VC0 senders are fed by the mesh routers' MESH_TO_Z targets on their
+    // typed from-boundary. Its VC0 senders are fed by the mesh routers' boundary targets on their
     // own maps, so there is no VC0 arm here -- traffic arriving on its VC0 receiver crosses over
     // onto these same VC1 downstream senders instead. Nothing in the turn matrix applies to it,
     // which is why the set is the full set: not a special case, a consequence. The requirements

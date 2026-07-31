@@ -23,8 +23,6 @@ namespace {
 
 constexpr bool k_express = true;
 constexpr bool k_no_express = false;
-constexpr bool k_has_intermesh_z = true;
-constexpr bool k_no_intermesh_z = false;
 constexpr bool k_vc1 = true;
 constexpr bool k_no_vc1 = false;
 constexpr bool k_no_pass_through = false;
@@ -48,8 +46,7 @@ RouterConnectionMapping express_mapping(
         Topology::Torus,
         direction,
         capability,
-        (has_express_chord) ? ZPortRole::EXPRESS_CHORD
-                            : ((k_no_intermesh_z) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE),
+        (has_express_chord) ? ZPortRole::EXPRESS_CHORD : ZPortRole::NONE,
         k_express,
         enable_vc1,
         k_no_pass_through);
@@ -140,26 +137,31 @@ TEST(ExpressConnectionWiringTest, NoVC1TargetsWhenVC1Disabled) {
 }
 
 TEST(ExpressConnectionWiringTest, WorkerChannelIsReservedOnVC0Only) {
-    // VC0 sender channel 0 belongs to the local worker, so its forwarding targets land at 1 and
-    // above when computed from the direction bijection. VC1 has no worker channel and starts at 0.
-    const auto mapping = express_mapping(RoutingDirection::N);
+    // VC0 sender channel 0 belongs to the local worker, so a wired producer's VC0 slot is always 1
+    // or above; VC1 has no worker channel, so the same producer can land at slot 0. The tight case
+    // is the X-ring pair: producer W is compact index 0 on the E-facing router, giving exactly the
+    // VC0 slot 1 / VC1 slot 0 boundary values.
     uint32_t lowest_vc0 = ~0u;
     uint32_t lowest_vc1 = ~0u;
-    for (const auto& t : mapping.get_downstream_targets(0, 0)) {
-        const uint32_t slot = builder::get_downstream_sender_channel_for_vc(
-            /*is_2d_routing=*/true,
-            0,
-            eth_chan_directions::NORTH,
-            builder::routing_direction_to_eth_direction(*t.target_direction));
-        lowest_vc0 = std::min(lowest_vc0, slot);
-    }
-    for (const auto& t : mapping.get_downstream_targets(1, 0)) {
-        const uint32_t slot = builder::get_downstream_sender_channel_for_vc(
-            /*is_2d_routing=*/true,
-            1,
-            eth_chan_directions::NORTH,
-            builder::routing_direction_to_eth_direction(*t.target_direction));
-        lowest_vc1 = std::min(lowest_vc1, slot);
+    for (const auto facing : {RoutingDirection::N, RoutingDirection::E}) {
+        const auto mapping = express_mapping(facing);
+        const auto producer = builder::routing_direction_to_eth_direction(facing);
+        for (const auto& t : mapping.get_downstream_targets(0, 0)) {
+            const uint32_t slot = builder::get_downstream_sender_channel_for_vc(
+                /*is_2d_routing=*/true, 0, producer, builder::routing_direction_to_eth_direction(*t.target_direction));
+            EXPECT_GE(slot, 1u) << "producer " << static_cast<int>(facing) << " aliases the VC0 worker slot on "
+                                << static_cast<int>(*t.target_direction);
+            lowest_vc0 = std::min(lowest_vc0, slot);
+        }
+        for (const auto& t : mapping.get_downstream_targets(1, 0)) {
+            lowest_vc1 = std::min(
+                lowest_vc1,
+                builder::get_downstream_sender_channel_for_vc(
+                    /*is_2d_routing=*/true,
+                    1,
+                    producer,
+                    builder::routing_direction_to_eth_direction(*t.target_direction)));
+        }
     }
     EXPECT_EQ(lowest_vc0, 1u);
     EXPECT_EQ(lowest_vc1, 0u);
@@ -186,24 +188,20 @@ TEST(ExpressConnectionWiringTest, NonExpressWiringIsUnchanged) {
 }
 
 TEST(ExpressConnectionWiringTest, IntermeshZTemplateStillAppliesUnderExpress) {
-    // An intermesh Z router is a different edge from an express chord and keeps its own template.
+    // An intermesh Z edge is a different edge from an express chord and keeps its own template:
+    // the Z-direction target on this chip IS the boundary connection. The leak protection lives in
+    // role-based emission: on a chord-less chip (role NONE) no Z target is emitted at all, so
+    // same-mesh traffic can never leak onto the boundary link through an express-style Z target.
     const auto mapping = RouterConnectionMapping::for_router(
         Topology::Torus,
         RoutingDirection::N,
         EdgeCapability::INTRAMESH_CARDINAL,
-        (/*has_intramesh_express=*/false) ? ZPortRole::EXPRESS_CHORD
-                                          : ((k_has_intermesh_z) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE),
+        ZPortRole::INTERMESH_BOUNDARY,
         k_express,
         k_vc1,
         k_no_pass_through);
 
-    bool has_mesh_to_z = false;
-    for (const auto& target : mapping.get_downstream_targets(0, 0)) {
-        if (target.target_direction == RoutingDirection::Z) {
-            has_mesh_to_z = true;
-        }
-    }
-    EXPECT_TRUE(has_mesh_to_z);
+    EXPECT_TRUE(target_directions(mapping, 0).contains(RoutingDirection::Z));
 }
 
 // --- Z output existence (F3): only a chip that terminates the chord may emit a Z target ---
@@ -223,59 +221,27 @@ TEST(ExpressConnectionWiringTest, ChipWithoutExpressChordEmitsNoZTarget) {
     }
 }
 
-TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipReachesZRouterOnlyThroughIntermeshTemplate) {
-    // The F3 case: express mesh, and this chip's only Z edge crosses a mesh boundary. Same-mesh
-    // traffic must not take an express-style Z target onto the boundary link; the intermesh
-    // template is the only correct way to reach that router.
-    const auto mapping = RouterConnectionMapping::for_router(
-        Topology::Torus,
-        RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        (/*has_intramesh_express=*/false) ? ZPortRole::EXPRESS_CHORD
-                                          : ((k_has_intermesh_z) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE),
-        k_express,
-        k_vc1,
-        k_no_pass_through);
-
-    // The Z-direction target on this chip IS the boundary connection: there is no express chord
-    // on the chip, so the intermesh Z router is reached through it and only through it. The leak
-    // protection lives in role-based emission: on a chord-less chip (role NONE) no Z target is
-    // emitted at all, so same-mesh traffic can never leak onto the boundary link.
-    bool has_mesh_to_z = false;
-    for (const auto& target : mapping.get_downstream_targets(0, 0)) {
-        if (target.target_direction == RoutingDirection::Z) {
-            has_mesh_to_z = true;
-        }
-    }
-    EXPECT_TRUE(has_mesh_to_z);
-}
-
-TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipVc1MeshToZDoesNotAliasCardinalOutputs) {
+TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipVc1BoundaryTargetDoesNotAliasCardinalOutputs) {
     // With the express Z target dropped, a Y-facing router's VC1 targets are exactly the three
-    // cardinals plus the pass-through MESH_TO_Z -- each direction appearing exactly once, so no
-    // target aliases another. This only holds because the chord-less chip drops the Z output.
+    // cardinals plus the pass-through boundary target -- each direction appearing exactly once, so
+    // no target aliases another. This only holds because the chord-less chip drops the Z output.
     const auto mapping = RouterConnectionMapping::for_router(
         Topology::Torus,
         RoutingDirection::N,
         EdgeCapability::INTRAMESH_CARDINAL,
-        (/*has_intramesh_express=*/false) ? ZPortRole::EXPRESS_CHORD
-                                          : ((k_has_intermesh_z) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE),
+        ZPortRole::INTERMESH_BOUNDARY,
         k_express,
         k_vc1,
         /*enable_mesh_pass_through=*/true);
 
     std::set<RoutingDirection> used_directions;
-    bool has_vc1_mesh_to_z = false;
     for (const auto& target : mapping.get_downstream_targets(1, 0)) {
         ASSERT_TRUE(target.target_direction.has_value());
         EXPECT_TRUE(used_directions.insert(*target.target_direction).second)
             << "direction " << static_cast<int>(*target.target_direction) << " is shared by two VC1 targets";
-        if (*target.target_direction == RoutingDirection::Z) {
-            has_vc1_mesh_to_z = true;
-        }
     }
-    EXPECT_TRUE(has_vc1_mesh_to_z);
-    EXPECT_EQ(used_directions.size(), 4u);  // S, E, W cardinals + MESH_TO_Z
+    EXPECT_TRUE(used_directions.contains(RoutingDirection::Z));
+    EXPECT_EQ(used_directions.size(), 4u);  // S, E, W cardinals + the boundary target
 }
 
 // --- Wired producer sets (F1): the rule the injection-flag derivation consumes ---

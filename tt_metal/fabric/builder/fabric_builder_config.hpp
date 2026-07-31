@@ -117,7 +117,7 @@ static constexpr uint32_t num_mesh_directions_2d = 4;
 // arithmetic on the cardinal count, though they coincide because a Z-facing router has no self
 // among the mesh directions:
 //   VC0: the boundary egress is fed by every non-self producer (all four mesh-direction routers
-//        via MESH_TO_Z) plus the local worker.
+//        via their boundary targets) plus the local worker.
 //   VC1: the boundary's VC1 receiver fans out to every mesh direction.
 static constexpr uint32_t num_sender_channels_intermesh_z_boundary_vc0 = 1 + num_mesh_directions_2d;
 static constexpr uint32_t num_sender_channels_intermesh_z_boundary_vc1 = num_mesh_directions_2d;

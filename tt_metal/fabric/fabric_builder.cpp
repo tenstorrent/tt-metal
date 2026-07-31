@@ -211,9 +211,9 @@ void FabricBuilder::connect_routers() {
 
     // Connect each pair: local turns between two routers on this device (one router's receiver
     // feeds the other's sender, which transmits over its own eth link to a neighbor device).
-    // This is the single establishment pass for every connection -- the boundary turns
-    // (MESH_TO_Z / Z_TO_MESH) are wired here by the same path as every other local turn, so no
-    // second pass is needed.
+    // This is the single establishment pass for every connection -- the boundary turns (to and
+    // from the intermesh Z router) are wired here by the same path as every other local turn, so
+    // no second pass is needed.
     for (const auto& pair : connection_pairs) {
         auto& router1 = routers_.at(pair.chan1);
         auto& router2 = routers_.at(pair.chan2);

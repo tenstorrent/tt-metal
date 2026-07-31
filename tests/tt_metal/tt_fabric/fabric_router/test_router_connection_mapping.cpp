@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <set>
 #include <vector>
 
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
@@ -13,760 +15,365 @@ using namespace tt::tt_fabric;
 /**
  * RouterConnectionMapping Tests
  *
- * These tests validate connection mapping functionality:
- * - Factory methods for mesh and Z routers
- * - Downstream target specifications
- * - Connection type assignments
- * - Direction-based routing
- * - VC assignments for different connection types
+ * The connection map of one router, by family. Behaviour is keyed on port roles, not router
+ * "types": a cardinal-facing router gets the legacy or express turn set, the chip's extra port
+ * enters the turn set only through the chip's ZPortRole, and a Z-facing router whose edge is
+ * INTERMESH gets the from-boundary fanout. Covered here:
  *
- * Test Coverage Summary:
- * ┌──────────────────────────────────────────────────────────────────────────────────────┐
- * │ Category                    │ Test Name                                │ Focus        │
- * ├─────────────────────────────┼──────────────────────────────────────────┼──────────────┤
- * │ Basic Functionality         │ EmptyMapping_NoTargets                   │ Empty        │
- * │                             │ GetAllSenderKeys_ReturnsCorrectKeys      │ Key query    │
- * ├─────────────────────────────┼──────────────────────────────────────────┼──────────────┤
- * │ Mesh Router - 1D            │ MeshRouter_1D_NoZ_SingleConnection       │ 1D no Z      │
- * │                             │ MeshRouter_1D_WithZ_HasMeshToZ           │ 1D with Z    │
- * ├─────────────────────────────┼──────────────────────────────────────────┼──────────────┤
- * │ Mesh Router - 2D            │ MeshRouter_2D_NoZ_ThreeConnections       │ 2D no Z      │
- * │                             │ MeshRouter_2D_WithZ_FourConnections      │ 2D with Z    │
- * │                             │ MeshRouter_2D_AllDirections              │ All dirs     │
- * ├─────────────────────────────┼──────────────────────────────────────────┼──────────────┤
- * │ Z Router                    │ ZRouter_VC1_FourConnections              │ VC1 4 conns  │
- * │                             │ ZRouter_VC0_NoConnections                │ VC0 empty    │
- * │                             │ ZRouter_AllDirections_Mapped             │ All dirs     │
- * ├─────────────────────────────┼──────────────────────────────────────────┼──────────────┤
- * │ Target Composition          │ CardinalTargets_AndZBoundaryTarget       │ Directions   │
- * ├─────────────────────────────┼──────────────────────────────────────────┼──────────────┤
- * │ VC Assignments              │ VCAssignment_IntraMesh_VC0               │ VC0 routing  │
- * │                             │ VCAssignment_MeshToZ_VC0                 │ Mesh→Z VC0   │
- * │                             │ VCAssignment_ZToMesh_VC1                 │ Z→Mesh VC1   │
- * ├─────────────────────────────┼──────────────────────────────────────────┼──────────────┤
- * │ Direction Mapping           │ DirectionMapping_OppositeDirections      │ Opposites    │
- * │                             │ DirectionMapping_ZDirection              │ Z direction  │
- * │                             │ DirectionMapping_AllCardinalDirections   │ N/E/S/W      │
- * ├─────────────────────────────┼──────────────────────────────────────────┼──────────────┤
- * │ Query Interface             │ QueryInterface_HasTargets                │ Has check    │
- * │                             │ QueryInterface_GetTotalSenderCount       │ Count        │
- * │                             │ QueryInterface_GetAllSenderKeys          │ All keys     │
- * └─────────────────────────────┴──────────────────────────────────────────┴──────────────┘
+ * - 1D: opposite-direction only, independent of the chip's extra-port role.
+ * - Legacy 2D (non-express): every non-self cardinal, plus the boundary target when the chip's
+ *   extra port is an intermesh boundary; VC1 mirrors the cardinals; pass-through adds the
+ *   boundary target on VC1.
+ * - The boundary template: VC1 fanout to every mesh direction, nothing on VC0; requires 2D+VC1.
+ * - The express chord: a Z-facing INTRAMESH_EXPRESS router is wired as an ordinary routing
+ *   direction on every carrier VC; a cardinal-capability Z edge is a configuration error.
  *
- * Total: 22 tests across 8 categories
+ * The wiring rules these sets are read off live in wires_into; the primitive itself is pinned
+ * directly in test_express_connection_wiring.cpp so the two cannot drift.
  */
 
-// ============================================================================
-// Test Fixture
-// ============================================================================
-
-class RouterConnectionMappingTest : public ::testing::Test {
-protected:
-    void SetUp() override {}
-    void TearDown() override {}
-
-    // Helper to verify a single target
-    void verify_target(
-        const ConnectionTarget& target,
-        uint32_t expected_vc,
-        std::optional<RoutingDirection> expected_dir = std::nullopt) {
-        EXPECT_EQ(target.target_vc, expected_vc);
-        if (expected_dir.has_value()) {
-            ASSERT_TRUE(target.target_direction.has_value());
-            EXPECT_EQ(target.target_direction.value(), expected_dir.value());
-        }
-    }
-};
-
-// ============================================================================
-// Basic Functionality Tests
-// ============================================================================
-
-TEST_F(RouterConnectionMappingTest, EmptyMapping_NoTargets) {
-    RouterConnectionMapping mapping;
-
-    auto targets = mapping.get_downstream_targets(0, 0);
-    EXPECT_TRUE(targets.empty());
-    EXPECT_FALSE(mapping.has_targets(0, 0));
-    EXPECT_EQ(mapping.get_total_sender_count(), 0);
-}
-
-TEST_F(RouterConnectionMappingTest, GetAllSenderKeys_ReturnsCorrectKeys) {
-    RouterConnectionMapping mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
-        /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true);
-
-    auto keys = mapping.get_all_receiver_keys();
-
-    // Z router has 1 receiver channel on VC1 with 4 targets
-    EXPECT_EQ(keys.size(), 1);
-
-    // Verify the key is VC1, channel 0
-    EXPECT_EQ(keys[0].vc, 1);
-    EXPECT_EQ(keys[0].receiver_channel, 0);
-
-    // Verify it has 4 downstream targets
-    auto targets = mapping.get_downstream_targets(1, 0);
-    EXPECT_EQ(targets.size(), 4);
-}
-
-// ============================================================================
-// Mesh Router Tests - 1D Topology
-// ============================================================================
-
-TEST_F(RouterConnectionMappingTest, MeshRouter_1D_NoZ_SingleConnection) {
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Linear,
-        RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::NONE,
-        false,
-        false,
-        false);  // No Z router
-
-    // Receiver channel 0 has 1 target: opposite direction (SOUTH)
-    ASSERT_TRUE(mapping.has_targets(0, 0));
-    auto targets = mapping.get_downstream_targets(0, 0);
-    ASSERT_EQ(targets.size(), 1);
-
-    verify_target(targets[0], 0, RoutingDirection::S);
-}
-
-TEST_F(RouterConnectionMappingTest, MeshRouter_1D_WithZ_TwoConnections) {
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Linear,
-        RoutingDirection::E,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        (true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
-        false,
-        false);  // Has Z router
-
-    // Receiver channel 0 has 2 targets: INTRA_MESH (WEST) + MESH_TO_Z
-    auto targets = mapping.get_downstream_targets(0, 0);
-    ASSERT_EQ(targets.size(), 2);
-
-    // Find INTRA_MESH target
-    auto intra_mesh_it = std::find_if(targets.begin(), targets.end(), [](const ConnectionTarget& t) {
-        return t.target_direction != RoutingDirection::Z;
-    });
-    ASSERT_NE(intra_mesh_it, targets.end());
-    verify_target(*intra_mesh_it, 0, RoutingDirection::W);
-
-    // Find MESH_TO_Z target
-    auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(), [](const ConnectionTarget& t) {
-        return t.target_direction == RoutingDirection::Z;
-    });
-    ASSERT_NE(mesh_to_z_it, targets.end());
-    verify_target(*mesh_to_z_it, 0, RoutingDirection::Z);
-}
-
-TEST_F(RouterConnectionMappingTest, MeshRouter_1D_AllDirections_OppositeMapping) {
-    // Test all 4 directions to verify opposite calculation
-    std::vector<std::pair<RoutingDirection, RoutingDirection>> direction_pairs = {
-        {RoutingDirection::N, RoutingDirection::S},
-        {RoutingDirection::S, RoutingDirection::N},
-        {RoutingDirection::E, RoutingDirection::W},
-        {RoutingDirection::W, RoutingDirection::E}
-    };
-
-    for (const auto& [my_dir, expected_opposite] : direction_pairs) {
-        auto mapping = RouterConnectionMapping::for_router(
-            Topology::Linear, my_dir, EdgeCapability::INTRAMESH_CARDINAL, ZPortRole::NONE, false, false, false);
-
-        auto targets = mapping.get_downstream_targets(0, 0);  // Receiver channel 0
-        ASSERT_EQ(targets.size(), 1);
-        EXPECT_EQ(targets[0].target_direction.value(), expected_opposite)
-            << "Direction " << static_cast<int>(my_dir) << " should connect to " << static_cast<int>(expected_opposite);
-    }
-}
-
-// ============================================================================
-// Mesh Router Tests - 2D Topology
-// ============================================================================
-
-TEST_F(RouterConnectionMappingTest, MeshRouter_2D_NoZ_ThreeConnections) {
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, ZPortRole::NONE, false, false, false);
-
-    // Receiver channel 0 has 3 targets: opposite + 2 cross directions
-    // NORTH router connects to: SOUTH (opposite), EAST, WEST (cross)
-    ASSERT_TRUE(mapping.has_targets(0, 0));
-    auto targets = mapping.get_downstream_targets(0, 0);
-    ASSERT_EQ(targets.size(), 3);
-
-    // Verify all are INTRA_MESH
-    for (const auto& target : targets) {
-        EXPECT_TRUE(target.target_direction.has_value());
-        EXPECT_NE(target.target_direction.value(), RoutingDirection::Z);
-        EXPECT_EQ(target.target_vc, 0);
-    }
-
-    // Find SOUTH target (opposite)
-    auto south_it = std::find_if(targets.begin(), targets.end(),
-        [](const ConnectionTarget& t) { return t.target_direction == RoutingDirection::S; });
-    ASSERT_NE(south_it, targets.end());
-
-    // Verify EAST and WEST are present
-    auto east_it = std::find_if(targets.begin(), targets.end(),
-        [](const ConnectionTarget& t) { return t.target_direction == RoutingDirection::E; });
-    auto west_it = std::find_if(targets.begin(), targets.end(),
-        [](const ConnectionTarget& t) { return t.target_direction == RoutingDirection::W; });
-    ASSERT_NE(east_it, targets.end());
-    ASSERT_NE(west_it, targets.end());
-}
-
-TEST_F(RouterConnectionMappingTest, MeshRouter_2D_WithZ_FourConnections) {
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::E,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        (true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
-        false,
-        false);  // Has Z router
-
-    // Receiver channel 0 has 4 targets: 3 INTRA_MESH + 1 MESH_TO_Z
-    ASSERT_TRUE(mapping.has_targets(0, 0));
-    auto targets = mapping.get_downstream_targets(0, 0);
-    ASSERT_EQ(targets.size(), 4);
-
-    // Count by direction
-    uint32_t intra_mesh_count = 0;
-    uint32_t mesh_to_z_count = 0;
-    for (const auto& target : targets) {
-        if (target.target_direction == RoutingDirection::Z) {
-            mesh_to_z_count++;
-            verify_target(target, 0, RoutingDirection::Z);
-        } else {
-            intra_mesh_count++;
-        }
-    }
-    EXPECT_EQ(intra_mesh_count, 3);
-    EXPECT_EQ(mesh_to_z_count, 1);
-}
-
-TEST_F(RouterConnectionMappingTest, MeshRouter_2D_EastRouter_CorrectDirections) {
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh, RoutingDirection::E, EdgeCapability::INTRAMESH_CARDINAL, ZPortRole::NONE, false, false, false);
-
-    // EAST router receiver channel 0 should have 3 targets: WEST (opposite), NORTH, SOUTH
-    auto targets = mapping.get_downstream_targets(0, 0);
-    ASSERT_EQ(targets.size(), 3);
-
-    // Find each expected direction
-    auto west_it = std::find_if(targets.begin(), targets.end(),
-        [](const ConnectionTarget& t) { return t.target_direction == RoutingDirection::W; });
-    auto north_it = std::find_if(targets.begin(), targets.end(),
-        [](const ConnectionTarget& t) { return t.target_direction == RoutingDirection::N; });
-    auto south_it = std::find_if(targets.begin(), targets.end(),
-        [](const ConnectionTarget& t) { return t.target_direction == RoutingDirection::S; });
-
-    ASSERT_NE(west_it, targets.end());
-    ASSERT_NE(north_it, targets.end());
-    ASSERT_NE(south_it, targets.end());
-
-    // Verify all are INTRA_MESH to VC0
-    for (const auto& target : targets) {
-        verify_target(target, 0);
-    }
-}
-
-// ============================================================================
-// Z Router Tests
-// ============================================================================
-
-TEST_F(RouterConnectionMappingTest, ZRouter_VC1_FourSenderChannels) {
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
-        /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true);
-
-    // VC0: No connections (reserved for future use)
-    EXPECT_FALSE(mapping.has_targets(0, 0));
-
-    // VC1: receiver channel 0 has 4 targets
-    EXPECT_TRUE(mapping.has_targets(1, 0));
-    auto targets = mapping.get_downstream_targets(1, 0);
-    EXPECT_EQ(targets.size(), 4);
-
-    // Total sender count = 4 targets from receiver channel 0
-    EXPECT_EQ(mapping.get_total_sender_count(), 4);
-}
-
-TEST_F(RouterConnectionMappingTest, ZRouter_VC1_CorrectDirectionMapping) {
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
-        /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true);
-
-    // Receiver channel 0 on VC1 has 4 targets mapping to N/E/S/W
-    auto targets = mapping.get_downstream_targets(1, 0);
-    ASSERT_EQ(targets.size(), 4);
-
-    // Verify each direction is present
-    std::vector<RoutingDirection> expected_directions = {
-        RoutingDirection::N,
-        RoutingDirection::E,
-        RoutingDirection::S,
-        RoutingDirection::W
-    };
-
-    for (const auto& expected_dir : expected_directions) {
-        auto it = std::find_if(targets.begin(), targets.end(), [expected_dir](const ConnectionTarget& t) {
-            return t.target_direction == expected_dir;
-        });
-        ASSERT_NE(it, targets.end()) << "Missing direction: " << static_cast<int>(expected_dir);
-        verify_target(*it, 1, expected_dir);
-    }
-}
-
-TEST_F(RouterConnectionMappingTest, ZRouter_AllTargets_SameVC) {
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
-        /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true);
-
-    // All Z router VC1 targets should go to mesh router VC1
-    auto targets = mapping.get_downstream_targets(1, 0);
-    ASSERT_EQ(targets.size(), 4);
-
-    for (const auto& target : targets) {
-        EXPECT_EQ(target.target_vc, 1);  // Z VC1 → mesh VC1
-        EXPECT_TRUE(target.target_direction.has_value());
-        EXPECT_NE(target.target_direction.value(), RoutingDirection::Z);
-    }
-}
-
-// ============================================================================
-// Edge Case Tests
-// ============================================================================
-
-TEST_F(RouterConnectionMappingTest, MeshRouter_InvalidVC_NoTargets) {
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, ZPortRole::NONE, false, false, false);
-
-    // VC1 not configured for mesh routers
-    EXPECT_FALSE(mapping.has_targets(1, 0));
-    EXPECT_TRUE(mapping.get_downstream_targets(1, 0).empty());
-}
-
-TEST_F(RouterConnectionMappingTest, ZRouter_InvalidChannel_NoTargets) {
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
-        /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true);
-
-    // VC1 only has channels 0-3
-    EXPECT_FALSE(mapping.has_targets(1, 4));
-    EXPECT_FALSE(mapping.has_targets(1, 5));
-    EXPECT_TRUE(mapping.get_downstream_targets(1, 4).empty());
-}
-
-TEST_F(RouterConnectionMappingTest, ConnectionTarget_Construction) {
-    ConnectionTarget target(
-        1,  // VC1
-        RoutingDirection::Z);
-
-    EXPECT_EQ(target.target_direction, RoutingDirection::Z);
-    EXPECT_EQ(target.target_vc, 1);
-    ASSERT_TRUE(target.target_direction.has_value());
-    EXPECT_EQ(target.target_direction.value(), RoutingDirection::Z);
-}
-
-TEST_F(RouterConnectionMappingTest, ReceiverChannelKey_Comparison) {
-    ReceiverChannelKey key1{0, 1};
-    ReceiverChannelKey key2{0, 2};
-    ReceiverChannelKey key3{1, 0};
-    ReceiverChannelKey key4{0, 1};
-
-    // Ordering
-    EXPECT_TRUE(key1 < key2);  // Same VC, lower channel
-    EXPECT_TRUE(key1 < key3);  // Lower VC
-    EXPECT_FALSE(key2 < key1);
-
-    // Equality
-    EXPECT_TRUE(key1 == key4);
-    EXPECT_FALSE(key1 == key2);
-}
-
-// ============================================================================
-// Integration Scenario Tests
-// ============================================================================
-
-TEST_F(RouterConnectionMappingTest, Scenario_2DMesh_WithZ_FullDevice) {
-    // Simulate a full device with 4 mesh routers + 1 Z router
-
-    // Create mesh routers for all 4 directions
-    auto north_mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        (true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
-        false,
-        false);
-    auto east_mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::E,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        (true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
-        false,
-        false);
-    auto south_mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::S,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        (true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
-        false,
-        false);
-    auto west_mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::W,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        (true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
-        false,
-        false);
-
-    // Create Z router
-    auto z_mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
-        /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true);
-
-    // Verify each mesh router has 4 connections (3 INTRA_MESH + 1 MESH_TO_Z)
-    EXPECT_EQ(north_mapping.get_total_sender_count(), 4);
-    EXPECT_EQ(east_mapping.get_total_sender_count(), 4);
-    EXPECT_EQ(south_mapping.get_total_sender_count(), 4);
-    EXPECT_EQ(west_mapping.get_total_sender_count(), 4);
-
-    // Verify Z router has 4 connections (all Z_TO_MESH)
-    EXPECT_EQ(z_mapping.get_total_sender_count(), 4);
-
-    // Verify each mesh router has MESH_TO_Z in receiver channel 0 targets
-    for (auto* mapping_ptr : {&north_mapping, &east_mapping, &south_mapping, &west_mapping}) {
-        auto targets = mapping_ptr->get_downstream_targets(0, 0);
-        auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(), [](const ConnectionTarget& t) {
-            return t.target_direction == RoutingDirection::Z;
-        });
-        EXPECT_NE(mesh_to_z_it, targets.end());
-    }
-}
-
-TEST_F(RouterConnectionMappingTest, Scenario_EdgeDevice_2MeshRouters_WithZ) {
-    // Edge device with only 2 mesh routers (e.g., NORTH and EAST)
-    auto north_mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        (true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
-        false,
-        false);
-    auto east_mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::E,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        (true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
-        false,
-        false);
-
-    auto z_mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
-        /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true);
-
-    // Z router still has intent for all 4 directions
-    // FabricBuilder will skip SOUTH and WEST if routers don't exist
-    EXPECT_EQ(z_mapping.get_total_sender_count(), 4);
-
-    // Mesh routers still have MESH_TO_Z connections in receiver channel 0
-    auto north_targets = north_mapping.get_downstream_targets(0, 0);
-    auto north_mesh_to_z = std::find_if(north_targets.begin(), north_targets.end(), [](const ConnectionTarget& t) {
-        return t.target_direction == RoutingDirection::Z;
-    });
-    ASSERT_NE(north_mesh_to_z, north_targets.end());
-
-    auto east_targets = east_mapping.get_downstream_targets(0, 0);
-    auto east_mesh_to_z = std::find_if(east_targets.begin(), east_targets.end(), [](const ConnectionTarget& t) {
-        return t.target_direction == RoutingDirection::Z;
-    });
-    ASSERT_NE(east_mesh_to_z, east_targets.end());
-}
-
-TEST_F(RouterConnectionMappingTest, Scenario_1DMesh_NoZ_Bidirectional) {
-    // Simple 1D mesh with 2 routers (NORTH and SOUTH)
-    auto north_mapping = RouterConnectionMapping::for_router(
-        Topology::Linear,
-        RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::NONE,
-        false,
-        false,
-        false);
-    auto south_mapping = RouterConnectionMapping::for_router(
-        Topology::Linear,
-        RoutingDirection::S,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::NONE,
-        false,
-        false,
-        false);
-
-    // NORTH router receiver channel 0 → SOUTH
-    auto north_targets = north_mapping.get_downstream_targets(0, 0);
-    ASSERT_EQ(north_targets.size(), 1);
-    EXPECT_EQ(north_targets[0].target_direction.value(), RoutingDirection::S);
-
-    // SOUTH router receiver channel 0 → NORTH
-    auto south_targets = south_mapping.get_downstream_targets(0, 0);
-    ASSERT_EQ(south_targets.size(), 1);
-    EXPECT_EQ(south_targets[0].target_direction.value(), RoutingDirection::N);
-}
-
-// ============================================================================
-// Negative Tests: Invalid Channel Access and Overflow
-// ============================================================================
-
-TEST_F(RouterConnectionMappingTest, ZRouter_VC1_OnlyFourDirections) {
-    // Validate that Z router VC1 only defines connections for 4 directions (N/E/S/W)
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
-        /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true);
-
-    // VC1 receiver channel 0 should have exactly 4 targets
-    auto targets = mapping.get_downstream_targets(1, 0);
-    EXPECT_EQ(targets.size(), 4) << "Z VC1 receiver channel 0 should have 4 targets";
-
-    // Channel 1 and beyond should have no targets
-    for (uint32_t ch = 1; ch < 10; ++ch) {
-        auto ch_targets = mapping.get_downstream_targets(1, ch);
-        EXPECT_TRUE(ch_targets.empty()) << "Z VC1 receiver channel " << ch << " should have no targets (doesn't exist)";
-        EXPECT_FALSE(mapping.has_targets(1, ch));
-    }
-}
-
-TEST_F(RouterConnectionMappingTest, MeshRouter_InvalidVC_ReturnsEmpty) {
-    // Mesh router only has VC0, querying VC1+ should return empty
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, ZPortRole::NONE, false, false, false);
-
-    // VC1 should have no targets (not enabled for standard mesh)
-    for (uint32_t ch = 0; ch < 5; ++ch) {
-        auto targets = mapping.get_downstream_targets(1, ch);
-        EXPECT_TRUE(targets.empty()) << "Mesh router VC1 channel " << ch << " should have no targets";
-    }
-
-    // VC2+ definitely don't exist
-    auto targets = mapping.get_downstream_targets(2, 0);
-    EXPECT_TRUE(targets.empty());
-}
-
-TEST_F(RouterConnectionMappingTest, MeshRouter_InvalidSenderChannel_ReturnsEmpty) {
-    // Mesh router VC0 receiver channel 0 has 3 targets for 2D mesh without Z
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh, RoutingDirection::N, EdgeCapability::INTRAMESH_CARDINAL, ZPortRole::NONE, false, false, false);
-
-    // Receiver channel 0 should have targets
-    EXPECT_TRUE(mapping.has_targets(0, 0));
-    auto targets = mapping.get_downstream_targets(0, 0);
-    EXPECT_EQ(targets.size(), 3);  // 3 INTRA_MESH targets for 2D mesh
-
-    // Invalid receiver channels (beyond 0) should have no targets
-    for (uint32_t ch = 1; ch < 10; ++ch) {
-        auto ch_targets = mapping.get_downstream_targets(0, ch);
-        EXPECT_TRUE(ch_targets.empty()) << "Mesh router VC0 receiver channel " << ch << " should have no targets (doesn't exist)";
-        EXPECT_FALSE(mapping.has_targets(0, ch));
-    }
-}
-
-TEST_F(RouterConnectionMappingTest, ZRouter_VC0_NoOutgoingTargets) {
-    // Z router VC0 senders should have no downstream targets (reserved)
-    auto mapping = RouterConnectionMapping::for_router(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
-        /*express_routing_enabled=*/false,
-        /*enable_vc1=*/true);
-
-    // All VC0 sender channels should have no targets
-    for (uint32_t ch = 0; ch < 4; ++ch) {
-        auto targets = mapping.get_downstream_targets(0, ch);
-        EXPECT_TRUE(targets.empty()) << "Z router VC0 sender " << ch << " should have no targets";
-        EXPECT_FALSE(mapping.has_targets(0, ch));
-    }
-}
-
-// ============================================================================
-// EXPERIMENTAL: Inter-mesh Pass-Through (VC1 MESH_TO_Z) Tests
-// ============================================================================
-//
-// Pass-through (A->B->C) lets inter-mesh (VC1) traffic traverse intermediate
-// meshes instead of sinking at the first mesh boundary. For Z-stacked meshes
-// this requires the mesh router to forward VC1 traffic to the local Z router
-// (MESH_TO_Z on VC1), wiring the 4th VC1 sender channel that the channel mapping
-// already reserves on Z devices. These tests exercise the
-// `enable_mesh_pass_through` parameter of for_mesh_router directly (no env var),
-// keeping them deterministic and independent of global runtime state.
-
 namespace {
-uint32_t count_zward(const std::vector<ConnectionTarget>& targets) {
-    return static_cast<uint32_t>(std::count_if(targets.begin(), targets.end(), [](const ConnectionTarget& t) {
-        return t.target_direction == RoutingDirection::Z;
-    }));
+
+// The set of directions a router's receiver channel 0 forwards to on one VC.
+std::set<RoutingDirection> target_directions(const RouterConnectionMapping& mapping, uint32_t vc) {
+    std::set<RoutingDirection> out;
+    for (const auto& t : mapping.get_downstream_targets(vc, 0)) {
+        EXPECT_TRUE(t.target_direction.has_value());
+        out.insert(*t.target_direction);
+    }
+    return out;
 }
 
-uint32_t count_cardinal(const std::vector<ConnectionTarget>& targets) {
-    return static_cast<uint32_t>(std::count_if(targets.begin(), targets.end(), [](const ConnectionTarget& t) {
-        return t.target_direction != RoutingDirection::Z;
-    }));
+void expect_all_targets_on_vc(const RouterConnectionMapping& mapping, uint32_t vc, uint32_t expected_target_vc) {
+    for (const auto& t : mapping.get_downstream_targets(vc, 0)) {
+        EXPECT_EQ(t.target_vc, expected_target_vc);
+    }
 }
+
+const std::set<RoutingDirection> k_all_cardinals = {
+    RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W};
+
+std::set<RoutingDirection> non_self_cardinals(RoutingDirection facing) {
+    auto out = k_all_cardinals;
+    out.erase(facing);
+    return out;
+}
+
+RoutingDirection opposite_of(RoutingDirection facing) {
+    switch (facing) {
+        case RoutingDirection::N: return RoutingDirection::S;
+        case RoutingDirection::S: return RoutingDirection::N;
+        case RoutingDirection::E: return RoutingDirection::W;
+        case RoutingDirection::W: return RoutingDirection::E;
+        default: return facing;
+    }
+}
+
 }  // namespace
 
-TEST_F(RouterConnectionMappingTest, PassThrough_2D_WithZ_AddsMeshToZOnVC1) {
-    // 2D mesh on a Z-stacked device, VC1 enabled, pass-through enabled.
-    // Each mesh router's VC1 receiver should forward to the local Z router
-    // (MESH_TO_Z on VC1) in addition to the 3 INTRA_MESH VC1 forwards.
-    for (auto dir : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
-        auto mapping = RouterConnectionMapping::for_router(
-            Topology::Mesh,
-            dir,
-            EdgeCapability::INTRAMESH_CARDINAL,
-            (/*has_z=*/true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-            false,
-            /*enable_vc1=*/true,
-            /*enable_mesh_pass_through=*/true);
+class RouterConnectionMappingTest : public ::testing::Test {};
 
-        // VC1 receiver channel 0: 3 INTRA_MESH + 1 MESH_TO_Z
-        auto vc1_targets = mapping.get_downstream_targets(1, 0);
-        ASSERT_EQ(vc1_targets.size(), 4u) << "direction " << static_cast<int>(dir);
-        EXPECT_EQ(count_cardinal(vc1_targets), 3u);
-        EXPECT_EQ(count_zward(vc1_targets), 1u);
+// ============================================================================
+// 1D: the opposite direction only, regardless of the chip's extra-port role
+// ============================================================================
 
-        // The VC1 MESH_TO_Z target must target the Z router on VC1.
-        auto mesh_to_z_it = std::find_if(vc1_targets.begin(), vc1_targets.end(), [](const ConnectionTarget& t) {
-            return t.target_direction == RoutingDirection::Z;
-        });
-        ASSERT_NE(mesh_to_z_it, vc1_targets.end());
-        verify_target(*mesh_to_z_it, /*expected_vc=*/1, RoutingDirection::Z);
+TEST_F(RouterConnectionMappingTest, Linear1D_WiresOnlyTheOpposite) {
+    // A 1D router's whole turn set is the opposite direction. The extra port plays no role:
+    // intermesh connections are rejected upstream for 1D, and get_router_connection_pairs emits
+    // no Z pairs, so a boundary or chord target would be unestablishable anyway.
+    for (auto topology : {Topology::Linear, Topology::Ring}) {
+        for (auto role : {ZPortRole::NONE, ZPortRole::INTERMESH_BOUNDARY, ZPortRole::EXPRESS_CHORD}) {
+            for (auto facing : {RoutingDirection::N, RoutingDirection::E}) {
+                auto mapping = RouterConnectionMapping::for_router(
+                    topology,
+                    facing,
+                    EdgeCapability::INTRAMESH_CARDINAL,
+                    role,
+                    /*express_routing_enabled=*/false,
+                    /*enable_vc1=*/false,
+                    /*enable_mesh_pass_through=*/false);
 
-        // VC0 path is unchanged: 3 INTRA_MESH + 1 MESH_TO_Z (on VC0).
-        auto vc0_targets = mapping.get_downstream_targets(0, 0);
-        ASSERT_EQ(vc0_targets.size(), 4u);
-        EXPECT_EQ(count_zward(vc0_targets), 1u);
-        auto vc0_mesh_to_z = std::find_if(vc0_targets.begin(), vc0_targets.end(), [](const ConnectionTarget& t) {
-            return t.target_direction == RoutingDirection::Z;
-        });
-        ASSERT_NE(vc0_mesh_to_z, vc0_targets.end());
-        EXPECT_EQ(vc0_mesh_to_z->target_vc, 0u);
+                auto targets = mapping.get_downstream_targets(0, 0);
+                ASSERT_EQ(targets.size(), 1) << "topology " << static_cast<int>(topology) << " role "
+                                             << static_cast<int>(role) << " facing " << static_cast<int>(facing);
+                EXPECT_EQ(*targets[0].target_direction, opposite_of(facing));
+                EXPECT_EQ(targets[0].target_vc, 0);
+                EXPECT_FALSE(mapping.has_targets(1, 0));
+            }
+        }
     }
 }
 
-TEST_F(RouterConnectionMappingTest, PassThrough_Disabled_NoMeshToZOnVC1) {
-    // Default (full_mesh) behavior: VC1 is enabled but pass-through is OFF.
-    // VC1 must NOT forward to the Z router (feeding the Z router's VC1 sender
-    // while it does not service VC1 would create an undrained channel).
+// ============================================================================
+// Legacy 2D (non-express)
+// ============================================================================
+
+TEST_F(RouterConnectionMappingTest, Legacy2D_WiresEveryNonSelfCardinal) {
+    for (auto topology : {Topology::Mesh, Topology::Torus}) {
+        for (auto facing : k_all_cardinals) {
+            auto mapping = RouterConnectionMapping::for_router(
+                topology,
+                facing,
+                EdgeCapability::INTRAMESH_CARDINAL,
+                ZPortRole::NONE,
+                /*express_routing_enabled=*/false,
+                /*enable_vc1=*/false,
+                /*enable_mesh_pass_through=*/false);
+
+            EXPECT_EQ(target_directions(mapping, 0), non_self_cardinals(facing))
+                << "facing " << static_cast<int>(facing);
+            expect_all_targets_on_vc(mapping, 0, 0);
+        }
+    }
+}
+
+TEST_F(RouterConnectionMappingTest, Legacy2D_KeepsWiredButUnusedXToYTurns) {
+    // Standing decision: an E/W-facing legacy router is wired into the Y directions even though
+    // 2D routing is already dimension-ordered and never uses those turns. Removing them would move
+    // downstream counts, stream assignment, and L1 layout on every existing 2D configuration.
     auto mapping = RouterConnectionMapping::for_router(
         Topology::Mesh,
         RoutingDirection::E,
         EdgeCapability::INTRAMESH_CARDINAL,
-        (/*has_z=*/true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
+        ZPortRole::NONE,
+        /*express_routing_enabled=*/false,
+        /*enable_vc1=*/false,
+        /*enable_mesh_pass_through=*/false);
+
+    const auto dirs = target_directions(mapping, 0);
+    EXPECT_TRUE(dirs.contains(RoutingDirection::N));
+    EXPECT_TRUE(dirs.contains(RoutingDirection::S));
+    EXPECT_TRUE(dirs.contains(RoutingDirection::W));
+}
+
+TEST_F(RouterConnectionMappingTest, Legacy2D_BoundaryChipAddsBoundaryTargetOnVC0) {
+    // The chip's extra port enters the turn set when it is an intermesh boundary: the three
+    // non-self cardinals plus the boundary turn, which stays on VC0.
+    for (auto facing : k_all_cardinals) {
+        auto mapping = RouterConnectionMapping::for_router(
+            Topology::Mesh,
+            facing,
+            EdgeCapability::INTRAMESH_CARDINAL,
+            ZPortRole::INTERMESH_BOUNDARY,
+            /*express_routing_enabled=*/false,
+            /*enable_vc1=*/false,
+            /*enable_mesh_pass_through=*/false);
+
+        auto expected = non_self_cardinals(facing);
+        expected.insert(RoutingDirection::Z);
+        EXPECT_EQ(target_directions(mapping, 0), expected) << "facing " << static_cast<int>(facing);
+        expect_all_targets_on_vc(mapping, 0, 0);
+    }
+}
+
+TEST_F(RouterConnectionMappingTest, Legacy2D_VC1MirrorsCardinalsOnly) {
+    // VC1 forwards the same cardinal set, but the boundary target stays off VC1: feeding the
+    // boundary's VC1 sender while it does not service VC1 would create an undrained channel.
+    auto mapping = RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        ZPortRole::INTERMESH_BOUNDARY,
+        /*express_routing_enabled=*/false,
         /*enable_vc1=*/true,
         /*enable_mesh_pass_through=*/false);
 
-    auto vc1_targets = mapping.get_downstream_targets(1, 0);
-    ASSERT_EQ(vc1_targets.size(), 3u);
-    EXPECT_EQ(count_cardinal(vc1_targets), 3u);
-    EXPECT_EQ(count_zward(vc1_targets), 0u);
+    EXPECT_EQ(target_directions(mapping, 1), non_self_cardinals(RoutingDirection::N));
+    expect_all_targets_on_vc(mapping, 1, 1);
 
-    // VC0 still has its MESH_TO_Z connection regardless of pass-through.
-    EXPECT_EQ(count_zward(mapping.get_downstream_targets(0, 0)), 1u);
+    auto expected_vc0 = non_self_cardinals(RoutingDirection::N);
+    expected_vc0.insert(RoutingDirection::Z);
+    EXPECT_EQ(target_directions(mapping, 0), expected_vc0);
 }
 
-TEST_F(RouterConnectionMappingTest, PassThrough_NoZDevice_NoMeshToZOnVC1) {
-    // Pass-through requested but device has no Z router: there is no Z router to
-    // forward to, so no MESH_TO_Z is created on either VC.
+TEST_F(RouterConnectionMappingTest, PassThrough_AddsBoundaryTargetOnVC1) {
+    // EXPERIMENTAL pass-through (A->B->C) forwards VC1 traffic to the local boundary as well.
+    for (auto topology : {Topology::Mesh, Topology::Torus}) {
+        auto mapping = RouterConnectionMapping::for_router(
+            topology,
+            RoutingDirection::E,
+            EdgeCapability::INTRAMESH_CARDINAL,
+            ZPortRole::INTERMESH_BOUNDARY,
+            /*express_routing_enabled=*/false,
+            /*enable_vc1=*/true,
+            /*enable_mesh_pass_through=*/true);
+
+        auto expected_vc1 = non_self_cardinals(RoutingDirection::E);
+        expected_vc1.insert(RoutingDirection::Z);
+        EXPECT_EQ(target_directions(mapping, 1), expected_vc1) << "topology " << static_cast<int>(topology);
+        expect_all_targets_on_vc(mapping, 1, 1);
+
+        // No aliasing: every VC1 target names a distinct direction.
+        const auto vc1_targets = mapping.get_downstream_targets(1, 0);
+        EXPECT_EQ(vc1_targets.size(), expected_vc1.size());
+    }
+}
+
+TEST_F(RouterConnectionMappingTest, PassThrough_NoEffectWithoutBoundaryPort) {
+    // Pass-through requested on a chip whose extra port is absent or is a chord: there is no
+    // boundary to forward to, so no Z target appears on either VC.
     auto mapping = RouterConnectionMapping::for_router(
         Topology::Mesh,
         RoutingDirection::E,
         EdgeCapability::INTRAMESH_CARDINAL,
-        (/*has_z=*/false) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
+        ZPortRole::NONE,
+        /*express_routing_enabled=*/false,
         /*enable_vc1=*/true,
         /*enable_mesh_pass_through=*/true);
 
-    auto vc1_targets = mapping.get_downstream_targets(1, 0);
-    ASSERT_EQ(vc1_targets.size(), 3u);
-    EXPECT_EQ(count_zward(vc1_targets), 0u);
-
-    auto vc0_targets = mapping.get_downstream_targets(0, 0);
-    EXPECT_EQ(count_zward(vc0_targets), 0u);
+    EXPECT_EQ(target_directions(mapping, 0), non_self_cardinals(RoutingDirection::E));
+    EXPECT_EQ(target_directions(mapping, 1), non_self_cardinals(RoutingDirection::E));
 }
 
-TEST_F(RouterConnectionMappingTest, PassThrough_Torus_WithZ_AddsMeshToZOnVC1) {
-    // Torus is also a 2D topology and must support pass-through identically to Mesh.
+// ============================================================================
+// The boundary template (Z-facing router whose edge crosses a mesh boundary)
+// ============================================================================
+
+TEST_F(RouterConnectionMappingTest, BoundaryTemplate_FansOutToEveryMeshDirectionOnVC1) {
+    // The boundary's whole shape is its from-boundary VC1 fanout: nothing forwards off its VC0
+    // receiver (traffic arriving there crosses over onto these same VC1 downstream senders).
+    auto mapping = RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
+        ZPortRole::INTERMESH_BOUNDARY,
+        /*express_routing_enabled=*/false,
+        /*enable_vc1=*/true,
+        /*enable_mesh_pass_through=*/false);
+
+    // Exactly one receiver key: (VC1, channel 0).
+    const auto keys = mapping.get_all_receiver_keys();
+    ASSERT_EQ(keys.size(), 1);
+    EXPECT_EQ(keys[0].vc, 1);
+    EXPECT_EQ(keys[0].receiver_channel, 0);
+
+    for (uint32_t ch = 0; ch < 5; ++ch) {
+        EXPECT_FALSE(mapping.has_targets(0, ch)) << "boundary VC0 channel " << ch << " should have no targets";
+    }
+
+    const auto targets = mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(targets.size(), 4);
+    // Fanout is emitted in cardinal enum order.
+    const std::vector<RoutingDirection> expected_order = {
+        RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W};
+    for (size_t i = 0; i < expected_order.size(); ++i) {
+        ASSERT_TRUE(targets[i].target_direction.has_value());
+        EXPECT_EQ(*targets[i].target_direction, expected_order[i]);
+        EXPECT_EQ(targets[i].target_vc, 1);
+    }
+}
+
+TEST_F(RouterConnectionMappingTest, BoundaryTemplate_Requires2DAndVC1) {
+    // Its entire shape is the from-boundary VC1 fanout, so without VC1 or on 1D the boundary
+    // router cannot be constructed.
+    EXPECT_ANY_THROW(RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
+        ZPortRole::INTERMESH_BOUNDARY,
+        /*express_routing_enabled=*/false,
+        /*enable_vc1=*/false,
+        /*enable_mesh_pass_through=*/false));
+
+    EXPECT_ANY_THROW(RouterConnectionMapping::for_router(
+        Topology::Linear,
+        RoutingDirection::Z,
+        EdgeCapability::INTERMESH,
+        ZPortRole::INTERMESH_BOUNDARY,
+        /*express_routing_enabled=*/false,
+        /*enable_vc1=*/true,
+        /*enable_mesh_pass_through=*/false));
+}
+
+// ============================================================================
+// The express chord (Z-facing router whose edge is a same-mesh express chord)
+// ============================================================================
+
+TEST_F(RouterConnectionMappingTest, ExpressChord_IsWiredAsAnOrdinaryRoutingDirection) {
+    // A chord is a Y-axis resource like N/S: it fans out to all four cardinals as ordinary
+    // same-VC turns, on VC0 and VC1 alike (a landed carrier can still decode a Z action).
     auto mapping = RouterConnectionMapping::for_router(
         Topology::Torus,
-        RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        (/*has_z=*/true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
+        RoutingDirection::Z,
+        EdgeCapability::INTRAMESH_EXPRESS,
+        ZPortRole::EXPRESS_CHORD,
+        /*express_routing_enabled=*/true,
         /*enable_vc1=*/true,
-        /*enable_mesh_pass_through=*/true);
+        /*enable_mesh_pass_through=*/false);
 
-    auto vc1_targets = mapping.get_downstream_targets(1, 0);
-    ASSERT_EQ(vc1_targets.size(), 4u);
-    EXPECT_EQ(count_zward(vc1_targets), 1u);
+    for (uint32_t vc : {0u, 1u}) {
+        // No Z in the set: a router never wires back over its own link.
+        EXPECT_EQ(target_directions(mapping, vc), k_all_cardinals) << "VC" << vc;
+        expect_all_targets_on_vc(mapping, vc, vc);
+    }
 }
 
-TEST_F(RouterConnectionMappingTest, PassThrough_1D_WithZ_NoVC1MeshToZ) {
-    // 1D topologies do not have VC1; pass-through must be a no-op for VC1 while
-    // leaving the VC0 MESH_TO_Z connection intact.
-    auto mapping = RouterConnectionMapping::for_router(
+TEST_F(RouterConnectionMappingTest, ExpressChord_RequiresExpressEnabledAnd2D) {
+    EXPECT_ANY_THROW(RouterConnectionMapping::for_router(
+        Topology::Torus,
+        RoutingDirection::Z,
+        EdgeCapability::INTRAMESH_EXPRESS,
+        ZPortRole::EXPRESS_CHORD,
+        /*express_routing_enabled=*/false,
+        /*enable_vc1=*/false,
+        /*enable_mesh_pass_through=*/false));
+
+    EXPECT_ANY_THROW(RouterConnectionMapping::for_router(
         Topology::Linear,
-        RoutingDirection::E,
+        RoutingDirection::Z,
+        EdgeCapability::INTRAMESH_EXPRESS,
+        ZPortRole::EXPRESS_CHORD,
+        /*express_routing_enabled=*/true,
+        /*enable_vc1=*/false,
+        /*enable_mesh_pass_through=*/false));
+}
+
+TEST_F(RouterConnectionMappingTest, CardinalCapabilityOnZFacingIsAConfigurationError) {
+    // Direction letter and capability disagree: a same-mesh Z edge is an express chord and must
+    // carry INTRAMESH_EXPRESS; an ordinary cardinal-capability Z edge cannot exist.
+    EXPECT_ANY_THROW(RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
         EdgeCapability::INTRAMESH_CARDINAL,
-        (/*has_z=*/true) ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::NONE,
-        false,
+        ZPortRole::NONE,
+        /*express_routing_enabled=*/false,
         /*enable_vc1=*/true,
-        /*enable_mesh_pass_through=*/true);
+        /*enable_mesh_pass_through=*/false));
+}
 
-    EXPECT_FALSE(mapping.has_targets(1, 0));  // No VC1 for 1D
+// ============================================================================
+// Queries and value semantics
+// ============================================================================
 
-    // VC0 receiver 0 still has INTRA_MESH (opposite) + MESH_TO_Z.
-    auto vc0_targets = mapping.get_downstream_targets(0, 0);
-    ASSERT_EQ(vc0_targets.size(), 2u);
-    EXPECT_EQ(count_zward(vc0_targets), 1u);
+TEST_F(RouterConnectionMappingTest, Queries_OnAbsentChannelsReturnEmpty) {
+    RouterConnectionMapping empty;
+    EXPECT_FALSE(empty.has_targets(0, 0));
+    EXPECT_TRUE(empty.get_downstream_targets(0, 0).empty());
+    EXPECT_EQ(empty.get_total_sender_count(), 0);
+
+    auto mesh = RouterConnectionMapping::for_router(
+        Topology::Mesh,
+        RoutingDirection::N,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        ZPortRole::NONE,
+        /*express_routing_enabled=*/false,
+        /*enable_vc1=*/false,
+        /*enable_mesh_pass_through=*/false);
+    EXPECT_FALSE(mesh.has_targets(1, 0)) << "VC1 not enabled";
+    EXPECT_TRUE(mesh.get_downstream_targets(2, 0).empty());
+    EXPECT_FALSE(mesh.has_targets(0, 10)) << "no such receiver channel";
+}
+
+TEST_F(RouterConnectionMappingTest, ConnectionTarget_AndReceiverKey_Semantics) {
+    ConnectionTarget target(1, RoutingDirection::Z);
+    EXPECT_EQ(target.target_vc, 1);
+    ASSERT_TRUE(target.target_direction.has_value());
+    EXPECT_EQ(*target.target_direction, RoutingDirection::Z);
+
+    ReceiverChannelKey key1{0, 1}, key2{0, 2}, key3{1, 0}, key4{0, 1};
+    EXPECT_TRUE(key1 < key2);
+    EXPECT_TRUE(key1 < key3);
+    EXPECT_FALSE(key2 < key1);
+    EXPECT_TRUE(key1 == key4);
+    EXPECT_FALSE(key1 == key2);
 }

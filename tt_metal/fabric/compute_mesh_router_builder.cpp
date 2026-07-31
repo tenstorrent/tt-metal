@@ -307,9 +307,10 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // direction selects only the slot arithmetic.
     bool enable_vc1 = intermesh_config.requires_vc1;
     // EXPERIMENTAL: in pass-through mode, mesh routers also forward VC1 traffic to the local Z
-    // router (MESH_TO_Z on VC1) so inter-mesh traffic can traverse intermediate meshes (A->B->C).
+    // router (the boundary target on VC1) so inter-mesh traffic can traverse intermediate meshes
+    // (A->B->C).
     bool enable_mesh_pass_through = intermesh_config.requires_vc1_mesh_pass_through;
-    // The MESH_TO_Z connection exists to reach an intermesh Z router, so it follows the intermesh
+    // The boundary target exists to reach an intermesh Z router, so it follows the intermesh
     // Z edge rather than the presence of any Z port. An express chord is instead wired as an
     // ordinary same-VC cardinal/Z transition by the express path. The Z output is only
     // emitted when this chip actually terminates the chord: on a chip whose only Z edge crosses
@@ -709,8 +710,8 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
     // Establish VC connections between this router and the specified downstream router
     // This function does NOT iterate through targets - it connects to the single downstream_router passed in.
     // Every direction-matching target is established: there is no longer a type-based filter --
-    // the boundary turns (MESH_TO_Z / Z_TO_MESH) are wired through the same path as every other
-    // local turn, which is what made the second establishment pass redundant.
+    // the boundary turns (to and from the intermesh Z router) are wired through the same path as
+    // every other local turn, which is what made the second establishment pass redundant.
     uint32_t num_vcs = channel_mapping_.get_num_virtual_channels();
 
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
@@ -830,8 +831,9 @@ void ComputeMeshRouterBuilder::configure_connection(
         "Tried to connect router to downstream in worker connection mode");
 
     // Establish every direction-matching connection between the two routers (bidirectional).
-    // There is no type filter anymore: the boundary turns (MESH_TO_Z / Z_TO_MESH) are established
-    // here like every other local turn, so this is the single establishment pass for all of them.
+    // There is no type filter anymore: the boundary turns (to and from the intermesh Z router) are
+    // established here like every other local turn, so this is the single establishment pass for
+    // all of them.
     establish_connections_to_router(peer_compute);
     peer_compute.establish_connections_to_router(*this);
 

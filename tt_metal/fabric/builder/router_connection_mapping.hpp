@@ -92,8 +92,8 @@ public:
      *   opposite direction; legacy 2D is every non-self cardinal; express adds the express rule
      *   (an intramesh X ingress unwires from intramesh Y, a landing X ingress does not).
      * - The chip's extra port enters the set only when it has one: an express chord is an ordinary
-     *   same-VC target; an intermesh boundary is reached through MESH_TO_Z on VC0 (and on VC1 only
-     *   in pass-through mode); nothing exists without the port.
+     *   same-VC target; an intermesh boundary is reached through the boundary target on VC0 (and on
+     *   VC1 only in pass-through mode); nothing exists without the port.
      *
      * @param topology Mesh topology (1D or 2D)
      * @param facing This router's own direction
@@ -102,8 +102,8 @@ public:
      * @param express_routing_enabled Mesh-level: express chords are materialized and validated
      * @param enable_vc1 Whether VC1 (inter-mesh) connections should be created
      * @param enable_mesh_pass_through EXPERIMENTAL: also forwards VC1 traffic to the local
-     *        intermesh Z boundary (MESH_TO_Z on VC1) so inter-mesh traffic can pass through this
-     *        mesh (A->B->C). Reuses VC1; not deadlock-safe.
+     *        intermesh Z boundary (the boundary target on VC1) so inter-mesh traffic can pass
+     *        through this mesh (A->B->C). Reuses VC1; not deadlock-safe.
      * @return Configured RouterConnectionMapping for the router
      */
     static RouterConnectionMapping for_router(
