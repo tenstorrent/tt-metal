@@ -176,10 +176,33 @@ def _full_grid_crs(grid):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
 
-def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None):
+def _safe_half_out_block_w(per_core_N, out_subblock_w):
+    """Largest divisor of per_core_N, itself a multiple of out_subblock_w, that is <= per_core_N // 2.
+
+    Halves (at least) the output/intermediate CB footprint vs. the default out_block_w=per_core_N.
+    Falls back to out_subblock_w (always a valid divisor of per_core_N by construction) if no smaller
+    multiple divides evenly."""
+    half = max(1, per_core_N // 2)
+    best = out_subblock_w
+    for w in range(out_subblock_w, half + 1, out_subblock_w):
+        if per_core_N % w == 0:
+            best = w
+    return best
+
+
+def create_prefill_matmul_program_config(
+    m, k, n, grid_size=None, fused_activation=None, out_block_w=None, halve_out_block=False
+):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
-    fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg."""
+    fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg.
+    out_block_w: when set (< per_core_N), the output/intermediate CB only needs to hold one
+    out_block_w-wide slice of the per-core output at a time instead of the full per_core_N width —
+    same lever already used by build_mmrs_decode_state/matmul_reduce_scatter_prefill below.
+    halve_out_block: auto-derive a safe halved out_block_w (see _safe_half_out_block_w) instead of
+    passing one explicitly. Needed on grids that are already at their physical max (WH tops out at
+    8x8=64 cores vs BH's 8x10=80, with a smaller per-core L1 budget besides), where per_core_M/N can't
+    be shrunk further by adding more cores."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
@@ -191,7 +214,10 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     k_tiles = math.ceil(k / TILE_SIZE)
     in0_block_w = min(4, max(1, k_tiles // grid_size[0]))
 
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    if halve_out_block and out_block_w is None:
+        out_block_w = _safe_half_out_block_w(per_core_N, out_subblock_w)
+
+    kwargs = dict(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -202,6 +228,23 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
         fused_activation=fused_activation,
         fuse_batch=False,
     )
+    if out_block_w is not None:
+        kwargs["out_block_w"] = out_block_w
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(**kwargs)
+
+
+def prefill_out_memory_config(seq_len, out_width, elem_bytes=2, budget=8 << 20):
+    """L1 for prefill matmul outputs that fit; DRAM for the big ones.
+
+    Several prefill projections (MLP down-proj, attention wo, ...) were tuned to emit into L1 — a
+    real win measured on Blackhole, whose L1 is larger. Those outputs are [seq_len, out_width] and
+    grow with the prefill chunk (16MB+ at seq_len=2048, out_width=4096, bf16). On Wormhole that
+    leaves so little L1 free that the very matmul producing them can no longer place its own
+    statically-allocated circular buffers, and the op dies with "clash with L1 buffers" — CBs are
+    L1-only, so the output is what has to move. Blackhole keeps the tuned L1 path unchanged."""
+    if is_blackhole():
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG if seq_len * out_width * elem_bytes > budget else ttnn.L1_MEMORY_CONFIG
 
 
 def _best_prefill_cols(n, max_cols):
@@ -217,17 +260,21 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
-def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None):
+def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None, halve_out_block=False):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
 
     max_cols caps the grid width. Default = prefill_grid_default()[0] (8). Pass the device worker-grid
     width (11 on BH P150) to let the subblock heuristic go wide -> the measured prefill winners
     (gate 9-wide, down/wo 10-wide, gdn_qkvz 11-wide; test_mlp_matmul_sweep_prefill). Fused AG/RS paths
-    pin 8-wide separately and are unaffected."""
+    pin 8-wide separately and are unaffected. halve_out_block: see create_prefill_matmul_program_config
+    — pass on grids already at their physical core-count max (WH) where the full per_core_N-wide
+    output/intermediate CB overflows L1."""
     grid = prefill_grid_default()
     cols = _best_prefill_cols(n, max_cols or grid[0])
-    return create_prefill_matmul_program_config(m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation)
+    return create_prefill_matmul_program_config(
+        m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation, halve_out_block=halve_out_block
+    )
 
 
 # Mesh tensor helpers
@@ -298,8 +345,11 @@ def all_gather_matmul_prefill(
 
 
 def mlp_gateup_agmm_enabled(num_devices):
-    """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather)."""
-    return num_devices > 1
+    """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather).
+
+    BH-only: all_gather_swiglu_prefill's grid assumes BH's taller (9-10 row) compute grid; WH tops
+    out at 8 rows, so this fusion is unvalidated there. Falls back to the unfused AG + matmul path on WH."""
+    return num_devices > 1 and is_blackhole()
 
 
 def all_gather_swiglu_prefill(

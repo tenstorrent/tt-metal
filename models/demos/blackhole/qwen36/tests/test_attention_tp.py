@@ -24,7 +24,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import (
     compute_pcc,
     get_pcc_threshold,
@@ -140,8 +140,10 @@ def test_attention_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     attn = TPAttention(mesh_device, args, tw, tt_ccl)
 
     x = torch.randn(1, 1, S, args.dim, dtype=torch.bfloat16)
-    # Prefill input is K-sharded (the model's prefill norm skips its AG; the fused in-proj gathers).
-    x_tt = shard_to_device(mesh_device, x, dim=-1)
+    # Prefill input is K-sharded only when the fused AGMM in-proj is active (Blackhole only — see
+    # attn._fuse_agmm); otherwise the model's ff_norm gathers before handing attention a full-width
+    # input, so the test must match.
+    x_tt = shard_to_device(mesh_device, x, dim=-1) if attn._fuse_agmm else replicate_to_device(mesh_device, x)
     cos, sin = rot_mats_prefill(mesh_device, args.rope_head_dim, S, args.rope_theta)
     out = attn.forward_prefill(x_tt, cos, sin)
     out_t = ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].float()
@@ -193,12 +195,15 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_attention_weights_tp(mesh_device, sd, args)
 
+    # Fused AGMM in-proj (and thus the K-sharded prefill input contract) is Blackhole-only — see
+    # attention/tp.py's _fuse_agmm; on WH the model's ff_norm gathers before attention instead.
+    _fused_prefill_in = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None and is_blackhole()
+
     def to_dev(t):
         return replicate_to_device(mesh_device, t)
 
     def to_dev_pf(t):
-        # Prefill input is K-sharded (model's prefill norm skips its AG; fused in-proj gathers).
-        return shard_to_device(mesh_device, t, dim=-1)
+        return shard_to_device(mesh_device, t, dim=-1) if _fused_prefill_in else replicate_to_device(mesh_device, t)
 
     def rm_pt(rows):
         return ttnn.from_torch(
@@ -289,6 +294,9 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_attention_weights_tp(mesh_device, sd, args)
     comp = tp_composer(mesh_device)
+    # Fused AGMM in-proj (and thus the K-sharded prefill input contract) is Blackhole-only — see
+    # attention/tp.py's _fuse_agmm; on WH the model's ff_norm gathers before attention instead.
+    _fused_prefill_in = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None and is_blackhole()
 
     def mk_cache(num_blocks):
         return ttnn.from_torch(
@@ -318,9 +326,11 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
         L = x_u.shape[-2]
         cos_p, sin_p = rot_mats_prefill(mesh_device, rd, L, theta)
         pt = rm_pt([blocks])  # [1, bpu]
-        # Prefill input is K-sharded (model's prefill norm skips its AG; fused in-proj gathers).
+        _x_dev = (
+            shard_to_device(mesh_device, x_u, dim=-1) if _fused_prefill_in else replicate_to_device(mesh_device, x_u)
+        )
         attn.forward_prefill_paged(
-            shard_to_device(mesh_device, x_u, dim=-1),
+            _x_dev,
             cos_p,
             sin_p,
             pt,

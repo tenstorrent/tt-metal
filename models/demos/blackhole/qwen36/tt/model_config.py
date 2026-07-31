@@ -225,10 +225,15 @@ class Qwen36ModelArgs(ModelArgs):
             M, self.gdn_value_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
         )
 
-        # Prefill matmul factory (M = seq_len)
+        # Prefill matmul factory (M = seq_len). Shared by MLP down-proj, attention in/out-proj, and
+        # GDN in/out-proj. On Blackhole the grid is already wider (8x10) with more L1 headroom, so the
+        # full per_core_N-wide output/intermediate CB fits (validated there); WH's grid tops out at
+        # 8x8 with less L1/core, and a full decoder layer's combined GDN+attention+MLP CBs on this
+        # config alone were measured to overflow (1.68-1.85MB vs WH's 1.5MB max) — halve it there (see
+        # create_prefill_matmul_program_config's halve_out_block).
         self._prefill_grid = tpc.prefill_grid_default()
         self.prefill_progcfg = lambda seq_len, k, n: tpc.create_prefill_matmul_program_config(
-            seq_len, k, n, grid_size=self._prefill_grid
+            seq_len, k, n, grid_size=self._prefill_grid, halve_out_block=not tpc.is_blackhole()
         )
 
         # Activation shard configs

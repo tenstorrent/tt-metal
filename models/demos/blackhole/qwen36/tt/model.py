@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
@@ -810,7 +811,10 @@ class Qwen36Model:
             )
 
         for layer_idx, layer in enumerate(self.layers):
-            layer_chunk_size = attn_chunk_size if layer.is_full_attention else chunk_size
+            # GDN chunk length drives the chunk-seq kernel's L1-resident output relayout; cap it on
+            # Wormhole (see _GDN_MASKED_SEG). Chunking is exact — state carries between chunks.
+            _gdn_cs = chunk_size if is_blackhole() else min(chunk_size, self._GDN_MASKED_SEG)
+            layer_chunk_size = attn_chunk_size if layer.is_full_attention else _gdn_cs
 
             chunks_out = []
             for chunk_start in range(0, T, layer_chunk_size):
@@ -1993,12 +1997,56 @@ class Qwen36Model:
                     chunk_start_idx_tensor=csi_tensor,
                 )
             else:
-                x_new = layer.forward(
-                    x, mode="prefill", chunk_size=layer.attention.long_prefill_chunk_size, valid_len=valid_len
-                )
+                x_new = self._gdn_masked_forward(layer, x, bucket, valid_len)
             ttnn.deallocate(x)
             x = x_new
         return x
+
+    # Longest sequence handed to the GDN chunk-seq kernel in ONE call on Wormhole. The kernel
+    # relayouts its output as [B*Nv, L, Dv] fp32 in L1 (hardcoded in ttnn_delta_rule_seq.py, no
+    # memory_config exposed), so L1 demand is linear in L. Measured single-device (Nv=32, Dv=128):
+    # L=1024 -> 16.8MB fits, L=2048 -> 33.5MB OOMs.
+    #
+    # 1024 and not smaller: each distinct GDN sequence length compiles its own program, and 256
+    # multiplied the variants 8x, stalling trace capture for 30+ min at 100% host CPU (the
+    # bounded-program-set design in prefill_masked_bucket's docstring exists to prevent exactly that).
+    # Applied ONLY to the non-traced prefill paths for the same reason — the traced path keeps its
+    # single program per chunk.
+    _GDN_MASKED_SEG = 1024
+
+    def _gdn_masked_forward(self, layer, x, bucket, valid_len=None):
+        """GDN layer over a prefill segment, split when it exceeds one chunk-seq kernel call.
+
+        Splitting along the sequence is EXACT: the recurrent + conv state is carried by the layer
+        between calls (each writes gdn.recurrent_state) and every other op in the layer (norms, MLP,
+        residual) is position-local. Each segment gets its own valid_len so masking lands on the same
+        real/padding boundary; a fully padded segment (valid_len 0) leaves the state untouched.
+        valid_len=None means "no padding" and is forwarded as None — passing an explicit value instead
+        would flip the shared module's memory-config choice.
+        """
+        cs = layer.attention.long_prefill_chunk_size
+
+        def _call(xx, vl):
+            if vl is None:
+                return layer.forward(xx, mode="prefill", chunk_size=cs)
+            return layer.forward(xx, mode="prefill", chunk_size=cs, valid_len=vl)
+
+        seg = self._GDN_MASKED_SEG
+        if is_blackhole() or bucket <= seg:
+            return _call(x, valid_len)
+        parts = []
+        dim = x.shape[-1]
+        for st in range(0, bucket, seg):
+            en = min(st + seg, bucket)
+            # Bounds are multiples of _GDN_MASKED_SEG (a multiple of 32) -> tile-aligned slice.
+            x_s = ttnn.slice(x, (0, st, 0), (1, en, dim))
+            v_s = None if valid_len is None else max(0, min(valid_len - st, en - st))
+            parts.append(_call(x_s, v_s))
+            ttnn.deallocate(x_s)
+        out = ttnn.concat(parts, dim=1)
+        for pp in parts:
+            ttnn.deallocate(pp)
+        return out
 
     def _forward_prefill_chunk_masked_tp(
         self, token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=True, vision_tokens=None
