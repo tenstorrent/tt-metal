@@ -74,23 +74,44 @@ def test_legacy_reset_batch_still_rebuilds_sampling_state(monkeypatch):
     ]
 
 
-def test_decode_batch_reset_clears_removed_and_reseeds_identity_slot():
+def test_unseeded_decode_reset_loads_fresh_device_seed(monkeypatch):
     manager = SeedManager.__new__(SeedManager)
-    manager.max_batch_size = 3
-    manager.seeds = [11, None, 22]
-    manager.seed_counters = [5, 6, 7]
-    manager.rngs = [random.Random(1), random.Random(2), random.Random(3)]
-    manager._seed_active = True
+    manager.max_batch_size = 1
+    manager.seeds = [None]
+    manager.seed_counters = [4]
+    manager.rngs = [random.Random(1)]
+    manager._seed_active = False
     manager._reseted = False
-    before_identity_state = manager.rngs[1].getstate()
+    manager._needs_skip = False
+    manager._active_request_seed = False
+    manager._seed_mapper = None
+    seed_buffer = object()
+    manager.tt_sampling = SimpleNamespace(seeds_tt_tensor=seed_buffer)
+    before = manager.rngs[0].getstate()
+    host_seed_tensor = object()
+    uploads = []
 
-    manager.reset_decode_batch([None, None, None], [1])
+    monkeypatch.setattr(manager, "_next_unseeded_device_seed", lambda: 123)
+    monkeypatch.setattr(
+        "models.common.sampling.generator.ttnn.from_torch",
+        lambda *args, **kwargs: host_seed_tensor,
+    )
+    monkeypatch.setattr(
+        "models.common.sampling.generator.ttnn.copy_host_to_device_tensor",
+        lambda host, device: uploads.append((host, device)),
+    )
 
-    assert manager.seeds == [None, None, None]
-    assert manager.seed_counters == [0, 0, 0]
-    assert manager.rngs[1].getstate() != before_identity_state
-    assert not manager._seed_active
-    assert manager._reseted
+    # The conditional path would see None == None and do nothing. A decode
+    # state reset must be unconditional so the following get_new_values()
+    # enters its init state and uploads a fresh device seed.
+    manager.reset_seed_from_slots([None], [0])
+    manager.get_new_values([0])
+
+    assert manager.seed_counters == [0]
+    assert manager.rngs[0].getstate() != before
+    assert uploads == [(host_seed_tensor, seed_buffer)]
+    assert manager._needs_skip
+    assert not manager._reseted
 
 
 def test_legacy_seed_alignment_policy_is_preserved():
