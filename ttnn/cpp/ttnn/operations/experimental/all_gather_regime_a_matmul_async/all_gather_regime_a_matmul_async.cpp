@@ -4,6 +4,8 @@
 
 #include "all_gather_regime_a_matmul_async.hpp"
 
+#include <cstdlib>
+
 #include "device/all_gather_regime_a_matmul_async_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 
@@ -12,6 +14,19 @@ using namespace tt::tt_metal;
 namespace ttnn::experimental {
 
 namespace {
+
+// PHASE 1 kill switch. The fused fabric gather is under bring-up: it is opt-in via
+// TT_AGMM_FUSED_GATHER=1 so the Phase-0 composition below stays the default and stays available as a
+// same-process A/B oracle -- flip the variable, rerun the identical test, and any PCC delta is the fused
+// path's fault and nothing else's. Remove the switch (and the Phase-0 branch) once Phase 1 is the
+// production path.
+bool use_fused_gather() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("TT_AGMM_FUSED_GATHER");
+        return v != nullptr && v[0] == '1';
+    }();
+    return enabled;
+}
 
 // Validate the K-sharded contract and return the TP group size implied by the shapes.
 //
@@ -102,7 +117,32 @@ ttnn::Tensor all_gather_regime_a_matmul_async(
     uint32_t num_links,
     ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis) {
-    validate_and_infer_tp(input_tensor, weight_tensor, multi_device_global_semaphore);
+    const uint32_t tp = validate_and_infer_tp(input_tensor, weight_tensor, multi_device_global_semaphore);
+
+    if (use_fused_gather()) {
+        // FUSED: the device op does the gather itself, straight into the caller's persistent buffer.
+        TT_FATAL(
+            persistent_output_buffer.has_value(),
+            "the fused gather needs the caller's persistent [M, K] buffer to gather into");
+        auto fused_outs = ttnn::prim::all_gather_regime_a_matmul_async(
+            input_tensor,
+            weight_tensor,
+            config,
+            bias_tensor,
+            std::move(fused_activation),
+            fused_ternary_scalar,
+            fused_ternary_input_a,
+            fused_ternary_input_b,
+            1,  // chunks
+            tp,
+            cluster_axis.value_or(0),
+            num_links,
+            topology == ttnn::ccl::Topology::Ring,
+            multi_device_global_semaphore,
+            persistent_output_buffer);
+        TT_FATAL(fused_outs.size() == 1, "expected a single output, got {}", fused_outs.size());
+        return fused_outs[0];
+    }
 
     const ttnn::Tensor gathered = gather_activation(
         input_tensor,

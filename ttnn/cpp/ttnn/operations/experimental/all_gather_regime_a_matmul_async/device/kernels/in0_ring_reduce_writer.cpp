@@ -317,6 +317,15 @@ void kernel_main() {
         // GLOBAL semaphore ADDRESS (not a program semaphore id): a peer chip's atomic-inc can land before
         // this program launches, so the credit has to live in memory the caller allocated up front.
         const uint32_t fwd_recv_sem_addr = get_arg_val<uint32_t>(fa++);
+        // On-chip barrier args (see the FusedGatherArg enum on the host).
+        const uint32_t is_master0 = get_arg_val<uint32_t>(fa++);
+        const uint32_t gather_count_sem_id = get_arg_val<uint32_t>(fa++);
+        const uint32_t num_masters = get_arg_val<uint32_t>(fa++);
+        const uint32_t master0_x = get_arg_val<uint32_t>(fa++);
+        const uint32_t master0_y = get_arg_val<uint32_t>(fa++);
+        const uint32_t num_all_cores = get_arg_val<uint32_t>(fa++);
+        const std::size_t release_list_base = fa;  // num_all_cores (x, y) virtual coord pairs
+        fa += 2u * num_all_cores;
         (void)has_bwd;  // v1 is forward-only; the backward mux is deployed but not yet driven.
 
         // LOCAL-SHARD accessor: the factory appends it AFTER every other accessor, and ONLY when tp > 1.
@@ -340,7 +349,12 @@ void kernel_main() {
         const uint32_t m_lo = bank_id * m_per_core;
         const uint32_t m_hi = (m_lo + m_per_core < Mt_total) ? (m_lo + m_per_core) : Mt_total;
 
-        if (is_fabric_client && m_lo < m_hi) {
+        // NOTE: deliberately NOT gated on m_lo < m_hi. When Mt_total < 8 the tail cores get an empty M
+        // range, but they are still registered mux clients and their peers still expect tp-1 credits from
+        // them. Gating here would (a) skip sender.close(), which the v2 mux waits on before self-
+        // terminating, and (b) leave every peer's counter one short forever. The tile loops below are
+        // naturally empty for those cores, so they open, send zero payload, still credit, and close.
+        if (is_fabric_client) {
             // ---- 1. stage OUR OWN shard: in0[m, k] -> staging[m, rank*k_shard_tiles + k] ----
             // Local DRAM->DRAM, no fabric. Read into the scratch L1 slot then write back out.
             const uint32_t scratch = get_write_ptr(in0_cb);  // cb0 is not yet in use at this point
@@ -356,6 +370,11 @@ void kernel_main() {
                     noc_async_read_page(m * k_shard_tiles + k, shard_acc, scratch);
                     noc_async_read_barrier();
                     noc_async_write_page(m * Kt_global + own_k0 + k, stage_acc, scratch);
+                    // The write still SOURCES from scratch, and the next iteration's read overwrites it.
+                    // noc_async_read_barrier() orders reads only, so without this flush the write can
+                    // pick up the following tile's data -- silent corruption of our own shard, which the
+                    // ring then propagates to every other rank.
+                    noc_async_writes_flushed();
                 }
             }
             noc_async_write_barrier();
@@ -393,8 +412,9 @@ void kernel_main() {
                             // get_noc_addr(). The peer's staging buffer sits at the same address as ours
                             // (mesh tensors share an address across the mesh), so the same page id resolves
                             // correctly there -- fabric supplies the chip hop.
+                            // Signature is (accessor, page_id, offset) -- NOT (page_id, accessor).
                             const uint64_t dst_noc =
-                                tt::tt_fabric::linear::addrgen_detail::get_noc_address(page, stage_acc, 0);
+                                tt::tt_fabric::linear::addrgen_detail::get_noc_address(stage_acc, page, 0);
                             tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
                                 &sender,
                                 pkt_hdr_write,
@@ -412,7 +432,13 @@ void kernel_main() {
                     // sender.flush() would NOT do this -- it is a no-op unless EAGER_STAGING is on.
                     // Same core index on the peer chip: core i owns a disjoint M slice on every device, so
                     // core i credits core i and each core's counter is its own private arrival count.
-                    const uint64_t peer_sem_noc = get_noc_addr(my_x[noc_index], my_y[noc_index], fwd_recv_sem_addr);
+                    //
+                    // NOC0 coords (my_x[0], not my_x[noc_index]): the packet-header setter re-encodes the
+                    // address with its own mirroring, so handing it an already-noc1-mirrored coordinate
+                    // mirrors twice and credits the mirror-image core. Invisible on Blackhole, where
+                    // virtual coords make my_x[0] == my_x[1]; a hang on Wormhole. This writer runs on
+                    // RISCV_1 / noc_index == 1, so the distinction is live.
+                    const uint64_t peer_sem_noc = safe_get_noc_addr(my_x[0], my_y[0], fwd_recv_sem_addr, 0);
                     tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
                         &sender,
                         pkt_hdr_seminc,
@@ -444,9 +470,37 @@ void kernel_main() {
             // this slot for this invocation. It does NOT protect against a neighbour running a whole
             // ping-pong cycle ahead -- that is what the caller's depth>=2 rotation is for.
             noc_semaphore_set(fwd_recv, 0);
+
+            // Report in to master 0. A master's own fwd_recv count only proves ITS M slice landed, and the
+            // gather splits M by bank_id while the matmul splits it by the planner's m_start -- so no core
+            // may proceed on its own count alone.
+            noc_semaphore_inc(get_noc_addr(master0_x, master0_y, get_semaphore(gather_count_sem_id)), 1);
         }
-        noc_semaphore_wait_min(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem_id)), 0);  // placeholder
+
+        // ---- 4. on-chip barrier: master 0 waits for every master, then releases the whole grid ----
+        volatile tt_l1_ptr uint32_t* ready =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem_id));
+        if (is_master0) {
+            volatile tt_l1_ptr uint32_t* count =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather_count_sem_id));
+            noc_semaphore_wait(count, num_masters);
+            noc_semaphore_set(count, 0);  // re-arm within this launch; dispatch re-zeroes across launches
+
+            // Release every core by unicast. Includes master 0 itself: writing our own L1 through the NoC
+            // is fine and keeps the loop uniform.
+            noc_semaphore_set(ready, VALID);
+            for (uint32_t c = 0; c < num_all_cores; ++c) {
+                const uint32_t cx = get_arg_val<uint32_t>(release_list_base + 2u * c);
+                const uint32_t cy = get_arg_val<uint32_t>(release_list_base + 2u * c + 1u);
+                noc_semaphore_set_remote(
+                    get_semaphore(ready_sem_id), get_noc_addr(cx, cy, get_semaphore(ready_sem_id)));
+            }
+            // The sends SOURCE from our own `ready` word, so it must not be touched until they drain.
+            // Blackhole makes this the likely case rather than the rare one: NoC latency there exceeds
+            // RISC->L1 latency, so the RISC really can get ahead of the read.
+            noc_async_writes_flushed();
+        }
+        noc_semaphore_wait(ready, VALID);
     }
 #endif  // FUSED_GATHER
 

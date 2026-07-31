@@ -319,7 +319,12 @@ struct FusedGatherContext {
     uint8_t next_channel_bwd = 0;
     // Readiness: one semaphore slot per (source rank, chunk). Receivers block on these; senders
     // atomic-inc AFTER the payload is flushed.
-    uint32_t chunk_ready_sem_id = 0;
+    uint32_t chunk_ready_sem_id = 0;   // VALID/INVALID go-ahead flag, on EVERY core
+    uint32_t gather_count_sem_id = 0;  // masters-done counter, meaningful on master 0
+    // Barrier geometry, in VIRTUAL (translated) coords.
+    CoreCoord master0_virtual{};
+    std::vector<CoreCoord> release_list;  // every core master 0 releases once the gather is complete
+    uint32_t num_masters = 8;
     // Counts forward-stream shard arrivals from the backward neighbour. This is a caller-owned GLOBAL
     // semaphore address, not a program semaphore id: see the note in the operation types header for why a
     // cross-chip credit cannot land in a program semaphore.
@@ -341,10 +346,20 @@ enum FusedGatherArg : uint32_t {
     kFgHasBwd = 7,
     kFgMtTotal = 8,
     kFgKtGlobal = 9,
-    kFgShardAddr = 10,    // patched on replay (in0 may be a fresh allocation)
-    kFgBankId = 11,       //
-    kFgFwdRecvSem = 12,   // patched on replay (caller ping-pongs the global semaphore)
-    kFusedArgCount = 13,  // mux client-connection args, if any, follow this
+    kFgShardAddr = 10,   // patched on replay (in0 may be a fresh allocation)
+    kFgBankId = 11,      //
+    kFgFwdRecvSem = 12,  // patched on replay (caller ping-pongs the global semaphore)
+    // On-chip gather barrier: every master reports to master 0, which multicasts one go-ahead to the grid.
+    kFgIsMaster0 = 13,
+    kFgGatherCountSem = 14,
+    kFgNumMasters = 15,
+    kFgMaster0X = 16,
+    kFgMaster0Y = 17,
+    kFgNumAllCores = 18,
+    // Followed by kFgNumAllCores (x, y) VIRTUAL coord pairs -- the release list master 0 unicasts to.
+    // A multicast would be cheaper but the regime-A placement is bank-adjacent and deliberately NOT a
+    // filled rectangle, so a bounding-box mcast would also hit cores running no kernel of ours.
+    kFusedArgCount = 19,  // + 2 * num_all_cores coord words, then the mux client block
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
@@ -359,6 +374,7 @@ FusedGatherContext build_fused_gather_context(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const Tensor& in0,
     const std::vector<CoreCoord>& master_ring_cores,
+    const CoreRangeSet& all_cores,
     IDevice* device) {
     FusedGatherContext ctx;
     if (attrs.tp <= 1) {
@@ -366,6 +382,14 @@ FusedGatherContext build_fused_gather_context(
     }
     ctx.enabled = true;
     ctx.tp = attrs.tp;
+
+    // Forward-only store-and-forward needs a CLOSED ring. On a line, rank 0 has no backward neighbour so
+    // its credit never arrives, and rank tp-1 can never pass shards onward. Refuse rather than hang.
+    TT_FATAL(
+        attrs.topology_is_ring,
+        "the fused gather is ring-only today: a forward-only store-and-forward gather deadlocks on a line "
+        "(rank 0 is never credited, and the last rank cannot forward). Use Topology::Ring, or the Phase-0 "
+        "composition for line topologies");
 
     const auto topology = attrs.topology_is_ring ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
     ctx.rank = ttnn::ccl::get_linearized_index_from_physical_coord(in0, mesh_coordinate, attrs.cluster_axis);
@@ -390,9 +414,13 @@ FusedGatherContext build_fused_gather_context(
         }
         return v;
     }()));
-    // chunk_ready stays a PROGRAM semaphore on purpose: it is the on-chip credit from the master ring to the
-    // other ring groups, so both sides are in the same program launch and the cross-chip race does not apply.
-    ctx.chunk_ready_sem_id = CreateSemaphore(program, ring_crs, 0);
+    // These two stay PROGRAM semaphores on purpose: both sides of the handshake are on this chip and in the
+    // same program launch, so the cross-chip early-credit race that forced fwd_recv to be global does not
+    // apply -- and dispatch re-zeroes them on every enqueue, which is exactly the re-arm we want.
+    // Both live on ALL cores: every core waits on the go-ahead flag, not just the master ring.
+    ctx.chunk_ready_sem_id = CreateSemaphore(program, all_cores, 0);  // 0 == INVALID
+    ctx.gather_count_sem_id = CreateSemaphore(program, all_cores, 0);
+    ctx.num_masters = static_cast<uint32_t>(master_ring_cores.size());
     TT_FATAL(
         !attrs.gather_semaphores.empty(),
         "the fused gather (tp={}) needs at least one caller-supplied global semaphore for the cross-chip "
@@ -430,7 +458,11 @@ FusedGatherContext build_fused_gather_context(
     };
 
     deploy(fwd_coord, 0, ctx.mux_cfg_fwd, ctx.mux_virtual_core_fwd);
-    deploy(bwd_coord, 1, ctx.mux_cfg_bwd, ctx.mux_virtual_core_bwd);
+    // The backward mux is NOT deployed yet. Mux v2 self-terminates by counting close() calls against its
+    // compile-time channel count and has no host-side termination signal (that existed only in v1), so a
+    // mux whose 8 registered clients never open/close leaves its forwarder RISC spinning forever and the
+    // program never completes. Deploy it in the same commit that makes the kernel drive it, not before.
+    (void)bwd_coord;
     return ctx;
 }
 
@@ -495,7 +527,13 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         .gate_is_fp32 = gate_is_fp32};
 
     // ---- Run the pure host planner ----
-    auto planres = make_and_build_plan(device, in0, in1, cfg, fusion);
+    // Plan against the GATHERED activation, not this device's shard. make_and_build_plan takes Mt/Kt from
+    // in0's logical shape, so handing it the shard plans the whole matmul for K/tp: geo.Kt (and with it the
+    // in0 row stride, the k-slice capacity, and the fused block's k_shard_tiles) all come out tp times too
+    // small, and every page index the gather computes is wrong. The staging buffer already has exactly the
+    // [M, K_global] shape the matmul will actually read, so it is the correct planning input.
+    const Tensor& in0_for_plan = (operation_attributes.tp > 1) ? *tensor_args.gather_staging_buffer : in0;
+    auto planres = make_and_build_plan(device, in0_for_plan, in1, cfg, fusion);
     TT_FATAL(planres.ok(), "all_gather_regime_a_matmul_async planner rejected config: {}", planres.error);
     plan::ExecutionPlan& P = *planres.plan;  // mutable: the ring-order diag overrides ring_pos/next/prev below
     const plan::Geometry& geo = P.geo;
@@ -773,21 +811,31 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     for (uint32_t b = 0; b < 8u; ++b) {
         master_ring_cores.push_back(cores[b * preaders_pf]);
     }
-    // GUARD: today only the 8 master-ring cores wait on the gather (fwd_recv_sem), but EVERY core reads the
-    // staging buffer in the on-chip ring below. With more than one ring group the non-master cores would
-    // read staging before the remote shards land -- silently wrong numbers, not a hang, and only on some
-    // devices. Until those cores get a barrier of their own (a multicast credit from the master ring), the
-    // fused path is restricted to the single-ring case where every core IS a master.
-    TT_FATAL(
-        operation_attributes.tp == 1 || preaders_pf == 1u,
-        "fused gather currently supports a single in0 ring (8 cores) only, but this shape planned {} ring "
-        "groups ({} cores). Non-master cores have no gather barrier yet; refusing rather than returning "
-        "silently wrong results.",
-        preaders_pf,
-        geo.num_cores);
+    FusedGatherContext fused_gather = build_fused_gather_context(
+        program, operation_attributes, mesh_coordinate, in0, master_ring_cores, all_cores, device);
 
-    FusedGatherContext fused_gather =
-        build_fused_gather_context(program, operation_attributes, mesh_coordinate, in0, master_ring_cores, device);
+    // ---- On-chip gather barrier geometry ----
+    // A master core's fwd_recv count only proves ITS OWN M slice arrived: the gather splits M by bank_id,
+    // while the matmul splits M by the planner's m_start. Those partitions differ, so every core -- master
+    // or not -- can read rows that a DIFFERENT core gathered. Each master therefore reports completion to
+    // master 0, which multicasts a single go-ahead to the whole grid.
+    if (fused_gather.enabled) {
+        // worker_core_from_logical_core returns TRANSLATED (virtual) coords, in which the Blackhole grid is
+        // dense whatever the harvesting mask. Raw physical coords would straddle harvested columns here.
+        fused_gather.master0_virtual = device->worker_core_from_logical_core(master_ring_cores[0]);
+        fused_gather.release_list.reserve(cores.size());
+        for (const auto& c : cores) {
+            fused_gather.release_list.push_back(device->worker_core_from_logical_core(c));
+        }
+        // Two coord words per core ride in every core's arg block. Runtime args are a bounded resource, so
+        // cap this rather than silently overflowing; past this size the barrier wants a per-CoreRange
+        // multicast instead of a unicast fan-out.
+        TT_FATAL(
+            fused_gather.release_list.size() <= 64u,
+            "fused gather barrier currently unicasts the release to each of {} cores, which exceeds the "
+            "64-core runtime-arg budget; switch to a per-CoreRange multicast for grids this large",
+            fused_gather.release_list.size());
+    }
 
     // NOTE: packet headers come from PacketHeaderPool (a per-RISC L1 region), NOT from a circular buffer.
     // The CB carve-out is the older pattern; the pool is what current fabric kernels use.
@@ -1101,6 +1149,23 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             // the kernel can locate it without knowing which optional fusion args preceded it. The first
             // word says whether this core is a fabric client; only master-ring cores get the mux block.
             const bool is_master_ring = (i % preaders_pf) == 0u;
+            // Kt must divide evenly by tp, and each shard must be tile-aligned. Two distinct silent
+            // corruptions otherwise: the kernel strides the local shard as m * k_shard_tiles, which is
+            // only the true row stride when k_local is tile-aligned; and when Kt % tp != 0 the staging
+            // columns in [tp*k_shard_tiles, Kt) are never written but ARE read by the matmul.
+            TT_FATAL(
+                geo.Kt % fused_gather.tp == 0,
+                "fused gather needs the global K tile count ({}) to divide by tp ({}); the remainder "
+                "columns would be read by the matmul but never staged",
+                geo.Kt,
+                fused_gather.tp);
+            const uint32_t k_local_elems = tensor_args.input_tensor.logical_shape()[-1];
+            TT_FATAL(
+                k_local_elems % tt::constants::TILE_WIDTH == 0,
+                "fused gather needs each K shard tile-aligned, got a {}-element shard (TILE_WIDTH={}); the "
+                "kernel would stride the local shard by the wrong row pitch",
+                k_local_elems,
+                tt::constants::TILE_WIDTH);
             const uint32_t k_shard_tiles = geo.Kt / fused_gather.tp;  // this rank's K tiles
             wa.push_back(is_master_ring ? 1u : 0u);
             wa.push_back(fused_gather.rank);
@@ -1115,12 +1180,23 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(in0.buffer()->address());       // LOCAL shard base (in0_addr now points at staging)
             wa.push_back(i / preaders_pf);               // bank id 0..7 -> which M-slice this core stages
             wa.push_back(fused_gather.fwd_recv_sem_addr);  // incremented by my BACKWARD neighbour
+            wa.push_back((is_master_ring && (i == 0u)) ? 1u : 0u);
+            wa.push_back(fused_gather.gather_count_sem_id);
+            wa.push_back(fused_gather.num_masters);
+            wa.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.x));
+            wa.push_back(static_cast<uint32_t>(fused_gather.master0_virtual.y));
+            wa.push_back(static_cast<uint32_t>(fused_gather.release_list.size()));
+            for (const auto& rc : fused_gather.release_list) {
+                wa.push_back(static_cast<uint32_t>(rc.x));
+                wa.push_back(static_cast<uint32_t>(rc.y));
+            }
             TT_FATAL(
-                wa.size() == fused_rt_base + kFusedArgCount,
-                "fused-gather arg block is {} words but FusedGatherArg says {}; the push order and the "
-                "offsets used by override_runtime_arguments have drifted",
+                wa.size() == fused_rt_base + kFusedArgCount + 2u * fused_gather.release_list.size(),
+                "fused-gather arg block is {} words but FusedGatherArg says {} + 2*{}; the push order and "
+                "the offsets used by override_runtime_arguments have drifted",
                 wa.size() - fused_rt_base,
-                static_cast<uint32_t>(kFusedArgCount));
+                static_cast<uint32_t>(kFusedArgCount),
+                fused_gather.release_list.size());
             if (is_master_ring) {
                 if (fused_gather.mux_cfg_fwd) {
                     const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
