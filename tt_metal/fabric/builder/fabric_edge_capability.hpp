@@ -34,9 +34,9 @@ const char* to_string(EdgeCapability capability);
 // were the same statement. They no longer are: an express chord gives the port a genuine intramesh
 // routing direction. Naming the role rather than the port keeps that distinction structural: a
 // chip has one extra port, so it can hold exactly one role -- the mutual exclusion between
-// "intermesh Z" and "express chord" is unrepresentable on a chip. The mapping factories assert the
-// matching half of it: a Z-facing router's own capability must agree with the chip's role, since
-// the two arrive as independent parameters.
+// "intermesh Z" and "express chord" is unrepresentable on a chip. validate_facing_role_consistency
+// (below) asserts the matching half of it: a Z-facing router's own capability must agree with the
+// chip's role, and both mapping factories run it first.
 enum class ZPortRole : uint8_t {
     NONE,                // no extra port on this chip
     INTERMESH_BOUNDARY,  // crosses a mesh boundary; carries no intramesh routing direction
@@ -44,6 +44,13 @@ enum class ZPortRole : uint8_t {
 };
 
 const char* to_string(ZPortRole role);
+
+// The chip-level cross-check: a Z-facing router's own edge capability and the chip's extra-port
+// role are two spellings of one fact and must agree -- a Z-facing intermesh edge means role
+// INTERMESH_BOUNDARY, a same-mesh Z edge (an express chord) means role EXPRESS_CHORD, and express
+// capability never sits on a cardinal facing. Anything else is an impossible chip, which the
+// factories' independent parameters would otherwise make representable again.
+void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability edge_capability, ZPortRole z_role);
 
 // The role of this chip's extra port, from the neighbor graph. Pure structure: a same-mesh Z edge
 // reports EXPRESS_CHORD, and its validity (validated express intent) is enforced separately at

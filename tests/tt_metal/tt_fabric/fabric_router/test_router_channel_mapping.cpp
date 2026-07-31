@@ -14,8 +14,8 @@ namespace tt::tt_fabric {
 /**
  * FabricRouterChannelMapping Tests
  *
- * The per-VC channel shape and flat layout of one router, all of it read off
- * RouterConnectionMapping::router_vc_shape:
+ * The per-VC channel shape and flat layout of one router, all of it read off router_vc_shape()
+ * in builder/router_wiring_rules.*:
  *
  * - Legacy mesh/1D: VC0 only (4 senders in 2D, 2 in 1D); VC1 appears with an intermesh config.
  * - The intermesh boundary family: VC0 = worker + 4 wired producers (5), VC1 = the 4-wide

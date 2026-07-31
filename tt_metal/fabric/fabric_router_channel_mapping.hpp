@@ -8,7 +8,7 @@
 #include <map>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "tt_metal/fabric/builder/router_connection_mapping.hpp"
+#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
 #include <vector>
@@ -62,9 +62,9 @@ struct InternalReceiverChannelMapping {
  *
  * Defines the mapping from logical channels (VC + relative channel index within VC) to internal builder channels.
  * This is layout only: how many channels each VC has, and where each VC starts in the flat index
- * space, are decided once by RouterConnectionMapping::router_vc_shape() next to the wiring rules
- * that produce them. This class places entries at the indices that shape hands it and answers
- * counts by reading it back. It classifies nothing and re-derives no count.
+ * space, are decided once by router_vc_shape() next to the wiring rules that produce them
+ * (builder/router_wiring_rules.*). This class places entries at the indices that shape hands it
+ * and answers counts by reading it back. It classifies nothing and re-derives no count.
  *
  * Channel indices are relative to each VC:
  * - VC0 (1D): [0] = local worker, [1] = forwarding from upstream
@@ -112,7 +112,7 @@ private:
     // reads. The router's facing direction, its edge capability, its chip's intermesh Z edge, and
     // the mesh's express state are inputs to that derivation only -- they are deliberately not
     // retained, so nothing here can re-answer a question the shape already settled.
-    RouterConnectionMapping::RouterVcShape shape_;
+    RouterVcShape shape_;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;

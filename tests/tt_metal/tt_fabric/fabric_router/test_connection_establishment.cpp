@@ -185,8 +185,8 @@ protected:
     // against the router present in that direction. A target whose direction has no router is
     // skipped -- the edge-device mechanism.
     void establish(HostRouter& source, const std::map<RoutingDirection, HostRouter*>& present) {
-        for (const auto& key : source.connections.get_all_receiver_keys()) {
-            for (const auto& target : source.connections.get_downstream_targets(key.vc, key.receiver_channel)) {
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            for (const auto& target : source.connections.get_downstream_targets(vc)) {
                 TT_FATAL(target.target_direction.has_value(), "local connection target must name a direction");
                 const auto dest_dir = *target.target_direction;
                 if (!present.contains(dest_dir)) {
@@ -197,8 +197,8 @@ protected:
                     .source_node = source.node,
                     .source_direction = source.facing,
                     .source_eth_chan = 0,
-                    .source_vc = key.vc,
-                    .source_receiver_channel = key.receiver_channel,
+                    .source_vc = vc,
+                    .source_receiver_channel = 0,
                     .dest_node = dest->node,
                     .dest_direction = dest->facing,
                     .dest_eth_chan = 0,

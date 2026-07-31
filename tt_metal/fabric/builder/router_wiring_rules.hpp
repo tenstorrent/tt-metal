@@ -1,0 +1,149 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <optional>
+
+#include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+
+namespace tt::tt_fabric {
+
+// Forward declaration
+struct IntermeshVCConfig;
+
+/**
+ * The wiring rules for one router, as free functions: the turn-matrix primitive everything is
+ * built from, the per-VC channel shape derived from it, and the arity/count derivations between
+ * the two. These are facts about a router archetype -- pure functions of (topology, facing,
+ * capability, ZPortRole, express, VC config), carrying no eth channel -- shared by the connection
+ * map (builder/router_connection_mapping.*), the channel layout (fabric_router_channel_mapping.*),
+ * and the injection-flag derivation (compute_mesh_router_builder.cpp), so none of them can drift
+ * from the others.
+ */
+
+/**
+ * @brief The turn-matrix primitive: does the router facing `producer_direction` wire into the
+ * router facing `egress_direction` on the same chip?
+ *
+ * The one place the wiring rule lives. Turn sets, producer arity, and the injection-flag
+ * derivation are all built from this single relation, so the connection map and the guard
+ * derivation cannot drift apart -- there is no set form of the rule for them to disagree with.
+ *
+ * The rule, per case:
+ * - No U-turn: a router never wires back over its own link.
+ * - Legacy (non-express): every non-self cardinal direction wires in. The extra port exists in
+ *   the set only as the boundary template, when the chip's extra port is INTERMESH_BOUNDARY.
+ * - Express: a Z-facing producer fans out to every non-self direction; an intramesh X producer
+ *   may only continue around the X ring (dimension order); any other producer wires into every
+ *   non-self direction; and the extra port exists in the set only when the chip has one
+ *   (chord or boundary).
+ *
+ * The VC matters exactly once: for a boundary producer (a Z-facing router whose edge is
+ * INTERMESH). Its VC1 receiver fans out to every non-self VC1 sender (wired), while its VC0
+ * receiver crosses over onto downstream VC1 senders and feeds nothing on VC0 (not wired). So
+ * the boundary-producer arm answers `vc == 1`. Every other producer is VC-agnostic on this
+ * question, and for_router may pass any VC when building a turn set, since that arm is
+ * unreachable there (the boundary path early-returns before consulting this primitive).
+ *
+ * Guard classification follows from the answers: a cardinal producer into a boundary egress is
+ * NON_RING (the egress is not a protected ring), and a boundary producer into a protected
+ * cardinal egress on VC1 is ENTER -- the correct landing acquisition. The first arm is not
+ * "NON_RING either way": only the second depends on the VC.
+ */
+bool wires_into(
+    RoutingDirection producer_direction,
+    EdgeCapability producer_capability,
+    RoutingDirection egress_direction,
+    ZPortRole z_role,
+    bool express_routing_enabled,
+    uint32_t vc);
+
+// Opposite direction for mesh routers (N<->S, E<->W). Z has no opposite.
+RoutingDirection get_opposite_direction(RoutingDirection dir);
+
+/**
+ * Per-direction capability set of one chip: each direction's edge capability, indexed by
+ * RoutingDirection enum value (E=0, W=1, N=2, S=3, Z=4); nullopt where the direction is absent.
+ */
+using PerDirectionCapabilities = std::array<std::optional<EdgeCapability>, 5>;
+
+/**
+ * @brief The canonical express-endpoint chip: every cardinal intramesh, Z is the chord
+ *
+ * This is the capability set the express family-max count is evaluated against. It attains
+ * the structural ceiling: every Y and X producer wires into an E/W facing under any capability
+ * assignment, so no per-chip set produces a wider router.
+ */
+PerDirectionCapabilities canonical_express_endpoint_capabilities();
+
+/**
+ * @brief VC0 sender slots a router facing `direction` needs on a chip with these capabilities
+ *
+ * The local worker plus the producers the connection map wires into it. Arity depends on
+ * facing: an E/W-facing router is fed by every Y producer (the Y->X turn is legal), while
+ * dimension order leaves N/S/Z-facing routers with only their Y producers. INTERMESH
+ * (landing-capable) directions widen their non-self set, so per-chip callers must pass the
+ * actual chip's capabilities; the canonical endpoint set is only the family-max input.
+ */
+uint32_t express_vc0_producer_arity(RoutingDirection direction, const PerDirectionCapabilities& caps);
+
+/**
+ * @brief Uniform VC0/VC1 sender counts for the express mesh family
+ *
+ * The family max over facing directions of wired-producer arity on the canonical endpoint
+ * chip: one flat index space per family, with per-router wiring filling a subset and
+ * per-direction channel trimming as the separate L1 lever for narrowing (which evaluates
+ * arity against the actual per-chip capability set, not the canonical one).
+ */
+uint32_t express_mesh_vc0_sender_count();
+uint32_t express_mesh_vc1_sender_count();
+
+/**
+ * The complete per-VC channel shape of one router: how many sender and receiver channels it
+ * has on each VC, where each VC starts in the flat index space, and how many VCs exist.
+ * Computed ONCE from the same facts the connection map reads, so the count and every flat base
+ * are facts upstream of layout -- never recovered by counting map entries, and never
+ * recomputed at a consumption site (which is the class of bug that produced flat-9 aliasing).
+ */
+struct RouterVcShape {
+    uint32_t num_vcs = 0;
+
+    // Per-VC channel counts and their flat-index prefix sums, emitted by the derivation.
+    // sender_flat_base[vc] = sum of sender_counts over lower VCs; receiver likewise. The VC2
+    // receiver index that used to be "1 + num_vc1_receivers" is receiver_flat_base[2].
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_counts{};
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_flat_base{};
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_counts{};
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_flat_base{};
+};
+
+/**
+ * @brief The one per-VC shape derivation for any router
+ *
+ * All families' arity rules live here, next to the wiring rules that produce them. Topology
+ * gates the channel counts (1D has its own counts and never creates VC1/VC2 channels), but
+ * num_vcs is deliberately config-only and topology-independent: a 1D router with requires_vc1
+ * reports 2 VCs while creating zero VC1 channels -- that existing oddity is preserved, not
+ * fixed, and get_all_sender_mappings() already tolerates it.
+ *
+ * The derivation emits prefix sums for every flat base and enforces the num_max_* ceilings,
+ * turning the capacity comments elsewhere into guarantees at the one construction site. The
+ * chip's extra port arrives as its ZPortRole (boundary, chord, or none) -- the same fact the
+ * connection map reads, with one spelling.
+ */
+RouterVcShape router_vc_shape(
+    Topology topology,
+    RoutingDirection facing,
+    EdgeCapability edge_capability,
+    ZPortRole z_role,
+    bool express_routing_enabled,
+    const IntermeshVCConfig* vc_config);
+
+}  // namespace tt::tt_fabric

@@ -37,7 +37,7 @@ namespace {
 // The set of directions a router's receiver channel 0 forwards to on one VC.
 std::set<RoutingDirection> target_directions(const RouterConnectionMapping& mapping, uint32_t vc) {
     std::set<RoutingDirection> out;
-    for (const auto& t : mapping.get_downstream_targets(vc, 0)) {
+    for (const auto& t : mapping.get_downstream_targets(vc)) {
         EXPECT_TRUE(t.target_direction.has_value());
         out.insert(*t.target_direction);
     }
@@ -45,7 +45,7 @@ std::set<RoutingDirection> target_directions(const RouterConnectionMapping& mapp
 }
 
 void expect_all_targets_on_vc(const RouterConnectionMapping& mapping, uint32_t vc, uint32_t expected_target_vc) {
-    for (const auto& t : mapping.get_downstream_targets(vc, 0)) {
+    for (const auto& t : mapping.get_downstream_targets(vc)) {
         EXPECT_EQ(t.target_vc, expected_target_vc);
     }
 }
@@ -93,12 +93,12 @@ TEST_F(RouterConnectionMappingTest, Linear1D_WiresOnlyTheOpposite) {
                     /*enable_vc1=*/false,
                     /*enable_mesh_pass_through=*/false);
 
-                auto targets = mapping.get_downstream_targets(0, 0);
+                auto targets = mapping.get_downstream_targets(0);
                 ASSERT_EQ(targets.size(), 1) << "topology " << static_cast<int>(topology) << " role "
                                              << static_cast<int>(role) << " facing " << static_cast<int>(facing);
                 EXPECT_EQ(*targets[0].target_direction, opposite_of(facing));
                 EXPECT_EQ(targets[0].target_vc, 0);
-                EXPECT_FALSE(mapping.has_targets(1, 0));
+                EXPECT_FALSE(mapping.has_targets(1));
             }
         }
     }
@@ -204,7 +204,7 @@ TEST_F(RouterConnectionMappingTest, PassThrough_AddsBoundaryTargetOnVC1) {
         expect_all_targets_on_vc(mapping, 1, 1);
 
         // No aliasing: every VC1 target names a distinct direction.
-        const auto vc1_targets = mapping.get_downstream_targets(1, 0);
+        const auto vc1_targets = mapping.get_downstream_targets(1);
         EXPECT_EQ(vc1_targets.size(), expected_vc1.size());
     }
 }
@@ -241,17 +241,10 @@ TEST_F(RouterConnectionMappingTest, BoundaryTemplate_FansOutToEveryMeshDirection
         /*enable_vc1=*/true,
         /*enable_mesh_pass_through=*/false);
 
-    // Exactly one receiver key: (VC1, channel 0).
-    const auto keys = mapping.get_all_receiver_keys();
-    ASSERT_EQ(keys.size(), 1);
-    EXPECT_EQ(keys[0].vc, 1);
-    EXPECT_EQ(keys[0].receiver_channel, 0);
+    // Nothing forwards off the boundary's VC0 receiver; its whole shape is the VC1 fanout.
+    EXPECT_FALSE(mapping.has_targets(0));
 
-    for (uint32_t ch = 0; ch < 5; ++ch) {
-        EXPECT_FALSE(mapping.has_targets(0, ch)) << "boundary VC0 channel " << ch << " should have no targets";
-    }
-
-    const auto targets = mapping.get_downstream_targets(1, 0);
+    const auto targets = mapping.get_downstream_targets(1);
     ASSERT_EQ(targets.size(), 4);
     // Fanout is emitted in cardinal enum order.
     const std::vector<RoutingDirection> expected_order = {
@@ -340,7 +333,7 @@ TEST_F(RouterConnectionMappingTest, CardinalCapabilityOnZFacingIsAConfigurationE
         /*express_routing_enabled=*/false,
         /*enable_vc1=*/true,
         /*enable_mesh_pass_through=*/false));
-    EXPECT_ANY_THROW(RouterConnectionMapping::router_vc_shape(
+    EXPECT_ANY_THROW(router_vc_shape(
         Topology::Mesh,
         RoutingDirection::Z,
         EdgeCapability::INTRAMESH_CARDINAL,
@@ -367,7 +360,7 @@ TEST_F(RouterConnectionMappingTest, BoundaryFacingRequiresBoundaryRole) {
             /*express_routing_enabled=*/false,
             /*enable_vc1=*/true,
             /*enable_mesh_pass_through=*/false));
-        EXPECT_ANY_THROW(RouterConnectionMapping::router_vc_shape(
+        EXPECT_ANY_THROW(router_vc_shape(
             Topology::Mesh,
             RoutingDirection::Z,
             EdgeCapability::INTERMESH,
@@ -390,7 +383,7 @@ TEST_F(RouterConnectionMappingTest, ChordFacingRequiresChordRole) {
             /*express_routing_enabled=*/true,
             /*enable_vc1=*/false,
             /*enable_mesh_pass_through=*/false));
-        EXPECT_ANY_THROW(RouterConnectionMapping::router_vc_shape(
+        EXPECT_ANY_THROW(router_vc_shape(
             Topology::Torus,
             RoutingDirection::Z,
             EdgeCapability::INTRAMESH_EXPRESS,
@@ -411,7 +404,7 @@ TEST_F(RouterConnectionMappingTest, CardinalFacingRejectsExpressCapability) {
         /*express_routing_enabled=*/true,
         /*enable_vc1=*/false,
         /*enable_mesh_pass_through=*/false));
-    EXPECT_ANY_THROW(RouterConnectionMapping::router_vc_shape(
+    EXPECT_ANY_THROW(router_vc_shape(
         Topology::Torus,
         RoutingDirection::N,
         EdgeCapability::INTRAMESH_EXPRESS,
@@ -426,9 +419,9 @@ TEST_F(RouterConnectionMappingTest, CardinalFacingRejectsExpressCapability) {
 
 TEST_F(RouterConnectionMappingTest, Queries_OnAbsentChannelsReturnEmpty) {
     RouterConnectionMapping empty;
-    EXPECT_FALSE(empty.has_targets(0, 0));
-    EXPECT_TRUE(empty.get_downstream_targets(0, 0).empty());
-    EXPECT_EQ(empty.get_total_sender_count(), 0);
+    EXPECT_FALSE(empty.has_targets(0));
+    EXPECT_TRUE(empty.get_downstream_targets(0).empty());
+    EXPECT_EQ(empty.get_total_target_count(), 0);
 
     auto mesh = RouterConnectionMapping::for_router(
         Topology::Mesh,
@@ -438,21 +431,14 @@ TEST_F(RouterConnectionMappingTest, Queries_OnAbsentChannelsReturnEmpty) {
         /*express_routing_enabled=*/false,
         /*enable_vc1=*/false,
         /*enable_mesh_pass_through=*/false);
-    EXPECT_FALSE(mesh.has_targets(1, 0)) << "VC1 not enabled";
-    EXPECT_TRUE(mesh.get_downstream_targets(2, 0).empty());
-    EXPECT_FALSE(mesh.has_targets(0, 10)) << "no such receiver channel";
+    EXPECT_FALSE(mesh.has_targets(1)) << "VC1 not enabled";
+    EXPECT_TRUE(mesh.get_downstream_targets(2).empty());
+    EXPECT_FALSE(mesh.has_targets(999)) << "no such VC";
 }
 
-TEST_F(RouterConnectionMappingTest, ConnectionTarget_AndReceiverKey_Semantics) {
+TEST_F(RouterConnectionMappingTest, ConnectionTarget_Semantics) {
     ConnectionTarget target(1, RoutingDirection::Z);
     EXPECT_EQ(target.target_vc, 1);
     ASSERT_TRUE(target.target_direction.has_value());
     EXPECT_EQ(*target.target_direction, RoutingDirection::Z);
-
-    ReceiverChannelKey key1{0, 1}, key2{0, 2}, key3{1, 0}, key4{0, 1};
-    EXPECT_TRUE(key1 < key2);
-    EXPECT_TRUE(key1 < key3);
-    EXPECT_FALSE(key2 < key1);
-    EXPECT_TRUE(key1 == key4);
-    EXPECT_FALSE(key1 == key2);
 }

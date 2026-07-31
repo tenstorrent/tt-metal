@@ -5,7 +5,7 @@
 #include "fabric_router_channel_mapping.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
-#include "tt_metal/fabric/builder/router_connection_mapping.hpp"
+#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <tt_stl/assert.hpp>
 
@@ -22,8 +22,8 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
     bool express_routing_enabled) :
     topology_(topology),
     downstream_is_tensix_builder_(downstream_is_tensix_builder),
-    shape_(RouterConnectionMapping::router_vc_shape(
-        topology, direction, edge_capability, z_port_role, express_routing_enabled, intermesh_config)) {
+    shape_(
+        router_vc_shape(topology, direction, edge_capability, z_port_role, express_routing_enabled, intermesh_config)) {
     // Logged here rather than during layout: these are the inputs to the shape derivation, and this
     // is the only point at which they are in scope. None is retained.
     log_debug(

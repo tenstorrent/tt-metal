@@ -41,7 +41,7 @@ bool fabric_has_intermesh_z_edge(const MeshGraph& mesh_graph) {
 }  // namespace
 
 void FabricBuilderContext::compute_max_channel_counts() {
-    // Create channel mappings for all router types that exist in this fabric
+    // Create channel mappings for all router families present in this fabric
     const auto topology = fabric_context_.get_fabric_topology();
 
     std::vector<FabricRouterChannelMapping> possible_mappings;
@@ -96,7 +96,7 @@ void FabricBuilderContext::compute_max_channel_counts() {
             any_mesh_uses_express);
     }
 
-    // Compute max channel counts across all router types in this fabric
+    // Compute max channel counts across all router families in this fabric
     max_sender_channels_per_vc_.fill(0);
     max_receiver_channels_per_vc_.fill(0);
 

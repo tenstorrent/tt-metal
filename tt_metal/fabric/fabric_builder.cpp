@@ -213,7 +213,9 @@ void FabricBuilder::connect_routers() {
     // feeds the other's sender, which transmits over its own eth link to a neighbor device).
     // This is the single establishment pass for every connection -- the boundary turns (to and
     // from the intermesh Z router) are wired here by the same path as every other local turn, so
-    // no second pass is needed.
+    // no second pass is needed. The link_idx pairing preserves plane identity across the turn;
+    // that is what lets the connection and channel mappings stay plane-independent archetypes
+    // (they carry no eth channel) -- the plane enters only here.
     for (const auto& pair : connection_pairs) {
         auto& router1 = routers_.at(pair.chan1);
         auto& router2 = routers_.at(pair.chan2);

@@ -1,320 +1,43 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
-#include "tt_metal/fabric/fabric_builder_context.hpp"
 
 #include <algorithm>
 #include <array>
 
 namespace tt::tt_fabric {
 
-std::vector<ConnectionTarget> RouterConnectionMapping::get_downstream_targets(
-    uint32_t vc, uint32_t receiver_channel) const {
-    ReceiverChannelKey key{vc, receiver_channel};
-    auto it = receiver_to_targets_.find(key);
-
-    if (it != receiver_to_targets_.end()) {
-        return it->second;
-    }
-
-    return {};  // No targets for this sender channel
-}
-
-bool RouterConnectionMapping::has_targets(uint32_t vc, uint32_t receiver) const {
-    ReceiverChannelKey key{vc, receiver};
-    return receiver_to_targets_.contains(key);
-}
-
-std::vector<ReceiverChannelKey> RouterConnectionMapping::get_all_receiver_keys() const {
-    std::vector<ReceiverChannelKey> keys;
-    keys.reserve(receiver_to_targets_.size());
-
-    for (const auto& [key, _] : receiver_to_targets_) {
-        keys.push_back(key);
-    }
-
-    return keys;
-}
-
-void RouterConnectionMapping::add_target(uint32_t vc, uint32_t receiver_channel, const ConnectionTarget& target) {
-    ReceiverChannelKey key{vc, receiver_channel};
-    receiver_to_targets_[key].push_back(target);
-}
-
-RoutingDirection RouterConnectionMapping::get_opposite_direction(RoutingDirection dir) {
-    switch (dir) {
-        case RoutingDirection::N: return RoutingDirection::S;
-        case RoutingDirection::S: return RoutingDirection::N;
-        case RoutingDirection::E: return RoutingDirection::W;
-        case RoutingDirection::W: return RoutingDirection::E;
-        default:
-            TT_FATAL(false, "Invalid routing direction for opposite calculation: {}", static_cast<int>(dir));
-            return dir;  // Unreachable
-    }
-}
-
 namespace {
 
 constexpr std::array<RoutingDirection, 4> k_cardinal_directions = {
     RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W};
 
-constexpr std::array<RoutingDirection, 5> k_all_directions = {
-    RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z};
-
-// The extra port's role from a per-direction capability set: absent means NONE, an intermesh Z is
-// the boundary, anything else same-mesh is the chord.
-ZPortRole z_role_of(const RouterConnectionMapping::PerDirectionCapabilities& caps) {
-    const auto& z = caps[static_cast<size_t>(RoutingDirection::Z)];
-    if (!z.has_value()) {
-        return ZPortRole::NONE;
-    }
-    return *z == EdgeCapability::INTERMESH ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::EXPRESS_CHORD;
-}
-
 }  // namespace
 
-void RouterConnectionMapping::validate_facing_role_consistency(
-    RoutingDirection facing, EdgeCapability edge_capability, ZPortRole z_role) {
-    if (facing != RoutingDirection::Z) {
-        // The chord lives on the chip's extra port; a cardinal-facing router can never carry it.
-        TT_FATAL(
-            edge_capability != EdgeCapability::INTRAMESH_EXPRESS,
-            "Router facing {} carries INTRAMESH_EXPRESS, but an express chord lives on the chip's "
-            "extra (Z-facing) port",
-            static_cast<int>(facing));
-        return;
+std::vector<ConnectionTarget> RouterConnectionMapping::get_downstream_targets(uint32_t vc) const {
+    if (vc >= targets_by_vc_.size()) {
+        return {};
     }
-    switch (edge_capability) {
-        case EdgeCapability::INTERMESH:
-            TT_FATAL(
-                z_role == ZPortRole::INTERMESH_BOUNDARY,
-                "A Z-facing intermesh edge means the chip's extra port is the boundary: role must be "
-                "INTERMESH_BOUNDARY, got {}",
-                to_string(z_role));
-            break;
-        case EdgeCapability::INTRAMESH_EXPRESS:
-            TT_FATAL(
-                z_role == ZPortRole::EXPRESS_CHORD,
-                "A same-mesh Z edge is this chip's express chord: role must be EXPRESS_CHORD, got {}",
-                to_string(z_role));
-            break;
-        case EdgeCapability::INTRAMESH_CARDINAL:
-            TT_FATAL(
-                false,
-                "A same-mesh Z edge is an express chord and must carry INTRAMESH_EXPRESS capability; "
-                "an ordinary cardinal-capability Z edge cannot exist");
-            break;
-    }
+    return targets_by_vc_[vc];
 }
 
-RouterConnectionMapping::PerDirectionCapabilities RouterConnectionMapping::canonical_express_endpoint_capabilities() {
-    PerDirectionCapabilities caps;
-    for (size_t i = 0; i < caps.size() - 1; ++i) {
-        caps[i] = EdgeCapability::INTRAMESH_CARDINAL;
-    }
-    caps[static_cast<size_t>(RoutingDirection::Z)] = EdgeCapability::INTRAMESH_EXPRESS;
-    return caps;
+bool RouterConnectionMapping::has_targets(uint32_t vc) const {
+    return vc < targets_by_vc_.size() && !targets_by_vc_[vc].empty();
 }
 
-bool RouterConnectionMapping::wires_into(
-    RoutingDirection producer_direction,
-    EdgeCapability producer_capability,
-    RoutingDirection egress_direction,
-    ZPortRole z_role,
-    bool express_routing_enabled,
-    uint32_t vc) {
-    if (producer_direction == egress_direction) {
-        return false;  // a router never wires back over its own link
+size_t RouterConnectionMapping::get_total_target_count() const {
+    size_t total = 0;
+    for (const auto& targets : targets_by_vc_) {
+        total += targets.size();
     }
-
-    if (egress_direction == RoutingDirection::Z) {
-        if (!express_routing_enabled) {
-            // Legacy: the extra port exists in the set only as the boundary template's target.
-            return z_role == ZPortRole::INTERMESH_BOUNDARY;
-        }
-        // Express: Z is a legal target for every producer except an intramesh X one (dimension
-        // order forbids X -> Y), and it is realized only when the chip has the port at all.
-        const bool legal = producer_direction == RoutingDirection::Z || !is_x_axis_direction(producer_direction) ||
-                           producer_capability == EdgeCapability::INTERMESH;
-        return legal && z_role != ZPortRole::NONE;
-    }
-
-    if (!express_routing_enabled) {
-        // Legacy: every non-self cardinal direction wires in, on every carrier VC.
-        return true;
-    }
-
-    if (producer_direction == RoutingDirection::Z) {
-        // A Z-facing producer fans out to every non-self direction -- but a boundary producer's
-        // feed is VC-shaped: its VC1 receiver fans out onto VC1 senders, while its VC0 receiver
-        // crosses over onto downstream VC1 senders and feeds nothing on VC0. An express chord's
-        // feed rides every carrier VC.
-        if (producer_capability == EdgeCapability::INTERMESH) {
-            return vc == 1;
-        }
-        return true;
-    }
-    if (is_x_axis_direction(producer_direction) && producer_capability != EdgeCapability::INTERMESH) {
-        // Dimension order: an ordinary X producer may only continue around the X ring. A landing
-        // (INTERMESH) X producer is exempt -- it is a route root, not a packet mid-X-phase.
-        return egress_direction == get_opposite_direction(producer_direction);
-    }
-    return true;
+    return total;
 }
 
-uint32_t RouterConnectionMapping::express_vc0_producer_arity(
-    RoutingDirection direction, const PerDirectionCapabilities& caps) {
-    // The extra port's role the wiring rule consults is this chip's own, not a global.
-    const ZPortRole z_role = z_role_of(caps);
-
-    uint32_t count = 1;  // sender channel 0 is the local worker
-    for (const auto producer : k_all_directions) {
-        if (producer == direction) {
-            continue;
-        }
-        const auto& capability = caps[static_cast<size_t>(producer)];
-        if (!capability.has_value()) {
-            continue;  // direction absent on this chip: no producer to wire
-        }
-        if (wires_into(producer, *capability, direction, z_role, /*express_routing_enabled=*/true, /*vc=*/0)) {
-            ++count;
-        }
-    }
-    return count;
-}
-
-uint32_t RouterConnectionMapping::express_mesh_vc0_sender_count() {
-    // The canonical endpoint chip attains the structural ceiling: every Y and X producer wires
-    // into an E/W facing under any capability assignment, so no per-chip set produces a wider one.
-    const auto caps = canonical_express_endpoint_capabilities();
-    uint32_t count = 0;
-    for (const auto direction : k_all_directions) {
-        count = std::max(count, express_vc0_producer_arity(direction, caps));
-    }
-    return count;
-}
-
-uint32_t RouterConnectionMapping::express_mesh_vc1_sender_count() {
-    // VC1 forwards the same wired producer set as VC0 on every facing, minus the worker slot, so
-    // vc1_arity(f) == vc0_arity(f) - 1 for every facing f. The family max therefore commutes with
-    // the subtraction: max_f(vc0_arity(f)) - 1 == max_f(vc0_arity(f) - 1).
-    return express_mesh_vc0_sender_count() - 1;
-}
-
-uint32_t RouterConnectionMapping::mesh_router_vc0_sender_count(ZPortRole /*z_role*/, bool express_routing_enabled) {
-    if (express_routing_enabled) {
-        return express_mesh_vc0_sender_count();  // family max over facing of the express rule
-    }
-    // Legacy rule: the worker plus every non-self cardinal producer. An intermesh Z edge adds
-    // nothing on VC0: the boundary's VC0 receiver forwards nowhere, so no from-Z producer exists
-    // on VC0 regardless of the extra port's role.
-    return 1 + builder_config::num_downstream_edms_2d_vc0;
-}
-
-uint32_t RouterConnectionMapping::mesh_router_vc1_sender_count(ZPortRole z_role, bool express_routing_enabled) {
-    if (z_role == ZPortRole::INTERMESH_BOUNDARY) {
-        // Legacy non-self downstreams plus the from-Z slot for the boundary's VC1 fanout.
-        return builder_config::num_downstream_edms_2d_vc1 + 1;
-    }
-    if (express_routing_enabled) {
-        return express_mesh_vc1_sender_count();  // family max over facing of the express rule
-    }
-    // Legacy rule: every non-self cardinal receiver forwards into this router on VC1.
-    return builder_config::num_downstream_edms_2d_vc1;
-}
-
-namespace {
-
-// Emit the flat-index prefix sums and enforce the capacity ceilings at the one construction
-// site. The ceiling checks are what turn the "express with VC2 reaches it exactly (5+4+1)"
-// comment into a guarantee: every family's shape passes through here, with zero margin on
-// senders and on the 32 stream registers the flat space maps onto.
-void finalize_vc_shape_bases(RouterConnectionMapping::RouterVcShape& shape) {
-    uint32_t sender_base = 0;
-    uint32_t receiver_base = 0;
-    for (size_t vc = 0; vc < shape.sender_counts.size(); ++vc) {
-        shape.sender_flat_base[vc] = sender_base;
-        sender_base += shape.sender_counts[vc];
-        shape.receiver_flat_base[vc] = receiver_base;
-        receiver_base += shape.receiver_counts[vc];
-    }
-    TT_FATAL(
-        sender_base <= builder_config::num_max_sender_channels,
-        "Router shape needs {} sender channels, over the {}-channel ceiling",
-        sender_base,
-        builder_config::num_max_sender_channels);
-    TT_FATAL(
-        receiver_base <= builder_config::num_max_receiver_channels,
-        "Router shape needs {} receiver channels, over the {}-channel ceiling",
-        receiver_base,
-        builder_config::num_max_receiver_channels);
-}
-
-}  // namespace
-
-RouterConnectionMapping::RouterVcShape RouterConnectionMapping::router_vc_shape(
-    Topology topology,
-    RoutingDirection facing,
-    EdgeCapability edge_capability,
-    ZPortRole z_role,
-    bool express_routing_enabled,
-    const IntermeshVCConfig* vc_config) {
-    validate_facing_role_consistency(facing, edge_capability, z_role);
-
-    const bool z_boundary = (facing == RoutingDirection::Z && edge_capability == EdgeCapability::INTERMESH);
-    const bool requires_vc1 = vc_config && vc_config->requires_vc1;
-    const bool requires_vc2 = vc_config && vc_config->requires_vc2;
-
-    RouterVcShape shape{};
-
-    // num_vcs is config-only: the identical answer for 1D and 2D, by design. A 1D router can
-    // therefore report more VCs than it has channels for, since VC1/VC2 channels are never
-    // created on 1D. That oddity is preserved, not fixed -- get_all_sender_mappings() already
-    // tolerates counts exceeding created channels. Whether any 1D configuration should ever set
-    // requires_vc1 is a separate question, deliberately out of scope here.
-    shape.num_vcs = requires_vc2 ? 3 : (requires_vc1 ? 2 : 1);
-
-    // The intermesh boundary family is 2D-only by construction. Today the boundary VC0 arm of the
-    // channel mapping precedes the 2D check, so a 1D Z boundary would silently report 5 -- with
-    // topology in hand that becomes an explicit configuration error instead.
-    TT_FATAL(!z_boundary || is_2D_topology(topology), "A Z-facing intermesh boundary router requires a 2D topology");
-
-    if (!is_2D_topology(topology)) {
-        // 1D counts: worker, plus one forwarding peer on Linear/Ring. No VC1 or VC2 channels are
-        // ever created, independent of the num_vcs answer above.
-        shape.sender_counts = {builder_config::get_num_used_sender_channel_count(topology), 0, 0};
-        shape.receiver_counts = {1, 0, 0};
-        finalize_vc_shape_bases(shape);
-        return shape;
-    }
-
-    // A Z-facing boundary cannot exist without VC1: its whole shape is the from-boundary VC1
-    // fanout. This is where the construction error lives now (moved from the channel mapping).
-    TT_FATAL(!z_boundary || requires_vc1, "A Z-facing intermesh boundary router cannot be constructed without VC1");
-
-    // VC0: worker + wired producers.
-    const uint32_t vc0_senders = z_boundary ? builder_config::num_sender_channels_intermesh_z_boundary_vc0
-                                            : mesh_router_vc0_sender_count(z_role, express_routing_enabled);
-
-    // VC1: wired producers, when the VC exists.
-    const uint32_t vc1_senders = !requires_vc1 ? 0
-                                 : z_boundary  ? builder_config::num_sender_channels_intermesh_z_boundary_vc1
-                                               : mesh_router_vc1_sender_count(z_role, express_routing_enabled);
-
-    // VC2: one sender by VC2's own definition.
-    const uint32_t vc2_senders = requires_vc2 ? 1 : 0;
-
-    // Receivers: one per active carrier VC. The boundary services no VC2 receiver.
-    const uint32_t vc0_receivers = 1;
-    const uint32_t vc1_receivers = requires_vc1 ? 1 : 0;
-    const uint32_t vc2_receivers = (requires_vc2 && !z_boundary) ? 1 : 0;
-
-    shape.sender_counts = {vc0_senders, vc1_senders, vc2_senders};
-    shape.receiver_counts = {vc0_receivers, vc1_receivers, vc2_receivers};
-    finalize_vc_shape_bases(shape);
-    return shape;
+void RouterConnectionMapping::add_target(uint32_t vc, const ConnectionTarget& target) {
+    targets_by_vc_[vc].push_back(target);
 }
 
 RouterConnectionMapping RouterConnectionMapping::for_router(
@@ -343,10 +66,7 @@ RouterConnectionMapping RouterConnectionMapping::for_router(
             "A Z-facing intermesh boundary router cannot be constructed without VC1: its entire "
             "shape is the from-boundary VC1 fanout");
         for (size_t i = 0; i < k_cardinal_directions.size(); ++i) {
-            mapping.add_target(
-                1,  // VC1
-                0,  // Receiver channel 0
-                ConnectionTarget(1, k_cardinal_directions[i]));
+            mapping.add_target(1, ConnectionTarget(1, k_cardinal_directions[i]));
         }
         return mapping;
     }
@@ -365,10 +85,7 @@ RouterConnectionMapping RouterConnectionMapping::for_router(
     // emits no Z pairs in 1D, so such a target would be unestablishable anyway.
     if (topology == Topology::Linear || topology == Topology::Ring) {
         const auto opposite = get_opposite_direction(facing);
-        mapping.add_target(
-            0,  // VC0
-            0,  // receiver channel 1
-            ConnectionTarget(0, opposite));
+        mapping.add_target(0, ConnectionTarget(0, opposite));
         return mapping;
     }
 
@@ -427,15 +144,15 @@ RouterConnectionMapping RouterConnectionMapping::for_router(
         const auto target = outbound[i];
         if (target == RoutingDirection::Z && z_role == ZPortRole::INTERMESH_BOUNDARY) {
             // The boundary template's target: VC0 always, VC1 only in pass-through mode.
-            mapping.add_target(0, 0, ConnectionTarget(0, target));
+            mapping.add_target(0, ConnectionTarget(0, target));
             if (enable_vc1 && enable_mesh_pass_through) {
-                mapping.add_target(1, 0, ConnectionTarget(1, target));
+                mapping.add_target(1, ConnectionTarget(1, target));
             }
             continue;
         }
-        mapping.add_target(0, 0, ConnectionTarget(0, target));
+        mapping.add_target(0, ConnectionTarget(0, target));
         if (enable_vc1) {
-            mapping.add_target(1, 0, ConnectionTarget(1, target));
+            mapping.add_target(1, ConnectionTarget(1, target));
         }
     }
 

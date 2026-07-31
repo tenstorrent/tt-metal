@@ -16,6 +16,7 @@
 
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
+#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 
 namespace tt::tt_fabric {
@@ -29,7 +30,7 @@ constexpr bool k_no_pass_through = false;
 
 std::set<RoutingDirection> target_directions(const RouterConnectionMapping& mapping, uint32_t vc) {
     std::set<RoutingDirection> dirs;
-    for (const auto& target : mapping.get_downstream_targets(vc, 0)) {
+    for (const auto& target : mapping.get_downstream_targets(vc)) {
         if (target.target_direction.has_value()) {
             dirs.insert(*target.target_direction);
         }
@@ -101,7 +102,7 @@ TEST(ExpressConnectionWiringTest, NoRouterIsWiredBackOverItsOwnLink) {
     for (const auto ingress :
          {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z}) {
         for (const auto capability : {EdgeCapability::INTRAMESH_CARDINAL, EdgeCapability::INTERMESH}) {
-            EXPECT_FALSE(RouterConnectionMapping::wires_into(
+            EXPECT_FALSE(wires_into(
                 ingress, capability, ingress, ZPortRole::EXPRESS_CHORD, /*express_routing_enabled=*/true, /*vc=*/0))
                 << "ingress " << static_cast<int>(ingress) << " is wired back to itself";
         }
@@ -123,7 +124,7 @@ TEST(ExpressConnectionWiringTest, IntrameshTargetsNeverCrossVCs) {
     // boundary template, not to these shared maps.
     const auto mapping = express_mapping(RoutingDirection::N);
     for (uint32_t vc : {0u, 1u}) {
-        for (const auto& target : mapping.get_downstream_targets(vc, 0)) {
+        for (const auto& target : mapping.get_downstream_targets(vc)) {
             // Every target -- cardinal or boundary -- stays on its source VC.
             EXPECT_EQ(target.target_vc, vc);
         }
@@ -146,14 +147,14 @@ TEST(ExpressConnectionWiringTest, WorkerChannelIsReservedOnVC0Only) {
     for (const auto facing : {RoutingDirection::N, RoutingDirection::E}) {
         const auto mapping = express_mapping(facing);
         const auto producer = builder::routing_direction_to_eth_direction(facing);
-        for (const auto& t : mapping.get_downstream_targets(0, 0)) {
+        for (const auto& t : mapping.get_downstream_targets(0)) {
             const uint32_t slot = builder::get_downstream_sender_channel_for_vc(
                 /*is_2d_routing=*/true, 0, producer, builder::routing_direction_to_eth_direction(*t.target_direction));
             EXPECT_GE(slot, 1u) << "producer " << static_cast<int>(facing) << " aliases the VC0 worker slot on "
                                 << static_cast<int>(*t.target_direction);
             lowest_vc0 = std::min(lowest_vc0, slot);
         }
-        for (const auto& t : mapping.get_downstream_targets(1, 0)) {
+        for (const auto& t : mapping.get_downstream_targets(1)) {
             lowest_vc1 = std::min(
                 lowest_vc1,
                 builder::get_downstream_sender_channel_for_vc(
@@ -235,7 +236,7 @@ TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipVc1BoundaryTargetDoesNotAlia
         /*enable_mesh_pass_through=*/true);
 
     std::set<RoutingDirection> used_directions;
-    for (const auto& target : mapping.get_downstream_targets(1, 0)) {
+    for (const auto& target : mapping.get_downstream_targets(1)) {
         ASSERT_TRUE(target.target_direction.has_value());
         EXPECT_TRUE(used_directions.insert(*target.target_direction).second)
             << "direction " << static_cast<int>(*target.target_direction) << " is shared by two VC1 targets";
@@ -254,14 +255,14 @@ TEST(ExpressConnectionWiringTest, WiredProducerSetsMatchExpectedTransitions) {
     // X producers are dimension-order-unwired.
     for (const auto egress : {RoutingDirection::N, RoutingDirection::S}) {
         const auto opposite = egress == RoutingDirection::N ? RoutingDirection::S : RoutingDirection::N;
-        EXPECT_TRUE(RouterConnectionMapping::wires_into(
+        EXPECT_TRUE(wires_into(
             opposite,
             EdgeCapability::INTRAMESH_CARDINAL,
             egress,
             ZPortRole::EXPRESS_CHORD,
             /*express_routing_enabled=*/true,
             /*vc=*/0));
-        EXPECT_TRUE(RouterConnectionMapping::wires_into(
+        EXPECT_TRUE(wires_into(
             RoutingDirection::Z,
             EdgeCapability::INTRAMESH_EXPRESS,
             egress,
@@ -269,7 +270,7 @@ TEST(ExpressConnectionWiringTest, WiredProducerSetsMatchExpectedTransitions) {
             /*express_routing_enabled=*/true,
             /*vc=*/0));
         for (const auto x : {RoutingDirection::E, RoutingDirection::W}) {
-            EXPECT_FALSE(RouterConnectionMapping::wires_into(
+            EXPECT_FALSE(wires_into(
                 x,
                 EdgeCapability::INTRAMESH_CARDINAL,
                 egress,
@@ -282,7 +283,7 @@ TEST(ExpressConnectionWiringTest, WiredProducerSetsMatchExpectedTransitions) {
 
     // Express-facing egress (Z): both Y cardinals are wired; intramesh X is unwired.
     for (const auto y : {RoutingDirection::N, RoutingDirection::S}) {
-        EXPECT_TRUE(RouterConnectionMapping::wires_into(
+        EXPECT_TRUE(wires_into(
             y,
             EdgeCapability::INTRAMESH_CARDINAL,
             RoutingDirection::Z,
@@ -291,7 +292,7 @@ TEST(ExpressConnectionWiringTest, WiredProducerSetsMatchExpectedTransitions) {
             /*vc=*/0));
     }
     for (const auto x : {RoutingDirection::E, RoutingDirection::W}) {
-        EXPECT_FALSE(RouterConnectionMapping::wires_into(
+        EXPECT_FALSE(wires_into(
             x,
             EdgeCapability::INTRAMESH_CARDINAL,
             RoutingDirection::Z,
@@ -304,7 +305,7 @@ TEST(ExpressConnectionWiringTest, WiredProducerSetsMatchExpectedTransitions) {
     // the legal dimension change.
     for (const auto egress : {RoutingDirection::E, RoutingDirection::W}) {
         const auto opposite = egress == RoutingDirection::E ? RoutingDirection::W : RoutingDirection::E;
-        EXPECT_TRUE(RouterConnectionMapping::wires_into(
+        EXPECT_TRUE(wires_into(
             opposite,
             EdgeCapability::INTRAMESH_CARDINAL,
             egress,
@@ -312,7 +313,7 @@ TEST(ExpressConnectionWiringTest, WiredProducerSetsMatchExpectedTransitions) {
             /*express_routing_enabled=*/true,
             /*vc=*/0));
         for (const auto y : {RoutingDirection::N, RoutingDirection::S}) {
-            EXPECT_TRUE(RouterConnectionMapping::wires_into(
+            EXPECT_TRUE(wires_into(
                 y,
                 EdgeCapability::INTRAMESH_CARDINAL,
                 egress,
@@ -320,7 +321,7 @@ TEST(ExpressConnectionWiringTest, WiredProducerSetsMatchExpectedTransitions) {
                 /*express_routing_enabled=*/true,
                 /*vc=*/0));
         }
-        EXPECT_TRUE(RouterConnectionMapping::wires_into(
+        EXPECT_TRUE(wires_into(
             RoutingDirection::Z,
             EdgeCapability::INTRAMESH_EXPRESS,
             egress,
@@ -335,7 +336,7 @@ TEST(ExpressConnectionWiringTest, IntermeshLandingProducerMayWireIntoY) {
     // into N/S/Z even on an E or W port.
     for (const auto x : {RoutingDirection::E, RoutingDirection::W}) {
         for (const auto egress : {RoutingDirection::N, RoutingDirection::S, RoutingDirection::Z}) {
-            EXPECT_TRUE(RouterConnectionMapping::wires_into(
+            EXPECT_TRUE(wires_into(
                 x,
                 EdgeCapability::INTERMESH,
                 egress,
@@ -354,21 +355,21 @@ TEST(ExpressConnectionWiringTest, NoChordNothingWiresIntoZEgress) {
          {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z}) {
         const auto capability =
             producer == RoutingDirection::Z ? EdgeCapability::INTRAMESH_EXPRESS : EdgeCapability::INTRAMESH_CARDINAL;
-        EXPECT_FALSE(RouterConnectionMapping::wires_into(
+        EXPECT_FALSE(wires_into(
             producer, capability, RoutingDirection::Z, ZPortRole::NONE, /*express_routing_enabled=*/true, /*vc=*/0))
             << "producer " << static_cast<int>(producer);
     }
 
     // Y->Y without the chord still wires: leaf attachments and line continuation are real
     // transitions with real flow-control classifications.
-    EXPECT_TRUE(RouterConnectionMapping::wires_into(
+    EXPECT_TRUE(wires_into(
         RoutingDirection::S,
         EdgeCapability::INTRAMESH_CARDINAL,
         RoutingDirection::N,
         ZPortRole::NONE,
         /*express_routing_enabled=*/true,
         /*vc=*/0));
-    EXPECT_TRUE(RouterConnectionMapping::wires_into(
+    EXPECT_TRUE(wires_into(
         RoutingDirection::N,
         EdgeCapability::INTRAMESH_CARDINAL,
         RoutingDirection::S,
@@ -383,35 +384,35 @@ TEST(ExpressConnectionWiringTest, ExpressSenderCountsAreFamilyMaxOverFacing) {
     // E/W-facing routers wire five VC0 producers: the worker plus every Y producer (N/S/Z) and the
     // opposite X, since the Y->X turn is legal. Dimension order leaves N/S/Z-facing routers with
     // three: worker, opposite Y, chord.
-    const auto canonical = RouterConnectionMapping::canonical_express_endpoint_capabilities();
-    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::E, canonical), 5u);
-    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::W, canonical), 5u);
-    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::N, canonical), 3u);
-    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::S, canonical), 3u);
-    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::Z, canonical), 3u);
+    const auto canonical = canonical_express_endpoint_capabilities();
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::E, canonical), 5u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::W, canonical), 5u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, canonical), 3u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::S, canonical), 3u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::Z, canonical), 3u);
 
     // The uniform family counts are the max over facing: one flat index space per family, with
     // per-router wiring filling a subset. VC1 forwards the same producers minus the worker slot.
-    EXPECT_EQ(RouterConnectionMapping::express_mesh_vc0_sender_count(), 5u);
-    EXPECT_EQ(RouterConnectionMapping::express_mesh_vc1_sender_count(), 4u);
+    EXPECT_EQ(express_mesh_vc0_sender_count(), 5u);
+    EXPECT_EQ(express_mesh_vc1_sender_count(), 4u);
 }
 
 TEST(ExpressConnectionWiringTest, ArityRespectsPerChipCapabilities) {
     // The arity is a per-chip fact, not the family constant: on a chip whose E edge is an
     // intermesh landing, that landing producer wires into every Y egress, so a Y-facing router's
     // arity is 4, not the canonical 3. The family max is still attained by E/W facings (5).
-    auto landing = RouterConnectionMapping::canonical_express_endpoint_capabilities();
+    auto landing = canonical_express_endpoint_capabilities();
     landing[static_cast<size_t>(RoutingDirection::E)] = EdgeCapability::INTERMESH;
 
-    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::N, landing), 4u);
-    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::Z, landing), 4u);
-    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::W, landing), 5u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, landing), 4u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::Z, landing), 4u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::W, landing), 5u);
 
     // A leaf chip has no chord: no Z producer exists to wire, so arities drop accordingly.
-    auto leaf = RouterConnectionMapping::canonical_express_endpoint_capabilities();
+    auto leaf = canonical_express_endpoint_capabilities();
     leaf[static_cast<size_t>(RoutingDirection::Z)] = std::nullopt;
-    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::N, leaf), 2u);
-    EXPECT_EQ(RouterConnectionMapping::express_vc0_producer_arity(RoutingDirection::E, leaf), 4u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, leaf), 2u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::E, leaf), 4u);
 }
 
 }  // namespace

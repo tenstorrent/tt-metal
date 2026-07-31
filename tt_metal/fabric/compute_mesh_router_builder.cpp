@@ -13,6 +13,7 @@
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
+#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -268,7 +269,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     bool fabric_tensix_extension_mux_mode = fabric_tensix_config == FabricTensixConfig::MUX;
     bool fabric_tensix_extension_udm_mode = fabric_tensix_config == FabricTensixConfig::UDM;
 
-    // Determine if tensix builder will be created (reusable condition)
+    // Determine if tensix builder will be created (reusable condition). This is the one link-scope
+    // input to the channel layout: a dispatch link never gets a tensix builder downstream, so in
+    // MUX mode two same-facing routers can differ here even though every other fact is shared.
     bool will_create_tensix_builder = fabric_tensix_extension_enabled && !location.is_dispatch_link;
     bool downstream_is_tensix_builder = will_create_tensix_builder && fabric_tensix_extension_mux_mode;
 
@@ -276,11 +279,15 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     auto tensix_config_for_lookup = will_create_tensix_builder ? fabric_tensix_config : FabricTensixConfig::DISABLED;
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
-    // The channel shape is derived from the facing direction and this edge's capability rather than
-    // a variant tag. A same-mesh Z is an express chord and gets the ordinary mesh-like shape; only
-    // a Z-facing router whose edge crosses a mesh boundary gets the intermesh boundary shape. The
-    // capability comes through the one derivation route (neighbor resolved from the direction), the
-    // same path the counts pass uses, so the two cannot classify the edge differently.
+    // The facts behind this router's mappings are resolved once, each at its own scope: topology
+    // and the intermesh VC config (fabric), express_routing_enabled (mesh), z_port_role (chip),
+    // facing and edge capability (router); the eth channel enters only at establishment. Both
+    // mappings are pure functions of those facts, so routers with an identical fact tuple are
+    // byte-identical archetypes -- and constructing one to ask "what would a router like this look
+    // like" (the fabric-wide max pass, the peer fast-path query below) is intended use.
+    //
+    // The capability comes through the one derivation route (neighbor resolved from the direction),
+    // the same path the counts pass uses, so the two cannot classify the edge differently.
     const auto edge_capability = capability_in_direction(control_plane, local_node, location.direction)
                                      .value_or(EdgeCapability::INTRAMESH_CARDINAL);
     // What this chip's extra port is for: an intermesh boundary (has_z for the channel/connection
@@ -567,8 +574,7 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
         // is what keeps the derivation's dimension-order failure meaningful -- a DOR-forbidden
         // turn that still reaches classify_producer_effect genuinely signals a disagreement
         // between the maps and this derivation, not a correctly unwired slot.
-        if (!RouterConnectionMapping::wires_into(
-                ingress, *ingress_capability, egress, z_role, /*express_routing_enabled=*/true, vc)) {
+        if (!wires_into(ingress, *ingress_capability, egress, z_role, /*express_routing_enabled=*/true, vc)) {
             continue;
         }
 
@@ -718,7 +724,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        auto targets = connection_mapping_.get_downstream_targets(vc, 0);
+        auto targets = connection_mapping_.get_downstream_targets(vc);
         log_debug(
             LogMetal,
             "Router at x={}, y={}, Channel={}, Direction={}, FabricNodeId={} :: VC{} has {} targets",
