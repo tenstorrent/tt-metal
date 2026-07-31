@@ -16,6 +16,8 @@ from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGen
 
 
 class TtLlamaForCausalLM(TtLlamaModelForGeneration):
+    decode_input_update_contract = 1
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

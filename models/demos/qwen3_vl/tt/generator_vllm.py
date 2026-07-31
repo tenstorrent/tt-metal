@@ -134,6 +134,8 @@ class TT_Qwen3VLProcessingInfo(Qwen3VLProcessingInfo):
     Qwen3VLMultiModalProcessor, info=TT_Qwen3VLProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
 )
 class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
+    decode_input_update_contract = 1
+
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
