@@ -136,9 +136,12 @@ ttnn::Tensor tilize(
         // max_l1 / (input_tile_size + output_tile_size) by construction.
         //
         // This reroute is sharded-input only, which the codegen prim never supports (see
-        // tilize_codegen_supported.cpp), so both calls below stay on the native prim
-        // unconditionally regardless of `implementation`.
-        if (input_tensor.memory_config().is_sharded() && !enough_space_height) {
+        // tilize_codegen_supported.cpp), so under `auto`/`native` it stays on the native prim
+        // unconditionally. An explicit `implementation="codegen"` request must instead reach the
+        // selector dispatch below and hit supported_by_codegen()'s TT_FATAL rejection (R6) rather
+        // than being silently downgraded to native here.
+        if (selector != ttnn::prim::ImplementationSelector::Codegen && input_tensor.memory_config().is_sharded() &&
+            !enough_space_height) {
             log_debug(tt::LogOp, "ttnn::tilize: rerouting wide sharded input via DRAM interleaved (#45331)");
             const auto target_memory_config = memory_config.value_or(input_tensor.memory_config());
             auto interleaved_input = ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG);

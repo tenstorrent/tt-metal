@@ -259,7 +259,12 @@ ProgramDescriptor build_row(
     } else {
         const CoreCoord grid = device->compute_with_storage_grid_size();
         std::tie(num_cores, all_cores, group1, group2, per1, per2) = split_work_to_cores(grid, g.total_ht);
-        cores = grid_to_cores(num_cores, grid.x, grid.y, /*row_wise=*/true);
+        // Derive the per-core iteration list from the CoreRangeSet the kernels are actually
+        // created over (all_cores), never from a second, independent enumeration of the raw grid:
+        // split_work_to_cores's all_cores is column-major by default, so a row-major grid_to_cores
+        // list can name a logical core outside all_cores' bounding box, indexing past the end of
+        // Kernel::core_to_runtime_args_ (sized from that bounding box) and segfaulting.
+        cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
     }
 
     // MEMORY: the batched writer_tilize_interleaved.cpp is correct only for ONE tile-row per
