@@ -1100,7 +1100,8 @@ changes behaviour. Corpus = union of the broad Mt<=16 corpus and the canonical F
 Device time via the profiler CSV demuxed by run-host-id (op device time, not host wall), 2 warmup + 12 timed
 iterations per block, 2 blocks per shape = 24 timed iterations. Absolute PCC against an FP32 CPU reference.
 
-Full table in `HEAD_SWEEP_UNIFIED.md` (which replaced `PROD_SWEEP_MT16.md`; that file's numbers
+Full table in `P150_VS_GLX.md` (which replaced `HEAD_SWEEP_UNIFIED.md`, which in turn replaced
+`PROD_SWEEP_MT16.md`; that file's numbers
 were re-measured on HEAD and agree to a median +0.1%). Sorted ascending by effective DRAM bandwidth. Harness:
 `prod_sweep_worker.py` + `prod_sweep_report.py`.
 
@@ -1196,7 +1197,8 @@ give ratios below 1.0 (physically impossible) or scatter wildly across shapes.
 ### HEYGEN SHAPES: roofline + regime-A filter, then default-config perf/correctness
 
 23 candidate shapes supplied. Kept only those BOTH memory-bound by roofline AND servable by regime-A; ran the
-survivors at DEFAULTS. Table in `HEAD_SWEEP_UNIFIED.md` (which replaced `HEYGEN_SWEEP.md`, including
+survivors at DEFAULTS. Table in `P150_VS_GLX.md` (which replaced `HEAD_SWEEP_UNIFIED.md`, which
+replaced `HEYGEN_SWEEP.md`, including
 its 23-shape filter rationale).
 
 **Filter.** Machine balance = 304 TFLOP/s (110 cores x 2.765 TFLOP/s bf16 HiFi2) / 512 GB/s = **594 FLOP/byte**;
