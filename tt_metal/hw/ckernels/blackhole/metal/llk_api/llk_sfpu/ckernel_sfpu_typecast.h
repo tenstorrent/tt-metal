@@ -30,6 +30,14 @@ constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
 // SFPGT mod1 selector that sets the destination to all-ones (-1) when the comparison is true.
 constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
 
+// SFP_STOCH_RND rounding mode. RND_ZERO truncates toward zero, which is what the mantissa-shift
+// destinations (int32, uint32, uint8), the host static_cast and torch all do; the default operand 0
+// is round to nearest with ties away from zero. Three FP32 inputs are a documented hardware
+// exception that RND_ZERO cannot fix: 0x3F7FFFFE, 0x3F7FFFFF and 0x3FFFFFFF still round away from
+// zero (tt-isa-documentation, BlackholeA0 SFPSTOCHRND_FloatInt.md). No bfloat16 or block-float input
+// can encode them, and round to nearest got them wrong as well.
+constexpr std::uint32_t SFPSTOCHRND_TRUNCATE = sfpi::SFPSTOCHRND_RND_ZERO;
+
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_typecast_fp32_to_uint16() {
 #ifdef DISABLE_SFPLOADMACRO
@@ -37,7 +45,8 @@ inline void calculate_typecast_fp32_to_uint16() {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+        TTI_SFP_STOCH_RND(
+            SFPSTOCHRND_TRUNCATE, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         if (is_fp32_dest_acc_en) {
             TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
         } else {
@@ -80,7 +89,8 @@ inline void calculate_typecast_fp32_to_uint16() {
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
             TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+            TTI_SFP_STOCH_RND(
+                SFPSTOCHRND_TRUNCATE, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
         }
     }
@@ -538,7 +548,8 @@ inline void calculate_typecast_int32_to_uint16() {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+        TTI_SFP_STOCH_RND(
+            SFPSTOCHRND_TRUNCATE, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
     }
 #else
@@ -874,7 +885,7 @@ inline void init_typecast_fp32_to_uint16() {
     TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, 0xf);  // L[VD] = max(0, L[VD])
 
     // InstructionTemplate[1]
-    TTI_SFP_STOCH_RND(0, 0, 0, 0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+    TTI_SFP_STOCH_RND(SFPSTOCHRND_TRUNCATE, 0, 0, 0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
 
     // Macro 0
     {
@@ -912,7 +923,7 @@ inline void init_typecast_int32_to_uint16() {
     TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, 0xf);  // L[VD] = max(0, L[VD])
 
     // InstructionTemplate[1]
-    TTI_SFP_STOCH_RND(0, 0, 0, 0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+    TTI_SFP_STOCH_RND(SFPSTOCHRND_TRUNCATE, 0, 0, 0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
 
     // Macro 0
     {
