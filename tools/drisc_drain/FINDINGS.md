@@ -520,33 +520,46 @@ is the first run against the real producer path -- Tensix RISCs emitting zones t
 `DeviceZoneScopedN` macro, with a DRISC as the only consumer.
 
 Test: `DramKernelDRISCScatterFixture.DRISCServicesRealProfiledWorkers`, kernels
-`profiler_zone_producer.cpp` (Tensix) and `drisc_service_workers.cpp` (DRISC). 16 producing cores
-(4x4, BRISC only), 2000 zones each. One zone is 4 words and a ring is 512, so each lane is asked to
-push **15.6x its ring capacity**.
+`profiler_zone_producer.cpp` (BRISC + NCRISC), `profiler_zone_producer_compute.cpp` (TRISC0-2) and
+`drisc_service_workers.cpp` (DRISC). **All five SPSC lanes of every core are live**, which is what
+exercises per-lane indexing and the five-head write-back rather than just lane 0.
 
 **The test cannot pass by accident.** `kernel_profiler.hpp`'s producer BLOCKS on a full ring by design
 ("a profiled run REQUIRES the consumer to be draining"). A wrong tail offset, a missing head
 write-back, or a desynced mirror does not produce a bad number -- it hangs.
 
-| metric | value |
-|---|---|
-| words drained | 129,152 (504.5 KB) |
-| sum of final tails | 129,152 -- exact conservation |
-| lanes still behind at exit | 0 of 80 |
-| ring overflows | 0 |
-| **max run observed** | **511 words, against a 512-word ring** |
-| sweeps / core-visits with work | 4,129 / 392 |
+Two rounds, back to back on one device session:
 
-**Max run 511 of 512 is the result.** The producers sat right at the ring ceiling for the whole run:
-they really were blocking in `ring_ensure_room`, and the head write-back really is what released them.
-The loop closes.
+| | 4x4, 2000 zones/lane | full grid, 500 zones/lane |
+|---|---|---|
+| producing lanes | 80 | **600** |
+| words drained | 644,748 (2.52 MB) | 1,210,724 (4.73 MB) |
+| tails advanced this round | 644,748 -- **exact** | 1,210,724 -- **exact** |
+| lanes still behind | 0 | 0 |
+| lanes silent | 0 | 0 |
+| ring overflows | 0 | 0 |
+| **max run observed** | **511 / 512** | **511 / 512** |
+| device time | 11.2 ms | 75.3 ms |
 
-Words check out: 16 x 2000 x 4 = 128,000 expected, 129,152 seen. The 1,152-word excess is 72 words per
-core of FW wrapper zone and stickies.
+**Max run 511 of 512 is the result.** The producers sat at the ring ceiling for the whole run: they
+really were blocking in `ring_ensure_room`, and the head write-back really is what released them. The
+loop closes -- and it closes for **600 lanes against a single DRISC**.
 
-Throughput here (46 MB/s) is **not** a bandwidth measurement and should not be compared with anything
-above: 4,096 of the 4,129 sweeps were the post-workload quiet window used to detect completion, so the
-figure is dominated by idle polling. Only ~33 sweeps carried traffic.
+`lanes silent = 0` means no ring was left untouched. `tails advanced == words drained` on both rounds
+is exact conservation: nothing lost, nothing double-counted.
+
+The second round is deliberately not a repeat. It starts with heads already at ~644K words, so it is
+the regression test for monotonic-tail seeding -- a drainer assuming a zero-based stream computes a
+garbage run here.
+
+Word counts check out: 16 x 5 x 2000 x 4 = 640,000 expected vs 644,748 seen, and
+120 x 5 x 500 x 4 = 1,200,000 vs 1,210,724. The excess is FW wrapper zones and stickies.
+
+**The drainer currently paces the workload.** The full grid completed in **6 productive sweeps**; the
+other 4,096 were the quiet window used to detect completion. Producers spent most of their life blocked
+waiting for the next sweep, because this drainer serializes a 10 KB read plus a barrier per core and
+does no batching -- it was written for correctness, not rate. Closing that gap is what the tiering and
+pacing results above already measured.
 
 ### Three things this run settled
 
