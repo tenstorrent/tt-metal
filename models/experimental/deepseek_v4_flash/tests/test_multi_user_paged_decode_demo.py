@@ -56,7 +56,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     resolve_snapshot_dir,
 )
 
-_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark"
+_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731"
 _TOPICS = ["movies", "tv shows", "books", "video games", "songs", "cartoons", "podcasts", "board games"]
 _PROMPT_TEMPLATE = (
     "Tell me the name of the top 10 {topic} of all time. Also list out the top 10 worst {topic} of all "

@@ -19,6 +19,7 @@
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
@@ -30,38 +31,28 @@
 namespace {
 
 // logits = comb_w * scale + comb_bias  -> cb_comb.
-void produce_logits(uint32_t cb_w, uint32_t cb_bias, uint32_t cb_scratch, uint32_t cb_comb, uint32_t scale_bits) {
+// Both operands are brought into DST and combined with an SFPU binary add, so the whole
+// expression costs a single pack instead of a scratch round trip through L1.
+void produce_logits(uint32_t cb_w, uint32_t cb_bias, uint32_t cb_comb, uint32_t scale_bits) {
     cb_wait_front(cb_w, 1);
+    cb_wait_front(cb_bias, 1);
 
     tile_regs_acquire();
     copy_tile_to_dst_init_short(cb_w);
     copy_tile(cb_w, 0, 0);
     binop_with_scalar_tile_init();
     mul_unary_tile(0, scale_bits);
+    copy_tile_to_dst_init_short(cb_bias);
+    copy_tile(cb_bias, 0, 1);
+    add_binary_tile_init();
+    add_binary_tile(0, 1, 0);
     tile_regs_commit();
 
-    cb_reserve_back(cb_scratch, 1);
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_scratch);
-    pack_tile(0, cb_scratch);
-    tile_regs_release();
-    cb_push_back(cb_scratch, 1);
     cb_pop_front(cb_w, 1);
-
-    cb_wait_front(cb_scratch, 1);
-    cb_wait_front(cb_bias, 1);
-
-    tile_regs_acquire();
-    add_tiles_init(cb_scratch, cb_bias);
-    add_tiles(cb_scratch, cb_bias, 0, 0, 0);
-    tile_regs_commit();
-
-    cb_pop_front(cb_scratch, 1);
     cb_pop_front(cb_bias, 1);
 
     cb_reserve_back(cb_comb, 1);
     tile_regs_wait();
-    pack_reconfig_data_format(cb_comb);
     pack_tile(0, cb_comb);
     tile_regs_release();
     cb_push_back(cb_comb, 1);
@@ -91,16 +82,23 @@ void reduce_to_cb(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, bool eps_
     cb_push_back(cb_out, 1);
 }
 
-// comb = exp(comb - rowmax), rowmax broadcast across columns (COL bcast).
-void sub_max_exp(uint32_t cb_comb, uint32_t cb_red) {
+// comb = exp(comb - rowmax) * mask, rowmax broadcast across columns (COL bcast). The mask
+// multiply rides along in DST: a fully-padded row reduces to a uniform rowmax, which would
+// otherwise exponentiate to 1 and contaminate the column sums.
+void sub_max_exp_mask(uint32_t cb_comb, uint32_t cb_red, uint32_t cb_mask) {
     cb_wait_front(cb_comb, 1);
     cb_wait_front(cb_red, 1);
+    cb_wait_front(cb_mask, 1);
 
     sub_bcast_cols_init_short(cb_comb, cb_red);
     tile_regs_acquire();
     sub_tiles_bcast_cols(cb_comb, cb_red, 0, 0, 0);
     exp_tile_init();
     exp_tile(0);
+    copy_tile_to_dst_init_short(cb_mask);
+    copy_tile(cb_mask, 0, 1);
+    mul_binary_tile_init();
+    mul_binary_tile(0, 1, 0);
     tile_regs_commit();
 
     cb_pop_front(cb_comb, 1);
@@ -108,48 +106,6 @@ void sub_max_exp(uint32_t cb_comb, uint32_t cb_red) {
 
     cb_reserve_back(cb_comb, 1);
     tile_regs_wait();
-    pack_reconfig_data_format(cb_comb);
-    pack_tile(0, cb_comb);
-    tile_regs_release();
-    cb_push_back(cb_comb, 1);
-}
-
-// comb *= mask (elementwise). mask is reused, so it is not popped.
-void mul_mask(uint32_t cb_comb, uint32_t cb_mask) {
-    cb_wait_front(cb_comb, 1);
-    cb_wait_front(cb_mask, 1);
-
-    mul_tiles_init(cb_comb, cb_mask);
-    tile_regs_acquire();
-    mul_tiles(cb_comb, cb_mask, 0, 0, 0);
-    tile_regs_commit();
-
-    cb_pop_front(cb_comb, 1);
-
-    cb_reserve_back(cb_comb, 1);
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_comb);
-    pack_tile(0, cb_comb);
-    tile_regs_release();
-    cb_push_back(cb_comb, 1);
-}
-
-// comb += eps (elementwise).
-void add_eps(uint32_t cb_comb, uint32_t eps_bits) {
-    cb_wait_front(cb_comb, 1);
-
-    copy_tile_to_dst_init_short(cb_comb);
-    tile_regs_acquire();
-    copy_tile(cb_comb, 0, 0);
-    binop_with_scalar_tile_init();
-    add_unary_tile(0, eps_bits);
-    tile_regs_commit();
-
-    cb_pop_front(cb_comb, 1);
-
-    cb_reserve_back(cb_comb, 1);
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_comb);
     pack_tile(0, cb_comb);
     tile_regs_release();
     cb_push_back(cb_comb, 1);
@@ -157,7 +113,9 @@ void add_eps(uint32_t cb_comb, uint32_t eps_bits) {
 
 // Multiply comb by a broadcast reciprocal vector. is_col=true broadcasts a [H,1] column across
 // W (row normalization); is_col=false broadcasts a [1,W] row across H (column normalization).
-void mul_bcast_recip(uint32_t cb_comb, uint32_t cb_red, bool is_col) {
+// When cb_eps_mask is given, eps*mask is added to the result in the same DST pass, which is
+// equivalent to "+= eps then re-mask" because the input padding is already zero.
+void mul_bcast_recip(uint32_t cb_comb, uint32_t cb_red, bool is_col, uint32_t cb_eps_mask = 0xFFFFFFFF) {
     cb_wait_front(cb_comb, 1);
     cb_wait_front(cb_red, 1);
 
@@ -172,6 +130,13 @@ void mul_bcast_recip(uint32_t cb_comb, uint32_t cb_red, bool is_col) {
     } else {
         mul_tiles_bcast_rows(cb_comb, cb_red, 0, 0, 0);
     }
+    if (cb_eps_mask != 0xFFFFFFFF) {
+        cb_wait_front(cb_eps_mask, 1);
+        copy_tile_to_dst_init_short(cb_eps_mask);
+        copy_tile(cb_eps_mask, 0, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+    }
     tile_regs_commit();
 
     cb_pop_front(cb_comb, 1);
@@ -179,7 +144,6 @@ void mul_bcast_recip(uint32_t cb_comb, uint32_t cb_red, bool is_col) {
 
     cb_reserve_back(cb_comb, 1);
     tile_regs_wait();
-    pack_reconfig_data_format(cb_comb);
     pack_tile(0, cb_comb);
     tile_regs_release();
     cb_push_back(cb_comb, 1);
@@ -212,7 +176,7 @@ void kernel_main() {
     constexpr uint32_t cb_mask = get_compile_time_arg_val(3);
     constexpr uint32_t cb_comb = get_compile_time_arg_val(4);
     constexpr uint32_t cb_reduce = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_scratch = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_eps_mask = get_compile_time_arg_val(6);
     constexpr uint32_t cb_out = get_compile_time_arg_val(7);
     constexpr uint32_t num_streams = get_compile_time_arg_val(8);  // unused at runtime (masking via cb_mask)
     constexpr uint32_t sinkhorn_iters = get_compile_time_arg_val(9);
@@ -225,16 +189,13 @@ void kernel_main() {
     cb_wait_front(cb_scaler, 1);
 
     // logits = comb_w * comb_scale + comb_bias.
-    produce_logits(cb_comb_w, cb_comb_bias, cb_scratch, cb_comb, comb_scale_bits);
+    produce_logits(cb_comb_w, cb_comb_bias, cb_comb, comb_scale_bits);
 
     // softmax over the last dim (W), masked to the valid HxH block.
     reduce_to_cb<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_comb, cb_scaler, cb_reduce, /*eps_recip=*/false, eps_bits);
-    sub_max_exp(cb_comb, cb_reduce);
-    mul_mask(cb_comb, cb_mask);
+    sub_max_exp_mask(cb_comb, cb_reduce, cb_mask);
     reduce_to_cb<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_comb, cb_scaler, cb_reduce, /*eps_recip=*/true, eps_bits);
-    mul_bcast_recip(cb_comb, cb_reduce, /*is_col=*/true);
-    add_eps(cb_comb, eps_bits);
-    mul_mask(cb_comb, cb_mask);
+    mul_bcast_recip(cb_comb, cb_reduce, /*is_col=*/true, cb_eps_mask);
 
     // initial column normalisation: comb /= (sum_rows(comb) + eps).
     reduce_to_cb<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_comb, cb_scaler, cb_reduce, /*eps_recip=*/true, eps_bits);

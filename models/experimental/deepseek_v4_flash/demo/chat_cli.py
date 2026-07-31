@@ -63,6 +63,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import render_message
+from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
 from models.experimental.deepseek_v4_flash.tt.paged_cache import PagedCacheFull, round_context
@@ -361,7 +362,9 @@ class ChatEngine:
             # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
             logits_host = self.model.decode_traced(token_id, pos)
         else:
-            logits_host = ttnn.to_torch(self.lm_head(self.model.decode(token_id, pos, self.rope)))
+            hidden = self.model.decode(token_id, pos, self.rope)
+            with _region("LM_HEAD"):
+                logits_host = ttnn.to_torch(self.lm_head(hidden))
         logits = logits_host.reshape(1, -1).float()
         return int(logits[0].argmax().item())
 

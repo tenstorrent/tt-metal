@@ -12,20 +12,25 @@
 void kernel_main() {
     const uint32_t post_out_addr = get_arg_val<uint32_t>(0);
     const uint32_t collapsed_addr = get_arg_val<uint32_t>(1);
-    const uint32_t d_tiles = get_arg_val<uint32_t>(2);
+    const uint32_t comb_w_mat_addr = get_arg_val<uint32_t>(2);
+    const uint32_t d_tiles = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_post_out = get_compile_time_arg_val(0);
     constexpr uint32_t cb_collapsed = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_comb_w = get_compile_time_arg_val(2);
 
-    constexpr auto post_out_args = TensorAccessorArgs<2>();
+    constexpr auto post_out_args = TensorAccessorArgs<3>();
     constexpr auto collapsed_args = TensorAccessorArgs<post_out_args.next_compile_time_args_offset()>();
+    constexpr auto comb_w_args = TensorAccessorArgs<collapsed_args.next_compile_time_args_offset()>();
 
     const auto post_out = TensorAccessor(post_out_args, post_out_addr);
     const auto collapsed = TensorAccessor(collapsed_args, collapsed_addr);
+    const auto comb_w = TensorAccessor(comb_w_args, comb_w_mat_addr);
 
     Noc noc;
     CircularBuffer cb_post(cb_post_out);
     CircularBuffer cb_col(cb_collapsed);
+    CircularBuffer cb_cw(cb_comb_w);
 
     constexpr uint32_t one_tile = 1;
 
@@ -40,8 +45,13 @@ void kernel_main() {
         noc.async_write(cb_col, collapsed, col_tile_size, {.offset_bytes = n * col_tile_size}, {.page_id = n});
     }
 
+    // comb_w_mat [1,1,H,H] -> single tile (laid out by the reader).
+    cb_cw.wait_front(one_tile);
+    noc.async_write(cb_cw, comb_w, cb_cw.get_tile_size(), {.offset_bytes = 0}, {.page_id = 0});
+
     noc.async_write_barrier();
 
     cb_post.pop_front(one_tile);
     cb_col.pop_front(d_tiles);
+    cb_cw.pop_front(one_tile);
 }
