@@ -85,7 +85,9 @@ def test_depth_label_says_all_layers_when_uncapped(monkeypatch):
     monkeypatch.setenv("TT_PERF_LAYERS", "0")
     assert S._depth_label() == "all layers"
     monkeypatch.setenv("TT_PERF_LAYERS", "8")
-    assert S._depth_label() == "8 layers"
+    # a capped window is a coverage SAMPLE with no count (the count came from the env default and did
+    # not track the depth actually profiled, so it printed a wrong number)
+    assert S._depth_label() == "a coverage sample (not the full model)"
 
 
 # --- the anchor must be this run's own starting point, never its current value -----------------

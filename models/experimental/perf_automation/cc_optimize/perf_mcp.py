@@ -3576,6 +3576,7 @@ def _persist_throughput(rep: dict) -> None:
     55% at-floor while measuring FASTER, purely because the floor was recomputed each round."""
     try:
         target, scope, is_llm = _select_perf_target(rep)
+        _win = (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
         snap = {
             "scope": scope,
             "has_unit_ceiling": bool(is_llm),
@@ -3596,10 +3597,14 @@ def _persist_throughput(rep: dict) -> None:
             "unit": getattr(target, "unit", "token"),
             "modeled_floor_ms": rep.get("modeled_floor_ms"),
             # The floor is a SUM OVER THE PROFILED OPS, so it scales with the window it was computed
-            # at. This snapshot is keyed by (model, task) and persists across runs, so without the
-            # depth a 2-layer floor can be rendered against a 16-layer measurement -- the same defect
-            # that produced the 832.93-vs-1088.15 headline, one section lower in the report.
-            "perf_layers": (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all",
+            # at, and the FLOOR form is rendered against the measurement -- so the floor keeps the real
+            # window (_win) below. The CONFIG/anchored CEILING (has_unit_ceiling), however, divides by
+            # DEPTH-INDEPENDENT full-model bytes (weights or params): it describes the WHOLE model no
+            # matter what window the profile ran, so it must read "all". Stamping the profiler window
+            # onto it made the report's depth guard mismatch a full-model ceiling against the all-layer
+            # measurement and blank utilization -- the coverage default runs TT_PERF_LAYERS=2, so that
+            # false mismatch fired on essentially every run.
+            "perf_layers": "all" if is_llm else _win,
         }
         _throughput_path().write_text(json.dumps(snap))
         _f = rep.get("modeled_floor_ms") if isinstance(rep, dict) else None
@@ -3607,7 +3612,7 @@ def _persist_throughput(rep: dict) -> None:
             _ledger().anchor(
                 _ledger().KIND_FLOOR,
                 _f,
-                depth=str(snap.get("perf_layers") or "all"),
+                depth=_win,
                 source="_persist_throughput",
                 model=_MODEL_ROOT.name if _MODEL_ROOT else "",
             )
@@ -3696,6 +3701,12 @@ def termination_check() -> dict:
         rep = roofline.residual_report(prof, _ENV)
     except Exception as exc:  # noqa: BLE001
         return {"can_stop": False, "error": f"residual_report failed: {str(exc)[-400:]}"}
+    # Persist the roofline-target snapshot the RUN_REPORT reads. It used to be written ONLY by
+    # profile_model, which the agent does not call in the normal loop (the engine sets the baseline
+    # and the loop steers with termination_check) -- so the snapshot was often absent and the report
+    # fell to NO_BAND. termination_check runs every step and already has `rep`, so writing it here
+    # makes the ceiling reliably available. Best-effort; _persist_throughput never raises.
+    _persist_throughput(rep)
     at_floor = bool(rep.get("at_floor"))
     attempts = [a for a in _load_attempts() if a.get("kernel_detected_in_source")]
     blocking, cleared = [], []

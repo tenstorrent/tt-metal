@@ -389,7 +389,14 @@ def _depth_label(profile: dict | None = None) -> str:
         raw = str(profile.get("perf_layers") or "").strip()
     if not raw:
         raw = (os.environ.get("TT_PERF_LAYERS") or "").strip()
-    return "%s layers" % raw if raw.isdigit() and int(raw) > 0 else "all layers"
+    # A partial window means the tracy numbers are a COVERAGE SAMPLE -- a few layers holding every op
+    # type -- not the whole model. But the COUNT is not reliable: it comes from TT_PERF_LAYERS, which
+    # usually still holds the coverage default (2) and does NOT track the depth the search actually
+    # profiled at, so "%s layers" prints a wrong number -- an 8- or 16-layer slice is reported as "2".
+    # Disclose that it is a coverage sample WITHOUT the bogus count; only full-depth is stated exactly.
+    if raw.isdigit() and int(raw) > 0:
+        return "a coverage sample (not the full model)"
+    return "all layers"
 
 
 def _baseline_trace_ms(baseline_profile: dict | None):

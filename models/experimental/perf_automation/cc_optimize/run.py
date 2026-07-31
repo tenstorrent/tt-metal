@@ -3053,10 +3053,18 @@ def _hf_cache_dims(model_id: str) -> dict:
 
 
 def _model_weight_bytes(demo_dir, hint=None) -> int:
+    # _captured/ (golden PCC input/output tensors) and _stubs/ (graduated-stub .last_good snapshots)
+    # are TEST FIXTURES, not model weights. Summing them made a tiny non-weight total short-circuit
+    # the real checkpoint lookup -- XTTS's 102 captured *.pt files (133 MB) masked the true 1.868 GB
+    # model.pth, so the roofline ceiling divided by a 14x-too-small size. Skip fixture dirs; when the
+    # demo ships no real local weights the total is 0 and we fall through to the HF-cache checkpoint.
     total = 0
+    _skip = {"_captured", "_stubs"}
     try:
         for p in Path(demo_dir).rglob("*"):
             if p.suffix.lower() in (".safetensors", ".bin", ".pt", ".pth") and p.is_file():
+                if _skip & set(p.parts):
+                    continue
                 total += p.stat().st_size
     except Exception:
         total = 0

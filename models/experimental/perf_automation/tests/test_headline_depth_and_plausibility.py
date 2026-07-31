@@ -30,8 +30,14 @@ def _summary():
 
 def test_depth_label_prefers_the_profile_stamp(monkeypatch):
     m = _summary()
+    # A partial window is disclosed as a coverage SAMPLE with NO count: the count was read from the
+    # env default (usually 2) and did not track the depth actually profiled, so "N layers" printed a
+    # wrong number (a 16-layer slice showed "2"). The profile stamp still decides partial-vs-full --
+    # an "all" stamp is trusted over a capped env.
     monkeypatch.delenv("TT_PERF_LAYERS", raising=False)
-    assert m._depth_label({"perf_layers": "16"}) == "16 layers"
+    assert m._depth_label({"perf_layers": "16"}) == "a coverage sample (not the full model)"
+    monkeypatch.setenv("TT_PERF_LAYERS", "8")
+    assert m._depth_label({"perf_layers": "all"}) == "all layers"
 
 
 def test_depth_label_does_not_claim_all_layers_for_a_capped_profile(monkeypatch):
@@ -51,8 +57,8 @@ def test_depth_label_says_all_layers_for_an_uncapped_profile(monkeypatch):
 def test_depth_label_falls_back_to_env_for_unstamped_profiles(monkeypatch):
     m = _summary()
     monkeypatch.setenv("TT_PERF_LAYERS", "8")
-    assert m._depth_label(None) == "8 layers"
-    assert m._depth_label({}) == "8 layers"
+    assert m._depth_label(None) == "a coverage sample (not the full model)"
+    assert m._depth_label({}) == "a coverage sample (not the full model)"
 
 
 def _render(tmp_path, monkeypatch, baseline_device_ms, final_ms, perf_layers):
