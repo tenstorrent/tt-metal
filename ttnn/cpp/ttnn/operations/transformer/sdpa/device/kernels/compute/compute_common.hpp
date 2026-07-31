@@ -738,11 +738,13 @@ void correction_block(
     // convert scale from fp32 to bf16
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
-    if constexpr (DST_ACCUM_MODE) {
-        // FP32 dest accumulation halves DEST to 4 tiles, but the fused kernel below needs 5
-        // (prev_max, worker_max, cur_max, prev_sum, worker_sum) in one acquire — dst_reg_4 would
-        // be out of range and the worker sum would be read back as garbage. Split the same
-        // correction into two passes that use at most 3 DEST tiles each.
+    if constexpr (compute_kernel_lib::DEST_AUTO_LIMIT < 5) {
+        // The fused kernel below needs five tiles live in one acquire (prev_max, worker_max,
+        // cur_max, prev_sum, worker_sum). FP32 dest accumulation halves DEST, leaving 4 tiles in
+        // the default half-sync mode — dst_reg_4 would be out of range and the worker sum would be
+        // read back as garbage. Split the same correction into two passes that use at most 3 DEST
+        // tiles each. Gate on the actual capacity rather than on DST_ACCUM_MODE alone, so an fp32
+        // caller that also sets dst_full_sync_en (8 tiles) keeps the fused kernel.
         //
         // Pass 1: CUR_MAX = max(PREV_MAX, WORKER_MAX)
         //         EXP_MAX_DIFF   = exp((PREV_MAX   - CUR_MAX) * scale)
