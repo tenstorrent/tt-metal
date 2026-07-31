@@ -610,8 +610,32 @@ unreachable, and keep the suppression as tight as possible. Never reach for a bl
 
 ## Validating changes via CI
 
-We should attempt a fresh run of the targeted workflow with our PR branch. However, that is not working yet.
-Thus, nothing to do at the moment.
+Ideally you would trigger a fresh `workflow_dispatch` run of the tracked workflow you just
+patched, against your own PR branch, and let that run — not a local build, which you cannot do
+— be the evidence. **That is still not possible, so there is nothing to do here at the moment.**
+The reason is worth recording precisely, so it is not re-investigated every time.
+
+It is no longer a *file resolution* problem. gh-aw's `dispatch-workflow` safe-output exists, and
+as of **v0.84.1** its compile-time allowlist resolves tt-metal's tracked workflows correctly:
+upstream's `findWorkflowFile` fix taught the compiler to check the `.yaml` extension, so an
+allowlist naming all 44 entries of `aggregate-workflow-data.yaml`'s `workflow_ids` compiles
+cleanly. On v0.84.0 every one of those entries failed — it probed only `.md`, `.lock.yml`, and
+`.yml`, and tt-metal's CI workflows are uniformly `.yaml`.
+
+What blocks it is **ref selection**. The generated `dispatch_workflow` tool takes exactly two
+arguments, `workflow_name` and `inputs` — there is no `ref` argument for you to set. The ref is
+resolved once inside the `safe_outputs` job from configuration and environment only: frontmatter
+`target-ref`, else `GITHUB_HEAD_REF`, else `GITHUB_REF`, else the default branch. In scheduled
+mode — how you almost always run — none of those is your branch: `GITHUB_REF` is
+`refs/heads/main`, and the branch you asked gh-aw to create does not exist until `safe_outputs`
+runs *after* your turn ends, so it cannot be fed back in. A dispatch from here would re-run the
+workflow against `main`, proving nothing about your patch while consuming scarce
+Galaxy/T3000/Blackhole runner time. Do not attempt to work around this.
+
+Until an upstream release lets a dispatch carry a per-call ref (or wires a just-created PR
+branch into the dispatch ref), validation stays manual: a maintainer approves and re-runs the
+source tracked workflow on your branch. Keep saying exactly that in **Test Status** rather than
+implying a validation run exists.
 
 ## Pull request conventions
 
