@@ -357,7 +357,9 @@ class TTDiffusionHead:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
             shift,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # L1: x_mod is the in0 of _swiglu_ffn's gate/up pair (1536x4608, 120 calls/frame — the
+            # largest DRAM-in0 matmul bucket left).  Placement only, maxabsdiff==0.
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         # FFN + gated residual
         ffn_out = self._swiglu_ffn(x_mod, layer_idx)
