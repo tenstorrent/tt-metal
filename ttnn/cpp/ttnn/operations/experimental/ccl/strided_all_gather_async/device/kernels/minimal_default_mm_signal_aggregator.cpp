@@ -135,4 +135,13 @@ void kernel_main() {
     for (uint32_t w = 0; w < num_ag_workers; w++) {
         noc_semaphore_set(per_worker_sem_ptrs[w], 0);
     }
+    // Retire the outstanding NOC traffic before the kernel exits. Two kinds are still in flight
+    // here: the per-band mm-signal increments above are async NOC *atomics* to the matmul cores, and
+    // the semaphore resets are async NOC *writes*. Without these barriers the kernel can return with
+    // either still pending, so a matmul core can miss a signal it is waiting on, or (under trace
+    // replay, where the next invocation starts immediately) a late reset can land on top of a
+    // worker's increment for the following run and strand the aggregator's wait_min. Either way the
+    // op hangs -- non-deterministically, since it depends on how the traffic happens to drain.
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
