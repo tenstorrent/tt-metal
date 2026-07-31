@@ -78,7 +78,13 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    timeout-minutes: 60
+    # Single-source-of-truth per-job timeout: compute_sweep_matrix.py stamps
+    # matrix.timeout onto every entry from tests/pipeline_reorg/ttnn_sweep_tests.yaml
+    # (checked against .github/time_budget.yaml by verify_time_budget.py). Run types
+    # not budget-tracked in the yaml (nightly/comprehensive) are stamped with the
+    # 60-min default in matrix_runner_config.get_timeout_for, so the value is always
+    # present and consumed here directly.
+    timeout-minutes: ${{ matrix.timeout }}
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: 🧬 Checkout Repository

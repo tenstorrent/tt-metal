@@ -514,7 +514,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     return desc;
 }
 
-void UnaryDeviceOperation::override_runtime_arguments(
+void UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

@@ -117,9 +117,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT * dvalids_per_tile;
     {
         ZONE_SCOPED("INIT")
-        // PACK_ISOLATE / L1_CONGESTION: skip FPU→PACK dest-dvalid (math is src-clear only
-        // in congestion; pulsing never happens — matches WH/BH isolate semantics).
-        if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+        // End-to-end and math-isolate runs require FPU destination ownership.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
@@ -212,7 +211,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
-        else
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }

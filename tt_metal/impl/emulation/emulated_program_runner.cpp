@@ -2314,6 +2314,13 @@ static std::mutex g_conn_route_mu;
 // the sender, so a per-core key would miss). Deduped by direction; append order makes index 0=fwd, 1=bwd.
 // See tt-emule docs/fabric-ccl-emulation.md.
 static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
+// Persistent UNDIRECTED ring adjacency (chip -> ring-neighbor chips), accumulated across ALL ops and never
+// reset: the physical ethernet ring is static, but each op's senders open only the connection(s) they use,
+// so any single op's g_conn_route is an incomplete, per-chip one-sided view. The ring walk needs the full
+// undirected topology to traverse the turning Hamiltonian cycle without dead-ending at a chip that opened
+// only one direction this op. Direction (which way a send goes) still comes from per-op g_conn_route; only
+// the ring *connectivity* comes from here. See tt-emule docs/fabric-ccl-emulation.md.
+static std::unordered_map<uint32_t, std::set<uint32_t>> g_ring_adj;
 // Per-op reset flag: cleared at each new op's first connection-record so a later op's different line
 // orientation can't corrupt the src-keyed, direction-deduped table. See tt-emule docs/fabric-ccl-emulation.md.
 static std::atomic<bool> g_conn_route_dirty{true};
@@ -2338,6 +2345,9 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     // Record the connection-owner core's (the mux core, on the MUX path) direction, keyed by its LOGICAL
     // coords — before the per-direction dedup below, which is for the src-keyed g_conn_route only.
     g_mux_dir[__emule_worker_key(src, wx, wy)] = dir;
+    // Accumulate the undirected ring edge (persistent; unaffected by the per-op reset above).
+    g_ring_adj[src].insert(neighbor);
+    g_ring_adj[neighbor].insert(src);
     auto& v = g_conn_route[src];
     for (const auto& c : v) {
         if (c.dir == dir) {
@@ -2347,10 +2357,11 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     v.push_back(ConnRoute{dir, neighbor});
 }
 
-// Ordered ring members at distance 1,2,... from `src` starting in `start_dir`, by chaining the per-chip
-// recorded ring neighbors (g_conn_route) — at each hop taking the neighbor that is NOT where we came from,
-// so it follows the turning Hamiltonian cycle the compass walk can't. Returns empty if the chain is
-// incomplete (caller falls back to the compass walk). See tt-emule docs/fabric-ccl-emulation.md.
+// Ordered ring members at distance 1,2,... from `src` in `start_dir`: first hop from g_conn_route[src], then
+// follow the persistent undirected adjacency g_ring_adj (unvisited non-prev neighbor), tracing the turning
+// Hamiltonian cycle the compass walk can't. Stops at a dead end / cycle close; empty if src/start_dir was
+// never recorded. TT_FATALs if a chip has >1 continuation (cross-axis edges from another op's collective,
+// not disambiguable from the undirected union) rather than misroute. See docs/fabric-ccl-emulation.md.
 static std::vector<uint32_t> __emule_fabric_walk_ring(uint32_t src, uint32_t start_dir) {
     std::vector<uint32_t> walk;
     std::lock_guard<std::mutex> lk(g_conn_route_mu);
@@ -2369,23 +2380,36 @@ static std::vector<uint32_t> __emule_fabric_walk_ring(uint32_t src, uint32_t sta
         return walk;  // start direction not recorded — caller falls back
     }
     walk.push_back(static_cast<uint32_t>(first));
+    // Traverse the persistent UNDIRECTED ring adjacency: g_conn_route only fixes the FIRST hop's direction;
+    // connectivity comes from g_ring_adj so a chip that opened one connection this op doesn't dead-end.
+    std::set<uint32_t> visited{src, static_cast<uint32_t>(first)};
     uint32_t prev = src, cur = static_cast<uint32_t>(first);
     for (int hop = 0; hop < 64; ++hop) {  // 64 = chip-count backstop
-        auto cit = g_conn_route.find(cur);
-        if (cit == g_conn_route.end()) {
+        auto ait = g_ring_adj.find(cur);
+        if (ait == g_ring_adj.end()) {
             break;
         }
+        // Continuation = the unvisited neighbor other than `prev` (exactly one on a valid 1D ring; see header).
         int next = -1;
-        for (const auto& c : cit->second) {
-            if (c.neighbor != prev) {  // the ring edge that continues forward (not the one back to prev)
-                next = static_cast<int>(c.neighbor);
-                break;
+        int n_cont = 0;
+        for (uint32_t nb : ait->second) {
+            if (nb != prev && visited.find(nb) == visited.end()) {
+                if (++n_cont == 1) {
+                    next = static_cast<int>(nb);
+                }
             }
         }
+        TT_FATAL(
+            n_cont <= 1,
+            "walk_ring: ambiguous ring continuation at chip {} (degree {} in g_ring_adj); multi-axis fabric "
+            "topology not modeled",
+            cur,
+            ait->second.size());
         if (next < 0 || static_cast<uint32_t>(next) == src) {
             break;  // dead end, or the cycle closed back at the source
         }
         walk.push_back(static_cast<uint32_t>(next));
+        visited.insert(static_cast<uint32_t>(next));
         prev = cur;
         cur = static_cast<uint32_t>(next);
     }
@@ -2482,13 +2506,23 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
         // mux signal above is absent. See tt-emule docs/fabric-ccl-emulation.md.
         if (dir < 0 && r.kind == emule_route_kind::MCAST_1D) {
             const uint32_t range = r.b ? r.b : 1;
+            // Pick the direction whose walk_ring reach equals the multicast range (measured along the actual
+            // ring, which walk_ring follows and the compass walk can't). Disambiguates the two directions of a
+            // bidirectional reduce_scatter on an open line; on a closed ring both reach N-1, so a tie falls
+            // through to the recorded direction index rather than guessing conns[0]. See docs/fabric-ccl-emulation.md.
+            int matched = -1;
+            int n_match = 0;
             for (const auto& cr : conns) {
-                if (__emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(cr.dir)).size() == range) {
-                    dir = static_cast<int>(cr.dir);
-                    break;
+                if (__emule_fabric_walk_ring(src_chip, cr.dir).size() == range) {
+                    if (++n_match == 1) {
+                        matched = static_cast<int>(cr.dir);
+                    }
                 }
             }
-            if (dir < 0 && !conns.empty()) {
+            if (n_match == 1) {
+                dir = matched;  // unique range-match — the disambiguated direction
+            } else if (!conns.empty()) {
+                // no match, or an ambiguous closed-ring tie — use the actually-recorded send index
                 dir = static_cast<int>(conns[r.dir_index < conns.size() ? r.dir_index : 0].dir);
             }
             if (dir >= 0) {
@@ -3195,6 +3229,19 @@ static std::unordered_map<ProgramId, ResolvedProgram> g_resolved_programs;
 static std::deque<ProgramId> g_resolved_lru;
 static constexpr size_t kMaxResolvedPrograms = 256;
 
+// Per-program fabric routing, keyed by ProgramId. record_conn populates the globals g_conn_route/g_mux_dir
+// during host program construction, but ttnn's program cache SKIPS construction on a cache hit, so an
+// intervening op leaves the globals holding ITS routes. Routing is a property of the program (like the
+// compiled kernels), so capture it once (first resolve) and restore it into the globals at each dispatch.
+// Deliberately NOT LRU-bounded (unlike g_resolved_programs): tiny, and must outlive kernel-cache eviction so
+// a re-resolved program keeps its own routes. g_ring_adj (physical ring) stays global; g_worker_dir is a
+// run-time cache, re-derived per op. See docs/fabric-ccl-emulation.md.
+struct ProgramRoutes {
+    std::unordered_map<uint32_t, std::vector<ConnRoute>> conn_route;
+    std::unordered_map<uint64_t, uint32_t> mux_dir;
+};
+static std::unordered_map<ProgramId, ProgramRoutes> g_program_routes;
+
 static void launch_cores(
     std::vector<CoreSetup>& core_setups,
     uint8_t* dram_data,
@@ -3304,7 +3351,9 @@ static void launch_cores(
             id.logical_x = lx;
             id.logical_y = ly;
             id.proc_id = ki.processor_id;
-            id.kernel_src = nullptr;
+            // Point at the KernelInfo's owned source-path string (lives for the program run) so the
+            // quiescent-deadlock dump names each parked fiber's kernel.
+            id.kernel_src = ki.kernel_name.empty() ? nullptr : ki.kernel_name.c_str();
 
             // The fiber entry is the kernel body. __emule_self is set by the scheduler
             // on swap-in; the no-op start-barrier of the OS-thread model is gone (a
@@ -3479,6 +3528,15 @@ static ResolvedProgram& prepare_program(IDevice* device, Program& program) {
         pid,
         resolved.core_kernels.size());
 
+    // Capture once, keyed by pid: on first resolve the globals still hold what record_conn recorded for this
+    // program. A later re-resolve (cache-hit, construction skipped) finds the entry present and keeps it.
+    {
+        std::lock_guard<std::mutex> lk(g_conn_route_mu);
+        if (g_program_routes.find(pid) == g_program_routes.end()) {
+            g_program_routes[pid] = ProgramRoutes{g_conn_route, g_mux_dir};
+        }
+    }
+
     // LRU-bound the cache (safety net; entries are otherwise valid for the program's life).
     if (g_resolved_programs.size() >= kMaxResolvedPrograms && !g_resolved_lru.empty()) {
         g_resolved_programs.erase(g_resolved_lru.front());
@@ -3532,6 +3590,19 @@ void execute_program_emulated(IDevice* device, Program& program) {
     g_conn_route_dirty.store(true, std::memory_order_relaxed);
 
     ResolvedProgram& resolved = prepare_program(device, program);  // compile-once (memoized)
+
+    // Restore this program's routing into the globals before any 1D send resolves, so a program-cache hit
+    // reinstates its own directions over an intervening op's. Keyed by pid (never evicted); g_worker_dir is a
+    // run-time cache, cleared here to re-derive per op. See ProgramRoutes / docs/fabric-ccl-emulation.md.
+    {
+        const ProgramId pid = program.impl().get_id();
+        std::lock_guard<std::mutex> lk(g_conn_route_mu);
+        if (auto rit = g_program_routes.find(pid); rit != g_program_routes.end()) {
+            g_conn_route = rit->second.conn_route;
+            g_mux_dir = rit->second.mux_dir;
+        }
+        g_worker_dir.clear();
+    }
 
     const bool defer = g_emule_mesh_defer;  // mesh register phase (the run is deferred)
     dispatch_to_device(device, program, resolved, defer);

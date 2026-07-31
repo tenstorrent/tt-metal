@@ -26,6 +26,7 @@ GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | head -1 
 CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 ZSTD_VERSION=$(grep -E "^ARG ZSTD_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+CURL_VERSION=$(grep -E "^ARG CURL_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 OPENMPI_VERSION=$(grep -E "^ARG OMPI_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 ORAS_VERSION=$(grep -E "^ARG ORAS_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
@@ -33,7 +34,7 @@ SYFT_SCANNER_VERSION=$(grep -E "^ARG SYFT_SCANNER_VERSION=" dockerfile/Dockerfil
 DOCKERFILE_FRONTEND_VERSION=$(grep -E "^ARG DOCKERFILE_FRONTEND_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 
 # Compute hashes for each tool (version + install script)
-for tool in ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd oras; do
+for tool in ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd curl oras; do
     hash_var="$(printf '%s_HASH' "$tool" | tr '[:lower:]' '[:upper:]')"
     declare "$hash_var=$(cat "dockerfile/scripts/install-${tool}.sh" | sha1sum | cut -d' ' -f1 | head -c 12)"
 done
@@ -58,6 +59,7 @@ jq -n \
   --arg cmake "${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" \
   --arg yq "${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" \
   --arg zstd "${BASE}/zstd:${ZSTD_VERSION}-${ZSTD_HASH}" \
+  --arg curl "${BASE}/curl:${CURL_VERSION}-${CURL_HASH}" \
   --arg sfpi "${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" \
   --arg openmpi "${BASE}/openmpi:${OPENMPI_VERSION}-${OPENMPI_HASH}" \
   --arg oras "${BASE}/oras:${ORAS_VERSION}-${ORAS_HASH}" \
@@ -72,6 +74,7 @@ jq -n \
     "cmake-tag": $cmake,
     "yq-tag": $yq,
     "zstd-tag": $zstd,
+    "curl-tag": $curl,
     "sfpi-tag": $sfpi,
     "openmpi-tag": $openmpi,
     "oras-tag": $oras,

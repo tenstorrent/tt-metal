@@ -124,8 +124,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
-        // Only L1_TO_L1 has a math-to-pack consumer.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        // End-to-end and math-isolate runs require FPU destination ownership.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
@@ -207,7 +207,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             volatile std::uint32_t* cfg                 = (volatile std::uint32_t*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
-        else
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }

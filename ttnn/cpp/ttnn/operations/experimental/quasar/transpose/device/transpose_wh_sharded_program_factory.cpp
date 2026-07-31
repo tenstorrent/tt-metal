@@ -122,7 +122,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = CB_IN0, .accessor_name = "cb_in0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(
+            input_tensor.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer_spec{
@@ -133,7 +134,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = CB_OUT0, .accessor_name = "cb_out0", .endpoint_type = DFBEndpointType::CONSUMER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(
+            input_tensor.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     ttnn::ComputeKernelConfig compute_cfg{
