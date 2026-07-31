@@ -1,0 +1,207 @@
+{
+  "benchmarks": [
+    {
+      "name": "BM_program_spec_build/common/iterations:300/repeats:7/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 2077.4,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_program_spec_build/worst/iterations:300/repeats:7/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 14398.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_enqueue_program/common/iterations:300/repeats:7/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 15200.6,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_enqueue_program/worst/iterations:300/repeats:7/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 16742.4,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_run_args_update/common/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 129789.5,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_run_args_update/worst/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 535757.4,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_dfb_override/worst/iterations:300/repeats:7/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 2307.4,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_borrowed_rebind/iterations:300/repeats:7/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 1292.9,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_borrowed_resize/iterations:300/repeats:7/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 4017.8,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_enqueue_write_buffer/dram/32/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 2762325.6,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_enqueue_write_buffer/dram/256/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 508696.9,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_enqueue_write_buffer/dram/1024/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 465564.8,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_enqueue_write_buffer/dram/2048/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 464463.9,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_enqueue_write_buffer/l1/32/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 588130.4,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_enqueue_write_buffer/l1/256/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 506811.6,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_enqueue_write_buffer/l1/1024/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 466608.3,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_enqueue_write_buffer/l1/2048/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 465982.6,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_read_buffer_e2e/dram/32/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 11629328.9,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_read_buffer_e2e/dram/256/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 1224370.0,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_read_buffer_e2e/dram/1024/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 699847.8,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_read_buffer_e2e/dram/2048/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 668383.5,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_read_buffer_e2e/l1/32/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 8566644.9,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_read_buffer_e2e/l1/256/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 1217168.5,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_read_buffer_e2e/l1/1024/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 663682.9,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_read_buffer_e2e/l1/2048/iterations:1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 657520.8,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_trace_capture/common/iterations:200/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 57570.9,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_trace_capture/worst/iterations:200/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "real_time": 54300.1,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_trace_replay/common/iterations:300/repeats:7/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 1870.4,
+      "time_unit": "ns"
+    },
+    {
+      "name": "BM_trace_replay/worst/iterations:300/repeats:7/manual_time_min",
+      "run_type": "aggregate",
+      "aggregate_name": "min",
+      "real_time": 1852.2,
+      "time_unit": "ns"
+    }
+  ]
+}
