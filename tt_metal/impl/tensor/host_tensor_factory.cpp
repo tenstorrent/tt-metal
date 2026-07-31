@@ -72,14 +72,13 @@ HostTensor HostTensor::from_span(std::span<const T> buffer, TensorSpec spec) {
 }
 
 template <typename T>
-HostTensor HostTensor::from_borrowed_data(
-    ttsl::Span<T> buffer, const Shape& shape, MemoryPin pin, const std::optional<Tile>& tile) {
+HostTensor HostTensor::from_borrowed_data(ttsl::Span<T> buffer, const Shape& shape, MemoryPin pin) {
     size_t volume = shape.volume();
     TT_FATAL(buffer.size() == volume, "Buffer size {} differs from shape volume {}", buffer.size(), volume);
 
     auto host_buffer = HostBuffer(buffer, std::move(pin));
     auto buffer_dtype = convert_to_data_type<T>();
-    TensorSpec tensor_spec(shape, TensorLayout(buffer_dtype, PageConfig(Layout::ROW_MAJOR, tile), MemoryConfig{}));
+    TensorSpec tensor_spec(shape, TensorLayout(buffer_dtype, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
 
     return HostTensor::from_buffer(std::move(host_buffer), std::move(tensor_spec));
 }
@@ -206,18 +205,12 @@ template HostTensor HostTensor::from_span<uint32_t>(ttsl::Span<const uint32_t>, 
 template HostTensor HostTensor::from_span<uint16_t>(ttsl::Span<const uint16_t>, TensorSpec);
 template HostTensor HostTensor::from_span<uint8_t>(ttsl::Span<const uint8_t>, TensorSpec);
 
-template HostTensor HostTensor::from_borrowed_data<bfloat16>(
-    ttsl::Span<bfloat16>, const Shape&, MemoryPin, const std::optional<Tile>&);
-template HostTensor HostTensor::from_borrowed_data<float>(
-    ttsl::Span<float>, const Shape&, MemoryPin, const std::optional<Tile>&);
-template HostTensor HostTensor::from_borrowed_data<int32_t>(
-    ttsl::Span<int32_t>, const Shape&, MemoryPin, const std::optional<Tile>&);
-template HostTensor HostTensor::from_borrowed_data<uint32_t>(
-    ttsl::Span<uint32_t>, const Shape&, MemoryPin, const std::optional<Tile>&);
-template HostTensor HostTensor::from_borrowed_data<uint16_t>(
-    ttsl::Span<uint16_t>, const Shape&, MemoryPin, const std::optional<Tile>&);
-template HostTensor HostTensor::from_borrowed_data<uint8_t>(
-    ttsl::Span<uint8_t>, const Shape&, MemoryPin, const std::optional<Tile>&);
+template HostTensor HostTensor::from_borrowed_data<bfloat16>(ttsl::Span<bfloat16>, const Shape&, MemoryPin);
+template HostTensor HostTensor::from_borrowed_data<float>(ttsl::Span<float>, const Shape&, MemoryPin);
+template HostTensor HostTensor::from_borrowed_data<int32_t>(ttsl::Span<int32_t>, const Shape&, MemoryPin);
+template HostTensor HostTensor::from_borrowed_data<uint32_t>(ttsl::Span<uint32_t>, const Shape&, MemoryPin);
+template HostTensor HostTensor::from_borrowed_data<uint16_t>(ttsl::Span<uint16_t>, const Shape&, MemoryPin);
+template HostTensor HostTensor::from_borrowed_data<uint8_t>(ttsl::Span<uint8_t>, const Shape&, MemoryPin);
 
 template HostTensor host_tensor_from_vector_with_pad_value<bfloat16>(
     const std::vector<bfloat16>&, TensorSpec, bfloat16);
