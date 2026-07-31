@@ -99,7 +99,7 @@ formats/merges and uploads parameters; `reset_sampling_state=True` rebuilds
 prompt/output penalty state. The flags are independent. The method does NOT
 advance seeds — callers apply slot remaps first, reset/align seeds when state is
 reset, and call `seed_manager.get_new_values()` exactly once per sampled token.
-The legacy `reset_batch=` keyword remains as a compatibility alias.
+Both command flags are required at every decode call.
 
 This contract includes the unconditional first-decode reseed for `seed=None`
 also addressed by
@@ -123,8 +123,8 @@ Generators execute these commands without adding page-table comparisons,
 sampling-mode checks, or model-specific forced reloads. The corresponding
 vLLM and tt-metal revisions are deployed as a pinned pair; there is no
 per-model contract version or old-vLLM compatibility path. Direct non-vLLM
-callers may omit all four commands and retain their existing local behavior.
-Supplying only a subset is an error.
+callers, including demos and warmup code, must also provide all four commands.
+Any demo-side decision to retain traced inputs is made at the call site.
 
 `model_capabilities["supports_async_decode"]` is separate from contract
 versioning. It certifies that a vLLM wrapper supports split async readback and

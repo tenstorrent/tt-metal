@@ -1,15 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-#
-# Unit tests for the sampling half of the explicit vLLM decode update contract.
 
+import inspect
 import random
 from types import SimpleNamespace
 
-from models.common.sampling.generator import (
-    SamplingGenerator,
-    SeedManager,
-    should_align_decode_seed_counters,
-)
+from models.common.sampling.generator import SamplingGenerator, SeedManager
 
 
 def _fake_sampling_generator():
@@ -51,27 +47,12 @@ def test_no_sampling_updates_is_a_true_noop():
     assert calls == []
 
 
-def test_legacy_reset_batch_still_rebuilds_sampling_state(monkeypatch):
-    fake, calls = _fake_sampling_generator()
-    formatted = object()
-    monkeypatch.setattr(
-        "models.common.sampling.generator.format_sampling_params",
-        lambda params, max_batch_size: formatted,
-    )
+def test_sampling_update_commands_are_required_and_have_no_legacy_alias():
+    params = inspect.signature(SamplingGenerator.apply_decode_state).parameters
 
-    SamplingGenerator.apply_decode_state(
-        fake,
-        [object()],
-        reset_batch=True,
-        prompt_tokens="prompt",
-        output_tokens="output",
-    )
-
-    assert calls == [
-        ("params", formatted),
-        ("prompt", "prompt"),
-        ("output", "output"),
-    ]
+    assert params["reload_sampling_params"].default is inspect.Parameter.empty
+    assert params["reset_sampling_state"].default is inspect.Parameter.empty
+    assert "reset_batch" not in params
 
 
 def test_unseeded_decode_reset_loads_fresh_device_seed(monkeypatch):
@@ -112,21 +93,3 @@ def test_unseeded_decode_reset_loads_fresh_device_seed(monkeypatch):
     assert uploads == [(host_seed_tensor, seed_buffer)]
     assert manager._needs_skip
     assert not manager._reseted
-
-
-def test_legacy_seed_alignment_policy_is_preserved():
-    assert should_align_decode_seed_counters(
-        explicit_contract=False,
-        reset_sampling_state=False,
-        legacy_alignment=True,
-    )
-    assert not should_align_decode_seed_counters(
-        explicit_contract=True,
-        reset_sampling_state=False,
-        legacy_alignment=True,
-    )
-    assert should_align_decode_seed_counters(
-        explicit_contract=True,
-        reset_sampling_state=True,
-        legacy_alignment=False,
-    )
