@@ -585,7 +585,14 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     max_size_bytes_ -= shrink_size;
     shrink_size_ += shrink_size;
     if (block_size_[block_to_shrink] == 0) {
-        block_prev_block_[block_next_block_[block_to_shrink]] = block_prev_block_[block_to_shrink];
+        const ssize_t prev_block = block_prev_block_[block_to_shrink];
+        const ssize_t next_block = block_next_block_[block_to_shrink];
+        if (next_block != -1) {
+            block_prev_block_[next_block] = prev_block;
+        }
+        if (prev_block != -1) {
+            block_next_block_[prev_block] = next_block;
+        }
         free_meta_block(block_to_shrink);
     } else {
         block_address_[block_to_shrink] += shrink_size;
@@ -600,21 +607,29 @@ void FreeListOpt::reset_size() {
 
     // Create a new block, mark it as allocated and deallocate the old block so coalescing can happen
     ssize_t lowest_block_index = -1;
+    bool has_live_block = false;
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (!meta_block_is_allocated_[i]) {
             continue;
         }
+        has_live_block = true;
         if (block_address_[i] == shrink_size_) {
             lowest_block_index = i;
             break;
         }
     }
-    TT_ASSERT(lowest_block_index != -1, "Lowest block not found during reset size");
 
-    // There 2 cases to consider:
-    // 1. The lowest block is is free, which means we can just modify it's attributes
-    // 2. The lowest block is allocated, which means we need to create a new block and deallocate the old one
-    if (!block_is_allocated_[lowest_block_index]) {
+    TT_FATAL(!has_live_block || lowest_block_index != -1, "Lowest block not found during reset size");
+
+    // There 3 cases to consider:
+    // 1. Every block was consumed by the shrink, which means there is nothing to grow back into and the
+    //    restored range has to be rebuilt the way init() does it
+    // 2. The lowest block is is free, which means we can just modify it's attributes
+    // 3. The lowest block is allocated, which means we need to create a new block and deallocate the old one
+    if (lowest_block_index == -1) {
+        size_t new_block_index = alloc_meta_block(0, shrink_size_, -1, -1, false);
+        insert_block_to_segregated_list(new_block_index);
+    } else if (!block_is_allocated_[lowest_block_index]) {
         auto* segregated_list =
             &free_blocks_segregated_by_size_[get_size_segregated_index(block_size_[lowest_block_index])];
         for (size_t i = 0; i < segregated_list->size(); i++) {
