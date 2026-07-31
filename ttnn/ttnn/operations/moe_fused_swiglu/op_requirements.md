@@ -119,7 +119,7 @@ beyond 1e-4"**.
   0 xfail_wrong_mode, 0 hangs, 0 OOM, no inf/NaN
 - **Perf baseline**: util 0.235 / 0.245 / 0.143 at count 128 / 256 / 512 (emb 7168, cap 5120)
 
-### [ ] Refinement 1 — Honour the runtime token count (`m_tiles`), instead of always doing `M_BLOCK`
+### [x] Refinement 1 — Honour the runtime token count (`m_tiles`), instead of always doing `M_BLOCK`
 
 **Type**: perf
 
@@ -160,6 +160,34 @@ them first means redoing them.
 256` and `count 512` not regressed; the guard set shows no regression; no golden cell changes
 category and no cell's PCC moves by more than 1e-4; `count = 0` still returns in ~6 us without a
 hang; and the acceptance suite's `count ∈ {32, 255, 512, 1024}` cases still hold their Phase-0 PCC.
+
+**Outcome**: **DONE.** `count 128` (the target) **223 496 -> 151 620 ns, -32 %** (util 0.233 ->
+0.343); `count 256` 226 771 -> 227 795 (+0.5 %, per-cell noise — unaffected by construction, exactly
+as predicted); `count 512` 442 463 -> 439 679 (**-0.6 %**); `count = capacity` 4 351 747 -> 4 279 071
+(**-1.7 %**); 9-cell sum **-2.3 %** (two independent runs agreed within 0.2 %). Guard set clean
+except `bfp8_tile` at +1.1/+1.5 % over two runs, the one cell marginally above noise. All 12 golden
+cells re-measured have **bit-identical PCC** (delta exactly 0.0), and `count = 0` is still ~6.1 us.
+- **`m_eff` cost the design 0 and paid ~2x on its own axis**; the -32 % is close to the honest
+  ceiling for it, because the shrink cannot touch the **weight stream** — 87 % of the read bytes and
+  count-independent. At `count 128` the x-multicast+compute portion is what halved.
+- **The real find was a latent correctness bug, not perf.** `mcast_pipe`'s rotating-sender Flag reset
+  (`set(INVALID)` behind a `fence_()` that is `async_writes_flushed` = SENT, not LANDED) races the
+  sender's own `MCAST_INCL_SRC` **loopback** VALID write, so the sender's next `receive()` returns on
+  a stale flag and the block's last round is consumed before it lands. Present since Phase 0 on BOTH
+  collectives; invisible only because `(m_eff-1) * KR_PAD` tile-matmuls of cover hid it, which is
+  exactly the cover `m_eff` removes. Fixed caller-side (both sends now land their own copy locally
+  and multicast in place, `src == dst` / EXCLUDE-source) and the hazard is documented at
+  `mcast_pipe.hpp`'s `ROTATING_SENDER`. Cost of the fix: two self-copies, both then hidden — the x
+  one by hoisting all staging into a per-injector prologue (which also took the DRAM read + fused
+  tilize OFF the multicast chain, a win in its own right), the h one by issuing it before the W_down
+  prefetch so ONE barrier covers both.
+- **Bottleneck now**: unchanged in kind — the serial composition of the collectives (Refinement 2's
+  premise still holds), plus the count-independent weight stream that now dominates the low-count
+  cells even harder. Next levers are Refinement 2's, unchanged. NOT attempted here and why: fixing
+  the `mcast_pipe` loopback ordering *inside* the helper (an acked barrier on the loopback path)
+  would delete both self-copies rather than hide them, but it is a shared-`kernel_lib` change with
+  its own blast radius (`tensix_all_reduce`, the pipe unit test) and belongs with Refinement 2's
+  lever 4, which already owns `mcast_pipe`.
 
 ### [ ] Refinement 2 — Break the reduce-path serialisation (the measured 85 %)
 

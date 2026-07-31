@@ -230,68 +230,70 @@ void kernel_main() {
         cb_reserve_back(cb_x_tiles, x_slot_tiles);
         const uint32_t x_base = get_write_ptr(cb_x_tiles);
 
-        // m_eff rounds, not M_BLOCK: at count 128 (M_t 4) this is HALF the handshake chain and
-        // half the staged bytes, and at count 32 an eighth. m_eff divides M_BLOCK, so cb_x_tiles'
-        // write pointer stays block-aligned and identical on every core in the row (which
-        // mcast_pipe requires of the landing address).
-        for (uint32_t t = 0; t < m_eff; ++t) {
-            const uint32_t round = t % HGROUPS;
+        // ---- x staging PROLOGUE: land every tile-row THIS core injects, before the chain ----
+        //
+        // Staging (the DRAM stick read, the fused tilize, and the landing in the resident slot) is
+        // per-injector work with NO cross-core ordering: `dst` is a fixed offset inside the slot
+        // reserved just above, and each tile-row has exactly one injector. Hoisting it out of the
+        // multicast loop lets all m_eff injectors stage CONCURRENTLY instead of each one stalling
+        // its own round while every other core in the row sits in `receive()`. The round loop below
+        // is then a pure collective: one multicast per tile-row and nothing else.
+        //
+        // The landing is a self-copy (bf16) / a direct read (bfp8) rather than a multicast loopback
+        // so that the send below is `src == dst` and therefore EXCLUDE-source. That is NOT
+        // cosmetic: a `src != dst` send is a LOOPBACK multicast (mcast_pipe.inl
+        // `loopback = in_rect_ && src_l1 != dst_l1`), which makes this core's OWN data-ready cell a
+        // multicast destination — and the rotating-sender reset right after
+        // (`data_ready_.set(INVALID)` behind a `fence_()` that is `async_writes_flushed`, i.e. SENT,
+        // not LANDED) then races that in-flight VALID. When the late VALID wins, this core's next
+        // `receive()` returns on a stale flag, every later round shifts one early, and the block's
+        // LAST tile-row is consumed before its multicast lands: silent, run-to-run garbage.
+        // `noc_async_read_barrier()` IS a real arrival guarantee, so landing the data here removes
+        // the loopback altogether, for the same NoC bytes (one fewer multicast destination).
+        for (uint32_t t = my_col; t < m_eff; t += HGROUPS) {
             const uint32_t dst = x_base + t * X_ROW_BYTES;
-            if (round == my_col) {
-                uint32_t row = b * M_BLOCK + t;
-                if (row >= M_T_MAX) {
-                    row = M_T_MAX - 1;  // rows past the sized region are UNDEFINED; stay in bounds
+            uint32_t row = b * M_BLOCK + t;
+            if (row >= M_T_MAX) {
+                row = M_T_MAX - 1;  // rows past the sized region are UNDEFINED; stay in bounds
+            }
+            if constexpr (INPUT_FORMAT == 0) {
+                // bf16 ROW_MAJOR: read this row-group's emb slice of 32 sticks; compute tilizes
+                // them to bfp8 in cb_x_stage; copy the tile-row into the resident slot.
+                cb_reserve_back(cb_x_in, TILE_H);
+                const uint32_t wp = get_write_ptr(cb_x_in);
+                for (uint32_t s = 0; s < TILE_H; ++s) {
+                    noc_async_read(
+                        x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
+                        wp + s * X_SLICE,
+                        kr * BF16_TILE_ROW_BYTES);
                 }
-                if constexpr (INPUT_FORMAT == 0) {
-                    // bf16 ROW_MAJOR: read this row-group's emb slice of 32 sticks, compute
-                    // tilizes it to bfp8 in cb_x_stage, then land it in the resident slot and
-                    // broadcast IN PLACE.
-                    cb_reserve_back(cb_x_in, TILE_H);
-                    const uint32_t wp = get_write_ptr(cb_x_in);
-                    for (uint32_t s = 0; s < TILE_H; ++s) {
-                        noc_async_read(
-                            x_acc.get_noc_addr(row * TILE_H + s, kstart * BF16_TILE_ROW_BYTES),
-                            wp + s * X_SLICE,
-                            kr * BF16_TILE_ROW_BYTES);
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_x_in, TILE_H);
+                noc_async_read_barrier();
+                cb_push_back(cb_x_in, TILE_H);
 
-                    // Self-copy cb_x_stage -> the resident slot FIRST, so the multicast below is
-                    // `src == dst` and therefore EXCLUDE-source, exactly like the bfp8 branch.
-                    //
-                    // This is NOT a stylistic choice. A `src != dst` send is a LOOPBACK multicast
-                    // (mcast_pipe.inl `loopback = in_rect_ && src_l1 != dst_l1`), which makes this
-                    // core's OWN data-ready cell a multicast destination — and the rotating-sender
-                    // reset right after (`data_ready_.set(INVALID)` behind a `fence_()` that is
-                    // `async_writes_flushed`, i.e. SENT, not LANDED) then races that in-flight
-                    // VALID. When the late VALID wins, this core's NEXT `receive()` returns on a
-                    // stale flag, every later round shifts one early, and the block's LAST token
-                    // tile-row is consumed before its multicast has landed — silent, run-to-run
-                    // garbage in exactly that tile-row. `noc_async_read_barrier()` IS a real
-                    // arrival guarantee, so doing the self-copy here removes the loopback
-                    // altogether. Same NoC bytes as before (one fewer multicast destination, one
-                    // local L1->L1 copy) and it frees cb_x_stage a step earlier.
-                    cb_wait_front(cb_x_stage, KR_PAD);
-                    noc_async_read(get_noc_addr(get_read_ptr(cb_x_stage)), dst, X_ROW_BYTES);
-                    noc_async_read_barrier();
-                    cb_pop_front(cb_x_stage, KR_PAD);
-                    if constexpr (xmc.active) {
-                        x_send.send(dst, dst, X_ROW_BYTES);
-                    }
-                } else {
-                    // bfp8_b TILE: land the tiles straight in the resident slot, then broadcast
-                    // in place (src == dst, so the pipe multicasts EXCLUDE-source).
-                    for (uint32_t i = 0; i < kr; ++i) {
-                        noc_async_read(x_acc.get_noc_addr(row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
-                    }
-                    noc_async_read_barrier();
-                    if constexpr (xmc.active) {
-                        x_send.send(dst, dst, X_ROW_BYTES);
-                    }
-                }
+                cb_wait_front(cb_x_stage, KR_PAD);
+                noc_async_read(get_noc_addr(get_read_ptr(cb_x_stage)), dst, X_ROW_BYTES);
+                noc_async_read_barrier();
+                cb_pop_front(cb_x_stage, KR_PAD);
             } else {
-                if constexpr (xmc.active) {
+                // bfp8_b TILE: the tiles land straight in the resident slot, no tilize.
+                for (uint32_t i = 0; i < kr; ++i) {
+                    noc_async_read(x_acc.get_noc_addr(row * EMB_T + kstart + i), dst + i * BFP8_TILE, BFP8_TILE);
+                }
+                noc_async_read_barrier();
+            }
+        }
+
+        // ---- x multicast chain ----
+        // m_eff rounds, not M_BLOCK: at count 128 (M_t 4) this is HALF the handshake chain and half
+        // the staged bytes, and at count 32 an eighth. m_eff divides M_BLOCK, so cb_x_tiles' write
+        // pointer stays block-aligned and identical on every core in the row (which mcast_pipe
+        // requires of the landing address).
+        if constexpr (xmc.active) {
+            for (uint32_t t = 0; t < m_eff; ++t) {
+                const uint32_t round = t % HGROUPS;
+                if (round == my_col) {
+                    x_send.send(x_base + t * X_ROW_BYTES, x_base + t * X_ROW_BYTES, X_ROW_BYTES);
+                } else {
                     x_recv.receive(round);
                 }
             }
@@ -371,9 +373,32 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
         for (uint32_t r = 0; r < HGROUPS; ++r) {
+            // This round's cb_h slot is reserved BEFORE the W_down prefetch so that the round's
+            // sender can ISSUE its self-copy first and ONE barrier below covers both: the copy then
+            // rides the W_down DRAM read's latency instead of adding its own to the round chain.
+            // Reordering the two reserves cannot deadlock — cb_w_down always runs WD_AHEAD blocks
+            // ahead of cb_h, so a compute thread waiting on K-block k already has its in1.
+            cb_reserve_back(cb_h, h_block_tiles);
+            const uint32_t hdst = get_write_ptr(cb_h);
+            const bool i_send = (is_root && r == my_col);
+            if (i_send) {
+                // Self-copy cb_h_local -> this round's cb_h slot, so the send below is `src == dst`
+                // and therefore EXCLUDE-source. Identical reasoning to the x send above: a
+                // `src != dst` send is a LOOPBACK multicast, and mcast_pipe's rotating-sender flag
+                // reset then races this core's own in-flight VALID, so the root's remaining
+                // `receive()` calls shift one round early and the LAST h K-block is consumed before
+                // it lands. Measured: with the x send fixed but this one left as a loopback, PCC on
+                // a fixed input still varied 0.959-0.979 run to run on BOTH activation formats (the
+                // bfp8 path has no x loopback, so this send was the only remaining suspect); with
+                // both fixed it is bit-stable. Same NoC bytes, one fewer mcast destination.
+                cb_wait_front(cb_h_local, h_block_tiles);
+                noc_async_read(get_noc_addr(get_read_ptr(cb_h_local)), hdst, h_block_tiles * BFP8_TILE);
+            }
+
             // Stay WD_AHEAD K-blocks ahead of the round being consumed.
             const uint32_t pre = r + WD_AHEAD;
-            if (pre < HGROUPS) {
+            const bool prefetch = pre < HGROUPS;
+            if (prefetch) {
                 const uint32_t hbase = pre * HN_PAD;
                 uint32_t hn_r = HN_PAD;
                 if (hbase + hn_r > HID_T) {
@@ -391,25 +416,13 @@ void kernel_main() {
                         wp + k * EC_MAX * BFP4_TILE,
                         BFP4_TILE);
                 }
-                noc_async_read_barrier();
+            }
+            noc_async_read_barrier();  // ONE barrier: the sender's h self-copy AND the W_down block
+            if (prefetch) {
                 cb_push_back(cb_w_down, WD_BLOCK_TILES);
             }
 
-            cb_reserve_back(cb_h, h_block_tiles);
-            const uint32_t hdst = get_write_ptr(cb_h);
-            if (is_root && r == my_col) {
-                // Self-copy cb_h_local -> this round's cb_h slot FIRST, then broadcast IN PLACE
-                // (`src == dst`, EXCLUDE-source). Identical reasoning to the x send above: a
-                // `src != dst` send is a LOOPBACK multicast, and mcast_pipe's rotating-sender flag
-                // reset then races this core's own in-flight VALID, so the root's remaining
-                // `receive()` calls shift one round early and the LAST h K-block is consumed before
-                // it lands. Measured: with the x send fixed but this one left as a loopback, PCC on
-                // a fixed input still varied 0.959-0.979 run to run on BOTH activation formats
-                // (the bfp8 path has no x loopback, so this send was the only remaining suspect);
-                // with both fixed it is bit-stable. Same NoC bytes, one fewer mcast destination.
-                cb_wait_front(cb_h_local, h_block_tiles);
-                noc_async_read(get_noc_addr(get_read_ptr(cb_h_local)), hdst, h_block_tiles * BFP8_TILE);
-                noc_async_read_barrier();
+            if (i_send) {
                 cb_pop_front(cb_h_local, h_block_tiles);
                 if constexpr (hmc.active) {
                     h_send.send(hdst, hdst, h_block_tiles * BFP8_TILE);

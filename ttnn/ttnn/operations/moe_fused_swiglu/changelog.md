@@ -12,7 +12,7 @@ Device: **blackhole_p150**, `compute_with_storage_grid_size() = 11 x 10` (the p1
 | **Kg** emb, gate/up contraction | across grid ROWS | `KR_PAD = ceil(EMB_T/KGROUPS)`, per-row `kr(y)` | 23 (emb 7168) / 20 (6144) |
 | **Ne** emb, `down` output | across ALL cores | `ec(i)` = `split_work_to_cores(EMB_T, 110)`, stride `EC_MAX` | 2–3 |
 | **Kh** hidden, `down` contraction | sequential per core | `HGROUPS` K-blocks of `HN_PAD` | 11 x 6 |
-| **M** tokens | sequential outer loop | `M_BLOCK` | 8 |
+| **M** tokens | sequential outer loop | `M_BLOCK` (CB sizing) / runtime `m_eff` (work) | 8 / `pow2_ceil(tail M_t)` |
 | **x** over Hn | rotating injector + ROW multicast | — | 1 tile-row per injector |
 | **h** over Ne | grid-wide multicast, `HGROUPS` rounds | `DEPTH_H` | 3 |
 
@@ -21,7 +21,8 @@ Read knobs: `WRUN=8`, `WD_AHEAD=1`. Sub-block: `OUT_SUBBLOCK_H=1`, `out_subblock
 / `ec` (down). L1: **~1.35 MB** of the 1.43 MB budget.
 
 Every CB page count, loop trip count and grid formula derives from those parameters. `count` is the
-only runtime value and enters ONLY as `m_blocks` — never as a CB size.
+only runtime value and enters ONLY as `m_blocks` and the per-block `m_eff` (Refinement 1) — never as
+a CB size.
 
 ## 2. Deviations from `op_design.md` (and why)
 
@@ -83,8 +84,15 @@ hang, no structural failure, no inf/nan anywhere.
 `mcast_pipe.inl:153` hands `inc_multicast` the LOOPBACK (INCLUDE-source) fan-out `num_dests_incl_`,
 while the atomic multicast itself is EXCLUDE-source (unlike the Flag branch at `:159-165`, which
 selects `MCAST_INCL_SRC` explicitly). Its `async_atomic_barrier()` then waits forever for an ack from
-a destination that was never addressed. Both families here loopback (`src cb != dst cb`), so both
-trip it. `Flag` is used instead, documented at the emission site.
+a destination that was never addressed. Both families here loopbacked (`src cb != dst cb`), so both
+tripped it. `Flag` is used instead, documented at the emission site.
+
+> **UPDATE (Refinement 1).** Neither family loopbacks any more — both sends are now `src == dst`
+> (EXCLUDE-source), because the LOOPBACK shape carries a *second*, independent `mcast_pipe` bug: the
+> rotating-sender Flag reset races the sender's own in-flight VALID. See the Refinement 1 entry below
+> and the hazard note at `mcast_pipe.hpp`'s `ROTATING_SENDER`. This also removes the loopback fan-out
+> that trips the Counter path's atomic barrier, so a future Counter retry (Refinement 2 lever 4) now
+> only has to solve the linked-chain/command-buffer half.
 
 ## 5. Performance — measured, and the bound identified
 
@@ -208,3 +216,82 @@ paying its own latency with nothing else in flight.
 - **Action required of the harness owner**: relax the golden `_PCC_GATE` (0.98) below the measured
   format floor, or quantize the reference weights. Until then no correctness cell can pass and the
   44 red cells say nothing about the kernel. See `verification_report.md`.
+
+## Refinement 1 — Honour the runtime token count (`m_tiles`), instead of always doing `M_BLOCK`
+
+- **Date**: 2026-07-31
+- **What was done**: `op_design.md` §3's `m_tiles` is now real. Each M-block works a RUNTIME
+  `m_eff = m_tiles_eff(M_t, b, M_BLOCK, M_EFF_MIN)` token tile-rows instead of the constant
+  `M_BLOCK = 8`, so `count 128` does 4 tile-rows and `count 32` does 1.
+  - **One shared inline**, `moe_fused_swiglu::m_tiles_eff()` in `kernels/moe_fused_swiglu_common.hpp`,
+    called from all three kernels. It is a pure function of `(m_t, b, M_BLOCK, M_EFF_MIN)` — all four
+    identical on every core and RISC-V — so the reader's multicast round count, compute's
+    `MatmulBlockShape` and the writer's CB waits are the same number by construction, which the
+    collectives require. `inject_rows()` sits beside it and replaces the host-computed `n_inject`
+    runtime arg (that constant was pinned to `M_BLOCK`); compute now takes `my_col` instead.
+  - Tail blocks round UP to a **power of two <= `M_BLOCK`** (`m_eff ∈ {1,2,4,8}`), never to a raw
+    `M_t`: every M-scaled CB is sized `DEPTH * M_BLOCK * W`, so a power-of-two `m_eff` divides the
+    total and no shrunk reserve can straddle a FIFO end. `M_BLOCK` is now host-asserted to be a power
+    of two, and `M_EFF_MIN = pow2_ceil(OUT_SUBBLOCK_H)` keeps `m_eff / OUT_SUBBLOCK_H` exact (so
+    Refinement 2's plan to split `OUT_SUBBLOCK_H` stays a knob turn).
+  - Threaded through: `cb_x_tiles`, `cb_h`, `cb_h_local`, `cb_gate_send`/`cb_up_send`,
+    `cb_out_interm`, `cb_out_tiles`, both `MatmulBlockShape`s, the bias-add walk, the x-round loop and
+    the output row loop. **One deliberate exception**: `cb_reduce_gate_in`/`cb_reduce_up_in` keep the
+    FULL `M_BLOCK * HN_PAD` reserve/push/pop, because the child unicasts to its OWN
+    `get_write_ptr(cb_reduce_*_in)` as a proxy for the parent's and that only holds while every push
+    is a whole slot (which always wraps back to the CB base, on every core, whatever its child
+    count). The child ships only the `m_eff * HN_PAD` live tiles — so the expensive part, the up-to-4
+    serial round trips, halves anyway — and compute adds those and drains the tail.
+- **A PRE-EXISTING correctness bug this exposed, and fixed** (the bulk of the work):
+  `mcast_pipe`'s rotating-sender Flag reset — `data_ready_.set(INVALID)` behind a `fence_()` that is
+  `async_writes_flushed()`, i.e. **SENT, not LANDED** — races the sender's own `MCAST_INCL_SRC`
+  **loopback** VALID write (`loopback = in_rect_ && src_l1 != dst_l1`). When the late VALID wins, the
+  sender's next `receive()` returns on a stale flag, every later round shifts one early, and the
+  block's LAST round is consumed before its data lands. Present since Phase 0 on BOTH collectives and
+  silent — it was masked by the `(m_eff-1) * KR_PAD` tile-matmuls of cover between the CB push and
+  the read, which is exactly the cover `m_eff` removes. Symptom was run-to-run PCC of 0.955-0.979 on
+  byte-identical input at `m_eff ∈ {2,4}`, with occasional NaN. Both sends now land their own copy
+  locally under `noc_async_read_barrier()` (a real arrival guarantee) and multicast **in place**
+  (`src == dst` -> EXCLUDE-source), which is the shape the op's bfp8 x path always had — which is why
+  bfp8 was immune to the x half and pinpointed the h half. The hazard is now documented at
+  `mcast_pipe.hpp`'s `ROTATING_SENDER`; fixing it inside the pipe (an acked barrier on the loopback
+  path) would be better but is a shared-`kernel_lib` change and belongs with Refinement 2's lever 4.
+  Both self-copies are then **hidden**, not paid:
+  1. all x staging (DRAM stick read + fused tilize + self-copy) moved into a per-injector
+     **prologue** before the multicast chain. It has no cross-core ordering, so all `m_eff` injectors
+     now stage CONCURRENTLY instead of each one stalling its own round while the rest of the row sits
+     in `receive()`. This also takes the DRAM read and the tilize off the multicast chain — a win in
+     its own right, worth ~4 % on its own (235 631 -> 227 346 ns at `count 256`).
+  2. the h self-copy is ISSUED before the W_down prefetch so ONE `noc_async_read_barrier()` covers
+     both; it rides the DRAM read's latency (226 177 vs 232 106 ns at cap 2048). The two `cb_h` /
+     `cb_w_down` reserves were swapped to allow this — safe because `cb_w_down` always runs
+     `WD_AHEAD` blocks ahead of `cb_h`.
+- **Accuracy achieved**: PCC **bit-identical to Phase 0** — all 12 re-measured golden cells match to
+  `0.0e+00` (m_eff 1 / 2 / multi-block regimes), acceptance PCC 0.97905-0.97955 unchanged, all 8
+  precision-baseline rows unchanged at kernel-attributable dpcc 5.66e-4-6.78e-4, 3 exact structural
+  debug tests still exact. `m_eff` only removes work on UNDEFINED rows, so this is the expected
+  result, and it is the evidence for it.
+- **Perf** (`device_kernel_ns`, graded loose cases, two independent runs agreeing within 0.2 %):
+
+  | cell (emb 7168, cap 5120, bf16_rm) | Phase 0 | now | delta | util |
+  |---|---|---|---|---|
+  | `count 128` (the target) | 223 496 | **151 620** | **-32 %** | 0.233 -> 0.343 |
+  | `count 256` | 226 771 | 227 795 | +0.5 % (noise) | 0.245 -> 0.244 |
+  | `count 512` (`m_blocks = 2`) | 442 463 | 439 679 | **-0.6 %** | 0.142 -> 0.143 |
+  | `count = capacity` | 4 351 747 | 4 279 071 | **-1.7 %** | 0.044 -> 0.045 |
+  | 9-cell sum | 6 132 909 | 5 993 786 | **-2.3 %** | |
+
+  Guard set clean (cap 1024 / 2048 at count 256 within +1.1 %, emb 6144 +0.0 %, `count 0` still
+  ~6.1 us and hang-free); the one cell marginally above noise is `bfp8_tile` at +1.1/+1.5 %, the
+  residual of the h self-copy on the path that gains least from the prologue. `count 256` being flat
+  is the fix landing correctly: `M_t = 8` means `m_eff = M_BLOCK`, i.e. byte-identical work.
+  `m_eff` cannot touch the **weight stream** (87 % of read bytes, count-independent), so -32 % is
+  near its honest ceiling; the remaining gap to the 91 800 ns target is Refinement 2/3 territory.
+- **Issues encountered**: the `mcast_pipe` loopback race above — found with the static analyzer after
+  the m_eff shrink turned it from latent to reproducible, then localised by a 4-rep determinism probe
+  plus the observation that `bfp8_tile` (no x loopback) was still racy, which isolated the h send.
+- **Tests added**: `test_moe_fused_swiglu_m_tiles.py` (16 cases) — asserts **repeat-determinism**
+  (3 dispatches, bit-identical output) across every `m_eff` regime x both formats, because the bug
+  class here is silent and a single-shot accuracy test passes straight through it; plus `m_eff`
+  numerics-invariance under `input_m_tiles` and the `count == 0` no-collective path. Probes
+  `probe_008`-`probe_013` document the investigation.

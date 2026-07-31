@@ -171,6 +171,26 @@ private:
 //                                  resets the cell to INVALID after the broadcast is flushed, so this
 //                                  core's next receiver turn waits for a fresh VALID instead of its own
 //                                  stale one. Flag signal only; the rarest knob, last.
+//                                  !! HAZARD, ROTATING_SENDER + LOOPBACK (measured on Blackhole,
+//                                  2026-07): pass `src_l1 == dst_l1` to send(), i.e. land your own
+//                                  copy BEFORE the call and broadcast in place. With `src != dst`
+//                                  the send is a LOOPBACK (MCAST_INCL_SRC) multicast, so this core's
+//                                  own data_ready cell is one of the destinations — and the reset
+//                                  above sits behind `fence_()`, which is `async_writes_flushed()`
+//                                  (SENT, not LANDED). The self-directed VALID can therefore land
+//                                  AFTER the reset, leaving the cell VALID; this core's next
+//                                  receive() then returns on that stale flag, every later round
+//                                  shifts one early, and the LAST round's payload is never waited
+//                                  for. Silent: correct output most runs, corrupt some runs, and
+//                                  masked entirely when enough compute follows the push. (Same
+//                                  fence also means a loopback sender has no arrival guarantee for
+//                                  its OWN payload copy before it pushes the destination CB.) Fixing
+//                                  it inside the pipe needs an ACKED barrier on the loopback path
+//                                  before the reset — a round trip per send, so it wants a
+//                                  measurement, not a blind edit. See
+//                                  ttnn/ttnn/operations/moe_fused_swiglu/kernels/*_reader.cpp for
+//                                  the caller-side workaround (both of its collectives do the
+//                                  self-copy locally under `noc_async_read_barrier()`).
 // Runtime ctor inputs:
 //   * the `McastRect` — its virtual coords vary per sender core under one compiled binary (each sender
 //                       targets a different receiver rectangle), so it is set per-core via runtime
