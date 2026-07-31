@@ -137,8 +137,7 @@ protected:
     void validate_bank_assignments() const;
 
 private:
-    void verify_safe_allocation(const Buffer* buffer) const;
-    void track_buffer_if_unsafe(Buffer* buffer);
+    void record_allocation_if_unsafe(Buffer* buffer);
     bool in_corruptible_allocation_scope() const;
 
     mutable std::mutex mutex_;

@@ -180,22 +180,23 @@ bool AllocatorImpl::in_corruptible_allocation_scope() const {
         [this](const auto& allocators) { return allocators.contains(this); });
 }
 
-void AllocatorImpl::verify_safe_allocation(const Buffer* buffer) const {
-    if (!allocations_unsafe_ || buffer->buffer_type() == BufferType::TRACE) {
+void AllocatorImpl::record_allocation_if_unsafe(Buffer* buffer) {
+    if (!allocations_unsafe_) {
         return;
     }
-    thread_local static bool warning_generated = false;
-    if (!tracking_enabled_ && !warning_generated) {
-        log_warning(
-            tt::LogMetal,
-            "Allocating device buffers while a trace is active. "
-            "Enable the unsafe allocation tracker for safety checks.");
-        warning_generated = true;
-    }
-}
 
-void AllocatorImpl::track_buffer_if_unsafe(Buffer* buffer) {
-    if (!tracking_enabled_ || !allocations_unsafe_ || unsafe_tracked_ids_by_trace_.empty()) {
+    thread_local static bool warning_generated = false;
+    if (!tracking_enabled_) {
+        if (!warning_generated) {
+            log_warning(
+                tt::LogMetal,
+                "Allocating device buffers while a trace is active. "
+                "Enable the unsafe allocation tracker for safety checks.");
+            warning_generated = true;
+        }
+        return;
+    }
+    if (buffer->buffer_type() == BufferType::TRACE || unsafe_tracked_ids_by_trace_.empty()) {
         return;
     }
 
@@ -223,7 +224,6 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     auto buffer_type = buffer->buffer_type();
     auto bottom_up = buffer->bottom_up();
     auto num_cores = buffer->num_cores();
-    this->verify_safe_allocation(buffer);
     if (config_->disable_interleaved) {
         TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
     }
@@ -250,7 +250,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
         buffer->set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
-        this->track_buffer_if_unsafe(buffer);
+        this->record_allocation_if_unsafe(buffer);
         return buffer->per_core_addresses_.at(cores[0]);
     }
 
@@ -295,7 +295,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
-    this->track_buffer_if_unsafe(buffer);
+    this->record_allocation_if_unsafe(buffer);
     return address;
 }
 
