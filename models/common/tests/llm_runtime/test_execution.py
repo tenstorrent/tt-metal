@@ -406,7 +406,7 @@ def test_prefill_replay_does_not_interpret_request_eligibility(monkeypatch):
             ("finish", prepared, hidden, persistent)
         )
         or "traced",
-        assemble=lambda prepared_results, *, batch_size, sampling_params=None: prepared_results[0][1],
+        assemble=lambda prepared_results, *, batch_size, sampling_params=None: next(iter(prepared_results))[1],
     )
     program_compiler = _compiler(monkeypatch)
     eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=program_compiler)
@@ -432,6 +432,45 @@ def test_prefill_replay_does_not_interpret_request_eligibility(monkeypatch):
     assert identity_events[2][2:] == (hidden, persistent)
 
 
+def test_prefill_replay_is_consumed_before_shared_trace_output_is_overwritten(monkeypatch):
+    prepared = (
+        _prepared_prefill(name="first"),
+        _prepared_prefill(name="second"),
+    )
+    persistent = {"output": None}
+
+    def prepare(**kwargs):
+        return prepared
+
+    def refresh_trace(request, trace_inputs):
+        trace_inputs["output"] = request.name
+
+    def assemble(prepared_results, *, batch_size, sampling_params=None):
+        return [result.value["output"] for _, result in prepared_results]
+
+    prefill = _runtime(
+        PrefillRuntime,
+        prepare=prepare,
+        refresh_trace=refresh_trace,
+        finish_trace=lambda request, hidden, trace_inputs: PrefillInvocationResult(trace_inputs, ()),
+        assemble=assemble,
+    )
+    program_compiler = _compiler(monkeypatch)
+    eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=program_compiler)
+    trace_compiler = _trace_compiler(program_compiler)
+    artifact = SimpleNamespace(persistent_inputs=SimpleNamespace(values=persistent))
+    trace_compiler.replay = lambda program_key, refresh_inputs, **kwargs: refresh_inputs(artifact, object()) or "hidden"
+    trace_compiler.trace_key_for_program = lambda program_key: "trace-key"
+    trace_compiler.get = lambda trace_key: SimpleNamespace(artifact=artifact)
+
+    traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
+
+    assert traced.prefill_forward(tokens=torch.zeros(2, 1), page_table=torch.zeros(2, 1)) == [
+        "first",
+        "second",
+    ]
+
+
 def test_prefill_missing_trace_artifact_is_an_error_without_eager_reinvocation(monkeypatch, expect_error):
     prepared = _prepared_prefill(trace_eligible=True)
     eager_invocations = []
@@ -452,7 +491,7 @@ def test_prefill_missing_trace_artifact_is_an_error_without_eager_reinvocation(m
         prepare=prepare,
         invoke=lambda prepared: eager_invocations.append(prepared) or PrefillInvocationResult("eager", ()),
         refresh_trace=lambda prepared, persistent: None,
-        assemble=lambda prepared_results, *, batch_size, sampling_params=None: prepared_results[0][1],
+        assemble=lambda prepared_results, *, batch_size, sampling_params=None: next(iter(prepared_results))[1],
     )
     program_compiler = _compiler(monkeypatch)
     eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=program_compiler)

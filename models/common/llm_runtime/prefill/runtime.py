@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Sequence
+from typing import Any, Callable, Iterable, Literal, Sequence
 
 import torch
 
@@ -380,7 +380,7 @@ class PrefillRuntime:
 
     def assemble(
         self,
-        prepared_results: Sequence[tuple[PreparedPrefill, InvocationResult]],
+        prepared_results: Iterable[tuple[PreparedPrefill, InvocationResult]],
         *,
         batch_size: int,
         sampling_params: SamplingParams | None = None,
@@ -388,8 +388,6 @@ class PrefillRuntime:
         """Read phase outputs, restore source-row order, and release transients."""
 
         sampled = sampling_params is not None
-        if prepared_results and sampled != (prepared_results[0][0].sampling_params is not None):
-            raise ValueError("prefill result sampling path disagrees with the public request")
         config = self.config
         vocab_size = int(config.model.vocab_size)
         cluster_shape = config.cluster_shape
@@ -399,6 +397,8 @@ class PrefillRuntime:
 
         for prepared, result in prepared_results:
             request = prepared.request
+            if sampled != (prepared.sampling_params is not None):
+                raise ValueError("prefill result sampling path disagrees with the public request")
             try:
                 host_output = config.output_reader.read_synchronized(result.value)
                 if isinstance(host_output, tuple):

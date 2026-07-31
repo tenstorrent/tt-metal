@@ -17,15 +17,43 @@
 
 - name: Llama 3.1-8B e2e tests
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    # The DRAM prefetcher does not yet support more than one repeat batch (issue #47820):
-    # cover the eval repeat-batch loop with the prefetcher DISABLED (perf reporting skipped
-    # so only the prefetcher run sets perf), and cover the prefetcher path with a SINGLE
-    # repeat batch (this run reports/validates perf). See #47820 for the multi-batch work.
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --skip_perf_report
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
+    case "{sku}" in
+      wh_n150|wh_llmbox_perf)
+        case "{sku}" in
+          wh_n150) MESH_DEVICE=N150 ;;
+          wh_llmbox_perf) MESH_DEVICE=T3K ;;
+        esac
+        export MESH_DEVICE
+
+        export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+        export HF_HUB_OFFLINE=1
+        export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.1-8B-Instruct
+        export SAMPLING_MODE=on_device_topk
+        export PIPELINE_READBACK=1
+
+        # Match TTTv1 token-matching coverage.
+        pytest --timeout 420 models/common/tests/demos/llama3_8b/demo.py -k "performance and token-accuracy-repeat_batch-1-prefetcher-off"
+        # Match both TTTv1 ci-eval-32 runs. TTTv2 has no DRAM prefetcher, so the
+        # one-repeat performance run and three-repeat comparison both identify prefetcher-off.
+        pytest --timeout 600 models/common/tests/demos/llama3_8b/demo.py -k "performance and eval-32-repeat_batch-3-prefetcher-off-perf-report-off"
+        pytest --timeout 600 models/common/tests/demos/llama3_8b/demo.py -k "performance and eval-32-repeat_batch-1-prefetcher-off-perf-report-on"
+
+        # Keep this TTTv1 leg until TTTv2 supports native HF-layout RoPE:
+        # https://github.com/tenstorrent/tt-metal/issues/51374
+        pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
+        ;;
+      *)
+        export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+        pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+        # The DRAM prefetcher does not yet support more than one repeat batch (issue #47820):
+        # cover the eval repeat-batch loop with the prefetcher DISABLED (perf reporting skipped
+        # so only the prefetcher run sets perf), and cover the prefetcher path with a SINGLE
+        # repeat batch (this run reports/validates perf). See #47820 for the multi-batch work.
+        pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --skip_perf_report
+        pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1
+        pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
+        ;;
+    esac
   model: llama3.1-8b
   model_family: Llama
   skus:
@@ -73,8 +101,17 @@
 # TODO: Move DP tests to sweep pipelines when those come online
 - name: Llama 3.1-8B data-parallel e2e tests
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
+    case "{sku}" in
+      wh_llmbox_perf)
+        export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.1-8B-Instruct MESH_DEVICE=T3K SAMPLING_MODE=on_device_topk PIPELINE_READBACK=1
+        pytest --timeout 1000 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-ci-b1-DP-4-T3K]"
+        pytest --timeout 1000 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-ci-b1-DP-8-T3K]"
+        ;;
+      *)
+        export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+        pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
+        ;;
+    esac
   model: llama3.1-8b-dp
   model_family: Llama
   skus:
@@ -93,8 +130,11 @@
 # TODO: Move DP tests to sweep pipelines when those come online
 - name: Llama 3.1-8B data-parallel e2e tests (Galaxy)
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.1-8B-Instruct MESH_DEVICE=TG SAMPLING_MODE=on_device_topk PIPELINE_READBACK=1
+    pytest --timeout 1000 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-ci-b1-DP-4-TG]"
+    pytest --timeout 1000 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-ci-b1-DP-8-TG]"
+    pytest --timeout 1000 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-ci-b1-DP-16-TG]"
+    pytest --timeout 1000 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-ci-b1-DP-32-TG]"
   model: llama3.1-8b-dp-galaxy
   model_family: Llama
   skus:

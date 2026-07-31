@@ -274,7 +274,9 @@ class TracedExecutor:
             empty_slots=empty_slots,
             sampling_params=sampling_params,
         )
-        results = tuple((request, self._execute_prefill(request)) for request in prepared)
+        # A trace record owns one persistent output buffer. Consume each replay
+        # before the next request with the same trace overwrites that buffer.
+        results = ((request, self._execute_prefill(request)) for request in prepared)
         return self.eager_executor.prefill.assemble(
             results,
             batch_size=int(tokens.shape[0]),

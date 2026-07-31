@@ -959,13 +959,14 @@ def build_llama3_transformer_1d_config(
             ttnn.cluster.ClusterType.P150_X8,
         ):
             return ttnn.Topology.Ring
+        if current_cluster_type == ttnn.cluster.ClusterType.T3K:
+            return ttnn.Topology.Ring if num_devices >= 8 else ttnn.Topology.Linear
         if current_cluster_type in (
-            ttnn.cluster.ClusterType.T3K,
             ttnn.cluster.ClusterType.GALAXY,
             ttnn.cluster.ClusterType.TG,
             ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
         ):
-            return ttnn.Topology.Ring if num_devices >= 8 else ttnn.Topology.Linear
+            return ttnn.Topology.Linear
         return ttnn.Topology.Linear if num_devices > 1 else None
 
     use_fused_all_gather_matmul = (
@@ -1632,7 +1633,6 @@ def build_llama3_transformer_1d_config(
         if vocab_size // sampling_splits > 64 * 1024:
             return None
 
-        use_galaxy_force_argmax = is_galaxy_cluster and num_devices >= 8
         return Sampling1DConfig(
             vocab_size=padded_vocab_size,
             valid_vocab_size=vocab_size,
@@ -1643,8 +1643,8 @@ def build_llama3_transformer_1d_config(
             # Decode uses force-argmax for greedy rows; prefill can still force
             # the top-k path at the executor call site when a platform needs it.
             allow_force_argmax=True,
-            num_argmax_gather_links=4 if use_galaxy_force_argmax else 1,
-            ag_topology=ttnn.Topology.Ring if use_galaxy_force_argmax else ttnn.Topology.Linear,
+            num_argmax_gather_links=1,
+            ag_topology=ttnn.Topology.Linear,
             argmax_num_workers_per_link=2,
         )
 

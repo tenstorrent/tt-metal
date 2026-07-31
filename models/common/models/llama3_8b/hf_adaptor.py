@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import errno
 import math
 import os
 import re
@@ -374,16 +375,32 @@ def load_converted_state_dict(
 
 def _model_cache_path(hf_model: str, mesh_device) -> Path:
     cache_path = os.getenv("TT_CACHE_PATH")
-    if cache_path:
-        return Path(cache_path) / get_device_name(mesh_device)
-    return Path("model_cache") / hf_model / get_device_name(mesh_device)
+    device_name = get_device_name(mesh_device)
+    if not cache_path:
+        return Path("model_cache") / hf_model / device_name
+
+    configured_path = Path(cache_path) / device_name
+    try:
+        configured_path.mkdir(parents=True, exist_ok=True)
+        return configured_path
+    except OSError as exc:
+        if exc.errno not in (errno.EROFS, errno.EACCES, errno.EPERM):
+            raise
+
+    fallback_root = Path(os.getenv("TT_CACHE_FALLBACK_PATH", "/tmp/tttv2_model_cache"))
+    fallback_path = fallback_root / Path(hf_model).name / device_name
+    fallback_path.mkdir(parents=True, exist_ok=True)
+    logger.warning(
+        f"Configured TT cache is not writable at {configured_path}; " f"using job-local tensor cache {fallback_path}"
+    )
+    return fallback_path
 
 
 def _max_prefill_chunk_size(mesh_device) -> int:
     override = os.getenv("MAX_PREFILL_CHUNK_SIZE")
     if override is not None:
         return int(override) * 1024
-    return {"N150": 4, "N300": 64, "T3K": 128}[get_device_name(mesh_device)] * 1024
+    return {"N150": 4, "N300": 64, "N150x4": 4, "T3K": 128}[get_device_name(mesh_device)] * 1024
 
 
 def _trace_prefill_supported_seq_lens(
@@ -392,6 +409,7 @@ def _trace_prefill_supported_seq_lens(
     supported_seq_lens_by_device = {
         "N150": (128, 1024),
         "N300": (128, 1024, 2048, 4096, 8192),
+        "N150x4": (128, 1024, 2048, 4096, 8192),
         "T3K": (128, 1024, 2048, 4096, 8192),
     }
     supported_seq_lens = supported_seq_lens_by_device[device_name]
