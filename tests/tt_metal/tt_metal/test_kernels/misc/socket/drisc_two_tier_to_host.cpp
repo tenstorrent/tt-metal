@@ -31,6 +31,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/socket_api.h"
+#include "hostdevcommon/profiler_common.h"
 #include "internal/tt-1xx/risc_common.h"
 #include "pcie_noc_utils.h"
 
@@ -53,9 +54,48 @@ void kernel_main() {
     // A mispredict costs one bulk read of a core that has cooled -- which is what the 70%-vs-100%
     // headroom in the threshold absorbs.
     constexpr uint32_t kHysteresis = get_compile_time_arg_val(9);
+    // No adaptive logic at all: skip the poll, and unconditionally read all five rings of every core
+    // as five separate full-ring transfers. The naive baseline the two tiers are measured against --
+    // same bytes as a whole-core read, but 5 transfers per core instead of 1.
+    constexpr uint32_t kNoAdaptive = get_compile_time_arg_val(10);
+    // Paced mode: always bulk, but space the sweeps so each one arrives when the rings are worth
+    // reading. A closed loop on observed occupancy -- above the high watermark the drainer is behind
+    // and runs flat out; below the low watermark it waits longer.
+    //
+    // Production is EMULATED: occupancy is modelled as rate x elapsed rather than read from the
+    // workers, because the harness primes static tails and a real controller needs occupancy to
+    // respond to the pacing. Reads, pushes and all timing are real; only the occupancy value is
+    // synthetic, and it drives both the controller and the live-byte accounting.
+    constexpr uint32_t kPaced = get_compile_time_arg_val(11);
+    constexpr uint32_t kProdMilliWordsPerUs = get_compile_time_arg_val(12);  // per lane
+    constexpr uint32_t kHighWatermark = get_compile_time_arg_val(13);        // words
+    constexpr uint32_t kLowWatermark = get_compile_time_arg_val(14);         // words
+    constexpr uint32_t kClkMhz = get_compile_time_arg_val(15);
+    constexpr uint32_t kDelayStepCycles = get_compile_time_arg_val(16);
+    // Head write-back. The ring is flow-controlled: SPSC_RING_HEAD_0..4 in the worker's control vector
+    // are CONSUMER-written (profiler_common.h:157-161), and profstream.c does the same
+    // (`w32(cbase + r*4, tails[r]); /* advance heads -> producers unblock */`). Without it a real
+    // producer stalls. Five head words are staged locally and published in ONE 20 B NoC write rather
+    // than five inline writes, since issue cost dominates. Posted -- a stale head only makes the
+    // producer conservative, never unsafe.
+    constexpr uint32_t kWriteBackHeads = get_compile_time_arg_val(17);
+    constexpr uint32_t kHeadScratch = get_compile_time_arg_val(18);
+    constexpr uint32_t kHeadSlots = 16;
+    constexpr uint32_t kMirrorCores = 128;
+    constexpr uint32_t kRingCapWordsK = kRingCapBytes / 4;
 
-    constexpr uint32_t kTailWordOffset = 5;
+    // Offsets come from the shared enum, never from literals. Hardcoding word 5 is exactly how the
+    // X280 firmware silently stopped draining when PROFILER_SPSC_MAX_RISC moved 5 -> 24: the tails
+    // relocated to 24..28, the reader kept reading 5..9, those read 0, tail always equalled head, and
+    // every producing RISC blocked forever. profstream.c / profcons.c / profll.c still carry that
+    // literal; profzone.c takes the offset via the boot nonce.
+    constexpr uint32_t kHeadWordOffset = kernel_profiler::SPSC_RING_HEAD_0;
+    constexpr uint32_t kTailWordOffset = kernel_profiler::SPSC_RING_TAIL_0;
+    constexpr uint32_t kCoreXyOffset = kernel_profiler::SPSC_CORE_XY;
     constexpr uint32_t kNumRisc = 5;
+    static_assert(
+        (kernel_profiler::SPSC_CONTROL_END * 4u) <= kPollBytes,
+        "the SPSC control layout must fit inside the polled control vector");
     constexpr uint32_t kMaxCores = 256;
     constexpr uint32_t kMaxBulkPerPage = kPageBytes / kCoreSpan + 1;
     static_assert(kCoreSpan <= NOC_MAX_BURST_SIZE, "whole-core read must fit one NoC packet");
@@ -85,6 +125,20 @@ void kernel_main() {
     uint32_t n_recs = 0;
     uint32_t polls = 0;
 
+    uint32_t src_w0_acc = 0;
+    uint64_t t_head = 0;
+    uint32_t hb_slot = 0;
+    uint32_t head_ctr = 0;
+    // Local head mirror. The head is consumer-written, so the drainer already knows it -- reading it
+    // back from the worker would be pointless work. Only the tail is producer-written and must be
+    // fetched, and it rides along in the control vector. Same shape as profstream.c's LIM mirror.
+    static uint32_t head_mirror[kMirrorCores * kNumRisc];
+    uint64_t delay_cycles = 0;
+    uint64_t last_sweep = get_timestamp();
+    uint64_t t_wait = 0;
+    uint32_t overflows = 0;
+    uint64_t occ_sum = 0;
+
     uint64_t t_poll = 0;
     uint64_t t_decide = 0;
     uint64_t t_fetch = 0;
@@ -92,14 +146,33 @@ void kernel_main() {
     uint32_t pages = 0;
     uint32_t bulk_cores = 0;
     uint32_t partial_cores = 0;
-    uint64_t valid_bytes = 0;
+    uint64_t valid_bytes = 0;  // bytes actually transferred (bulk counts whole rings)
+    uint64_t live_bytes = 0;   // bytes that are real markers -- the only thing the host cares about
     uint32_t fill = 0;
 
     const uint64_t t_start = get_timestamp();
     for (uint32_t sweep = 0; sweep < num_sweeps; sweep++) {
+        uint32_t paced_occ = 0;
+        if constexpr (kPaced) {
+            const uint64_t w0 = get_timestamp();
+            while ((get_timestamp() - last_sweep) < delay_cycles) {
+            }
+            const uint64_t now = get_timestamp();
+            t_wait += now - w0;
+            const uint64_t elapsed_us = (now - last_sweep) / kClkMhz;
+            last_sweep = now;
+            uint64_t occ = (kProdMilliWordsPerUs * elapsed_us) / 1000u;
+            if (occ >= kRingCapWordsK) {
+                occ = kRingCapWordsK;
+                overflows++;  // a real producer would have wrapped and lost markers here
+            }
+            paced_occ = static_cast<uint32_t>(occ);
+            occ_sum += paced_occ;
+        }
+
         // -------- 1. poll --------
         const uint64_t p0 = get_timestamp();
-        for (uint32_t c = 0; c < num_cores; c++) {
+        for (uint32_t c = 0; c < num_cores && !kNoAdaptive && !kPaced; c++) {
             if constexpr (kHysteresis) {
                 if (was_bulk[c]) {
                     continue;  // its bulk read will carry a fresh control vector
@@ -122,8 +195,20 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kPollRing + c * kPollBytes);
             uint32_t runs[kNumRisc];
             bool bulk = false;
-            if (kHysteresis && was_bulk[c]) {
+            if constexpr (kPaced) {
+                bulk = true;  // paced mode is always bulk; the pacing chooses when, not how much
+                for (uint32_t r = 0; r < kNumRisc; r++) {
+                    runs[r] = paced_occ;
+                }
+            } else if constexpr (kNoAdaptive) {
+                for (uint32_t r = 0; r < kNumRisc; r++) {
+                    runs[r] = kRingCapBytes / 4;  // whole ring, unconditionally
+                }
+            } else if (kHysteresis && was_bulk[c]) {
                 bulk = true;  // assumed; confirmed or cleared when its bulk read lands
+                for (uint32_t r = 0; r < kNumRisc; r++) {
+                    runs[r] = 0;  // tails unknown without a poll; live-byte accounting is off in this mode
+                }
             } else {
                 for (uint32_t r = 0; r < kNumRisc; r++) {
                     runs[r] = cv[kTailWordOffset + r];  // heads are 0 here, so tail - head == tail
@@ -132,6 +217,12 @@ void kernel_main() {
                     }
                 }
             }
+            for (uint32_t r = 0; r < kNumRisc; r++) {
+                live_bytes += runs[r] * 4u;
+            }
+            // Identity comes from the core itself: (y<<16)|x in the control vector, stamped once by
+            // BRISC FW. Nothing is constructed or injected here, and nothing is looked up host-side.
+            src_w0_acc += cv[kCoreXyOffset];
             const uint32_t xy = coords[c];
             const uint64_t d1 = get_timestamp();
             t_decide += d1 - d0;
@@ -198,8 +289,28 @@ void kernel_main() {
                 fill += bytes;
                 valid_bytes += bytes;
             }
+            if constexpr (kWriteBackHeads) {
+                const uint64_t h0 = get_timestamp();
+                // Advance the local mirror by what was just drained. No read of the worker: the head
+                // is ours, we wrote it last time.
+                uint32_t* mine = &head_mirror[(c & (kMirrorCores - 1u)) * kNumRisc];
+                for (uint32_t r = 0; r < kNumRisc; r++) {
+                    mine[r] += runs[r];
+                }
+                head_ctr += mine[0];
+                // Stage the five new heads, publish in one write.
+                const uint32_t sc = kHeadScratch + hb_slot * 32u;
+                volatile tt_l1_ptr uint32_t* scp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc);
+                for (uint32_t r = 0; r < kNumRisc; r++) {
+                    scp[r] = mine[r];
+                }
+                noc_async_write(sc, get_noc_addr(xy & 0xFFFFu, xy >> 16, cv_src + kHeadWordOffset * 4u), kNumRisc * 4u);
+                hb_slot = (hb_slot + 1u) & (kHeadSlots - 1u);
+                t_head += get_timestamp() - h0;
+            }
             if (bulk) {
                 bulk_cores++;
+                (void)0;
                 if constexpr (kHysteresis) {
                     was_bulk[c] = 1;  // provisional; the flush confirms or clears it
                 }
@@ -208,6 +319,17 @@ void kernel_main() {
                 if constexpr (kHysteresis) {
                     was_bulk[c] = 0;
                 }
+            }
+        }
+        if constexpr (kPaced) {
+            // Integral controller: ease the delay down when rings run hot, up when they run cold.
+            // Zeroing on overshoot would oscillate.
+            constexpr uint64_t kMaxDelay = 4000000;  // ~3 ms, enough for very low production rates
+            if (paced_occ > kHighWatermark) {
+                delay_cycles = (delay_cycles > kDelayStepCycles) ? delay_cycles - kDelayStepCycles : 0;
+            } else if (paced_occ < kLowWatermark) {
+                delay_cycles =
+                    (delay_cycles + kDelayStepCycles > kMaxDelay) ? kMaxDelay : delay_cycles + kDelayStepCycles;
             }
         }
     }
@@ -240,6 +362,17 @@ void kernel_main() {
     out[12] = static_cast<uint32_t>(t_push & 0xFFFFFFFFu);
     out[13] = static_cast<uint32_t>(t_push >> 32);
     out[14] = polls;
+    out[15] = static_cast<uint32_t>(live_bytes & 0xFFFFFFFFu);
+    out[16] = static_cast<uint32_t>(live_bytes >> 32);
+    out[17] = overflows;
+    out[18] = static_cast<uint32_t>(occ_sum / (num_sweeps ? num_sweeps : 1));
+    out[19] = static_cast<uint32_t>(t_wait & 0xFFFFFFFFu);
+    out[20] = static_cast<uint32_t>(t_wait >> 32);
+    out[21] = static_cast<uint32_t>(delay_cycles);
+    out[22] = static_cast<uint32_t>(t_head & 0xFFFFFFFFu);
+    out[23] = static_cast<uint32_t>(t_head >> 32);
+    out[24] = head_ctr;    // keeps the head staging from being optimized away
+    out[25] = src_w0_acc;  // keeps the identity read from being optimized away
 
     update_socket_config(sender);
 }

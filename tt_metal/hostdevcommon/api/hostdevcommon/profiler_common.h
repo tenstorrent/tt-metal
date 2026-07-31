@@ -164,6 +164,16 @@ enum SpscControlBuffer {
     // proceeds, so a dispatch core cannot get stuck in ring_ensure_room and wedge wait_until_cores_done()
     // during device close.
     PROFILER_TERMINATE = 2 * PROFILER_SPSC_MAX_RISC,
+    // Core identity: NoC coords packed as (y << 16) | x, written once by BRISC FW at init from
+    // my_x[0]/my_y[0]. Deliberately NOT the push-to-DRAM profiler's ControlBuffer::NOC_X/NOC_Y or its
+    // FLAT_ID -- that enum belongs to the other backend and the two never share a word.
+    //
+    // Coords rather than a flat id on purpose: the flat id is a dense rank over a sorted map of
+    // Tensix+Eth cores, so it has no positional formula, shifts with harvesting, and can only be
+    // computed host-side. (x,y) is what the core already knows about itself, needs no host round-trip,
+    // and the host can map it back however it likes. It rides along free in every bulk read, since the
+    // control vector is the first 256 B of the span -- a drainer never injects or constructs identity.
+    SPSC_CORE_XY = 2 * PROFILER_SPSC_MAX_RISC + 1,
     SPSC_CONTROL_END,  // first unused word; grow the layout here
 };
 
