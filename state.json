@@ -1,7 +1,7 @@
 {
-  "last_run": "2026-07-28T06:46:32Z",
-  "run_id": "30335618590",
-  "tasks_run": ["task1_triage", "task2_comment", "task5_maintain_prs", "task6_stale_prs", "task8_monthly_summary"],
+  "last_run": "2026-07-31T07:20:54Z",
+  "run_id": "30612219794",
+  "tasks_run": ["task3_fix_issues", "task8_monthly_summary"],
   "monthly_activity_issue": {
     "number": 50956,
     "month": "2026-07",
@@ -22,14 +22,17 @@
   },
   "open_prs": [
     {
-      "branch": "repo-assist/fix-issue-51083-repeat-last-dim-precedence",
-      "issue": 51083,
-      "pr_number": 51111,
-      "title": "[repo-assist] fix(data_movement): correct operator-precedence bug in repeat_program_factory_last_dim",
-      "created": "2026-07-25T06:39:00Z",
-      "ci_status": "unknown - mergeable_state=unstable, check pr-gate runs on PR 51111"
+      "branch": "repo-assist/fix-issue-51661-fmod-remainder-loop-direction",
+      "issue": 51661,
+      "title": "fix(sfpu): correct repair-loop direction in fmod/remainder kernels",
+      "created": "2026-07-31T07:20:54Z",
+      "ci_status": "queued - check pr-gate runs on next repo-assist run"
     }
   ],
-  "next_tasks": ["task3_fix_issues", "task4_improvements", "task7_welcome"],
-  "notes": "PR #51024 already fixes issue #51294 (cb_id typo in reduce_helpers_dataflow.inl). Nudged codeowners 2026-07-28. Issues #51290 and #51288 are sub-issues of #51225, assigned to msudumbrekar-TT. Issue #51291 is a platform-level Quasar DFB ordering question, unlabeled. DeepWiki cache note: for repeat kernel questions check repeat_program_factory_*.cpp directly. Last verified 2026-07-25."
+  "closed_or_merged_prs": [
+    {"pr_number": 51111, "merged_at": "2026-07-28T19:35:44Z", "note": "repeat_program_factory_last_dim precedence fix"},
+    {"pr_number": 51024, "merged_at": "2026-07-28T08:25:41Z", "note": "not a repo-assist PR; fixed issue #51294 (cb_id typo), authored by amahmudTT"}
+  ],
+  "next_tasks": ["task1_triage", "task2_comment", "task4_improvements", "task5_maintain_prs", "task6_stale_prs", "task7_welcome"],
+  "notes": "2026-07-31: Confirmed PR #51111 merged (closes #51083). Confirmed issue #51294 already fixed on main via PR #51024 (not repo-assist authored) - no action needed there. Investigated issue #51482 (MemoryConfig field-dropping in tilize/untilize) but it's a broader refactor with a prior closed PR #51191 as reference - not a surgical one-line fix, deferred to task4/manual review. Opened new PR for #51661 (ttnn.fmod/remainder wrong sign for large |x|): fixed the repair-loop negate-vs-reduce bug (v = s - v -> v = v - s) in all 4 kernel files (blackhole+wormhole, fmod+remainder). Issue explicitly notes this is a partial fix (large |x| > s*2^23 needs separate range-reduction work) - documented as known limitation in PR body. Did not run task1/2/5/6/7 this run - focus was on task3 fix + task8. Next run should prioritize task5 (check CI on new PR), task6 (re-ping #49892 if still stale, check #50525), and resume task1/2 triage from cursor 51296 forward (many new candidate issues seen: 51603, 51550, 51543, 51503, 51482, 51451, 51442, 51420, 51409 - mostly unlabeled/complex, need review)."
 }
