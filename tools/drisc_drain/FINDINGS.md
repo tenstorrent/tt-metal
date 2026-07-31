@@ -315,6 +315,109 @@ at the L1 budget:** read depth is as large as the remaining L1 allows once a sec
 to hide the DMA. Getting both deep reads and hidden DMA needs more than 86 KB — 2 buffers x 8 cores
 would want 160 KB.
 
+## The reserved DRAM profiler region
+
+The old DRAM-based profiler's slice is reusable as the DRISC drainer's DRAM buffer, and it already has
+the right geometry. `bh_hal.cpp` puts it at a **fixed bank-relative offset**:
+
+```
+DRAM_BARRIER_BASE  = 0
+DRAM_PROFILER_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE     // measured: 0x40
+```
+
+DRAM addresses are bank-relative, so that constant means "this offset inside every bank" -- exactly
+what a DRISC needs, since `gddr_dma` only reaches its own bank. The host readback already matches:
+`issueSlowDispatchReadFromProfilerBuffer` loops channels reading the same address from each.
+
+Measured on bh-07: **4,800,000 B per bank (4.80 MB)** = 600k markers / 300k zones, 33.6 MB across the
+7 banks. That is far smaller than a DRAM view (3.98 GB) -- at leg A's 43 GB/s a bank's slice fills in
+**0.11 ms**, and it holds only 3.9 full-grid sweeps. Size scales linearly with
+`TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT` (default 1000), and `get_dram_profiler_size()` returns 0
+without `TRACY_ENABLE`.
+
+**One bank per DRISC, not one DRISC per bank.** Nothing requires using all banks; unused slices simply
+sit idle (the host loop would need to skip them). But the ceiling is one drainer per bank -- 7 here,
+8 on a full die -- because only the free subchannel is safe to put in stream mode, and a second DRISC
+on the same bank adds 2.4% to DMA anyway.
+
+### Host pull from the region is not viable
+
+`cluster.read_dram_vec`, the path the existing profiler uses under slow dispatch:
+
+| transfer | 1 channel | all 7 channels |
+|---|---|---|
+| 64 KB … 4.8 MB | **0.047 GB/s** | **0.047 GB/s** |
+
+Flat across every size and identical for one channel or seven, so it is a genuine sustained rate, not
+a small-transfer artifact. Draining the full 33.6 MB takes **712 ms**; a 9 MB trace takes 191 ms. That
+is **~1230x slower than the device pushing** (57.6 GB/s), which is what host-initiated non-posted PCIe
+reads through a TLB window cost.
+
+Caveat: this is the slow-dispatch path, the only one available under `BlackholeSingleCardFixture`.
+Production's `issueFastDispatchReadFromProfilerBuffer` uses `enqueue_read_shard_from_core`, which is
+device-initiated and a different mechanism entirely. Unmeasured.
+
+## Full circle: A -> DRAM ping/pong -> B -> host
+
+A sweeps the whole grid into one DRAM buffer while B drains the other to host, with a 2-credit SPSC
+handshake (A publishes `fill_idx` into B's L1, B publishes `drain_idx` into A's L1, A blocks while both
+buffers are outstanding). A is on bank 0's free subchannel; B is on bank 1 and **NoC-reads bank 0's
+DRAM through bank 0's NOC1 worker endpoint** -- it cannot use DMA, which is bank-local.
+
+200 sweeps of 1,228,800 B = 246 MB. Warm pass:
+
+| host pages/read | end-to-end | A | A blocked on B | B | B: dram-read / push |
+|---|---|---|---|---|---|
+| 1 | 19.21 | 19.52 | 51.0% | 19.21 | 52.7% / 44.6% |
+| 2 | 20.17 | 20.43 | 48.7% | 20.13 | 55.3% / 42.1% |
+| 4 | 20.76 | 20.86 | 47.2% | 20.69 | 57.1% / 40.6% |
+| **8** | **20.85** | 20.89 | **47.1%** | 20.72 | 57.2% / 40.5% |
+
+B is blocked on A only 0.3%, so **B is the bottleneck and A idles ~47% of the pipeline**. Host-side
+batching helps only +8.5% here (vs +50% standalone) because B's DRAM-read phase already hides most of
+the reserve-wait. The cross-bank DRAM read works and is fast -- 36.4 GB/s effective.
+
+With ping/pong only, there is **no burst absorption**: A throttles to B's rate immediately. Elasticity
+would need many more buffers than two, and the region holds 3.9 sweeps total.
+
+## Direct: ingest -> host on one DRISC
+
+The same grid sweep, but reads land straight in a socket page and get pushed -- no DRAM hop, no second
+core. Page size and read batch are the same object.
+
+| config | memcpy consumer | zero-copy (discard) |
+|---|---|---|
+| 2 buf x 4 cores (40 KB page) | 21.88 | 23.18 |
+| **1 buf x 8 cores (80 KB page)** | **24.51** | **27.71** |
+
+Phases at the winner, memcpy vs discard: wbar 12.7 / 14.1%, read 36.9 / 41.8%,
+**reserve 5.2 / 1.7%**, push 42.8 / 40.3%.
+
+**Removing the host memcpy is worth only +13% here, against +132% in the egress-only test.** The
+reserve column explains it: at 5.2% the host is barely stalling the DRISC, because **the NoC reads have
+already absorbed the host's slowness**. Egress-only had nothing else to do, so every host inefficiency
+landed directly on reserve-wait.
+
+So the direct path is **device-bound at ~28 GB/s, not host-bound** -- read, push and write-barrier are
+all serial on one core, which is 98% busy. Past that needs a second DRISC on another slice of the grid
+(the linear-scaling case), not a split pipeline.
+
+Note the inversion against leg A: here `1 buf x 8` beats `2 buf x 4`, because the buffer is freed by a
+slow PCIe write rather than a 640 ns DMA, so the larger page outweighs the overlap.
+
+## Verdict: the DRAM round-trip does not pay
+
+| approach | GB/s | DRISCs | DRAM traffic |
+|---|---|---|---|
+| **ingest -> host, direct** | **24.51** (27.71 zero-copy) | **1** | none |
+| A -> DRAM -> B -> host | 20.85 | 2 | 2x the trace |
+| egress only, no ingest (reference) | 25.36 (57.60 zero-copy) | 1 | none |
+
+Direct is **18% faster with half the cores**. Splitting across two DRISCs means neither can absorb the
+other's stall, and B's DRAM read is work the direct version never performs. The DRAM buffer sits
+upstream of the host wall, so it cannot raise throughput -- its only product is elasticity, and at
+4.8 MB per bank that is 3.9 sweeps.
+
 ## What it means: the zone budget
 
 A zone is 2 markers = 4 words = 16 B, and a lane's ring is 512 words, so **128 zones per lane**
@@ -324,10 +427,15 @@ back-to-back on one lane:
 | limited by | rate | min zone duration |
 |---|---|---|
 | ingest alone, whole-core sweep @ 18.29 us | 67.4 GB/s | **143 ns** |
-| leg A: ingest + DMA to GDDR, one DRISC | 43.18 GB/s | **222 ns** |
-| egress to host, untuned consumer | 16.85 GB/s | 580 ns |
-| egress to host, tuned consumer | 25.36 GB/s | **387 ns** |
-| egress to host, zero-copy (measured via discard) | 57.60 GB/s | **167 ns** |
+| leg A: ingest + DMA to GDDR, one DRISC | 43.18 GB/s | 222 ns |
+| **whole drainer: ingest -> host, one DRISC** | **24.51 GB/s** | **392 ns** |
+| whole drainer, same but zero-copy host | 27.71 GB/s | 346 ns |
+| A -> DRAM -> B -> host, two DRISCs | 20.85 GB/s | 460 ns |
+| egress only, no ingest (reference) | 25.36 GB/s | 387 ns |
+| egress only, zero-copy (reference) | 57.60 GB/s | 167 ns |
+
+The single-DRISC direct drainer at **392 ns/zone** is the end-to-end number; everything above it in
+this table is a component measured in isolation.
 
 Host tuning closed a third of the gap. **Zero-copy consumption would bring egress to 167 ns against
 ingest's 143 ns -- the two sides finally comparable**, and the drainer viable at ~150-170 ns zones.
@@ -349,10 +457,16 @@ Until then egress binds by ~2.7x.
 6. **On egress, tune the host, not the device.** 80 KB pages and 8 pages per host read are worth +50%
    together. Host ack batching and device notify batching are both worth nothing. The device write
    path is already at ~90% of the PCIe link.
-7. **If the trace goes to DRAM, ping-pong two buffers.** One DRISC doing ingest + DMA runs at
+7. **Do not route the trace through DRAM to get it to the host.** Measured 18% slower than pushing
+   direct, using twice the cores. The host wall is downstream of the DRAM buffer, so the round-trip
+   cannot raise throughput. Use DRAM only if you specifically need elasticity, and size it knowing the
+   reserved region is 4.8 MB per bank.
+8. **Expect zero-copy to matter less in a combined kernel.** Worth 2.3x when the DRISC only pushes,
+   +13% once ingest shares the core, because the reads already absorb the host's stalls.
+9. **If the trace goes to DRAM, ping-pong two buffers.** One DRISC doing ingest + DMA runs at
    43.18 GB/s, ~10% below reads alone, and the DMA hides completely behind the reads as long as a
    second batch buffer exists. A single deeper buffer trades that away and loses 23%.
-8. **Consume the FIFO in place.** The `memcpy` in `D2HSocket::read()` is the single largest remaining
+10. **Consume the FIFO in place.** The `memcpy` in `D2HSocket::read()` is the single largest remaining
    cost anywhere in the pipeline -- 2.3x -- and it penalises the producer as well as the consumer,
    because the host's PCIe reads contend with the device's PCIe writes.
 
