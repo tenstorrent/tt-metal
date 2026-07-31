@@ -252,6 +252,7 @@ class TtPrefillRuntime:
         slot_id: int,
         actual_start: int,
         actual_end: int,
+        request_id: int = 0,
         *,
         skip_lm_head: bool = True,
         get_last_token: int = -1,
@@ -282,6 +283,10 @@ class TtPrefillRuntime:
             slot_id: cache user slot to fill, in [0, num_users).
             actual_start: absolute KV pos of the chunk's first token (the cache write offset).
             actual_end: absolute KV pos past the chunk's last real (non-pad) token.
+            request_id: the engine's chunk counter, part of the runner's call contract. Only the
+                pipelined layer-completion sink needs it (to build a globally-dense
+                seq = request_id * num_layers + layer_idx); this runtime's single-rank LayerAck
+                channel carries no payload, so it is accepted and ignored.
         """
         assert self.model_built, "build the model before prefill_chunk()"
         assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
