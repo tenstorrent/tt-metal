@@ -50,7 +50,7 @@ bool reduce_scatter_minimal_direct_is_applicable(
     // see the header note. Ordered cheapest-first, and every one of them is structural -- nothing here
     // decides whether direct is worth using.
     auto* mesh_device = input_tensor.device();
-    if (mesh_device == nullptr || input_tensor.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+    if (mesh_device == nullptr || input_tensor.storage_type() != StorageType::DEVICE) {
         return false;
     }
     if (input_tensor.layout() != ttnn::TILE_LAYOUT) {
@@ -106,7 +106,7 @@ namespace {
 // buffer is byte-identical to what the op would have allocated itself -- including the staging
 // L1-sharded / L1-interleaved / DRAM placement decision, which depends on the shape and would be
 // impossible for a caller to reproduce by hand.
-std::vector<ttnn::TensorSpec> reduce_scatter_minimal_direct_buffer_specs(
+std::vector<tt::tt_metal::TensorSpec> reduce_scatter_minimal_direct_buffer_specs(
     const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis) {
     ttnn::experimental::prim::ReduceScatterMinimalDirectInputs inputs{.input_tensor = input_tensor};
     const uint32_t rank = input_tensor.logical_shape().rank();

@@ -71,3 +71,60 @@ def test_reduce_scatter_minimal_direct_ring(
         enable_trace=enable_trace,
         persistent_mode=persistent_mode,
     )
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("rs_input_dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("enable_trace, num_iters", RS_DIRECT_TRACE_CASES, ids=RS_DIRECT_TRACE_IDS)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}],
+    indirect=True,
+    ids=["fabric_ring"],
+)
+def test_reduce_scatter_minimal_direct_sharded(
+    bh_1d_mesh_device,
+    num_links,
+    rs_input_dtype,
+    enable_trace,
+    num_iters,
+):
+    """Width-sharded L1 in and out. ttnn.reduce_scatter routes sharded cases to this op, so the sharded
+    layout needs coverage even though the op's own staging is always interleaved/L1-sharded on its own
+    terms. Buffers are op-allocated (persistent_mode="none"), which is how that dispatch calls it.
+
+    Sized off the ring: input width = num_devices^2 tiles over a num_devices-wide core grid, so the
+    input shards num_devices tiles/core and the output (num_devices tiles wide) shards 1 tile/core --
+    valid on any ring size this box presents.
+    """
+    num_devices = bh_1d_mesh_device.get_num_devices()
+    validate_test(num_devices, ttnn.Topology.Ring, bh_1d_mesh_device.shape, 0)
+
+    rs_input_shape = [1, 1, 32, 32 * num_devices * num_devices]
+    output_shape = list(rs_input_shape)
+    output_shape[3] //= num_devices
+
+    def width_sharded(shape):
+        return ttnn.create_sharded_memory_config(
+            tuple(shape),
+            core_grid=ttnn.CoreGrid(y=1, x=num_devices),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+    run_reduce_scatter_minimal_direct_impl(
+        bh_1d_mesh_device,
+        num_devices,
+        rs_input_shape,
+        3,
+        num_links,
+        rs_input_dtype,
+        ttnn.TILE_LAYOUT,
+        width_sharded(rs_input_shape),
+        width_sharded(output_shape),
+        num_iters=num_iters,
+        enable_trace=enable_trace,
+        persistent_mode="none",
+    )
