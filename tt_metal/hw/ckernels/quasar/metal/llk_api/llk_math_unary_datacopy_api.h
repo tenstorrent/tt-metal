@@ -41,9 +41,10 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
 
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
-    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(srcA_format, srcB_format);
 
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
+        _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(
+            srcA_format, srcB_format);
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
         if constexpr (!unpack_to_dest) {
             _llk_math_eltwise_unary_datacopy_init_<type, EN_32BIT_DEST>(
@@ -61,6 +62,12 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
                 tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
             "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
 
+        if constexpr (unpack_to_dest) {
+            _configure_mov_ops_explicit_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
+        } else {
+            _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(
+                srcA_format, srcB_format);
+        }
         _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, false /*unpack_to_dest*/>(tensor_shape);
     }
 }
