@@ -10,6 +10,7 @@ import math
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.gpt_oss.tt.matmul_guard import check_matmul_program_config
 
 
 @dataclass
@@ -159,6 +160,20 @@ class ProgramConfig:
             if Kt % in0_block_w != 0:
                 divisors = [d for d in range(2, in0_block_w + 1) if Kt % d == 0]
                 in0_block_w = max(divisors) if divisors else Kt
+
+        # Reject configs that hit the PR #51514 reload defect. That defect is
+        # silent: no crash, no warning, just wrong values that grow to infinity
+        # a few decode steps later. Checked after in0_block_w is snapped above,
+        # so the values here are the ones the kernel actually receives.
+        check_matmul_program_config(
+            name=f"expert matmul (cores={cores}, n={n})",
+            Kt=int(math.ceil((k if k is not None else n) / 32)),
+            in0_block_w=in0_block_w,
+            per_core_N=per_core_N,
+            out_block_w=out_subblock_w,
+            out_subblock_w=out_subblock_w,
+            out_subblock_h=1,
+        )
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),

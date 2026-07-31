@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.gpt_oss.tt.matmul_guard import check_matmul_program_config
 
 
 @dataclass
@@ -151,6 +152,18 @@ class ProgramConfig:
     ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
         """Build matmul program config for attention projections"""
         core_x, core_y = cores
+        # Reject configs that hit the PR #51514 reload defect before the config
+        # reaches the device. The defect is silent, so an unguarded config shows
+        # up as nonsense output several decode steps later, not as an error.
+        check_matmul_program_config(
+            name=f"attention matmul (cores={cores}, n={n})",
+            Kt=-(-k // 32),
+            in0_block_w=in0_block_w,
+            per_core_N=-(-(n // 32) // (core_x * core_y)),
+            out_block_w=out_subblock_w,
+            out_subblock_w=out_subblock_w,
+            out_subblock_h=out_subblock_h,
+        )
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
             in0_block_w=in0_block_w,
