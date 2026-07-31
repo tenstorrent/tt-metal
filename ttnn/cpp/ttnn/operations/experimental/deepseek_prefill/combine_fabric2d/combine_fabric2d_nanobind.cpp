@@ -85,7 +85,8 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         nb::arg("token_size_bytes") = 14336,
         nb::arg("axis") = 0,
         nb::arg("num_l1_slots") = 8,
-        nb::arg("fwd_bump_every") = 8,
+        nb::arg("fwd_bump_every") = 32,
+        nb::arg("assignment_order") = 1,
         nb::arg("stall_telemetry") = 0,
         nb::arg("topology") = nb::none());
 
