@@ -369,29 +369,12 @@
     });
   }
 
-  /* ─── Breadcrumbs — Figma node 239:8072 ─────────────────────── */
-  function transformBreadcrumbs() {
-    /* Replace home icon link with plain "Home" text */
-    var homeLink = document.querySelector(".wy-breadcrumbs a.icon-home");
-    if (homeLink) {
-      homeLink.textContent = "Home";
-      homeLink.className = "";
-    }
-
-    /* Remove the "View page source" aside */
-    var aside = document.querySelector(".wy-breadcrumbs-aside");
-    if (aside) aside.parentNode && aside.parentNode.removeChild(aside);
-
-    /* Remove the hr */
-    var nav = document.querySelector('div[role="navigation"][aria-label="Page navigation"]');
-    if (nav) {
-      var hr = nav.querySelector("hr");
-      if (hr) hr.parentNode && hr.parentNode.removeChild(hr);
-    }
-  }
+  /* Breadcrumbs (Figma node 239:8072) are handled at build time, not here:
+   * the "Home" text link comes from _templates/breadcrumbs.html, the source
+   * link from html_show_sourcelink = False, and the <hr/> divider from
+   * .wy-breadcrumbs ~ hr in tt_theme.css. */
 
   function run() {
-    transformBreadcrumbs();
     transformPyData();
     transformCpp();
     transformExamples();
