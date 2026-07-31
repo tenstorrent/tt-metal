@@ -177,6 +177,15 @@ DFLASH_ENABLED = os.environ.get("PREFILL_DFLASH", "0") == "1"
 # lines is a per-chunk transport-correctness check. The fingerprint reads the tensor to host
 # (non-mutating), so it is off by default and never on the production path.
 D2D_DEBUG = os.environ.get("PREFILL_D2D_DEBUG", "0") == "1"
+# D2D activation capture (opt-in, default OFF; heavier than the CRC fingerprint above). When set to a
+# shared-FS dir, every _d2d_send (sender rank r) and _d2d_recv (receiver rank r+1) composes the full
+# [1,1,chunk,2H] packed activation to a host tensor and torch.saves it there (one file per hop), so an
+# offline script (models/demos/common/prefill/tools/compare_d2d_pcc.py) can PCC the sent vs received
+# tensor per hop — reporting the hidden half [...,:H] and the drafter-partial half [...,H:] separately,
+# which is exactly the "did hidden + partial cross the galaxies correctly" check for DFlash (issue
+# #49586). Reads the tensor to host (non-mutating) and writes ~2H*chunk*2B/file, so it is off by default
+# and never on the production path. ttrun does NOT forward shell PREFILL_* env; set it in the binding yaml.
+D2D_DUMP_DIR = os.environ.get("PREFILL_D2D_DUMP_DIR", "")
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -349,6 +358,66 @@ def _log_d2d_activation(tag: str, rank_label: str, t: ttnn.Tensor, meta: dict) -
         logger.warning(f"[pp {rank_label}] [d2d-debug] {tag} fingerprint skipped: {e}")
 
 
+def _dump_d2d_activation(tag: str, rank: int, t: ttnn.Tensor, meta: dict, dump_dir: str) -> None:
+    """PREFILL_D2D_DUMP_DIR only. Persist the full composed D2D activation as a host tensor at SEND
+    (this process = sender rank r) and RECV (this process = receiver rank r+1) so an offline script can
+    PCC the two. The transport must deliver the packed [hidden ‖ partial] bit-identically, so the SEND on
+    rank r and the RECV on rank r+1 for the same (hop, slot, token-range) should be numerically identical
+    (PCC ~ 1.0, torch.equal True). Composing to one [1,1,chunk,2H] host tensor (ConcatMesh2dToTensor
+    dims=(2,3), matching D2D_MAPPER_CONFIG) lets the script split hidden=[...,:split_at] from the drafter
+    partial=[...,split_at:] and report each half's PCC separately. Per-shard CRC32s are stored alongside
+    to localize a divergent chip. Reads the tensor to host (non-mutating), outside the timed push window.
+    Wrapped so instrumentation can never abort a run."""
+    import os as _os
+    import zlib
+
+    import torch
+
+    try:
+        # Pair a SEND with its RECV by the boundary it crosses: SEND on rank r crosses (r -> r+1); the
+        # matching RECV on rank r+1 crosses (r -> r+1) too. So both label the file with the same hop.
+        hop = (rank, rank + 1) if tag == "send" else (rank - 1, rank)
+        dev = t.device()
+        composed = ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(dev, dims=(2, 3), mesh_shape=dev.shape)
+        )  # [1, 1, chunk, width]; width = 2H under dflash, else H
+        shards = ttnn.get_device_tensors(t)
+        crcs = [hex(zlib.crc32(ttnn.to_torch(s).to(torch.float32).numpy().tobytes()) & 0xFFFFFFFF) for s in shards]
+        width = int(composed.shape[-1])
+        split_at = width // 2 if DFLASH_ENABLED else width  # hidden = [...,:split_at]; partial = [...,split_at:]
+        _os.makedirs(dump_dir, exist_ok=True)
+        fname = _os.path.join(
+            dump_dir,
+            f"d2d_{tag}_hop{hop[0]}-{hop[1]}_slot{meta['slot_id']}_{meta['actual_start']}_{meta['actual_end']}.pt",
+        )
+        torch.save(
+            {
+                "tag": tag,  # "send" | "recv"
+                "hop": hop,  # (sender_rank, receiver_rank) — the boundary; pairs a SEND with its RECV
+                "rank": rank,  # this process's rank
+                "slot_id": meta["slot_id"],
+                "actual_start": meta["actual_start"],
+                "actual_end": meta["actual_end"],
+                "dflash": bool(DFLASH_ENABLED),
+                "split_at": split_at,  # hidden-half width H (== drafter-partial-half width under dflash)
+                "packed_width": width,  # 2H under dflash, else H
+                "mesh_shape": tuple(int(x) for x in dev.shape),
+                "dtype": str(t.dtype),
+                "layout": str(t.layout),
+                "shape": tuple(int(x) for x in composed.shape),
+                "crc32_per_shard": crcs,  # order matches ttnn.get_device_tensors; localizes a bad chip
+                "tensor": composed.contiguous(),  # native bf16 — exactly the transported bits
+            },
+            fname,
+        )
+        logger.info(
+            f"[pp rank {rank}] [d2d-dump] {tag} hop{hop[0]}-{hop[1]} -> {fname} "
+            f"shape={tuple(composed.shape)} width={width} split_at={split_at} nshards={len(shards)}"
+        )
+    except Exception as e:  # dump-only: never let instrumentation break a run
+        logger.warning(f"[pp rank {rank}] [d2d-dump] {tag} skipped: {e}")
+
+
 def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
     """Stand up this rank's persistent D2D endpoints for the pipeline: an inbound receiver from rank-1
     (every rank but the first) and an outbound sender to rank+1 (every rank but the last). Returns
@@ -410,7 +479,7 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     return inbound, outbound
 
 
-def _d2d_recv(inbound) -> tuple:
+def _d2d_recv(inbound, rank: int) -> tuple:
     """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor and
     decode the inline metadata. The returned tensor already has the embedding-output sharding, so it
     feeds runtime.prefill with no reshard. Pairs with the upstream rank's _d2d_send."""
@@ -423,11 +492,13 @@ def _d2d_recv(inbound) -> tuple:
     m = ttnn.to_torch(ttnn.get_device_tensors(md)[0]).view(torch.int32).flatten()
     meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
     logger.info(
-        f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
+        f"[pp rank {rank}] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
         f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
     )
     if D2D_DEBUG:
-        _log_d2d_activation("RECV", "recv", act, meta)
+        _log_d2d_activation("RECV", f"rank {rank}", act, meta)
+    if D2D_DUMP_DIR:
+        _dump_d2d_activation("recv", rank, act, meta, D2D_DUMP_DIR)
     return act, meta
 
 
@@ -437,6 +508,8 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
     TT_FATALs on any spec mismatch, so no host-side relayout is needed."""
     if D2D_DEBUG:  # before t0: outside the timed push window, and before the send deallocates `activation`
         _log_d2d_activation("SEND", f"rank {rank}", activation, meta)
+    if D2D_DUMP_DIR:  # likewise before the send frees `activation`
+        _dump_d2d_activation("send", rank, activation, meta, D2D_DUMP_DIR)
     t0 = time.perf_counter()
     backing = outbound.get_backing_tensor()
     import torch
@@ -578,7 +651,7 @@ def run_request_loop(
         if cfg.is_first_rank:
             inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
         else:
-            inp, meta = _d2d_recv(d2d_in)
+            inp, meta = _d2d_recv(d2d_in, rank)
         if _is_shutdown_sentinel(meta):
             # End of stream: drop the throwaway payload, hand the sentinel to the next rank so it too
             # unblocks and exits, then fall through to the graceful drain below.
@@ -647,7 +720,7 @@ def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in
             inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
             meta = {"slot_id": slot_id, "actual_start": kv_actual, "actual_end": kv_actual + cfg.chunk_size}
         else:
-            inp, meta = _d2d_recv(d2d_in)
+            inp, meta = _d2d_recv(d2d_in, rank)
             slot_id = meta["slot_id"]
         t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
         if first is None:
