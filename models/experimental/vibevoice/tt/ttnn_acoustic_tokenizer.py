@@ -28,16 +28,20 @@ from typing import Dict, List, Optional
 import torch
 import ttnn
 
+from models.experimental.vibevoice.common.weight_cache import WeightCache
 from models.experimental.vibevoice.tt.ttnn_semantic_tokenizer import (
     ConvWeightsHost,
     Block1DWeightsHost,
     SemanticTokenizerWeights,
     _parse_depths,
     _get_conv_weights,
+    _get_or_zeros,
     TTConv1d,
     TTBlock1DDevice,
     TTSemanticTokenizer,
     preprocess_semantic_tokenizer_weights,
+    _materialize,
+    _no_cache,
 )
 from models.experimental.vibevoice.tt.vibevoice_config import SemanticTokenizerConfig, TokenizerConfig
 
@@ -77,12 +81,14 @@ def _get_block_weights(hf_state: dict, prefix: str, dim: int, eps: float, causal
         hf_state, dw_prefix, in_ch=dim, out_ch=dim, kernel_size=7, stride=1, groups=dim, causal=causal
     )
 
-    norm_w = hf_state.get(f"{prefix}.norm.weight", torch.ones(dim)).float()
-    ffn_norm_w = hf_state.get(f"{prefix}.ffn_norm.weight", torch.ones(dim)).float()
+    # Raw (bf16, mmap-backed) tensors; the cast/reshape is deferred to the device-upload thunks in
+    # TTBlock1DDevice, so a cache hit never reads the checkpoint here.
+    norm_w = hf_state.get(f"{prefix}.norm.weight", torch.ones(dim))
+    ffn_norm_w = hf_state.get(f"{prefix}.ffn_norm.weight", torch.ones(dim))
 
-    l1_w = hf_state.get(f"{prefix}.ffn.linear1.weight", torch.zeros(ffn_dim_default, dim)).float()
+    l1_w = _get_or_zeros(hf_state, f"{prefix}.ffn.linear1.weight", (ffn_dim_default, dim))
     l1_b = hf_state.get(f"{prefix}.ffn.linear1.bias", None)
-    l2_w = hf_state.get(f"{prefix}.ffn.linear2.weight", torch.zeros(dim, ffn_dim_default)).float()
+    l2_w = _get_or_zeros(hf_state, f"{prefix}.ffn.linear2.weight", (dim, ffn_dim_default))
     l2_b = hf_state.get(f"{prefix}.ffn.linear2.bias", None)
 
     gamma = hf_state.get(f"{prefix}.gamma", None)
@@ -91,14 +97,14 @@ def _get_block_weights(hf_state: dict, prefix: str, dim: int, eps: float, causal
     ffn_dim = l1_w.shape[0]
     return Block1DWeightsHost(
         dw_conv=dw,
-        norm_w=norm_w.contiguous(),
-        ffn_norm_w=ffn_norm_w.contiguous(),
-        linear1_w=l1_w.contiguous(),
-        linear1_b=l1_b.float().contiguous() if l1_b is not None else None,
-        linear2_w=l2_w.contiguous(),
-        linear2_b=l2_b.float().contiguous() if l2_b is not None else None,
-        gamma=gamma.float().contiguous() if gamma is not None else None,
-        ffn_gamma=ffn_gamma.float().contiguous() if ffn_gamma is not None else None,
+        norm_w=norm_w,
+        ffn_norm_w=ffn_norm_w,
+        linear1_w=l1_w,
+        linear1_b=l1_b,
+        linear2_w=l2_w,
+        linear2_b=l2_b,
+        gamma=gamma,
+        ffn_gamma=ffn_gamma,
         dim=dim,
         ffn_dim=ffn_dim,
         eps=eps,
@@ -159,9 +165,9 @@ def preprocess_acoustic_tokenizer_weights(
         out_ch = n_filters * (2**out_ch_exp) if out_ch_exp >= 0 else n_filters
         kernel_size = ratio * 2
         pref = f"decoder.upsample_layers.{i + 1}.0.convtr.convtr"
-        w = hf_state.get(f"{pref}.weight", torch.zeros(in_ch, out_ch, kernel_size)).float().contiguous()
-        b_raw = hf_state.get(f"{pref}.bias", None)
-        b = b_raw.float().contiguous() if b_raw is not None else None
+        # Raw tensors; the phase split + cast is deferred to the TTConvTranspose1d build thunks.
+        w = _get_or_zeros(hf_state, f"{pref}.weight", (in_ch, out_ch, kernel_size))
+        b = hf_state.get(f"{pref}.bias", None)
         upsample_convs.append(ConvTransposeWeightsHost(weight=w, bias=b, stride=ratio, trim_right=kernel_size - ratio))
 
     # Decoder stages
@@ -213,7 +219,15 @@ class TTConvTranspose1d:
     Each phase is therefore a kernel-2 causal conv (taps x[t-1], x[t]); no extra trim.
     """
 
-    def __init__(self, ctw: ConvTransposeWeightsHost, device, compute_dtype=ttnn.bfloat16):
+    def __init__(
+        self,
+        ctw: ConvTransposeWeightsHost,
+        device,
+        compute_dtype=ttnn.bfloat16,
+        *,
+        weight_cache: WeightCache = None,
+        cache_key: str = "",
+    ):
         self.device = device
         self.stride = ctw.stride
 
@@ -226,14 +240,32 @@ class TTConvTranspose1d:
 
         # One kernel-2 causal conv per phase; bias added in every phase (each output
         # position is produced by exactly one phase, so bias lands once per position).
-        W = ctw.weight  # [in, out, K]
+        # The phase split (index + transpose + stack of ctw.weight) is deferred into a thunk so a
+        # cache hit never reads the transposed-conv weight; only the shape is needed up front.
+        def _phase_builder(s: int):
+            def build():
+                W = _materialize(ctw.weight)  # [in, out, K]
+                k_tm1 = W[:, :, s + S].transpose(0, 1).contiguous()  # [out, in] coeff of x[t-1]
+                k_t = W[:, :, s].transpose(0, 1).contiguous()  # [out, in] coeff of x[t]
+                return torch.stack([k_tm1, k_t], dim=2).contiguous()  # [out, in, 2]
+
+            return build
+
         self._phases = []
         for s in range(S):
-            k_tm1 = W[:, :, s + S].transpose(0, 1).contiguous()  # [out, in] coeff of x[t-1]
-            k_t = W[:, :, s].transpose(0, 1).contiguous()  # [out, in] coeff of x[t]
-            phase_w = torch.stack([k_tm1, k_t], dim=2).contiguous()  # [out, in, 2]
-            cw = ConvWeightsHost(weight=phase_w, bias=ctw.bias, stride=1, groups=1, causal_pad=1)
-            self._phases.append(TTConv1d(cw, device, compute_dtype=compute_dtype))
+            cw = ConvWeightsHost(
+                weight=_phase_builder(s),
+                bias=ctw.bias,
+                stride=1,
+                groups=1,
+                causal_pad=1,
+                weight_shape=(out_ch, in_ch, 2),
+            )
+            self._phases.append(
+                TTConv1d(
+                    cw, device, compute_dtype=compute_dtype, weight_cache=weight_cache, cache_key=f"{cache_key}.p{s}"
+                )
+            )
 
     def reset_cache(self) -> None:
         for p in self._phases:
@@ -277,15 +309,27 @@ class TTAcousticTokenizer:
     Device must be opened with l1_small_size=32768 for conv support on Blackhole.
     """
 
-    def __init__(self, weights: AcousticTokenizerWeights, device):
+    def __init__(self, weights: AcousticTokenizerWeights, device, *, weight_cache: WeightCache = None):
         self.device = device
-        self._encoder_tt = TTSemanticTokenizer(weights.encoder, device)
+        wc = weight_cache or _no_cache()
+        # The acoustic encoder is a full semantic tokenizer; namespace it under "enc" so its keys
+        # never collide with the decoder's ("dec.*") within this tokenizer's cache.
+        self._encoder_tt = TTSemanticTokenizer(weights.encoder, device, weight_cache=wc.child("enc"))
 
         dec = weights.decoder
-        self._dec_input_conv = TTConv1d(dec.input_conv, device)
-        self._dec_stage_blocks = [[TTBlock1DDevice(bw, device) for bw in stage_blocks] for stage_blocks in dec.stages]
-        self._dec_upsample_convs = [TTConvTranspose1d(ctw, device) for ctw in dec.upsample_convs]
-        self._dec_head_conv = TTConv1d(dec.head_conv, device)
+        self._dec_input_conv = TTConv1d(dec.input_conv, device, weight_cache=wc, cache_key="dec.input")
+        self._dec_stage_blocks = [
+            [
+                TTBlock1DDevice(bw, device, weight_cache=wc, cache_key=f"dec.s{si}.b{bi}")
+                for bi, bw in enumerate(stage_blocks)
+            ]
+            for si, stage_blocks in enumerate(dec.stages)
+        ]
+        self._dec_upsample_convs = [
+            TTConvTranspose1d(ctw, device, weight_cache=wc, cache_key=f"dec.up{i}")
+            for i, ctw in enumerate(dec.upsample_convs)
+        ]
+        self._dec_head_conv = TTConv1d(dec.head_conv, device, weight_cache=wc, cache_key="dec.head")
 
     def reset_decode_cache(self) -> None:
         """Clear all decoder streaming caches (call before a new speech segment)."""

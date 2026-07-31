@@ -150,8 +150,20 @@ def hidden_torch_to_tt(hidden: torch.Tensor, device) -> ttnn.Tensor:
     )
 
 
+def tt_weight_cache(submodule: str):
+    """Default device-weight cache for one ``submodule``, keyed by the active checkpoint
+    (``config.MODEL_PATH``, set by the conftest fixture). On by default and shared with
+    ``from_checkpoint``'s cache files; ``VV_DISABLE_WEIGHT_CACHE=1`` disables it.
+    """
+    from models.experimental.vibevoice.common import config as _vv_config
+    from models.experimental.vibevoice.common.weight_cache import resolve_weight_cache
+
+    return resolve_weight_cache(_vv_config.MODEL_PATH, submodule)
+
+
 def build_tt_lm(lm_state: dict, mesh_device, cfg) -> TTVibeVoiceLM:
-    weights = preprocess_lm_weights(lm_state, mesh_device, cfg)
+    # Weight cache on by default (shares from_checkpoint's "lm" files); VV_DISABLE_WEIGHT_CACHE=1 off.
+    weights = preprocess_lm_weights(lm_state, mesh_device, cfg, tt_weight_cache("lm"))
     return TTVibeVoiceLM(weights, mesh_device)
 
 

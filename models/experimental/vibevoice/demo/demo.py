@@ -182,6 +182,21 @@ def main() -> int:
         help="Voice clone WAV(s) for Speaker 1, 2, 3, … in order (repeatable path list)",
     )
     ap.add_argument(
+        "--weight-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Cache preprocessed device weights (LM + connectors + diffusion head + tokenizers) to "
+        "disk and reload them on later runs, skipping the host tilize/cast + re-upload. Byte-exact, "
+        "so it cannot change output. On by default; pass --no-weight-cache to always rebuild.",
+    )
+    ap.add_argument(
+        "--weight-cache-dir",
+        default=None,
+        help="Directory for the device-weight cache (default: $VV_WEIGHT_CACHE_DIR, else "
+        "$TT_CACHE_PATH/vibevoice/weight_cache, else generated/ttnn/vibevoice/weight_cache). "
+        "Entries are keyed by checkpoint identity.",
+    )
+    ap.add_argument(
         "--debug",
         action="store_true",
         help="Verbose stage logs (VV_DEBUG=1) + device-synced timing breakdown (VV_PROFILE=1)",
@@ -345,11 +360,16 @@ def main() -> int:
             print("[vibevoice_demo] stage 2/5 open_device: device_id=0 l1_small_size=32768", flush=True)
         print("[vibevoice_demo] Loading TTVibeVoiceModel...", flush=True)
         _t_load0 = _time.perf_counter()
+        # Weight cache is on by default in from_checkpoint; --no-weight-cache disables it, and
+        # --weight-cache-dir / $VV_WEIGHT_CACHE_DIR override the location (else a standard default).
+        if not args.weight_cache:
+            os.environ["VV_DISABLE_WEIGHT_CACHE"] = "1"
         tt_model = TTVibeVoiceModel.from_checkpoint(
             mesh,
             model_path,
             cfg_scale=args.cfg_scale,
             num_diffusion_steps=args.num_steps,
+            weight_cache_dir=args.weight_cache_dir,
         )
         print(f"[vibevoice_demo] model load: {_time.perf_counter() - _t_load0:.1f}s", flush=True)
         if args.debug:

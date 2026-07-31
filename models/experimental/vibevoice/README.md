@@ -661,9 +661,6 @@ repeated here — see [Model description](#model-description) and [Upstream refe
 - **Single device.** No tensor-parallel or multi-chip path (`mesh_device` shape `[1]`).
 - **Trace costs a ~1.4 GB trace region + 2 command queues.** Enabled by default; anything else
   sharing the device must fit around it.
-- **Weights are re-read and re-preprocessed on every process start** (5.4 GB checkpoint → host
-  remap/weight-norm fold → device upload). There is no cached device-weight path, so short runs are
-  dominated by load rather than inference.
 
 **Long-form rendering**
 

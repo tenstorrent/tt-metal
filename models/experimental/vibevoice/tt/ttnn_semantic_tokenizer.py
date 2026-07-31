@@ -40,6 +40,7 @@ from typing import Dict, List, Optional
 import torch
 import ttnn
 
+from models.experimental.vibevoice.common.weight_cache import WeightCache
 from models.experimental.vibevoice.tt.vibevoice_config import SemanticTokenizerConfig
 
 
@@ -82,13 +83,34 @@ _FFN_DOWN_PROGCFG = {
 # ──────────────────────────────────────────────────────────────
 
 
+def _materialize(t):
+    """Resolve a weight field that may be a torch tensor or a 0-arg thunk (built on demand)."""
+    return t() if callable(t) else t
+
+
+def _get_or_zeros(sd: dict, key: str, shape, dtype=torch.float32) -> torch.Tensor:
+    """``sd[key]`` if present, else a fresh zero tensor of ``shape``.
+
+    Unlike ``sd.get(key, torch.zeros(shape))`` this does NOT allocate the (potentially large)
+    zero fallback when the key is present — the fallback only exists for malformed/partial states,
+    so for a real checkpoint this is a pure dict lookup with no allocation or data read.
+    """
+    v = sd.get(key)
+    return v if v is not None else torch.zeros(*shape, dtype=dtype)
+
+
 @dataclass
 class ConvWeightsHost:
-    weight: torch.Tensor  # [out_ch, in_ch//groups, K]
-    bias: Optional[torch.Tensor]
+    # torch tensor [out_ch, in_ch//groups, K], or a 0-arg thunk returning it (materialized only on
+    # a cache miss — a hit loads the tiled flatbuffer and never touches the checkpoint).
+    weight: object
+    bias: object  # torch tensor / thunk / None
     stride: int
     groups: int
-    causal_pad: int  # left-pad applied before conv
+    causal_pad: int
+    weight_shape: Optional[
+        tuple
+    ] = None  # required when ``weight`` is a thunk (shape without a data read)  # left-pad applied before conv
 
 
 @dataclass
@@ -135,14 +157,16 @@ def _parse_depths(depths_str: str) -> List[int]:
 def _get_conv_weights(
     sd: dict, prefix: str, in_ch: int, out_ch: int, kernel_size: int, stride: int, groups: int = 1, causal: bool = False
 ) -> ConvWeightsHost:
-    w = sd.get(f"{prefix}.weight", torch.zeros(out_ch, in_ch // groups, kernel_size, dtype=torch.float32))
+    w = _get_or_zeros(sd, f"{prefix}.weight", (out_ch, in_ch // groups, kernel_size))
     b = sd.get(f"{prefix}.bias", None)
     # Reference: padding_total = (kernel_size - 1) * dilation - (stride - 1)
     # All convolutions here have dilation=1
     causal_pad = (kernel_size - 1 - (stride - 1)) if causal else 0
+    # Keep the raw (bf16, mmap-backed) tensors; the fp32->bf16 cast + copy is deferred to the
+    # device-upload thunk in TTConv1d, so a cache hit never reads the checkpoint here.
     return ConvWeightsHost(
-        weight=w.float().contiguous(),
-        bias=b.float().contiguous() if b is not None else None,
+        weight=w,
+        bias=b,
         stride=stride,
         groups=groups,
         causal_pad=causal_pad,
@@ -207,12 +231,14 @@ def preprocess_semantic_tokenizer_weights(
                 hf_state, dw_prefix, in_ch=dim, out_ch=dim, kernel_size=7, stride=1, groups=dim, causal=causal
             )
 
-            norm_w = hf_state.get(f"{bp}.norm.weight", torch.ones(dim)).float()
-            ffn_norm_w = hf_state.get(f"{bp}.ffn_norm.weight", torch.ones(dim)).float()
+            # Raw (bf16, mmap-backed) tensors; the cast/reshape is deferred to the per-tensor
+            # device-upload thunks (TTBlock1DDevice), so a cache hit never reads the checkpoint.
+            norm_w = hf_state.get(f"{bp}.norm.weight", torch.ones(dim))
+            ffn_norm_w = hf_state.get(f"{bp}.ffn_norm.weight", torch.ones(dim))
 
-            l1_w = hf_state.get(f"{bp}.ffn.linear1.weight", torch.zeros(ffn_dim_default, dim)).float()
+            l1_w = _get_or_zeros(hf_state, f"{bp}.ffn.linear1.weight", (ffn_dim_default, dim))
             l1_b = hf_state.get(f"{bp}.ffn.linear1.bias", None)
-            l2_w = hf_state.get(f"{bp}.ffn.linear2.weight", torch.zeros(dim, ffn_dim_default)).float()
+            l2_w = _get_or_zeros(hf_state, f"{bp}.ffn.linear2.weight", (dim, ffn_dim_default))
             l2_b = hf_state.get(f"{bp}.ffn.linear2.bias", None)
 
             gamma = hf_state.get(f"{bp}.gamma", None)
@@ -221,14 +247,14 @@ def preprocess_semantic_tokenizer_weights(
             ffn_dim = l1_w.shape[0]
             blk = Block1DWeightsHost(
                 dw_conv=dw,
-                norm_w=norm_w.contiguous(),
-                ffn_norm_w=ffn_norm_w.contiguous(),
-                linear1_w=l1_w.contiguous(),
-                linear1_b=l1_b.float().contiguous() if l1_b is not None else None,
-                linear2_w=l2_w.contiguous(),
-                linear2_b=l2_b.float().contiguous() if l2_b is not None else None,
-                gamma=gamma.float().contiguous() if gamma is not None else None,
-                ffn_gamma=ffn_gamma.float().contiguous() if ffn_gamma is not None else None,
+                norm_w=norm_w,
+                ffn_norm_w=ffn_norm_w,
+                linear1_w=l1_w,
+                linear1_b=l1_b,
+                linear2_w=l2_w,
+                linear2_b=l2_b,
+                gamma=gamma,
+                ffn_gamma=ffn_gamma,
                 dim=dim,
                 ffn_dim=ffn_dim,
                 eps=eps,
@@ -239,9 +265,8 @@ def preprocess_semantic_tokenizer_weights(
     # ── final norm ───────────────────────────────────────────────────────
     # The final norm key is encoder.norm.weight in some models
     last_dim = n_filters * (2 ** (len(depths) - 1))
+    # Raw tensor (or None); cast deferred to the _norm_w_tt thunk in TTSemanticTokenizer.
     final_norm_w = hf_state.get("encoder.norm.weight", hf_state.get("norm.weight", None))
-    if final_norm_w is not None:
-        final_norm_w = final_norm_w.float().contiguous()
 
     # ── head conv ────────────────────────────────────────────────────────
     head_prefix = "encoder.head.conv.conv"
@@ -264,10 +289,16 @@ def preprocess_semantic_tokenizer_weights(
 # ──────────────────────────────────────────────────────────────
 
 
-def _tile_linear(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+def _no_cache() -> WeightCache:
+    return WeightCache(None, enabled=False)
+
+
+def _tile_linear(t: torch.Tensor, device, dtype=ttnn.bfloat16, *, wc: WeightCache = None, key: str = "") -> ttnn.Tensor:
     """[out, in] → [1, 1, in, out] TILE for ttnn.linear (x @ w semantics)."""
-    return ttnn.as_tensor(
-        t.t().unsqueeze(0).unsqueeze(0).contiguous(),
+    wc = wc or _no_cache()
+    return wc.as_tensor(
+        key,
+        lambda: t.t().unsqueeze(0).unsqueeze(0).contiguous(),
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -275,12 +306,18 @@ def _tile_linear(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     )
 
 
-def _norm_w_tt(w: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+def _norm_w_tt(w: torch.Tensor, device, dtype=ttnn.bfloat16, *, wc: WeightCache = None, key: str = "") -> ttnn.Tensor:
     """[C] norm weight → [1, 1, C//32, 32] ROW_MAJOR for ttnn.rms_norm."""
-    C = w.shape[0]
     tdtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
-    return ttnn.as_tensor(
-        w.to(tdtype).view(1, 1, C // 32, 32).contiguous(),
+    wc = wc or _no_cache()
+
+    def _mk():
+        C = w.shape[0]
+        return w.to(tdtype).view(1, 1, C // 32, 32).contiguous()
+
+    return wc.as_tensor(
+        key,
+        _mk,
         device=device,
         dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -300,19 +337,28 @@ class TTConv1d:
     then conv with stride, then output in [B, 1, T_out, out_ch] NHWC.
     """
 
-    def __init__(self, cw: ConvWeightsHost, device, compute_dtype=ttnn.bfloat16):
+    def __init__(
+        self,
+        cw: ConvWeightsHost,
+        device,
+        compute_dtype=ttnn.bfloat16,
+        *,
+        weight_cache: WeightCache = None,
+        cache_key: str = "",
+    ):
         self.device = device
         self.compute_dtype = compute_dtype
         self.stride = cw.stride
         self.groups = cw.groups
         self.causal_pad = cw.causal_pad
 
-        out_ch, in_per_group, K = cw.weight.shape
+        out_ch, in_per_group, K = cw.weight_shape if cw.weight_shape is not None else tuple(cw.weight.shape)
         self.out_ch = out_ch
         self.in_ch = in_per_group * cw.groups
         self.K = K
 
         tdtype = torch.bfloat16 if compute_dtype == ttnn.bfloat16 else torch.float32
+        wc = weight_cache or _no_cache()
         # OIHW: [out_ch, in_ch//groups, H=1, K_W=K] for ttnn.conv2d.
         # Kept on HOST (unprepared conv-weight layout): the first ttnn.conv2d call takes the
         # clean host-preprocess path (a log_trace) and returns the device-prepared weight/bias
@@ -320,18 +366,25 @@ class TTConv1d:
         # device instead makes conv2d log a "weights not properly prepared" warning and pull it
         # back to host anyway. Warm-up runs every conv once before trace capture, so the prep
         # happens at load time, outside the trace region.
-        w4d = cw.weight.to(tdtype).unsqueeze(2).contiguous()
-        self.weight = ttnn.as_tensor(
-            w4d,
+        # The host tensor itself is disk-cached (a hit skips the fp32->bf16 cast + reshape); the
+        # per-geometry conv2d weight-prep at first call is NOT cached and still runs each start.
+        self.weight = wc.as_tensor(
+            f"{cache_key}.w",
+            lambda: _materialize(cw.weight).to(tdtype).unsqueeze(2).contiguous(),
+            device=None,
             dtype=compute_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=None,
         )
         if cw.bias is not None:
             # conv2d requires bias as [1, 1, 1, out_ch]
-            self.bias = ttnn.as_tensor(
-                cw.bias.to(tdtype).view(1, 1, 1, -1).contiguous(),
+            self.bias = wc.as_tensor(
+                f"{cache_key}.b",
+                lambda: _materialize(cw.bias).to(tdtype).view(1, 1, 1, -1).contiguous(),
+                device=None,
                 dtype=compute_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=None,
             )
         else:
             self.bias = None
@@ -519,12 +572,21 @@ class TTBlock1DDevice:
     FFN permute-to-TC is implicit in NHWC (already channels-last).
     """
 
-    def __init__(self, bw: Block1DWeightsHost, device, compute_dtype=ttnn.bfloat16):
+    def __init__(
+        self,
+        bw: Block1DWeightsHost,
+        device,
+        compute_dtype=ttnn.bfloat16,
+        *,
+        weight_cache: WeightCache = None,
+        cache_key: str = "",
+    ):
         self.device = device
         self.eps = bw.eps
         self.dim = bw.dim
 
         tdtype = torch.bfloat16 if compute_dtype == ttnn.bfloat16 else torch.float32
+        wc = weight_cache or _no_cache()
 
         # VV_POST_SCALE_FOLD=1: fold the per-channel layer scales into the weights that
         # produce the scaled tensors — gamma into the depthwise conv weight/bias, ffn_gamma
@@ -550,42 +612,43 @@ class TTBlock1DDevice:
             l2_w_host = bw.linear2_w.float() * fg.view(-1, 1)
             l2_b_host = (bw.linear2_b.float() * fg) if bw.linear2_b is not None else None
 
-        self.dw_conv = TTConv1d(dw, device, compute_dtype=compute_dtype)
-        self.norm_w = _norm_w_tt(bw.norm_w, device, dtype=compute_dtype)
-        self.ffn_norm_w = _norm_w_tt(bw.ffn_norm_w, device, dtype=compute_dtype)
+        self.dw_conv = TTConv1d(dw, device, compute_dtype=compute_dtype, weight_cache=wc, cache_key=f"{cache_key}.dw")
+        self.norm_w = _norm_w_tt(bw.norm_w, device, dtype=compute_dtype, wc=wc, key=f"{cache_key}.norm")
+        self.ffn_norm_w = _norm_w_tt(bw.ffn_norm_w, device, dtype=compute_dtype, wc=wc, key=f"{cache_key}.ffn_norm")
         # linear1_w is [ffn_dim, C] in PyTorch → _tile_linear transposes to [C, ffn_dim]
-        self.linear1_w = _tile_linear(bw.linear1_w, device, dtype=compute_dtype)
-        self.linear2_w = _tile_linear(l2_w_host.contiguous(), device, dtype=compute_dtype)
+        self.linear1_w = _tile_linear(bw.linear1_w, device, dtype=compute_dtype, wc=wc, key=f"{cache_key}.l1")
+        self.linear2_w = _tile_linear(l2_w_host, device, dtype=compute_dtype, wc=wc, key=f"{cache_key}.l2")
         # Tuned down-proj config for the deep (dim 2048/1024) stages; auto otherwise.
         self._l2_progcfg = _FFN_DOWN_PROGCFG.get(self.dim) if os.environ.get("VV_POST_L2_PROGCFG", "1") == "1" else None
 
-        def _bias(b: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:
+        def _bias(b: Optional[torch.Tensor], key: str) -> Optional[ttnn.Tensor]:
             if b is None:
                 return None
-            return ttnn.as_tensor(
-                b.to(tdtype).view(1, 1, 1, -1).contiguous(),
+            return wc.as_tensor(
+                key,
+                lambda: b.to(tdtype).view(1, 1, 1, -1).contiguous(),
                 device=device,
                 dtype=compute_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        def _scale(s: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:
+        def _scale(s: Optional[torch.Tensor], key: str) -> Optional[ttnn.Tensor]:
             if s is None:
                 return None
-            C = s.shape[0]
-            return ttnn.as_tensor(
-                s.to(tdtype).view(1, 1, 1, C).contiguous(),
+            return wc.as_tensor(
+                key,
+                lambda: s.to(tdtype).view(1, 1, 1, s.shape[0]).contiguous(),
                 device=device,
                 dtype=compute_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        self.linear1_b = _bias(bw.linear1_b)
-        self.linear2_b = _bias(l2_b_host)
-        self.gamma = None if self._fold_gamma else _scale(bw.gamma)
-        self.ffn_gamma = None if self._fold_ffn_gamma else _scale(bw.ffn_gamma)
+        self.linear1_b = _bias(bw.linear1_b, f"{cache_key}.l1_b")
+        self.linear2_b = _bias(l2_b_host, f"{cache_key}.l2_b")
+        self.gamma = None if self._fold_gamma else _scale(bw.gamma, f"{cache_key}.gamma")
+        self.ffn_gamma = None if self._fold_ffn_gamma else _scale(bw.ffn_gamma, f"{cache_key}.ffn_gamma")
 
     def reset_cache(self) -> None:
         self.dw_conv.reset_cache()
@@ -700,19 +763,28 @@ class TTSemanticTokenizer:
     Output: [B, 1, T_enc, vae_dim]
     """
 
-    def __init__(self, weights: SemanticTokenizerWeights, device):
+    def __init__(self, weights: SemanticTokenizerWeights, device, *, weight_cache: WeightCache = None):
         self.device = device
         self.eps = weights.eps
+        wc = weight_cache or _no_cache()
 
-        self._downsample_convs = [TTConv1d(cw, device) for cw in weights.downsample_convs]
-        self._stages = [[TTBlock1DDevice(bw, device) for bw in stage_blocks] for stage_blocks in weights.stages]
+        self._downsample_convs = [
+            TTConv1d(cw, device, weight_cache=wc, cache_key=f"ds{i}") for i, cw in enumerate(weights.downsample_convs)
+        ]
+        self._stages = [
+            [
+                TTBlock1DDevice(bw, device, weight_cache=wc, cache_key=f"s{si}.b{bi}")
+                for bi, bw in enumerate(stage_blocks)
+            ]
+            for si, stage_blocks in enumerate(weights.stages)
+        ]
 
         if weights.final_norm_w is not None:
-            self._final_norm_w = _norm_w_tt(weights.final_norm_w, device)
+            self._final_norm_w = _norm_w_tt(weights.final_norm_w, device, wc=wc, key="final_norm")
         else:
             self._final_norm_w = None
 
-        self._head_conv = TTConv1d(weights.head_conv, device)
+        self._head_conv = TTConv1d(weights.head_conv, device, weight_cache=wc, cache_key="head")
 
     def reset_cache(self) -> None:
         """Clear all streaming caches (call before encoding a new segment)."""

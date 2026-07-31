@@ -17,6 +17,8 @@ from typing import Optional
 import torch
 import ttnn
 
+from models.experimental.vibevoice.common.weight_cache import WeightCache
+
 
 @dataclass
 class ConnectorParameters:
@@ -35,57 +37,63 @@ def preprocess_connector_parameters(
     device,
     eps: float = 1e-6,
     dtype: ttnn.DataType = ttnn.bfloat16,
+    weight_cache: Optional[WeightCache] = None,
 ) -> ConnectorParameters:
     """Convert host-side HF SpeechConnector weights to TTNN tensors.
 
     hf_state keys expected: fc1.weight, fc1.bias (opt), fc2.weight, fc2.bias (opt), norm.weight
     (stripped of module prefix by split_submodule_weights).
-    """
-    fc1_w = hf_state["fc1.weight"].to(torch.bfloat16)  # [hidden, input]
-    fc2_w = hf_state["fc2.weight"].to(torch.bfloat16)  # [hidden, hidden]
-    norm_w = hf_state["norm.weight"].to(torch.bfloat16)  # [hidden]
 
-    hidden_dim = fc1_w.shape[0]
-    input_dim = fc1_w.shape[1]
+    ``weight_cache`` (when enabled) serialises each preprocessed tensor so later runs load
+    it straight to device; the build thunks below are only evaluated on a cache miss.
+    """
+    wc = weight_cache if weight_cache is not None else WeightCache(None, enabled=False)
+
+    # Shapes come from tensor metadata (no data read), so they are cheap even on a cache hit.
+    hidden_dim = hf_state["fc1.weight"].shape[0]
+    input_dim = hf_state["fc1.weight"].shape[1]
 
     # ttnn.linear computes x @ W (no implicit transpose), so store weights as [in, out]
-    fc1_tt = ttnn.as_tensor(
-        fc1_w.t().unsqueeze(0).unsqueeze(0),  # [1, 1, in, out]
+    fc1_tt = wc.as_tensor(
+        "fc1",
+        lambda: hf_state["fc1.weight"].to(torch.bfloat16).t().unsqueeze(0).unsqueeze(0),  # [1,1,in,out]
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    fc2_tt = ttnn.as_tensor(
-        fc2_w.t().unsqueeze(0).unsqueeze(0),  # [1, 1, in, out]
+    fc2_tt = wc.as_tensor(
+        "fc2",
+        lambda: hf_state["fc2.weight"].to(torch.bfloat16).t().unsqueeze(0).unsqueeze(0),  # [1,1,in,out]
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     # RMSNorm weight: ttnn.rms_norm requires shape [1, 1, hidden//32, 32] in ROW_MAJOR
-    norm_w_4d = norm_w.view(1, 1, hidden_dim // 32, 32)
-    norm_tt = ttnn.as_tensor(
-        norm_w_4d,
+    norm_tt = wc.as_tensor(
+        "norm",
+        lambda: hf_state["norm.weight"].to(torch.bfloat16).view(1, 1, hidden_dim // 32, 32),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    def _bias_to_tt(b):
-        return ttnn.as_tensor(
-            b.to(torch.bfloat16).view(1, 1, 1, -1),
+    def _bias_to_tt(key: str, ckey: str):
+        if hf_state.get(key) is None:
+            return None
+        return wc.as_tensor(
+            ckey,
+            lambda: hf_state[key].to(torch.bfloat16).view(1, 1, 1, -1),
             device=device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    fc1_b_raw = hf_state.get("fc1.bias")
-    fc2_b_raw = hf_state.get("fc2.bias")
-    fc1_b_tt = _bias_to_tt(fc1_b_raw) if fc1_b_raw is not None else None
-    fc2_b_tt = _bias_to_tt(fc2_b_raw) if fc2_b_raw is not None else None
+    fc1_b_tt = _bias_to_tt("fc1.bias", "fc1_bias")
+    fc2_b_tt = _bias_to_tt("fc2.bias", "fc2_bias")
 
     return ConnectorParameters(
         fc1_weight=fc1_tt,

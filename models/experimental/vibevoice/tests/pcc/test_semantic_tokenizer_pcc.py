@@ -83,8 +83,10 @@ def test_semantic_tokenizer_pcc(mesh_device, vv_config, sem_tok_state):
 
     # 2) TT forward
     cfg = vv_config.semantic_tokenizer
+    from models.experimental.vibevoice.tests.pcc.pcc_helpers import tt_weight_cache
+
     weights = preprocess_semantic_tokenizer_weights(sem_tok_state, mesh_device, cfg)
-    tokenizer_tt = TTSemanticTokenizer(weights, mesh_device)
+    tokenizer_tt = TTSemanticTokenizer(weights, mesh_device, weight_cache=tt_weight_cache("semantic_tokenizer"))
 
     # Input: [1, 1, 1, T] for TT (B, 1, H=1, T)
     audio_4d = audio.unsqueeze(0)  # [1, 1, 1, T]
