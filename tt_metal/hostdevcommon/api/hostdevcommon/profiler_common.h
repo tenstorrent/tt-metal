@@ -235,4 +235,101 @@ constexpr static std::uint32_t PROFILER_L1_VECTOR_SIZE =
     PROFILER_L1_MARKER_UINT32_SIZE;
 constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE * sizeof(uint32_t);
 
+// ---- SPSC SPAN frame: the identity-free drain wire format ------------------------------------------
+//
+// A drainer should not know, or claim to know, who it is draining. Everything the host needs is already
+// in the 256 B control vector the drainer had to poll anyway: identity in SPSC_CORE_XY, progress in the
+// heads, extent in the tails. So the frame is that control vector, verbatim, followed by the ring bytes
+// it describes -- and the drainer injects nothing.
+//
+//   [0]                       w0 = SPSC_SPAN_PACKET_TYPE << PP_TYPE_SHIFT; low 27 bits RESERVED, zero
+//   [1]                       payload_words = PROFILER_L1_CONTROL_VECTOR_SIZE + shipped ring words
+//   [2 .. PREFIX)             zero
+//   [PREFIX .. +CONTROL)      the worker's profiler control vector, verbatim
+//   [.. +payload)             for each RISC in ascending order, its ring slice(s) (see spsc_span_run)
+//   [.. frame_words)          zero pad to a 64 B socket page
+//
+// The host recomputes the slice geometry from the control vector with the SAME helper the drainer used,
+// so there is nothing on the wire to desynchronize: no lane tags, no run lengths, no core id.
+//
+// Prefix is 16 words (64 B) so the control vector starts at 64 B and the first ring slice at 320 B --
+// both multiples of L1_ALIGNMENT (16 B on Blackhole). Alignment is not a nicety here: the NoC
+// MIS-DELIVERS a misaligned transfer rather than rejecting it.
+constexpr static std::uint32_t SPSC_SPAN_PREFIX_WORDS = 16;
+// Wire type code. Must equal PP_BULK_SPAN in tools/x280_bm/include/prof_packet.h, which is plain C and
+// cannot include this header; x280_profzone_decode.hpp static_asserts that the two agree.
+constexpr static std::uint32_t SPSC_SPAN_PACKET_TYPE = 13;
+// Where the packet type sits in word0 of every packet in this stream (PP_TYPE_SHIFT in prof_packet.h).
+constexpr static std::uint32_t SPSC_SPAN_TYPE_SHIFT = 27;
+// Ring slices are cut on this word granularity to keep both ends of every NoC copy 16 B-aligned.
+constexpr static std::uint32_t SPSC_SPAN_ALIGN_WORDS = 4;
+// Socket page granularity, in words -- a frame is padded up to a whole number of these.
+constexpr static std::uint32_t SPSC_SPAN_PAGE_WORDS = 16;
+
+struct SpscSpanSlice {
+    std::uint32_t start;  // first word of the slice within the ring
+    std::uint32_t words;  // slice length, always a multiple of SPSC_SPAN_ALIGN_WORDS
+};
+
+// Geometry of one RISC's contribution to a span frame: the aligned ring slices that cover [head, tail),
+// where the live run begins inside the concatenation of those slices, and how long it is. Two slices
+// when the run wraps the ring, one otherwise, none when there is nothing to ship.
+//
+// Because the slices are concatenated in the page, the host walks `run` words from `skip` LINEARLY --
+// the ring wrap is resolved by the framing, not by modular arithmetic on the host.
+struct SpscSpanRun {
+    SpscSpanSlice slice[2];
+    std::uint32_t nslices;
+    std::uint32_t words;  // total shipped (sum of slice lengths)
+    std::uint32_t skip;   // live run starts this many words into the shipped block
+    std::uint32_t run;    // live words
+};
+
+inline SpscSpanRun spsc_span_run(std::uint32_t head, std::uint32_t tail, std::uint32_t cap) {
+    SpscSpanRun g = {};
+    // Head and tail are monotonic word counters, so the subtraction is wrap-safe. A lossless producer
+    // blocks at capacity, so a run wider than the ring means the control vector was read torn.
+    std::uint32_t run = tail - head;
+    if (run > cap) {
+        run = cap;
+    }
+    g.run = run;
+    if (run == 0) {
+        return g;
+    }
+    const std::uint32_t mask = ~(SPSC_SPAN_ALIGN_WORDS - 1u);
+    const std::uint32_t s = head % cap;
+    const std::uint32_t a = s & mask;
+    g.skip = s - a;
+    const std::uint32_t e = s + run;  // exclusive; may run past the end of the ring
+    if (e <= cap) {
+        const std::uint32_t end = (e + SPSC_SPAN_ALIGN_WORDS - 1u) & mask;
+        g.slice[0].start = a;
+        g.slice[0].words = end - a;
+        g.nslices = 1;
+    } else {
+        const std::uint32_t end2 = (e - cap + SPSC_SPAN_ALIGN_WORDS - 1u) & mask;
+        g.slice[0].start = a;
+        g.slice[0].words = cap - a;
+        g.slice[1].start = 0;
+        g.slice[1].words = end2;
+        g.nslices = 2;
+    }
+    g.words = g.slice[0].words + (g.nslices > 1 ? g.slice[1].words : 0u);
+    return g;
+}
+
+inline std::uint32_t spsc_span_w0() { return SPSC_SPAN_PACKET_TYPE << SPSC_SPAN_TYPE_SHIFT; }
+
+// Total words a frame occupies on the wire, including the prefix and the pad up to a socket page.
+inline std::uint32_t spsc_span_frame_words(std::uint32_t payload_words) {
+    const std::uint32_t n = SPSC_SPAN_PREFIX_WORDS + payload_words;
+    return (n + SPSC_SPAN_PAGE_WORDS - 1u) & ~(SPSC_SPAN_PAGE_WORDS - 1u);
+}
+
+static_assert(PROFILER_L1_VECTOR_SIZE % SPSC_SPAN_ALIGN_WORDS == 0, "ring capacity must be slice-aligned");
+static_assert(
+    (SPSC_SPAN_PREFIX_WORDS + PROFILER_L1_CONTROL_VECTOR_SIZE) % SPSC_SPAN_PAGE_WORDS == 0,
+    "the first ring slice must land on a socket page boundary");
+
 }  // namespace kernel_profiler

@@ -107,6 +107,15 @@
  * over-read past tail is present but the host takes only `run`), then decode as that lane's packet stream. */
 #define PP_BULK_CORE 5u
 
+/* BULK_SPAN: the IDENTITY-FREE whole-core frame. Where BULK_CORE has the reader tell the host which core
+ * and how much (core_id in word0, per-risc head/run meta), a SPAN frame carries the worker's own profiler
+ * control vector verbatim and lets the host read all of that out of it -- identity from SPSC_CORE_XY,
+ * progress from the heads, extent from the tails. A drainer that has to poll the control vector anyway
+ * therefore injects NOTHING, which is the whole point: nothing on the wire can disagree with the worker.
+ * Layout and the shared slice geometry live in hostdevcommon/profiler_common.h (SPSC_SPAN_*), which this
+ * plain-C header cannot include; x280_profzone_decode.hpp static_asserts that the codes agree. */
+#define PP_BULK_SPAN 13u
+
 /* X280_ZONE: an X280 DRAIN-HART's own profiling zone (reader/relay activity), injected IN-BAND into the same
  * linearized stream as the worker data (readers inject into their LIM STAGE, relays into the socket) so the
  * host gets hart zones for FREE over the existing transport -- no separate side-channel poller. 3 WORDS:
@@ -220,6 +229,10 @@ static inline uint32_t pp_bulkcore_core(uint32_t w0) { return pp_low27(w0); }
 static inline uint32_t pp_bulk_meta(uint32_t head_mod, uint32_t run) { return (head_mod << 16) | (run & 0xFFFFu); }
 static inline uint32_t pp_bulk_head(uint32_t m) { return (m >> 16) & 0xFFFFu; }
 static inline uint32_t pp_bulk_run(uint32_t m) { return m & 0xFFFFu; }
+
+/* ----- BULK_SPAN frame (identity-free raw span) ----- */
+static inline uint32_t pp_bulkspan_w0(void) { return pp_word0(PP_BULK_SPAN, 0u); }
+static inline int pp_is_bulkspan(uint32_t w0) { return pp_type(w0) == PP_BULK_SPAN; }
 
 /* reconstruct the 59-bit device timestamp from a marker's 32-bit low + the lane's sticky 27-bit high. */
 static inline uint64_t pp_full_ts(uint32_t timer_hi, uint32_t timer_low) {

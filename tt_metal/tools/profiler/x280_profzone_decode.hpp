@@ -24,9 +24,16 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <unordered_map>
 #include <vector>
 
+#include "hostdevcommon/profiler_common.h"
 #include "prof_packet.h"
+
+static_assert(
+    PP_BULK_SPAN == kernel_profiler::SPSC_SPAN_PACKET_TYPE,
+    "prof_packet.h (plain C, X280 firmware) and profiler_common.h (C++, metal kernels) must agree on the "
+    "BULK_SPAN wire code -- they cannot include each other, so this is the only thing holding them together");
 
 namespace tt::tt_metal::profiler {
 
@@ -41,6 +48,10 @@ struct ProfzoneDecodeState {
     uint32_t cur_prog = 0;            // set by STICKY_PROG (program-global)
     std::vector<uint32_t> cur_hi;     // per-lane wall-clock high half (set by STICKY_TIMER), size = nl
     std::vector<uint32_t> resid;      // trailing partial packet carried to the next call
+    // BULK_SPAN identity: packed (y << 16) | x -> dense core index, so lane = core*NRISC + risc keeps its
+    // meaning downstream. The caller owns this map because only the host knows the grid; the drainer never
+    // sees it and never puts a core id on the wire. A frame whose xy is absent is skipped whole.
+    std::unordered_map<uint32_t, uint32_t> core_of_xy;
 
     void reset(uint32_t nl) {
         cur_lane = 0xFFFFFFFFu;
@@ -164,6 +175,73 @@ inline void profzone_decode(
                 }
             }
             p += prefix + rawn;
+        } else if (pp_is_bulkspan(w0)) {
+            // Identity-free whole-core frame. Everything BULK_CORE puts in a drainer-written header --
+            // which core, where each ring starts, how much is live -- is re-derived here from the worker's
+            // OWN control vector, using the same helper the drainer used to cut the slices. The ring wrap
+            // was resolved by the framing, so each run is a flat array.
+            if (p + 1 >= sz) {
+                break;  // need the length word
+            }
+            const uint32_t frame = kernel_profiler::spsc_span_frame_words(w[p + 1]);
+            if (p + frame > sz) {
+                break;  // incomplete frame -> carry to the next call
+            }
+            const uint32_t* ctrl = &w[p + kernel_profiler::SPSC_SPAN_PREFIX_WORDS];
+            const uint32_t* blk = ctrl + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
+            const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
+            const bool known = xy_it != st.core_of_xy.end();
+            for (uint32_t r = 0; r < kProfzoneNRiscDecode; r++) {
+                const kernel_profiler::SpscSpanRun g = kernel_profiler::spsc_span_run(
+                    ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r],
+                    ctrl[kernel_profiler::SPSC_RING_TAIL_0 + r],
+                    kProfzoneRingCap);
+                const uint32_t* run_w = blk + g.skip;
+                blk += g.words;  // slices are concatenated in RISC order -- advance even when skipping
+                const uint32_t lane = known ? xy_it->second * kProfzoneNRiscDecode + r : nl;
+                if (g.run == 0 || lane >= nl) {
+                    continue;
+                }
+                uint32_t i = 0;
+                while (i < g.run) {
+                    const uint32_t rw0 = run_w[i];
+                    if (pp_is_timer(rw0)) {  // 1-word: refresh this lane's timer_hi
+                        st.cur_hi[lane] = pp_timer_hi(rw0);
+                        i += 1;
+                        continue;
+                    }
+                    // The producer publishes its tail only after a whole packet is in the ring, so a run
+                    // never ends mid-packet. These bounds checks are therefore assertions, not recovery.
+                    if (i + 1 >= g.run) {
+                        break;
+                    }
+                    const uint32_t rw1 = run_w[i + 1];
+                    if (pp_is_point(rw0)) {
+                        const uint32_t n = pp_data_size(rw0);
+                        if (i + 2u + n > g.run) {
+                            break;
+                        }
+                        emit_data(
+                            lane,
+                            pp_type(rw0),
+                            pp_data_id(rw0),
+                            pp_full_ts(st.cur_hi[lane], rw1),
+                            st.cur_prog,
+                            &run_w[i + 2],
+                            n);
+                        i += 2u + n;
+                        continue;
+                    }
+                    if (pp_type(rw0) == PP_STICKY_PROG) {
+                        st.cur_prog = rw1;
+                    } else {
+                        emit(
+                            lane, pp_type(rw0), pp_low27(rw0) & 0xFFFFu, pp_full_ts(st.cur_hi[lane], rw1), st.cur_prog);
+                    }
+                    i += 2;
+                }
+            }
+            p += frame;
         } else if (pp_is_src(w0)) {  // 1-word: set the current lane
             st.cur_lane = pp_src_lane(w0);
             p += 1;
