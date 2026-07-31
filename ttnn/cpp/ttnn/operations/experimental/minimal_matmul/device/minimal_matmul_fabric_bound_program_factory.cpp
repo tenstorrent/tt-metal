@@ -325,11 +325,18 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     const uint32_t double_buffer_factor = 2;
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
-    // TODO: consider not double buffering the output
     // SwiGLU emits half the N tiles per block (one per gate/up pair), so the output CB only
     // needs to hold half a block. The intermediate CB still holds the full (2N) block.
     uint32_t out_block_num_tiles_written = fuse_swiglu ? (out_block_num_tiles / 2) : out_block_num_tiles;
-    uint32_t out_cb_num_tiles = out_block_num_tiles_written * double_buffer_factor;
+    // Double-buffer the output only when this core produces more than one block. The second buffer
+    // exists so compute can reserve block n+1 while a DM writer drains block n; the output CB is
+    // written once per (m_block_iter, n_block_iter) pair, so with both counts at 1 there is no n+1
+    // and the second buffer is never reserved -- it just burns out_block_num_tiles of L1 (128 KB at
+    // M_block=16/N_block=4 bf16, enough on its own to clash with L1-resident activations).
+    // in0/in1 keep their double buffering: those are refetched on every K iteration, which runs
+    // many times even when the M/N block counts are 1, so their prefetch is real work.
+    const uint32_t out_double_buffer_factor = (M_blocks_per_core * N_blocks_per_core > 1) ? double_buffer_factor : 1;
+    uint32_t out_cb_num_tiles = out_block_num_tiles_written * out_double_buffer_factor;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
