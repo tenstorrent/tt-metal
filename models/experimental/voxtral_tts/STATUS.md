@@ -157,6 +157,39 @@ substitute for a MOS-style eval with real raters and a side-by-side against the 
 to claim naturalness — for a customer, a demo, or a comparison against another vendor — that eval
 has not been done.
 
+### 3.2 bf16 in Block 2 — what was checked before flipping the default
+
+Block 2's output is 36 integers rounded onto 21 FSQ levels, so PCC is the wrong gate: what matters
+is how often a value crosses a rounding boundary, and whether that compounds over hundreds of
+autoregressive steps. All 15 prompts were regenerated at bf16 and rescored.
+
+| | fp32 | bf16 |
+|---|---|---|
+| acoustic codes differing from the reference | 0.81% | 1.16% (all off-by-one) |
+| semantic codes wrong (12 seeds, batch 2) | 0/24 | 0/24 |
+| **natural-text WER, 341 words** | **1.17%** | **1.17%** |
+| natural `[END_AUDIO]` termination | 15/15 | 15/15 |
+| 125-word paragraph, free-running | 459 / 489 frames | **458 / 490 frames** |
+| voice identity (same-voice vs next-nearest) | 0.984 / 0.882 | 0.985 / 0.884 |
+
+The WER total is unchanged and its *composition* moved: German and Hindi each gained one word-error,
+Spanish lost three. All single-token, in both directions, on 3–7 word clips where one word is
+14–33% WER. The Spanish case shows it is divergence and not degradation — bf16 read "42" as digits
+where fp32 spelled out "cuarenta y dos", and bf16 only scores better because the reference text
+contains digits.
+
+Two things were checked and one was a false alarm. Across 12 matched natural-speech pairs the output
+is **~2% quieter** (median, ~0.2 dB, inaudible; negative in 11/12) and **F0 is unchanged** (median
+−0.25%, negative in only 6/12). An apparent downward F0 bias seen on the first 3 pairs did **not**
+survive the larger sample — the two large positives came from 0.7–2.9 s clips where a median-F0
+estimator is unreliable. Spectral similarity between the fp32 and bf16 renderings is 0.9875–0.9992
+on 11 of 12, i.e. tighter than the 0.984 that two utterances of the *same voice* score against each
+other.
+
+**Not covered:** nobody has A/B listened to fp32 vs bf16. Matched pairs are in `generated/` as
+`caseN_<voice>.wav` against `caseN_<voice>_bf16flow.wav`. Level-match first — the 2% median is
+irrelevant but cases 0, 1 and 5 differ by 11–16%, enough to bias a casual comparison.
+
 Three fixture texts are deliberately adversarial — emoji, `!@#$%^&*()`, literal `\t`/`\n`. The
 model tries to **vocalise** them (it renders `1234567890` correctly as "1 2 3 4 5 6 7 8 9 0", then
 speaks the symbol run), so there is no well-defined reference transcript and they are reported
@@ -406,9 +439,28 @@ the regime where host dispatch becomes exposed. Read trap #1 before writing trac
 
 ## 7. Suggested order when resuming
 
-**All three blocks work and the audio is good (§3.1). The open work is performance, and the order
-is set by where the time actually goes: Block 1's decode step is ~0.17 s and Block 2's untraced
-7-step ODE is next; Block 3 is 242x real-time and irrelevant to RTF.**
+**All three blocks work and the audio is good (§3.1). The open work is performance.**
+
+**Where the time actually goes — MEASURED, and it is not what this file used to claim.** An earlier
+version of this section said Block 1's decode step dominates. That was inferred from parameter count
+(3.4B vs 390M) and is **wrong**. Timed per frame at the real pipeline batch (B=1):
+
+| | fp32 | bf16 (current) |
+|---|---|---|
+| **Block 2** — flow, 7 Euler steps | **169.9 ms — 76.0%** | **109.4 ms — 69.4%** |
+| Block 1 — one decode step | 53.4 ms — 23.9% | 48.0 ms — 30.5% |
+| `embed_frame` (host gather) | 0.1 ms | 0.1 ms |
+| total | 223.4 ms → RTF 2.79 | 157.6 ms → **RTF 1.97** |
+
+Parameter count is the wrong proxy: Block 1's step is a few big matmuls, whereas Block 2 is ~660
+tiny dispatch-bound ops (3-token sequence, 7 sequential steps, batch-2 CFG). **Optimize Block 2
+first.** Of its 109 ms, ~79 ms is the 7 velocity evaluations and ~30 ms is host work — the semantic
+argmax, FSQ quantise and the CFG/Euler arithmetic. Steady-state per-frame settles near 120 ms on
+long clips once warm, so the 40-frame table above carries some warmup.
+
+**Block 2 runs at bf16 (2026-07-31), worth 1.55x on the block and 1.42x end-to-end for no
+measurable quality cost.** Sets weights and all activations; matmul accumulation stays fp32, and so
+does the host-side Euler state, which is why the error does not compound. Evidence in §3.2.
 
 1. Re-read this file and `reference/PROVENANCE.md`. Recreate the two venvs (§2).
 2. Run the 118 tests, then `generate_quality_set.py --cases 0,1` to confirm the device path still
