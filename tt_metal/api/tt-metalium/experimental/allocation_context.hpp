@@ -9,7 +9,7 @@
 
 namespace tt::tt_metal {
 
-// Thread-local allocation context stack.
+// Experimental thread-local allocation context stack.
 // Guards push a context string (e.g. op name + compile args) before dispatching;
 // the allocator records whatever context is on top of the stack at allocation time.
 //

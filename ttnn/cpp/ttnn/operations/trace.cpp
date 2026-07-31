@@ -6,7 +6,7 @@
 
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/allocation_context.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include "tt_metal/distributed/trace_allocation_tracker.hpp"
 
 #include <tracy/Tracy.hpp>

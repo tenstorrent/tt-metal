@@ -18,7 +18,7 @@
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/allocation_context.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include <tracy/Tracy.hpp>
 #include "ttnn/graph/graph_serialization.hpp"
 

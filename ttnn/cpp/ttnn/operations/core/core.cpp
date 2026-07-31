@@ -13,7 +13,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/allocation_context.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 
 namespace ttnn::operations::core {
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/allocation_context.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device.hpp>
