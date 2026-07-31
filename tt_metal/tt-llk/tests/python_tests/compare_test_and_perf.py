@@ -3,30 +3,33 @@
 
 """Compare the @parametrize sweeps of a functional test module vs a perf module.
 
-For each matched pair it maps every parametrized function in the functional
-module to its counterpart in the perf module and, axis by axis, reports which
-parameters are identical and which differ. For a differing axis it simply prints
-both sweeps (the functional value list and the perf value list) so you can see
-how the two diverge. When one sweep is a subset of the other it labels that
-relationship (perf subset of functional, or the reverse); otherwise it reports
-a true mismatch.
+For each matched pair it maps parametrized functions in the functional module to
+counterparts in the perf module and, axis by axis, reports which parameters are
+identical and which differ. For a differing axis it prints both value lists.
+When one sweep is a subset of the other it labels that relationship (perf subset
+of functional, or the reverse); otherwise it reports a true mismatch. Perf-only
+``iterations`` and ``loop_factor`` axes are reported but excluded from coverage
+comparisons because they are measurement controls, not coverage dimensions.
+
+This is an axis-level comparison: it compares the union of values observed on
+each axis, not the dependency or combination structure between axes.
 
 By default it sweeps a folder (its own folder, i.e. ``python_tests``): it
 collects every ``test_*.py`` and ``perf_*.py`` module, pairs them by the part of
-the name after the prefix (so ``test_matmul.py`` pairs with ``perf_matmul.py``
-and ``test_matmul_quasar.py`` with ``perf_matmul_quasar.py``), and runs the
-comparison over each matched pair. Use ``--dir`` to sweep a different folder
-(e.g. ``--dir quasar``), or pass two explicit paths for a single pair.
+the name after the prefix (so ``test_matmul.py`` pairs with ``perf_matmul.py``),
+and runs the comparison over each matched pair. Use ``--dir`` to sweep another
+folder that contains matched files, or pass two explicit paths for one pair.
 
 This is a standalone diagnostic script, not a pytest test: it introspects the
 ``parametrize`` mark left on each function by the custom ``@parametrize``
-decorator, so it needs neither a pytest run, the conftest, nor the simulator.
-It is not named ``test_*.py`` so pytest does not collect it.
+decorator and does not invoke pytest. Importing test modules can execute their
+normal module and ``conftest`` imports, so run it in the usual LLK environment.
+It is not named ``test_*.py`` and pytest does not collect it.
 
 Usage (run from the python_tests folder):
     python compare_test_and_perf.py                         # sweep this folder
     python compare_test_and_perf.py --full                  # no value-list truncation
-    python compare_test_and_perf.py --dir quasar            # sweep a subfolder
+    python compare_test_and_perf.py --arch quasar            # resolve Quasar sweeps
     python compare_test_and_perf.py <functional.py> <perf.py>   # single explicit pair
 """
 from __future__ import annotations
@@ -36,12 +39,16 @@ import enum
 import importlib
 import os
 import sys
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 _HERE = Path(__file__).resolve().parent
 _SELF = Path(__file__).resolve()
+_BANNER_WIDTH = 88
+_VALUE_PREVIEW_LIMIT = 8
+_ARCH_CHOICES = ("wormhole", "blackhole", "quasar")
 
 
 # --------------------------------------------------------------------------- #
@@ -59,12 +66,12 @@ def find_python_tests_root(sample: Path) -> Path:
 def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    # conftest normally sets LLK_HOME; we bypass conftest, so replicate its default.
+    # Replicate conftest's LLK_HOME default for modules that do not import it.
     os.environ.setdefault("LLK_HOME", str(root.parent.parent))
     # Importing a test module runs get_chip_architecture() at module load. Without
     # CHIP_ARCH it probes for a physical device (or simulator context) and fails on a
-    # plain host; set it so the parametrize sweeps resolve without any device.
-    os.environ.setdefault("CHIP_ARCH", arch)
+    # plain host. The explicit CLI selection must override the caller's environment.
+    os.environ["CHIP_ARCH"] = arch
     dotted = ".".join(path.resolve().relative_to(root).with_suffix("").parts)
     return importlib.import_module(dotted)
 
@@ -73,9 +80,13 @@ def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
 # Extract parametrize axes/values from a module.                              #
 # --------------------------------------------------------------------------- #
 def canon(value: Any) -> str:
-    """Readable + hashable representation, mirroring param_config.generate_id."""
-    if hasattr(value, "input_format") and hasattr(value, "output_format"):
-        return f"{value.input_format.name}->{value.output_format.name}"
+    """Return a readable key that preserves every dataclass configuration field."""
+    if is_dataclass(value) and not isinstance(value, type):
+        members = ", ".join(
+            f"{field.name}={canon(getattr(value, field.name))}"
+            for field in fields(value)
+        )
+        return f"{type(value).__name__}({members})"
     if isinstance(value, (list, tuple)):
         return "[" + ", ".join(canon(v) for v in value) + "]"
     if isinstance(value, enum.Enum):
@@ -104,11 +115,15 @@ def parametrized_functions(module: ModuleType) -> dict[str, list]:
 
 
 def as_tuple(v: Any, n: int) -> tuple:
+    if isinstance(v, tuple) and len(v) == n:
+        return v
     return (v,) if n == 1 else tuple(v)
 
 
-def axis_value_sets(pmarks: list) -> tuple[dict[str, list[str]], int]:
-    """Return (axis_name -> ordered unique canonical values, variant_count)."""
+def axis_value_sets(
+    pmarks: list,
+) -> tuple[dict[str, list[str]], list[dict[str, str]]]:
+    """Return per-axis values and canonicalized parameter rows."""
     axis_names: list[str] = []
     rows: list[tuple] | None = None
     for mark in pmarks:
@@ -123,56 +138,78 @@ def axis_value_sets(pmarks: list) -> tuple[dict[str, list[str]], int]:
 
     per_axis: dict[str, list[str]] = {n: [] for n in axis_names}
     seen: dict[str, set] = {n: set() for n in axis_names}
+    canonical_rows = []
     for row in rows:
+        canonical_row = {}
         for name, val in zip(axis_names, row):
             key = canon(val)
+            canonical_row[name] = key
             if key not in seen[name]:
                 seen[name].add(key)
                 per_axis[name].append(key)
-    return per_axis, len(rows)
+        canonical_rows.append(canonical_row)
+    return per_axis, canonical_rows
+
+
+def projected_variant_count(
+    rows: list[dict[str, str]], ignored_axes: frozenset[str]
+) -> int:
+    """Count unique parameter rows after removing ignored measurement axes."""
+    return len(
+        {
+            tuple(
+                (name, value) for name, value in row.items() if name not in ignored_axes
+            )
+            for row in rows
+        }
+    )
 
 
 # --------------------------------------------------------------------------- #
 # Pairing + comparison.                                                       #
 # --------------------------------------------------------------------------- #
 def normalize(name: str) -> str:
+    normalized = name
     for pre in ("test_perf_", "perf_test_", "test_", "perf_"):
-        if name.startswith(pre):
-            return name[len(pre) :]
-    return name
+        if normalized.startswith(pre):
+            normalized = normalized[len(pre) :]
+            break
+    for suffix in ("_perf", "_test"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
+    return normalized
 
 
 def pair_functions(
     test_funcs: dict, perf_funcs: dict
-) -> list[tuple[str | None, str | None]]:
+) -> list[tuple[str | None, str | None, str | None]]:
     if len(test_funcs) == 1 and len(perf_funcs) == 1:
-        return [(next(iter(test_funcs)), next(iter(perf_funcs)))]
+        tname, pname = next(iter(test_funcs)), next(iter(perf_funcs))
+        method = "name" if normalize(tname) == normalize(pname) else "position"
+        return [(tname, pname, method)]
     perf_by_norm = {normalize(n): n for n in perf_funcs}
     pairs, used = [], set()
     for tname in test_funcs:
         pname = perf_by_norm.get(normalize(tname))
-        pairs.append((tname, pname))
+        pairs.append((tname, pname, "name" if pname else None))
         if pname:
             used.add(pname)
-    pairs += [(None, pname) for pname in perf_funcs if pname not in used]
+    pairs += [(None, pname, None) for pname in perf_funcs if pname not in used]
     return pairs
 
 
-# Axes intentionally absent or asymmetric between functional and perf sweeps.
-# Omitted from the report so rename/subset alignment work stays visible.
-IGNORED_AXES = frozenset(
-    {
-        "combo_idx",  # internal zip index when tuple axes are split
-        "iterations",  # perf SFPU repeat count (measurement knob)
-        "loop_factor",  # perf outer repeat count (measurement knob)
-    }
-)
+# Perf-only measurement controls are shown but excluded from coverage verdicts.
+PERF_MEASUREMENT_AXES = frozenset({"iterations", "loop_factor"})
 
 
-def fmt_values(values: list[str], full: bool, limit: int = 8) -> str:
-    if full or len(values) <= limit:
+def fmt_values(values: list[str], full: bool) -> str:
+    if full or len(values) <= _VALUE_PREVIEW_LIMIT:
         return ", ".join(values) if values else "-"
-    return ", ".join(values[:limit]) + f", ... (+{len(values) - limit} more)"
+    return (
+        ", ".join(values[:_VALUE_PREVIEW_LIMIT])
+        + f", ... (+{len(values) - _VALUE_PREVIEW_LIMIT} more)"
+    )
 
 
 def axis_value_relation(test_values: list[str], perf_values: list[str]) -> str:
@@ -187,31 +224,42 @@ def axis_value_relation(test_values: list[str], perf_values: list[str]) -> str:
     return "different"
 
 
-def compare(test_axes: dict, perf_axes: dict, full: bool) -> None:
+def compare(
+    test_axes: dict,
+    perf_axes: dict,
+    ignored_perf_axes: frozenset[str],
+    full: bool,
+) -> None:
     """Report identical vs differing axes; for differing ones print both sweeps."""
-    all_axes = [
-        axis
-        for axis in dict.fromkeys([*test_axes, *perf_axes])
-        if axis not in IGNORED_AXES
-    ]
-    same, diff = [], []
+    all_axes = list(dict.fromkeys([*test_axes, *perf_axes]))
+    same, diff, ignored = [], [], []
     for axis in all_axes:
         in_t, in_p = axis in test_axes, axis in perf_axes
         t, p = test_axes.get(axis, []), perf_axes.get(axis, [])
 
-        if in_t and in_p and set(t) == set(p):
-            same.append(axis)
-            print(f"  [=] {axis}: identical ({len(t)} value(s))")
-            if full:
-                print(f"        values : {fmt_values(t, full)}")
-        else:
+        if axis in ignored_perf_axes:
+            ignored.append(axis)
+            print(f"  [i] {axis}: ignored perf measurement axis")
+            print(f"        perf       : {fmt_values(p, full)}")
+        elif not in_t:
             diff.append(axis)
-            if not in_t:
-                print(f"  [P] {axis}: PERF-ONLY axis")
-            elif not in_p:
-                print(f"  [T] {axis}: FUNCTIONAL-ONLY axis")
+            print(f"  [P] {axis}: PERF-ONLY axis")
+            print(f"        functional : {fmt_values(t, full)}")
+            print(f"        perf       : {fmt_values(p, full)}")
+        elif not in_p:
+            diff.append(axis)
+            print(f"  [T] {axis}: FUNCTIONAL-ONLY axis")
+            print(f"        functional : {fmt_values(t, full)}")
+            print(f"        perf       : {fmt_values(p, full)}")
+        else:
+            relation = axis_value_relation(t, p)
+            if relation == "identical":
+                same.append(axis)
+                print(f"  [=] {axis}: identical ({len(t)} value(s))")
+                if full:
+                    print(f"        values : {fmt_values(t, full)}")
             else:
-                relation = axis_value_relation(t, p)
+                diff.append(axis)
                 if relation == "perf_subset":
                     print(
                         f"  [~] {axis}: perf subset of functional "
@@ -224,13 +272,15 @@ def compare(test_axes: dict, perf_axes: dict, full: bool) -> None:
                     )
                 else:
                     print(f"  [x] {axis}: DIFFERENT")
-            print(f"        functional : {fmt_values(t, full)}")
-            print(f"        perf       : {fmt_values(p, full)}")
+                print(f"        functional : {fmt_values(t, full)}")
+                print(f"        perf       : {fmt_values(p, full)}")
     print(f"\n  Summary: {len(same)} identical axis/axes, {len(diff)} differing.")
     if same:
         print(f"    identical : {', '.join(same)}")
     if diff:
         print(f"    differing : {', '.join(diff)}")
+    if ignored:
+        print(f"    ignored   : {', '.join(ignored)} (perf measurement controls)")
 
 
 def discover_pairs(
@@ -266,9 +316,9 @@ def compare_pair(
 
     Returns True if at least one function pair was compared, False otherwise.
     """
-    print("#" * 88)
+    print("#" * _BANNER_WIDTH)
     print(f"# {functional.name}  vs  {perf.name}")
-    print("#" * 88)
+    print("#" * _BANNER_WIDTH)
     try:
         test_mod = import_test_module(functional, root, arch)
         perf_mod = import_test_module(perf, root, arch)
@@ -289,20 +339,37 @@ def compare_pair(
         print(f"  ! no parametrized functions found in {perf.name}\n")
         return False
 
-    for tname, pname in pair_functions(test_funcs, perf_funcs):
-        print("=" * 88)
+    compared = False
+    for tname, pname, match_method in pair_functions(test_funcs, perf_funcs):
+        print("=" * _BANNER_WIDTH)
         print(f"functional: {test_mod.__name__}.{tname or '<none>'}")
         print(f"perf      : {perf_mod.__name__}.{pname or '<none>'}")
-        print("=" * 88)
+        print("=" * _BANNER_WIDTH)
         if tname is None or pname is None:
             print("  (unmatched - no counterpart found)\n")
             continue
-        t_axes, t_n = axis_value_sets(test_funcs[tname])
-        p_axes, p_n = axis_value_sets(perf_funcs[pname])
+        if match_method == "position":
+            print("  ! paired by position because normalized function names differ")
+        t_axes, t_rows = axis_value_sets(test_funcs[tname])
+        p_axes, p_rows = axis_value_sets(perf_funcs[pname])
+        if not t_rows or not p_rows:
+            print(
+                "  ! empty sweep: "
+                f"functional={len(t_rows)} row(s), perf={len(p_rows)} row(s)\n"
+            )
+            continue
+        ignored_perf_axes = frozenset(
+            axis
+            for axis in PERF_MEASUREMENT_AXES
+            if axis in p_axes and axis not in t_axes
+        )
+        t_n = projected_variant_count(t_rows, ignored_perf_axes)
+        p_n = projected_variant_count(p_rows, ignored_perf_axes)
         print(f"  variants: functional={t_n}, perf={p_n}\n")
-        compare(t_axes, p_axes, full)
+        compare(t_axes, p_axes, ignored_perf_axes, full)
         print()
-    return True
+        compared = True
+    return compared
 
 
 def main() -> int:
@@ -330,8 +397,9 @@ def main() -> int:
     )
     ap.add_argument(
         "--arch",
-        default="quasar",
-        help="CHIP_ARCH used to resolve the sweeps without a device (default: quasar)",
+        choices=_ARCH_CHOICES,
+        default="wormhole",
+        help="CHIP_ARCH used to resolve the sweeps (default: wormhole)",
     )
     args = ap.parse_args()
 
@@ -372,9 +440,10 @@ def main() -> int:
         return 1
 
     root = find_python_tests_root(matched[0][1])
+    results = []
     for _key, functional, perf in matched:
-        compare_pair(functional, perf, root, args.arch, args.full)
-    return 0
+        results.append(compare_pair(functional, perf, root, args.arch, args.full))
+    return 0 if all(results) else 1
 
 
 if __name__ == "__main__":
