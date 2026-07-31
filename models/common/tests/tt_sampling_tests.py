@@ -383,6 +383,14 @@ def run_sampling_generator(
                 )
             user_ids = list(range(len(seed_values)))
             sg.seed_manager.reset_seed(seed_values, user_ids)
+        else:
+            # Mirror production's apply_prefill_state: reset_sampling_params does
+            # not touch the SeedManager, so an unseeded request must still call
+            # reset_seed (seeds=None) to move it out of the fresh _reseted=False
+            # state. Without this the SeedManager stays in the steady "SKIP" state
+            # and get_new_values() never pushes entropy seeds, making unseeded
+            # sampling deterministic.
+            sg.seed_manager.reset_seed(None, list(range(BATCH_SIZE)))
 
         if state_setup is not None:
             state_setup(sg)
@@ -1235,8 +1243,15 @@ class TestBatchIsolation:
         ), f"Greedy should pick the highest-logit token {hot_tokens[0]}, got {greedy_tokens[0]}"
 
         # --- Stochastic with uniform seed: all users should agree. ---
+        # Use full-length lists (like the greedy sub-case above) so temperature
+        # applies uniformly to every lane. A scalar temperature would only
+        # configure lane 0 and leave lanes 1..31 on the greedy default.
         uniform_seed = [7777] * BATCH_SIZE
-        stochastic_params = SamplingParams(temperature=1.5, top_k=8, top_p=1.0)
+        stochastic_params = SamplingParams(
+            temperature=[1.5] * BATCH_SIZE,
+            top_k=[8] * BATCH_SIZE,
+            top_p=[1.0] * BATCH_SIZE,
+        )
         out_uniform = run_sampling_generator(
             mesh_device,
             args,
