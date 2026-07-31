@@ -597,7 +597,17 @@ def _warm_start_for(model_root, op_code: str):
         out = {k: src[k] for k in ("fidelity", "dtype") if isinstance(src, dict) and src.get(k)}
         return out or None
 
-    for row in (data.get("seeds") or []) + (data.get("table") or []):
+    def _rows(key):
+        """Only a LIST is iterable here.
+
+        ``data.get(k) or []`` keeps ANY truthy value, so a corrupt file whose `seeds` is a string
+        made this ``"nope" + []`` -- a TypeError out of a lookup whose entire contract is to degrade
+        to None. A damaged cache would crash the MCP tool instead of starting cold.
+        """
+        v = data.get(key)
+        return v if isinstance(v, list) else []
+
+    for row in _rows("seeds") + _rows("table"):
         if isinstance(row, dict) and _shape_of(row) == want:
             cfg = _config_of(row)
             if cfg:

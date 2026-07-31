@@ -48,7 +48,26 @@ _DT = ["bfloat16", "bfloat8_b", "bfloat4_b"]
 
 
 def _write(tmp_path, entries):
-    (tmp_path / "matmul_sweep.json").write_text(json.dumps({"ok": True, "shapes": len(entries), "entries": entries}))
+    """Write the schema matmul_sweep.py ACTUALLY produces, from convenient flat rows.
+
+    Tests describe a shape as flat m/k/n because that reads well in a table; the producer nests it
+    under row["shape"] inside `seeds` (matmul_sweep.py:140). Translating HERE keeps every test body
+    unchanged while what lands on disk is what the sweep really writes.
+
+    This helper used to emit an invented `entries` key. No producer has ever written that, so the
+    whole file asserted against a schema that does not exist -- and when _warm_start_for was
+    corrected to read seeds/table, these tests failed rather than the code. Only keys the caller
+    supplied are carried through, so "partial row" cases stay partial.
+    """
+    seeds = []
+    for r in entries:
+        seed = {"shape": {"m": r["m"], "k": r["k"], "n": r["n"]}}
+        for key in ("fidelity", "dtype", "pcc", "best_ms", "baseline_ms", "speedup"):
+            if key in r:
+                seed[key] = r[key]
+        seeds.append(seed)
+    payload = {"shapes": len(entries), "seeded": len(seeds), "seeds": seeds}
+    (tmp_path / "matmul_sweep.json").write_text(json.dumps(payload))
     return tmp_path
 
 
@@ -136,10 +155,14 @@ def test_s3_the_issue_14_empty_table(tmp_path):
         "[]",
         "null",
         "42",
-        '{"entries": null}',
-        '{"entries": [1,2,3]}',
-        '{"entries": [{}]}',
-        '{"entries": [{"m": "x", "k": 1, "n": 1}]}',
+        # Malformed on the REAL key. Probing a key the reader ignores would pass against any
+        # garbage and prove nothing -- which is what these cases did while they named `entries`.
+        '{"seeds": null}',
+        '{"seeds": [1,2,3]}',
+        '{"seeds": [{}]}',
+        '{"seeds": [{"shape": {"m": "x", "k": 1, "n": 1}}]}',
+        '{"seeds": [{"shape": null, "fidelity": "LoFi"}]}',
+        '{"table": [{"m": 1, "k": 1, "n": 1, "best": null}]}',
     ],
 )
 def test_s3_corrupt_tables_degrade_silently(tmp_path, junk):

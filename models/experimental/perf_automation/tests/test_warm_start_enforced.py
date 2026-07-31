@@ -44,13 +44,42 @@ def _mod():
     return m
 
 
+# THE SCHEMA matmul_sweep.py ACTUALLY WRITES -- summarize()'s dict plus summary["table"] = table
+# (matmul_sweep.py:129-149 and :349). Shape is NESTED under row["shape"] in `seeds`, and FLAT on a
+# `table` row whose winner sits under row["best"].
+#
+# This fixture used to invent an `entries` key with flat m/k/n. No producer has ever written that, so
+# these tests asserted against a schema that does not exist: when _warm_start_for was corrected to
+# read seeds/table, all 8 of them began failing and stayed that way. Building a fixture from a mental
+# model instead of from the producer is exactly how the original defect shipped -- a table the loop
+# could not read looked identical to a table with no matching shape.
 SWEEP = {
-    "ok": True,
     "shapes": 2,
     "seeded": 2,
-    "entries": [
-        {"m": 32, "k": 4096, "n": 4096, "fidelity": "LoFi", "dtype": "bfloat8_b", "pcc": 0.998},
-        {"m": 1, "k": 4096, "n": 14336, "fidelity": "HiFi2", "dtype": "bfloat16", "pcc": 0.999},
+    "improved": 2,
+    "seeds": [
+        {
+            "shape": {"m": 32, "k": 4096, "n": 4096},
+            "fidelity": "LoFi",
+            "dtype": "bfloat8_b",
+            "best_ms": 0.41,
+            "baseline_ms": 0.87,
+            "speedup": 2.122,
+            "pcc": 0.998,
+        },
+        {
+            "shape": {"m": 1, "k": 4096, "n": 14336},
+            "fidelity": "HiFi2",
+            "dtype": "bfloat16",
+            "best_ms": 0.62,
+            "baseline_ms": 0.70,
+            "speedup": 1.129,
+            "pcc": 0.999,
+        },
+    ],
+    "table": [
+        {"m": 32, "k": 4096, "n": 4096, "best": {"fidelity": "LoFi", "dtype": "bfloat8_b", "ms": 0.41, "pcc": 0.998}},
+        {"m": 1, "k": 4096, "n": 14336, "best": {"fidelity": "HiFi2", "dtype": "bfloat16", "ms": 0.62, "pcc": 0.999}},
     ],
 }
 
@@ -107,7 +136,7 @@ def test_non_matmul_op_returns_nothing(tmp_path):
     assert fn(_sweep_file(tmp_path), "LayerNorm") is None
 
 
-@pytest.mark.parametrize("junk", ["{not json", "", "[]", "null", '{"entries": "nope"}'])
+@pytest.mark.parametrize("junk", ["{not json", "", "[]", "null", '{"seeds": "nope"}', '{"table": "nope"}'])
 def test_corrupt_table_degrades_to_nothing(tmp_path, junk):
     _m, fn = _lookup()
     (tmp_path / "matmul_sweep.json").write_text(junk)

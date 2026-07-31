@@ -169,5 +169,9 @@ def test_source_no_longer_reads_entries():
     j = src.index("\ndef ", i + 1)
     body = src[i:j]
     code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
-    assert 'data.get("entries")' not in code, "the fix must not read the non-existent `entries` key"
-    assert 'data.get("seeds")' in code and 'data.get("table")' in code, "must read seeds + table"
+    assert '"entries"' not in code, "the fix must not read the non-existent `entries` key"
+    # The KEYS must be read -- not one particular spelling of the read. Pinning the literal
+    # `data.get("seeds")` broke the moment those lookups moved behind a _rows() helper guarding
+    # against a non-list value. A source guard should survive a refactor that preserves its intent,
+    # otherwise it just taxes every future edit.
+    assert '"seeds"' in code and '"table"' in code, "must read seeds + table"
