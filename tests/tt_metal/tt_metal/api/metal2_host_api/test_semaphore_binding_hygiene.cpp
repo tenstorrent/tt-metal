@@ -244,11 +244,27 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
 }
 
 TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
-    const char* home = std::getenv("TT_METAL_HOME");
-    if (home == nullptr) {
-        GTEST_SKIP() << "TT_METAL_HOME not set; cannot locate kernel sources to lint";
+    // Locate the repo WITHOUT depending on the environment. This test used to GTEST_SKIP when
+    // TT_METAL_HOME was unset, which is the worst failure mode for a lint: it protects nothing while
+    // still reporting success. __FILE__ is this source's own path, so the root is derivable from it;
+    // TT_METAL_HOME is only a fallback for an out-of-tree layout.
+    std::filesystem::path root;
+    {
+        const std::string self{__FILE__};
+        const std::string marker{"/tests/tt_metal/"};
+        const size_t at = self.find(marker);
+        if (at != std::string::npos) {
+            root = std::filesystem::path{self.substr(0, at)};
+        }
     }
-    const std::filesystem::path root{home};
+    if (root.empty() || !std::filesystem::exists(root / "tests")) {
+        const char* home = std::getenv("TT_METAL_HOME");
+        ASSERT_NE(home, nullptr) << "cannot locate the repo from __FILE__ (" << __FILE__
+                                 << ") and TT_METAL_HOME is unset -- this lint would otherwise pass "
+                                    "vacuously without scanning anything";
+        root = std::filesystem::path{home};
+    }
+    ASSERT_TRUE(std::filesystem::exists(root / "tests")) << "derived repo root has no tests/ dir: " << root;
     // Broad roots: "tests" (not just tests/tt_metal -- the TT-NN test tree also holds Metal 2.0
     // kernels, e.g. under unit_tests/gtests/accessor/kernels/) and the whole op tree. The per-file
     // predicate below narrows to kernel sources.
