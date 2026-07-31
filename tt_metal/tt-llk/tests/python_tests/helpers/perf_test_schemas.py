@@ -4,11 +4,10 @@
 
 """Per-perf-test CSV schema catalog.
 
-One entry per perf test: the deliberate, reviewed set of CSV columns that test
-emits, plus a ``version`` bumped whenever those columns change, and an
-``aliases`` map (old_column -> new_column) that bridges a renamed column FOR
-THAT TEST only. The gate in test_perf_csv_header_gate.py re-derives each test's
-live columns and fails, per test, on any drift from this catalog.
+One entry per perf test: its reviewed set of CSV columns, a ``version`` bumped
+when those columns change, and an ``aliases`` map (old -> new) for a column
+renamed in that test. The gate in test_perf_csv_header_gate.py re-derives each
+test's columns and fails on any drift from this catalog.
 """
 
 

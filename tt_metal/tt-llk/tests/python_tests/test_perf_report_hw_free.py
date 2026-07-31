@@ -4,15 +4,16 @@
 
 """Hardware-free test of PerfConfig report generation (#51244).
 
-Drives ``PerfConfig.build_report_frame`` — the pure report-assembly seam of
-``run()`` — with synthetic per-run-type results and parameters, so the report is
-produced with **no chip**. Then it checks that the produced column set conforms
-to the shared output schema (``perf_wide_schema.OUTPUT_SCHEMA``).
+Runs the real report code with no chip and checks the produced columns against
+perf_wide_schema.OUTPUT_SCHEMA. Two levels:
+  - build_report_frame directly, with synthetic per-run-type stat frames;
+  - the full PerfConfig.run(), with the device/build seams stubbed and
+    Profiler.get_data returning synthetic events (so the real stat aggregation
+    runs too).
 
-This is the exact validation the static gate only approximates: the columns come
-from the real assembly code path, so it catches the optional-None and
-dynamic-param cases that static reading cannot. Needs the LLK env (pandas,
-ttexalens importable) but no hardware.
+Unlike the static gate, the columns come from the real code path, so this catches
+the optional-None and dynamic-param cases static reading can't. Needs the LLK env
+(pandas, ttexalens importable) but no hardware.
 """
 
 from pathlib import Path
@@ -115,13 +116,10 @@ def test_single_row_per_config():
     assert len(combined) == 2  # INIT + TILE_LOOP markers
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# End-to-end: drive the REAL PerfConfig.run() with every hardware/build seam
-# stubbed and Profiler.get_data returning synthetic events. Unlike the tests
-# above (which hand-build stat frames and only exercise build_report_frame),
-# this runs the real per-run-type loop AND the real stat aggregation
-# (Profiler.STATS_FUNCTION) — the profiler-events -> mean/std math — with no chip.
-# ─────────────────────────────────────────────────────────────────────────────
+# End-to-end: run the real PerfConfig.run() with the device/build seams stubbed
+# and Profiler.get_data returning synthetic events. The tests above hand-build
+# stat frames; these also run the real stat aggregation (Profiler.STATS_FUNCTION,
+# i.e. the profiler-events -> mean/std math), still with no chip.
 
 _MARKERS = (("INIT", 0), ("TILE_LOOP", 1))
 _THREADS = ("unpack", "math", "pack")

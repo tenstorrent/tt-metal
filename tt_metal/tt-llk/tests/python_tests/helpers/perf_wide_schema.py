@@ -4,22 +4,17 @@
 
 """Shared wide nullable schema for LLK performance reports (v1).
 
-Two layers compose the published table:
+Two layers make up the published table:
 
-  OUTPUT_SCHEMA  what a perf test PRODUCES (config + timings + counters +
-                 code size + marker). This is the "expected output" contract a
-                 test report is validated against. Emitted by the test.
-  PROVENANCE     run context (commit, arch, run id, ...) added by the CI/publish
-                 layer, NOT by the test. Broadcast onto every output row.
-  DB_SCHEMA      = OUTPUT_SCHEMA + PROVENANCE — one published row per test
-                 configuration per execution context.
+  OUTPUT_SCHEMA  columns a perf test produces (config, timings, counters, code
+                 size, marker). Reports are validated against this.
+  PROVENANCE     run context (commit, arch, run id, ...) added by CI, not the test.
+  DB_SCHEMA      OUTPUT_SCHEMA + PROVENANCE, one row per test config per run.
 
-Every OUTPUT column is nullable: a test fills the columns it uses and leaves the
-rest NULL. New columns (Quasar, counters/metrics, new params) are added later as
-nullable — a non-breaking change — so this v1 need not be complete.
+Every OUTPUT column is nullable: a test fills what it uses, the rest stay NULL.
+New columns are added later as nullable, so v1 need not be complete.
 
-No device libraries (only the pure ``perf_schema`` helpers) so it loads/validates
-without hardware.
+Imports no device libraries, so it loads without hardware.
 """
 
 from dataclasses import dataclass
@@ -35,13 +30,9 @@ class Column:
     category: str
 
 
-# Timing columns are FORMULA-DRIVEN, not sampled: the profiler emits
-# ``mean(<base>)`` for every run type and ``std(<base>)`` whenever that run type
-# runs >= 2 iterations. Different tests/configs run different iteration counts,
-# so across the corpus std can appear for ANY base. We therefore enumerate the
-# COMPLETE {mean, std} x base grid rather than whatever one nightly happened to
-# produce — otherwise the schema is an accidental subset (e.g. it once lacked
-# ``std(MATH_ISOLATE)``, which a real multi-run report legitimately emits).
+# Timing columns are formula-driven: mean(<base>) for every run type, std(<base>)
+# once a run type runs >=2 iterations. Enumerate the full {mean, std} x base grid
+# so the schema is a superset of any run config, not just what one nightly sampled.
 _TIMING_BASES = (
     "L1_TO_L1",
     "UNPACK_ISOLATE",
@@ -147,17 +138,13 @@ DB_SCHEMA = OUTPUT_SCHEMA + PROVENANCE
 
 MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
 
-# ── Row identity ──
-# A published row = one test configuration in one execution context, uniquely
-# identified by: test + its full sweep configuration + commit + arch + run.
-# The fixed part of the key (the configuration columns that complete it vary
-# per test and are the sweep-parameter values that row carries):
+# Row identity: one test config in one run. The sweep-parameter columns (which
+# vary per test) complete the key on top of these fixed columns.
 ROW_KEY = ["test_name", "commit_sha", "arch", "run_id"]
 
-# TODO(canonicalization — deferred, see #51245): same-purpose columns still use
-# divergent names across tests and are NOT yet unified here, e.g.
-#   - c_dimm / k_dimm / r_dimm  vs  in0_c_dim / ct_dim   (`_dimm` vs `_dim`)
+# TODO(canonicalization, deferred — see #51245): some columns name the same thing
+# differently across tests and are not yet unified, e.g.
+#   - c_dimm / k_dimm / r_dimm  vs  in0_c_dim / ct_dim
 #   - formats.input_A / formats.output  vs  input_format / output_format
 #   - num_blocks  vs  input_num_blocks / output_num_blocks
-# Aligning to one canonical name per concept needs sign-off; ambiguous fields
-# must not be merged automatically.
+# Picking one canonical name per concept needs sign-off, so don't merge them here.
