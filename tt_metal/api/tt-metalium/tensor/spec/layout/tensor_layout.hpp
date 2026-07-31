@@ -33,26 +33,15 @@ using Strides = std::vector<size_t>;
 // shape) And provides information required to physically lay out the tensor in memory
 class TensorLayout {
 public:
-    TensorLayout(
-        DataType dtype,
-        const PageConfig& page_config,
-        const MemoryConfig& memory_config,
-        const Alignment& alignment = {});
+    // The Alignment is derived from page_config, dtype and memory_config; it is not a parameter.
+    // Overriding it is outside this API, see experimental/tensor_layout_apis_with_custom_alignment.hpp.
+    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
 
     ~TensorLayout();
     TensorLayout(const TensorLayout& other);
     TensorLayout& operator=(const TensorLayout& other);
     TensorLayout(TensorLayout&& other) noexcept;
     TensorLayout& operator=(TensorLayout&& other) noexcept;
-
-    // static method makes it easy to find and remove all of its usages in the codebase - that's why it is not a
-    // constructor
-    [[deprecated("Use of Padded Shape is deprecated")]] static TensorLayout fromPaddedShape(
-        DataType dtype,
-        const PageConfig& page_config,
-        const MemoryConfig& memory_config,
-        const tt::tt_metal::Shape& logical_shape,
-        const tt::tt_metal::Shape& padded_shape);
 
     Layout get_layout() const;
     Tile get_tile() const;

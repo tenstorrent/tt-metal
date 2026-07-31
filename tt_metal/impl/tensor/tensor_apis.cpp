@@ -29,6 +29,7 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace tt::tt_metal {
 
@@ -94,7 +95,7 @@ MeshTensor distributed::MeshCommandQueue::enqueue_write_tensor(
     const auto& old_spec = host_tensor.tensor_spec();
     TensorSpec tensor_spec(
         old_spec.logical_shape(),
-        TensorLayout(
+        tensor_layout_with_custom_alignment(
             old_spec.tensor_layout().get_data_type(),
             old_spec.tensor_layout().get_page_config(),
             memory_config,
@@ -205,7 +206,7 @@ void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_
         std::move(*mesh_buffer),
         TensorSpec(
             host_tensor.tensor_spec().logical_shape(),
-            TensorLayout(
+            tensor_layout_with_custom_alignment(
                 host_tensor.tensor_spec().tensor_layout().get_data_type(),
                 host_tensor.tensor_spec().tensor_layout().get_page_config(),
                 device_tensor.memory_config(),
@@ -246,7 +247,7 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
     // Construct the new tensor spec first to verify that this is a supported Tensor configuration
     TensorSpec new_tensor_spec(
         tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tensor_layout_from_padded_shape(
             tensor.dtype(),
             PageConfig(Layout::ROW_MAJOR),
             MemoryConfig{},
@@ -282,7 +283,7 @@ HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
 
         auto output_spec = TensorSpec(
             tensor.logical_shape(),
-            TensorLayout(
+            tensor_layout_with_custom_alignment(
                 tensor.dtype(),
                 PageConfig(Layout::TILE, tile),
                 tensor.memory_config(),
@@ -542,7 +543,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
 
     auto output_spec = TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout(
+        tt::tt_metal::tensor_layout_with_custom_alignment(
             dtype,
             page_config,
             input_tensor.tensor_spec().memory_config(),

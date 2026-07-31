@@ -18,6 +18,7 @@
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "pinned_upload.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace tt::tt_metal {
 
@@ -180,7 +181,7 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
         const auto& old_spec = host_tensor.tensor_spec();
         tensor_spec_overriden_memory_config = TensorSpec(
             old_spec.logical_shape(),
-            TensorLayout(
+            tensor_layout_with_custom_alignment(
                 old_spec.tensor_layout().get_data_type(),
                 old_spec.tensor_layout().get_page_config(),
                 *memory_config,
@@ -267,7 +268,7 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         std::move(*mesh_buffer),
         TensorSpec(
             old_spec.logical_shape(),
-            TensorLayout(
+            tensor_layout_with_custom_alignment(
                 old_spec.tensor_layout().get_data_type(),
                 old_spec.tensor_layout().get_page_config(),
                 device_tensor.memory_config(),
@@ -354,7 +355,7 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
         std::move(*mesh_buffer),
         TensorSpec(
             old_spec.logical_shape(),
-            TensorLayout(
+            tensor_layout_with_custom_alignment(
                 old_spec.tensor_layout().get_data_type(),
                 old_spec.tensor_layout().get_page_config(),
                 device_tensor.memory_config(),
