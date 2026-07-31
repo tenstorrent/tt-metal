@@ -444,6 +444,31 @@ inline void fabric_reset_retrain_count() {
 #endif
 }
 
+// [CREDIT RESYNC] Retrain edge detector for the RECEIVER (ERISC1).
+//
+// ERISC0's recover_eth_link_if_down() bumps the retrain counter at MEM_AERISC_RETRAIN_COUNT_BASE after it
+// has restored the eth-queue config. ERISC1 shares the core's L1, so it can watch that same word and learn
+// that a retrain just completed -- no new signalling path needed. Returns true exactly once per retrain.
+//
+// The L1 read is amortized 1:1024 to keep it off the hot receiver path; a retrain takes ~26s, so detecting
+// the edge up to 1023 iterations late is irrelevant. The counter is monotonic, so amortizing can delay the
+// edge but never lose it.
+inline bool fabric_retrain_edge_for_receiver() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
+    static uint32_t last_retrain_count = 0;
+    static uint32_t poll_counter = 0;
+    if ((++poll_counter & 0x3FF) != 0) {
+        return false;
+    }
+    const uint32_t now = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RETRAIN_COUNT_BASE);
+    if (now != last_retrain_count) {
+        last_retrain_count = now;
+        return true;
+    }
+#endif
+    return false;
+}
+
 // Number of post-retrain main-loop iterations to allow before the freeze gate stops the loop.
 // was_retrained is 1 on the retrain edge and ++ each iteration bottom, so it takes values 1..N across
 // the N allowed iterations; the gate freezes once it exceeds N (i.e. at N+1).
@@ -509,6 +534,44 @@ inline void fabric_dbg_set_recv_debug(
     *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RECV_COMPL_COUNTER_ADDR) = compl_counter;
 #endif
 }
+// [RX PIPELINE PROBE] words 8..14 of the debug slot. ALL written by ERISC1 (the receiver), so they stay
+// live even when ERISC0 has wedged -- unlike the watcher ring buffer, which ERISC0 owns and stops
+// pushing the moment it stops executing. Read these out of L1 with exalens while the core is hung.
+//
+// Purpose: test the "receiver buffer is full" hypothesis DIRECTLY rather than by elimination.
+// occupancy == to_receiver_pkts_sent_id, i.e. packets the peer has announced minus packets this
+// receiver has dequeued. Buffer full => occupancy == RECEIVER_NUM_BUFFERS; buffer empty => 0.
+constexpr uint32_t MEM_AERISC_RX_OCCUPANCY_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 32;
+constexpr uint32_t MEM_AERISC_RX_OCC_HIWATER_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 36;
+constexpr uint32_t MEM_AERISC_RX_WR_SENT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 40;
+constexpr uint32_t MEM_AERISC_RX_WR_FLUSH_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 44;
+constexpr uint32_t MEM_AERISC_RX_ACK_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 48;
+constexpr uint32_t MEM_AERISC_RX_FLUSHSTATE_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 52;
+constexpr uint32_t MEM_AERISC_RX_HEARTBEAT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 56;
+
+inline void fabric_dbg_set_recv_pipeline(
+    [[maybe_unused]] uint32_t occupancy,
+    [[maybe_unused]] uint32_t wr_sent,
+    [[maybe_unused]] uint32_t wr_flush,
+    [[maybe_unused]] uint32_t ack,
+    [[maybe_unused]] uint32_t flush_state) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_OCCUPANCY_ADDR) = occupancy;
+    // High-water mark: a sampled occupancy can miss the peak, and "did it ever fill?" is the question.
+    volatile uint32_t* hiwater = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_OCC_HIWATER_ADDR);
+    if (occupancy > *hiwater) {
+        *hiwater = occupancy;
+    }
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_WR_SENT_ADDR) = wr_sent;
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_WR_FLUSH_ADDR) = wr_flush;
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_ACK_ADDR) = ack;
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_FLUSHSTATE_ADDR) = flush_state;
+    // Liveness: advances every receiver step regardless of traffic.
+    volatile uint32_t* hb = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_HEARTBEAT_ADDR);
+    *hb = *hb + 1;
+#endif
+}
+
 // Push the current TX packet count into the watcher ring buffer. Called on every context switch so the
 // per-core ring buffer becomes a time series of the counter -- if the values keep changing across
 // dumps, TX is advancing; if they flatline, TX has stalled. Replaces the old recovery/link-status

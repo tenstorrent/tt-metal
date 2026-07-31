@@ -71,4 +71,11 @@ void send_reset_msg_to_links(const std::vector<ResetLink>& links_to_reset);
 // Keys are "chip/channel"; each entry includes local NOC0 coords and remote chip/channel/NOC0 coords.
 void dump_eth_peers_json();
 
+// Dump the ERISC debug slot (16 words at DBG_SLOT_BASE) from every ethernet core on every local chip.
+// Uses the same private UMD cluster as the unsafe down path, so it can be run WHILE a fabric test holds
+// the chip -- including while the router is hung, which is the case we care about. A wedged run never
+// reaches teardown, so an in-test dump alone would miss exactly the failures under investigation.
+// Read-only: issues no writes to the device.
+void dump_erisc_debug_slots();
+
 }  // namespace tt::scaleout_tools

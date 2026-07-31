@@ -251,7 +251,17 @@
 //   word[5] (+20) = completions SENT by receiver, sender-channel 1 (local_receiver_completion[1])        (ERISC1)
 //   word[6] (+24) = receiver's local completion_counter (completions PROCESSED)                          (ERISC1)
 //   word[7]       = spare
-#define MEM_AERISC_RESUME_PHASE_SIZE 32
+//   word[8]  (+32) = RX buffer occupancy: packets announced by peer, not yet dequeued     (ERISC1)
+//   word[9]  (+36) = RX occupancy high-water mark (max ever observed)                     (ERISC1)
+//   word[10] (+40) = receiver wr_sent_counter    (local NoC writes issued)                (ERISC1)
+//   word[11] (+44) = receiver wr_flush_counter   (local NoC writes flushed)               (ERISC1)
+//   word[12] (+48) = receiver ack_counter        (acks sent)                              (ERISC1)
+//   word[13] (+52) = packed flush state: unacked_sends | has_pending_flush<<16 | trid<<17 (ERISC1)
+//   word[14] (+56) = receiver-step heartbeat -- increments every receiver step. If this
+//                    advances while word[0] (resume phase) is frozen, ERISC1 is alive and
+//                    the wedge is isolated to ERISC0.                                     (ERISC1)
+//   word[15]      = spare
+#define MEM_AERISC_RESUME_PHASE_SIZE 64
 #define MEM_AERISC_RESUME_PHASE_BASE (MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE - MEM_AERISC_RESUME_PHASE_SIZE)
 
 // ERISC retrain counter (PRODUCTION -- not gated on watcher/testing, unlike the debug slot above). One

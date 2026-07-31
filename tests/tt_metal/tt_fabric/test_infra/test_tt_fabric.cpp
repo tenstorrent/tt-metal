@@ -104,7 +104,16 @@ private:
         log_info(tt::LogTest, "EthLinkMonitor: polling PCS_STATUS on {} active ethernet core(s).", cores.size());
 
         std::vector<int> prev_up(cores.size(), -1);  // -1 unknown, 1 up, 0 down
+        int rounds = 0;
         while (!stop_.load()) {
+            // [SLOT DUMP] Periodically mirror the ERISC L1 debug slot into the test log. Done from this
+            // thread because it already holds an open cluster: an out-of-process dump has to construct its
+            // own UMD cluster, and that runs topology discovery, which blocks up to 900s waiting for eth
+            // training whenever a link is still down -- i.e. precisely the state we are trying to capture.
+            // Emits the same "SLOT <dev> <chan> w0..w15 hb0 hb1" format as the teardown dump.
+            if ((rounds++ % kSlotDumpEveryRounds) == 0) {
+                dump_slots(cores);
+            }
             for (size_t i = 0; i < cores.size(); ++i) {
                 uint32_t pcs_status = 0;
                 try {
@@ -133,12 +142,74 @@ private:
         }
     }
 
+    // Dump the debug slot every ~30s (kPollIntervalMs * 150).
+    static constexpr int kSlotDumpEveryRounds = 150;
+    static constexpr uint64_t kDbgSlotBase = 0x6F220;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE
+    static constexpr std::size_t kDbgSlotWords = 16;
+    static constexpr uint64_t kErisc0Heartbeat = 0x7CC70;
+
+    void dump_slots(const std::vector<MonitoredCore>& cores) {
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        for (const auto& c : cores) {
+            std::vector<uint32_t> words(kDbgSlotWords, 0);
+            std::vector<uint32_t> hb(2, 0);
+            try {
+                cluster.read_core(
+                    words, kDbgSlotWords * sizeof(uint32_t), tt_cxy_pair(c.chip_id, c.virtual_core), kDbgSlotBase);
+                cluster.read_core(hb, 2 * sizeof(uint32_t), tt_cxy_pair(c.chip_id, c.virtual_core), kErisc0Heartbeat);
+            } catch (...) {
+                continue;
+            }
+            std::string line = fmt::format("SLOT {} {}", c.chip_id, c.logical_core.y);
+            for (auto w : words) {
+                line += fmt::format(" 0x{:x}", w);
+            }
+            line += fmt::format(" 0x{:x} 0x{:x}", hb[0], hb[1]);
+            log_info(tt::LogTest, "{}", line);
+        }
+    }
+
     static constexpr int kPollIntervalMs = 200;
     static constexpr int kSleepSliceMs = 20;
 
     std::atomic<bool> stop_{false};
     std::thread thread_;
 };
+
+// Teardown dump of the ERISC debug slot for every active ethernet core, using the test's own cluster
+// (no second process needed). Emits the same "SLOT <dev> <chan> w0..w15 hb0 hb1" lines the external
+// `run_link_control dump_dbg_slot` produces, so one parser handles both.
+void dump_erisc_debug_slots_from_host() {
+    constexpr uint64_t DBG_SLOT_BASE = 0x6F220;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE
+    constexpr std::size_t DBG_SLOT_WORDS = 16;
+    constexpr uint64_t ERISC0_HEARTBEAT = 0x7CC70;
+
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    log_info(tt::LogTest, "ERISC debug slot dump (teardown): base 0x{:X}, {} words", DBG_SLOT_BASE, DBG_SLOT_WORDS);
+    for (auto chip_id : cluster.all_chip_ids()) {
+        for (const auto& logical_core : control_plane.get_active_ethernet_cores(chip_id)) {
+            const auto virtual_core =
+                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, tt::CoreType::ETH);
+            std::vector<uint32_t> words(DBG_SLOT_WORDS, 0);
+            std::vector<uint32_t> hb(2, 0);
+            try {
+                cluster.read_core(
+                    words, DBG_SLOT_WORDS * sizeof(uint32_t), tt_cxy_pair(chip_id, virtual_core), DBG_SLOT_BASE);
+                cluster.read_core(hb, 2 * sizeof(uint32_t), tt_cxy_pair(chip_id, virtual_core), ERISC0_HEARTBEAT);
+            } catch (...) {
+                continue;
+            }
+            std::string line = fmt::format("SLOT {} {}", chip_id, logical_core.y);
+            for (auto w : words) {
+                line += fmt::format(" 0x{:x}", w);
+            }
+            line += fmt::format(" 0x{:x} 0x{:x}", hb[0], hb[1]);
+            log_info(tt::LogTest, "{}", line);
+        }
+    }
+}
 
 }  // namespace
 
@@ -415,6 +486,11 @@ int main(int argc, char** argv) {
                 test_context.wait_for_programs_with_progress();
 
                 eth_link_monitor.stop_and_join();
+
+                // Teardown dump of the ERISC debug slot. Fires on runs that finish (cleanly or via the
+                // hang detector); a hard-wedged run killed externally never gets here, which is why the
+                // out-of-process `run_link_control dump_dbg_slot` exists as well.
+                dump_erisc_debug_slots_from_host();
 
                 if (test_context.did_last_test_hang()) {
                     log_error(

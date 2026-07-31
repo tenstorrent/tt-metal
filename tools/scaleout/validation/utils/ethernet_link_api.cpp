@@ -343,6 +343,44 @@ void down_links_bh_unsafe() { down_links_bh_unsafe_impl(/*single_ended=*/false);
 
 void down_links_bh_single_ended_unsafe() { down_links_bh_unsafe_impl(/*single_ended=*/true); }
 
+void dump_erisc_debug_slots() {
+    // Base of the ERISC debug slot (dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE) and its length in words.
+    // Hardcoded rather than included because dev_mem_map.h is a device header; keep in sync if the slot moves.
+    constexpr uint64_t DBG_SLOT_BASE = 0x6F220;
+    constexpr std::size_t DBG_SLOT_WORDS = 16;
+    // ERISC0 main-loop heartbeat (0xDCBA0000 | counter) -- liveness for the sender side.
+    constexpr uint64_t ERISC0_HEARTBEAT = 0x7CC70;
+
+    // Private UMD cluster: maps BARs without start_device(), so no CHIP_IN_USE lock. Read-only here.
+    tt::umd::Cluster cluster;
+    const auto mmio_chips = cluster.get_target_mmio_device_ids();
+
+    std::cout << "# ERISC debug slot dump: base 0x" << std::hex << DBG_SLOT_BASE << std::dec << ", " << DBG_SLOT_WORDS
+              << " words per core\n";
+    std::cout << "# fields: dev chan w0..w15 hb0 hb1\n";
+    for (auto chip_id : mmio_chips) {
+        const auto& soc_desc = cluster.get_soc_descriptor(chip_id);
+        const uint32_t num_eth_channels = soc_desc.get_num_eth_channels();
+        for (uint32_t channel = 0; channel < num_eth_channels; channel++) {
+            const auto core = soc_desc.get_eth_core_for_channel(channel, CoordSystem::TRANSLATED);
+            std::vector<uint32_t> words(DBG_SLOT_WORDS, 0);
+            uint32_t hb[2] = {0, 0};
+            try {
+                cluster.read_from_device(words.data(), chip_id, core, DBG_SLOT_BASE, DBG_SLOT_WORDS * sizeof(uint32_t));
+                cluster.read_from_device(hb, chip_id, core, ERISC0_HEARTBEAT, 2 * sizeof(uint32_t));
+            } catch (...) {
+                continue;  // core unreachable (e.g. link down); skip rather than abort the whole dump
+            }
+            std::cout << "SLOT " << chip_id << " " << channel;
+            for (auto w : words) {
+                std::cout << " 0x" << std::hex << w << std::dec;
+            }
+            std::cout << " 0x" << std::hex << hb[0] << " 0x" << hb[1] << std::dec << "\n";
+        }
+    }
+    std::cout.flush();
+}
+
 void reset_links_bh(const std::vector<ResetLink>& links_to_reset) {
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
