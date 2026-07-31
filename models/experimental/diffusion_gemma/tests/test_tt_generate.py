@@ -2829,13 +2829,29 @@ def test_prefill_prompt_tokens_embeds_and_writes_kv(monkeypatch):
             calls["to_layout"] = (value, layout)
             return _FakeDeviceTensor("tile-embeds")
 
+        @staticmethod
+        def embedding(tokens, weight, dtype=None):
+            calls["embedding"] = (tokens, weight, dtype)
+            return _FakeDeviceTensor("embeds")
+
+        @staticmethod
+        def mul(value, scale):
+            calls["mul"] = (value, scale)
+            return _FakeDeviceTensor("scaled-embeds")
+
+        bfloat16 = "bfloat16"
+
     class _FakeModel:
         mesh_device = object()
         hidden_size = 16
-
-        def embed_tokens(self, tt_tokens):
-            calls["embed_tokens"] = tt_tokens
-            return _FakeDeviceTensor("embeds")
+        # DG embeds through its own op sequence rather than Gemma4Model.embed_tokens,
+        # so it can route the TP all-gather through the semaphore-passing
+        # ccl_allgather. Deliberately NO embed_tokens attribute: reverting to the
+        # shared method must fail here, not silently reintroduce the plain
+        # ttnn.all_gather. mesh_config None is the single-device case (no gather).
+        embedding_weight = "embedding-weight"
+        embed_scale = 4.0
+        mesh_config = None
 
         def __call__(self, hidden_states, **kwargs):
             calls["model"] = (hidden_states, kwargs)
@@ -2847,7 +2863,9 @@ def test_prefill_prompt_tokens_embeds_and_writes_kv(monkeypatch):
     out = prefill_prompt_tokens(_FakeModel(), prompt_tokens, page_tables_per_layer=["pages"])
 
     assert out == PromptPrefill(prompt_len=3, cache_len=32)
-    assert calls["embed_tokens"].deallocated is True
+    assert calls["embedding"][1] == "embedding-weight"
+    assert calls["embedding"][0].deallocated is True
+    assert calls["mul"][1] == 4.0
     assert calls["reshape"][1] == (1, 1, 32, 16)
     hidden_states, kwargs = calls["model"]
     assert hidden_states.name == "tile-embeds"

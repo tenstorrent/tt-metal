@@ -271,10 +271,42 @@ def tokenize_prompt(
     return _as_prompt_token_tensor(tokenizer.encode(prompt))
 
 
+def _embed_tokens_dg(tt_model, tt_tokens):
+    """``Gemma4Model.embed_tokens`` with DG's semaphore-passing all-gather.
+
+    Byte-for-byte the shared op sequence (embedding -> scale -> unsqueeze -> TP
+    all-gather); the only substitution is the gather, from the shared
+    ``ccl_allgather``'s plain ``ttnn.all_gather`` to DG's ``ccl_allgather``, which
+    passes pre-created semaphores and so selects ``all_gather_async``'s
+    ``MINIMAL_DEFAULT`` factory instead of a factory that calls
+    ``create_global_semaphore`` three times. A gather moves data without
+    arithmetic, so this is a structural identity, not an accuracy trade.
+
+    Why it matters here: this is DG's LAST remaining semaphore-creating collective
+    on the non-traced path once the prefill lm_head is skipped
+    (``tt/prefill_logits.py``), and ``embed_host_tokens`` is called by BOTH prefill
+    and per-block commit -- which is why commit latency is bimodal in the same way
+    prefill is (p50 0.203 s, mean 0.683 s, max 4.512 s on tt-shield run
+    30640405931). Semaphore setup blocks in ``finish_nolock``; measured on QB2 at
+    0.87 s per cache-missing call with anything queued behind it, versus 0.003 s
+    when the queue is empty and 0.000 s on a cache hit.
+    """
+    if tt_model.embedding_weight is None:
+        raise RuntimeError("Embedding weights not loaded")
+    embeds = ttnn.embedding(tt_tokens, tt_model.embedding_weight, dtype=ttnn.bfloat16)
+    embeds = ttnn.mul(embeds, tt_model.embed_scale)
+    if tt_model.mesh_config is not None and tt_model.mesh_config.tp > 1:
+        from models.experimental.diffusion_gemma.tt.ccl import ccl_allgather
+
+        embeds = ttnn.unsqueeze_to_4D(embeds)
+        embeds = ccl_allgather(embeds, tt_model.mesh_config, tt_model.ccl_manager)
+    return embeds
+
+
 def embed_host_tokens(tt_model, tokens: torch.Tensor):
     """Embed host token ids as ``[1, 1, seq_len, hidden]`` TILE states."""
     tt_tokens = host_tokens_to_device(tt_model.mesh_device, tokens)
-    embeds = tt_model.embed_tokens(tt_tokens)
+    embeds = _embed_tokens_dg(tt_model, tt_tokens)
     tt_tokens.deallocate(True)
     embeds = ttnn.reshape(embeds, (1, 1, tokens.shape[1], tt_model.hidden_size))
     return ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
@@ -304,10 +336,17 @@ def prefill_prompt_tokens(
     prefill_tokens = _pad_prompt_tokens_for_prefill(prompt_tokens)
     cache_len = prefill_tokens.shape[1]
     prompt_embeds = embed_host_tokens(tt_model, prefill_tokens)
+    from models.experimental.diffusion_gemma.tt.prefill_logits import discard_prefill_logits
     from models.experimental.diffusion_gemma.tt.prefill_moe import use_tuned_prefill_moe
 
-    with use_tuned_prefill_moe(tt_model):
-        logits = tt_model(
+    # This forward is run for its K/V writes; whatever it returns is deallocated
+    # unread two lines down. discard_prefill_logits stops the shared backbone
+    # ending it in the lm_head, whose TP all-gather calls create_global_semaphore
+    # and drains the command queue once per prefill -- see prefill_logits.py.
+    # get_last_token is still passed: it is what the slice would use if the flag
+    # were ever off, and the backbone reads it before this branch on other paths.
+    with use_tuned_prefill_moe(tt_model), discard_prefill_logits(tt_model):
+        discarded = tt_model(
             prompt_embeds,
             is_decode=False,
             input_ids_torch=prefill_tokens,
@@ -315,7 +354,8 @@ def prefill_prompt_tokens(
             page_table=page_table,
             page_tables_per_layer=page_tables_per_layer,
         )
-    logits.deallocate(True)
+    if discarded is not None:
+        discarded.deallocate(True)
     return PromptPrefill(prompt_len=prompt_len, cache_len=cache_len)
 
 

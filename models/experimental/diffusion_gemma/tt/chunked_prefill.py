@@ -593,9 +593,13 @@ def chunked_prefill(
         global _CHUNK_CTX
         _CHUNK_CTX = _ChunkContext(chunk_start_idx=start, chunk_page_table=chunk_pt_dev, sliding_state=sliding_state)
         try:
+            from models.experimental.diffusion_gemma.tt.prefill_logits import discard_prefill_logits
             from models.experimental.diffusion_gemma.tt.prefill_moe import use_tuned_prefill_moe
 
-            with use_tuned_prefill_moe(model), _swap_prefill_attention():
+            # Non-final chunks discard `out` below, so they must not pay the
+            # lm_head's create_global_semaphore drain -- once per CHUNK here.
+            skip_lm_head = discard_prefill_logits(model, enabled=not want_logits)
+            with use_tuned_prefill_moe(model), _swap_prefill_attention(), skip_lm_head:
                 out = model(
                     chunk_embeds,
                     rope_mats=rope,
