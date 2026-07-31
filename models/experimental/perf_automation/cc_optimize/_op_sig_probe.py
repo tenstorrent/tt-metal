@@ -70,9 +70,127 @@ _BLOCK_TAG = "_perf_block_idx"
 _SIGNPOST_PREFIX = "PERF_BLOCK_SIGNPOST:"
 
 
-def _largest_repeated_stack(root, _depth: int = 0, _seen=None):
-    """The largest list/tuple of SAME-TYPED objects reachable from `root` — i.e. the repeated block
-    stack of a model that is not built out of torch containers.
+_ATOMIC = (str, bytes, bytearray, int, float, bool, complex, type(None))
+_MAX_STACK_DEPTH = 8
+_MAX_STACK_NODES = 20000
+_MAX_SEQ_SCAN = 4096
+
+
+def _is_atomic(node) -> bool:
+    if isinstance(node, _ATOMIC):
+        return True
+    return "Tensor" in type(node).__name__
+
+
+def _stack_members(seq):
+    """The elements of `seq` that could be blocks: objects carrying attributes."""
+    return [v for v in seq if v is not None and hasattr(v, "__dict__") and not _is_atomic(v)]
+
+
+def _stack_tier(members) -> int:
+    """How block-like this stack is: 2 invocable and composite, 1 either, 0 neither.
+
+    A real block is CALLABLE (it exists to be invoked, and the signpost wrapper hooks exactly that
+    call) and COMPOSITE (it owns sub-modules). Ranking rather than filtering matters: a bare list of
+    ``Linear`` projections outranks nothing, so it never displaces a real stack, yet a stack of inert
+    same-typed objects is still found when a model has nothing better -- which is the long-standing
+    contract test_finds_plain_python_list_of_same_typed_blocks pins down.
+    """
+    head = members[0]
+    return int(callable(head)) + int(_is_composite(head))
+
+
+def _shared_base(kinds):
+    """The most specific class every kind in `kinds` derives from, or None when that is only object."""
+    mros = [[c for c in t.__mro__ if c is not object] for t in kinds]
+    if not mros or any(not m for m in mros):
+        return None
+    common = set(mros[0]).intersection(*(set(m) for m in mros[1:]))
+    if not common:
+        return None
+    return min(common, key=lambda c: len(c.__subclasses__()))
+
+
+def _is_composite(node) -> bool:
+    """Does `node` own callable children, i.e. is it built out of sub-modules?
+
+    A decoder block contains attention/MLP/norm sub-modules; a bare ``Linear`` or ``Conv1d`` owns
+    only weights. Without this, the longest list of leaf projections wins over the real stack --
+    lw-detr picks a 13-element ``Linear`` list over its 10-layer encoder.
+    """
+    for child in _child_nodes(node):
+        if child is not None and callable(child) and hasattr(child, "__dict__") and not _is_atomic(child):
+            return True
+        if isinstance(child, (list, tuple, dict)):
+            seq = list(child.values()) if isinstance(child, dict) else list(child)
+            if any(c is not None and callable(c) and hasattr(c, "__dict__") for c in seq[:_MAX_SEQ_SCAN]):
+                return True
+    return False
+
+
+def _is_block_stack(members) -> bool:
+    """Does this sequence of callables look like a repeated block stack?
+
+    Two accepted shapes. HOMOGENEOUS -- N instances of one class -- is the original signal and still
+    the common case. HYBRID -- a few interleaved block classes sharing a base, e.g. NemotronH's
+    alternating Mamba and attention blocks -- was rejected outright by the old ``len(kinds) == 1``
+    test, so hybrid models silently produced no signposts. Hybrids are held to stricter bounds (at
+    least 4 blocks, at most 3 classes, a shared base, and one class covering at least a third) so an
+    ordinary list of a few unrelated submodules is not mistaken for a stack.
+    """
+    if len(members) < 2:
+        return False
+    kinds = {type(v) for v in members}
+    if len(kinds) == 1:
+        return True
+    if len(members) < 4 or len(kinds) > 3:
+        return False
+    if _shared_base(kinds) is None:
+        return False
+    dominant = max(sum(1 for v in members if type(v) is k) for k in kinds)
+    return dominant / len(members) >= 1 / 3
+
+
+def _child_nodes(node):
+    """Every child reachable from `node`, whatever container holds it.
+
+    The old walk followed only ``__dict__`` values and treated a list as a leaf, so a stack nested
+    inside ANY list or dict was unreachable. gemma3 hits this: ``prepare_generator_args`` builds one
+    model per submesh, so with data_parallel=1 the generator holds a ONE-element list whose single
+    element owns the 48 blocks -- too short to be a stack itself, and never opened.
+
+    Containers are a closed set (object attributes, __slots__, list/tuple, dict), unlike the open set
+    of shapes models arrange them in, so covering them here is what keeps this model-agnostic.
+    """
+    d = getattr(node, "__dict__", None)
+    if isinstance(d, dict):
+        yield from list(d.values())
+    for slot in getattr(type(node), "__slots__", ()) or ():
+        try:
+            yield getattr(node, slot)
+        except Exception:  # noqa: BLE001
+            pass
+    if isinstance(node, dict):
+        yield from list(node.values())[:_MAX_SEQ_SCAN]
+    elif isinstance(node, (list, tuple)):
+        yield from list(node)[:_MAX_SEQ_SCAN]
+
+
+def _node_sequence(node):
+    """`node` viewed as an ordered sequence, when it is one.
+
+    dict is included so torch's ``nn.ModuleList`` is covered: it keeps its children in the
+    ``_modules`` OrderedDict, not in a list.
+    """
+    if isinstance(node, (list, tuple)) and 2 <= len(node) <= _MAX_SEQ_SCAN:
+        return list(node)
+    if isinstance(node, dict) and 2 <= len(node) <= _MAX_SEQ_SCAN:
+        return list(node.values())
+    return None
+
+
+def _largest_repeated_stack(root, _depth: int = 0, _seen=None, _budget=None):
+    """The largest repeated block stack reachable from `root`, through any container nesting.
 
     A TTNN model is typically NOT a torch.nn.Module: models/common/lightweightmodule.py exists
     precisely to avoid torch's per-call host overhead, and such models hold their decoder blocks in a
@@ -81,25 +199,72 @@ def _largest_repeated_stack(root, _depth: int = 0, _seen=None):
     signposts, and run.py has to fall back to probing depth 2/4/8/16 to discover what the signposts
     would have said for free.
 
-    Same-typedness is the signal, not the attribute name: a stack is N instances of one class, so no
-    per-model knowledge (and no 'layers'/'blocks' name list) is needed.
+    Structure is the signal, not the attribute name: a stack is N callable blocks of one class (or of
+    a few interleaved classes sharing a base), so no per-model knowledge and no 'layers'/'blocks'
+    name list is needed.
     """
     if _seen is None:
         _seen = set()
-    if root is None or _depth > 4 or id(root) in _seen:
+    if _budget is None:
+        _budget = [_MAX_STACK_NODES]
+    if root is None or _depth > _MAX_STACK_DEPTH or _budget[0] <= 0 or _is_atomic(root):
+        return None
+    if id(root) in _seen:
         return None
     _seen.add(id(root))
+    _budget[0] -= 1
+    best: dict = {}
+    seq = _node_sequence(root)
+    if seq is not None:
+        members = _stack_members(seq)
+        if _is_block_stack(members):
+            best[_stack_tier(members)] = members
+    for child in _child_nodes(root):
+        deeper = _largest_repeated_stack(child, _depth + 1, _seen, _budget)
+        if deeper is None:
+            continue
+        tier = _stack_tier(deeper)
+        if tier not in best or len(deeper) > len(best[tier]):
+            best[tier] = deeper
+    if not best:
+        return None
+    return best[max(best)]
+
+
+def _enclosing_stack(block):
+    """The stack that CONTAINS `block`, for when the walk is rooted at a leaf block.
+
+    Walking DOWN only works when the wrapper first fires on the top module. It often does not: a
+    model whose top module is invoked by METHOD rather than ``__call__`` never triggers the hook
+    itself. tt_transformers is exactly this shape -- generator.py calls
+    ``self.model[i].ttnn_prefill_forward(...)``, so the first ``LightweightModule.__call__`` is
+    ``x = layer(...)`` inside the Transformer, i.e. ``layers[0]``. A single block holds attention,
+    MLP and norms, never a 48-element stack, so the downward walk finds nothing and no signpost is
+    ever emitted.
+
+    The list holding the block is one referrer away, so recover the stack upward instead.
+    """
+    import gc
+
     best = None
-    for value in list(getattr(root, "__dict__", {}).values()):
-        if isinstance(value, (list, tuple)) and len(value) >= 2:
-            kinds = {type(v) for v in value if v is not None and hasattr(v, "__dict__")}
-            if len(kinds) == 1 and (best is None or len(value) > len(best)):
-                best = list(value)
-        elif hasattr(value, "__dict__"):
-            deeper = _largest_repeated_stack(value, _depth + 1, _seen)
-            if deeper is not None and (best is None or len(deeper) > len(best)):
-                best = deeper
+    for ref in gc.get_referrers(block):
+        if isinstance(ref, (list, tuple)):
+            seq = list(ref)
+        elif isinstance(ref, dict):
+            seq = list(ref.values())
+        else:
+            continue
+        if len(seq) < 2 or len(seq) > _MAX_SEQ_SCAN or not any(v is block for v in seq):
+            continue
+        members = _stack_members(seq)
+        if _is_block_stack(members) and (best is None or len(members) > len(best)):
+            best = members
     return best
+
+
+def _find_stack(root):
+    """The block stack for `root`, looking down first and then up."""
+    return _largest_repeated_stack(root) or _enclosing_stack(root)
 
 
 def _tag_stack(stack) -> bool:
@@ -185,7 +350,7 @@ def _install_block_signposts():
     def _lw_wrapped(self, *a, **k):
         if not state["tagged"]:
             try:
-                state["tagged"] = _tag_stack(_largest_repeated_stack(self))
+                state["tagged"] = _tag_stack(_find_stack(self))
             except Exception:  # noqa: BLE001
                 pass
         _emit(self)
