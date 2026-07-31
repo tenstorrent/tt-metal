@@ -292,11 +292,38 @@ class _TtMoE:
                 sel[d, d * epd + e, e * I : (e + 1) * I] = 1.0
         self.sel = _shard0(sel)
 
-        # shared expert REPLICATED (added once, after the routed all-reduce)
+        # shared expert: REPLICATED by default. With full-mesh EP it is SHARDED across all chips
+        # on its intermediate dim (025dbff313) so each chip computes a PARTIAL that folds into the
+        # SAME 2-axis all_reduce (no new CCL). Requires si % n_shard == 0. UNVERIFIED pending mesh.
         if self.use_shared:
-            self.shared_gu = self._repl(torch_module.shared_mlp.gate_and_up_proj.weight.t().contiguous())
-            self.shared_down = self._repl(torch_module.shared_mlp.down_proj.weight.t().contiguous())
-            self.shared_inter = int(torch_module.shared_mlp.gate_and_up_proj.weight.shape[0] // 2)
+            si = int(torch_module.shared_mlp.gate_and_up_proj.weight.shape[0] // 2)
+            self.shared_inter = si
+            gu_t = torch_module.shared_mlp.gate_and_up_proj.weight.t().contiguous()  # [H, 2*si]
+            down_t = torch_module.shared_mlp.down_proj.weight.t().contiguous()  # [si, H]
+            self.shared_sharded = getattr(self, "_ep_fullmesh", False) and (si % n_shard == 0)
+            if self.shared_sharded:
+                self.shared_per = si // n_shard
+                _Hs = int(gu_t.shape[0])
+                self.shared_gu = ttnn.from_torch(
+                    gu_t.reshape(_Hs, 2, si).to(torch.float32),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=2),
+                )
+                self.shared_gu = ttnn.reshape(self.shared_gu, [_Hs, 2 * self.shared_per])
+                self.shared_down = ttnn.from_torch(
+                    down_t.to(torch.float32),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+                )
+            else:
+                self.shared_gu = self._repl(gu_t)
+                self.shared_down = self._repl(down_t)
 
     # ------------------------------------------------------------------
     def _mesh_reduce(self, x):
@@ -462,16 +489,24 @@ class _TtMoE:
         )  # [1, S, H] (down + expert-sum fused)
         ttnn.deallocate(act)
 
-        routed = self._mesh_reduce(combined)  # all-reduce over TP -> full expert sum
-        ttnn.deallocate(combined)
-
-        if self.use_shared:
+        # shared expert: when SHARDED (full-mesh EP) add its PARTIAL to the routed partial BEFORE
+        # the reduce so ONE 2-axis all_reduce sums both (025dbff313); else the original post-reduce add.
+        if self.use_shared and getattr(self, "shared_sharded", False):
+            shared_p = self._swiglu(x, self.shared_gu, self.shared_down, self.shared_per)
+            combined = ttnn.add(combined, shared_p)
+            ttnn.deallocate(shared_p)
+            out = self._mesh_reduce(combined)
+            ttnn.deallocate(combined)
+        elif self.use_shared:
+            routed = self._mesh_reduce(combined)  # all-reduce over TP -> full expert sum
+            ttnn.deallocate(combined)
             shared = self._swiglu(x, self.shared_gu, self.shared_down, self.shared_inter)
             out = ttnn.add(shared, routed)
             ttnn.deallocate(shared)
             ttnn.deallocate(routed)
         else:
-            out = routed
+            out = self._mesh_reduce(combined)
+            ttnn.deallocate(combined)
         if return_l_aux:
             return out, l_aux
         if l_aux is not None:
