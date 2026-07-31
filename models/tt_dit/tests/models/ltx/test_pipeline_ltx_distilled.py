@@ -26,7 +26,7 @@ from models.tt_dit.utils.ltx import (
     print_ltx_timing_table,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import line_params, line_params_8k, ring_params, ring_params_8k
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
@@ -34,8 +34,16 @@ from models.tt_dit.utils.vbench import assert_vbench_quality
 # l1_small_size: native ttnn.conv1d (the depthwise audio taps) runs an UntilizeWithHalo gather
 # whose sharding/config tensors allocate from the dedicated L1_SMALL pool; it defaults to 0, which
 # OOMs the vocoder. 32 KB matches the audio component tests.
-ring_trace_params = {**ring_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
-line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+# LTX_FABRIC_8K=1 raises the fabric router's max packet payload from the 4352 B default
+# (FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) to 8192 B. At bf16 (2048 B/tile)
+# that lifts the strided AG's scatter-write from floor(4384/2048) = 2 tiles/packet to the hardware
+# max of 4 (strided_all_gather_async_program.cpp:397-401), halving the AG's fabric packet count.
+# Matches the config test_transformer_ltx.py's `ring_bh_4x8sp1tp0_8k` already uses.
+_fabric_8k = os.environ.get("LTX_FABRIC_8K") in ("1", "true", "True")
+_ring_base = ring_params_8k if _fabric_8k else ring_params
+_line_base = line_params_8k if _fabric_8k else line_params
+ring_trace_params = {**_ring_base, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+line_trace_params = {**_line_base, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 
 
 # Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips in the default suite
