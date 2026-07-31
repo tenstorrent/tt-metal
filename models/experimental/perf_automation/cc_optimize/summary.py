@@ -1042,6 +1042,6 @@ def render_summary(
 
     lines.append("")
     lines.append(
-        f"levels: grid -> fidelity -> dtype -> shard -> host -> {_disp_level('tt-lang')} -> cpp   |   ✓win = beat baseline, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
+        f"levels: grid -> fidelity -> dtype -> shard -> host -> {_disp_level('tt-lang')} -> cpp   |   ✓win = new best so far, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
     )
     return "\n".join(lines)
